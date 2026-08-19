@@ -87,7 +87,7 @@ cp "$TEMPLATE/contracts/GRAPH.md"    wheelhouse/GRAPH.md.new
 
 ## 4. Splice: new contract, your project section
 
-For each file, take the contract half from the new copy and the project half from yours. Use the same rule the install uses — the LAST line that is exactly `## This project`, whole line, nothing else on it:
+For each file, take the contract half from the new copy and the project half from yours. Use the same rule the install's integrity check uses — the FIRST line that is exactly `## This project`, whole line, nothing else on it (first-match is the safer rule: if a project section ever contained that literal line again, a last-match split would absorb project content into the contract half):
 
 ```bash
 splice() {   # splice <new-contract> <your-file>
@@ -101,7 +101,7 @@ splice wheelhouse/crew/REVIEWER.md.new  wheelhouse/crew/REVIEWER.md
 splice wheelhouse/crew/DESIGNER.md.new  wheelhouse/crew/DESIGNER.md
 splice wheelhouse/crew/BENCH.md.new     wheelhouse/crew/BENCH.md
 splice wheelhouse/GRAPH.md.new          wheelhouse/GRAPH.md
-rm -f wheelhouse/**/*.md.new wheelhouse/*.md.new
+find wheelhouse -name '*.md.new' -delete   # find, not **: globstar is off by default in bash
 ```
 
 Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A naive match has destroyed a contract file this way once already — it deleted a licensing-compliance rule while every automated check still passed. `BOOTSTRAP.md` states the same rule for the same reason; this is the operation it was stating it for.

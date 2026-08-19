@@ -152,6 +152,9 @@ Run each of these and paste what it prints:
   # That is the failure mode this whole check exists to prevent, so refuse to run --
   # but try to recover first, because path= points at a mktemp directory the OS
   # eventually deletes, and an upgrade months later will always find it gone.
+  # NOTE this makes the block more than a pure check: on a dead path it performs a
+  # network clone and rewrites the machine-local path= field. That is the whole of
+  # its side effects; the contracts themselves are never written by this block.
   if [ -z "$TEMPLATE" ] || [ ! -s "$TEMPLATE/contracts/WORKER.md" ]; then
     SOURCE=$(sed -n 's/^source=//p' wheelhouse/.template-source 2>/dev/null)
     if [ -n "$SOURCE" ]; then
