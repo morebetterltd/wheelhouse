@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# bench.sh — UNIMPLEMENTED.
+#
+# This is the stub every wheelhouse ships with. It exits non-zero on purpose:
+# an unimplemented bench that passes is indistinguishable from a bench that
+# works, and the reviewer contract leans on the bench being real.
+#
+# Implement it against crew/BENCH.md. The eight clauses there are the acceptance
+# criteria for this file. In outline:
+#
+#   1. one command:      bench.sh <artifact> <output-dir>, exit 0 pass / non-0 fail
+#   2. built artifact:   test what ships, not the source and not a dev server
+#   3. clean state:      no snapshots, no reused state, clear prior data
+#   4. not just liveness: assert the artifact DID ITS JOB
+#   5. evidence:         write logs/captures/output to <output-dir>
+#   6. teardown:         on success, on failure, and on interrupt (trap)
+#   7. measurements:     report numbers as measurements; say what they cannot tell apart
+#   8. re-runnable:      by someone who did not write it, on a fresh checkout
+#
+# Until then, no APPROVE may claim this project's software runs.
+
+set -euo pipefail
+
+printf 'bench.sh is not implemented for this project yet.\n' >&2
+printf 'Implement it against crew/BENCH.md before approving any behavioral change.\n' >&2
+exit 1
