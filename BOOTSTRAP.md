@@ -43,6 +43,8 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
   - `GRAPH.md` into `wheelhouse/`
   - `bench.sh.stub` to `wheelhouse/crew/bench.sh`, executable, unchanged — **it exits non-zero on purpose.** A stub that exits 0 lets the first APPROVE through on nothing.
 - **Do not edit a single line of any `## Contract` section.** They are identical in every project by design; a project that edits its contract has forked from every other one silently.
+
+**How to fill a `## This project` section, precisely.** Find the LAST line in the file that is exactly `## This project` — the whole line, nothing else on it. Everything above that line is the contract and is not yours to touch; everything below it is yours to write. Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A contract may legitimately discuss its own structure, and a naive match has already destroyed one contract file this way — deleting a licensing-compliance rule while every automated check still passed.
 - Fill each file's `## This project` section from the interview: the designer's territory, the worker's repos and its empty gotchas section, the reviewer's branch and worktree conventions, the bench's run-proof.
 - Fill `wheelhouse/fleet/SEATS.md`'s `## This project` roster from the seat answers, or with the minimum viable fleet and a note that seats can be added later. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
 - Write `CLAUDE.md` at the root: commander-session context, product changes happen in product repos via workers, new work becomes a bead immediately, deadline beads outrank everything, plus the principal-only actions from Q4 and the merge policy from Q5.
@@ -58,6 +60,28 @@ Run each of these and paste what it prints:
 - `bd ready` — returns without error.
 - A grep of the installed tree for the template's own specimen strings (`Ebb`, `ebb`, and the example project's terms: `cordova`, `emulator`, `app-review`, `com.example.app`). **Expect zero hits.** If template strings appear in the project's files, the install leaked and must be fixed before you report success.
 - A grep for unfilled placeholders and for `<!--` comment stubs you were supposed to replace. Expect zero in the files you generated.
+- **Contract integrity — run this before anything else, and stop if it fails.** Every installed `## Contract` section must be byte-identical to the template's. Check each one:
+
+  ```bash
+  # $TEMPLATE is the clone you fetched; $ROOT is the project root
+  for pair in "fleet/WORKER.md:WORKER.md" "fleet/SEATS.md:SEATS.md" \
+              "crew/REVIEWER.md:REVIEWER.md" "crew/DESIGNER.md:DESIGNER.md" \
+              "crew/BENCH.md:BENCH.md" "GRAPH.md:GRAPH.md"; do
+    installed="$ROOT/wheelhouse/${pair%%:*}"; template="$TEMPLATE/contracts/${pair##*:}"
+    # the contract is everything above the last exact '## This project' line
+    awk '/^## This project$/{exit} {print}' "$installed"  > /tmp/wh-a.$$
+    awk '/^## This project$/{exit} {print}' "$template"   > /tmp/wh-b.$$
+    if diff -q /tmp/wh-a.$$ /tmp/wh-b.$$ >/dev/null; then
+      echo "OK   ${pair%%:*}"
+    else
+      echo "FAIL ${pair%%:*} — contract differs from the template:"; diff /tmp/wh-b.$$ /tmp/wh-a.$$
+    fi
+    rm -f /tmp/wh-a.$$ /tmp/wh-b.$$
+  done
+  ```
+
+  Any `FAIL` means the install damaged a contract. Stop and repair it before continuing. Every other check in this list can pass on a file whose contract you deleted — this is the only one that looks.
+
 - Confirm every file you created exists and is non-empty.
 - Print the resulting tree.
 

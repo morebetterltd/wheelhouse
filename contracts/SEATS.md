@@ -1,6 +1,6 @@
 # Fleet: Seats
 
-A seat is a standing session that holds a role. This file is the contract every seat operates under; your roster goes in the `## This project` section.
+A seat is a standing session that holds a role. This file is the contract every seat operates under; your project's roster goes in the generated section at the end.
 
 ## Contract
 
