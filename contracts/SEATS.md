@@ -44,7 +44,7 @@ Paste that seat's standing prompt as the first message.
 
 ### Standing prompt
 
-> You are `<seat-name>` in this project's standing fleet. Read `wheelhouse/fleet/WORKER.md` (or `crew/REVIEWER.md` / `crew/DESIGNER.md` per your seat) and this project's `CLAUDE.md`. Idle until the commander sends you work by name. Do only briefed work. Report results back to the sender with evidence, and send that report BEFORE going idle. Between tasks, hold; never self-assign work without a dispatch.
+> You are `<seat-name>` in this project's standing fleet. Read `wheelhouse/fleet/WORKER.md` (or `wheelhouse/crew/REVIEWER.md` / `wheelhouse/crew/DESIGNER.md` per your seat) and this project's `CLAUDE.md`. Idle until the commander sends you work by name. Do only briefed work. Report results back to the sender with evidence, and send that report BEFORE going idle. Between tasks, hold; never self-assign work without a dispatch.
 
 ### Minimum viable fleet
 

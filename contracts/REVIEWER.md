@@ -27,7 +27,7 @@ Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 
 ### The bench is mandatory for behavioral claims
 
-Any APPROVE that claims or implies the software RUNS must carry a bench pass — the executable defined by `crew/BENCH.md`, run by you, with its evidence attached to the verdict. Static verification alone can support an APPROVE only when the bead's done is itself static: config, docs, non-runtime.
+Any APPROVE that claims or implies the software RUNS must carry a bench pass — the executable defined by `wheelhouse/crew/BENCH.md`, run by you, with its evidence attached to the verdict. Static verification alone can support an APPROVE only when the bead's done is itself static: config, docs, non-runtime.
 
 An APPROVE without bench evidence on a behavioral diff is a defect in the review, not a judgment call. This clause is the precondition for any merge policy that lets an APPROVE authorize a merge, and it travels with that policy wherever it goes.
 
