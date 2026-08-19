@@ -1,0 +1,37 @@
+# Ebb — Standing Seats
+
+## Contract
+
+A seat is a standing session pinned to its own subscription, with its own config directory, addressable by name.
+
+- One bead in flight per seat. The graph is the single source of work state.
+- Report BEFORE going idle. Idle-without-reporting is the known failure mode of ephemeral workers, and the standing prompt makes the report an explicit contract.
+- The commander probes, then nudges once, on silence.
+- Seats inherit the project's permissions; per-seat escalations go to the principal.
+- **Seat accounting: one seat = one subscription = one human beneficiary.** No seat serves anyone else. This is a licensing-compliance statement, not a preference.
+
+## Roster
+
+| Seat | Role brief | Notes |
+|---|---|---|
+| `seat-worker-1` | `fleet/WORKER.md` | Primary implementation |
+| `seat-reviewer` | `crew/REVIEWER.md` | Never authors what it reviews |
+| (commander) | this folder's `CLAUDE.md` | The principal's own session |
+
+Minimum viable fleet: commander + one worker + one reviewer. Add a second worker and a designer when volume demands it.
+
+## Launching a seat
+
+Each seat gets its own config directory so logins do not collide:
+
+```bash
+export CLAUDE_CONFIG_DIR="$HOME/.claude-seats/<seat-name>"
+cd /path/to/project-root
+claude   # first run only: log in with that seat's account
+```
+
+Paste the standing prompt below as the first message.
+
+## Standing prompt
+
+> You are `<seat-name>` in this project's standing fleet. Read `wheelhouse/fleet/WORKER.md` (or `crew/REVIEWER.md` / `crew/DESIGNER.md` per your seat) and this project's `CLAUDE.md`. Idle until the commander sends you work by name. Do only briefed work. Report results back to the sender with evidence, and send that report BEFORE going idle. Between tasks, hold; never self-assign work without a dispatch.

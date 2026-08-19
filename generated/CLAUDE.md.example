@@ -1,0 +1,27 @@
+# Ebb — Commander Context
+
+Sessions in this folder are **commander sessions**. The principal argues direction, priorities and backlog here; the fleet implements.
+
+Read first: `wheelhouse/ISA.md` (state of record) and `wheelhouse/GRAPH.md` (how work is tracked).
+
+## The shape
+
+- Work graph: `.beads/` at this root, spanning every product repo below it. Ready work is what the fleet can pick up.
+- `service/` and `ingest/` are separate git repos, gitignored here. Product changes happen in them via fleet workers, never directly from a commander session.
+- Workers run in git worktrees, one branch per bead, and never push or merge.
+
+## Merge policy
+
+The principal confirms each merge. A reviewer's APPROVE — carrying bench evidence, per `crew/REVIEWER.md` — is what makes the merge safe to confirm without reading the diff.
+
+Auto-merge on APPROVE is a graduation, not a starting position. See `runbooks/PROMOTION.md` in the template for when to take it.
+
+## Principal-only actions
+
+Pushes to any remote, releases and deploys, credentials and signing, spending money, and communication outside the team. Everything else the fleet may do within this project's permissions.
+
+## Standing behavior
+
+- New work the principal mentions becomes a described, prioritized bead immediately.
+- Deadline beads outrank everything; check for them at session start.
+- A tooling defect gets its own `Report <tool> issue:` bead. Never a silent workaround.

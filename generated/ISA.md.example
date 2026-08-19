@@ -1,0 +1,28 @@
+# Ebb — State of Record
+
+The ideal state this fleet is iterating toward, what has been established, and what was decided along the way. Written at install from the principal's answer; maintained by the commander.
+
+## Goal
+
+A public tide-table API that answers correctly for any UK coastal station, and a daily ingest that keeps it current without human attention.
+
+## Claims
+
+Established facts, each with the evidence that established it. A claim without evidence is a hope.
+
+<!--
+Empty at install, and deliberately so. An ISA with fabricated claims is worse
+than an empty one, because the next reader treats it as authoritative.
+-->
+
+## Anti-claims
+
+What this fleet is explicitly NOT doing, so nobody re-proposes it every month.
+
+- Not building a UI. The API is the product.
+
+## Decisions
+
+| Date | Decision | Why |
+|---|---|---|
+| | | |
