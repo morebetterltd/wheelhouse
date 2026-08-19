@@ -55,7 +55,7 @@ It will survey your repo, ask you about five things it cannot derive, write the 
     │   └── bench.sh             stub — exits non-zero until you implement it
     └── fleet/
         ├── WORKER.md            contract + your repos, and your gotchas as you earn them
-        └── SEATS.md             your roster
+        └── SEATS.md             contract + your roster
 ```
 
 ## Contract, and this project

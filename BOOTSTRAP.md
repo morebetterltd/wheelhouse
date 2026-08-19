@@ -38,13 +38,13 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 - `bd init` in the project root; confirm the graph exists.
 - Create `wheelhouse/crew/` and `wheelhouse/fleet/`.
 - Copy **verbatim** from the template's `contracts/`:
-  - `WORKER.md` into `wheelhouse/fleet/`
+  - `WORKER.md` and `SEATS.md` into `wheelhouse/fleet/`
   - `REVIEWER.md`, `DESIGNER.md`, `BENCH.md` into `wheelhouse/crew/`
   - `GRAPH.md` into `wheelhouse/`
   - `bench.sh.stub` to `wheelhouse/crew/bench.sh`, executable, unchanged — **it exits non-zero on purpose.** A stub that exits 0 lets the first APPROVE through on nothing.
 - **Do not edit a single line of any `## Contract` section.** They are identical in every project by design; a project that edits its contract has forked from every other one silently.
 - Fill each file's `## This project` section from the interview: the designer's territory, the worker's repos and its empty gotchas section, the reviewer's branch and worktree conventions, the bench's run-proof.
-- Write `wheelhouse/fleet/SEATS.md` from the seat answers, or the minimum viable fleet with a note that seats can be added later.
+- Fill `wheelhouse/fleet/SEATS.md`'s `## This project` roster from the seat answers, or with the minimum viable fleet and a note that seats can be added later. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
 - Write `CLAUDE.md` at the root: commander-session context, product changes happen in product repos via workers, new work becomes a bead immediately, deadline beads outrank everything, plus the principal-only actions from Q4 and the merge policy from Q5.
 - Write `wheelhouse/ISA.md`: the goal from Q3, empty claims, empty decisions, and any anti-claims stated. **Do not invent claims.** An ISA with fabricated claims is worse than an empty one.
 - Write `wheelhouse/STARTUP.md` with this project's real paths and seat names.
