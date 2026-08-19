@@ -16,7 +16,35 @@ Work in this order. Do not reorder, and do not write anything before step 3 is a
 You were told to clone this repo into a temporary directory. Before you read another word of it, confirm the clone produced something:
 
 - `$TEMPLATE/BOOTSTRAP.md`, `$TEMPLATE/contracts/` and `$TEMPLATE/contracts/WORKER.md` all exist and are non-empty.
-- `ls $TEMPLATE/contracts/` lists six files.
+- All seven contract files are present — six briefs plus the bench stub:
+
+  ```bash
+  for f in WORKER.md SEATS.md REVIEWER.md DESIGNER.md BENCH.md GRAPH.md bench.sh.stub; do
+    test -s "$TEMPLATE/contracts/$f" || echo "MISSING: contracts/$f"
+  done
+  ```
+
+  Check for the files by name rather than counting them. A count breaks every time the template gains a file, and a check that halts on a healthy clone teaches installers to skip it.
+
+**Then record where the template came from, before you do anything else with it.** A shell variable does not survive between your tool calls; a file does.
+
+```bash
+mkdir -p wheelhouse
+{ echo "source=$(git -C "$TEMPLATE" remote get-url origin 2>/dev/null || echo "$TEMPLATE")"
+  echo "commit=$(git -C "$TEMPLATE" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "path=$TEMPLATE"
+  echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > wheelhouse/.template-source
+cat wheelhouse/.template-source
+```
+
+Every later step reads `path=` out of that file rather than trusting `$TEMPLATE` to still be set:
+
+```bash
+TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
+```
+
+The `commit=` line is the provenance record. It is what tells a future reader which version of the contracts this project installed, and it is the baseline the upgrade path in the README compares against. Without it, "re-copy the contracts" has nothing to diff from.
 
 **A clone of an empty or unpushed repository exits 0.** It creates the directory, prints nothing alarming, and leaves you with nothing to install. If the files above are missing, STOP and tell the principal the template is empty or unreachable — do not proceed, and do not reconstruct the contracts from memory or from this document. A wheelhouse whose contracts were invented by the installer is worse than no wheelhouse, because it looks like the real thing.
 
@@ -97,11 +125,22 @@ Run each of these and paste what it prints:
 - **Contract integrity — this one first, and stop if it fails.** Every installed `## Contract` section must be byte-identical to the template's. Check each one:
 
   ```bash
-  # $TEMPLATE is the clone you fetched; $ROOT is the project root
+  ROOT="$PWD"
+  TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
+
+  # A missing or empty template path makes every comparison below vacuously true.
+  # That is the failure mode this whole check exists to prevent, so refuse to run.
+  if [ -z "$TEMPLATE" ] || [ ! -s "$TEMPLATE/contracts/WORKER.md" ]; then
+    echo "FAIL cannot verify contracts: template source is missing or empty ($TEMPLATE)"
+    echo "     re-clone the template and re-run this check before reporting anything"
+    exit 1
+  fi
+
   for pair in "fleet/WORKER.md:WORKER.md" "fleet/SEATS.md:SEATS.md" \
               "crew/REVIEWER.md:REVIEWER.md" "crew/DESIGNER.md:DESIGNER.md" \
               "crew/BENCH.md:BENCH.md" "GRAPH.md:GRAPH.md"; do
     installed="$ROOT/wheelhouse/${pair%%:*}"; template="$TEMPLATE/contracts/${pair##*:}"
+    test -s "$installed" || { echo "FAIL ${pair%%:*} — installed file missing or empty"; continue; }
     # the contract is everything above the last exact '## This project' line
     awk '/^## This project$/{exit} {print}' "$installed"  > /tmp/wh-a.$$
     awk '/^## This project$/{exit} {print}' "$template"   > /tmp/wh-b.$$
