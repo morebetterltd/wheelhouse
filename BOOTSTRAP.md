@@ -2,16 +2,12 @@
 
 You are installing a wheelhouse — a standing agent fleet over a shared work graph — into the user's project. You are talking to the PRINCIPAL: the person who owns this project and whose judgment the fleet defers to.
 
-Work in this order. Do not reorder, and do not write anything before step 3 is answered.
+Work in this order. Do not reorder, and do not write anything before the interview in step 4 is answered.
 
-## 1. Preflight — verify, then report what you found
+## 1. Confirm you actually have the template
 
-- Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue.
-- Confirm the `bd` CLI is on PATH and print its version. If it is missing, stop and give the install command from the README's prerequisites rather than guessing one.
-- Report uncommitted changes if there are any. Do not block on them; the principal may be mid-work.
-- **STOP IMMEDIATELY, without writing anything, if `wheelhouse/` or `CLAUDE.md` already exists.** Say what exists and ask what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable.
+You are already following instructions from this clone, so verify it before trusting any more of it. This comes before the project checks deliberately: everything below depends on these files being real, and a wheelhouse installed from an empty clone is worse than no install.
 
-## 1b. Confirm you actually have the template
 
 You were told to clone this repo into a temporary directory. Before you read another word of it, confirm the clone produced something:
 
@@ -48,15 +44,23 @@ The `commit=` line is the provenance record. It is what tells a future reader wh
 
 **A clone of an empty or unpushed repository exits 0.** It creates the directory, prints nothing alarming, and leaves you with nothing to install. If the files above are missing, STOP and tell the principal the template is empty or unreachable — do not proceed, and do not reconstruct the contracts from memory or from this document. A wheelhouse whose contracts were invented by the installer is worse than no wheelhouse, because it looks like the real thing.
 
-## 2. Read before you ask
+## 2. Preflight — verify the project, then report what you found
+
+
+- Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue.
+- Confirm the `bd` CLI is on PATH and print its version. If it is missing, stop and give the install command from the README's prerequisites rather than guessing one.
+- Report uncommitted changes if there are any. Do not block on them; the principal may be mid-work.
+- **STOP IMMEDIATELY, without writing anything, if `wheelhouse/` or `CLAUDE.md` already exists.** Say what exists and ask what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable.
+
+## 3. Read before you ask
 
 Survey the repository so your questions are informed: build and dependency files, language and framework, test setup, CI config, existing docs, whether there are multiple product repos beneath this root, and how the project is built and run.
 
-You are forming PROPOSED ANSWERS to step 3. Asking a principal what language their own project is in tells them you did not look.
+You are forming PROPOSED ANSWERS to step 4. Asking a principal what language their own project is in tells them you did not look.
 
-## 3. Interview — propose, then confirm
+## 4. Interview — propose, then confirm
 
-Ask in as few turns as you can manage. Lead each question with your proposal from step 2, so the principal is correcting rather than composing.
+Ask in as few turns as you can manage. Lead each question with your proposal from step 3, so the principal is correcting rather than composing.
 
 1. **Product repos, and therefore the shape of this install.** "I see \<what you found\>. Are these the repos the fleet will change, and are they separate git repos from this root?"
 
@@ -89,7 +93,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 7. **Seats**, only if they want them now. Names and count. Offer the minimum viable fleet: commander, one worker, one reviewer.
 
-## 4. Write
+## 5. Write
 
 - `bd init` in the project root; confirm the graph exists. Its output is verbose and mentions daemons, migrations and sync; that is normal and not an error.
 
@@ -133,7 +137,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 `generated/` in the template holds specimens of these files. They are examples of the SHAPE. Never copy them — they describe an invented project.
 
-## 5. Verify — show the output, do not summarize it
+## 6. Verify — show the output, do not summarize it
 
 Run each of these and paste what it prints:
 
@@ -170,7 +174,18 @@ Run each of these and paste what it prints:
 
   Any `FAIL` means the install damaged a contract. Stop and repair it before continuing. Every other check in this list can pass on a file whose contract you deleted — this is the only one that looks.
 
-- **Check `GRAPH.md`'s version-stamped claims against the CLI you actually have.** It states that this build has no `in_review` status and that the review queue is a `needs-review` label. Run `bd --help` (and `bd update --help`) and confirm. If your build disagrees, correct `wheelhouse/GRAPH.md` now and say so in the hand-back — the file says it is stamped rather than eternal, and an install is the moment to check.
+- **Check `GRAPH.md`'s version-stamped claims against the CLI you actually have.** It states that this build has no `in_review` status, so the review queue is a `needs-review` label instead.
+
+  `bd --help` cannot answer this — it lists commands, and `bd update --help` shows `--status` without enumerating its values. Two things that can:
+
+  ```bash
+  bd list --help | grep -i status     # the --status filter enumerates the valid statuses
+  bd update <some-id> --status in_review   # expect an "invalid status" error
+  ```
+
+  **Read the error text, not the exit code.** This build prints `invalid status: in_review` and then exits 0, so an exit-code check concludes the opposite of the truth. That is a defect in the tool, not in your reading.
+
+  If your build does enumerate `in_review`, correct `wheelhouse/GRAPH.md` now and say so in the hand-back. The file says it is stamped rather than eternal, and an install is the moment to check.
 
 - `bd ready` — returns without error. On an empty graph this prints nothing, which is indistinguishable from a broken install, so prove the graph round-trips instead: create a real first bead, list it, and leave it in place as the fleet's first piece of work.
 
@@ -182,17 +197,22 @@ Run each of these and paste what it prints:
 - A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
 
   ```bash
-  grep -rnwE "Ebb|ebb|cordova|emulator|app-review|com\.example\.app" CLAUDE.md wheelhouse/
+  grep -rnwE "Ebb|ebb|cordova|emulator|app-review|com\.example\.app" \
+    CLAUDE.md AGENTS.md wheelhouse/
   ```
 
-  **Expect zero hits.** If specimen strings appear in the project's files, the install leaked and must be fixed before you report success.
+  **Expect zero hits.** If specimen strings appear in the project's files, the install leaked and must be fixed before you report success. `AGENTS.md` is in scope because you edited it too.
+
+  Those terms come from the template's own `generated/` specimens (the invented project) and `examples/` (the one worked example). If you are reading this in a template whose specimens have changed, the list is stale — check what `generated/` and `examples/` actually contain and grep for that instead. A hardcoded list that no longer matches the specimens passes everything.
 - A grep for unfilled placeholders. Anything you leave for the principal to fill uses `{{DOUBLE_BRACE}}` and nothing else, so this check is exact:
 
   ```bash
   grep -rn "{{" CLAUDE.md wheelhouse/
   ```
 
-  Expect zero. The HTML comments in the contracts' `## This project` sections are guidance for the section's future contents, not placeholders — leave them where you have nothing to write yet, and do not count them here.
+  Expect zero. The HTML comments in the contracts' `## This project` sections are guidance, not placeholders, and do not count here.
+
+  What to do with them: **when you have content for a section, REPLACE its comment with that content. When you have nothing, leave the comment where it is.** The comment is a prompt for whoever fills the section later, so it stops being useful the moment the section is filled — and a section carrying both guidance and content reads as though the content is an example of what to write.
 - **Confirm the bench stub fails.** It is the one file whose whole job is to exit non-zero:
 
   ```bash
@@ -206,7 +226,7 @@ Run each of these and paste what it prints:
 - Confirm every file you created exists and is non-empty.
 - Print the resulting tree.
 
-## 5b. Commit
+## 7. Commit
 
 Commit the install so the principal can see exactly what was added and revert it in one step:
 
@@ -222,7 +242,7 @@ Inside `.beads/` there is a JSONL file and a database. The JSONL is the durable,
 
 Do not push. Pushing is a principal-only action, here and in every wheelhouse.
 
-## 6. Hand back
+## 8. Hand back
 
 Tell the principal plainly:
 
