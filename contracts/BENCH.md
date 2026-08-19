@@ -46,6 +46,14 @@ assertion, and the stub keeps the reviewer honest until it is filled.
 
 ### How the target is started and torn down
 
+<!--
+Only some benches need this. A long-running target -- a server, an emulator, a
+container -- has to be started and torn down around the assertion. A one-shot
+artifact -- a CLI, a library, a batch job -- does not, and its bench is much
+shorter. Delete this section if it does not apply rather than inventing content
+for it.
+-->
+
 ### What the error scan looks for
 
 ### Prerequisites

@@ -17,3 +17,27 @@ This specimen shows only what the interview writes: the roster below.
 | (commander) | this folder's `CLAUDE.md` | The principal's own session |
 
 Minimum viable fleet for this project. A second worker goes in when the reviewer is idle waiting for work; a designer goes in when the principal is spending more time decomposing beads than deciding direction.
+
+---
+
+## What the installed file actually looks like
+
+This specimen shows only the generated half. The file at `wheelhouse/fleet/SEATS.md` in a real project is:
+
+```
+# Fleet: Seats
+<intro line>
+
+## Contract                 <- copied verbatim from contracts/SEATS.md, never edited
+  ### What a seat is
+  ### Seat accounting       <- one seat = one subscription = one human beneficiary
+  ### Rules
+  ### Launching a seat
+  ### Standing prompt
+  ### Minimum viable fleet
+
+## This project             <- everything from here down is generated, and is the
+  ### Roster                   only part this specimen shows
+```
+
+If your installed file is missing the contract half, the install split it in the wrong place. That has happened; see the note in `BOOTSTRAP.md` about matching the heading exactly.

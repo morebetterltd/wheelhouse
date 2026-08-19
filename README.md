@@ -10,7 +10,7 @@ This repo is the template. It ships the contracts those roles share, one worked 
 
 - a git repository you want the fleet to work on
 - [Claude Code](https://claude.com/claude-code)
-- the `bd` CLI (the work graph) on your PATH
+- the `bd` CLI (the work graph) on your PATH — `brew install beads`, or see https://github.com/gastownhall/beads
 - `git` able to reach this repo
 
 ## Install
@@ -59,9 +59,10 @@ It will survey your repo, ask you about five things it cannot derive, write the 
     │   ├── REVIEWER.md          contract + your branch conventions
     │   ├── BENCH.md             contract + what proves YOUR build works
     │   └── bench.sh             stub — exits non-zero until you implement it
-    └── fleet/
-        ├── WORKER.md            contract + your repos, and your gotchas as you earn them
-        └── SEATS.md             contract + your roster
+    ├── fleet/
+    │   ├── WORKER.md            contract + your repos, and your gotchas as you earn them
+    │   └── SEATS.md             contract + your roster
+    └── runbooks/                seat discovery, and the graduations to take later
 ```
 
 ## Contract, and this project
