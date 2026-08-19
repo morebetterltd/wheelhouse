@@ -30,6 +30,7 @@ mkdir -p wheelhouse
   echo "commit=$(git -C "$TEMPLATE" rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "path=$TEMPLATE"
   echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "upgraded="
 } > wheelhouse/.template-source
 cat wheelhouse/.template-source
 ```
@@ -40,7 +41,7 @@ Every later step reads `path=` out of that file rather than trusting `$TEMPLATE`
 TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 ```
 
-The `commit=` line is the provenance record. It is what tells a future reader which version of the contracts this project installed, and it is the baseline the upgrade path in the README compares against. Without it, "re-copy the contracts" has nothing to diff from.
+`installed=` records when this project first installed and is never rewritten afterwards; `upgraded=` is the one an upgrade updates. The `commit=` line is the provenance record. It is what tells a future reader which version of the contracts this project installed, and it is the baseline the upgrade path in the README compares against. Without it, "re-copy the contracts" has nothing to diff from.
 
 **A clone of an empty or unpushed repository exits 0.** It creates the directory, prints nothing alarming, and leaves you with nothing to install. If the files above are missing, STOP and tell the principal the template is empty or unreachable — do not proceed, and do not reconstruct the contracts from memory or from this document. A wheelhouse whose contracts were invented by the installer is worse than no wheelhouse, because it looks like the real thing.
 
@@ -141,17 +142,28 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 Run each of these and paste what it prints:
 
-- **Contract integrity — this one first, and stop if it fails.** Every installed `## Contract` section must be byte-identical to the template's. Check each one:
+- **Contract integrity — this one first, and stop if it fails.** (Upgrading rather than installing? `wheelhouse/runbooks/UPGRADE.md` is the procedure; it uses this same check, and step 0 there covers installs old enough to have no `.template-source` at all.) Every installed `## Contract` section must be byte-identical to the template's. Check each one:
 
   ```bash
   ROOT="$PWD"
   TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 
   # A missing or empty template path makes every comparison below vacuously true.
-  # That is the failure mode this whole check exists to prevent, so refuse to run.
+  # That is the failure mode this whole check exists to prevent, so refuse to run --
+  # but try to recover first, because path= points at a mktemp directory the OS
+  # eventually deletes, and an upgrade months later will always find it gone.
   if [ -z "$TEMPLATE" ] || [ ! -s "$TEMPLATE/contracts/WORKER.md" ]; then
-    echo "FAIL cannot verify contracts: template source is missing or empty ($TEMPLATE)"
-    echo "     re-clone the template and re-run this check before reporting anything"
+    SOURCE=$(sed -n 's/^source=//p' wheelhouse/.template-source 2>/dev/null)
+    if [ -n "$SOURCE" ]; then
+      TEMPLATE=$(mktemp -d)
+      echo "template path was dead; re-cloning from $SOURCE"
+      git clone --quiet "$SOURCE" "$TEMPLATE" || true
+      sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+    fi
+  fi
+  if [ -z "$TEMPLATE" ] || [ ! -s "$TEMPLATE/contracts/WORKER.md" ]; then
+    echo "FAIL cannot verify contracts: no usable template ($TEMPLATE)"
+    echo "     recover one per wheelhouse/runbooks/UPGRADE.md step 0-1, then re-run"
     exit 1
   fi
 

@@ -68,7 +68,7 @@ It will survey your repo, ask you about the handful of things it cannot derive �
     ├── fleet/
     │   ├── WORKER.md            contract + your repos, and your gotchas as you earn them
     │   └── SEATS.md             contract + your roster
-    └── runbooks/                seat discovery, and the graduations to take later
+    └── runbooks/                seat discovery, upgrading, and the graduations to take later
 ```
 
 ## Contract, and this project
@@ -85,7 +85,7 @@ That split is the whole design. It means a project's specifics never get tangled
 |---|---|
 | `contracts/` | the briefs, copied verbatim at install |
 | `generated/` | specimens of what the interview writes — never copied, and drawn from an invented project so they cannot be mistaken for a starting point |
-| `runbooks/` | seat discovery, and the graduations to take once the loop has proven itself |
+| `runbooks/` | seat discovery, the upgrade procedure, and the graduations to take once the loop has proven itself |
 | `examples/android-cordova/` | one fully worked bench, from a real project, labelled as one project's implementation |
 | `BOOTSTRAP.md` | the procedure the install session follows |
 
@@ -103,11 +103,17 @@ A seat is a standing session pinned to **one subscription, serving one human ben
 
 ## Upgrading
 
-When these contracts improve, re-copy `contracts/` over your project's copies and keep your `## This project` sections. That is the entire upgrade path, and the two-section split is what makes it safe. There is no tooling for it, deliberately — a file copy you understand beats a migration you do not.
+When these contracts improve, you re-copy the six contract files and keep your `## This project` sections. The two-section split is what makes that safe, and there is no tooling for it deliberately — a file copy you understand beats a migration you do not.
 
-Your install records where it came from in `wheelhouse/.template-source`: the template's remote, the exact commit installed, and the date. That is your baseline — diff the template's `contracts/` at that commit against its current `main` to see precisely what changed before you copy anything, and update the file when you do. Without it, upgrading means comparing your contracts against a moving target and guessing which differences are yours.
+The full procedure is [`runbooks/UPGRADE.md`](runbooks/UPGRADE.md), which installs into your project along with the other runbooks. It covers the parts that are not obvious:
 
-After any re-copy, re-run the contract-integrity check from `BOOTSTRAP.md`. It is the same check the install runs, and it is the one that tells you whether the copy landed cleanly.
+- how to reconstruct your baseline if you installed before `.template-source` existed, which every early install did;
+- getting a clone with enough history to diff against (the install clone is `--depth 1` and cannot);
+- copying the six `.md` files by name, because `cp -r contracts/` would drop the bench stub over your implemented bench;
+- splicing with the same exact-heading rule the install uses, since that is the operation people get wrong;
+- and sweeping the things a contract copy cannot reach — your generated files and the beads already in your graph — when a convention changes.
+
+Your install records its baseline in `wheelhouse/.template-source`: the template's remote, the commit installed, and when. Upgrades add an `upgraded=` line and leave `installed=` alone, because when you started and when you last upgraded are different facts.
 
 ## License
 
