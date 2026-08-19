@@ -42,7 +42,7 @@ Two things before you start:
   me. Do not work around it, and do not overwrite anything I already have.
 ```
 
-It will survey your repo, ask you about five things it cannot derive, write the tree, verify it, and tell you what is stubbed.
+It will survey your repo, ask you about the five things it cannot derive — and one more if you want seats set up straight away — then write the tree, verify it, and tell you what is stubbed.
 
 ## What lands in your project
 

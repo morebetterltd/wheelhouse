@@ -94,28 +94,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 Run each of these and paste what it prints:
 
-- `bd ready` — returns without error. On an empty graph this prints nothing, which is indistinguishable from a broken install, so prove the graph round-trips instead: create a real first bead, list it, and leave it in place as the fleet's first piece of work.
-
-  ```bash
-  bd create "Implement crew/bench.sh against crew/BENCH.md" -p 1 \
-    --description="The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: contracts/BENCH.md clauses 1-8."
-  bd ready          # must now list that bead
-  ```
-- A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
-
-  ```bash
-  grep -rnwE "Ebb|ebb|cordova|emulator|app-review|com\.example\.app" CLAUDE.md wheelhouse/
-  ```
-
-  **Expect zero hits.** If specimen strings appear in the project's files, the install leaked and must be fixed before you report success.
-- A grep for unfilled placeholders. Anything you leave for the principal to fill uses `{{DOUBLE_BRACE}}` and nothing else, so this check is exact:
-
-  ```bash
-  grep -rn "{{" CLAUDE.md wheelhouse/
-  ```
-
-  Expect zero. The HTML comments in the contracts' `## This project` sections are guidance for the section's future contents, not placeholders — leave them where you have nothing to write yet, and do not count them here.
-- **Contract integrity — run this before anything else, and stop if it fails.** Every installed `## Contract` section must be byte-identical to the template's. Check each one:
+- **Contract integrity — this one first, and stop if it fails.** Every installed `## Contract` section must be byte-identical to the template's. Check each one:
 
   ```bash
   # $TEMPLATE is the clone you fetched; $ROOT is the project root
@@ -139,6 +118,27 @@ Run each of these and paste what it prints:
 
 - **Check `GRAPH.md`'s version-stamped claims against the CLI you actually have.** It states that this build has no `in_review` status and that the review queue is a `needs-review` label. Run `bd --help` (and `bd update --help`) and confirm. If your build disagrees, correct `wheelhouse/GRAPH.md` now and say so in the hand-back — the file says it is stamped rather than eternal, and an install is the moment to check.
 
+- `bd ready` — returns without error. On an empty graph this prints nothing, which is indistinguishable from a broken install, so prove the graph round-trips instead: create a real first bead, list it, and leave it in place as the fleet's first piece of work.
+
+  ```bash
+  bd create "Implement crew/bench.sh against crew/BENCH.md" -p 1 \
+    --description="The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: contracts/BENCH.md clauses 1-8."
+  bd ready          # must now list that bead
+  ```
+- A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
+
+  ```bash
+  grep -rnwE "Ebb|ebb|cordova|emulator|app-review|com\.example\.app" CLAUDE.md wheelhouse/
+  ```
+
+  **Expect zero hits.** If specimen strings appear in the project's files, the install leaked and must be fixed before you report success.
+- A grep for unfilled placeholders. Anything you leave for the principal to fill uses `{{DOUBLE_BRACE}}` and nothing else, so this check is exact:
+
+  ```bash
+  grep -rn "{{" CLAUDE.md wheelhouse/
+  ```
+
+  Expect zero. The HTML comments in the contracts' `## This project` sections are guidance for the section's future contents, not placeholders — leave them where you have nothing to write yet, and do not count them here.
 - Confirm every file you created exists and is non-empty.
 - Print the resulting tree.
 
