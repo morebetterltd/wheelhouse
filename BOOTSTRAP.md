@@ -36,6 +36,26 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 ## 4. Write
 
 - `bd init` in the project root; confirm the graph exists.
+
+- **Reconcile `AGENTS.md`.** `bd init` writes an `AGENTS.md` at the root whose session-completion section mandates pushing — "work is NOT complete until `git push` succeeds", "NEVER stop before pushing", "YOU must push". At this root that is a direct contradiction of `wheelhouse/fleet/WORKER.md`, which forbids a worker from pushing at all, and of the principal-only actions the principal just confirmed. Two files at the same root giving opposite orders is a defect regardless of which one an agent follows.
+
+  Keep bd's useful content — the command reference is genuinely handy — and override the mandate. Append a section to `AGENTS.md`:
+
+  ```markdown
+  ## This project runs a wheelhouse — the rules above are overridden
+
+  `CLAUDE.md` at this root and `wheelhouse/fleet/WORKER.md` govern. Where they and
+  the section above disagree, they win.
+
+  Specifically: **do not push.** Pushing to any remote is a principal-only action
+  here. A worker's output is a reviewable branch, and work is complete when it is
+  committed locally and reported with evidence — not when it is pushed. Ignore
+  "landing the plane" as written above; land it by reporting.
+
+  The bd command reference above is accurate and worth keeping.
+  ```
+
+  Say plainly in your hand-back that you did this and why. A principal who later reads `AGENTS.md` unaware of the override will be confused by it, and the fleet's behaviour will look like disobedience rather than policy.
 - Create `wheelhouse/crew/` and `wheelhouse/fleet/`.
 - Copy **verbatim** from the template's `contracts/`:
   - `WORKER.md` and `SEATS.md` into `wheelhouse/fleet/`
