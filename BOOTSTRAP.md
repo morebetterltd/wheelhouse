@@ -172,7 +172,7 @@ Run each of these and paste what it prints:
   done
   ```
 
-  Any `FAIL` means the install damaged a contract. Stop and repair it before continuing. Every other check in this list can pass on a file whose contract you deleted — this is the only one that looks.
+  A `FAIL` means the installed contract differs from your template source — it does not say why. Two causes exist: the install damaged the contract, or your template clone is newer than the install (contracts do change). Compare the `commit=` in `wheelhouse/.template-source` against the template's HEAD to tell which: same commit → damaged, stop and repair; older commit → you are behind, and the README's upgrade note applies. Every other check in this list can pass on a file whose contract you deleted — this is the only one that looks.
 
 - **Check `GRAPH.md`'s version-stamped claims against the CLI you actually have.** It states that this build has no `in_review` status, so the review queue is a `needs-review` label instead.
 
