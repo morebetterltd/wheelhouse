@@ -47,7 +47,7 @@ Two things before you start:
   me. Do not work around it, and do not overwrite anything I already have.
 ```
 
-It will survey your repo, ask you about the five things it cannot derive — and one more if you want seats set up straight away — then write the tree, verify it, and tell you what is stubbed.
+It will survey your repo, ask you about the handful of things it cannot derive — six topics, plus your seats if you want them set up straight away — then write the tree, verify it, and tell you what is stubbed.
 
 ## What lands in your project
 
@@ -56,6 +56,7 @@ It will survey your repo, ask you about the five things it cannot derive — and
 ├── CLAUDE.md                    generated — makes this folder's sessions the commander
 ├── .beads/                      the work graph
 └── wheelhouse/
+    ├── .template-source        where these contracts came from, and at which commit
     ├── ISA.md                   generated — your goal, your claims, your decisions
     ├── STARTUP.md               generated — cold start with your real paths
     ├── GRAPH.md                 contract
@@ -103,6 +104,10 @@ A seat is a standing session pinned to **one subscription, serving one human ben
 ## Upgrading
 
 When these contracts improve, re-copy `contracts/` over your project's copies and keep your `## This project` sections. That is the entire upgrade path, and the two-section split is what makes it safe. There is no tooling for it, deliberately — a file copy you understand beats a migration you do not.
+
+Your install records where it came from in `wheelhouse/.template-source`: the template's remote, the exact commit installed, and the date. That is your baseline — diff the template's `contracts/` at that commit against its current `main` to see precisely what changed before you copy anything, and update the file when you do. Without it, upgrading means comparing your contracts against a moving target and guessing which differences are yours.
+
+After any re-copy, re-run the contract-integrity check from `BOOTSTRAP.md`. It is the same check the install runs, and it is the one that tells you whether the copy landed cleanly.
 
 ## License
 

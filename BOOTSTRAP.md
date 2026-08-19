@@ -73,7 +73,11 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    b. "What does the bench need in order to do that — what artifact does it take, and does anything have to be started and torn down around it?" A long-running target (a server, an emulator, a container) needs start and teardown; a one-shot artifact (a CLI, a library, a batch job) does not, and its bench is much shorter.
 
-   Together these fill the bench contract's project section. If the principal cannot answer yet, record it as unanswered and continue — the bench ships as an explicit stub.
+   c. "When it goes wrong, what does that look like in the logs or output — what should the bench scan for and treat as failure?"
+
+   d. "What does someone need installed or running before they can execute this bench at all?"
+
+   `crew/BENCH.md` has five project sections and these four questions fill them; the fifth, the artifact, comes from (b). Do not fill a section the principal did not answer. The template's own rule is no invention: an unanswered section says so, and the stub keeps the reviewer honest until it is filled. If the principal cannot answer yet, record it as unanswered and continue — the bench ships as an explicit stub.
 
 3. **First ideal state.** "What is true when this fleet's first iteration is done?" **DO NOT PROPOSE AN ANSWER.** This is the one thing only the principal knows, and a plausible suggestion gets accepted by default — after which the ISA states your goal rather than theirs.
 
@@ -81,11 +85,15 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 5. **Merge policy.** "Does a reviewer's APPROVE carrying bench evidence authorize a merge to your local main, or do you want to confirm each merge yourself?" **Default: the principal confirms each merge.** Say that auto-merge is a graduation documented in `runbooks/PROMOTION.md`, taken once the loop has been right on real merges — not a starting position.
 
-6. **Seats**, only if they want them now. Names and count. Offer the minimum viable fleet: commander, one worker, one reviewer.
+6. **Priorities.** `wheelhouse/GRAPH.md` has a project section for what P0 to P3 mean here. Offer this default and ask them to amend rather than compose: **P0 blocks the fleet or has an external deadline; P1 is the core loop; P2 is maintenance; P3 is nice-to-have.** If they accept it unchanged, say so in the file — a scheme that was confirmed reads differently from one that was assumed.
+
+7. **Seats**, only if they want them now. Names and count. Offer the minimum viable fleet: commander, one worker, one reviewer.
 
 ## 4. Write
 
-- `bd init` in the project root; confirm the graph exists. Its output is verbose and mentions daemons, migrations and sync; that is normal and not an error. If it reports something you cannot explain, run `bd doctor` and paste the output rather than continuing on the assumption it was fine.
+- `bd init` in the project root; confirm the graph exists. Its output is verbose and mentions daemons, migrations and sync; that is normal and not an error.
+
+  What IS worth stopping for: a non-zero exit, a refusal to create `.beads/`, or a message naming a conflicting existing database. Anything else, run `bd doctor`, paste the output, and continue. Treat `bd doctor`'s upgrade suggestions as advisory — one of them names a formula that may not exist.
 
 - **Reconcile `AGENTS.md`.** `bd init` writes an `AGENTS.md` at the root whose session-completion section mandates pushing — "work is NOT complete until `git push` succeeds", "NEVER stop before pushing", "YOU must push". At this root that is a direct contradiction of `wheelhouse/fleet/WORKER.md`, which forbids a worker from pushing at all, and of the principal-only actions the principal just confirmed. Two files at the same root giving opposite orders is a defect regardless of which one an agent follows.
 
@@ -167,8 +175,8 @@ Run each of these and paste what it prints:
 - `bd ready` — returns without error. On an empty graph this prints nothing, which is indistinguishable from a broken install, so prove the graph round-trips instead: create a real first bead, list it, and leave it in place as the fleet's first piece of work.
 
   ```bash
-  bd create "Implement crew/bench.sh against crew/BENCH.md" -p 1 \
-    --description="The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: contracts/BENCH.md clauses 1-8."
+  bd create "Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md" -p 1 \
+    --description="The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: the eight clauses in wheelhouse/crew/BENCH.md."
   bd ready          # must now list that bead
   ```
 - A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
@@ -185,6 +193,16 @@ Run each of these and paste what it prints:
   ```
 
   Expect zero. The HTML comments in the contracts' `## This project` sections are guidance for the section's future contents, not placeholders — leave them where you have nothing to write yet, and do not count them here.
+- **Confirm the bench stub fails.** It is the one file whose whole job is to exit non-zero:
+
+  ```bash
+  bash wheelhouse/crew/bench.sh; echo "bench stub exit=$?"   # must be non-zero
+  ```
+
+  A stub that exits 0 would let the first behavioral APPROVE through on nothing.
+
+- Confirm `wheelhouse/runbooks/` contains both runbooks. `SEATS.md` and `STARTUP.md` link to them by path, and a missing runbook is a broken link at the moment someone needs it.
+
 - Confirm every file you created exists and is non-empty.
 - Print the resulting tree.
 
@@ -193,11 +211,14 @@ Run each of these and paste what it prints:
 Commit the install so the principal can see exactly what was added and revert it in one step:
 
 ```bash
-git add CLAUDE.md AGENTS.md wheelhouse/ .beads/
+git status --short          # look first: bd init may have added files you did not expect
+git add CLAUDE.md AGENTS.md .gitattributes wheelhouse/ .beads/
 git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"
 ```
 
-Commit `.beads/` unless the principal says otherwise. The graph is the project's work state, it is meant to be shared between seats and to survive a fresh clone, and a graph that lives only on one machine is not a single source of anything. If the principal prefers it untracked, add it to `.gitignore` and say what that costs.
+`bd init` also writes `.gitattributes` (it sets up merge behaviour for the graph). Include it, or the next clone loses that behaviour silently.
+
+Inside `.beads/` there is a JSONL file and a database. The JSONL is the durable, diffable record and is the one that matters in git; the database is a local cache rebuilt from it. Committing the directory as a whole is fine and is what the tool expects. Commit `.beads/` unless the principal says otherwise. The graph is the project's work state, it is meant to be shared between seats and to survive a fresh clone, and a graph that lives only on one machine is not a single source of anything. If the principal prefers it untracked, add it to `.gitignore` and say what that costs.
 
 Do not push. Pushing is a principal-only action, here and in every wheelhouse.
 
