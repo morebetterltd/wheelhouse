@@ -2,7 +2,7 @@
 
 ## Contract
 
-The seat contract — what a seat is, seat accounting, the rules, launching, and the standing prompt — is `contracts/SEATS.md`, copied verbatim into `wheelhouse/fleet/SEATS.md` at install. It is not reproduced here, and it is not edited per-project.
+The seat contract — what a seat is, seat accounting, the rules, launching, and the standing prompt — is `contracts/SEATS.md` in the template repo, copied verbatim into `wheelhouse/fleet/SEATS.md` at install. It is not reproduced here, and it is not edited per-project.
 
 This specimen shows only what the interview writes: the roster below.
 
@@ -12,8 +12,8 @@ This specimen shows only what the interview writes: the roster below.
 
 | Seat | Role brief | Notes |
 |---|---|---|
-| `seat-worker-1` | `fleet/WORKER.md` | Primary implementation |
-| `seat-reviewer` | `crew/REVIEWER.md` | Never authors what it reviews |
+| `seat-worker-1` | `wheelhouse/fleet/WORKER.md` | Primary implementation |
+| `seat-reviewer` | `wheelhouse/crew/REVIEWER.md` | Never authors what it reviews |
 | (commander) | this folder's `CLAUDE.md` | The principal's own session |
 
 Minimum viable fleet for this project. A second worker goes in when the reviewer is idle waiting for work; a designer goes in when the principal is spending more time decomposing beads than deciding direction.

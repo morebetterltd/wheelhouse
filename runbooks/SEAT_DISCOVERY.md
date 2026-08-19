@@ -18,9 +18,11 @@ Use plain `cp`. Symlinks are ignored by discovery.
 
 Run from the project root after launching or relaunching any seat.
 
+Seat names come from the roster in `wheelhouse/fleet/SEATS.md`, which is the one authoritative list. Do not invent names here or copy them from an example: a seat whose name does not match its roster entry is a seat the commander cannot address, and the failure looks exactly like an idle seat.
+
 ```bash
 PROJECT_ROOT="$PWD"
-SEATS="seat-worker-1 seat-reviewer"          # every seat you launched
+SEATS="{{SEAT_NAMES}}"   # space-separated; from the roster in wheelhouse/fleet/SEATS.md
 MAIN_REG="$HOME/.claude/sessions"
 SEAT_REG_BASE="$HOME/.claude-seats"
 

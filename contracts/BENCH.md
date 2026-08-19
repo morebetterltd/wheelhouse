@@ -26,7 +26,7 @@ A bench must satisfy all eight of these. They are stack-agnostic on purpose — 
 
 ### The stub
 
-A project without a bench yet ships `crew/bench.sh` as a stub that exits non-zero. An unimplemented bench that passes is indistinguishable from a bench that works, and the reviewer contract leans on the bench being real.
+A project without a bench yet ships `wheelhouse/crew/bench.sh` as a stub that exits non-zero. An unimplemented bench that passes is indistinguishable from a bench that works, and the reviewer contract leans on the bench being real.
 
 ## This project
 

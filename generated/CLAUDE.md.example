@@ -12,9 +12,9 @@ Read first: `wheelhouse/ISA.md` (state of record) and `wheelhouse/GRAPH.md` (how
 
 ## Merge policy
 
-The principal confirms each merge. A reviewer's APPROVE — carrying bench evidence, per `crew/REVIEWER.md` — is what makes the merge safe to confirm without reading the diff.
+The principal confirms each merge. A reviewer's APPROVE — carrying bench evidence, per `wheelhouse/crew/REVIEWER.md` — is what makes the merge safe to confirm without reading the diff.
 
-Auto-merge on APPROVE is a graduation, not a starting position. See `runbooks/PROMOTION.md` in the template for when to take it.
+Auto-merge on APPROVE is a graduation, not a starting position. See `wheelhouse/runbooks/PROMOTION.md` for when to take it.
 
 ## Principal-only actions
 

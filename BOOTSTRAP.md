@@ -58,7 +58,14 @@ You are forming PROPOSED ANSWERS to step 3. Asking a principal what language the
 
 Ask in as few turns as you can manage. Lead each question with your proposal from step 2, so the principal is correcting rather than composing.
 
-1. **Product repos.** "I see \<what you found\>. Are these the repos the fleet will change, and are they separate git repos from this root?"
+1. **Product repos, and therefore the shape of this install.** "I see \<what you found\>. Are these the repos the fleet will change, and are they separate git repos from this root?"
+
+   Two shapes, and the common one is the second:
+
+   - **Umbrella root.** This directory is a container; the product lives in one or more separate git repos beneath it. The wheelhouse installs at the container root, the graph spans the repos below it, and workers create worktrees inside each product repo.
+   - **Single repo.** This directory IS the product — one repo, no container. This is the ordinary case and it is fully supported: the wheelhouse installs at the product root, `CLAUDE.md` and `wheelhouse/` are committed alongside the code, and a worker's worktree is a SIBLING directory outside the repo (for example `../.wheelhouse-worktrees/<bead-id>`), so the worktree never nests inside the repo it is branching from.
+
+   Say which shape you are installing, and record it in the worker's `## This project` section along with where worktrees go. A worker that guesses this wrong creates a worktree inside the repo and pollutes the very diff it is meant to produce.
 
 2. **What "it runs" means.** Two questions, because `crew/BENCH.md` has five sections to fill and one answer fills one of them:
 

@@ -27,11 +27,11 @@ cd /path/to/project-root
 claude
 ```
 
-Paste that seat's standing prompt from `fleet/SEATS.md`. The seat idles until the commander sends it work by name.
+Paste that seat's standing prompt from `wheelhouse/fleet/SEATS.md`. The seat idles until the commander sends it work by name.
 
 ## 3. Wire discovery, then verify
 
-Per-seat config directories isolate each seat's session registry, so the commander cannot message a seat until their registrations are shared. Run the procedure in `runbooks/SEAT_DISCOVERY.md`, then ask the commander to verify the fleet: it should list every seat and round-trip a message to each. A seat that does not answer gets relaunched.
+Per-seat config directories isolate each seat's session registry, so the commander cannot message a seat until their registrations are shared. Run the procedure in `wheelhouse/runbooks/SEAT_DISCOVERY.md`, then ask the commander to verify the fleet: it should list every seat and round-trip a message to each. A seat that does not answer gets relaunched.
 
 ## 4. Feed it
 

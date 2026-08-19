@@ -38,7 +38,7 @@ claude   # first run only: log in with that seat's account
 Paste that seat's standing prompt as the first message.
 
 > Version-stamped: the `CLAUDE_CONFIG_DIR` mechanism and the cross-seat discovery
-> procedure in `runbooks/SEAT_DISCOVERY.md` depend on harness internals that can
+> procedure in `wheelhouse/runbooks/SEAT_DISCOVERY.md` depend on harness internals that can
 > change. Verified working August 2026. If seats cannot see each other, check the
 > current behaviour before assuming you mis-followed the steps.
 
@@ -48,7 +48,7 @@ Paste that seat's standing prompt as the first message.
 
 ### Minimum viable fleet
 
-Commander + one worker + one reviewer. That is a working loop. Add seats when a specific role is the bottleneck, not to fill out a roster — see `runbooks/PROMOTION.md`.
+Commander + one worker + one reviewer. That is a working loop. Add seats when a specific role is the bottleneck, not to fill out a roster — see `wheelhouse/runbooks/PROMOTION.md`.
 
 ## This project
 

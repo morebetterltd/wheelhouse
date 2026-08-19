@@ -12,7 +12,7 @@ Every graduation here is deliberately NOT the default. A template that ships the
 
 **Take it when:** you are dispatching often enough that context re-establishment is the slow part, and the worker/reviewer loop has produced merges you trusted.
 
-Promotion is configuration, not a rewrite: the briefs do not change, only how long the session lives. See `fleet/SEATS.md` and `runbooks/SEAT_DISCOVERY.md`.
+Promotion is configuration, not a rewrite: the briefs do not change, only how long the session lives. See `wheelhouse/fleet/SEATS.md` and `wheelhouse/runbooks/SEAT_DISCOVERY.md`.
 
 ## Principal-confirmed merges to auto-merge on APPROVE
 
@@ -26,7 +26,7 @@ Promotion is configuration, not a rewrite: the briefs do not change, only how lo
 - the bench is implemented and actually gates behavioral APPROVEs — an auto-merge policy on top of a stub bench is an auto-merge policy on top of nothing;
 - a bad merge is cheap to undo, because local main is local.
 
-The precondition is in `crew/REVIEWER.md`: an APPROVE without bench evidence on a behavioral diff is a defect in the review. That sentence is load-bearing for this graduation and travels with it.
+The precondition is in `wheelhouse/crew/REVIEWER.md`: an APPROVE without bench evidence on a behavioral diff is a defect in the review. That sentence is load-bearing for this graduation and travels with it.
 
 ## One vendor to cross-vendor seats
 
