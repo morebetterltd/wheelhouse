@@ -23,7 +23,13 @@ Install the wheelhouse in this repo.
 Clone the template somewhere temporary and read its BOOTSTRAP.md, then follow it
 exactly:
 
-  git clone --depth 1 git@github.com:morebetterltd/wheelhouse.git /tmp/wheelhouse-template
+  TEMPLATE=$(mktemp -d) && git clone --depth 1 \
+    git@github.com:morebetterltd/wheelhouse.git "$TEMPLATE" && \
+    test -f "$TEMPLATE/BOOTSTRAP.md" || echo "TEMPLATE CLONE FAILED OR EMPTY - STOP"
+
+If that prints the failure line, or $TEMPLATE/BOOTSTRAP.md does not exist, STOP and
+tell me. An empty clone exits 0 and looks like success; installing from one
+produces a wheelhouse with no contracts in it.
 
 BOOTSTRAP.md is the authoritative procedure — it tells you what to read before
 asking me anything, what to ask, what to write, and how to verify the install.

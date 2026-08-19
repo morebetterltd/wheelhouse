@@ -11,6 +11,15 @@ Work in this order. Do not reorder, and do not write anything before step 3 is a
 - Report uncommitted changes if there are any. Do not block on them; the principal may be mid-work.
 - **STOP IMMEDIATELY, without writing anything, if `wheelhouse/` or `CLAUDE.md` already exists.** Say what exists and ask what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable.
 
+## 1b. Confirm you actually have the template
+
+You were told to clone this repo into a temporary directory. Before you read another word of it, confirm the clone produced something:
+
+- `$TEMPLATE/BOOTSTRAP.md`, `$TEMPLATE/contracts/` and `$TEMPLATE/contracts/WORKER.md` all exist and are non-empty.
+- `ls $TEMPLATE/contracts/` lists six files.
+
+**A clone of an empty or unpushed repository exits 0.** It creates the directory, prints nothing alarming, and leaves you with nothing to install. If the files above are missing, STOP and tell the principal the template is empty or unreachable — do not proceed, and do not reconstruct the contracts from memory or from this document. A wheelhouse whose contracts were invented by the installer is worse than no wheelhouse, because it looks like the real thing.
+
 ## 2. Read before you ask
 
 Survey the repository so your questions are informed: build and dependency files, language and framework, test setup, CI config, existing docs, whether there are multiple product repos beneath this root, and how the project is built and run.
