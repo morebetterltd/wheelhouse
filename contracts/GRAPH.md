@@ -17,9 +17,20 @@ An errored command piped into a counter looks exactly like a clean zero. That ha
 
 On the build stamped below, a command whose operations ALL fail exits non-zero, but one where some succeeded and some failed exits zero: the mixed-result batch is the one case measured on that build where a failure reads as success. A near neighbour worth knowing is `bd update <id>` with no update flags — it prints `No updates specified` and exits zero without ever validating the id, so a mistyped flag turns the command into a silent no-op against an id that need not exist. Older builds were worse still: an invalid status update printed its error and exited zero. Establish which you have instead of carrying this sentence forward on faith.
 
-Where the CLI may be run from is build-dependent, and the answer is not simply "the root". bd 0.49.1 resolved the graph only from the project root. bd 1.2.2 resolves it from a plain subdirectory but still fails inside a NESTED GIT REPOSITORY — the workspace walk stops at the nested repo boundary, so a product repo checked out beneath the root gets `no beads database found` and exit 1. Measured 2026-08-20 from four places under one root: two plain subdirectories returned the graph at exit 0, two product repos carrying their own `.git` failed at exit 1. The discriminator is the nested repository, not the depth.
+Where the CLI may be run from is build-dependent, and the answer is neither "the root" nor "anywhere". bd 0.49.1 resolved the graph only from the project root. On bd 1.2.2 the workspace walk climbs out of a plain subdirectory and out of a git WORKTREE, but halts at a nested git REPOSITORY. Measured 2026-08-20 from six places under one root:
 
-That is the layout this contract's own interview prescribes, so run-from-root still holds wherever the fleet actually edits code. The consolation is that this build fails honestly — a message and a non-zero exit, rather than the silent-looking zero the original rule was written against. Before deciding the rule has lapsed on your build, measure from inside a nested repo and not just from a subdirectory.
+| run from | its `.git` | result |
+|---|---|---|
+| a plain subdirectory | none | exit 0, graph resolved |
+| a deeper plain subdirectory | none | exit 0 |
+| a git worktree beside the product repos | file | exit 0 |
+| a subdirectory inside that worktree | none | exit 0 |
+| a product repo checked out under the root | directory | exit 1, `no beads database found` |
+| a second product repo | directory | exit 1 |
+
+The discriminator is what kind of `.git` the walk meets, not how deep you are. A worktree's `.git` is a file pointing at the real repository and the walk passes through it — proven by the fourth row, which could not resolve if the walk halted at the worktree root. A repository's `.git` is a directory and the walk halts there, even though the graph sits one level above.
+
+For the layout this contract's own interview prescribes — product repos beneath the root, workers in worktrees beside them — that means the graph is reachable from a worker's worktree and unreachable from the product checkout. Run-from-root still holds for the product repos, and only for them. The consolation is that this build fails honestly there: a message and a non-zero exit, rather than the silent-looking zero the original rule was written against. Before deciding the rule has lapsed for your build, measure from inside a product repo AND from inside a worktree — the two do not behave alike, and testing only the one that happens to work is how a true measurement becomes a false rule.
 
 ### The review queue
 
