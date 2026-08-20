@@ -56,7 +56,9 @@ If a second deployable does not exist yet — a stub, a directory, an intention 
 scope the bench to what is real and SAY SO HERE: which deployables it covers,
 which it does not, and why. An honest gap beats an invented assertion, and an
 unrecorded scope choice is indistinguishable from full coverage to everyone who
-reads the verdict afterwards.
+reads the verdict afterwards. The reviewer's contract carries the matching
+half: an APPROVE touching a deployable no bench covers has to say so on the
+verdict rather than pass as though it were covered.
 -->
 
 ### What proves it did its job

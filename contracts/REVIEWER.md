@@ -17,7 +17,7 @@ The principal can trust an APPROVE enough to merge without reading the diff. Tha
 - **A merge answer and a push answer, as two labelled lines.** The second is required on every verdict, including the ones where you have no answer to give:
 
   ```
-  VERDICT: APPROVE | BOUNCE
+  VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers> | BOUNCE
   PUSH:    APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED
   ```
 
@@ -38,6 +38,8 @@ The principal can trust an APPROVE enough to merge without reading the diff. Tha
   An APPROVE says the work is sound and may join the shared line. It says nothing about publishing, and only publishing leaves the machine. Read on its own it is not a narrower approval and not a withheld one — it is silent on a question you may never have put to yourself.
 
   **Write `NOT CONSIDERED` when you did not consider it.** That value is what makes the line worth requiring. Without it the vocabulary has no way to say "I formed no view", so an absence of thought leaves as a bare verdict line and arrives looking like a judgement someone reached — indistinguishable, in the record, from a considered refusal. That is the same defect this contract names about unverifiable items, turned on the verdict itself. An absence needs a name of its own or it will keep borrowing one.
+
+  **`NOT BENCHED` is the same move on the other line**, for a project whose bench covers only part of what it ships. It is defined under *When no bench covers the part you are reviewing* below, with the two cases in which it is not enough and the verdict is a BOUNCE instead. A reviewer who works from this block alone still has to meet it, which is why it is named here rather than only there.
 
   The push line carries its own evidence, because the merge review does not cover it: the exact commit range, **the tip's own identifier compared against the one you reviewed**, and a scan of the added lines for credentials, keys, local paths and internal addresses. Name the remote. Authority over one remote is not authority over another.
 
@@ -82,6 +84,27 @@ The item closes when its holder confirms it, and their confirmation belongs on t
 Any APPROVE that claims or implies the software RUNS must carry a bench pass — the executable defined by `wheelhouse/crew/BENCH.md`, run by you, with its evidence attached to the verdict. Static verification alone can support an APPROVE only when the bead's done is itself static: config, docs, non-runtime.
 
 An APPROVE without bench evidence on a behavioral diff is a defect in the review, not a judgment call. This clause is the precondition for any merge policy that lets an APPROVE authorize a merge, and it travels with that policy wherever it goes.
+
+### When no bench covers the part you are reviewing
+
+A project's bench can cover only some of what the project ships. A second deployable may still be a stub, a seam between two may not be exercisable yet, a component's harness may not exist. `wheelhouse/crew/BENCH.md`'s project section is where a project records which deployables its bench covers and which it does not. A partial bench is a scope decision, not a defect, and it is not grounds to refuse a review.
+
+The defect is an APPROVE on the uncovered part that does not say so. The clause above tells you not to claim the software runs without bench evidence; it does not tell you what to write when no bench for this part exists. Left there, the careful reviewer and the careless one produce the same verdict — APPROVE, with nothing recording that no bench was available — and the next reader cannot tell which one they are holding. Silence is read as coverage, because coverage is the ordinary case.
+
+Name the absence on the verdict line, where the reader is already looking:
+
+```
+VERDICT: APPROVE — NOT BENCHED: <what this diff touches that no bench covers>
+```
+
+It rides the line the verdict already has rather than adding a second place to look, for the same reason `NOT CONSIDERED` does: a fact kept somewhere the reader must go and find is a fact that stops arriving.
+
+Such an APPROVE is narrower than an ordinary one, and making the narrowness visible is the whole point. You are approving the change on everything except its runtime behaviour, and you are naming the part you could not put behind evidence.
+
+Two limits on it, because a name for an absence becomes a way to wave the absence through:
+
+- **If the bead's done is itself a behavioral claim about the uncovered part, `NOT BENCHED` is not enough — that is a BOUNCE.** The done cannot be shown to hold by any means you have, and an APPROVE would be endorsing the author's word for the one thing the bench exists to check. The marker reports a gap in coverage; it does not license approving through one.
+- **If the uncovered part is not recorded in the project's `BENCH.md`, say that too.** An unrecorded scope choice is what the bench contract asks the project to write down, and you have just found one by tripping over it.
 
 ## This project
 
