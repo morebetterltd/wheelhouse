@@ -50,7 +50,13 @@ Generated at install; the fleet accretes here as review earns it.
 
 ### Repos and where work lands
 
-<!-- The repos a worker may change, and the branch merges target. -->
+<!--
+The repos a worker may change, and the branch merges target — the branch NAME
+as it exists in that repository, not the one the project assumes. Confirm it
+against `git -C <repo> branch --list` before writing it here; repos under one
+root need not agree with each other. Do not take the answer from the currently
+checked-out branch: in a worktree that is the worktree's own branch.
+-->
 
 ### Verified gotchas
 

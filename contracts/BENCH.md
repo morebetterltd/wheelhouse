@@ -71,14 +71,23 @@ If this is not yet answerable, say so here. An honest gap beats an invented
 assertion, and the stub keeps the reviewer honest until it is filled.
 -->
 
-### How the target is started and torn down
+### What is set up and torn down around the assertion
 
 <!--
-Only some benches need this. A long-running target -- a server, a virtual
-device, a container -- has to be started and torn down around the assertion. A one-shot
-artifact -- a CLI, a library, a batch job -- does not, and its bench is much
-shorter. Delete this section if it does not apply rather than inventing content
-for it.
+The target, if it is long-running: a server, a virtual device, a container has
+to be started and stopped around the assertion.
+
+AND the fixtures, whether or not the target is long-running. A one-shot
+artifact -- a CLI, a library, a batch job -- starts nothing, but it usually
+still needs something created for it to act on and removed afterwards: a
+throwaway directory, a scratch database, a copied input file. Those belong
+here. They are what clause 3 means by clean state and what clause 6 means by
+tearing down, and a bench that leaves them behind fails both while passing
+every check that only asks whether the process exited.
+
+Delete this section only if NOTHING is created for the run and nothing is left
+after it -- which is rarer than it sounds. Filling it with "not applicable"
+because the target is one-shot is the mistake this wording exists to prevent.
 -->
 
 ### What the error scan looks for

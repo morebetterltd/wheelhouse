@@ -57,6 +57,15 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 
 Survey the repository so your questions are informed: build and dependency files, language and framework, test setup, CI config, existing docs, whether there are multiple product repos beneath this root, and how the project is built and run.
 
+Read the branch that merges target out of each repository rather than assuming it, once per product repo, because they need not agree. This is the one survey answer that gets written into several installed files at once, so a guess here is a guess repeated: an install that assumed `master` wrote it into three files, and it surfaced only when a worker ran a dispatch's read path and got `fatal: ambiguous argument 'master'`.
+
+```bash
+git -C <repo> branch --list                             # what actually exists
+git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD   # if there is a remote
+```
+
+Ask the principal for the merge target and check the name you are given against that list. `branch --list` does not answer the question either — it returns the SET of branches that exist, and which one merges target is not a property of the repository. That is the point rather than a hedge: swapping one command for another would reproduce the same defect with better manners, because the failure was never the command, it was taking a value from a tool that was answering something adjacent. Note what `git -C <repo> symbolic-ref --short HEAD` does NOT tell you: it reports the branch currently checked out, which in a worktree is the worktree's own feature branch. Measured on one repository — `master` from its own checkout, `fleet/<bead-id>` from a worktree beside it, and nothing in either answer says which question was asked.
+
 You are forming PROPOSED ANSWERS to step 4. Asking a principal what language their own project is in tells them you did not look.
 
 ## 4. Interview — propose, then confirm
@@ -76,7 +85,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    a. "For a \<project type\>, I would prove a build works by \<your proposal: a server answers a health check; a CLI executes a real command against real input; an app installs and reaches its first screen\>. What is the observation that would convince you a build actually works?"
 
-   b. "What does the bench need in order to do that — what artifact does it take, and does anything have to be started and torn down around it?" A long-running target (a server, an emulator, a container) needs start and teardown; a one-shot artifact (a CLI, a library, a batch job) does not, and its bench is much shorter.
+   b. "What does the bench need in order to do that — what artifact does it take, and what has to be set up and cleaned away around the assertion?" Ask both halves. A long-running target (a server, an emulated device, a container) has to be started and stopped. A one-shot artifact (a CLI, a library, a batch job) starts nothing, but it almost always needs something created for it to act on and removed afterwards — a scratch directory, a throwaway database, a copied input. Asking only about the target invites "nothing" from a principal whose bench does need a fixture, and the answer is then recorded as though the question had been the wider one.
 
    c. "When it goes wrong, what does that look like in the logs or output — what should the bench scan for and treat as failure?"
 
@@ -289,6 +298,19 @@ git status --short          # look first: bd init may have added files AND a com
 git add CLAUDE.md AGENTS.md wheelhouse/ .beads/
 git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"
 ```
+
+Before you stage, make the worktree directory invisible to this repository. Workers create worktrees at the location you recorded in step 4, and in the umbrella shape that location is INSIDE this repo — so every worktree that exists shows up as untracked in the container root's `git status` from then on, which is the diff pollution the location was chosen to avoid, arriving one level up.
+
+```bash
+# umbrella shape: the worktree directory sits inside this repo
+[ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ] && printf '\n' >> .gitignore
+grep -qxF '.wheelhouse-worktrees/' .gitignore 2>/dev/null \
+  || printf '.wheelhouse-worktrees/\n' >> .gitignore
+```
+
+The first line is not decoration. `>>` appends at the byte the file ends on, and a `.gitignore` whose last line has no trailing newline — ordinary output from plenty of editors and generators — turns `node_modules/` and the new entry into the single line `node_modules/.wheelhouse-worktrees/`, which matches neither. Measured: the previously-ignored directory stops being ignored, the new one never starts, and the corrupted file ships inside the install commit to a file nobody re-reads. Verified across all three starting states — no file, trailing newline, no trailing newline — three runs each and idempotent.
+
+Measured: before, `git status --short` at the container root reports `?? .wheelhouse-worktrees/`; after, it reports nothing for it. In the SINGLE-REPO shape there is nothing to do here — the worktree location is a sibling OUTSIDE this repo, so this repo never sees it. If that sibling location happens to sit inside some other repository, that repository is not this install's to edit; say so to the principal rather than leaving dirt they will find later and attribute to their own working copy.
 
 Stage what `git status` actually shows, not a remembered list. What bd writes varies by build: some versions add `.gitattributes` (graph merge behaviour — include it if present, or the next clone loses that behaviour silently), current ones add `.claude/`, `.codex/` and `.agents/` and commit them unasked, so those may already be in history before you stage anything. Never `git add` a path you have not seen in the status output — `git add` is atomic, and one nonexistent pathspec fails the whole command having staged **nothing**, which leaves you believing the commit is prepared when it is empty.
 
