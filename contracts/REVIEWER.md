@@ -25,6 +25,16 @@ Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 - The worker's report is a CLAIM, not evidence. Re-run what is cheap, and say explicitly what you could not re-run.
 - Check the claims as well as the code. A correct change described by a false sentence still ships that sentence, and the next reader believes it.
 
+### Reading a branch without disturbing it
+
+- **Default: read, do not check out.** `git diff <base> <sha>` and `git show <sha>:<path>` from the canonical repository answer essentially every review question. A working tree was only ever needed for building and running.
+- **When you genuinely need a working tree** — to build, to bench, to run the thing — create your own: `git worktree add <your-own-path> <sha>`. Detaching a worktree you made is harmless. That is what it is for.
+- **Never run `git checkout` in a directory you did not create.**
+
+The prohibition is phrased that way on purpose. "Stay out of other seats' worktrees" sounds equivalent and is not: acting on it requires knowing whose directory you are standing in, which is precisely the knowledge missing at the moment the mistake gets made. "Did I create this path?" is a question you can always answer about yourself, with no map of anyone else's state. A prohibition whose precondition you cannot evaluate is not a prohibition.
+
+What it prevents is not damage to the directory. It is that the author working there is now committing to a detached HEAD, their log still looks right, and neither of you can see it from where you are standing.
+
 ### What you structurally cannot verify
 
 Some items are unverifiable by you in principle rather than for want of effort: the evidence lives with someone else, or checking it needs access the review role does not have. Verbatim text you were told to reproduce is the standard case — only whoever holds the source can say whether it matches.
