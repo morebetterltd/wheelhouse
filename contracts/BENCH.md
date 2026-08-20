@@ -28,13 +28,30 @@ A bench must satisfy all eight of these. They are stack-agnostic on purpose — 
 
 A project without a bench yet ships `wheelhouse/crew/bench.sh` as a stub that exits non-zero. An unimplemented bench that passes is indistinguishable from a bench that works, and the reviewer contract leans on the bench being real.
 
+### Worked examples
+
+The template repository carries two, under `examples/`. Each is one project's implementation, not a spec, and they are there because reading a real bench beats reading criteria. Read the one whose shape is closer to yours, then write your own against the eight clauses above.
+
+- a mobile app benched on an emulated device — installs an artifact, drives it, and asserts on what rendered
+- an HTTP service with a separate background worker — starts a throwaway database per run, asserts across the seam between two deployables, and tears down on interrupt
+
+The second is the one to read if your project ships more than one deployable, or if starting from clean state means standing up a dependency rather than wiping a device.
+
 ## This project
 
 Generated at install.
 
 ### What the artifact is
 
-<!-- The thing the bench receives: a binary, an image, a package, an installer. -->
+<!--
+The thing the bench receives: a binary, an image, a package, an installer.
+
+If this project ships MORE THAN ONE deployable, name them all here and say what
+single thing the bench takes as its argument — a manifest naming each, most
+likely. One bench per deployable and none for the seam between them leaves the
+failure they are most likely to have uncovered. See the HTTP-service example in
+the template repository for one way to do it.
+-->
 
 ### What proves it did its job
 
