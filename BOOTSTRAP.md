@@ -67,7 +67,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    Two shapes, and the common one is the second:
 
-   - **Umbrella root.** This directory is a container; the product lives in one or more separate git repos beneath it. The wheelhouse installs at the container root, the graph spans the repos below it, and workers create worktrees inside each product repo.
+   - **Umbrella root.** This directory is a container; the product lives in one or more separate git repos beneath it. The wheelhouse installs at the container root, the graph spans the repos below it, and workers create worktrees BESIDE the product repos at the container root (for example `<root>/.wheelhouse-worktrees/<bead-id>`), never inside them — same reason as the single-repo case below, and it also keeps the graph reachable from inside the worktree, which `contracts/GRAPH.md` explains (a worktree's `.git` is a file the workspace walk passes through; a nested repo's `.git` is a directory that stops it).
    - **Single repo.** This directory IS the product — one repo, no container. This is the ordinary case and it is fully supported: the wheelhouse installs at the product root, `CLAUDE.md` and `wheelhouse/` are committed alongside the code, and a worker's worktree is a SIBLING directory outside the repo (for example `../.wheelhouse-worktrees/<bead-id>`), so the worktree never nests inside the repo it is branching from.
 
    Say which shape you are installing, and record it in the worker's `## This project` section along with where worktrees go. A worker that guesses this wrong creates a worktree inside the repo and pollutes the very diff it is meant to produce.
@@ -112,11 +112,14 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
   Specifically: **do not push.** Pushing to any remote is a principal-only action
   here. A worker's output is a reviewable branch, and work is complete when it is
-  committed locally and reported with evidence — not when it is pushed. Ignore
-  "landing the plane" as written above; land it by reporting.
+  committed locally and reported with evidence — not when it is pushed.
+
+  Ignore "landing the plane" as written above; land it by reporting.
 
   The bd command reference above is accurate and worth keeping.
   ```
+
+  The "landing the plane" line stands alone so the conservative-case strike is exact: delete that whole line and its blank line, change nothing else. Two installers taking that branch must produce identical files.
 
   Say plainly in your hand-back that you did this and why. A principal who later reads `AGENTS.md` unaware of the override will be confused by it, and the fleet's behaviour will look like disobedience rather than policy.
 - Create `wheelhouse/crew/` and `wheelhouse/fleet/`.
@@ -131,6 +134,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 **How to fill a `## This project` section, precisely.** Find the LAST line in the file that is exactly `## This project` — the whole line, nothing else on it. Everything above that line is the contract and is not yours to touch; everything below it is yours to write. Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A contract may legitimately discuss its own structure, and a naive match has already destroyed one contract file this way — deleting a licensing-compliance rule while every automated check still passed.
 - Fill each file's `## This project` section from the interview: the designer's territory, the worker's repos and its empty gotchas section, the reviewer's branch and worktree conventions, the bench's run-proof, and the integrator's push authority — the last in the principal's own words, with the date, because it is the one section that records a permission rather than a fact.
+- The integrator's third section, "How a shipped record gets corrected here", has no interview question on purpose: unless the principal volunteers a convention, fill it with the contract's own default — a follow-up commit naming the corrected commit's identifier, history never rewritten — and label it "adopted from the contract's default" so a later principal knows it was a default rather than their decision. Two cold installs both had to guess this; the default they guessed is now the documented one.
 - Fill `wheelhouse/fleet/SEATS.md`'s `## This project` roster from the seat answers, or with the minimum viable fleet and a note that seats can be added later. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
 - Write `CLAUDE.md` at the root: commander-session context, product changes happen in product repos via workers, new work becomes a bead immediately, deadline beads outrank everything, plus the principal-only actions from Q4 and the merge policy from Q5.
 - Write `wheelhouse/ISA.md`: the goal from Q3, empty claims, empty decisions, and any anti-claims stated. **Do not invent claims.** An ISA with fabricated claims is worse than an empty one.
