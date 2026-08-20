@@ -255,7 +255,17 @@ git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"
 
 `bd init` also writes `.gitattributes` (it sets up merge behaviour for the graph). Include it, or the next clone loses that behaviour silently.
 
-Inside `.beads/` there is a JSONL file and a database. The JSONL is the durable, diffable record and is the one that matters in git; the database is a local cache rebuilt from it. Committing the directory as a whole is fine and is what the tool expects. Commit `.beads/` unless the principal says otherwise. The graph is the project's work state, it is meant to be shared between seats and to survive a fresh clone, and a graph that lives only on one machine is not a single source of anything. If the principal prefers it untracked, add it to `.gitignore` and say what that costs.
+The graph is the project's work state: it is meant to be shared between seats and to survive a fresh clone, and a graph that lives only on one machine is not a single source of anything. What it takes to achieve that depends on the CLI build you have, so establish it rather than assuming — this is the step where a wrong assumption is invisible, because committing the directory looks identical either way.
+
+```bash
+cat .beads/.gitignore        # what the tool excludes from git itself
+ls .beads/                   # what it actually created
+git status --short .beads/   # what would be committed as things stand
+```
+
+Two shapes exist. If the issue data sits in a JSONL file git will track, committing `.beads/` gives you the durability above: the JSONL is the record that matters and the database beside it is a local cache rebuilt from it. If the data lives in a directory the tool's own `.gitignore` excludes, committing `.beads/` commits configuration and nothing else, and durability becomes a deliberate choice — enable the tool's JSONL export, use its own sync mechanism, or accept a machine-local graph and say so out loud. bd 1.2.2 is the second shape: an embedded database under `embeddeddolt/`, gitignored by the file bd writes itself, with JSONL export disabled by default.
+
+Commit `.beads/` unless the principal says otherwise, and report which shape you found and what you did about it. An installer who commits `.beads/`, then reports that the graph now survives a fresh clone, has written a sentence the next reader will believe and the defaults do not support.
 
 Do not push. Pushing is a principal-only action, here and in every wheelhouse.
 
