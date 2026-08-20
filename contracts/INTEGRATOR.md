@@ -63,6 +63,10 @@ Generated at install.
 Which remotes and repositories carry standing authorization, which are gated
 per push, in the principal's words and with the date. Inferences about scope
 recorded as inferences until the principal confirms them.
+
+If nothing is written here yet, the answer is per-push and the principal's —
+that is the shipped default, not an omission. `wheelhouse/runbooks/PROMOTION.md`
+describes what earns a standing grant and what returns you to per-push.
 -->
 
 ### How a shipped record gets corrected here

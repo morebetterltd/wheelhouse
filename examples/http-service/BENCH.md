@@ -45,6 +45,16 @@ What must not happen is the unrecorded version: a bench per deployable and none 
 
 **2. It exercises the built artifact.** The digests from the manifest are pulled and run as-is. No `docker build` from the working tree, no dev server, no `uvicorn --reload`. The commonest way to fail this clause on a service is to bench the thing you run locally rather than the image you ship; they differ in exactly the ways that bite in production — base image, entrypoint, environment.
 
+Registry digests are this stack's answer to the identity requirement in clause 2, not the requirement itself. A project that ships a compiled binary to a host by script has no registry to borrow from, and the analogue is the same shape: hash the built file when you build it, put the hash in whatever the bench receives, and have the bench re-compute it before running anything —
+
+```sh
+shasum -a 256 dist/the-binary | cut -d' ' -f1   # at build time, into the manifest
+# and in the bench, against the artifact it was handed:
+test "$(shasum -a 256 "$ARTIFACT" | cut -d' ' -f1)" = "$EXPECTED" || fail "artifact is not the one reviewed"
+```
+
+The point is not the hash function. It is that the bench refuses an artifact whose identity it cannot confirm, so "the bench passed" names a specific set of bytes rather than whatever was at that path. The same gap reaches the clean-state clause below: this bench runs its migration from inside the API image, and a project without images has to say what plays that part — the released binary invoked with a migrate subcommand, a separate migration tool pinned the same way. Answer it explicitly rather than letting the bench pick up whatever is on PATH.
+
 **3. It starts from clean state, every run.** A throwaway database container per run, no volume, migrated from empty, dropped by the teardown. This is the clause the Android example cannot demonstrate and the one a service stack gets wrong most often: a bench pointed at a development database passes on rows it did not create, and keeps passing after the code that created them is deleted. Every container name carries the run id — date plus a random suffix — which makes collision between runs unlikely in practice and a leaked container from an earlier run recognisable; nothing here depends on the name being unique in principle, and the script says so where the name is built.
 
 **4. Liveness is not success.** A container that is up proves a container is up. `/healthz` returning 200 proves a health endpoint exists — a Tideline API with every business route removed still answers it. So the bench stores a reading through the public API, reads it back, and asserts the record served is the record stored; then queues a summary job and requires the *worker* to be what completes it. The last assertion is the one worth copying: after the job reports `done`, the bench checks the summary is actually there. A worker that marks jobs complete without doing them passes every check that only reads the state field.
