@@ -69,7 +69,7 @@ It will survey your repo, ask you about the handful of things it cannot derive �
     ├── fleet/
     │   ├── WORKER.md            contract + your repos, and your gotchas as you earn them
     │   └── SEATS.md             contract + your roster
-    └── runbooks/                seat discovery, upgrading, and the graduations to take later
+    └── runbooks/                running the loop, seat discovery, upgrading, and the graduations to take later
 ```
 
 ## Contract, and this project
@@ -86,7 +86,7 @@ That split is the whole design. It means a project's specifics never get tangled
 |---|---|
 | `contracts/` | the briefs, copied verbatim at install |
 | `generated/` | specimens of what the interview writes — never copied, and drawn from an invented project so they cannot be mistaken for a starting point |
-| `runbooks/` | seat discovery, the upgrade procedure, and the graduations to take once the loop has proven itself |
+| `runbooks/` | how to run the loop, seat discovery, the upgrade procedure, and the graduations to take once the loop has proven itself |
 | `examples/` | worked benches, each labelled as one project's implementation: `android-cordova/` from a real project, `http-service/` for a service-and-worker shape |
 | `BOOTSTRAP.md` | the procedure the install session follows |
 

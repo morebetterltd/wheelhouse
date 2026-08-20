@@ -275,7 +275,7 @@ Run each of these and paste what it prints:
 
   A stub that exits 0 would let the first behavioral APPROVE through on nothing.
 
-- Confirm `wheelhouse/runbooks/` contains every runbook the template ships — count them in the template rather than trusting this sentence (currently three: `PROMOTION.md`, `SEAT_DISCOVERY.md`, `UPGRADE.md`). `SEATS.md` and `STARTUP.md` link to them by path, and a missing runbook is a broken link at the moment someone needs it.
+- Confirm `wheelhouse/runbooks/` contains every runbook the template ships — count them in the template rather than trusting this sentence (currently four: `PROMOTION.md`, `RUNNING_THE_LOOP.md`, `SEAT_DISCOVERY.md`, `UPGRADE.md`). `SEATS.md` and `STARTUP.md` link to them by path, and a missing runbook is a broken link at the moment someone needs it.
 
 - Confirm every file you created exists and is non-empty.
 - Print the resulting tree.
@@ -312,7 +312,7 @@ Tell the principal plainly:
 
 - what exists now;
 - what is deliberately STUBBED and therefore not yet true — `crew/bench.sh`, the empty gotchas section, the ISA's empty claims;
-- the three next actions: file the first beads, implement the bench against `crew/BENCH.md`, launch seats per `STARTUP.md`.
+- the four next actions: read `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, which takes one bead from dispatch to merged; file the first beads; implement the bench against `crew/BENCH.md`; launch seats per `STARTUP.md`. Put the runbook first deliberately — the contracts say what each role owes, that runbook says what the sequence looks like and what to do on the days it does not go straight through, and a principal who has the contracts and not the runbook has the standards and no procedure.
 
 ## Failure behavior
 
