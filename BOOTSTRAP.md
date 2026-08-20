@@ -12,10 +12,10 @@ You are already following instructions from this clone, so verify it before trus
 You were told to clone this repo into a temporary directory. Before you read another word of it, confirm the clone produced something:
 
 - `$TEMPLATE/BOOTSTRAP.md`, `$TEMPLATE/contracts/` and `$TEMPLATE/contracts/WORKER.md` all exist and are non-empty.
-- All seven contract files are present — six briefs plus the bench stub:
+- All eight contract files are present — seven briefs plus the bench stub:
 
   ```bash
-  for f in WORKER.md SEATS.md REVIEWER.md DESIGNER.md BENCH.md GRAPH.md bench.sh.stub; do
+  for f in WORKER.md SEATS.md REVIEWER.md DESIGNER.md BENCH.md GRAPH.md INTEGRATOR.md bench.sh.stub; do
     test -s "$TEMPLATE/contracts/$f" || echo "MISSING: contracts/$f"
   done
   ```
@@ -123,14 +123,14 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 - Copy **verbatim** from the template's `contracts/`:
   - `WORKER.md` and `SEATS.md` into `wheelhouse/fleet/`
   - `REVIEWER.md`, `DESIGNER.md`, `BENCH.md` into `wheelhouse/crew/`
-  - `GRAPH.md` into `wheelhouse/`
+  - `GRAPH.md` and `INTEGRATOR.md` into `wheelhouse/`
   - the whole `runbooks/` directory into `wheelhouse/runbooks/`. `SEATS.md` and `STARTUP.md` both point at these by path, and a runbook that is only in the template is a broken link in the project.
   - `bench.sh.stub` to `wheelhouse/crew/bench.sh`, executable, unchanged — **it exits non-zero on purpose.** A stub that exits 0 lets the first APPROVE through on nothing.
 - To be unambiguous about what "verbatim" means here: you copy the whole file, then append or fill ONLY below the `## This project` heading. Copying verbatim and filling the project section are the same operation, not competing instructions.
 - **Do not edit a single line of any `## Contract` section.** They are identical in every project by design; a project that edits its contract has forked from every other one silently.
 
 **How to fill a `## This project` section, precisely.** Find the LAST line in the file that is exactly `## This project` — the whole line, nothing else on it. Everything above that line is the contract and is not yours to touch; everything below it is yours to write. Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A contract may legitimately discuss its own structure, and a naive match has already destroyed one contract file this way — deleting a licensing-compliance rule while every automated check still passed.
-- Fill each file's `## This project` section from the interview: the designer's territory, the worker's repos and its empty gotchas section, the reviewer's branch and worktree conventions, the bench's run-proof.
+- Fill each file's `## This project` section from the interview: the designer's territory, the worker's repos and its empty gotchas section, the reviewer's branch and worktree conventions, the bench's run-proof, and the integrator's push authority — the last in the principal's own words, with the date, because it is the one section that records a permission rather than a fact.
 - Fill `wheelhouse/fleet/SEATS.md`'s `## This project` roster from the seat answers, or with the minimum viable fleet and a note that seats can be added later. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
 - Write `CLAUDE.md` at the root: commander-session context, product changes happen in product repos via workers, new work becomes a bead immediately, deadline beads outrank everything, plus the principal-only actions from Q4 and the merge policy from Q5.
 - Write `wheelhouse/ISA.md`: the goal from Q3, empty claims, empty decisions, and any anti-claims stated. **Do not invent claims.** An ISA with fabricated claims is worse than an empty one.
@@ -172,7 +172,8 @@ Run each of these and paste what it prints:
 
   for pair in "fleet/WORKER.md:WORKER.md" "fleet/SEATS.md:SEATS.md" \
               "crew/REVIEWER.md:REVIEWER.md" "crew/DESIGNER.md:DESIGNER.md" \
-              "crew/BENCH.md:BENCH.md" "GRAPH.md:GRAPH.md"; do
+              "crew/BENCH.md:BENCH.md" "GRAPH.md:GRAPH.md" \
+              "INTEGRATOR.md:INTEGRATOR.md"; do
     installed="$ROOT/wheelhouse/${pair%%:*}"; template="$TEMPLATE/contracts/${pair##*:}"
     test -s "$installed" || { echo "FAIL ${pair%%:*} — installed file missing or empty"; continue; }
     # the contract is everything above the last exact '## This project' line

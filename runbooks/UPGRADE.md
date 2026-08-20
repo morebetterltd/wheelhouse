@@ -72,7 +72,7 @@ git -C "$TEMPLATE" diff "$BASE" main -- contracts/     # skip if BASE is 'unknow
 
 Read it. If nothing changed in `contracts/`, you are already current and there is nothing to do.
 
-## 3. Copy the six contract files — by name, never the directory
+## 3. Copy the seven contract files — by name, never the directory
 
 ```bash
 cp "$TEMPLATE/contracts/WORKER.md"   wheelhouse/fleet/WORKER.md.new
@@ -81,16 +81,22 @@ cp "$TEMPLATE/contracts/REVIEWER.md" wheelhouse/crew/REVIEWER.md.new
 cp "$TEMPLATE/contracts/DESIGNER.md" wheelhouse/crew/DESIGNER.md.new
 cp "$TEMPLATE/contracts/BENCH.md"    wheelhouse/crew/BENCH.md.new
 cp "$TEMPLATE/contracts/GRAPH.md"    wheelhouse/GRAPH.md.new
+cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 ```
 
-**Six `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade.
+**Seven `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade.
 
 ## 4. Splice: new contract, your project section
 
 For each file, take the contract half from the new copy and the project half from yours. Use the same rule the install's integrity check uses — the FIRST line that is exactly `## This project`, whole line, nothing else on it (first-match is the safer rule: if a project section ever contained that literal line again, a last-match split would absorb project content into the contract half):
 
+A contract that did not exist at the commit you installed has no project half to keep. Copy those whole — do not splice them, because splicing against a file you do not have silently produces a contract with no `## This project` section, and then there is nowhere to record the things that section exists to record:
+
 ```bash
 splice() {   # splice <new-contract> <your-file>
+  if [ ! -e "$2" ]; then                      # new contract since your install
+    cp "$1" "$2"; echo "new, copied whole: $2"; return
+  fi
   awk '/^## This project$/{exit} {print}' "$1"  >  "$2.tmp"
   awk 'f{print} /^## This project$/{f=1; print}' "$2" >> "$2.tmp"
   mv "$2.tmp" "$2"
@@ -101,14 +107,17 @@ splice wheelhouse/crew/REVIEWER.md.new  wheelhouse/crew/REVIEWER.md
 splice wheelhouse/crew/DESIGNER.md.new  wheelhouse/crew/DESIGNER.md
 splice wheelhouse/crew/BENCH.md.new     wheelhouse/crew/BENCH.md
 splice wheelhouse/GRAPH.md.new          wheelhouse/GRAPH.md
+splice wheelhouse/INTEGRATOR.md.new     wheelhouse/INTEGRATOR.md
 find wheelhouse -name '*.md.new' -delete   # find, not **: globstar is off by default in bash
 ```
+
+Without that guard the failure is quiet in the way this template keeps warning about: `awk` reports `can't open file` on stderr, the function still exits 0, and you are left with a contract file whose project section does not exist. Measured, not assumed. If you have already run an upgrade without the guard, check each contract for its `## This project` heading before trusting the integrity check — the check compares contract halves and will report OK on a file that lost its project half entirely.
 
 Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A naive match has destroyed a contract file this way once already — it deleted a licensing-compliance rule while every automated check still passed. `BOOTSTRAP.md` states the same rule for the same reason; this is the operation it was stating it for.
 
 ## 5. Re-verify — the same checks the install runs
 
-- **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all six. A FAIL now means the splice went wrong, not that you are behind.
+- **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all seven. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
 - **The bench stub still fails, IF you have not implemented your bench**: `bash wheelhouse/crew/bench.sh; echo $?` must be non-zero. If you have implemented it, run your real bench instead — and if it now exits 0 having done nothing, step 3 clobbered it.
 - Your `## This project` sections are intact. Diff them against what you had.
 

@@ -60,6 +60,7 @@ It will survey your repo, ask you about the handful of things it cannot derive �
     ├── ISA.md                   generated — your goal, your claims, your decisions
     ├── STARTUP.md               generated — cold start with your real paths
     ├── GRAPH.md                 contract
+    ├── INTEGRATOR.md            contract + your push authority
     ├── crew/
     │   ├── DESIGNER.md          contract + your project's territory
     │   ├── REVIEWER.md          contract + your branch conventions
@@ -103,13 +104,13 @@ A seat is a standing session pinned to **one subscription, serving one human ben
 
 ## Upgrading
 
-When these contracts improve, you re-copy the six contract files and keep your `## This project` sections. The two-section split is what makes that safe, and there is no tooling for it deliberately — a file copy you understand beats a migration you do not.
+When these contracts improve, you re-copy the seven contract files and keep your `## This project` sections. The two-section split is what makes that safe, and there is no tooling for it deliberately — a file copy you understand beats a migration you do not.
 
 The full procedure is [`runbooks/UPGRADE.md`](runbooks/UPGRADE.md), which installs into your project along with the other runbooks. It covers the parts that are not obvious:
 
 - how to reconstruct your baseline if you installed before `.template-source` existed, which every early install did;
 - getting a clone with enough history to diff against (the install clone is `--depth 1` and cannot);
-- copying the six `.md` files by name, because `cp -r contracts/` would drop the bench stub over your implemented bench;
+- copying the seven `.md` files by name, because `cp -r contracts/` would drop the bench stub over your implemented bench;
 - splicing with the same exact-heading rule the install uses, since that is the operation people get wrong;
 - and sweeping the things a contract copy cannot reach — your generated files and the beads already in your graph — when a convention changes.
 
