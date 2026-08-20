@@ -120,6 +120,16 @@ Do not split on the first occurrence of the words "this project", and do not spl
 - **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all seven, and no `FAIL` lines after them. That check is also this runbook's backstop: a contract missing from the copy list above never installs, and the check says so rather than passing quietly. Do not skip it on the grounds that the copies looked right. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
 - **The bench stub still fails, IF you have not implemented your bench**: `bash wheelhouse/crew/bench.sh; echo $?` must be non-zero. If you have implemented it, run your real bench instead — and if it now exits 0 having done nothing, step 3 clobbered it.
 - Your `## This project` sections are intact. Diff them against what you had.
+- **Newly-arrived contracts have an EMPTY project half, and the check above cannot tell you so.** The integrity check compares contract halves; the project-half check confirms the heading exists. A contract copied whole in step 4 satisfies both while carrying nothing but the template's guidance comments. That is not a failure and should not be made one — the template's own rule is that a guidance comment stays until you have content for it — but it is not evidence either, and "my project sections diffed clean" is trivially true for a file that never had one.
+
+  So name them and act on them. Step 4 printed `new, copied whole:` for each; for every file it named:
+
+  ```bash
+  # for each newly-arrived contract, show what is still unfilled
+  awk 'f; /^## This project$/{f=1}' wheelhouse/<the-file> | grep -n '<!--'
+  ```
+
+  Fill each section from what your project already knows, or write one sentence saying it is deliberately unfilled and why. Do not leave it silent. `wheelhouse/INTEGRATOR.md` is the case that shows why: its project half records who may push and to where, and an upgraded project that leaves it empty has taken delivery of the contract whose central claim is that a gate exercised without being recorded stops existing — with the gate unrecorded.
 
 ## 6. Record the upgrade
 

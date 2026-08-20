@@ -132,7 +132,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 - To be unambiguous about what "verbatim" means here: you copy the whole file, then append or fill ONLY below the `## This project` heading. Copying verbatim and filling the project section are the same operation, not competing instructions.
 - **Do not edit a single line of any `## Contract` section.** They are identical in every project by design; a project that edits its contract has forked from every other one silently.
 
-**How to fill a `## This project` section, precisely.** Find the LAST line in the file that is exactly `## This project` — the whole line, nothing else on it. Everything above that line is the contract and is not yours to touch; everything below it is yours to write. Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A contract may legitimately discuss its own structure, and a naive match has already destroyed one contract file this way — deleting a licensing-compliance rule while every automated check still passed.
+**How to fill a `## This project` section, precisely.** Find the FIRST line in the file that is exactly `## This project` — the whole line, nothing else on it. FIRST, not last: the integrity check below and `runbooks/UPGRADE.md` both stop at the first match, and a last-match rule would absorb project content into the contract half the moment a project section legitimately quotes that heading. Everything above that line is the contract and is not yours to touch; everything below it is yours to write. Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A contract may legitimately discuss its own structure, and a naive match has already destroyed one contract file this way — deleting a licensing-compliance rule while every automated check still passed.
 - Fill each file's `## This project` section from the interview: the designer's territory, the worker's repos and its empty gotchas section, the reviewer's branch and worktree conventions, the bench's run-proof, and the integrator's push authority — the last in the principal's own words, with the date, because it is the one section that records a permission rather than a fact.
 - The integrator's third section, "How a shipped record gets corrected here", has no interview question on purpose: unless the principal volunteers a convention, fill it with the contract's own default — a follow-up commit naming the corrected commit's identifier, history never rewritten — and label it "adopted from the contract's default" so a later principal knows it was a default rather than their decision. Two cold installs both had to guess this; the default they guessed is now the documented one.
 - Fill `wheelhouse/fleet/SEATS.md`'s `## This project` roster from the seat answers, or with the minimum viable fleet and a note that seats can be added later. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
@@ -303,6 +303,36 @@ git status --short .beads/   # what would be committed as things stand
 Two shapes exist. If the issue data sits in a JSONL file git will track, committing `.beads/` gives you the durability above: the JSONL is the record that matters and the database beside it is a local cache rebuilt from it. If the data lives in a directory the tool's own `.gitignore` excludes, committing `.beads/` commits configuration and nothing else, and durability becomes a deliberate choice — enable the tool's JSONL export, use its own sync mechanism, or accept a machine-local graph and say so out loud. bd 1.2.2 is the second shape: an embedded database under `embeddeddolt/`, gitignored by the file bd writes itself, with JSONL export disabled by default.
 
 Commit `.beads/` unless the principal says otherwise, and report which shape you found and what you did about it. An installer who commits `.beads/`, then reports that the graph now survives a fresh clone, has written a sentence the next reader will believe and the defaults do not support.
+
+If you found the second shape, put one of these to the principal and run whichever they choose. Each was exercised against a scratch install of this template rather than reasoned about; the consequences below are what was observed, not what the flags promise.
+
+**Snapshot to JSONL, and commit it.**
+
+```bash
+bd export -o .beads/issues.jsonl
+git add .beads/issues.jsonl && git commit -m "graph snapshot"
+```
+
+Survives a fresh clone and a lost machine, at issue level — comments, labels and dependency edges all travel. It is a SNAPSHOT and is stale from the moment it is written. Re-run the export before each commit, or put it in a pre-commit hook.
+
+Do not substitute the config flag for the command. Setting `export.auto: true` in `.beads/config.yaml` does produce the file, and the file it produces LAGS: measured at a five-second interval, `issues.jsonl` held one issue while the database held three, and twelve seconds of waiting did not close the gap. A later command that WRITES catches it up; time alone never does, because this build ships no daemon to run a timed flush. That the file exists is what makes it dangerous — an absent export announces itself, while a present one reads as current and is not, and it is committed by whoever glances at `git status` and sees a tracked file with recent changes.
+
+If you check this yourself, two things change what you will see and neither is visible in the file: the configured interval, and whether any writing command has run since the last one you made. Say both when you report the result — a bare "the export is current" is not a measurement.
+
+Recovery is two steps, not one: `git clone`, then `bd init && bd import .beads/issues.jsonl`. A clone on its own leaves you with the file and a `bd list` that errors.
+
+**Sync the database itself.**
+
+```bash
+bd dolt remote add origin <git-remote-url>
+bd dolt push
+```
+
+Real cross-machine sync rather than a snapshot, and it is the tool's own mechanism — the tool prints this same repair when it notices no remote. Costs a reachable remote and the discipline of someone pushing. Recovery: `git clone`, then `bd bootstrap`. A plain clone does not fetch the data ref, so `bd list` errors until bootstrap runs, and bootstrap goes to the remote rather than to what the clone fetched.
+
+**Keep it machine-local, knowingly.**
+
+No commands, and it is a legitimate choice — but state the consequence rather than leaving it to be discovered. The graph survives a damaged working copy only if you separately back up `.beads/`, and does not survive losing the machine. A fresh clone gets `config.yaml`, `hooks/`, `metadata.json` and `README.md`, and `bd list` answers `no beads database found`. Choosing this is fine; arriving at it by default is what this passage exists to prevent. Record the choice in `wheelhouse/INTEGRATOR.md`'s project section or your ISA, so the next reader can tell a decision from an oversight.
 
 Do not push. Pushing is a principal-only action, here and in every wheelhouse.
 
