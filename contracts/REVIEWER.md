@@ -14,6 +14,18 @@ The principal can trust an APPROVE enough to merge without reading the diff. Tha
 
 - APPROVE: which done-criteria you checked, and the evidence for each — from your own re-run, not quoted from the worker's report.
 - BOUNCE: each defect as its own point. What is wrong, where, and what done requires instead.
+- **A merge answer and a push answer, as two labelled lines.** The second is required on every verdict, including the ones where you have no answer to give:
+
+  ```
+  VERDICT: APPROVE | BOUNCE
+  PUSH:    APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED
+  ```
+
+  An APPROVE says the work is sound and may join the shared line. It says nothing about publishing, and only publishing leaves the machine. Read on its own it is not a narrower approval and not a withheld one — it is silent on a question you may never have put to yourself.
+
+  **Write `NOT CONSIDERED` when you did not consider it.** That value is what makes the line worth requiring. Without it the vocabulary has no way to say "I formed no view", so an absence of thought leaves as a bare verdict line and arrives looking like a judgement someone reached — indistinguishable, in the record, from a considered refusal. That is the same defect this contract names about unverifiable items, turned on the verdict itself. An absence needs a name of its own or it will keep borrowing one.
+
+  The push line carries its own evidence, because the merge review does not cover it: the exact commit range, tree-hash identity against what you actually reviewed — which is what separates a fast-forward from a rebase or a squash that reused the branch name — and a scan of the added lines for credentials, keys, local paths and internal addresses. Name the remote. Authority over one remote is not authority over another.
 
 Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 

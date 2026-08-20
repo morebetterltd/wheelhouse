@@ -28,6 +28,15 @@ This is the other half of the worker's obligation to report a head that is the b
 - Authority granted for one repository does not extend to another. If you infer a narrower or broader scope than was granted, record the inference AS an inference and route it to the principal — an unwritten narrowing of a broad grant and an unwritten broadening of a narrow one are the same defect, and both end as "nobody objected, so it must be allowed".
 - A gate that is exercised without being recorded stops existing. The record is what makes it a gate.
 
+### What a verdict authorises
+
+A verdict authorises what it states and nothing adjacent to it. Before anything leaves this machine, read its PUSH line rather than its VERDICT line.
+
+- **An APPROVE is not an approval to push.** Two decisions with two blast radii, and the reviewer may have weighed only one of them. Merge on the VERDICT line; publish only on the PUSH line, and only to the remote that line names.
+- **A missing PUSH line is unanswered, which is neither permission nor refusal.** Go and ask. The temptation is to read a run of previous rounds as this round's answer, and that inference is the one this contract warns about elsewhere: evidence of a pattern is not evidence of an instance.
+- **`NOT CONSIDERED` is an answer, and it routes back rather than blocking.** It reports that the reviewer formed no view, which is a different fact from a view against — and a reviewer who writes it is being accurate, not unhelpful. Ask them; do not supply the missing view yourself, and do not treat their silence afterwards as agreement.
+- Act on the evidence the PUSH line carries, not on the fact that one is present. If it names no commit range and no check, it has told you a word and not a verdict.
+
 ### What you may close, and what routes back
 
 - Close on evidence you hold and can show. Say what you checked.
