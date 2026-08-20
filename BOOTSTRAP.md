@@ -51,7 +51,7 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 - Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue.
 - Confirm the `bd` CLI is on PATH and print its version. If it is missing, stop and give the install command from the README's prerequisites rather than guessing one.
 - Report uncommitted changes if there are any. Do not block on them; the principal may be mid-work.
-- **STOP IMMEDIATELY, without writing anything, if `wheelhouse/` or `CLAUDE.md` already exists.** Say what exists and ask what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable.
+- **STOP IMMEDIATELY, without writing anything further, if `wheelhouse/` or `CLAUDE.md` existed before step 1 ran.** Say what exists and ask what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable. Two things do NOT trip this check, because this procedure creates them itself: the `wheelhouse/` directory step 1 just made for `.template-source`, and the `CLAUDE.md` that `bd init` will create in step 5. The check guards what was there before you arrived, so run it — or note what exists — before step 1 writes anything.
 
 ## 3. Read before you ask
 
@@ -96,11 +96,11 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 ## 5. Write
 
-- `bd init` in the project root; confirm the graph exists. Its output is verbose and mentions daemons, migrations and sync; that is normal and not an error.
+- `bd init` in the project root; confirm the graph exists. Its output is verbose and mentions daemons, migrations and sync; that is normal and not an error. **Expect two side effects it does not ask about:** it creates config files well beyond `.beads/` (a `CLAUDE.md` at the root if none exists, `.claude/settings.json` with a SessionStart hook, `.codex/`, `.agents/`), and on recent builds it **commits them itself**, authored as the signed-in git user. Neither is an error. The `CLAUDE.md` it creates is a scaffold; the next steps write the commander content into that same file, keeping bd's managed block. Review its auto-commit rather than being surprised by it in `git log` later.
 
-  What IS worth stopping for: a non-zero exit, a refusal to create `.beads/`, or a message naming a conflicting existing database. Anything else, run `bd doctor`, paste the output, and continue. Treat `bd doctor`'s upgrade suggestions as advisory — one of them names a formula that may not exist.
+  What IS worth stopping for: a non-zero exit, a refusal to create `.beads/`, or a message naming a conflicting existing database. Anything else, run `bd doctor`, paste the output, and continue — but know that on bd builds using the embedded backend (the current default) `bd doctor` prints "not yet supported in embedded mode" and diagnoses nothing; that message is itself a normal result, not a failure. Treat any upgrade suggestions as advisory.
 
-- **Reconcile `AGENTS.md`.** `bd init` writes an `AGENTS.md` at the root whose session-completion section mandates pushing — "work is NOT complete until `git push` succeeds", "NEVER stop before pushing", "YOU must push". At this root that is a direct contradiction of `wheelhouse/fleet/WORKER.md`, which forbids a worker from pushing at all, and of the principal-only actions the principal just confirmed. Two files at the same root giving opposite orders is a defect regardless of which one an agent follows.
+- **Reconcile `AGENTS.md` — conditionally.** `bd init` writes an `AGENTS.md` at the root. On some bd builds its session-completion section mandates pushing ("work is NOT complete until `git push` succeeds", "NEVER stop before pushing"); on current builds it is conservative and says the opposite ("Do not commit or push without clear authority"). **Read the file bd actually wrote before acting.** If it mandates pushing, that directly contradicts `wheelhouse/fleet/WORKER.md`, which forbids a worker from pushing at all — append the override below. If it is already conservative, append the override anyway but strike the "Ignore 'landing the plane'" sentence, which refers to wording your version does not contain; an override quoting text that is not there reads as an error to the next person who checks.
 
   Keep bd's useful content — the command reference is genuinely handy — and override the mandate. Append a section to `AGENTS.md`:
 
@@ -170,20 +170,27 @@ Run each of these and paste what it prints:
     exit 1
   fi
 
-  PAIRS="fleet/WORKER.md:WORKER.md fleet/SEATS.md:SEATS.md
-         crew/REVIEWER.md:REVIEWER.md crew/DESIGNER.md:DESIGNER.md
-         crew/BENCH.md:BENCH.md GRAPH.md:GRAPH.md INTEGRATOR.md:INTEGRATOR.md"
+  # The pair list is positional parameters, not a whitespace-split string:
+  # zsh (the macOS default shell) does not word-split an unquoted variable, so a
+  # `for pair in $PAIRS` loop there runs ONCE over the whole list, diffs the wrong
+  # files, and leaves six of seven contracts unchecked while exiting 0. "$@" iterates
+  # identically in bash and zsh. Found by a cold install run in zsh, 2026-08-20.
+  set -- \
+    fleet/WORKER.md:WORKER.md fleet/SEATS.md:SEATS.md \
+    crew/REVIEWER.md:REVIEWER.md crew/DESIGNER.md:DESIGNER.md \
+    crew/BENCH.md:BENCH.md GRAPH.md:GRAPH.md INTEGRATOR.md:INTEGRATOR.md
+  FAILED=0
 
-  for pair in $PAIRS; do
+  for pair in "$@"; do
     installed="$ROOT/wheelhouse/${pair%%:*}"; template="$TEMPLATE/contracts/${pair##*:}"
-    test -s "$installed" || { echo "FAIL ${pair%%:*} — installed file missing or empty"; continue; }
+    test -s "$installed" || { echo "FAIL ${pair%%:*} — installed file missing or empty"; FAILED=1; continue; }
     # the contract is everything above the FIRST exact '## This project' line
     awk '/^## This project$/{exit} {print}' "$installed"  > /tmp/wh-a.$$
     awk '/^## This project$/{exit} {print}' "$template"   > /tmp/wh-b.$$
     if diff -q /tmp/wh-a.$$ /tmp/wh-b.$$ >/dev/null; then
       echo "OK   ${pair%%:*}"
     else
-      echo "FAIL ${pair%%:*} — contract differs from the template:"; diff /tmp/wh-b.$$ /tmp/wh-a.$$
+      echo "FAIL ${pair%%:*} — contract differs from the template:"; diff /tmp/wh-b.$$ /tmp/wh-a.$$; FAILED=1
     fi
     rm -f /tmp/wh-a.$$ /tmp/wh-b.$$
   done
@@ -193,17 +200,22 @@ Run each of these and paste what it prints:
   # step with another list is the thing being guarded against.
   for f in "$TEMPLATE"/contracts/*.md; do
     b=$(basename "$f"); seen=""
-    for pair in $PAIRS; do [ "${pair##*:}" = "$b" ] && seen=1; done
-    [ -n "$seen" ] || echo "FAIL $b — present in the template but checked by nothing above"
+    for pair in "$@"; do [ "${pair##*:}" = "$b" ] && seen=1; done
+    [ -n "$seen" ] || { echo "FAIL $b — present in the template but checked by nothing above"; FAILED=1; }
   done
 
   # Each installed contract must still have BOTH halves. The loop above compares
   # contract halves and is blind to a project half that went missing.
-  for pair in $PAIRS; do
+  for pair in "$@"; do
     installed="$ROOT/wheelhouse/${pair%%:*}"
     grep -qx '## This project' "$installed" 2>/dev/null \
-      || echo "FAIL ${pair%%:*} — no '## This project' heading; the project half is gone"
+      || { echo "FAIL ${pair%%:*} — no '## This project' heading; the project half is gone"; FAILED=1; }
   done
+
+  # The exit status must agree with the FAIL lines. Before this summary the block
+  # printed FAILs and exited 0, so "stop if it fails" could only be judged by
+  # reading output — an instruction no script can follow.
+  if [ "$FAILED" -eq 0 ]; then echo "INTEGRITY OK — all contracts verified"; else echo "INTEGRITY FAILED — see FAIL lines above"; exit 1; fi
   ```
 
   Three guards, one list. The pair list is the single registration that matters, and the two loops after it derive from the template directory rather than from a second list — a list kept in step with another list is the thing being guarded against. Together they close the chain: a contract the template ships must appear in the list, a contract in the list must be installed, and an installed contract must still have both halves. Every link says something when it breaks, which was not true before: a contract registered nowhere used to produce a completely clean run.
@@ -245,10 +257,10 @@ Run each of these and paste what it prints:
 - A grep for unfilled placeholders. Anything you leave for the principal to fill uses `{{DOUBLE_BRACE}}` and nothing else, so this check is exact:
 
   ```bash
-  grep -rn "{{" CLAUDE.md wheelhouse/
+  grep -rn "{{" CLAUDE.md wheelhouse/ | grep -v "^wheelhouse/runbooks/"
   ```
 
-  Expect zero. The HTML comments in the contracts' `## This project` sections are guidance, not placeholders, and do not count here.
+  Expect zero. The HTML comments in the contracts' `## This project` sections are guidance, not placeholders, and do not count here. `runbooks/` is excluded deliberately: runbooks are copied verbatim and legitimately ship placeholders that get filled at their own moment of use, not at install — `SEAT_DISCOVERY.md`'s `{{SEAT_NAMES}}` is filled at promotion, from the roster in `fleet/SEATS.md`. Before this exclusion the check failed on every correct install, on a file the installer never authored.
 
   What to do with them: **when you have content for a section, REPLACE its comment with that content. When you have nothing, leave the comment where it is.** The comment is a prompt for whoever fills the section later, so it stops being useful the moment the section is filled — and a section carrying both guidance and content reads as though the content is an example of what to write.
 - **Confirm the bench stub fails.** It is the one file whose whole job is to exit non-zero:
@@ -259,7 +271,7 @@ Run each of these and paste what it prints:
 
   A stub that exits 0 would let the first behavioral APPROVE through on nothing.
 
-- Confirm `wheelhouse/runbooks/` contains both runbooks. `SEATS.md` and `STARTUP.md` link to them by path, and a missing runbook is a broken link at the moment someone needs it.
+- Confirm `wheelhouse/runbooks/` contains every runbook the template ships — count them in the template rather than trusting this sentence (currently three: `PROMOTION.md`, `SEAT_DISCOVERY.md`, `UPGRADE.md`). `SEATS.md` and `STARTUP.md` link to them by path, and a missing runbook is a broken link at the moment someone needs it.
 
 - Confirm every file you created exists and is non-empty.
 - Print the resulting tree.
@@ -269,12 +281,12 @@ Run each of these and paste what it prints:
 Commit the install so the principal can see exactly what was added and revert it in one step:
 
 ```bash
-git status --short          # look first: bd init may have added files you did not expect
-git add CLAUDE.md AGENTS.md .gitattributes wheelhouse/ .beads/
+git status --short          # look first: bd init may have added files AND a commit you did not expect
+git add CLAUDE.md AGENTS.md wheelhouse/ .beads/
 git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"
 ```
 
-`bd init` also writes `.gitattributes` (it sets up merge behaviour for the graph). Include it, or the next clone loses that behaviour silently.
+Stage what `git status` actually shows, not a remembered list. What bd writes varies by build: some versions add `.gitattributes` (graph merge behaviour — include it if present, or the next clone loses that behaviour silently), current ones add `.claude/`, `.codex/` and `.agents/` and commit them unasked, so those may already be in history before you stage anything. Never `git add` a path you have not seen in the status output — `git add` is atomic, and one nonexistent pathspec fails the whole command having staged **nothing**, which leaves you believing the commit is prepared when it is empty.
 
 The graph is the project's work state: it is meant to be shared between seats and to survive a fresh clone, and a graph that lives only on one machine is not a single source of anything. What it takes to achieve that depends on the CLI build you have, so establish it rather than assuming — this is the step where a wrong assumption is invisible, because committing the directory looks identical either way.
 
