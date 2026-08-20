@@ -194,13 +194,15 @@ Run each of these and paste what it prints:
   `bd --help` cannot answer this — it lists commands, and `bd update --help` shows `--status` without enumerating its values. Two things that can:
 
   ```bash
-  bd list --help | grep -i status     # the --status filter enumerates the valid statuses
-  bd update <some-id> --status in_review   # expect an "invalid status" error
+  bd list --help | grep -i status          # the --status filter usually enumerates them
+  bd update <some-id> --status in_review   # expect an "invalid status" error naming the built-ins
   ```
 
-  **Read the error text, not the exit code.** This build prints `invalid status: in_review` and then exits 0, so an exit-code check concludes the opposite of the truth. That is a defect in the tool, not in your reading.
+  The second is the better probe, and the two do not always agree: on bd 1.2.2 the `--status` filter help omits `pinned` and `hooked`, which the error text lists.
 
-  If your build does enumerate `in_review`, correct `wheelhouse/GRAPH.md` now and say so in the hand-back. The file says it is stamped rather than eternal, and an install is the moment to check.
+  **Read the error text, and treat the exit code as a separate question.** On bd 1.2.2 an invalid status exits non-zero, so the exit code is trustworthy here. On builds before 0.57.0 the same command printed the error and exited 0, so an exit-code check concluded the opposite of the truth. Establish which you have rather than assuming, and note it in `GRAPH.md`.
+
+  If your build enumerates `in_review`, or lets you configure it — bd 1.2.2 does, via `bd config set status.custom` — correct `wheelhouse/GRAPH.md` now and say so in the hand-back. The file says it is stamped rather than eternal, and an install is the moment to check.
 
 - `bd ready` — returns without error. On an empty graph this prints nothing, which is indistinguishable from a broken install, so prove the graph round-trips instead: create a real first bead, list it, and leave it in place as the fleet's first piece of work.
 
