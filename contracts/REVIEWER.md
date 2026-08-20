@@ -21,11 +21,27 @@ The principal can trust an APPROVE enough to merge without reading the diff. Tha
   PUSH:    APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED
   ```
 
+  Filled in, so that the schema's shape is not something the next reviewer has to infer — `— verified:` belongs to APPROVE and to nothing else:
+
+  ```
+  VERDICT: APPROVE
+  PUSH:    APPROVE origin — verified: base..tip is one commit; the tip SHA equals the
+           SHA I reviewed; added lines scanned for credentials, keys, local paths and
+           internal addresses, none found
+
+  VERDICT: APPROVE
+  PUSH:    HOLD — the branch is one commit ahead of the remote's default, but I have no
+           record of who authorised pushing this remote, so the check I would need is
+           not mine to make
+  ```
+
   An APPROVE says the work is sound and may join the shared line. It says nothing about publishing, and only publishing leaves the machine. Read on its own it is not a narrower approval and not a withheld one — it is silent on a question you may never have put to yourself.
 
   **Write `NOT CONSIDERED` when you did not consider it.** That value is what makes the line worth requiring. Without it the vocabulary has no way to say "I formed no view", so an absence of thought leaves as a bare verdict line and arrives looking like a judgement someone reached — indistinguishable, in the record, from a considered refusal. That is the same defect this contract names about unverifiable items, turned on the verdict itself. An absence needs a name of its own or it will keep borrowing one.
 
-  The push line carries its own evidence, because the merge review does not cover it: the exact commit range, tree-hash identity against what you actually reviewed — which is what separates a fast-forward from a rebase or a squash that reused the branch name — and a scan of the added lines for credentials, keys, local paths and internal addresses. Name the remote. Authority over one remote is not authority over another.
+  The push line carries its own evidence, because the merge review does not cover it: the exact commit range, **the tip's own identifier compared against the one you reviewed**, and a scan of the added lines for credentials, keys, local paths and internal addresses. Name the remote. Authority over one remote is not authority over another.
+
+  Compare identifiers, not content. A branch amended after you reviewed it — the message rewritten, every byte of the tree unchanged — keeps its content identity and its parent, and merges as a clean fast-forward. Measured: tip identifier differs, tree matches, parent matches, `merge --ff-only` succeeds. So content identity does not separate a fast-forward from a rewrite, and neither does the parent. Only comparing what you reviewed against what is now there does. It matters most wherever load-bearing reasoning is kept in commit messages, which is a common convention and is precisely the text a content check cannot see: the place a project deliberately puts its reasoning is the place tree comparison is blind to. Content identity keeps a smaller job: when the identifiers differ, it tells you whether the content at least survived, which is a diagnosis and not an authorisation.
 
 Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 
