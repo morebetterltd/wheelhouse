@@ -27,7 +27,17 @@ worker: registry.example.net/tideline-worker@sha256:91ab…
 
 One argument in, one exit code out, and the thing named is the thing that ships. The bench refuses a manifest that names tags rather than digests, because a tag can move between the build a reviewer approved and the bench that claims to have tested it.
 
-If your project ships one artifact, pass the artifact. If it ships four, the manifest grows and nothing else changes. What must not happen is a bench per deployable and no bench for the seam between them.
+The manifest is written by whatever builds the images — a release job, a tagging script, a human running one command. Nothing in this bench produces it, and nothing should: a bench that can generate its own artifact description can generate one that agrees with itself. Say in your own project section who writes it and when.
+
+If your project ships one artifact, pass the artifact. If it ships four, the manifest grows and nothing else changes.
+
+### When you cannot bench them all yet
+
+The common install-time reality is a second deployable that is one placeholder line — a directory, a stub, an intention. Benching a seam that does not exist yet is not possible, and waiting for it means shipping no bench at all.
+
+So the interim rule: **scope the bench to what exists, and record the scope where a reviewer will meet it.** Name in your project section which deployables the bench covers and which it does not, and why. That is an honest gap, which this template prefers to an invented assertion, and it converts a silent scope choice into a fact someone can act on — most of all for whoever reviews a change to the part nothing benches.
+
+What must not happen is the unrecorded version: a bench per deployable and none for the seam, with nothing saying so. The seam is where an API and its worker disagree about the schema they share, and a project that has quietly decided not to test it should have decided that out loud.
 
 ## The eight clauses, each satisfied concretely
 
@@ -43,9 +53,20 @@ If your project ships one artifact, pass the artifact. If it ships four, the man
 
 **6. It always tears down.** `trap cleanup EXIT INT TERM`, containers and network removed on every path. Three things learned by measuring rather than assuming, all encoded in the script, and the third only after a reviewer found it in the first version of this file:
 
-- A SIGINT delivered to the script's pid alone does **not** run the trap until the current child exits. Measured: the script stayed alive through a 30-second sleep after the signal, then ran teardown normally. An interactive Ctrl-C signals the whole process group and behaves differently; a `kill -INT` from a wrapper does not.
+- **How you deliver the signal decides whether the trap exists at all**, and this is where the first version of this file was wrong. A process started in the background from a non-interactive shell inherits SIGINT as `SIG_IGN`, and a signal ignored on entry cannot be trapped — so `trap cleanup INT` is silently a no-op and `kill -INT` runs nothing. Measured, four ways:
+
+  | delivery | result |
+  |---|---|
+  | background from a script, `kill -INT` | ran to completion; only the EXIT trap fired |
+  | background from a script, `kill -TERM` | trap fired at once |
+  | parent resets the disposition, then execs, `kill -INT` | trap fired at once |
+  | script signals itself in the foreground | trap fired at once |
+
+  The first row is the trap: it looks like the teardown "ran late", because the EXIT trap eventually runs and prints the same lines. It did not run late. It never ran, and the run reported success.
+
+  **So verify your teardown with `SIGTERM`, or reset the disposition in the PARENT before spawning.** Resetting it inside the child does not work — measured: a script doing `trap - INT` on itself still ran to completion, because by then the disposition was already inherited. A reader who checks their own teardown by backgrounding it and sending SIGINT tests nothing and gets a pass.
 - Worse, the trap then sees `$? = 0`, so an interrupted run exits 0 and reports success to anything reading the exit code. The script carries a `PASSED` flag set only on the success path, and the teardown forces a non-zero exit when it is unset. A bench that can exit 0 without finishing is not a bench.
-- **A cleanup handler that ends in `exit` and is trapped on `EXIT` as well as `INT` runs twice.** The signal trap fires, the handler exits, and that exit re-enters the same handler. Pass one captured the logs and removed the containers; pass two found them gone, and `>` truncates the file before the command fails — so all three captured logs became `Error: No such container`, on precisely the interrupted run where a human wants them most. Measured before and after: two passes and 28-byte logs, against one pass and the real contents. `trap - EXIT INT TERM` as the handler's first line is the whole fix. Note what this defect was immune to: the exit code was correct throughout, so any check that only asked "did it fail?" passed it.
+- **A cleanup handler that ends in `exit` and is trapped on `EXIT` as well as `INT` runs twice.** The signal trap fires, the handler exits, and that exit re-enters the same handler. Pass one captured the logs and removed the containers; pass two found them gone, and `>` truncates the file before the command fails — so all three captured logs became `Error: No such container`, on precisely the interrupted run where a human wants them most. Measured before and after: two passes and 28-byte logs, against one pass and the real contents. `trap - EXIT INT TERM` inside the handler is the whole fix — placed after `rc=$?`, which has to run first, and before anything the handler would rather not repeat. Note what this defect was immune to: the exit code was correct throughout, so any check that only asked "did it fail?" passed it.
 
 **7. Measurements are not verdicts.** The bench times twenty sequential reads and writes them to `latency.txt`. It never compares them to a threshold, because it cannot: this runs a database and two containers on whatever machine invoked it, so the number cannot distinguish a slow service from a loaded host. It is there for a reviewer comparing runs, and it says so.
 
@@ -59,7 +80,11 @@ If your project ships one artifact, pass the artifact. If it ships four, the man
 
 Stated because a bench that has never run is a claim about behaviour like any other.
 
-**Exercised:** argument handling (no arguments, missing manifest), the digest-not-tag refusal, the teardown firing on a failure path, the `PASSED`-flag guard against the interrupt case it exists for, and — after the first version of this file shipped a bug there — the teardown running exactly once on a signal, with the captured logs intact.
+**Exercised:** argument handling (no arguments, missing manifest), the digest-not-tag refusal, the teardown firing on a failure path, the `PASSED` flag forcing a non-zero exit when the success path is not reached, the four signal-delivery contexts in the table above, and the teardown running exactly once with its captured logs intact.
+
+The last two were measured against **stand-ins** — scripts of the same shape, not this bench — because they need no daemon and this machine had none. Read the byte counts accordingly: the stand-in's truncated log was 28 bytes of `No such container`; a real daemonless `docker logs` writes 122 bytes of connection error instead. Same defect, different text, and neither number is a property of this script.
+
+One correction worth reading, because it is the failure this section exists to prevent, committed by this section: the first version claimed the interrupt case was exercised. It was exercised **through a background `kill -INT`**, which the table above shows runs no trap at all. The `PASSED` guard was genuinely exercised — by a stand-in that reached the end without setting it — but not via an interrupt. A claim of coverage was made about the one path that had not been covered.
 
 **Not exercised:** anything that needs a live daemon. The project is invented and there are no images to pull, so every service-facing assertion describes what this bench would do against the project it was written for. Adapt those rather than trusting them.
 

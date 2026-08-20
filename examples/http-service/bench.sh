@@ -27,9 +27,13 @@ case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
 log()  { printf '[bench] %s\n' "$*"; }
 fail() { printf '[bench] FAIL: %s\n' "$*" >&2; exit 1; }
 
-# Every name carries the run id, so two runs cannot collide and a leaked
-# container from an earlier run cannot be mistaken for this one's (clause 8).
-RUN="tideline-bench-$$"
+# Every name carries a run id, so concurrent runs do not collide and a leaked
+# container from an earlier run is not mistaken for this one's (clause 8).
+# $$ alone is not enough for that claim: pids recycle, and a fresh container or
+# namespace hands out low, predictable ones — two runs a day apart can collide.
+# Date plus a random suffix makes the name unique in practice; nothing here
+# depends on it being unique in principle.
+RUN="tideline-bench-$(date +%Y%m%d-%H%M%S)-$$-${RANDOM}"
 NET="$RUN-net"
 DB="$RUN-db"
 API="$RUN-api"
@@ -39,6 +43,12 @@ WORKER="$RUN-worker"
 # On success, on failure, and on interrupt. The trap covers INT and TERM as
 # well as EXIT, because a bench that only cleans up on a clean exit leaks
 # exactly when a human gets impatient and hits Ctrl-C.
+#
+# ORDER MATTERS HERE: the misuse checks above run BEFORE this trap is installed,
+# which is what lets them exit 2 rather than being rewritten to 1 by cleanup's
+# PASSED guard. Move the trap above them and `bench.sh` with no arguments starts
+# reporting a failed bench instead of a usage error. There is nothing to tear
+# down before this line, which is why it is safe here and only here.
 PASSED=0
 cleanup() {
   rc=$?
@@ -49,10 +59,11 @@ cleanup() {
   # overwritten with "No such container", on exactly the interrupted run where
   # a human most wants the logs. Measured; not a theoretical race.
   trap - EXIT INT TERM
-  # An interrupted run must not exit 0. Measured: a SIGINT delivered to this
-  # script's pid alone does not run the trap until the current child exits,
-  # and the trap then sees $? = 0 — so a run that was interrupted reports
-  # success to anything reading the exit code. The flag is what stops that.
+  # An interrupted run must not exit 0. When a signal DOES reach this handler,
+  # $? can be 0 — the run was killed partway and nothing had failed yet — so
+  # without the flag an interrupted bench reports success to anything reading
+  # the exit code. See BENCH.md clause 6 for which signals reach it at all;
+  # SIGINT often does not, and that is a property of how it was delivered.
   [ "$PASSED" = "1" ] || [ "$rc" -ne 0 ] || rc=1
   log "tearing down $RUN"
   for c in "$WORKER" "$API" "$DB"; do

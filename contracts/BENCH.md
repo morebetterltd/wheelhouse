@@ -51,6 +51,12 @@ single thing the bench takes as its argument — a manifest naming each, most
 likely. One bench per deployable and none for the seam between them leaves the
 failure they are most likely to have uncovered. See the HTTP-service example in
 the template repository for one way to do it.
+
+If a second deployable does not exist yet — a stub, a directory, an intention —
+scope the bench to what is real and SAY SO HERE: which deployables it covers,
+which it does not, and why. An honest gap beats an invented assertion, and an
+unrecorded scope choice is indistinguishable from full coverage to everyone who
+reads the verdict afterwards.
 -->
 
 ### What proves it did its job
