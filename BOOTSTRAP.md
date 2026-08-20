@@ -170,13 +170,14 @@ Run each of these and paste what it prints:
     exit 1
   fi
 
-  for pair in "fleet/WORKER.md:WORKER.md" "fleet/SEATS.md:SEATS.md" \
-              "crew/REVIEWER.md:REVIEWER.md" "crew/DESIGNER.md:DESIGNER.md" \
-              "crew/BENCH.md:BENCH.md" "GRAPH.md:GRAPH.md" \
-              "INTEGRATOR.md:INTEGRATOR.md"; do
+  PAIRS="fleet/WORKER.md:WORKER.md fleet/SEATS.md:SEATS.md
+         crew/REVIEWER.md:REVIEWER.md crew/DESIGNER.md:DESIGNER.md
+         crew/BENCH.md:BENCH.md GRAPH.md:GRAPH.md INTEGRATOR.md:INTEGRATOR.md"
+
+  for pair in $PAIRS; do
     installed="$ROOT/wheelhouse/${pair%%:*}"; template="$TEMPLATE/contracts/${pair##*:}"
     test -s "$installed" || { echo "FAIL ${pair%%:*} — installed file missing or empty"; continue; }
-    # the contract is everything above the last exact '## This project' line
+    # the contract is everything above the FIRST exact '## This project' line
     awk '/^## This project$/{exit} {print}' "$installed"  > /tmp/wh-a.$$
     awk '/^## This project$/{exit} {print}' "$template"   > /tmp/wh-b.$$
     if diff -q /tmp/wh-a.$$ /tmp/wh-b.$$ >/dev/null; then
@@ -186,7 +187,26 @@ Run each of these and paste what it prints:
     fi
     rm -f /tmp/wh-a.$$ /tmp/wh-b.$$
   done
+
+  # Every contract the TEMPLATE ships must appear in the list above. Derived from
+  # the directory, not from a second list, because a list that has to be kept in
+  # step with another list is the thing being guarded against.
+  for f in "$TEMPLATE"/contracts/*.md; do
+    b=$(basename "$f"); seen=""
+    for pair in $PAIRS; do [ "${pair##*:}" = "$b" ] && seen=1; done
+    [ -n "$seen" ] || echo "FAIL $b — present in the template but checked by nothing above"
+  done
+
+  # Each installed contract must still have BOTH halves. The loop above compares
+  # contract halves and is blind to a project half that went missing.
+  for pair in $PAIRS; do
+    installed="$ROOT/wheelhouse/${pair%%:*}"
+    grep -qx '## This project' "$installed" 2>/dev/null \
+      || echo "FAIL ${pair%%:*} — no '## This project' heading; the project half is gone"
+  done
   ```
+
+  Three guards, one list. The pair list is the single registration that matters, and the two loops after it derive from the template directory rather than from a second list — a list kept in step with another list is the thing being guarded against. Together they close the chain: a contract the template ships must appear in the list, a contract in the list must be installed, and an installed contract must still have both halves. Every link says something when it breaks, which was not true before: a contract registered nowhere used to produce a completely clean run.
 
   A `FAIL` means the installed contract differs from your template source — it does not say why. Two causes exist: the install damaged the contract, or your template clone is newer than the install (contracts do change). Compare the `commit=` in `wheelhouse/.template-source` against the template's HEAD to tell which: same commit → damaged, stop and repair; older commit → you are behind, and the README's upgrade note applies. Every other check in this list can pass on a file whose contract you deleted — this is the only one that looks.
 

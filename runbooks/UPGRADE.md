@@ -117,7 +117,7 @@ Do not split on the first occurrence of the words "this project", and do not spl
 
 ## 5. Re-verify — the same checks the install runs
 
-- **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all seven. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
+- **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all seven, and no `FAIL` lines after them. That check is also this runbook's backstop: a contract missing from the copy list above never installs, and the check says so rather than passing quietly. Do not skip it on the grounds that the copies looked right. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
 - **The bench stub still fails, IF you have not implemented your bench**: `bash wheelhouse/crew/bench.sh; echo $?` must be non-zero. If you have implemented it, run your real bench instead — and if it now exits 0 having done nothing, step 3 clobbered it.
 - Your `## This project` sections are intact. Diff them against what you had.
 
