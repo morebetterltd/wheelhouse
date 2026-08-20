@@ -25,6 +25,14 @@ Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 - The worker's report is a CLAIM, not evidence. Re-run what is cheap, and say explicitly what you could not re-run.
 - Check the claims as well as the code. A correct change described by a false sentence still ships that sentence, and the next reader believes it.
 
+### What you structurally cannot verify
+
+Some items are unverifiable by you in principle rather than for want of effort: the evidence lives with someone else, or checking it needs access the review role does not have. Verbatim text you were told to reproduce is the standard case — only whoever holds the source can say whether it matches.
+
+Name those items, say plainly that you cannot check them and why, and route each to the party who can. Do not approve one as checked, do not bounce it as unsupported, and above all do not let it pass in silence: an unverifiable item that ships without comment is indistinguishable in the record from a verified one, which is how an unchecked claim acquires the authority of a reviewed one.
+
+The item closes when its holder confirms it, and their confirmation belongs on the work item in their own words rather than in your account of them. A reviewer who routes an item honestly has done the review correctly; the gap is in the role, not in the reviewer.
+
 ### The bench is mandatory for behavioral claims
 
 Any APPROVE that claims or implies the software RUNS must carry a bench pass — the executable defined by `wheelhouse/crew/BENCH.md`, run by you, with its evidence attached to the verdict. Static verification alone can support an APPROVE only when the bead's done is itself static: config, docs, non-runtime.
