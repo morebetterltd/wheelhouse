@@ -194,11 +194,11 @@ Run each of these and paste what it prints:
   `bd --help` cannot answer this — it lists commands, and `bd update --help` shows `--status` without enumerating its values. Two things that can:
 
   ```bash
-  bd list --help | grep -i status          # the --status filter usually enumerates them
-  bd update <some-id> --status in_review   # expect an "invalid status" error naming the built-ins
+  bd list --help | grep -i status     # the --status filter usually enumerates them
+  bd list --status in_review          # expect an "invalid status" error naming the valid ones
   ```
 
-  The second is the better probe, and the two do not always agree: on bd 1.2.2 the `--status` filter help omits `pinned` and `hooked`, which the error text lists.
+  The second is the better probe — it needs no issue id and changes nothing — and the two do not agree: on bd 1.2.2 the `--status` filter help names five statuses while the rejection names seven, adding `pinned` and `hooked`. Trust the rejection.
 
   **Read the error text, and treat the exit code as a separate question.** On bd 1.2.2 an invalid status exits non-zero, so the exit code is trustworthy here. On builds before 0.57.0 the same command printed the error and exited 0, so an exit-code check concluded the opposite of the truth. Establish which you have rather than assuming, and note it in `GRAPH.md`.
 
