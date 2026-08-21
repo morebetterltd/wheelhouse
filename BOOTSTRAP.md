@@ -317,12 +317,12 @@ Before you stage, make the worktree directory invisible to this repository. Work
 
 ```bash
 # umbrella shape: the worktree directory sits inside this repo
-[ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ] && printf '\n' >> .gitignore
+if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
 grep -qxF '.wheelhouse-worktrees/' .gitignore 2>/dev/null \
   || printf '.wheelhouse-worktrees/\n' >> .gitignore
 ```
 
-The first line is not decoration. `>>` appends at the byte the file ends on, and a `.gitignore` whose last line has no trailing newline — ordinary output from plenty of editors and generators — turns `node_modules/` and the new entry into the single line `node_modules/.wheelhouse-worktrees/`, which matches neither. Measured: the previously-ignored directory stops being ignored, the new one never starts, and the corrupted file ships inside the install commit to a file nobody re-reads. Verified across all three starting states — no file, trailing newline, no trailing newline — three runs each and idempotent.
+The first line is not decoration. `>>` appends at the byte the file ends on, and a `.gitignore` whose last line has no trailing newline — ordinary output from plenty of editors and generators — turns `node_modules/` and the new entry into the single line `node_modules/.wheelhouse-worktrees/`, which matches neither. Measured: the previously-ignored directory stops being ignored, the new one never starts, and the corrupted file ships inside the install commit to a file nobody re-reads. Verified across all three starting states — no file, trailing newline, no trailing newline — three runs each and idempotent. It is an `if` rather than an `&&` chain because a chain whose guard is false exits non-zero, and here that is the healthy case: measured under bash and zsh, the chain form exits 1 when there is no file and 1 when the file already ends in a newline, reaching 0 only on the corrupted state it exists to repair — so anyone pasting these lines into a `set -e` wrapper aborts on the common path. The `if` runs the same command on the same condition and exits 0 either way.
 
 Measured: before, `git status --short` at the container root reports `?? .wheelhouse-worktrees/`; after, it reports nothing for it. In the SINGLE-REPO shape there is nothing to do here — the worktree location is a sibling OUTSIDE this repo, so this repo never sees it. If that sibling location happens to sit inside some other repository, that repository is not this install's to edit; say so to the principal rather than leaving dirt they will find later and attribute to their own working copy.
 
