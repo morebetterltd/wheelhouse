@@ -8,16 +8,19 @@ This repo is the template. It ships the contracts those roles share, one worked 
 
 ## Prerequisites
 
-- a git repository you want the fleet to work on
-- [Claude Code](https://claude.com/claude-code)
-- the `bd` CLI (the work graph) on your PATH — `brew install beads`, or see https://github.com/gastownhall/beads
-- `git` able to reach this repo
+- **a git repository you want the fleet to work on.** The wheelhouse installs into a project you already have; it does not start one for you.
+- **[Claude Code](https://claude.com/claude-code).** Every seat is a Claude Code session, and the install is itself a Claude Code session.
+- **four command-line tools on your PATH: `git`, `bd`, `bash`, `awk`.** Three of those ship with macOS and every Linux. `bd` is the work graph, and is the one you probably have to install: `brew install beads`, or see https://github.com/gastownhall/beads.
+
+You do not have to check the four by hand. Step 0 of the install is a dependency preflight that checks all of them, and for each one that is missing prints what the wheelhouse needs it for and how to install it, then stops before anything has been written.
 
 ## Install
 
-Open a Claude Code session in your project root and paste this:
+Open a Claude Code session in your project root and paste the block below into that session.
 
-```
+**It is a prompt for Claude, not a shell command.** Claude runs the clone for you; pasting the block into a terminal fails on its first line.
+
+```text
 Install the wheelhouse in this repo.
 
 Clone the template somewhere temporary and read its BOOTSTRAP.md, then follow it
@@ -48,6 +51,12 @@ Two things before you start:
 ```
 
 It will survey your repo, ask you about the handful of things it cannot derive — six topics, plus your seats if you want them set up straight away — then write the tree, verify it, and tell you what is stubbed.
+
+If you would rather read the template before installing anything, this is safe to paste into a terminal — it clones a copy you can browse and installs nothing:
+
+```bash
+git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
+```
 
 ## What lands in your project
 
