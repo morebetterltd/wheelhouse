@@ -52,6 +52,8 @@ $ADB install -r /path/to/app-debug.apk        # expect: Success
 $ADB shell pm list packages | grep app     # expect: package:com.example.app
 ```
 
+bench.sh prints adb's own error text verbatim on a failed install rather than asserting a cause. An unsigned release APK is one known cause, but not the only one: a stale, signature-mismatched install already on the AVD from a previous run (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) produces the exact same failed-install shape from a signed, fine APK. A guard that explains into the wrong diagnosis is worse than one that stays quiet, so both causes are named and whoever reads adb's own error decides which applies. Remedy for the second: `adb uninstall <package>`, then retry.
+
 ## Launch and confirm it stayed up
 
 ```sh
@@ -98,6 +100,24 @@ An APK built without `www/` assembles, installs, launches, and stays resident. I
 ## Render check (h6i)
 
 bench.sh now `pm clear`s the package before launch (every bench sees first-run state) and measures the screencap: a near-solid frame (dominant colour ≥0.90 of pixels) polls every 5s up to RENDER_TIMEOUT (90s) and FAILS if it never breaks up. Read its output as a **measurement, never a verdict**: below-threshold means "not near-solid", not "the app rendered" — gradient-only blanks (~0.075) and dialog-covered blanks (~0.77) pass the number, so **looking at the screencap stays mandatory**. A healthy app transits 0.92–0.94 mid-paint on the way up; a near-solid reading mid-poll is normal, only the timeout is a failure. Gradient-blank detection is app-mvv.
+
+## Foreign-window check
+
+The painted-frame measurement above cannot tell the app's own pixels from a system window drawn on top of it — a screencap can show the app genuinely rendered *under* a system dialog (e.g. "System UI isn't responding") and that frame can still clear the density/share thresholds. It also can't be caught downstream: the logcat capture is scoped `--pid=$PID` to the app's own process, so a System UI ANR, which belongs to a different process, can never appear in it.
+
+bench.sh runs `adb shell dumpsys window windows` right after the frame check, writes it to `evidence-windows.txt`, and warns (does not fail) when a window other than the app and known chrome is visible over the frame. **This is a best-effort name, not a guarantee the frame is clean.**
+
+The check gates on real per-window *visibility*, not mere registration — an earlier version listed every registered window and allowlisted a short chrome list by name, and on a live device run it flagged nearly every registered window: structural windows that were merely present, not drawing anything foreign over the frame (a screen-decor overlay, an edge-gesture handler, a taskbar, a notification shade, a drop target, the launcher activity, the wallpaper). A registered window is not an on-screen window, and a warning that fires every run is noise a reviewer learns to ignore.
+
+`dumpsys window windows` prints an `isVisible=` line inside every window's own block (verified against AOSP's `WindowState.java` / `WindowManagerService.java`), and only a window whose block says `isVisible=true` is a flag candidate — an idle gesture-handler touch region, a collapsed notification shade, an occluded wallpaper, or a backgrounded launcher activity all read `isVisible=false` at rest. Genuinely always-visible chrome (`StatusBar`, `NavigationBar`, a rounded-corner/cutout screen-decor overlay, a taskbar on a gesture-nav skin) still needs a name allowlist on top of the visibility gate — it's real content on screen every frame, just not app content.
+
+The `dumpsys` text format is not a stable contract across Android builds, and a legitimate window the parser doesn't recognise (a permission prompt, say) will show as a false positive if it happens to be visible. Detection here is not robust enough to gate the bench on, so it warns rather than fails.
+
+**Opening the screencap and reading `evidence-windows.txt` when it warns stays mandatory** — the same rule as the render check above: a below-threshold or clean-window PASS is a measurement, never a verdict that the app rendered the right screen with nothing foreign on top of it.
+
+## Verdict file
+
+bench.sh tees its final PASS/FAIL line, with the exit code, into `<output-dir>/verdict.txt` as well as stdout/stderr — every other check (logcat, error grep, missing-assets, screencap) already lands in the output directory, and the verdict itself should too, so a reviewer checking the evidence directory sees the conclusion, not just what fed it. An arg-count or missing-APK failure can happen before the output directory is created; in that case there is nowhere to write the file, so bench.sh falls back to stderr only.
 
 ## Shut down
 
