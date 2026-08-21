@@ -103,7 +103,19 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 6. **Priorities.** `wheelhouse/GRAPH.md` has a project section for what P0 to P3 mean here. Offer this default and ask them to amend rather than compose: **P0 blocks the fleet or has an external deadline; P1 is the core loop; P2 is maintenance; P3 is nice-to-have.** If they accept it unchanged, say so in the file — a scheme that was confirmed reads differently from one that was assumed.
 
-7. **Seats**, only if they want them now. Names and count. Offer the minimum viable fleet: commander, one worker, one reviewer.
+7. **Seats — walk the roster one seat at a time.** Do not offer a fleet shape and ask whether they want it. A roster proposed whole is accepted whole, and the seat that goes missing is the one nobody was asked about: today that is reliably the designer, because its absence looks like a smaller install rather than a gap.
+
+   The commander is not on the list and is not a question. It is the principal's own session in the directory whose `CLAUDE.md` you are about to write, so it exists whether or not anyone names it. Say that, then take the rest individually — each answer is yes-with-a-count or no:
+
+   - **Worker** — implements beads on branches, per `wheelhouse/fleet/WORKER.md`. "How many worker seats? One is the working minimum; a second goes in when the reviewer is idle waiting for work."
+   - **Reviewer** — gates every diff before it merges and never reviews what it authored, per `wheelhouse/crew/REVIEWER.md`. "How many reviewer seats? One, until a single reviewer is the thing everything waits on."
+   - **Designer** — decomposes goals into implementation-ready beads, per `wheelhouse/crew/DESIGNER.md`. Offer it out loud even when you expect a no: "Do you want a designer seat? It earns its place when you are spending more time decomposing work than deciding direction — otherwise you hold that yourself."
+
+   For each seat also ask the name it answers to and the account it is pinned to, since one seat is one subscription and the roster records both.
+
+   **Write down the no's as well as the yes's.** A refused seat goes into `wheelhouse/fleet/SEATS.md` under `### Declined seats` with the principal's reason and the date. An absence on the page is the same absence whether the seat was refused or never raised, so only the recorded no answers "why is there no designer?" when it is asked six weeks from now.
+
+   Declining every seat is a legitimate answer rather than a failed interview — the commander alone is a working install, and step 8 takes the worker seat itself for the first bead. Say so instead of pushing back.
 
 ## 5. Write
 
@@ -146,7 +158,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 **How to fill a `## This project` section, precisely.** Find the FIRST line in the file that is exactly `## This project` — the whole line, nothing else on it. FIRST, not last: the integrity check below and `runbooks/UPGRADE.md` both stop at the first match, and a last-match rule would absorb project content into the contract half the moment a project section legitimately quotes that heading. Everything above that line is the contract and is not yours to touch; everything below it is yours to write. Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A contract may legitimately discuss its own structure, and a naive match has already destroyed one contract file this way — deleting a licensing-compliance rule while every automated check still passed.
 - Fill each file's `## This project` section from the interview: the designer's territory, the worker's repos and its empty gotchas section, the reviewer's branch and worktree conventions, the bench's run-proof, and the integrator's push authority — the last in the principal's own words, with the date, because it is the one section that records a permission rather than a fact.
 - The integrator's third section, "How a shipped record gets corrected here", has no interview question on purpose: unless the principal volunteers a convention, fill it with the contract's own default — a follow-up commit naming the corrected commit's identifier, history never rewritten — and label it "adopted from the contract's default" so a later principal knows it was a default rather than their decision. Two cold installs both had to guess this; the default they guessed is now the documented one.
-- Fill `wheelhouse/fleet/SEATS.md`'s `## This project` roster from the seat answers, or with the minimum viable fleet and a note that seats can be added later. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
+- Fill `wheelhouse/fleet/SEATS.md`'s `## This project` section from question 7's per-seat answers, **both halves**: one roster line per seat that was taken, and one line under `### Declined seats` per seat that was refused, carrying the reason in the principal's words and the date. A roster listing only what was taken is indistinguishable from one where the question was never asked, which is the reason the interview walks the seats individually in the first place. If every seat was declined, the roster holds the commander line alone and the declined section holds the rest — that is a filled section, not an empty one. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
 - Write `CLAUDE.md` at the root: commander-session context, product changes happen in product repos via workers, new work becomes a bead immediately, deadline beads outrank everything, plus the principal-only actions from Q4 and the merge policy from Q5.
 - Write `wheelhouse/ISA.md`: the goal from Q3, empty claims, empty decisions, and any anti-claims stated. **Do not invent claims.** An ISA with fabricated claims is worse than an empty one.
 - Write `wheelhouse/STARTUP.md` with this project's real paths and seat names.
@@ -381,10 +393,12 @@ bd ready
 
 Step 6 left exactly one bead ready, and it is real work rather than a placeholder: implement `wheelhouse/crew/bench.sh` against `wheelhouse/crew/BENCH.md`. It goes first because until the bench is real no verdict on this project may claim its software runs, so every approval until then is an approval of a diff somebody read. Dispatch it per the runbook's stage 1 — name the bead id and the repository, give a way to read anything it points at that changes nothing, and state done if the bead does not already state it.
 
-Where that dispatch goes depends on the seats answer from step 4's question 7:
+Where that dispatch goes depends on the per-seat answers from step 4's question 7. Read the roster in `wheelhouse/fleet/SEATS.md` rather than your memory of the conversation:
 
-- **Seats were named.** Launch them per `wheelhouse/STARTUP.md` and dispatch the bead to the worker. Then hold the commander's seat and wait for the report to arrive on the bead, not in a message.
-- **No seats yet.** Say so, and take the worker seat yourself for this one: claim the bead, work in a worktree at the location step 4 recorded, and report on the bead the way `wheelhouse/fleet/WORKER.md` requires of anyone. The one role you may not also take is the reviewer's for that same change — `wheelhouse/crew/REVIEWER.md` forbids author-review, and it is the one merge that care cannot recover afterwards. Name that gap to the principal now, while there is a whole bead's worth of time to fill it, rather than at the moment the branch is ready to merge.
+- **A worker seat is on the roster.** Launch every seat the roster names, per `wheelhouse/STARTUP.md`, and dispatch the bead to the worker. Then hold the commander's seat and wait for the report to arrive on the bead, not in a message.
+- **No worker seat.** Say so, and take the worker seat yourself for this one: claim the bead, work in a worktree at the location step 4 recorded, and report on the bead the way `wheelhouse/fleet/WORKER.md` requires of anyone.
+
+Then check the roster for the reviewer, whichever branch you took. The one role the author of a change may not also hold is the reviewer's for that same change — `wheelhouse/crew/REVIEWER.md` forbids author-review, and it is the one merge that care cannot recover afterwards. If no reviewer seat was taken, or if you are about to author this bead yourself, name that gap to the principal now, while there is a whole bead's worth of time to fill it, rather than at the moment the branch is ready to merge.
 
 Either way, say which seat you are sitting in and what you are waiting for. The remaining actions are the commander's ordinary ones and they follow this first loop rather than replacing it: file the beads for the ideal state from step 4's question 3, and launch any seats you have not launched yet per `wheelhouse/STARTUP.md`.
 

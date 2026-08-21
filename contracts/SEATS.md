@@ -56,4 +56,14 @@ Generated at install.
 
 ### Roster
 
-<!-- Seat names, which brief each reads, and which account each is pinned to. -->
+<!-- One line per seat this project took: its name, which brief it reads, and which
+     account it is pinned to. The commander is always here — it is the principal's
+     own session and was never a question at install. -->
+
+### Declined seats
+
+<!-- One line per seat that was offered at install and refused: the seat, the
+     principal's reason, and the date. A seat that was considered and declined
+     looks exactly like a seat nobody raised once both are simply absent, and this
+     is the only section that can tell them apart. Add a line here when a seat is
+     dropped later, too. -->
