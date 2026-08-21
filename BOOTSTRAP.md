@@ -153,7 +153,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    Say which shape you are installing, and record it in the worker's `## This project` section along with where worktrees go. A worker that guesses this wrong creates a worktree inside the repo and pollutes the very diff it is meant to produce.
 
-2. **What "it runs" means.** Two questions, because `crew/BENCH.md` has five sections to fill and one answer fills one of them:
+2. **What "it runs" means.** Four questions, because `crew/BENCH.md` has five sections to fill and (b) fills two of them:
 
    a. "For a \<project type\>, I would prove a build works by \<your proposal: a server answers a health check; a CLI executes a real command against real input; an app installs and reaches its first screen\>. What is the observation that would convince you a build actually works?"
 
@@ -337,7 +337,7 @@ Run each of these and paste what it prints:
 
   The second is the better probe — it needs no issue id and changes nothing — and the two do not agree: on bd 1.2.2 the `--status` filter help names five statuses while the rejection names seven, adding `pinned` and `hooked`. Trust the rejection.
 
-  **Read the error text, and treat the exit code as a separate question.** On bd 1.2.2 an invalid status exits non-zero, so the exit code is trustworthy here. On builds before 0.57.0 the same command printed the error and exited 0, so an exit-code check concluded the opposite of the truth. Establish which you have rather than assuming, and note it in `GRAPH.md`.
+  **Read the error text, and treat the exit code as a separate question.** On bd 1.2.2 an invalid status exits non-zero, so the exit code is trustworthy here. On builds before 0.57.0 the same command printed the error and exited 0, so an exit-code check concluded the opposite of the truth. Establish which you have rather than assuming. **If your build differs from what the contract stamped — a different exit code, a different status list — write one line under `### CLI build notes` in `wheelhouse/GRAPH.md`'s `## This project` half saying the build, what you ran, what it did, and the date. If it matches, there is nothing to note** — the stamp already says so, and an entry recording agreement is noise the next reader has to re-verify.
 
   If your build enumerates `in_review`, or lets you configure it — bd 1.2.2 does, via `bd config set status.custom` — correct `wheelhouse/GRAPH.md` now and say so in the hand-back. The file says it is stamped rather than eternal, and an install is the moment to check.
 
