@@ -9,7 +9,7 @@ Commander + one worker + one reviewer. Start there. It is a working loop, and it
 ## 1. Commander
 
 ```bash
-cd /path/to/project-root
+cd ~/code/ebb
 claude
 ```
 
@@ -19,15 +19,25 @@ The folder's `CLAUDE.md` makes this session the commander. No launcher required.
 
 ## 2. Seats
 
-Per seat, in its own terminal:
+Each seat is a terminal you open and leave open — the session in it IS the seat. One terminal per seat, one account per seat. `wheelhouse/fleet/SEATS.md`'s "Launching a seat" is the full procedure, including the `claude` check, the first-run login, the standing prompt to paste as the first message, and what the seat does afterwards. The blocks below are that procedure with this project's root and seat names already filled in.
+
+`seat-worker-1`, on account `ebb-fleet-1`:
 
 ```bash
-export CLAUDE_CONFIG_DIR="$HOME/.claude-seats/seat-worker-1"   # or seat-reviewer
-cd /path/to/project-root
+export CLAUDE_CONFIG_DIR="$HOME/.claude-seats/seat-worker-1"
+cd ~/code/ebb
 claude
 ```
 
-Paste that seat's standing prompt from `wheelhouse/fleet/SEATS.md`. The seat idles until the commander sends it work by name.
+`seat-reviewer`, on account `ebb-fleet-2`:
+
+```bash
+export CLAUDE_CONFIG_DIR="$HOME/.claude-seats/seat-reviewer"
+cd ~/code/ebb
+claude
+```
+
+Then paste that seat's standing prompt from `wheelhouse/fleet/SEATS.md`, with `<seat-name>` replaced by the name above and only that seat's role brief kept. The seat idles until the commander sends it work by name.
 
 ## 3. Wire discovery, then verify
 

@@ -27,15 +27,82 @@ This is a licensing-compliance statement, not a preference or a scaling guidelin
 
 ### Launching a seat
 
-Each seat gets its own configuration directory so logins do not collide:
+**A seat is a terminal you open and leave open.** Launching one is not running a
+command that finishes and returns you to a prompt: the interactive session living
+in that terminal IS the seat, and closing the terminal ends it. So every seat on
+the roster gets its own terminal window or tab, opened by hand, and each stays
+open for as long as that seat is meant to exist. Nothing in this fleet daemonizes
+a seat or restarts one for you.
+
+That is worth stating first because the rest of this procedure reads like setup
+for a launcher that does not exist, and because the commander's dispatches are
+addressed to sessions that somebody has to have started. Run these five steps
+once per seat in the roster below, before the commander dispatches anything to
+that seat.
+
+**1. Check the tool this needs.** The install's own preflight (`BOOTSTRAP.md`
+step 0) deliberately does not check for `claude`: a project may take no seats at
+all, and the person running the install may never open a CLI session themselves.
+This is the first moment anything actually runs it, so the check is here.
+
+```bash
+command -v claude || echo "MISSING claude — a seat IS a claude session, so there is nothing here to launch. Install it: https://claude.com/claude-code"
+```
+
+A MISSING line is a STOP for this seat, not something to work around: no other
+program in this template starts a seat. The commander, the graph and the
+contracts are all still fine — what you have is an install whose seats cannot be
+occupied until the binary is on this machine's PATH.
+
+**2. Open a new terminal, give the seat its own configuration directory, and
+start it at the project root.** The configuration directory is per-seat because
+that is what makes one seat one subscription; two seats sharing one directory
+share a login, and the seat-accounting rule above stops being true of your fleet.
+The `cd` matters as much: the commander is defined by the folder's `CLAUDE.md`
+and every path in the contracts is written relative to the project root, so a
+seat started anywhere else reads a different project or none.
 
 ```bash
 export CLAUDE_CONFIG_DIR="$HOME/.claude-seats/<seat-name>"
 cd /path/to/project-root
-claude   # first run only: log in with that seat's account
+claude
 ```
 
-Paste that seat's standing prompt as the first message.
+Substitute the seat's name from the roster below and this project's real root —
+`wheelhouse/STARTUP.md` carries both already filled in. A seat whose name does
+not match its roster entry is a seat the commander cannot address, and that
+failure looks exactly like an idle seat.
+
+**3. On the first run only, log in — as this seat's own account.** The session
+will ask. Use the account the roster pins to this seat and no other; an account
+that already holds a seat cannot hold a second one. Later launches reuse the
+login stored in that seat's configuration directory and go straight to a prompt.
+
+**4. Paste the standing prompt as the seat's first message.** The text is in
+"Standing prompt" directly below — that section is the source, and it is the same
+text in every project. Two substitutions before you paste: put the roster's seat
+name where `<seat-name>` is, and keep only the role brief the roster gives that
+seat. Nothing else in it changes.
+
+The seat is launched when it answers that prompt and then holds. It should not go
+looking for work; a seat that starts claiming beads unprompted did not read the
+prompt you pasted.
+
+**5. Wire discovery, then verify you can reach it.** Per-seat configuration
+directories also isolate each session's registry, so until you run
+`wheelhouse/runbooks/SEAT_DISCOVERY.md` the commander cannot address the seat by
+name — and an unreachable seat is indistinguishable from an idle one. Run that
+runbook from the project root after launching or relaunching any seat, then have
+the commander round-trip a message to the seat. A seat that does not answer is
+not launched, whatever its terminal shows.
+
+**What the seat does after that.** It idles. The commander sends it work by name,
+per stage 1 of `wheelhouse/runbooks/RUNNING_THE_LOOP.md`; the seat then reads the
+bead itself and follows the role brief named in its standing prompt —
+`wheelhouse/fleet/WORKER.md` for a worker, which is what says to claim the bead,
+isolate it in a worktree on `fleet/<bead-id>`, and report on the bead with
+evidence before going idle again. The seat never self-assigns, and the standing
+prompt is what holds it to that between dispatches.
 
 > Version-stamped: the `CLAUDE_CONFIG_DIR` mechanism and the cross-seat discovery
 > procedure in `wheelhouse/runbooks/SEAT_DISCOVERY.md` depend on harness internals that can

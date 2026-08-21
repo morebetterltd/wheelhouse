@@ -14,6 +14,8 @@ Four are worth checking. Everything else the procedure runs — `sed`, `grep`, `
 
 Deliberately NOT on the list: `gh`. Nothing in `BOOTSTRAP.md`, `runbooks/` or `contracts/` invokes it — measured by grep, not assumed — so do not install it on this file's account. If you add a tool to the list, measure the same way: the list is only worth what it was checked against.
 
+Also deliberately NOT on the list, for a different reason: `claude`. The contracts do invoke it, but only in `contracts/SEATS.md`'s launch procedure and only once someone takes a seat — and an install that declines every seat is a legitimate install whose principal may never run a CLI session. Checking it here would block that install on a tool it never uses, so the check lives at the first moment something actually runs the binary, in that procedure. This sentence exists so the decision is readable in the file rather than only in whoever made it.
+
 ```bash
 # Positional parameters, not a whitespace-split string: zsh does not word-split an
 # unquoted variable, so a `for t in $TOOLS` loop there runs ONCE over the whole list
@@ -216,7 +218,14 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 - Fill `wheelhouse/fleet/SEATS.md`'s `## This project` section from question 7's per-seat answers, **both halves**: one roster line per seat that was taken, and one line under `### Declined seats` per seat that was refused, carrying the reason in the principal's words and the date. A roster listing only what was taken is indistinguishable from one where the question was never asked, which is the reason the interview walks the seats individually in the first place. If every seat was declined, the roster holds the commander line alone and the declined section holds the rest — that is a filled section, not an empty one. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
 - Write `CLAUDE.md` at the root: commander-session context, product changes happen in product repos via workers, new work becomes a bead immediately, deadline beads outrank everything, plus the principal-only actions from Q4 and the merge policy from Q5.
 - Write `wheelhouse/ISA.md`: the goal from Q3, empty claims, empty decisions, and any anti-claims stated. **Do not invent claims.** An ISA with fabricated claims is worse than an empty one.
-- Write `wheelhouse/STARTUP.md` with this project's real paths and seat names.
+- Write `wheelhouse/STARTUP.md`: this project's cold-start card. It is what step 8 and the commander point at when it is time to actually start a session, so its job is to resolve rather than to restate — the launch MECHANICS live in `wheelhouse/fleet/SEATS.md`'s "Launching a seat" section, identically in every project, and this file is where those mechanics meet this project's real root path and real seat names. Four things, in this order, and none of them optional:
+
+  1. **The commander.** `cd` to this project's real absolute root, then `claude`. Say that the folder's `CLAUDE.md` is what makes that session the commander, so no launcher is needed.
+  2. **One block per seat on the roster**, using that seat's real name and this project's real root — the `export CLAUDE_CONFIG_DIR=...` / `cd` / `claude` lines from the launch procedure with the placeholders already substituted, so the principal can paste rather than translate. Then point at `wheelhouse/fleet/SEATS.md` by name for what those lines mean, the login-per-account rule, the standing prompt to paste, and what the seat does next. **Copy no seat name that is not on the roster**, and if the roster took no seats, say that in place of this section rather than inventing a specimen seat.
+  3. **Discovery.** `wheelhouse/runbooks/SEAT_DISCOVERY.md`, run after launching or relaunching any seat, followed by asking the commander to round-trip a message to each seat. An unwired seat looks exactly like an idle one.
+  4. **How work reaches the fleet** — the principal speaks backlog items to the commander, which files them as beads — and that shutdown is closing the terminals, because in-flight work resumes from the graph.
+
+  Do not reproduce the launch procedure's prose here. A second copy of a contract's text in a generated file is a copy that drifts, and this one would drift in every project separately.
 
 `generated/` in the template holds specimens of these files. They are examples of the SHAPE. Never copy them — they describe an invented project.
 
@@ -486,7 +495,7 @@ Two answers are not one bead, and neither is a reason to guess which bead was me
 
 Where that dispatch goes depends on the per-seat answers from step 4's question 7. Read the roster in `wheelhouse/fleet/SEATS.md` rather than your memory of the conversation:
 
-- **A worker seat is on the roster.** Launch every seat the roster names, per `wheelhouse/STARTUP.md`, and dispatch the bead to the worker. Then hold the commander's seat and wait for the report to arrive on the bead, not in a message.
+- **A worker seat is on the roster.** Launch every seat the roster names, then dispatch the bead to the worker. Launching is a hands-on procedure and it is written down twice over, deliberately: `wheelhouse/fleet/SEATS.md`'s "Launching a seat" is the procedure — a terminal per seat, its own config directory, its own account, the standing prompt pasted as the first message, discovery wired and verified afterwards — and `wheelhouse/STARTUP.md` is the same steps with this project's root and seat names already substituted. Follow `STARTUP.md`; if it is thinner than what you just wrote in step 5, the contract is the authority and the STARTUP.md you wrote is the thing to fix. Then hold the commander's seat and wait for the report to arrive on the bead, not in a message.
 - **No worker seat.** Say so, and take the worker seat yourself for this one: claim the bead, work in a worktree at the location step 4 recorded, and report on the bead the way `wheelhouse/fleet/WORKER.md` requires of anyone.
 
 Then check the roster for the reviewer, whichever branch you took. The one role the author of a change may not also hold is the reviewer's for that same change — `wheelhouse/crew/REVIEWER.md` forbids author-review, and it is the one merge that care cannot recover afterwards. If no reviewer seat is on the roster, name that gap to the principal now — whoever authors this bead, there is then nobody left who is permitted to review it — while there is a whole bead's worth of time to fill it, rather than at the moment the branch is ready to merge.
