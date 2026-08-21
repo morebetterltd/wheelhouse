@@ -360,13 +360,33 @@ No commands, and it is a legitimate choice — but state the consequence rather 
 
 Do not push. Pushing is a principal-only action, here and in every wheelhouse.
 
-## 8. Hand back
+## 8. Take the seat, and hand back from it
 
-Tell the principal plainly:
+You are a session in the directory whose `CLAUDE.md` you just wrote, and that file says a session in this directory is a commander session. So you are the commander already, and the first commander action is yours to perform rather than to recommend. An install that ends on a reading list gives the principal the standards, the procedure and the homework, and leaves the loop unstarted — which is the one thing the install exists to start. Observed on a real install, 2026-08-21: every file was correct and nothing was running.
 
-- what exists now;
-- what is deliberately STUBBED and therefore not yet true — `crew/bench.sh`, the empty gotchas section, the ISA's empty claims;
-- the four next actions: read `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, which takes one bead from dispatch to merged; file the first beads; implement the bench against `crew/BENCH.md`; launch seats per `STARTUP.md`. Put the runbook first deliberately — the contracts say what each role owes, that runbook says what the sequence looks like and what to do on the days it does not go straight through, and a principal who has the contracts and not the runbook has the standards and no procedure.
+Three things, in this order.
+
+**Hand back what is now true.** Plainly, and with the two halves kept apart, because a principal who cannot tell them apart will trust the stubs:
+
+- what exists — the files, the graph, the shape you installed and where worktrees go, the merge policy and the principal-only actions in the principal's own words, and anything you corrected on the way through: the `AGENTS.md` override from step 5, any `GRAPH.md` status correction from step 6, and which `.beads/` durability shape you found in step 7 and what was chosen about it;
+- what is deliberately STUBBED and therefore not yet true — `wheelhouse/crew/bench.sh` exits non-zero on purpose, the worker's gotchas section is empty because gotchas are earned rather than invented, and the ISA's claims are empty for the same reason.
+
+**Read the loop you are about to run.** `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, now, before the dispatch below — you are executing its first stage in the next paragraph, not filing it for someone to read later. The contracts say what each role owes; that runbook says what the sequence looks like and what to do on the days it does not go straight through, and whoever has the contracts and not the runbook has the standards and no procedure. The role contracts are then read at the stage that needs them — `wheelhouse/fleet/WORKER.md` when you dispatch, `wheelhouse/crew/REVIEWER.md` when a branch lands, `wheelhouse/INTEGRATOR.md` when one is approved, `wheelhouse/GRAPH.md` for the review queue — and the runbook's closing table says which is which. That is the reading list, and it is a step inside this action rather than a parting gift.
+
+**Make the first dispatch.** Read the graph rather than your memory of it:
+
+```bash
+bd ready
+```
+
+Step 6 left exactly one bead ready, and it is real work rather than a placeholder: implement `wheelhouse/crew/bench.sh` against `wheelhouse/crew/BENCH.md`. It goes first because until the bench is real no verdict on this project may claim its software runs, so every approval until then is an approval of a diff somebody read. Dispatch it per the runbook's stage 1 — name the bead id and the repository, give a way to read anything it points at that changes nothing, and state done if the bead does not already state it.
+
+Where that dispatch goes depends on the seats answer from step 4's question 7:
+
+- **Seats were named.** Launch them per `wheelhouse/STARTUP.md` and dispatch the bead to the worker. Then hold the commander's seat and wait for the report to arrive on the bead, not in a message.
+- **No seats yet.** Say so, and take the worker seat yourself for this one: claim the bead, work in a worktree at the location step 4 recorded, and report on the bead the way `wheelhouse/fleet/WORKER.md` requires of anyone. The one role you may not also take is the reviewer's for that same change — `wheelhouse/crew/REVIEWER.md` forbids author-review, and it is the one merge that care cannot recover afterwards. Name that gap to the principal now, while there is a whole bead's worth of time to fill it, rather than at the moment the branch is ready to merge.
+
+Either way, say which seat you are sitting in and what you are waiting for. The remaining actions are the commander's ordinary ones and they follow this first loop rather than replacing it: file the beads for the ideal state from step 4's question 3, and launch any seats you have not launched yet per `wheelhouse/STARTUP.md`.
 
 ## Failure behavior
 
