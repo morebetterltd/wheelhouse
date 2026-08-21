@@ -89,6 +89,7 @@ That split is the whole design. It means a project's specifics never get tangled
 | `runbooks/` | how to run the loop, seat discovery, the upgrade procedure, and the graduations to take once the loop has proven itself |
 | `examples/` | worked benches, each labelled as one project's implementation: `android-cordova/` from a real project, `http-service/` for a service-and-worker shape |
 | `BOOTSTRAP.md` | the procedure the install session follows |
+| `MAINTAINING.md` | this repo's convention for revising its own prose — where reasoning lives and how a reader finds the revise-class part; deliberately not a contract |
 
 ## Two things worth knowing before you start
 
