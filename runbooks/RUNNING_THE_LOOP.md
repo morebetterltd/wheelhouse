@@ -12,9 +12,28 @@ So when you read a stage below, the question is never "was that passed along cor
 
 ## Before your first loop
 
-- The roles exist. One person may hold several — commander and integrator are commonly the same, and a solo principal can hold all of them at different moments. What must not happen is one person being both author and reviewer of the same change; `wheelhouse/crew/REVIEWER.md` forbids it and it is the one merge that cannot be recovered by care.
+- The roles exist. One person may hold several — commander and integrator are commonly the same, and a solo principal can hold all of them at different moments. What must not happen is one person being both author and reviewer of the same change; `wheelhouse/crew/REVIEWER.md` forbids it and it is the one merge that cannot be recovered by care. A solo install, where one human holds every role, closes that gap the way the next section describes.
 - The work graph is initialised and `bd ready` lists something.
 - You know whether `wheelhouse/crew/bench.sh` is the shipped stub or a real bench. If it is the stub, no verdict may claim the software runs, and that is deliberate. See `wheelhouse/crew/BENCH.md`.
+
+## When one human holds every seat
+
+A solo install — one human, one subscription, every standing seat declined — is a legitimate install, and it still runs this loop. What it cannot do is waive the rule the loop is built around: **no change is approved by the mind that authored it.**
+
+That rule is narrower than it first reads. Its unit is the authoring CONTEXT — the session that produced the diff, carrying its own reasoning, assumptions and investment — not the account the session ran on, and not the human who owns the account. A solo install therefore always has more reviewers available than it has seats, because it has more minds than accounts:
+
+- **The principal.** For any agent-authored change, the principal is a different mind from the author by construction. The principal may hold the reviewer role for that change: read the diff, re-run the cheap evidence, and write the verdict on the bead in the format `wheelhouse/crew/REVIEWER.md` prescribes. A solo principal already holds commander and integrator at different moments; reviewer is one more role, barred only for changes the principal authored.
+- **A fresh session.** For any change — including one the principal wrote by hand — a fresh session is a mind that did not author it: a new terminal, a new context, holding nothing of the conversation that produced the diff. Dispatch it the way stage 1 dispatches any reviewer: the bead id, the branch, a way to read it that changes nothing, and `wheelhouse/crew/REVIEWER.md` as its brief. Running it on the principal's own account is fine — seat accounting governs standing seats pinned to subscriptions, and an ephemeral session serving the principal is one subscription serving its one human (`wheelhouse/fleet/SEATS.md`'s Lifecycle section: ephemeral is the default shape, and a standing seat is a promotion). What such a session must never be given is the author's transcript, or the author's summary of the work: a fresh session fed the author's reasoning is the author's mind with a new timestamp.
+
+Say on the verdict which one reviewed — "reviewed by the principal" or "reviewed by a fresh session, dispatched <when>" — because the record otherwise cannot distinguish either from the author approving itself.
+
+And say what this shape does NOT buy, because the honest cost is the reason the fleet shape exists:
+
+- **Correlated blind spots.** A fresh session of the same model catches the author's context-bound errors — the rationalisation, the skipped check, the claim that outran its evidence — but it shares the model's systematic errors with the author session, and those it will make too.
+- **Procedural, not structural, independence.** The principal dispatches the review, reads the verdict, and merges. Nothing outside the principal's own discipline forces the gate to close before the merge; a standing reviewer seat on its own account makes skipping the gate a visible act, and here it is a private one.
+- **The least adversarial reviewer.** The principal wants the change to be done, and reviewing toward a merge you already want is how a skim acquires the authority of a review. Prefer the fresh session whenever you notice you would skim; take the review yourself only when you will genuinely re-run the evidence.
+
+What remains forbidden, in every shape: the session that authored a change writing its verdict, and a "review" produced by feeding the author's account of the work back to a second session. If a change truly has no available mind that did not author it, the work waits — `wheelhouse/fleet/SEATS.md` states that rule for seats, and it holds for minds.
 
 ## One loop
 
