@@ -2,7 +2,7 @@
 
 ## Contract
 
-The seat contract — what a seat is, seat accounting, the rules, launching, and the standing prompt — is `contracts/SEATS.md` in the template repo, copied verbatim into `wheelhouse/fleet/SEATS.md` at install. It is not reproduced here, and it is not edited per-project.
+The seat contract — what a seat is, its lifecycle, seat accounting, the rules, launching, and the standing prompt — is `contracts/SEATS.md` in the template repo, copied verbatim into `wheelhouse/fleet/SEATS.md` at install. It is not reproduced here, and it is not edited per-project.
 
 This specimen shows only what the interview writes: the roster below, and the seats that were offered and turned down.
 
@@ -37,6 +37,7 @@ This specimen shows only the generated half. The file at `wheelhouse/fleet/SEATS
 
 ## Contract                 <- copied verbatim from contracts/SEATS.md, never edited
   ### What a seat is
+  ### Lifecycle             <- context is a cache; ephemeral default, standing is a promotion
   ### Seat accounting       <- one seat = one subscription = one human beneficiary
   ### Rules
   ### Launching a seat

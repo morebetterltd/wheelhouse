@@ -10,6 +10,18 @@ Copied byte-for-byte into every project. Do not edit this section.
 
 A standing session pinned to its own subscription, with its own configuration directory, addressable by name. It idles between dispatches and holds context across them.
 
+### Lifecycle
+
+A seat's session context is a CACHE. Everything durable lives on the graph, in the contracts, in git, and in the ISA — which is why reports go on the bead. A seat that loses its context loses nothing the fleet needs: at most one in-flight bead, which the commander re-dispatches. The context a standing seat holds across dispatches is a warm cache, nothing more.
+
+That the cache is disposable is what makes EPHEMERAL the default lifecycle: a fresh session per dispatched bead, discarded once the report lands on the bead. No lifecycle management exists in this mode, and none is needed — there is nothing to keep alive.
+
+A standing seat — the terminal kept open, which the rest of this file describes — is a PROMOTION, not the starting shape; `wheelhouse/runbooks/PROMOTION.md` says when to take it. It buys continuity and dispatch latency, and the price is a manual reset ritual. Within a bead, the harness's auto-compaction carries the seat through. BETWEEN beads — the moment its context is worthless by construction, because everything the next bead needs is on the graph — the human runs `/clear` (the work graph's session hook re-primes the context) or restarts the CLI and pastes the standing prompt again, per the launch procedure below. Reset between beads, never mid-bead.
+
+Nothing here supervises a seat. Automated launch, health-checking and restart are tooling a project brings if it wants them; this template does not promise or provide them. The launch procedure below is a human opening terminals, and that is the whole of it.
+
+From the commander's side, seat health stays what the rules below say: probe once, nudge once — a dead seat and an idle seat look identical, which is why the probe exists. If both go unanswered, declare the seat dead, relaunch it per the launch procedure, and re-dispatch the in-flight bead. That is the entire recovery, because the cache was the only thing lost.
+
 ### Seat accounting
 
 **One seat = one subscription = one human beneficiary. No seat serves anyone else.**

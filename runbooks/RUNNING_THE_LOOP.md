@@ -86,7 +86,7 @@ That includes the unglamorous ones: a premise that turned out wrong, a scope cho
 
 ## When it does not go straight through
 
-**A report goes quiet.** Probe once, then nudge once. A seat that cannot be reached looks exactly like a seat that is idle, and the distinction matters before you re-dispatch the work to someone else.
+**A report goes quiet.** Probe once, then nudge once. A seat that cannot be reached looks exactly like a seat that is idle, and the distinction matters before you re-dispatch the work to someone else. If both go unanswered, declare the seat dead and relaunch it per `wheelhouse/fleet/SEATS.md`'s launch procedure — its Lifecycle section says why re-dispatching the in-flight bead is the whole cost.
 
 **The dispatch's premise was wrong.** Say so and stop, rather than delivering against a brief you know to be mistaken. This happens often enough to be normal: the bead described a file that had moved, a fix that was already applied, a defect that reproduces differently than reported. The correction is worth more than the delivery.
 
