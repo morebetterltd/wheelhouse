@@ -10,11 +10,11 @@ This specimen shows only what the interview writes: the roster below, and the se
 
 ### Roster
 
-| Seat | Role brief | Notes |
-|---|---|---|
-| `seat-worker-1` | `wheelhouse/fleet/WORKER.md` | Primary implementation |
-| `seat-reviewer` | `wheelhouse/crew/REVIEWER.md` | Never authors what it reviews |
-| (commander) | this folder's `CLAUDE.md` | The principal's own session |
+| Seat | Role brief | Account | Notes |
+|---|---|---|---|
+| `seat-worker-1` | `wheelhouse/fleet/WORKER.md` | `ebb-fleet-1` | Primary implementation |
+| `seat-reviewer` | `wheelhouse/crew/REVIEWER.md` | `ebb-fleet-2` | Never authors what it reviews |
+| (commander) | this folder's `CLAUDE.md` | (principal's own) | The principal's own session |
 
 ### Declined seats
 
