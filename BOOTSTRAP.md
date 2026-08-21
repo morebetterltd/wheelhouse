@@ -296,13 +296,17 @@ Run each of these and paste what it prints:
 - A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
 
   ```bash
-  grep -rnwE "Ebb|ebb|Tideline|tideline|cordova|emulator|app-review|com\.example\.app" \
+  grep -rnwE "Ebb|ebb|Tideline|tideline|cordova|emulator|app-review|com\.example\.app|learn what a good one looks like|take it when the reviewer starts waiting" \
     CLAUDE.md AGENTS.md wheelhouse/
   ```
 
   **Expect zero hits.** If specimen strings appear in the project's files, the install leaked and must be fixed before you report success. `AGENTS.md` is in scope because you edited it too.
 
   Those terms come from the template's own `generated/` specimens (the invented project) and `examples/` (the worked benches, which use invented projects of their own). If you are reading this in a template whose specimens have changed, the list is stale — check what `generated/` and `examples/` actually contain and grep for that instead. A hardcoded list that no longer matches the specimens passes everything.
+
+  The first eight terms are names from the invented project, so any wholesale copy of a specimen trips them. The last two are the reason texts from the declined-seats rows in `generated/SEATS.md.example`: a copy of just those two rows carries no project name, so the eight would match nothing and a partial leak of that section would walk through. They are phrases rather than words because every WORD in those rows — designer, worker, reviewer, second — is one a correct install writes for itself. For the same reason the roster seat names are deliberately absent: they are plausible real choices, and grepping for them would fail correct installs.
+
+  Deliberately NOT in the list: "spending more time decomposing beads than deciding direction", which reads as the most distinctive line of that specimen and is not — `runbooks/PROMOTION.md` carries it verbatim, and runbooks are copied into every install, so adding it would fail every correct install on a file the installer never wrote. Any term you add here has to be checked against the template's `runbooks/` and `contracts/`, not only against `generated/`.
 - A grep for unfilled placeholders. Anything you leave for the principal to fill uses `{{DOUBLE_BRACE}}` and nothing else, so this check is exact:
 
   ```bash
