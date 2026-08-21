@@ -98,6 +98,8 @@ That includes the unglamorous ones: a premise that turned out wrong, a scope cho
 
 **A report goes quiet.** Probe once, then nudge once. A seat that cannot be reached looks exactly like a seat that is idle, and the distinction matters before you re-dispatch the work to someone else. If both go unanswered, declare the seat dead and relaunch it per `wheelhouse/fleet/SEATS.md`'s launch procedure — its Lifecycle section says why re-dispatching the in-flight bead is the whole cost.
 
+On a fleet of standing seats, check one thing before you declare anything: a seat that answers your probe but never reports on its own is not quiet, it is half-wired — it can reply to you and cannot initiate to you, which is what a missing reverse leg looks like from this side. `wheelhouse/runbooks/SEAT_DISCOVERY.md` step 3 is the check, and re-running the wiring is the fix. Relaunching that seat instead costs you its context and leaves the actual cause in place.
+
 **The dispatch's premise was wrong.** Say so and stop, rather than delivering against a brief you know to be mistaken. This happens often enough to be normal: the bead described a file that had moved, a fix that was already applied, a defect that reproduces differently than reported. The correction is worth more than the delivery.
 
 **Two people disagree about a fact.** Neither account settles it — measure. In these rounds, every disagreement between two careful parties was resolved by someone running the thing, and in several cases both prior accounts were wrong. Evidence of a pattern is not evidence of an instance.

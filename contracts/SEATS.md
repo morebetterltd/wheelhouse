@@ -100,13 +100,21 @@ The seat is launched when it answers that prompt and then holds. It should not g
 looking for work; a seat that starts claiming beads unprompted did not read the
 prompt you pasted.
 
-**5. Wire discovery, then verify you can reach it.** Per-seat configuration
-directories also isolate each session's registry, so until you run
+**5. Wire discovery, roll call, then verify the seat can speak first.** Per-seat
+configuration directories also isolate each session's registry, so until you run
 `wheelhouse/runbooks/SEAT_DISCOVERY.md` the commander cannot address the seat by
-name — and an unreachable seat is indistinguishable from an idle one. Run that
-runbook from the project root after launching or relaunching any seat, then have
-the commander round-trip a message to the seat. A seat that does not answer is
-not launched, whatever its terminal shows.
+name and the seat cannot reach the commander at all — and an unreachable seat is
+indistinguishable from an idle one. Run that runbook from the project root after
+launching or relaunching any seat. You run it, not the commander: an agent
+cannot write into its own session registry.
+
+Wiring makes the seat reachable, not identifiable — registry rows carry derived
+names — so the commander's next act, before it dispatches anything, is a roll
+call that asks each seat its name and binds the map. Then verify by asking the
+seat to message the commander unprompted, addressing it by name. A round trip
+does not test this: a reply travels back the way the message came without ever
+consulting the seat's registry, so it passes while half the wiring is missing. A
+seat that does not answer is not launched, whatever its terminal shows.
 
 **What the seat does after that.** It idles. The commander sends it work by name,
 per stage 1 of `wheelhouse/runbooks/RUNNING_THE_LOOP.md`; the seat then reads the
