@@ -46,6 +46,16 @@ Report **on the bead**, as a comment. Not in a message, not only in a terminal s
 
 A report says what changed, the head, and the evidence for each claim — command output, not adjectives. `wheelhouse/fleet/WORKER.md` is specific about the form. Then add the review-queue label; `wheelhouse/GRAPH.md` names it and explains why it is a label rather than a status.
 
+The comment text is a positional argument, not a flag. On bd 1.2.2 the `-m` most people reach for first is not a flag this CLI has, and it fails before writing anything (`unknown shorthand flag: 'm' in -m`, exit 1) — which is the good case, since a report that silently did not land is the failure this stage is about:
+
+```bash
+bd comment <bead-id> "the report text"        # short reports
+bd comment <bead-id> --file report.md         # a real report, written in a file first
+cat report.md | bd comment <bead-id> --stdin  # same, from a pipe
+```
+
+Prefer the file or stdin form for anything with command output in it: a multi-line report typed as one shell-quoted argument is one stray quote away from a mangled comment, and `--file` also leaves you the text to re-send if the write fails. Verify the form against your own build the way `wheelhouse/GRAPH.md` asks — `bd comment --help` enumerates it in one line — rather than carrying this paragraph forward on faith.
+
 **What it costs otherwise:** a head reported from inside a detached worktree was true of everything the author could see and false of the branch. The integrator's fast-forward merge then took four commits of six, printed a real diffstat, and exited zero.
 
 ### 4. Review
@@ -86,7 +96,7 @@ That includes the unglamorous ones: a premise that turned out wrong, a scope cho
 
 ## When it does not go straight through
 
-**A report goes quiet.** Probe once, then nudge once. A seat that cannot be reached looks exactly like a seat that is idle, and the distinction matters before you re-dispatch the work to someone else.
+**A report goes quiet.** Probe once, then nudge once. A seat that cannot be reached looks exactly like a seat that is idle, and the distinction matters before you re-dispatch the work to someone else. If both go unanswered, declare the seat dead and relaunch it per `wheelhouse/fleet/SEATS.md`'s launch procedure — its Lifecycle section says why re-dispatching the in-flight bead is the whole cost.
 
 **The dispatch's premise was wrong.** Say so and stop, rather than delivering against a brief you know to be mistaken. This happens often enough to be normal: the bead described a file that had moved, a fix that was already applied, a defect that reproduces differently than reported. The correction is worth more than the delivery.
 

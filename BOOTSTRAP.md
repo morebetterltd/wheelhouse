@@ -4,6 +4,76 @@ You are installing a wheelhouse — a standing agent fleet over a shared work gr
 
 Work in this order. Do not reorder, and do not write anything before the interview in step 4 is answered.
 
+## 0. Before anything writes — the tools this needs, and what was here before you
+
+Two observations, both taken before anything writes: the binaries this procedure depends on, and the state of the project as you found it. They share a step because they share that property — each is cheap now and expensive or impossible later.
+
+### 0a. The tools this procedure needs
+
+This procedure, and the runbooks and contracts it installs, invoke a handful of binaries. Someone installing on their own machine for the first time has no reason to already have them, and a missing one surfaces halfway through as a bare `command not found` — at which point part of the install exists and part does not, which is the state this whole document is written to avoid.
+
+It runs before step 1 rather than alongside it, even though step 1 is where the "verify before you trust it" rule lives, because the clone step 1 is about to verify was made by `git`, and a missing `bd` is cheaper to find now than after the interview. This part writes nothing, so re-running it costs nothing either.
+
+Four are worth checking. Everything else the procedure runs — `sed`, `grep`, `diff`, `cp`, `mv`, `find`, `mktemp`, `date`, `basename`, `cut`, `ls`, `xargs`, `ps`, `tail`, `printf`, `rm`, `mkdir`, `cat`, `env` — is the POSIX baseline that ships with macOS and every Linux. Checking for those would fail nothing and teach installers to skip the block, which is the same reason step 1 checks the contracts by name rather than counting them.
+
+Deliberately NOT on the list: `gh`. Nothing in `BOOTSTRAP.md`, `runbooks/` or `contracts/` invokes it — measured by grep, not assumed — so do not install it on this file's account. If you add a tool to the list, measure the same way: the list is only worth what it was checked against.
+
+Also deliberately NOT on the list, for a different reason: `claude`. The contracts do invoke it, but only in `contracts/SEATS.md`'s launch procedure and only once someone takes a seat — and an install that declines every seat is a legitimate install whose principal may never run a CLI session. Checking it here would block that install on a tool it never uses, so the check lives at the first moment something actually runs the binary, in that procedure. This sentence exists so the decision is readable in the file rather than only in whoever made it.
+
+```bash
+# Positional parameters, not a whitespace-split string: zsh does not word-split an
+# unquoted variable, so a `for t in $TOOLS` loop there runs ONCE over the whole list
+# and reports one nonexistent tool while checking none of them. "$@" iterates
+# identically in bash and zsh -- the same reason step 6's integrity check uses it.
+# Each entry is tool:why:how; only the first two colons are separators, so `how` may
+# contain a URL and `why` may not contain a colon.
+set -- \
+  "git:clones the template, and carries every branch, worktree and merge the fleet runs on:brew install git   # macOS also ships one with the Xcode command line tools" \
+  "bd:is the work graph -- every unit of work the fleet holds lives in it:brew install beads   # or see https://github.com/gastownhall/beads" \
+  "bash:runs wheelhouse/crew/bench.sh, which ships with a bash shebang and is invoked as bash in step 6:preinstalled on macOS and every Linux; brew install bash for a current one" \
+  "awk:splits each contract into its contract half and its project half -- step 6's integrity check and runbooks/UPGRADE.md's splice both depend on it:preinstalled on macOS and every Linux"
+
+MISSING=0
+for entry in "$@"; do
+  tool=${entry%%:*}; rest=${entry#*:}; why=${rest%%:*}; how=${rest#*:}
+  if command -v "$tool" >/dev/null 2>&1; then
+    echo "OK      $tool — $(command -v "$tool")"
+  else
+    echo "MISSING $tool"
+    echo "        the wheelhouse needs it because it $why"
+    echo "        install it: $how"
+    MISSING=1
+  fi
+done
+
+if [ "$MISSING" -eq 0 ]; then
+  echo "PREFLIGHT OK — every dependency is on PATH"
+else
+  echo "PREFLIGHT FAILED — install what is named above, then re-run this block"
+  exit 1
+fi
+```
+
+**A MISSING line is a STOP.** Install what it names and re-run the block; do not proceed on the assumption that the step needing that tool is one you can work around. `brew` is named because it covers the machines this template has been installed on; if you are on a platform it does not cover, install the tool the way that platform does and say which way in your hand-back, rather than adapting the line above silently.
+
+Then record the versions, because two of the things you will check later are stamped against particular builds rather than against the tools in general:
+
+```bash
+git --version
+bd --version
+```
+
+`wheelhouse/GRAPH.md`'s claims about the work graph's CLI were measured on bd 1.2.2, and step 6 re-verifies them against whatever you have. Print the version here so that step has something to compare against, and so a later reader can tell which build this install was made on.
+
+### 0b. What was here before you — the survey that cannot be taken later
+
+Take this from the project directory you are installing into, not from the template clone. If you are not standing in it yet, go there first: a survey of the wrong directory returns a clean answer about a project nobody is installing into.
+
+- **STOP IMMEDIATELY, without writing anything, if `wheelhouse/` or `CLAUDE.md` already exists here.** Say what exists and ask the principal what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable.
+- **If neither exists, say so out loud.** That sentence is the record every later step reads. This procedure creates both names itself — the `wheelhouse/` directory step 1 makes for `.template-source`, and the `CLAUDE.md` that `bd init` writes in step 5 — and neither trips this check, because both appear after this survey. That is the whole reason the survey lives here and not further down: seeing those files at step 2 or step 6 tells you nothing, and seeing them now tells you everything.
+
+This is the one observation in the procedure that expires. Every other check can be re-run at any point and give the same answer; this one is about a state that step 1 destroys. If you find yourself past step 1 having never taken it, the cheap answer is gone — ask the principal directly, and read `git log --oneline -1 -- CLAUDE.md wheelhouse`, where a path with history predates you. An empty answer proves nothing in the other direction, since an untracked file that was already here has no history either.
+
 ## 1. Confirm you actually have the template
 
 You are already following instructions from this clone, so verify it before trusting any more of it. This comes before the project checks deliberately: everything below depends on these files being real, and a wheelhouse installed from an empty clone is worse than no install.
@@ -48,10 +118,10 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 ## 2. Preflight — verify the project, then report what you found
 
 
-- Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue.
-- Confirm the `bd` CLI is on PATH and print its version. If it is missing, stop and give the install command from the README's prerequisites rather than guessing one.
+- Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue. A correction here means step 0b surveyed the wrong directory and step 1 wrote into it — say so, and take the survey again in the directory you have just been given.
+- Step 0 established that `bd` is on PATH and printed its version. Carry that version forward rather than re-deriving it; if you skipped step 0, go and run it now instead of checking `bd` alone here, because it is not the only tool that has to be there.
 - Report uncommitted changes if there are any. Do not block on them; the principal may be mid-work.
-- **STOP IMMEDIATELY, without writing anything further, if `wheelhouse/` or `CLAUDE.md` existed before step 1 ran.** Say what exists and ask what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable. Two things do NOT trip this check, because this procedure creates them itself: the `wheelhouse/` directory step 1 just made for `.template-source`, and the `CLAUDE.md` that `bd init` will create in step 5. The check guards what was there before you arrived, so run it — or note what exists — before step 1 writes anything.
+- **Report what step 0b's survey found** — whether `wheelhouse/` or `CLAUDE.md` was here before this install, which is the check that guards an unrecoverable overwrite. Carry the answer forward; do not re-derive it from what you can see now. Step 1 created `wheelhouse/` for `.template-source` and `bd init` will create `CLAUDE.md` in step 5, so the directory in front of you cannot answer the question any more. If you skipped step 0b, do not guess: go back and read its last paragraph, which says what to do once the cheap answer is gone.
 
 ## 3. Read before you ask
 
@@ -79,9 +149,11 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
    - **Umbrella root.** This directory is a container; the product lives in one or more separate git repos beneath it. The wheelhouse installs at the container root, the graph spans the repos below it, and workers create worktrees BESIDE the product repos at the container root (for example `<root>/.wheelhouse-worktrees/<bead-id>`), never inside them — same reason as the single-repo case below, and it also keeps the graph reachable from inside the worktree, which `contracts/GRAPH.md` explains (a worktree's `.git` is a file the workspace walk passes through; a nested repo's `.git` is a directory that stops it).
    - **Single repo.** This directory IS the product — one repo, no container. This is the ordinary case and it is fully supported: the wheelhouse installs at the product root, `CLAUDE.md` and `wheelhouse/` are committed alongside the code, and a worker's worktree is a SIBLING directory outside the repo (for example `../.wheelhouse-worktrees/<bead-id>`), so the worktree never nests inside the repo it is branching from.
 
+   **When both shapes fit, one question decides it: is this repo something other people clone as-is?** A template, a starter kit, a library whose repository IS the deliverable — anything whose consumers take the working tree rather than a built artifact. If yes, install the umbrella shape even where a single repo would otherwise be the obvious call: this root becomes a container holding the fleet's machinery, and the consumer-facing repo stays pristine beneath it. The single-repo shape commits `CLAUDE.md` and `wheelhouse/` alongside the code, so everyone who clones receives the installer's fleet state — commander context written for one principal, an ISA stating one project's goal, a work graph of beads that are not theirs — and the first stranger who runs this procedure inside their clone trips step 0b's stop check on files they never wrote. Where single-repo is genuinely required, keep the install out of the tree with `.git/info/exclude` rather than `.gitignore`, and say plainly that it is machine-local: it is not itself committed, so a second seat cloning that repo has to repeat it. This template's own install took the umbrella shape for exactly this reason (2026-08-20) — the product is the wheelhouse template, and its consumers clone it.
+
    Say which shape you are installing, and record it in the worker's `## This project` section along with where worktrees go. A worker that guesses this wrong creates a worktree inside the repo and pollutes the very diff it is meant to produce.
 
-2. **What "it runs" means.** Two questions, because `crew/BENCH.md` has five sections to fill and one answer fills one of them:
+2. **What "it runs" means.** Four questions, because `crew/BENCH.md` has five sections to fill and (b) fills two of them:
 
    a. "For a \<project type\>, I would prove a build works by \<your proposal: a server answers a health check; a CLI executes a real command against real input; an app installs and reaches its first screen\>. What is the observation that would convince you a build actually works?"
 
@@ -101,7 +173,19 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 6. **Priorities.** `wheelhouse/GRAPH.md` has a project section for what P0 to P3 mean here. Offer this default and ask them to amend rather than compose: **P0 blocks the fleet or has an external deadline; P1 is the core loop; P2 is maintenance; P3 is nice-to-have.** If they accept it unchanged, say so in the file — a scheme that was confirmed reads differently from one that was assumed.
 
-7. **Seats**, only if they want them now. Names and count. Offer the minimum viable fleet: commander, one worker, one reviewer.
+7. **Seats — walk the roster one seat at a time.** Do not offer a fleet shape and ask whether they want it. A roster proposed whole is accepted whole, and the seat that goes missing is the one nobody was asked about: today that is reliably the designer, because its absence looks like a smaller install rather than a gap.
+
+   The commander is not on the list and is not a question. It is the principal's own session in the directory whose `CLAUDE.md` you are about to write, so it exists whether or not anyone names it. Say that, then take the rest individually — each answer is yes-with-a-count or no:
+
+   - **Worker** — implements beads on branches, per `wheelhouse/fleet/WORKER.md`. "How many worker seats? One is the working minimum; a second goes in when the reviewer is idle waiting for work."
+   - **Reviewer** — gates every diff before it merges and never reviews what it authored, per `wheelhouse/crew/REVIEWER.md`. "How many reviewer seats? One, until a single reviewer is the thing everything waits on."
+   - **Designer** — decomposes goals into implementation-ready beads, per `wheelhouse/crew/DESIGNER.md`. Offer it out loud even when you expect a no: "Do you want a designer seat? It earns its place when you are spending more time decomposing work than deciding direction — otherwise you hold that yourself."
+
+   For each seat also ask the name it answers to and the account it is pinned to, since one seat is one subscription and the roster records both.
+
+   **Write down the no's as well as the yes's.** A refused seat goes into `wheelhouse/fleet/SEATS.md` under `### Declined seats` with the principal's reason and the date. An absence on the page is the same absence whether the seat was refused or never raised, so only the recorded no answers "why is there no designer?" when it is asked six weeks from now.
+
+   Declining every seat is a legitimate answer rather than a failed interview — the commander alone is a working install, and step 8 takes the worker seat itself for the first bead. Say so instead of pushing back.
 
 ## 5. Write
 
@@ -144,10 +228,17 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 **How to fill a `## This project` section, precisely.** Find the FIRST line in the file that is exactly `## This project` — the whole line, nothing else on it. FIRST, not last: the integrity check below and `runbooks/UPGRADE.md` both stop at the first match, and a last-match rule would absorb project content into the contract half the moment a project section legitimately quotes that heading. Everything above that line is the contract and is not yours to touch; everything below it is yours to write. Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A contract may legitimately discuss its own structure, and a naive match has already destroyed one contract file this way — deleting a licensing-compliance rule while every automated check still passed.
 - Fill each file's `## This project` section from the interview: the designer's territory, the worker's repos and its empty gotchas section, the reviewer's branch and worktree conventions, the bench's run-proof, and the integrator's push authority — the last in the principal's own words, with the date, because it is the one section that records a permission rather than a fact.
 - The integrator's third section, "How a shipped record gets corrected here", has no interview question on purpose: unless the principal volunteers a convention, fill it with the contract's own default — a follow-up commit naming the corrected commit's identifier, history never rewritten — and label it "adopted from the contract's default" so a later principal knows it was a default rather than their decision. Two cold installs both had to guess this; the default they guessed is now the documented one.
-- Fill `wheelhouse/fleet/SEATS.md`'s `## This project` roster from the seat answers, or with the minimum viable fleet and a note that seats can be added later. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
+- Fill `wheelhouse/fleet/SEATS.md`'s `## This project` section from question 7's per-seat answers, **both halves**: one roster line per seat that was taken, and one line under `### Declined seats` per seat that was refused, carrying the reason in the principal's words and the date. A roster listing only what was taken is indistinguishable from one where the question was never asked, which is the reason the interview walks the seats individually in the first place. If every seat was declined, the roster holds the commander line alone and the declined section holds the rest — that is a filled section, not an empty one. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
 - Write `CLAUDE.md` at the root: commander-session context, product changes happen in product repos via workers, new work becomes a bead immediately, deadline beads outrank everything, plus the principal-only actions from Q4 and the merge policy from Q5.
 - Write `wheelhouse/ISA.md`: the goal from Q3, empty claims, empty decisions, and any anti-claims stated. **Do not invent claims.** An ISA with fabricated claims is worse than an empty one.
-- Write `wheelhouse/STARTUP.md` with this project's real paths and seat names.
+- Write `wheelhouse/STARTUP.md`: this project's cold-start card. It is what step 8 and the commander point at when it is time to actually start a session, so its job is to resolve rather than to restate — the launch MECHANICS live in `wheelhouse/fleet/SEATS.md`'s "Launching a seat" section, identically in every project, and this file is where those mechanics meet this project's real root path and real seat names. Four things, in this order, and none of them optional:
+
+  1. **The commander.** `cd` to this project's real absolute root, then `claude`. Say that the folder's `CLAUDE.md` is what makes that session the commander, so no launcher is needed.
+  2. **One block per seat on the roster**, using that seat's real name and this project's real root — the `export CLAUDE_CONFIG_DIR=...` / `cd` / `claude` lines from the launch procedure with the placeholders already substituted, so the principal can paste rather than translate. Then point at `wheelhouse/fleet/SEATS.md` by name for what those lines mean, the login-per-account rule, the standing prompt to paste, and what the seat does next. **Copy no seat name that is not on the roster**, and if the roster took no seats, say that in place of this section rather than inventing a specimen seat.
+  3. **Discovery.** `wheelhouse/runbooks/SEAT_DISCOVERY.md`, run after launching or relaunching any seat, followed by asking the commander to round-trip a message to each seat. An unwired seat looks exactly like an idle one.
+  4. **How work reaches the fleet** — the principal speaks backlog items to the commander, which files them as beads — and that shutdown is closing the terminals, because in-flight work resumes from the graph.
+
+  Do not reproduce the launch procedure's prose here. A second copy of a contract's text in a generated file is a copy that drifts, and this one would drift in every project separately.
 
 `generated/` in the template holds specimens of these files. They are examples of the SHAPE. Never copy them — they describe an invented project.
 
@@ -246,27 +337,53 @@ Run each of these and paste what it prints:
 
   The second is the better probe — it needs no issue id and changes nothing — and the two do not agree: on bd 1.2.2 the `--status` filter help names five statuses while the rejection names seven, adding `pinned` and `hooked`. Trust the rejection.
 
-  **Read the error text, and treat the exit code as a separate question.** On bd 1.2.2 an invalid status exits non-zero, so the exit code is trustworthy here. On builds before 0.57.0 the same command printed the error and exited 0, so an exit-code check concluded the opposite of the truth. Establish which you have rather than assuming, and note it in `GRAPH.md`.
+  **Read the error text, and treat the exit code as a separate question.** On bd 1.2.2 an invalid status exits non-zero, so the exit code is trustworthy here. On builds before 0.57.0 the same command printed the error and exited 0, so an exit-code check concluded the opposite of the truth. Establish which you have rather than assuming. **If your build differs from what the contract stamped — a different exit code, a different status list — write one line under `### CLI build notes` in `wheelhouse/GRAPH.md`'s `## This project` half saying the build, what you ran, what it did, and the date. If it matches, there is nothing to note** — the stamp already says so, and an entry recording agreement is noise the next reader has to re-verify.
 
   If your build enumerates `in_review`, or lets you configure it — bd 1.2.2 does, via `bd config set status.custom` — correct `wheelhouse/GRAPH.md` now and say so in the hand-back. The file says it is stamped rather than eternal, and an install is the moment to check.
 
 - `bd ready` — returns without error. On an empty graph this prints nothing, which is indistinguishable from a broken install, so prove the graph round-trips instead: create a real first bead, list it, and leave it in place as the fleet's first piece of work.
 
+  **The bead carries the label `wheelhouse-bootstrap`, and that label is how step 8 finds it again.** Step 8 dispatches this bead minutes from now and has to pick it out of whatever else the graph holds; matching on its title, or on it being the only ready bead, works on an empty graph and nowhere else — a wheelhouse gets installed into projects that were already tracking their work here. The label is documented in this file rather than in `wheelhouse/GRAPH.md` because it is not a fleet signal: `GRAPH.md`'s `needs-review` marks a queue every bead passes through for as long as the fleet runs, while this marker is written by step 6, read once by step 8, and never used again.
+
+  **Look before you create — this is a step re-runs and upgrades repeat.**
+
+  ```bash
+  bd list --label wheelhouse-bootstrap --all
+  ```
+
+  If that names a bead, the bench bead already exists: create nothing, say which bead it is and what state it is in, and move on. A second one is worse than none, because two beads carrying the same marker put step 8 back to choosing, which is the whole thing the marker removes.
+
+  If it prints `No issues found`, look once more before you conclude the bead is absent. An install made from a template older than this marker left a bench bead with no label on it, and the label filter cannot see it — `bd list --all` and read the titles. If one is there, stamp it rather than duplicating it, and say you did:
+
+  ```bash
+  bd update <id> --add-label wheelhouse-bootstrap
+  ```
+
+  Only when nothing answers to either:
+
   ```bash
   bd create "Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md" -p 1 \
+    --labels wheelhouse-bootstrap \
     --description="The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: the eight clauses in wheelhouse/crew/BENCH.md."
-  bd ready          # must now list that bead
+  bd ready                                 # must now list that bead
+  bd ready --label wheelhouse-bootstrap    # must list that bead and nothing else
   ```
+
+  Two things measured on bd 1.2.2, both of which turn a check into a no-op if you assume otherwise: `bd list --label` hides closed issues unless `--all` is given, so an install upgrading over a graph whose bench bead was already implemented and closed reads as a graph with no bench bead at all and files a duplicate; and an empty result exits 0, so the answer is in the text rather than the exit status. Establish both against the build you have.
 - A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
 
   ```bash
-  grep -rnwE "Ebb|ebb|Tideline|tideline|cordova|emulator|app-review|com\.example\.app" \
+  grep -rnwE "Ebb|ebb|Tideline|tideline|cordova|emulator|app-review|com\.example\.app|learn what a good one looks like|take it when the reviewer starts waiting" \
     CLAUDE.md AGENTS.md wheelhouse/
   ```
 
   **Expect zero hits.** If specimen strings appear in the project's files, the install leaked and must be fixed before you report success. `AGENTS.md` is in scope because you edited it too.
 
   Those terms come from the template's own `generated/` specimens (the invented project) and `examples/` (the worked benches, which use invented projects of their own). If you are reading this in a template whose specimens have changed, the list is stale — check what `generated/` and `examples/` actually contain and grep for that instead. A hardcoded list that no longer matches the specimens passes everything.
+
+  The first eight terms are names from the invented project, so any wholesale copy of a specimen trips them. The last two are the reason texts from the declined-seats rows in `generated/SEATS.md.example`: a copy of just those two rows carries no project name, so the eight would match nothing and a partial leak of that section would walk through. They are phrases rather than words because every WORD in those rows — designer, worker, reviewer, second — is one a correct install writes for itself. For the same reason the roster seat names are deliberately absent: they are plausible real choices, and grepping for them would fail correct installs.
+
+  Deliberately NOT in the list: "spending more time decomposing beads than deciding direction", which reads as the most distinctive line of that specimen and is not — `runbooks/PROMOTION.md` carries it verbatim, and runbooks are copied into every install, so adding it would fail every correct install on a file the installer never wrote. Any term you add here has to be checked against the template's `runbooks/` and `contracts/`, not only against `generated/`.
 - A grep for unfilled placeholders. Anything you leave for the principal to fill uses `{{DOUBLE_BRACE}}` and nothing else, so this check is exact:
 
   ```bash
@@ -295,20 +412,30 @@ Commit the install so the principal can see exactly what was added and revert it
 
 ```bash
 git status --short          # look first: bd init may have added files AND a commit you did not expect
-git add CLAUDE.md AGENTS.md wheelhouse/ .beads/
+# Stage each install path ONLY if that status output actually shows it. bd commits some of
+# them itself (.beads/ routinely, and current builds also .claude/, .codex/, .agents/), and an
+# install kept out of the tree with .git/info/exclude shows none of them.
+for p in CLAUDE.md AGENTS.md wheelhouse/ .beads/; do
+  if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
+done
+git status --short          # read what is staged; if nothing is, there is no commit to make
 git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"
 ```
+
+The loop is the rule below — "never `git add` a path you have not seen in the status output" — written as something you can run, and it is a loop rather than one `git add` line because `git add` is atomic: a single absent pathspec fails the whole command having staged nothing. It is an `if` rather than an `&&` chain because the chain form reports the healthy path as a failure. A loop's exit status is its last iteration's, and `guard && git add` exits non-zero whenever that guard is false — so an install with nothing left to stage, which is the ordinary outcome when bd has already committed `.beads/`, ends on a non-zero status and any caller, CI step or wrapper that reads it calls the install failed. Measured at exit 1 in that state under bash, zsh and sh; the `if` form exits 0 in every state. It does NOT abort a `set -e` script mid-run — `A && B` is an AND-OR list, which `set -e` exempts, and execution continues past the false guard in all three shells. The list is a list of CANDIDATES; status decides. Anything else this install wrote — a `.gitattributes` bd added, a `.gitignore` you appended to below — you add to the candidate list yourself after seeing it in that first status.
+
+**Not every install commits.** If step 4 landed on a single repo whose install you kept out of the tree with `.git/info/exclude`, there is nothing here to stage — `CLAUDE.md`, `wheelhouse/` and `.beads/` are excluded on purpose, and committing them is the exact outcome that decision exists to prevent. Hand the principal that fact in place of a commit SHA, and with it the two consequences they will otherwise meet later: the revert-in-one-step above is not available to them, and a second seat cloning that repo receives none of this and has to repeat the exclusion by hand.
 
 Before you stage, make the worktree directory invisible to this repository. Workers create worktrees at the location you recorded in step 4, and in the umbrella shape that location is INSIDE this repo — so every worktree that exists shows up as untracked in the container root's `git status` from then on, which is the diff pollution the location was chosen to avoid, arriving one level up.
 
 ```bash
 # umbrella shape: the worktree directory sits inside this repo
-[ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ] && printf '\n' >> .gitignore
+if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
 grep -qxF '.wheelhouse-worktrees/' .gitignore 2>/dev/null \
   || printf '.wheelhouse-worktrees/\n' >> .gitignore
 ```
 
-The first line is not decoration. `>>` appends at the byte the file ends on, and a `.gitignore` whose last line has no trailing newline — ordinary output from plenty of editors and generators — turns `node_modules/` and the new entry into the single line `node_modules/.wheelhouse-worktrees/`, which matches neither. Measured: the previously-ignored directory stops being ignored, the new one never starts, and the corrupted file ships inside the install commit to a file nobody re-reads. Verified across all three starting states — no file, trailing newline, no trailing newline — three runs each and idempotent.
+The first line is not decoration. `>>` appends at the byte the file ends on, and a `.gitignore` whose last line has no trailing newline — ordinary output from plenty of editors and generators — turns `node_modules/` and the new entry into the single line `node_modules/.wheelhouse-worktrees/`, which matches neither. Measured: the previously-ignored directory stops being ignored, the new one never starts, and the corrupted file ships inside the install commit to a file nobody re-reads. Verified across all three starting states — no file, trailing newline, no trailing newline — three runs each and idempotent. It is an `if` rather than an `&&` chain because a chain whose guard is false exits non-zero, and here that is the healthy case: measured under bash and zsh, the chain form exits 1 when there is no file and 1 when the file already ends in a newline, reaching 0 only on the corrupted state it exists to repair — so the common path ends on a non-zero status and any caller, CI step or wrapper that reads it calls the install failed. It does NOT abort a `set -e` script mid-run — `A && B` is an AND-OR list, which `set -e` exempts, and execution continues past the false guard under bash, zsh and sh alike. The `if` runs the same command on the same condition and exits 0 either way.
 
 Measured: before, `git status --short` at the container root reports `?? .wheelhouse-worktrees/`; after, it reports nothing for it. In the SINGLE-REPO shape there is nothing to do here — the worktree location is a sibling OUTSIDE this repo, so this repo never sees it. If that sibling location happens to sit inside some other repository, that repository is not this install's to edit; say so to the principal rather than leaving dirt they will find later and attribute to their own working copy.
 
@@ -358,13 +485,43 @@ No commands, and it is a legitimate choice — but state the consequence rather 
 
 Do not push. Pushing is a principal-only action, here and in every wheelhouse.
 
-## 8. Hand back
+## 8. Take the seat, and hand back from it
 
-Tell the principal plainly:
+You are a session in the directory whose `CLAUDE.md` you just wrote, and that file says a session in this directory is a commander session. So you are the commander already, and the first commander action is yours to perform rather than to recommend. An install that ends on a reading list gives the principal the standards, the procedure and the homework, and leaves the loop unstarted — which is the one thing the install exists to start. Observed on a real install, 2026-08-21: every file was correct and nothing was running.
 
-- what exists now;
-- what is deliberately STUBBED and therefore not yet true — `crew/bench.sh`, the empty gotchas section, the ISA's empty claims;
-- the four next actions: read `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, which takes one bead from dispatch to merged; file the first beads; implement the bench against `crew/BENCH.md`; launch seats per `STARTUP.md`. Put the runbook first deliberately — the contracts say what each role owes, that runbook says what the sequence looks like and what to do on the days it does not go straight through, and a principal who has the contracts and not the runbook has the standards and no procedure.
+Three things, in this order.
+
+**Hand back what is now true.** Plainly, and with the two halves kept apart, because a principal who cannot tell them apart will trust the stubs:
+
+- what exists — the files, the graph, the shape you installed and where worktrees go, the merge policy and the principal-only actions in the principal's own words, and anything you corrected on the way through: the `AGENTS.md` override from step 5, any `GRAPH.md` status correction from step 6, and which `.beads/` durability shape you found in step 7 and what was chosen about it;
+- what is deliberately STUBBED and therefore not yet true — `wheelhouse/crew/bench.sh` exits non-zero on purpose, the worker's gotchas section is empty because gotchas are earned rather than invented, and the ISA's claims are empty for the same reason.
+
+**Read the loop you are about to run.** `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, now, before the dispatch below — you are executing its first stage in the next paragraph, not filing it for someone to read later. The contracts say what each role owes; that runbook says what the sequence looks like and what to do on the days it does not go straight through, and whoever has the contracts and not the runbook has the standards and no procedure. The role contracts are then read at the stage that needs them — `wheelhouse/fleet/WORKER.md` when you dispatch, `wheelhouse/crew/REVIEWER.md` when a branch lands, `wheelhouse/INTEGRATOR.md` when one is approved, `wheelhouse/GRAPH.md` for the review queue — and the runbook's closing table says which is which. That is the reading list, and it is a step inside this action rather than a parting gift.
+
+**Make the first dispatch.** Read the graph rather than your memory of it:
+
+```bash
+bd ready                                 # the graph you are dispatching into
+bd ready --label wheelhouse-bootstrap    # the bead step 6 left for you
+```
+
+The second command is the one that finds the bead; the first is there so you see what else is in flight before you dispatch into it. Step 6 stamped the bench bead with `wheelhouse-bootstrap` for exactly this handoff, because on a graph that already held work — the ordinary case for a project adopting a wheelhouse — "the ready bead step 6 created" is not something `bd ready` alone can tell you.
+
+That bead is real work rather than a placeholder: implement `wheelhouse/crew/bench.sh` against `wheelhouse/crew/BENCH.md`. It goes first because until the bench is real no verdict on this project may claim its software runs, so every approval until then is an approval of a diff somebody read. Dispatch it per the runbook's stage 1 — name the bead id and the repository, give a way to read anything it points at that changes nothing, and state done if the bead does not already state it.
+
+Two answers are not one bead, and neither is a reason to guess which bead was meant:
+
+- **Nothing listed.** On bd 1.2.2 that prints `No ready work found` and exits 0, so read the text. `bd list --label wheelhouse-bootstrap --all` separates the two causes. If it shows a CLOSED bead, this install went in over a graph whose bench was already implemented — say so, and make the first dispatch from the highest-priority bead `bd ready` does show. If it shows nothing at all, step 6 did not complete; go back and finish it there, where its verification runs, rather than creating the bead here.
+- **More than one.** An earlier partial run left a duplicate. Say so to the principal and dispatch none of them until you are told which one is live — a duplicate bench bead is cheap to resolve now and expensive after two seats have worked it.
+
+Where that dispatch goes depends on the per-seat answers from step 4's question 7. Read the roster in `wheelhouse/fleet/SEATS.md` rather than your memory of the conversation:
+
+- **A worker seat is on the roster.** Launch every seat the roster names, then dispatch the bead to the worker. Launching is a hands-on procedure and it is written down twice over, deliberately: `wheelhouse/fleet/SEATS.md`'s "Launching a seat" is the procedure — a terminal per seat, its own config directory, its own account, the standing prompt pasted as the first message, discovery wired and verified afterwards — and `wheelhouse/STARTUP.md` is the same steps with this project's root and seat names already substituted. Follow `STARTUP.md`; if it is thinner than what you just wrote in step 5, the contract is the authority and the STARTUP.md you wrote is the thing to fix. Then hold the commander's seat and wait for the report to arrive on the bead, not in a message.
+- **No worker seat.** Say so, and take the worker seat yourself for this one: claim the bead, work in a worktree at the location step 4 recorded, and report on the bead the way `wheelhouse/fleet/WORKER.md` requires of anyone.
+
+Then check the roster for the reviewer, whichever branch you took. The one role the author of a change may not also hold is the reviewer's for that same change — `wheelhouse/crew/REVIEWER.md` forbids author-review, and it is the one merge that care cannot recover afterwards. If no reviewer seat is on the roster, name that gap to the principal now — whoever authors this bead, there is then nobody left who is permitted to review it — while there is a whole bead's worth of time to fill it, rather than at the moment the branch is ready to merge.
+
+Either way, say which seat you are sitting in and what you are waiting for. The remaining actions are the commander's ordinary ones and they follow this first loop rather than replacing it: file the beads for the ideal state from step 4's question 3, and launch any seats you have not launched yet per `wheelhouse/STARTUP.md`.
 
 ## Failure behavior
 

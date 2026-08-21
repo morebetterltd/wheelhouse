@@ -12,7 +12,7 @@ Every graduation here is deliberately NOT the default. A template that ships the
 
 **Take it when:** you are dispatching often enough that context re-establishment is the slow part, and the worker/reviewer loop has produced merges you trusted.
 
-Promotion is configuration, not a rewrite: the briefs do not change, only how long the session lives. See `wheelhouse/fleet/SEATS.md` and `wheelhouse/runbooks/SEAT_DISCOVERY.md`.
+Promotion is configuration, not a rewrite: the briefs do not change, only how long the session lives. What it costs is a manual reset ritual between beads — `wheelhouse/fleet/SEATS.md`'s Lifecycle section carries that, along with why the ephemeral shape needs no lifecycle management at all. See also `wheelhouse/runbooks/SEAT_DISCOVERY.md`.
 
 ## Principal-confirmed merges to auto-merge on APPROVE
 

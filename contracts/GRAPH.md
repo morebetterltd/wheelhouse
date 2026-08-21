@@ -49,3 +49,16 @@ Generated at install.
 ### Priorities
 
 <!-- What P0..P3 mean here, and what outranks what. -->
+
+### CLI build notes
+
+<!--
+Where a measurement of YOUR bd build disagrees with the version-stamped claims
+in the contract above. One line per divergence: the build, what was run, what
+it did, and the date.
+
+Add a line only when your build actually differs. A build that matches the
+stamped one needs nothing here -- an entry saying "matches" is noise, and the
+contract's own stamp already says what matching means. Leave this comment in
+place until there is a divergence to record.
+-->

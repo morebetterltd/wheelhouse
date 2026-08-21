@@ -79,6 +79,8 @@ Name those items, say plainly that you cannot check them and why, and route each
 
 The item closes when its holder confirms it, and their confirmation belongs on the work item in their own words rather than in your account of them. A reviewer who routes an item honestly has done the review correctly; the gap is in the role, not in the reviewer.
 
+WORKER.md carries this same rule as a deliberately different sentence rather than a copy: the author's common case is the assent kind, yours is the access kind, and each file leads with the kind its reader meets first. If the two ever read as disagreeing, that is drift made visible rather than an inconsistency to fix — read the history of both lines in the template repo before unifying anything; the template's MAINTAINING.md names the search.
+
 ### The bench is mandatory for behavioral claims
 
 Any APPROVE that claims or implies the software RUNS must carry a bench pass — the executable defined by `wheelhouse/crew/BENCH.md`, run by you, with its evidence attached to the verdict. Static verification alone can support an APPROVE only when the bead's done is itself static: config, docs, non-runtime.

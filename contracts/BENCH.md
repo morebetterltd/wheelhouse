@@ -92,4 +92,29 @@ because the target is one-shot is the mistake this wording exists to prevent.
 
 ### What the error scan looks for
 
+<!--
+What failure looks like in this project's logs or output, in the principal's
+own terms: the strings, exit codes or patterns the bench greps for and treats
+as failure even when the process exited cleanly.
+
+Name what the scan CANNOT distinguish, per clause 7 -- a scan that finds
+nothing has not established that nothing went wrong, only that none of these
+patterns appeared. If the principal cannot answer yet, say so here rather than
+inventing patterns; a scan matching strings nobody has ever seen in this
+project's output passes every run and catches nothing.
+-->
+
 ### Prerequisites
+
+<!--
+What has to be installed or running before someone who did not write this bench
+can execute it at all: toolchains and their versions, emulators or runtimes,
+services, credentials, environment variables.
+
+This is what clause 8 means by "documented prerequisites". Write it for a
+non-author on a fresh checkout, which is the only reader it has -- anything
+already present on the author's machine and nowhere else is exactly what gets
+left out. If nothing beyond a clone is needed, say that explicitly; a section
+left blank reads as unanswered rather than as none.
+-->
+

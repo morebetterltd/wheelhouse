@@ -8,23 +8,26 @@ This repo is the template. It ships the contracts those roles share, one worked 
 
 ## Prerequisites
 
-- a git repository you want the fleet to work on
-- [Claude Code](https://claude.com/claude-code)
-- the `bd` CLI (the work graph) on your PATH — `brew install beads`, or see https://github.com/gastownhall/beads
-- `git` able to reach this repo
+- **a git repository you want the fleet to work on.** The wheelhouse installs into a project you already have; it does not start one for you.
+- **[Claude Code](https://claude.com/claude-code).** Every seat is a Claude Code session, and the install is itself a Claude Code session.
+- **four command-line tools on your PATH: `git`, `bd`, `bash`, `awk`.** Three of those ship with macOS and every Linux. `bd` is the work graph, and is the one you probably have to install: `brew install beads`, or see https://github.com/gastownhall/beads.
+
+You do not have to check the four by hand. Step 0 of the install is a dependency preflight that checks all of them, and for each one that is missing prints what the wheelhouse needs it for and how to install it, then stops before anything has been written.
 
 ## Install
 
-Open a Claude Code session in your project root and paste this:
+Open a Claude Code session in your project root and paste the block below into that session.
 
-```
+**It is a prompt for Claude, not a shell command.** Claude runs the clone for you; pasting the block into a terminal fails on its first line.
+
+```text
 Install the wheelhouse in this repo.
 
 Clone the template somewhere temporary and read its BOOTSTRAP.md, then follow it
 exactly:
 
   TEMPLATE=$(mktemp -d) && \
-    git clone --depth 1 git@github.com:morebetterltd/wheelhouse.git "$TEMPLATE" && \
+    git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git "$TEMPLATE" && \
     test -s "$TEMPLATE/BOOTSTRAP.md" || \
     { echo "TEMPLATE CLONE FAILED OR EMPTY - STOP" >&2; exit 1; }
   echo "template at: $TEMPLATE"
@@ -48,6 +51,12 @@ Two things before you start:
 ```
 
 It will survey your repo, ask you about the handful of things it cannot derive — six topics, plus your seats if you want them set up straight away — then write the tree, verify it, and tell you what is stubbed.
+
+If you would rather read the template before installing anything, this is safe to paste into a terminal — it clones a copy you can browse and installs nothing:
+
+```bash
+git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
+```
 
 ## What lands in your project
 
@@ -89,6 +98,7 @@ That split is the whole design. It means a project's specifics never get tangled
 | `runbooks/` | how to run the loop, seat discovery, the upgrade procedure, and the graduations to take once the loop has proven itself |
 | `examples/` | worked benches, each labelled as one project's implementation: `android-cordova/` from a real project, `http-service/` for a service-and-worker shape |
 | `BOOTSTRAP.md` | the procedure the install session follows |
+| `MAINTAINING.md` | this repo's convention for revising its own prose — where reasoning lives and how a reader finds the revise-class part; deliberately not a contract |
 
 ## Two things worth knowing before you start
 
@@ -116,6 +126,10 @@ The full procedure is [`runbooks/UPGRADE.md`](runbooks/UPGRADE.md), which instal
 
 Your install records its baseline in `wheelhouse/.template-source`: the template's remote, the commit installed, and when. Upgrades add an `upgraded=` line and leave `installed=` alone, because when you started and when you last upgraded are different facts.
 
+## Credit
+
+The shape this template installs — a standing fleet of agent seats over a shared work graph, under a human commander — is Steve Yegge's, from his essay [*The Shape of Things to Come*](https://yegge.ai/essays/the-shape-of-things-to-come/). This repo is one working implementation of that idea, grown on a real project; the idea is his.
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Public domain, under [the Unlicense](https://unlicense.org). See [LICENSE](LICENSE).

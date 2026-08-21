@@ -18,7 +18,7 @@ Use plain `cp`. Symlinks are ignored by discovery.
 
 Run from the project root after launching or relaunching any seat.
 
-Seat names come from the roster in `wheelhouse/fleet/SEATS.md`, which is the one authoritative list. Do not invent names here or copy them from an example: a seat whose name does not match its roster entry is a seat the commander cannot address, and the failure looks exactly like an idle seat.
+Seat names come from the roster in `wheelhouse/fleet/SEATS.md`, which is the one authoritative list — the roster table, not the declined seats recorded beneath it, which are the seats this project does not have. Do not invent names here or copy them from an example: a seat whose name does not match its roster entry is a seat the commander cannot address, and the failure looks exactly like an idle seat.
 
 ```bash
 PROJECT_ROOT="$PWD"
@@ -28,9 +28,15 @@ SEAT_REG_BASE="$HOME/.claude-seats"
 
 # The commander is the newest LIVE registration whose cwd is this project root.
 # Other sessions may share the cwd, so liveness and recency both matter.
+# Liveness is `ps -p`, not `kill -0`: kill -0 exits non-zero both for a pid that
+# is gone (ESRCH) and for one that is alive but not signalable by this user
+# (EPERM), and the exit status does not separate them, so a live commander
+# running as another user would read as dead. ps reports processes it cannot
+# signal. Measured: `kill -0 1` exits 1 while `ps -p 1` exits 0, and both exit 1
+# for a pid that does not exist.
 CMD_PID=$(ls -t $(grep -l "\"cwd\":\"$PROJECT_ROOT\"" "$MAIN_REG"/*.json) \
   | xargs -n1 basename | cut -d. -f1 \
-  | while read -r p; do kill -0 "$p" 2>/dev/null && echo "$p"; done | head -1)
+  | while read -r p; do ps -p "$p" >/dev/null 2>&1 && echo "$p"; done | head -1)
 
 for seat in $SEATS; do
   # forward: the commander can see the seat
