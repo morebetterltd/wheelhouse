@@ -220,7 +220,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
   - `WORKER.md` and `SEATS.md` into `wheelhouse/fleet/`
   - `REVIEWER.md`, `DESIGNER.md`, `BENCH.md` into `wheelhouse/crew/`
   - `GRAPH.md` and `INTEGRATOR.md` into `wheelhouse/`
-  - the whole `runbooks/` directory into `wheelhouse/runbooks/`. `SEATS.md` and `STARTUP.md` both point at these by path, and a runbook that is only in the template is a broken link in the project.
+  - the whole `runbooks/` directory into `wheelhouse/runbooks/`. `SEATS.md` and `STARTUP.md` both point at these by path, and a runbook that is only in the template is a broken link in the project. It holds two executable scripts as well as prose — copy in a way that keeps the executable bit (`cp -R` does; a file-by-file rewrite may not), because `wire-seats.sh` is run as a command by a human following `SEAT_DISCOVERY.md`, not sourced.
   - `bench.sh.stub` to `wheelhouse/crew/bench.sh`, executable, unchanged — **it exits non-zero on purpose.** A stub that exits 0 lets the first APPROVE through on nothing.
 - To be unambiguous about what "verbatim" means here: you copy the whole file, then append or fill ONLY below the `## This project` heading. Copying verbatim and filling the project section are the same operation, not competing instructions.
 - **Do not edit a single line of any `## Contract` section.** They are identical in every project by design; a project that edits its contract has forked from every other one silently.
@@ -235,7 +235,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
   1. **The commander.** `cd` to this project's real absolute root, then `claude`. Say that the folder's `CLAUDE.md` is what makes that session the commander, so no launcher is needed.
   2. **One block per seat on the roster**, using that seat's real name and this project's real root — the `export CLAUDE_CONFIG_DIR=...` / `cd` / `claude` lines from the launch procedure with the placeholders already substituted, so the principal can paste rather than translate. Then point at `wheelhouse/fleet/SEATS.md` by name for what those lines mean, the login-per-account rule, the standing prompt to paste, and what the seat does next. **Copy no seat name that is not on the roster**, and if the roster took no seats, say that in place of this section rather than inventing a specimen seat.
-  3. **Discovery.** `wheelhouse/runbooks/SEAT_DISCOVERY.md`, run after launching or relaunching any seat, followed by asking the commander to round-trip a message to each seat. An unwired seat looks exactly like an idle one.
+  3. **Discovery, then the roll call.** `wheelhouse/runbooks/wire-seats.sh` — with this project's real root in the `cd` — run by the principal after launching or relaunching any seat, then a commander roll call before it dispatches anything, then each seat messaging the commander unprompted to prove the reverse leg. Point at `wheelhouse/runbooks/SEAT_DISCOVERY.md` for what those three steps mean and why a round trip is not the check. An unwired seat looks exactly like an idle one, and an un-rolled fleet is reachable but anonymous.
   4. **How work reaches the fleet** — the principal speaks backlog items to the commander, which files them as beads — and that shutdown is closing the terminals, because in-flight work resumes from the graph.
 
   Do not reproduce the launch procedure's prose here. A second copy of a contract's text in a generated file is a copy that drifts, and this one would drift in every project separately.
@@ -401,7 +401,13 @@ Run each of these and paste what it prints:
 
   A stub that exits 0 would let the first behavioral APPROVE through on nothing.
 
-- Confirm `wheelhouse/runbooks/` contains every runbook the template ships — count them in the template rather than trusting this sentence (currently four: `PROMOTION.md`, `RUNNING_THE_LOOP.md`, `SEAT_DISCOVERY.md`, `UPGRADE.md`). `SEATS.md` and `STARTUP.md` link to them by path, and a missing runbook is a broken link at the moment someone needs it.
+- Confirm `wheelhouse/runbooks/` contains every runbook the template ships — count them in the template rather than trusting this sentence (currently four: `PROMOTION.md`, `RUNNING_THE_LOOP.md`, `SEAT_DISCOVERY.md`, `UPGRADE.md`) — plus the two scripts that ship alongside them, `wire-seats.sh` and `wire-seats.selftest.sh`, both of which must still be executable:
+
+  ```bash
+  ls -l wheelhouse/runbooks/wire-seats.sh wheelhouse/runbooks/wire-seats.selftest.sh   # both must show x
+  ```
+
+  `SEATS.md` and `STARTUP.md` link to these by path, and a missing runbook is a broken link at the moment someone needs it. A script that arrived without its executable bit fails at the moment a seat cannot be reached, which is the worst moment to be debugging a file mode.
 
 - Confirm every file you created exists and is non-empty.
 - Print the resulting tree.

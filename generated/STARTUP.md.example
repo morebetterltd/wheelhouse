@@ -39,9 +39,17 @@ claude
 
 Then paste that seat's standing prompt from `wheelhouse/fleet/SEATS.md`, with `<seat-name>` replaced by the name above and only that seat's role brief kept. The seat idles until the commander sends it work by name.
 
-## 3. Wire discovery, then verify
+## 3. Wire discovery, roll call, then verify
 
-Per-seat config directories isolate each seat's session registry, so the commander cannot message a seat until their registrations are shared. Run the procedure in `wheelhouse/runbooks/SEAT_DISCOVERY.md`, then ask the commander to verify the fleet: it should list every seat and round-trip a message to each. A seat that does not answer gets relaunched.
+Per-seat config directories isolate each seat's session registry, so until the registrations are shared the commander cannot message a seat and no seat can reach the commander. You run the wiring, not the commander — an agent cannot write its own registry:
+
+```bash
+cd ~/code/ebb
+wheelhouse/runbooks/wire-seats.sh --dry-run   # read-only: prints the plan
+wheelhouse/runbooks/wire-seats.sh
+```
+
+Re-run it whenever a seat restarts. Then ask the commander for a roll call before it dispatches anything: wiring makes seats reachable but anonymous — registry rows carry derived names like `ebb-4f`, not seat names — and the roll call is what binds the map. Finally have each seat message the commander unprompted, by name; a round trip only proves the commander can reach the seat. A seat that cannot answer gets relaunched, then re-wired and re-rolled. Full procedure and the reasoning: `wheelhouse/runbooks/SEAT_DISCOVERY.md`.
 
 ## 4. Feed it
 

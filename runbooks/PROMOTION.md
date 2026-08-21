@@ -12,7 +12,14 @@ Every graduation here is deliberately NOT the default. A template that ships the
 
 **Take it when:** you are dispatching often enough that context re-establishment is the slow part, and the worker/reviewer loop has produced merges you trusted.
 
-Promotion is configuration, not a rewrite: the briefs do not change, only how long the session lives. What it costs is a manual reset ritual between beads — `wheelhouse/fleet/SEATS.md`'s Lifecycle section carries that, along with why the ephemeral shape needs no lifecycle management at all. See also `wheelhouse/runbooks/SEAT_DISCOVERY.md`.
+Promotion is configuration, not a rewrite: the briefs do not change, only how long the session lives. What it costs is a manual reset ritual between beads — `wheelhouse/fleet/SEATS.md`'s Lifecycle section carries that, along with why the ephemeral shape needs no lifecycle management at all.
+
+It also costs two standing chores that the ephemeral shape does not have, both in `wheelhouse/runbooks/SEAT_DISCOVERY.md`, and both are part of taking this graduation rather than optional polish afterwards:
+
+- **Wiring, by the operator, after every launch or relaunch.** Standing seats are addressed by name, and per-seat config directories isolate the registries that make names resolve. `wheelhouse/runbooks/wire-seats.sh` shares them in both directions. The commander cannot run it — an agent writing its own session registry is blocked — so promotion moves a step onto the human that nobody had to do before.
+- **A roll call before the first dispatch of every session generation.** Wiring makes seats reachable, not identifiable: registry rows carry derived names, so the commander must ask each seat who it is and hold the map. Restart a seat and its name changes, which is why this is per-generation rather than once.
+
+Take the graduation only if you will actually do both. A promoted fleet that skips them dispatches to whoever answers, and the failure reads as a seat behaving strangely rather than as a wiring step nobody ran.
 
 ## Principal-confirmed merges to auto-merge on APPROVE
 
