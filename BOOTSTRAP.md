@@ -4,11 +4,15 @@ You are installing a wheelhouse — a standing agent fleet over a shared work gr
 
 Work in this order. Do not reorder, and do not write anything before the interview in step 4 is answered.
 
-## 0. Dependency preflight — the tools this procedure needs
+## 0. Before anything writes — the tools this needs, and what was here before you
+
+Two observations, both taken before anything writes: the binaries this procedure depends on, and the state of the project as you found it. They share a step because they share that property — each is cheap now and expensive or impossible later.
+
+### 0a. The tools this procedure needs
 
 This procedure, and the runbooks and contracts it installs, invoke a handful of binaries. Someone installing on their own machine for the first time has no reason to already have them, and a missing one surfaces halfway through as a bare `command not found` — at which point part of the install exists and part does not, which is the state this whole document is written to avoid.
 
-It runs before step 1 rather than alongside it, even though step 1 is where the "verify before you trust it" rule lives, because the clone step 1 is about to verify was made by `git`, and a missing `bd` is cheaper to find now than after the interview. This step writes nothing, so re-running it costs nothing either.
+It runs before step 1 rather than alongside it, even though step 1 is where the "verify before you trust it" rule lives, because the clone step 1 is about to verify was made by `git`, and a missing `bd` is cheaper to find now than after the interview. This part writes nothing, so re-running it costs nothing either.
 
 Four are worth checking. Everything else the procedure runs — `sed`, `grep`, `diff`, `cp`, `mv`, `find`, `mktemp`, `date`, `basename`, `cut`, `ls`, `xargs`, `ps`, `tail`, `printf`, `rm`, `mkdir`, `cat`, `env` — is the POSIX baseline that ships with macOS and every Linux. Checking for those would fail nothing and teach installers to skip the block, which is the same reason step 1 checks the contracts by name rather than counting them.
 
@@ -61,6 +65,15 @@ bd --version
 
 `wheelhouse/GRAPH.md`'s claims about the work graph's CLI were measured on bd 1.2.2, and step 6 re-verifies them against whatever you have. Print the version here so that step has something to compare against, and so a later reader can tell which build this install was made on.
 
+### 0b. What was here before you — the survey that cannot be taken later
+
+Take this from the project directory you are installing into, not from the template clone. If you are not standing in it yet, go there first: a survey of the wrong directory returns a clean answer about a project nobody is installing into.
+
+- **STOP IMMEDIATELY, without writing anything, if `wheelhouse/` or `CLAUDE.md` already exists here.** Say what exists and ask the principal what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable.
+- **If neither exists, say so out loud.** That sentence is the record every later step reads. This procedure creates both names itself — the `wheelhouse/` directory step 1 makes for `.template-source`, and the `CLAUDE.md` that `bd init` writes in step 5 — and neither trips this check, because both appear after this survey. That is the whole reason the survey lives here and not further down: seeing those files at step 2 or step 6 tells you nothing, and seeing them now tells you everything.
+
+This is the one observation in the procedure that expires. Every other check can be re-run at any point and give the same answer; this one is about a state that step 1 destroys. If you find yourself past step 1 having never taken it, the cheap answer is gone — ask the principal directly, and read `git log --oneline -1 -- CLAUDE.md wheelhouse`, where a path with history predates you. An empty answer proves nothing in the other direction, since an untracked file that was already here has no history either.
+
 ## 1. Confirm you actually have the template
 
 You are already following instructions from this clone, so verify it before trusting any more of it. This comes before the project checks deliberately: everything below depends on these files being real, and a wheelhouse installed from an empty clone is worse than no install.
@@ -105,10 +118,10 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 ## 2. Preflight — verify the project, then report what you found
 
 
-- Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue.
+- Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue. A correction here means step 0b surveyed the wrong directory and step 1 wrote into it — say so, and take the survey again in the directory you have just been given.
 - Step 0 established that `bd` is on PATH and printed its version. Carry that version forward rather than re-deriving it; if you skipped step 0, go and run it now instead of checking `bd` alone here, because it is not the only tool that has to be there.
 - Report uncommitted changes if there are any. Do not block on them; the principal may be mid-work.
-- **STOP IMMEDIATELY, without writing anything further, if `wheelhouse/` or `CLAUDE.md` existed before step 1 ran.** Say what exists and ask what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable. Two things do NOT trip this check, because this procedure creates them itself: the `wheelhouse/` directory step 1 just made for `.template-source`, and the `CLAUDE.md` that `bd init` will create in step 5. The check guards what was there before you arrived, so run it — or note what exists — before step 1 writes anything.
+- **Report what step 0b's survey found** — whether `wheelhouse/` or `CLAUDE.md` was here before this install, which is the check that guards an unrecoverable overwrite. Carry the answer forward; do not re-derive it from what you can see now. Step 1 created `wheelhouse/` for `.template-source` and `bd init` will create `CLAUDE.md` in step 5, so the directory in front of you cannot answer the question any more. If you skipped step 0b, do not guess: go back and read its last paragraph, which says what to do once the cheap answer is gone.
 
 ## 3. Read before you ask
 
@@ -136,7 +149,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
    - **Umbrella root.** This directory is a container; the product lives in one or more separate git repos beneath it. The wheelhouse installs at the container root, the graph spans the repos below it, and workers create worktrees BESIDE the product repos at the container root (for example `<root>/.wheelhouse-worktrees/<bead-id>`), never inside them — same reason as the single-repo case below, and it also keeps the graph reachable from inside the worktree, which `contracts/GRAPH.md` explains (a worktree's `.git` is a file the workspace walk passes through; a nested repo's `.git` is a directory that stops it).
    - **Single repo.** This directory IS the product — one repo, no container. This is the ordinary case and it is fully supported: the wheelhouse installs at the product root, `CLAUDE.md` and `wheelhouse/` are committed alongside the code, and a worker's worktree is a SIBLING directory outside the repo (for example `../.wheelhouse-worktrees/<bead-id>`), so the worktree never nests inside the repo it is branching from.
 
-   **When both shapes fit, one question decides it: is this repo something other people clone as-is?** A template, a starter kit, a library whose repository IS the deliverable — anything whose consumers take the working tree rather than a built artifact. If yes, install the umbrella shape even where a single repo would otherwise be the obvious call: this root becomes a container holding the fleet's machinery, and the consumer-facing repo stays pristine beneath it. The single-repo shape commits `CLAUDE.md` and `wheelhouse/` alongside the code, so everyone who clones receives the installer's fleet state — commander context written for one principal, an ISA stating one project's goal, a work graph of beads that are not theirs — and the first stranger who runs this procedure inside their clone trips step 2's stop check on files they never wrote. Where single-repo is genuinely required, keep the install out of the tree with `.git/info/exclude` rather than `.gitignore`, and say plainly that it is machine-local: it is not itself committed, so a second seat cloning that repo has to repeat it. This template's own install took the umbrella shape for exactly this reason (2026-08-20) — the product is the wheelhouse template, and its consumers clone it.
+   **When both shapes fit, one question decides it: is this repo something other people clone as-is?** A template, a starter kit, a library whose repository IS the deliverable — anything whose consumers take the working tree rather than a built artifact. If yes, install the umbrella shape even where a single repo would otherwise be the obvious call: this root becomes a container holding the fleet's machinery, and the consumer-facing repo stays pristine beneath it. The single-repo shape commits `CLAUDE.md` and `wheelhouse/` alongside the code, so everyone who clones receives the installer's fleet state — commander context written for one principal, an ISA stating one project's goal, a work graph of beads that are not theirs — and the first stranger who runs this procedure inside their clone trips step 0b's stop check on files they never wrote. Where single-repo is genuinely required, keep the install out of the tree with `.git/info/exclude` rather than `.gitignore`, and say plainly that it is machine-local: it is not itself committed, so a second seat cloning that repo has to repeat it. This template's own install took the umbrella shape for exactly this reason (2026-08-20) — the product is the wheelhouse template, and its consumers clone it.
 
    Say which shape you are installing, and record it in the worker's `## This project` section along with where worktrees go. A worker that guesses this wrong creates a worktree inside the repo and pollutes the very diff it is meant to produce.
 
