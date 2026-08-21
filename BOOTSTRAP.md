@@ -4,6 +4,61 @@ You are installing a wheelhouse — a standing agent fleet over a shared work gr
 
 Work in this order. Do not reorder, and do not write anything before the interview in step 4 is answered.
 
+## 0. Dependency preflight — the tools this procedure needs
+
+This procedure, and the runbooks and contracts it installs, invoke a handful of binaries. Someone installing on their own machine for the first time has no reason to already have them, and a missing one surfaces halfway through as a bare `command not found` — at which point part of the install exists and part does not, which is the state this whole document is written to avoid.
+
+It runs before step 1 rather than alongside it, even though step 1 is where the "verify before you trust it" rule lives, because the clone step 1 is about to verify was made by `git`, and a missing `bd` is cheaper to find now than after the interview. This step writes nothing, so re-running it costs nothing either.
+
+Four are worth checking. Everything else the procedure runs — `sed`, `grep`, `diff`, `cp`, `mv`, `find`, `mktemp`, `date`, `basename`, `cut`, `ls`, `xargs`, `ps`, `tail`, `printf`, `rm`, `mkdir`, `cat`, `env` — is the POSIX baseline that ships with macOS and every Linux. Checking for those would fail nothing and teach installers to skip the block, which is the same reason step 1 checks the contracts by name rather than counting them.
+
+Deliberately NOT on the list: `gh`. Nothing in `BOOTSTRAP.md`, `runbooks/` or `contracts/` invokes it — measured by grep, not assumed — so do not install it on this file's account. If you add a tool to the list, measure the same way: the list is only worth what it was checked against.
+
+```bash
+# Positional parameters, not a whitespace-split string: zsh does not word-split an
+# unquoted variable, so a `for t in $TOOLS` loop there runs ONCE over the whole list
+# and reports one nonexistent tool while checking none of them. "$@" iterates
+# identically in bash and zsh -- the same reason step 6's integrity check uses it.
+# Each entry is tool:why:how; only the first two colons are separators, so `how` may
+# contain a URL and `why` may not contain a colon.
+set -- \
+  "git:clones the template, and carries every branch, worktree and merge the fleet runs on:brew install git   # macOS also ships one with the Xcode command line tools" \
+  "bd:is the work graph -- every unit of work the fleet holds lives in it:brew install beads   # or see https://github.com/gastownhall/beads" \
+  "bash:runs wheelhouse/crew/bench.sh, which ships with a bash shebang and is invoked as bash in step 6:preinstalled on macOS and every Linux; brew install bash for a current one" \
+  "awk:splits each contract into its contract half and its project half -- step 6's integrity check and runbooks/UPGRADE.md's splice both depend on it:preinstalled on macOS and every Linux"
+
+MISSING=0
+for entry in "$@"; do
+  tool=${entry%%:*}; rest=${entry#*:}; why=${rest%%:*}; how=${rest#*:}
+  if command -v "$tool" >/dev/null 2>&1; then
+    echo "OK      $tool — $(command -v "$tool")"
+  else
+    echo "MISSING $tool"
+    echo "        the wheelhouse needs it because it $why"
+    echo "        install it: $how"
+    MISSING=1
+  fi
+done
+
+if [ "$MISSING" -eq 0 ]; then
+  echo "PREFLIGHT OK — every dependency is on PATH"
+else
+  echo "PREFLIGHT FAILED — install what is named above, then re-run this block"
+  exit 1
+fi
+```
+
+**A MISSING line is a STOP.** Install what it names and re-run the block; do not proceed on the assumption that the step needing that tool is one you can work around. `brew` is named because it covers the machines this template has been installed on; if you are on a platform it does not cover, install the tool the way that platform does and say which way in your hand-back, rather than adapting the line above silently.
+
+Then record the versions, because two of the things you will check later are stamped against particular builds rather than against the tools in general:
+
+```bash
+git --version
+bd --version
+```
+
+`wheelhouse/GRAPH.md`'s claims about the work graph's CLI were measured on bd 1.2.2, and step 6 re-verifies them against whatever you have. Print the version here so that step has something to compare against, and so a later reader can tell which build this install was made on.
+
 ## 1. Confirm you actually have the template
 
 You are already following instructions from this clone, so verify it before trusting any more of it. This comes before the project checks deliberately: everything below depends on these files being real, and a wheelhouse installed from an empty clone is worse than no install.
@@ -49,7 +104,7 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 
 
 - Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue.
-- Confirm the `bd` CLI is on PATH and print its version. If it is missing, stop and give the install command from the README's prerequisites rather than guessing one.
+- Step 0 established that `bd` is on PATH and printed its version. Carry that version forward rather than re-deriving it; if you skipped step 0, go and run it now instead of checking `bd` alone here, because it is not the only tool that has to be there.
 - Report uncommitted changes if there are any. Do not block on them; the principal may be mid-work.
 - **STOP IMMEDIATELY, without writing anything further, if `wheelhouse/` or `CLAUDE.md` existed before step 1 ran.** Say what exists and ask what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable. Two things do NOT trip this check, because this procedure creates them itself: the `wheelhouse/` directory step 1 just made for `.template-source`, and the `CLAUDE.md` that `bd init` will create in step 5. The check guards what was there before you arrived, so run it — or note what exists — before step 1 writes anything.
 
