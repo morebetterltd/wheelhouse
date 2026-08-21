@@ -339,6 +339,8 @@ git add CLAUDE.md AGENTS.md wheelhouse/ .beads/
 git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"
 ```
 
+**Not every install commits.** If step 4 landed on a single repo whose install you kept out of the tree with `.git/info/exclude`, there is nothing here to stage — `CLAUDE.md`, `wheelhouse/` and `.beads/` are excluded on purpose, and committing them is the exact outcome that decision exists to prevent. Hand the principal that fact in place of a commit SHA, and with it the two consequences they will otherwise meet later: the revert-in-one-step above is not available to them, and a second seat cloning that repo receives none of this and has to repeat the exclusion by hand.
+
 Before you stage, make the worktree directory invisible to this repository. Workers create worktrees at the location you recorded in step 4, and in the umbrella shape that location is INSIDE this repo — so every worktree that exists shows up as untracked in the container root's `git status` from then on, which is the diff pollution the location was chosen to avoid, arriving one level up.
 
 ```bash
