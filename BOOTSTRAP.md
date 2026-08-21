@@ -412,9 +412,17 @@ Commit the install so the principal can see exactly what was added and revert it
 
 ```bash
 git status --short          # look first: bd init may have added files AND a commit you did not expect
-git add CLAUDE.md AGENTS.md wheelhouse/ .beads/
+# Stage each install path ONLY if that status output actually shows it. bd commits some of
+# them itself (.beads/ routinely, and current builds also .claude/, .codex/, .agents/), and an
+# install kept out of the tree with .git/info/exclude shows none of them.
+for p in CLAUDE.md AGENTS.md wheelhouse/ .beads/; do
+  if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
+done
+git status --short          # read what is staged; if nothing is, there is no commit to make
 git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"
 ```
+
+The loop is the rule below — "never `git add` a path you have not seen in the status output" — written as something you can run, and it is a loop rather than one `git add` line because `git add` is atomic: a single absent pathspec fails the whole command having staged nothing. It is an `if` rather than an `&&` chain for the reason given later in this step: the chain form exits non-zero on the healthy case where a path is legitimately absent, which aborts anyone who pasted these lines into a `set -e` wrapper. The list is a list of CANDIDATES; status decides. Anything else this install wrote — a `.gitattributes` bd added, a `.gitignore` you appended to below — you add to the candidate list yourself after seeing it in that first status.
 
 **Not every install commits.** If step 4 landed on a single repo whose install you kept out of the tree with `.git/info/exclude`, there is nothing here to stage — `CLAUDE.md`, `wheelhouse/` and `.beads/` are excluded on purpose, and committing them is the exact outcome that decision exists to prevent. Hand the principal that fact in place of a commit SHA, and with it the two consequences they will otherwise meet later: the revert-in-one-step above is not available to them, and a second seat cloning that repo receives none of this and has to repeat the exclusion by hand.
 
