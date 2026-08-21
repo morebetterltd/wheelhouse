@@ -322,7 +322,7 @@ foreign_windows() {
     /isVisible=true/ { visible = 1 }
     END { if (name != "" && visible) print name }
   ' "$1" 2>/dev/null \
-    | grep -viE "^(${APP_PKG//./\\.}(/.*)?|StatusBar|NavigationBar[0-9]*|InputMethod|Splash Screen.*|Toast|Wallpaper|com\\.android\\.systemui\\.wallpapers\\.ImageWallpaper|Docked Stack Divider|ScreenDecorOverlay(\\(Bottom\\))?|EdgeBackGestureHandler[0-9]*|Taskbar|NotificationShade|ShellDropTarget|com\\.google\\.android\\.apps\\.nexuslauncher(/.*)?)\$" \
+    | grep -viE "^(${APP_PKG//./\\.}(/.*)?|StatusBar|NavigationBar[0-9]*|InputMethod|Splash Screen.*|Toast|Wallpaper|com\\.android\\.systemui\\.wallpapers\\.ImageWallpaper|Docked Stack Divider|ScreenDecorOverlay(Bottom)?|EdgeBackGestureHandler[0-9]*|Taskbar|NotificationShade|ShellDropTarget|com\\.google\\.android\\.apps\\.nexuslauncher(/.*)?)\$" \
     || true
 }
 
