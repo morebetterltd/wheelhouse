@@ -24,7 +24,7 @@ Clone the template somewhere temporary and read its BOOTSTRAP.md, then follow it
 exactly:
 
   TEMPLATE=$(mktemp -d) && \
-    git clone --depth 1 git@github.com:morebetterltd/wheelhouse.git "$TEMPLATE" && \
+    git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git "$TEMPLATE" && \
     test -s "$TEMPLATE/BOOTSTRAP.md" || \
     { echo "TEMPLATE CLONE FAILED OR EMPTY - STOP" >&2; exit 1; }
   echo "template at: $TEMPLATE"
@@ -117,6 +117,10 @@ The full procedure is [`runbooks/UPGRADE.md`](runbooks/UPGRADE.md), which instal
 
 Your install records its baseline in `wheelhouse/.template-source`: the template's remote, the commit installed, and when. Upgrades add an `upgraded=` line and leave `installed=` alone, because when you started and when you last upgraded are different facts.
 
+## Credit
+
+The shape this template installs — a standing fleet of agent seats over a shared work graph, under a human commander — is Steve Yegge's, from his essay [*The Shape of Things to Come*](https://yegge.ai/essays/the-shape-of-things-to-come/). This repo is one working implementation of that idea, grown on a real project; the idea is his.
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Public domain, under [the Unlicense](https://unlicense.org). See [LICENSE](LICENSE).
