@@ -44,7 +44,22 @@ EMU="$ANDROID_HOME/emulator/emulator"
 EMU_PID=""
 
 log()  { printf '[bench] %s\n' "$*"; }
-fail() { printf '[bench] FAIL: %s\n' "$*" >&2; exit 1; }
+# The verdict is the one thing OUT/ did not retain: every input (logcat, error
+# grep, missing-assets, screencap) lands there but the runner's own PASS/FAIL
+# conclusion only ever went to stdout/stderr. Tee it, with the exit code, into
+# OUT/verdict.txt so a reviewer checking the evidence directory sees the
+# conclusion too, not just what fed it. OUT may not exist yet for an
+# arg-count or missing-APK failure (before `mkdir -p "$OUT"` runs) — in that
+# case there is nowhere to write the file, so fall back to stderr only.
+fail() {
+  local line="[bench] FAIL: $* (exit 1)"
+  if [ -n "${OUT:-}" ] && [ -d "$OUT" ]; then
+    printf '%s\n' "$line" | tee "$OUT/verdict.txt" >&2
+  else
+    printf '%s\n' "$line" >&2
+  fi
+  exit 1
+}
 
 # Always kill the guest. A leaked headless emulator eats ~2GB of RAM silently,
 # so this runs on success, on failure, and on Ctrl-C alike.
@@ -148,8 +163,17 @@ done
 log "booted in ~${waited}s"
 
 # --- install ------------------------------------------------------------
+# Print adb's own error verbatim rather than asserting a cause: a build that
+# asserts "release APKs are unsigned" when the real cause is a stale
+# signature-mismatched install left on the AVD by a previous run misdiagnoses
+# a signed, fine APK. A guard that explains into the wrong diagnosis is worse
+# than one that stays quiet, so this names both known causes and leaves which
+# one applies to whoever reads adb's own text.
 log "installing $(basename "$APK")"
-"$ADB" -s "$EMU_SERIAL" install -r "$APK" || fail "adb install failed (release APKs are unsigned — use the debug APK)"
+INSTALL_OUT="$("$ADB" -s "$EMU_SERIAL" install -r "$APK" 2>&1)" || fail "adb install failed:
+${INSTALL_OUT}
+Known causes (not diagnosed here — read the error above): (1) this is a release APK, which is unsigned — use the debug APK; (2) signature mismatch against a stale install already on the AVD (INSTALL_FAILED_UPDATE_INCOMPATIBLE) — remedy: adb -s $EMU_SERIAL uninstall $APP_PKG, then retry."
+log "adb install: ${INSTALL_OUT}"
 "$ADB" -s "$EMU_SERIAL" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:$APP_PKG" \
   || fail "$APP_PKG is not in pm list packages after install"
 log "installed $APP_PKG"
@@ -236,6 +260,82 @@ else
   log "WARNING: $SHARE_TOOL or python3 missing — blank-screen check SKIPPED"
 fi
 
+# --- foreign-window check -------------------------------------------------
+# The painted-frame measurement above cannot tell the app's own pixels from a
+# system window drawn on top of it -- a screencap can show the app genuinely
+# rendered UNDER a system dialog (e.g. "System UI isn't responding") and still
+# clear the density/share thresholds. It also can't be caught downstream: the
+# logcat below is scoped --pid="$PID", so a System UI ANR, which belongs to a
+# different process, can never appear in it. Name any window visible over the
+# app that isn't expected chrome, from the same capture the frame check above
+# just accepted.
+#
+# v1 of this check listed every REGISTERED window and allowlisted a short
+# chrome list by name -- on a live device run it flagged most registered
+# windows, nearly all of them structural windows that were merely present,
+# not drawing anything foreign over the frame (a screen-decor overlay, an
+# edge-gesture handler, a taskbar, a notification shade, a drop target, the
+# launcher activity, the wallpaper). A registered window is not an on-screen
+# window.
+#
+# v2 gates on real per-window visibility instead of registration (verified
+# against AOSP's WindowState.java / WindowManagerService.java): the "windows"
+# dumpsys subcommand prints an `isVisible=` line UNCONDITIONALLY inside every
+# window's own block, where isVisible() is false for a window that's
+# registered but not currently contributing pixels -- an idle gesture-handler
+# touch region, a collapsed notification shade, an occluded wallpaper or a
+# backgrounded launcher activity all read isVisible=false at rest. Only a
+# window whose own block says isVisible=true is a flag candidate.
+#
+# The visibility gate alone still isn't enough: some chrome (StatusBar,
+# NavigationBar, a rounded-corner/cutout screen-decor overlay, a taskbar on a
+# gesture-nav skin) is genuinely on screen every frame -- real content, just
+# not app content -- so those names stay allowlisted on top of the gate. The
+# rest of the v1 fallback list is kept too, as defense in depth in case a
+# build's isVisible= semantics differ from what AOSP's source says.
+#
+# Still a best-effort name, not a guarantee the frame is clean: the dumpsys
+# text format is not a stable contract across Android builds, and a
+# legitimate window this parser doesn't recognise (a permission prompt, say)
+# will show as a false positive if it happens to be visible. Detection here
+# is not robust enough to gate the bench on, so it warns rather than fails --
+# it is a pointer for the human look, which stays mandatory either way.
+WINDOWS="$OUT/evidence-windows.txt"
+"$ADB" -s "$EMU_SERIAL" shell dumpsys window windows > "$WINDOWS" 2>&1 || true
+
+foreign_windows() {
+  # Per window block: the name from "Window #N Window{hash u0 <name>}:", kept
+  # only if that same block's dump also says isVisible=true somewhere before
+  # the next "Window #" header.
+  awk '
+    /Window #[0-9]+ Window\{[^}]*\}/ {
+      if (name != "" && visible) print name
+      line = $0
+      match(line, /Window\{[^}]*\}/)
+      inner = substr(line, RSTART + 7, RLENGTH - 8)
+      n = split(inner, parts, " ")
+      name = parts[3]
+      for (i = 4; i <= n; i++) name = name " " parts[i]
+      visible = 0
+      next
+    }
+    /isVisible=true/ { visible = 1 }
+    END { if (name != "" && visible) print name }
+  ' "$1" 2>/dev/null \
+    | grep -viE "^(${APP_PKG//./\\.}(/.*)?|StatusBar|NavigationBar[0-9]*|InputMethod|Splash Screen.*|Toast|Wallpaper|com\\.android\\.systemui\\.wallpapers\\.ImageWallpaper|Docked Stack Divider|ScreenDecorOverlay(Bottom)?|EdgeBackGestureHandler[0-9]*|Taskbar|NotificationShade|ShellDropTarget|com\\.google\\.android\\.apps\\.nexuslauncher(/.*)?)\$" \
+    || true
+}
+
+FRAME_FOREIGN_NOTE=""
+FOREIGN_LIST="$(foreign_windows "$WINDOWS")"
+if [ -n "$FOREIGN_LIST" ]; then
+  log "WARNING: window(s) other than $APP_PKG visible over the frame (best-effort name from dumpsys, not a guarantee -- see $WINDOWS):"
+  while IFS= read -r w; do
+    [ -n "$w" ] && log "WARNING:   $w"
+  done <<<"$FOREIGN_LIST"
+  FRAME_FOREIGN_NOTE=" -- WARNING: window(s) other than the app were visible over it, see $WINDOWS"
+fi
+
 # --- logcat -------------------------------------------------------------
 "$ADB" -s "$EMU_SERIAL" logcat -d --pid="$PID" > "$LOGCAT" || fail "logcat capture failed"
 # Smoke pass for a Cordova WebView app. Matches are evidence for the reviewer,
@@ -259,5 +359,5 @@ if [ -s "$MISSING" ]; then
   fail "the WebView could not open $(wc -l < "$MISSING" | tr -d ' ') www/ asset(s) (lines above, also in $MISSING) — broken payload, not a live app"
 fi
 
-log "PASS: payload + install + clear + launch + liveness + screencap measured + www assets loaded (the screencap still needs a human look)"
+printf '[bench] PASS: payload + install + clear + launch + liveness + screencap measured + www assets loaded (the screencap still needs a human look)%s (exit 0)\n' "$FRAME_FOREIGN_NOTE" | tee "$OUT/verdict.txt"
 exit 0
