@@ -266,11 +266,33 @@ Run each of these and paste what it prints:
 
 - `bd ready` — returns without error. On an empty graph this prints nothing, which is indistinguishable from a broken install, so prove the graph round-trips instead: create a real first bead, list it, and leave it in place as the fleet's first piece of work.
 
+  **The bead carries the label `wheelhouse-bootstrap`, and that label is how step 8 finds it again.** Step 8 dispatches this bead minutes from now and has to pick it out of whatever else the graph holds; matching on its title, or on it being the only ready bead, works on an empty graph and nowhere else — a wheelhouse gets installed into projects that were already tracking their work here. The label is documented in this file rather than in `wheelhouse/GRAPH.md` because it is not a fleet signal: `GRAPH.md`'s `needs-review` marks a queue every bead passes through for as long as the fleet runs, while this marker is written by step 6, read once by step 8, and never used again.
+
+  **Look before you create — this is a step re-runs and upgrades repeat.**
+
+  ```bash
+  bd list --label wheelhouse-bootstrap --all
+  ```
+
+  If that names a bead, the bench bead already exists: create nothing, say which bead it is and what state it is in, and move on. A second one is worse than none, because two beads carrying the same marker put step 8 back to choosing, which is the whole thing the marker removes.
+
+  If it prints `No issues found`, look once more before you conclude the bead is absent. An install made from a template older than this marker left a bench bead with no label on it, and the label filter cannot see it — `bd list --all` and read the titles. If one is there, stamp it rather than duplicating it, and say you did:
+
+  ```bash
+  bd update <id> --add-label wheelhouse-bootstrap
+  ```
+
+  Only when nothing answers to either:
+
   ```bash
   bd create "Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md" -p 1 \
+    --labels wheelhouse-bootstrap \
     --description="The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: the eight clauses in wheelhouse/crew/BENCH.md."
-  bd ready          # must now list that bead
+  bd ready                                 # must now list that bead
+  bd ready --label wheelhouse-bootstrap    # must list that bead and nothing else
   ```
+
+  Two things measured on bd 1.2.2, both of which turn a check into a no-op if you assume otherwise: `bd list --label` hides closed issues unless `--all` is given, so an install upgrading over a graph whose bench bead was already implemented and closed reads as a graph with no bench bead at all and files a duplicate; and an empty result exits 0, so the answer is in the text rather than the exit status. Establish both against the build you have.
 - A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
 
   ```bash
@@ -388,10 +410,18 @@ Three things, in this order.
 **Make the first dispatch.** Read the graph rather than your memory of it:
 
 ```bash
-bd ready
+bd ready                                 # the graph you are dispatching into
+bd ready --label wheelhouse-bootstrap    # the bead step 6 left for you
 ```
 
-Step 6 left exactly one bead ready, and it is real work rather than a placeholder: implement `wheelhouse/crew/bench.sh` against `wheelhouse/crew/BENCH.md`. It goes first because until the bench is real no verdict on this project may claim its software runs, so every approval until then is an approval of a diff somebody read. Dispatch it per the runbook's stage 1 — name the bead id and the repository, give a way to read anything it points at that changes nothing, and state done if the bead does not already state it.
+The second command is the one that finds the bead; the first is there so you see what else is in flight before you dispatch into it. Step 6 stamped the bench bead with `wheelhouse-bootstrap` for exactly this handoff, because on a graph that already held work — the ordinary case for a project adopting a wheelhouse — "the ready bead step 6 created" is not something `bd ready` alone can tell you.
+
+That bead is real work rather than a placeholder: implement `wheelhouse/crew/bench.sh` against `wheelhouse/crew/BENCH.md`. It goes first because until the bench is real no verdict on this project may claim its software runs, so every approval until then is an approval of a diff somebody read. Dispatch it per the runbook's stage 1 — name the bead id and the repository, give a way to read anything it points at that changes nothing, and state done if the bead does not already state it.
+
+Two answers are not one bead, and neither is a reason to guess which bead was meant:
+
+- **Nothing listed.** On bd 1.2.2 that prints `No ready work found` and exits 0, so read the text. `bd list --label wheelhouse-bootstrap --all` separates the two causes. If it shows a CLOSED bead, this install went in over a graph whose bench was already implemented — say so, and make the first dispatch from the highest-priority bead `bd ready` does show. If it shows nothing at all, step 6 did not complete; go back and finish it there, where its verification runs, rather than creating the bead here.
+- **More than one.** An earlier partial run left a duplicate. Say so to the principal and dispatch none of them until you are told which one is live — a duplicate bench bead is cheap to resolve now and expensive after two seats have worked it.
 
 Where that dispatch goes depends on the per-seat answers from step 4's question 7. Read the roster in `wheelhouse/fleet/SEATS.md` rather than your memory of the conversation:
 
