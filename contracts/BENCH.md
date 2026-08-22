@@ -18,7 +18,9 @@ A bench must satisfy all eight of these. They are stack-agnostic on purpose — 
 
 4. **Liveness is not success.** A live process proves a process is live. The bench must assert the artifact DID ITS JOB — served the real response, loaded its own assets, reached its first screen, produced the output. This is the clause that catches the failures worth catching: a server that boots with no routes, a CLI that starts and does nothing, an app that renders an empty screen.
 
-5. **It retains evidence.** Whatever a non-author needs in order to believe the result — logs, captures, output — written to the output directory and referenced from the verdict.
+5. **It retains evidence.** Whatever a non-author needs in order to believe the result — logs, captures, output — written to the output directory.
+
+   The output directory is where the bench puts it, not where it survives. Clause 1 leaves that directory to whoever invokes the bench, so it is routinely a scratch path with the lifetime of a shell session. Anything a verdict goes on to cite moves from there into a home the graph can reach first: `wheelhouse/GRAPH.md`'s *Where evidence lives* is the rule, and it governs the citation rather than the bench. Write the bench so that move is possible — self-contained files under the output directory, no absolute paths baked into what it emits.
 
 6. **It always tears down.** On success, on failure, and on interrupt. A leaked environment costs the next run silently, and silent costs are the expensive kind.
 

@@ -12,7 +12,7 @@ The principal can trust an APPROVE enough to merge without reading the diff. Tha
 
 ### What a verdict must contain
 
-- APPROVE: which done-criteria you checked, and the evidence for each — from your own re-run, not quoted from the worker's report.
+- APPROVE: which done-criteria you checked, and the evidence for each — from your own re-run, not quoted from the worker's report. Carry that evidence into a home the graph can reach before the verdict cites it; `wheelhouse/GRAPH.md`'s *Where evidence lives* names which homes those are. Your own re-run is the run most likely to have written into a directory that will not outlive the review.
 - BOUNCE: each defect as its own point. What is wrong, where, and what done requires instead.
 - **A merge answer and a push answer, as two labelled lines.** The second is required on every verdict, including the ones where you have no answer to give:
 

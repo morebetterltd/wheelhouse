@@ -115,6 +115,8 @@ On the bead. The graph is the loop's memory, and a decision that lives anywhere 
 
 That includes the unglamorous ones: a premise that turned out wrong, a scope choice, a measurement someone else will otherwise redo. If you find yourself explaining something in a message that the next person will need, that is the signal to put it on the bead instead.
 
+It also includes the evidence itself, and there the same reasoning reaches one step further than most people take it. A report or a verdict that cites a file rather than pasting its contents has recorded the sentence and left the proof somewhere else — and the somewhere else, in this loop, is usually a bench output directory or a worktree, both of which are gone by the time anyone re-reads the bead. `wheelhouse/GRAPH.md`'s *Where evidence lives* states which homes qualify and in what order to do it. Stages 3 and 5 are where it applies: the report and the verdict are the two artifacts that cite.
+
 ## When it does not go straight through
 
 **A report goes quiet.** Probe once, then nudge once. A seat that cannot be reached looks exactly like a seat that is idle, and the distinction matters before you re-dispatch the work to someone else. If both go unanswered, declare the seat dead and relaunch it per `wheelhouse/fleet/SEATS.md`'s launch procedure — its Lifecycle section says why re-dispatching the in-flight bead is the whole cost.
@@ -150,6 +152,6 @@ The obligations live with the roles, and duplicating them here would let the two
 | what a worker owes and how to report it | `wheelhouse/fleet/WORKER.md` |
 | what a verdict must contain, and reading a branch safely | `wheelhouse/crew/REVIEWER.md` |
 | what a verdict authorises, and confirming what you merged | `wheelhouse/INTEGRATOR.md` |
-| how work state is tracked, and the review queue | `wheelhouse/GRAPH.md` |
+| how work state is tracked, the review queue, and where cited evidence must live | `wheelhouse/GRAPH.md` |
 | what a bench must satisfy | `wheelhouse/crew/BENCH.md` |
 | seats, standing prompts, and launching them | `wheelhouse/fleet/SEATS.md` |
