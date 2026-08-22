@@ -39,8 +39,8 @@
 #                       non-seat sessions share the project cwd)
 #   seat ...            seat names to wire, from the roster in
 #                       wheelhouse/fleet/SEATS.md. Default is every directory
-#                       in SEATS_ROOT, which is this project's seats and no
-#                       other once SEATS_ROOT is set per project -- see below.
+#                       the seat root, which is this project's seats and no
+#                       other once a namespace is recorded -- see below.
 #
 # SEATS_ROOT -- this project's seat root, and an INTERFACE rather than a test
 # hook. It is DERIVED, not remembered: this script reads `namespace=` out of

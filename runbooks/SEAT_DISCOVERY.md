@@ -75,15 +75,15 @@ The roll call is what binds name to seat. Ask every seat for three things:
 2. its `CLAUDE_CONFIG_DIR`;
 3. whether it has work in flight.
 
-Keep the resulting map — `myproject-4f = seat-reviewer` — in the commander's working context and dispatch by seat name from there.
+Keep the resulting map — `myproject-4f = myproject-reviewer` — in the commander's working context and dispatch by seat name from there. Seat names carry this project's namespace, which is what lets you read a foreign answer as foreign rather than as a seat you had forgotten about.
 
-**Then assert the map is unambiguous, before the first dispatch.** Every seat name in it must resolve to exactly one live row in the commander's registry, and every `CLAUDE_CONFIG_DIR` the roll call collected must sit under this project's `SEATS_ROOT`. The seat root is per-project; the commander's registry is not, so a machine hosting several wheelhouses can put two live rows behind one name, and a name with two rows dispatches to whichever answers:
+**Then assert the map is unambiguous, before the first dispatch.** Every seat name in it must resolve to exactly one live row in the commander's registry, and every `CLAUDE_CONFIG_DIR` the roll call collected must sit under this project's seat root — the one `wire-seats.sh` printed on its last run. The seat root is per-project; the commander's registry is not, so a machine hosting several wheelhouses can put two live rows behind one name, and a name with two rows dispatches to whichever answers:
 
 ```bash
 ls ~/.claude/sessions/*.json | wc -l          # rows the commander can address
 ```
 
-Read the roll call's answers against that, not the count alone: a config directory outside this project's seat root is another fleet's seat wired in by mistake, and a seat name that two rows both claim is a STOP. Unwire the stranger — delete the copied row from `~/.claude/sessions/` — and re-run step 1 with this project's `SEATS_ROOT` set, rather than dispatching and hoping. A dispatch that lands in another project is not visible from here: the bead goes quiet, which is what a working seat also looks like.
+Read the roll call's answers against that, not the count alone: a config directory outside this project's seat root is another fleet's seat wired in by mistake, and a seat name that two rows both claim is a STOP. Unwire the stranger — delete the copied row from `~/.claude/sessions/` — and re-run step 1, rather than dispatching and hoping. If this install has a namespace recorded, step 1 is the bare command and the re-run needs nothing set; if it does not, that is what the stranger is telling you, and `UPGRADE.md` step 7 is the fix rather than a `SEATS_ROOT` you set once and forget next time. A dispatch that lands in another project is not visible from here: the bead goes quiet, which is what a working seat also looks like.
 
 **The binding is per-launch.** A restarted seat comes back with a new pid and a new derived name, so it needs re-wiring AND re-rolling. A commander dispatching from yesterday's map is addressing a session that no longer exists, or worse, one that now belongs to a different seat.
 

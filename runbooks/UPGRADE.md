@@ -237,14 +237,32 @@ Do it now if this machine already hosts, or is about to host, more than one whee
    Your `.template-source` predates the field, so the append branch is the one that will run — the `grep -q` guard is there so re-running this does not add a second line. Then add `### Seat namespace` to `wheelhouse/fleet/SEATS.md`'s project half, above `### Roster`, carrying the same string and the root it names, `$HOME/.claude-seats-<namespace>`. That section is the human record; `.template-source` is the one a program acts on, and it decides.
 2. **Move the seat directories, with the seats shut down.** A seat is a running session holding its configuration directory open; move it underneath a live one and you have a seat writing into a path that no longer exists. Close the terminals first.
 
+   Decide each seat's new name first, then move it into that name in one step — the directory's basename IS the seat name, so a move that keeps the old basename leaves the rename half of this migration undone.
+
    ```bash
    mkdir -p "$HOME/.claude-seats-<namespace>"
-   mv "$HOME/.claude-seats/<seat-name>" "$HOME/.claude-seats-<namespace>/<namespace>-<seat-name>"
+   mv "$HOME/.claude-seats/<old-seat-name>" "$HOME/.claude-seats-<namespace>/<its rostered namespaced name>"
    ```
 
-   The rename in that second path is the other half: the prefix is what keeps two fleets' seat names apart in the commander's registry, which stays shared whatever you do to the seat roots. Repeat per seat, then `rmdir "$HOME/.claude-seats"` if it is now empty — and if it is not, read what is left before deleting anything, because on a multi-fleet machine what remains is another project's fleet.
-3. **Update the derived surfaces.** The roster in `wheelhouse/fleet/SEATS.md` takes the prefixed names; `wheelhouse/STARTUP.md`'s launch blocks take the `SEATS_ROOT` export and the prefixed names; any `wire-seats.sh` invocation you have written down or scripted takes `SEATS_ROOT`. These are the surfaces step 7's sweep is about, and the seat namespace is the convention that moved.
-4. **Relaunch, re-wire, re-roll.** Seat registrations are per-process and the roll-call binding is per-launch, so the seats come back with new pids and new derived names. Run `wire-seats.sh` with the new `SEATS_ROOT`, then the roll call, then the unambiguity assertion in `SEAT_DISCOVERY.md` step 2 — which is the check that tells you the move actually took.
+   The destination is the name you are giving that seat on the roster, not the old name with something glued to the front — a seat that was `seat-worker-1` becomes `<namespace>-worker-1`, not `<namespace>-seat-worker-1`. The prefix is what keeps two fleets' seat names apart in the commander's registry, which stays shared whatever you do to the seat roots, and a name nobody would have chosen at install is a name that reads as a mistake for the life of the project. Repeat per seat, then `rmdir "$HOME/.claude-seats"` if it is now empty — and if it is not, read what is left before deleting anything, because on a multi-fleet machine what remains is another project's fleet.
+3. **Rewrite the derived surfaces to the interface this upgrade actually ships.** Two of them, and the shape is not what a pre-namespace install has on the page today:
+
+   - The roster in `wheelhouse/fleet/SEATS.md` takes the new namespaced names, matching the directories you just moved.
+   - `wheelhouse/STARTUP.md`'s launch blocks take the namespaced `CLAUDE_CONFIG_DIR` **and the foreign-directory check that now belongs in every one of them.** The upgraded `contracts/SEATS.md` launch procedure and `generated/STARTUP.md.example` are the shape to copy:
+
+     ```bash
+     export CLAUDE_CONFIG_DIR="$HOME/.claude-seats-<namespace>/<seat-name>"
+     if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
+       sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
+     fi
+     cd /path/to/project-root
+     claude
+     ```
+
+     Those three middle lines go in EVERY per-seat block, not once at the top of the file. They print the project roots of any sessions the directory already holds: nothing, or this project's root, is fine; any other path is another fleet's seat and a STOP. The upgrade re-copies the contract that explains the check, but `STARTUP.md` is yours and is the surface your operator actually pastes from — if the check does not land here, the install has the reasoning and not the tooth.
+
+   **There is no `SEATS_ROOT` to write down anywhere, and that is the point of this upgrade.** Once step 1 has recorded `namespace=`, `wire-seats.sh` derives its own seat root and takes nothing; a bare `wheelhouse/runbooks/wire-seats.sh` is the whole invocation. Any `SEATS_ROOT` export you find in your `STARTUP.md`, a note, or a script is from before and should come out — the environment variable survives as a documented override for a relocated seat tree or a fixture, not as anything this migration asks you to set. Re-introducing it here would put back the remembered value this change exists to remove.
+4. **Relaunch, re-wire, re-roll.** Seat registrations are per-process and the roll-call binding is per-launch, so the seats come back with new pids and new derived names. Run each seat's launch block — reading what the foreign-directory check prints, which is the first place a half-finished move shows up — then `wheelhouse/runbooks/wire-seats.sh` with nothing passed. Read the `seat root:` line it prints: it should name `$HOME/.claude-seats-<namespace>` and say it came from `namespace=`, and if it still names the shared path then step 1 did not take. Then the roll call, then the unambiguity assertion in `SEAT_DISCOVERY.md` step 2 — which is the check that tells you the move actually took.
 
 A real example, from the upgrade this procedure was written from. That upgrade changed one thing upstream: a path convention, `crew/` to `wheelhouse/crew/`. The contracts were re-copied correctly and the check passed 6/6. The install's very first bead — filed by the bootstrap itself — still read *"Implement crew/bench.sh against crew/BENCH.md"*, and its acceptance criterion pointed at `contracts/BENCH.md`, a template path that does not exist in an installed project at all. Nothing was broken and no check could have caught it, because no check looks at the graph. It was found by reading, and fixed by editing the bead.
 
