@@ -18,7 +18,7 @@ You do not have to check the four by hand. Step 0 of the install is a dependency
 
 Open a Claude Code session in your project root and paste the block below into that session.
 
-**It is a prompt for Claude, not a shell command.** Claude runs the clone for you; pasting the block into a terminal fails on its first line.
+**Paste the whole block into Claude; you run none of it yourself.** The block is addressed to Claude, and the shell command inside it is Claude's to execute — which is why it opens with a sentence rather than a command, and why pasting the block into a terminal fails on its first line.
 
 ```text
 Install the wheelhouse in this repo.
@@ -50,7 +50,7 @@ Two things before you start:
   me. Do not work around it, and do not overwrite anything I already have.
 ```
 
-It will survey your repo, ask you about the handful of things it cannot derive — six topics, plus your seats if you want them set up straight away — then write the tree, verify it, and tell you what is stubbed.
+It will survey your repo, then interview you about the things it cannot derive: which repos the fleet changes, what proves a build actually works (that one is several questions), what is true when the first iteration is done, which actions stay yours alone, what authorizes a merge, and what your priorities mean. Then it walks your seat roster one seat at a time — declining every seat is a legitimate answer. Then it writes the tree, verifies it, and tells you what is stubbed.
 
 If you would rather read the template before installing anything, this is safe to paste into a terminal — it clones a copy you can browse and installs nothing:
 
