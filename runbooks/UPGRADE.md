@@ -125,6 +125,12 @@ splice() {   # splice <new-contract> <your-file>
   if [ ! -e "$2" ]; then                      # new contract since your install
     cp "$1" "$2"; echo "new, copied whole: $2"; return
   fi
+  # Headings the template's project-half scaffold carries and yours does not.
+  # Read from the two halves that are about to be joined, because after the mv
+  # the new file's project half is gone and nothing downstream looks there.
+  diff <(awk 'f&&/^##+ /{print} /^## This project$/{f=1}' "$2") \
+       <(awk 'f&&/^##+ /{print} /^## This project$/{f=1}' "$1") \
+    | sed -n "s|^> |project section UPSTREAM, not in yours — $2: |p"
   awk '/^## This project$/{exit} {print}' "$1"  >  "$2.tmp"
   awk 'f{print} /^## This project$/{f=1; print}' "$2" >> "$2.tmp"
   mv "$2.tmp" "$2"
@@ -141,13 +147,28 @@ find wheelhouse -name '*.md.new' -delete   # find, not **: globstar is off by de
 
 Without that guard the failure is quiet in the way this template keeps warning about: `awk` reports `can't open file` on stderr, the function still exits 0, and you are left with a contract file whose project section does not exist. Measured, not assumed. If you have already run an upgrade without the guard, check each contract for its `## This project` heading before trusting the integrity check — the check compares contract halves and will report OK on a file that lost its project half entirely.
 
+**The `project section UPSTREAM, not in yours` lines are the other thing this step reports, and they are not failures.** The splice keeps your project half whole, which is what you want and must not change — but "whole" means the template's own scaffold below `## This project` never reaches you, and that scaffold moves too. Between two real commits of this template, `SEATS.md` gained `### Declined seats`, `GRAPH.md` gained `### CLI build notes`, and `BENCH.md` renamed `### What is set up and torn down around the assertion`; a project that ran this procedure by the book learned none of it, because every check in step 5 compares contract halves and the one bullet about project halves is scoped to contracts copied whole — of which that run had none. The heading diff above is what closes that: it is the same reporting the runbook loop in step 3 does for `runbooks/`, one level down.
+
+Read the lines and decide. A heading that is genuinely new is a section you may want to fill; a heading that is your own under a different name is a rename you may want to adopt or ignore. The report cannot tell those apart — a rename looks exactly like an arrival to a diff of headings — and it does not try, because which one it is depends on content only you can read. Compare `##`-level headings and above rather than every line, so this is a list of sections and not a second copy of the diff you already read in step 2. It reads headings inside fenced code blocks too, if a contract's project half ever contains one; that is a line you dismiss, not a check that lies to you.
+
 Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A naive match has destroyed a contract file this way once already — it deleted a licensing-compliance rule while every automated check still passed. `BOOTSTRAP.md` states the same rule for the same reason; this is the operation it was stating it for.
 
 ## 5. Re-verify — the same checks the install runs
 
 - **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all seven, and no `FAIL` lines after them. That check is also this runbook's backstop: a contract missing from the copy list above never installs, and the check says so rather than passing quietly. Do not skip it on the grounds that the copies looked right. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
-- **The bench stub still fails, IF you have not implemented your bench**: `bash wheelhouse/crew/bench.sh; echo $?` must be non-zero. If you have implemented it, run your real bench instead — and if it now exits 0 having done nothing, step 3 clobbered it.
+- **Your bench is the file you had before, whichever file that was.** Step 3 copies seven named `.md` files and the contents of `runbooks/`, and neither list can reach `wheelhouse/crew/bench.sh` — so the check is that nothing reached it, and it reads the same in both states:
+
+  ```bash
+  git diff --stat -- wheelhouse/crew/bench.sh          # expect: nothing. The upgrade is not committed until step 8.
+  diff -q wheelhouse/crew/bench.sh "$TEMPLATE/contracts/bench.sh.stub" >/dev/null 2>&1 \
+    && echo "bench.sh: IS THE STUB" || echo "bench.sh: NOT the stub"
+  ```
+
+  If you have not implemented your bench, `IS THE STUB` is the correct answer and `bash wheelhouse/crew/bench.sh; echo $?` being non-zero confirms it still refuses. If you have implemented it, `IS THE STUB` means something overwrote it — `cp -r contracts/` in place of step 3's named copies is how that happens — and the file to restore is in your git history, not in the template.
+
+  Do **not** use "run your real bench and check it is non-zero" as the clobber check, which is what this bullet said until it was run against a real one. An implemented bench takes arguments; invoked bare it exits non-zero on a usage error, having tested nothing: measured, `bash wheelhouse/crew/bench.sh` exits 2 and prints `usage: ...` to stderr. That satisfies the check as written while answering none of the question, and the failure it named — "exits 0 having done nothing" — is not what a clobbered bench does anyway, because the stub it would be replaced by exits 1. Running your real bench properly, with its arguments, is worth doing and is how you learn the upgraded contracts did not break your loop. It is a different question from this one.
 - Your `## This project` sections are intact. Diff them against what you had.
+- **Every `project section UPSTREAM, not in yours` line from step 4 has been read.** Those lines are the only place the procedure looks below `## This project` at all: the integrity check compares contract halves, and the bullet below about newly-arrived contracts only fires for a contract you did not have. A project half that is intact and a project half that is current are different claims, and every check here except this one measures the first. Read each line and decide — fill the section, adopt the rename, or decide your wording is the one you want. Deciding to do nothing is a fine answer; not knowing there was something to decide is what this closes.
 - **Every `runbook YOURS, merge by hand:` line from step 3 has been acted on.** That line is the one output of this procedure that no later check looks at: the integrity check compares contracts, and a runbook left at your version is a legitimate outcome the tooling cannot distinguish from a merge you meant to do and forgot. Read the diff and decide, per file:
 
   ```bash
@@ -182,12 +203,14 @@ rm -f wheelhouse/.template-source.bak
 An upgrade re-copies the contracts and the runbooks and reaches nothing else. If the change altered a convention — a path form, a command name, a label — then your generated files and your existing beads still speak the old one:
 
 - `CLAUDE.md`, `wheelhouse/ISA.md`, `wheelhouse/STARTUP.md`, and the `## This project` sections you just preserved;
-- open beads whose text cites paths or commands, especially long-lived ones filed at install.
+- every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install.
 
 ```bash
 git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ | grep -E '^[-+].*`[a-z/.]+`' | sort -u
-bd list --status open | head -20      # then read them for the old convention
+bd list --status open,in_progress,blocked,deferred --limit 0   # then read them for the old convention
 ```
+
+**Every unclosed state, not just `open`.** `bd list --status open` means the stored status `open` and nothing else, so a bead someone has claimed is invisible to it — and the beads most likely to carry an old dialect, the long-lived ones filed at install, are also the ones most likely to be claimed. Measured on the graph this fix was written from: `--status open` printed `No issues found.` while four unclosed beads existed, all `in_progress`. Comma-separated is the form to use; `bd` 1.2.2 documents that repeating `-s` silently overwrites the previous value rather than accumulating. Not `--all`, which adds every closed bead — those are history, and nobody is going to act on their text again. `--limit 0` because `bd list` defaults to 50 and a sweep that stops early is the same vacuous check in a different costume.
 
 Fix what you find, in the same commit as the upgrade. This is manual on purpose — a convention change is exactly the kind of thing that needs a human deciding what it means in each place it appears.
 
