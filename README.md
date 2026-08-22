@@ -126,6 +126,10 @@ The full procedure is [`runbooks/UPGRADE.md`](runbooks/UPGRADE.md), which instal
 
 Your install records its baseline in `wheelhouse/.template-source`: the template's remote, the commit installed, and when. Upgrades add an `upgraded=` line and leave `installed=` alone, because when you started and when you last upgraded are different facts.
 
+## Pairs well with an intent layer
+
+The commander seat is a plain Claude Code session, and it works fine as exactly that. It also pairs well with personal-AI-infrastructure tooling on the commander's side — a layer that holds your goals and context above any one task graph, in the vein of Daniel Miessler's [LifeOS](https://github.com/danielmiessler/LifeOS) (formerly PAI, the Personal AI Infrastructure). The fleet executes; a layer like that helps decide which hill is worth climbing, and keeps verification discipline on the human side of the loop. Nothing in this template requires it.
+
 ## Credit
 
 The shape this template installs — a standing fleet of agent seats over a shared work graph, under a human commander — is Steve Yegge's, from his essay [*The Shape of Things to Come*](https://yegge.ai/essays/the-shape-of-things-to-come/). This repo is one working implementation of that idea, grown on a real project; the idea is his.
