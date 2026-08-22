@@ -17,7 +17,9 @@
 # each fleet under its own seat root, and with both under the shared default an
 # install predating the namespace uses. It asserts the scoped run ignores the
 # sibling fleet AND that the shared one does not — a guard whose failure state
-# is never exercised is a guard nobody has seen work.
+# is never exercised is a guard nobody has seen work. It also runs the shared
+# root a third way, reached by SEATS_ROOT over a recorded namespace, because the
+# scope is the same and the run therefore has to say so.
 #
 # The last phase is a canary. It sabotages a COPY of the script and checks that
 # these tests notice. A suite that passes everything, including a script with
@@ -280,6 +282,27 @@ else fail "namespaced: this commander was written into the sibling's fleet"; fi
 
 if says "beta-worker-1"; then fail "namespaced: the sibling fleet's seat was even considered"
 else pass "namespaced: the sibling fleet's seat is never enumerated"; fi
+
+if says "belonging to another wheelhouse"; then fail "namespaced: a scoped root still warned about machine-wide scope"
+else pass "namespaced: a scoped root does not warn — the warning is about the shared root, not about every run"; fi
+
+# 4b'. THE OVERRIDE AIMED BACK AT THE SHARED ROOT. A recorded namespace does not
+# decide the scope; the path does. SEATS_ROOT set to the shared root is the same
+# machine-wide scope as the fallback, and the warning used to be gated on the
+# fallback branch, so precisely the operator who typed the wide root got silence.
+# The preflight still refuses here — this asserts the legibility, not the tooth.
+build_two_fleet_fixture shared
+printf 'source=fixture\ncommit=fixture\nnamespace=alpha\n' > "$TSRC"
+OUT="$(env HOME="$HOME_FIX" MAIN_SESSIONS="$MAIN" PROJECT_CWD="$CWD" \
+           TEMPLATE_SOURCE="$TSRC" SEATS_ROOT="$HOME_FIX/.claude-seats" \
+           "$SCRIPT" 2>&1)"; RC=$?
+if says "SEATS_ROOT was set to the shared root" && says "belonging to another wheelhouse"; then
+  pass "shared root by override: the run warns even though a namespace is recorded"
+else fail "shared root by override: no warning — the wide scope was chosen in silence"; fi
+
+if says "no namespace= is recorded"; then
+  fail "shared root by override: warns in the fallback's words, which are untrue here"
+else pass "shared root by override: the warning names the override, not a missing namespace"; fi
 
 # 4c. THE SECOND TOOTH — the refusal, on the machine the first tooth cannot
 # help: one shared root, both fleets inside it, which is every install that has

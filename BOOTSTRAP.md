@@ -442,9 +442,13 @@ Run each of these and paste what it prints:
   ```bash
   NS=$(sed -n 's/^namespace=//p' wheelhouse/.template-source)
   test -n "$NS" || echo "FAIL no namespace= recorded in wheelhouse/.template-source"
-  grep -q "$NS" wheelhouse/fleet/SEATS.md || echo "FAIL SEATS.md does not carry the namespace '$NS'"
+  awk '/^### Seat namespace$/{f=1;next} /^### /{f=0} f' wheelhouse/fleet/SEATS.md \
+    | grep -qE "claude-seats-$NS([^A-Za-z0-9_-]|\$)" \
+    || echo "FAIL SEATS.md's '### Seat namespace' does not record the root for '$NS'"
   awk '/^### Roster$/{f=1;next} /^### /{f=0} f' wheelhouse/fleet/SEATS.md | grep '`'
   ```
+
+  **Both halves of that middle check are load-bearing, and it is a comparison rather than a search.** Scoped to the section, because the namespace is usually a word this file says anyway — the project's own name — so a bare `grep "$NS" SEATS.md` passes on the prose, on a roster name, on the contract half, on any sentence that happens to mention the project. It answers "does this string occur" when the question is "is this string *recorded*", and the install it is meant to catch — a namespace machine-recorded but never written into the human record — is exactly the one where the string is somewhere in the file regardless. Matched on the ROOT rather than the bare namespace, because the unfilled section is an HTML comment containing `$HOME/.claude-seats-<namespace>`, and a namespace like `seats` is a substring of the placeholder that was never replaced. `claude-seats-$NS` followed by a non-name character is present only once the value is filled in, and it does not confuse this project with a sibling whose namespace extends it.
 
   Read that last listing rather than counting it: every seat name it prints, the commander line excepted, should begin with the namespace. A roster whose names do not carry it is an install where the prefix half of the scheme is absent, and the absence is invisible until two fleets share a machine.
 - Confirm every file you created exists and is non-empty.

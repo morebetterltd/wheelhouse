@@ -76,7 +76,11 @@
 # The fallback is deliberately the old shared path, so an install that predates
 # the namespace keeps working unchanged while it is the only fleet on its
 # machine. It is the collision state the moment a second one arrives:
-# wheelhouse/runbooks/UPGRADE.md carries the migration.
+# wheelhouse/runbooks/UPGRADE.md carries the migration. An unfiltered run on that
+# shared path warns, and it warns on the PATH rather than on how the path was
+# arrived at -- SEATS_ROOT pointed back at it is the same scope as never having
+# recorded a namespace, and a scope this wide should not be quieter for having
+# been asked for.
 #
 # THE FOREIGN-SEAT PREFLIGHT is what makes that fallback survivable, and it is
 # the check that would have caught the 2026-08-22 machine. Before anything is
@@ -114,7 +118,9 @@ TEMPLATE_SOURCE="${TEMPLATE_SOURCE:-$(dirname "${BASH_SOURCE[0]}")/../.template-
 
 # The seat root, and WHERE IT CAME FROM. The provenance is reported rather than
 # inferred later: an environment override, a derived root and the bare fallback
-# are three different situations and only the last is a warning.
+# are three different situations, and the warning below turns on the ROOT rather
+# than on which of the three produced it — an override aimed back at the shared
+# path is the same scope as the fallback, and used to pass in silence.
 NAMESPACE=""
 SEATS_ROOT_FALLBACK=""
 [ -r "$TEMPLATE_SOURCE" ] && NAMESPACE="$(sed -n 's/^namespace=//p' "$TEMPLATE_SOURCE" | head -1)"
@@ -128,6 +134,9 @@ else
   SEATS_ROOT_FROM="the shared fallback — no namespace= recorded for this install"
   SEATS_ROOT_FALLBACK=1
 fi
+# Scope is a property of the path, not of how the path was chosen.
+SEATS_ROOT_SHARED=""
+[ "${SEATS_ROOT%/}" = "$HOME/.claude-seats" ] && SEATS_ROOT_SHARED=1
 
 DRY_RUN=0
 COMMANDER_PID=""
@@ -230,14 +239,21 @@ fi
 # The scope this run is about to wire, stated before it wires anything.
 say "seat root: $SEATS_ROOT"
 say "           (from $SEATS_ROOT_FROM)"
-if [ -n "$SEATS_ROOT_FALLBACK" ] && [ -z "$SEATS_NAMED" ]; then
-  warn "wire-seats: no namespace= is recorded for this install, so this is the"
-  warn "            shared fallback root and every seat directory under it is in"
-  warn "            scope — including any belonging to another wheelhouse on this"
-  warn "            machine. Record one (wheelhouse/fleet/SEATS.md, '### Seat"
-  warn "            namespace'), set SEATS_ROOT, or name this project's seats as"
-  warn "            arguments. The preflight below refuses on any foreign seat it"
-  warn "            can identify, but it can only see seats that are RUNNING."
+if [ -n "$SEATS_ROOT_SHARED" ] && [ -z "$SEATS_NAMED" ]; then
+  if [ -n "$SEATS_ROOT_FALLBACK" ]; then
+    warn "wire-seats: no namespace= is recorded for this install, so this run is on"
+    warn "            the shared root."
+  else
+    warn "wire-seats: SEATS_ROOT was set to the shared root, so this run is on it"
+    warn "            whatever this install has recorded."
+  fi
+  warn "            Every seat directory under it is in scope — including any"
+  warn "            belonging to another wheelhouse on this machine. Record a"
+  warn "            namespace (wheelhouse/fleet/SEATS.md, '### Seat namespace'),"
+  warn "            point SEATS_ROOT at this project's own root, or name this"
+  warn "            project's seats as arguments. The preflight below refuses on"
+  warn "            any foreign seat it can identify, but it can only see seats"
+  warn "            that are RUNNING."
 fi
 
 # --- foreign-seat preflight -------------------------------------------------
