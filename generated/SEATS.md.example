@@ -11,9 +11,10 @@ This specimen shows only what the interview writes: the roster below, and the se
 ### Seat namespace
 
 `ebb` — seat root `$HOME/.claude-seats-ebb`, and the prefix every seat name below
-carries. Derived once at the install interview. The launch blocks in
-`wheelhouse/STARTUP.md` export that root, and `wire-seats.sh` is invoked with it;
-if any of those three disagree, this line is the one that is right.
+carries. Derived once at the install interview and recorded as `namespace=ebb`
+in `wheelhouse/.template-source`, which is where `wire-seats.sh` reads it. This
+line and that one must say the same string; `.template-source` is the copy a
+program acts on, so it is the one that decides.
 
 ### Roster
 

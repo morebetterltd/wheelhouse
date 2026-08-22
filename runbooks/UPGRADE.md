@@ -216,13 +216,25 @@ Fix what you find, in the same commit as the upgrade. This is manual on purpose 
 
 ### The seat namespace, if you installed before it existed
 
-Every install made before 2026-08-22 is in this position, so this is a normal starting point and not a sign anything is wrong. Those installs put every seat under one shared `$HOME/.claude-seats/`, and `wire-seats.sh` defaulted to enumerating it. On a machine running one wheelhouse that is correct and keeps working — the default is still the shared path for exactly this reason, and **an upgrade does not break your fleet.** It becomes a collision the moment a second wheelhouse lands on the same machine: the newcomer's wiring sweeps up your seats, and a dispatch to `seat-worker-1` can be answered by either project's worker.
+Every install made before 2026-08-22 is in this position, so this is a normal starting point and not a sign anything is wrong. Those installs put every seat under one shared `$HOME/.claude-seats/`, and `wire-seats.sh` defaulted to enumerating it. On a machine running one wheelhouse that is correct and keeps working — the fallback is still the shared path for exactly this reason, and **an upgrade does not break your fleet.** It becomes a collision the moment a second wheelhouse lands on the same machine, and it runs both ways: the newcomer's wiring sweeps up your seats, and the newcomer's COMMANDER is copied into your seats' registries, so your running workers become addressable by and will report to a commander from another project.
+
+**What the upgrade gives you before you do anything.** The new `wire-seats.sh` carries a foreign-seat preflight: it reads the cwd each in-scope seat's live session recorded and refuses the whole run, writing nothing, if any of them is not this project's root. That protects a still-shared root against the case above, and it is the reason this migration is deferrable rather than urgent. It only sees RUNNING seats, so it is a backstop and not a substitute for the move.
 
 Step 4 above will have printed `project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Seat namespace`. That line is this migration announcing itself, and here is what to do with it.
 
 Do it now if this machine already hosts, or is about to host, more than one wheelhouse. Otherwise record the namespace and defer the move; the value costs nothing until a second fleet arrives, and having it written down is what makes the move a rename rather than an investigation.
 
-1. **Choose the namespace and write it down.** Short, lowercase, filesystem-safe — this project's own name is almost always right. Add `### Seat namespace` to `wheelhouse/fleet/SEATS.md`'s project half, above `### Roster`, carrying the namespace and the root it names, `$HOME/.claude-seats-<namespace>`. This is the one recorded value; everything below is derived from it and must agree with it.
+1. **Choose the namespace and write it down, in the file the script reads.** Short, lowercase, filesystem-safe — this project's own name is almost always right. `wire-seats.sh` derives its seat root from `namespace=` in `wheelhouse/.template-source`, so that line is the one that changes behaviour; until it exists the script uses the shared fallback.
+
+   ```bash
+   grep -q '^namespace=' wheelhouse/.template-source \
+     && sed -i.bak "s|^namespace=.*|namespace=<the namespace>|" wheelhouse/.template-source \
+     || echo "namespace=<the namespace>" >> wheelhouse/.template-source
+   rm -f wheelhouse/.template-source.bak
+   grep '^namespace=' wheelhouse/.template-source
+   ```
+
+   Your `.template-source` predates the field, so the append branch is the one that will run — the `grep -q` guard is there so re-running this does not add a second line. Then add `### Seat namespace` to `wheelhouse/fleet/SEATS.md`'s project half, above `### Roster`, carrying the same string and the root it names, `$HOME/.claude-seats-<namespace>`. That section is the human record; `.template-source` is the one a program acts on, and it decides.
 2. **Move the seat directories, with the seats shut down.** A seat is a running session holding its configuration directory open; move it underneath a live one and you have a seat writing into a path that no longer exists. Close the terminals first.
 
    ```bash

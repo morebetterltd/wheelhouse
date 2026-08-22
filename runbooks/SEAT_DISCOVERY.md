@@ -20,24 +20,36 @@ Use plain `cp`. Symlinks are ignored by discovery.
 
 ```bash
 cd /path/to/project-root
-export SEATS_ROOT="$HOME/.claude-seats-<namespace>"   # from wheelhouse/fleet/SEATS.md, '### Seat namespace'
 wheelhouse/runbooks/wire-seats.sh --dry-run    # read-only: prints the plan
 wheelhouse/runbooks/wire-seats.sh
 ```
 
-`SEATS_ROOT` is this project's seat root and is part of the script's interface,
-not a testing hook. With no seat names the script wires every directory under
-it, so pointing it at the shared default on a machine that hosts a second
-wheelhouse wires that wheelhouse's seats into this commander's registry — and a
-dispatch to `seat-worker-1` then lands on whichever project's worker answered.
-The script says which root it is using on every run and warns when the root is
-the unscoped default; `wire-seats.sh --help` carries the full rationale. Existing
-installs that predate the namespace still work unchanged on the default while
-they are the only fleet on their machine — `UPGRADE.md`'s step 7 is the move.
+**Nothing to pass, and that is deliberate.** The script derives this project's
+seat root from `namespace=` in `wheelhouse/.template-source` and prints which
+root it used and where the value came from. `SEATS_ROOT` in the environment
+overrides that derivation and is part of the interface, not a testing hook — it
+is what a relocated seat tree or an install with no namespace recorded yet uses.
+With no seat names the script wires every directory under whichever root it
+settled on, so a root shared with a second wheelhouse puts that wheelhouse's
+seats in scope. `wire-seats.sh --help` carries the full rationale.
+
+**Two teeth, and only the second one bites.** The derived root narrows what is
+in scope; the FOREIGN-SEAT PREFLIGHT refuses what is in scope and does not
+belong. Before copying anything, the script reads the cwd recorded by every
+in-scope seat's live sessions — a seat must be started at its project root, so
+that cwd is which fleet it is in — and if any of them is not this project's, it
+names the seat and the path and refuses the whole run, having written nothing.
+There is no flag to force past it: the two things it tells you to do, scope the
+root or name your seats, are the fix. It sees only RUNNING seats, because a
+seat that is not running is skipped anyway and can do no harm.
+
+Existing installs that predate the namespace go on working on the shared
+fallback while they are the only fleet on their machine, and the preflight is
+what protects them the day they are not — `UPGRADE.md`'s step 7 is the move.
 
 **The commander cannot run this for you.** An agent writing into its own session registry is blocked by the permission classifier, so the fleet cannot wire itself — this is an operator step by construction, or a launcher's, and no amount of asking the commander nicely will change it.
 
-Seat names come from the roster in `wheelhouse/fleet/SEATS.md`, which is the one authoritative list — the roster table, not the declined seats recorded beneath it, which are the seats this project does not have. Do not invent names here or copy them from an example: a seat whose name does not match its roster entry is a seat the commander cannot address, and the failure looks exactly like an idle seat. With no arguments the script wires every seat directory under `SEATS_ROOT`, which is this project's seats and no other once that root is this project's. Naming them explicitly is the belt to that braces, and the only protection an install still on the shared default has:
+Seat names come from the roster in `wheelhouse/fleet/SEATS.md`, which is the one authoritative list — the roster table, not the declined seats recorded beneath it, which are the seats this project does not have. Do not invent names here or copy them from an example: a seat whose name does not match its roster entry is a seat the commander cannot address, and the failure looks exactly like an idle seat. With no arguments the script wires every seat directory under the root it settled on, which is this project's seats and no other once a namespace is recorded. Naming them explicitly narrows it further, and is worth doing on an install still on the shared fallback:
 
 ```bash
 wheelhouse/runbooks/wire-seats.sh {{SEAT_NAMES}}   # space-separated; from the roster in wheelhouse/fleet/SEATS.md
@@ -46,6 +58,8 @@ wheelhouse/runbooks/wire-seats.sh {{SEAT_NAMES}}   # space-separated; from the r
 Registrations are per-process, so re-run this whenever a seat restarts. The script is idempotent — it reports `already current` for what is already in place — and stale copies of dead processes are harmless.
 
 ### What the script refuses to do
+
+It will not wire a seat that belongs to another project, and it will not wire the ones that do belong while it refuses that one — the preflight above is all-or-nothing on purpose, because a refusal partway through the loop leaves half a fleet joined to a stranger. Note what the transcript-ownership rule below does NOT cover: a foreign seat sitting under a shared root has its transcript inside that root, so ownership reports it correctly owned. Only cwd separates the two fleets, which is why the preflight reads cwd and not ownership. (Credit for that finding and for this check: Releaf's seat-worker-2, 2026-08-22.)
 
 It will not guess which session is the commander. Every seat runs from the same project root, so "the newest live session whose cwd is this project" picks whichever session started last: restart a seat after the commander and that seat becomes the fleet's commander, wiring every other seat to a peer. Instead the script asks which config directory owns each session, by finding the transcript that session writes — the one record the wiring itself does not copy. When ownership cannot be established, or when two sessions could both be the commander, it stops and asks for `--commander-pid` rather than picking one.
 

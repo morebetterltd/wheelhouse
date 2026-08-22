@@ -21,13 +21,17 @@ The folder's `CLAUDE.md` makes this session the commander. No launcher required.
 
 Each seat is a terminal you open and leave open — the session in it IS the seat. One terminal per seat, one account per seat. `wheelhouse/fleet/SEATS.md`'s "Launching a seat" is the full procedure, including the `claude` check, the first-run login, the standing prompt to paste as the first message, and what the seat does afterwards. The blocks below are that procedure with this project's root, seat root and seat names already filled in.
 
-This project's seat root is `$HOME/.claude-seats-ebb` and its seat names are prefixed `ebb-`, both from `### Seat namespace` in `wheelhouse/fleet/SEATS.md`. That root is per-project because this machine may host another wheelhouse; the prefix is per-project because the commander's registry is shared even when the roots are not.
+This project's seat root is `$HOME/.claude-seats-ebb` and its seat names are prefixed `ebb-` — namespace `ebb`, recorded as `namespace=ebb` in `wheelhouse/.template-source` and written out in `### Seat namespace` in `wheelhouse/fleet/SEATS.md`. That root is per-project because this machine may host another wheelhouse; the prefix is per-project because the commander's registry is shared even when the roots are not.
+
+Each block ends with the check from the launch procedure: it prints the project roots of any sessions the directory already holds. Nothing, or `/Users/you/code/ebb`, is fine. Any other path is another fleet's seat — stop, do not run `claude` against it.
 
 `ebb-worker-1`, on account `ebb-fleet-1`:
 
 ```bash
-export SEATS_ROOT="$HOME/.claude-seats-ebb"
-export CLAUDE_CONFIG_DIR="$SEATS_ROOT/ebb-worker-1"
+export CLAUDE_CONFIG_DIR="$HOME/.claude-seats-ebb/ebb-worker-1"
+if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
+  sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
+fi
 cd ~/code/ebb
 claude
 ```
@@ -35,8 +39,10 @@ claude
 `ebb-reviewer`, on account `ebb-fleet-2`:
 
 ```bash
-export SEATS_ROOT="$HOME/.claude-seats-ebb"
-export CLAUDE_CONFIG_DIR="$SEATS_ROOT/ebb-reviewer"
+export CLAUDE_CONFIG_DIR="$HOME/.claude-seats-ebb/ebb-reviewer"
+if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
+  sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
+fi
 cd ~/code/ebb
 claude
 ```
@@ -49,12 +55,11 @@ Per-seat config directories isolate each seat's session registry, so until the r
 
 ```bash
 cd ~/code/ebb
-export SEATS_ROOT="$HOME/.claude-seats-ebb"
 wheelhouse/runbooks/wire-seats.sh --dry-run   # read-only: prints the plan
 wheelhouse/runbooks/wire-seats.sh
 ```
 
-`SEATS_ROOT` is not optional here. Without it the script enumerates the shared default root, and on a machine hosting a second wheelhouse that wires the other project's seats into this commander's registry.
+Nothing to pass: the script reads `namespace=ebb` out of `wheelhouse/.template-source`, prints the root it settled on, and refuses the run if any seat in scope turns out to belong to another project on this machine.
 
 Re-run it whenever a seat restarts. Then ask the commander for a roll call before it dispatches anything: wiring makes seats reachable but anonymous — registry rows carry derived names like `ebb-4f`, not seat names — and the roll call is what binds the map, then asserts no name in it resolves to two live rows. Finally have each seat message the commander unprompted, by name; a round trip only proves the commander can reach the seat. A seat that cannot answer gets relaunched, then re-wired and re-rolled. Full procedure and the reasoning: `wheelhouse/runbooks/SEAT_DISCOVERY.md`.
 

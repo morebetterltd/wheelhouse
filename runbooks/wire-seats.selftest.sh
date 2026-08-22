@@ -158,30 +158,39 @@ if [ $RC -ne 0 ] && says "several live non-seat sessions"; then pass "two possib
 else fail "picked a commander with two candidates (exit $RC)"; fi
 
 # --- two fleets on one machine ----------------------------------------------
-# The same two fleets, the same four processes, laid out two ways: as a
-# pre-namespace machine where both fleets' seats sit under the shared default
-# root, and as a namespaced one where each fleet has its own. HOME is pointed
-# at the fixture so the SHARED case exercises wire-seats.sh's real default
-# expression ($HOME/.claude-seats) rather than a stand-in for it.
-build_two_fleet_fixture() {   # $1 = shared | scoped
+# Two projects, two roots or one, four processes. THIS project is alpha, with
+# its own project directory; the sibling wheelhouse is beta, whose seat records
+# a DIFFERENT cwd — which is the only thing on disk that separates the two
+# fleets under a shared root, and therefore what the preflight reads.
+#
+# HOME is pointed at the fixture throughout, so the roots the script computes
+# for itself — the derived $HOME/.claude-seats-<namespace> and the shared
+# $HOME/.claude-seats fallback — are its real expressions and not stand-ins.
+# The namespace is recorded the way an install records it, in a .template-source
+# handed to the script through TEMPLATE_SOURCE.
+build_two_fleet_fixture() {   # $1 = shared | namespaced
   [ -n "$PIDS" ] && kill $PIDS 2>/dev/null
   PIDS=""
   [ -n "$FIX" ] && rm -rf "$FIX"
   FIX="$(mktemp -d)"
   HOME_FIX="$FIX/home"
   MAIN="$FIX/config/sessions"
-  CWD="$FIX/project"
+  CWD="$FIX/project-alpha"      # this project
+  CWD_B="$FIX/project-beta"     # the sibling wheelhouse
   SLUG="fixture-slug"
-  mkdir -p "$MAIN" "$FIX/config/projects/$SLUG" "$CWD" "$HOME_FIX"
+  TSRC="$FIX/template-source"
+  mkdir -p "$MAIN" "$FIX/config/projects/$SLUG" "$CWD" "$CWD_B" "$HOME_FIX"
 
   if [ "$1" = shared ]; then
     A_DIR="$HOME_FIX/.claude-seats/alpha-worker-1"
     B_DIR="$HOME_FIX/.claude-seats/beta-worker-1"
-    SEATS_ARG_ROOT=""                             # unset: the real default runs
+    : > "$TSRC"                                   # no namespace= : the fallback runs
+    EXPECT_ROOT="$HOME_FIX/.claude-seats"
   else
     A_DIR="$HOME_FIX/.claude-seats-alpha/alpha-worker-1"
     B_DIR="$HOME_FIX/.claude-seats-beta/beta-worker-1"
-    SEATS_ARG_ROOT="$HOME_FIX/.claude-seats-alpha"
+    printf 'source=fixture\ncommit=fixture\nnamespace=alpha\n' > "$TSRC"
+    EXPECT_ROOT="$HOME_FIX/.claude-seats-alpha"
   fi
 
   spawn; CMD=$SPAWNED
@@ -192,63 +201,103 @@ build_two_fleet_fixture() {   # $1 = shared | scoped
   : > "$FIX/config/projects/$SLUG/sid-cmd.jsonl"
   mkdir -p "$A_DIR/sessions" "$A_DIR/projects/$SLUG" "$B_DIR/sessions" "$B_DIR/projects/$SLUG"
   register "$A_DIR/sessions" "$A" "fixture-alpha" "sid-alpha"; : > "$A_DIR/projects/$SLUG/sid-alpha.jsonl"
-  register "$B_DIR/sessions" "$B" "fixture-beta"  "sid-beta";  : > "$B_DIR/projects/$SLUG/sid-beta.jsonl"
+  # register() writes $CWD into the row, and the sibling's row must carry the
+  # OTHER project's cwd — that difference is the whole subject of 4c.
+  CWD_SAVE="$CWD"; CWD="$CWD_B"
+  register "$B_DIR/sessions" "$B" "fixture-beta" "sid-beta"
+  CWD="$CWD_SAVE"
+  : > "$B_DIR/projects/$SLUG/sid-beta.jsonl"
 
-  # Assert the subject exists before anything measures its absence: an
+  # Assert the subjects exist before anything measures their absence: an
   # un-wired sibling fleet and a sibling fleet that was never built look
-  # identical from the other end of this test.
+  # identical from the other end of this test. The cwd is asserted too — it is
+  # the discriminator under test, and a fixture where both fleets accidentally
+  # share one would pass the refusal checks by never posing the question.
   [ -s "$B_DIR/sessions/$B.json" ] || fail "two-fleet fixture: the sibling fleet's registration was never written"
   [ -s "$A_DIR/sessions/$A.json" ] || fail "two-fleet fixture: this fleet's registration was never written"
+  grep -q "\"cwd\":\"$CWD_B\"" "$B_DIR/sessions/$B.json" \
+    || fail "two-fleet fixture: the sibling's registration does not record a foreign cwd"
 }
 
-run_fleet() {
-  if [ -n "$SEATS_ARG_ROOT" ]; then
-    OUT="$(env HOME="$HOME_FIX" MAIN_SESSIONS="$MAIN" PROJECT_CWD="$CWD" \
-               SEATS_ROOT="$SEATS_ARG_ROOT" "$SCRIPT" "$@" 2>&1)"; RC=$?
-  else
-    OUT="$(env -u SEATS_ROOT HOME="$HOME_FIX" MAIN_SESSIONS="$MAIN" PROJECT_CWD="$CWD" \
-               "$SCRIPT" "$@" 2>&1)"; RC=$?
-  fi
+run_fleet() {   # $1 = script to run; rest = its arguments
+  local s="$1"; shift
+  OUT="$(env -u SEATS_ROOT HOME="$HOME_FIX" MAIN_SESSIONS="$MAIN" \
+             PROJECT_CWD="$CWD" TEMPLATE_SOURCE="$TSRC" "$s" "$@" 2>&1)"; RC=$?
 }
 
 phase "4. two fleets on one machine"
 
-# 4a. THE FAILURE STATE, exercised rather than described. This is the machine
-# every pre-namespace install is running on: one shared root, both fleets in it.
+# 4a. THE FAILURE STATE, exercised rather than described, and exercised BOTH
+# WAYS. The reverse leg is the worse half and the one that gets left out of the
+# description: it does not merely let the newcomer see the incumbent's seats, it
+# writes the newcomer's COMMANDER into a running fleet's registries. Run against
+# a copy of the script with the preflight cut out, which is what every install
+# before this check had. (Credit: bidirectional reproduction is Releaf's
+# seat-worker-2, 2026-08-22.)
 build_two_fleet_fixture shared
-run_fleet
-if [ $RC -eq 0 ]; then pass "shared default: run exits 0"
-else fail "shared default: run exited $RC"; fi
-
-if [ -e "$B_DIR/sessions/$CMD.json" ] && [ -e "$MAIN/$B.json" ]; then
-  pass "shared default: the SIBLING fleet's seat was wired — the collision this scoping prevents"
+NOTEETH="$FIX/wire-seats-no-preflight.sh"
+sed 's|^foreign_cwd_preflight$|:|' "$SCRIPT" > "$NOTEETH"
+chmod +x "$NOTEETH"
+if cmp -s "$SCRIPT" "$NOTEETH"; then
+  fail "4a: could not remove the preflight — its call no longer matches the pattern this test cuts, so 4a and 4c below prove nothing"
 else
-  fail "shared default: the sibling fleet was NOT wired, so this test proves nothing about scoping"
+  run_fleet "$NOTEETH"
+  if [ $RC -eq 0 ]; then pass "no preflight, shared root: run exits 0"
+  else fail "no preflight, shared root: run exited $RC"; fi
+
+  if [ -e "$MAIN/$B.json" ]; then
+    pass "no preflight: FORWARD leg crossed — the sibling's seat reached this commander's registry"
+  else fail "no preflight: the forward leg did not cross, so this test proves nothing"; fi
+
+  if [ -e "$B_DIR/sessions/$CMD.json" ]; then
+    pass "no preflight: REVERSE leg crossed — this commander was written into the sibling's running fleet"
+  else fail "no preflight: the reverse leg did not cross, so this test proves nothing"; fi
+
+  if says "no namespace= is recorded"; then pass "no preflight: the run warns that its root is the shared fallback"
+  else fail "no preflight: no warning that every seat on the machine was in scope"; fi
 fi
 
-if says "SEATS_ROOT is unset"; then pass "shared default: the run warns that its root is unscoped"
-else fail "shared default: no warning that every seat on the machine was in scope"; fi
+# 4b. THE FIRST TOOTH — a root derived from the recorded namespace. Nothing is
+# passed to the script: it reads namespace=alpha and computes the root itself.
+build_two_fleet_fixture namespaced
+run_fleet "$SCRIPT"
+if [ $RC -eq 0 ]; then pass "namespaced: run exits 0"
+else fail "namespaced: run exited $RC"; fi
 
-# 4b. THE GUARD. Same fleets, same processes, each fleet under its own root.
-build_two_fleet_fixture scoped
-run_fleet
-if [ $RC -eq 0 ]; then pass "scoped root: run exits 0"
-else fail "scoped root: run exited $RC"; fi
+if says "seat root: $EXPECT_ROOT" && says "namespace=alpha"; then
+  pass "namespaced: the root was DERIVED from the recorded namespace, not passed in"
+else fail "namespaced: the run did not derive its root from namespace="; fi
 
 if [ -e "$MAIN/$A.json" ] && [ -e "$A_DIR/sessions/$CMD.json" ]; then
-  pass "scoped root: this fleet's seat is wired, both legs"
-else fail "scoped root: this fleet's seat was not wired"; fi
+  pass "namespaced: this fleet's seat is wired, both legs"
+else fail "namespaced: this fleet's seat was not wired"; fi
 
-if [ ! -e "$B_DIR/sessions/$CMD.json" ] && [ ! -e "$MAIN/$B.json" ]; then
-  pass "scoped root: the sibling fleet is untouched — neither leg crossed"
-else fail "scoped root: the sibling fleet was wired anyway"; fi
+if [ ! -e "$MAIN/$B.json" ]; then pass "namespaced: forward leg did not cross to the sibling"
+else fail "namespaced: the sibling's seat reached this commander's registry"; fi
 
-if says "beta-worker-1"; then fail "scoped root: the sibling fleet's seat was even considered"
-else pass "scoped root: the sibling fleet's seat is never enumerated"; fi
+if [ ! -e "$B_DIR/sessions/$CMD.json" ]; then pass "namespaced: reverse leg did not cross to the sibling"
+else fail "namespaced: this commander was written into the sibling's fleet"; fi
 
-if says "seat root: $HOME_FIX/.claude-seats-alpha" && ! says "SEATS_ROOT is unset"; then
-  pass "scoped root: the run states its root and raises no unscoped warning"
-else fail "scoped root: the run did not state a scoped root"; fi
+if says "beta-worker-1"; then fail "namespaced: the sibling fleet's seat was even considered"
+else pass "namespaced: the sibling fleet's seat is never enumerated"; fi
+
+# 4c. THE SECOND TOOTH — the refusal, on the machine the first tooth cannot
+# help: one shared root, both fleets inside it, which is every install that has
+# not migrated. Same fixture as 4a, real script.
+build_two_fleet_fixture shared
+INV_BEFORE="$(find "$MAIN" "$HOME_FIX" -name '*.json' | sort | tr '\n' ' ')"
+run_fleet "$SCRIPT"
+if [ $RC -ne 0 ]; then pass "shared root: the run REFUSES rather than wiring a foreign seat"
+else fail "shared root: the run exited 0 and wired across fleets"; fi
+
+if says "belongs to a different project" && says "beta-worker-1" && says "$CWD_B"; then
+  pass "shared root: the refusal names the seat and the project it actually serves"
+else fail "shared root: the refusal did not say which seat or whose"; fi
+
+if [ "$(find "$MAIN" "$HOME_FIX" -name '*.json' | sort | tr '\n' ' ')" = "$INV_BEFORE" ] \
+   && [ ! -e "$B_DIR/sessions/$CMD.json" ] && [ ! -e "$MAIN/$B.json" ]; then
+  pass "shared root: nothing was written — the refusal is not a partial wiring"
+else fail "shared root: the refusal still wrote something"; fi
 
 phase "5. canary — can these checks detect a broken script?"
 build_fixture

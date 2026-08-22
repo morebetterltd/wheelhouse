@@ -43,19 +43,27 @@
 #                       other once SEATS_ROOT is set per project -- see below.
 #
 # SEATS_ROOT -- this project's seat root, and an INTERFACE rather than a test
-# hook. Set it to what wheelhouse/fleet/SEATS.md's `### Seat namespace` records,
-# which is the same value the seats' own CLAUDE_CONFIG_DIR exports carry:
+# hook. It is DERIVED, not remembered: this script reads `namespace=` out of
+# wheelhouse/.template-source, one level up from itself, and uses
+# $HOME/.claude-seats-<namespace>. Set SEATS_ROOT in the environment to override
+# that; the override is what a fixture, a relocated seat tree, or an install
+# whose namespace is not yet recorded uses.
 #
 #   SEATS_ROOT="$HOME/.claude-seats-<namespace>" wheelhouse/runbooks/wire-seats.sh
 #
+# The derivation matters more than the override. What this whole file guards
+# against is a machine hosting two wheelhouses, and the one thing that failed
+# there was a human remembering something -- so the value the operator can
+# forget to pass is read off the install instead.
+#
 # Why it is per-project. This script ENUMERATES the root: with no seat names it
 # wires every directory under it. One machine can host several wheelhouses, and
-# under the shared default below every one of them sees every other one's seats
-# -- so a second fleet's wiring copies the first fleet's registrations into its
-# own commander's registry, and a dispatch to `seat-worker-1` can land on
-# another project's worker. Observed on a real machine, 2026-08-22: a wheelhouse
-# being installed found another wheelhouse's four seat directories already
-# sitting in the place it was about to use.
+# under the shared fallback below every one of them sees every other one's
+# seats -- so a second fleet's wiring copies the first fleet's registrations
+# into its own commander's registry, and a dispatch to `seat-worker-1` can land
+# on another project's worker. Observed on a real machine, 2026-08-22: a
+# wheelhouse being installed found another wheelhouse's four seat directories
+# already sitting in the place it was about to use.
 #
 # The root is half the fix and the seat NAMES are the other half. What this
 # script writes into is MAIN_SESSIONS, the commander's own registry, and that is
@@ -65,28 +73,61 @@
 # ADDRESSING crossing them, because two rows called `seat-worker-1` in one
 # registry are two rows the roll call cannot tell apart.
 #
-# The default is deliberately the old shared path, so an install that predates
+# The fallback is deliberately the old shared path, so an install that predates
 # the namespace keeps working unchanged while it is the only fleet on its
 # machine. It is the collision state the moment a second one arrives:
 # wheelhouse/runbooks/UPGRADE.md carries the migration.
 #
+# THE FOREIGN-SEAT PREFLIGHT is what makes that fallback survivable, and it is
+# the check that would have caught the 2026-08-22 machine. Before anything is
+# copied, every seat in scope has its LIVE registrations read for the cwd they
+# record. contracts/SEATS.md requires a seat to be started at its project root,
+# so a live registration whose cwd is not this project's is a seat belonging to
+# another wheelhouse -- and this script REFUSES the whole run rather than wiring
+# it. Live registrations only, because a dead or never-run seat is skipped
+# anyway and can do no harm; a registration whose cwd cannot be read is treated
+# as foreign, on the same "refuses to guess" principle as commander detection.
+#
+# There is no flag to override the refusal, because the two things it tells you
+# to do -- set SEATS_ROOT, or name your seats as arguments -- are the fix rather
+# than a way round it. The reason the check is needed at all even with a scoped
+# root: the transcript-ownership rule below CANNOT see this case. A foreign seat
+# sitting under a shared root has its transcript inside that root, so owner_of
+# reports it correctly owned; only cwd separates the two fleets. (Credit: this
+# check and that finding are Releaf seat-worker-2's, 2026-08-22.)
+#
 # Env overrides (all default to the real fleet; set them to point at a fixture
 # tree when testing):
-#   MAIN_SESSIONS   commander registry   default ~/.claude/sessions
-#   SEATS_ROOT      seat config dirs     default ~/.claude-seats (see above)
-#   PROJECT_CWD     commander's cwd      default two levels above this script
-#                                        (wheelhouse/runbooks/ -> project root)
+#   MAIN_SESSIONS    commander registry   default ~/.claude/sessions
+#   SEATS_ROOT       seat config dirs     default from namespace= (see above)
+#   PROJECT_CWD      commander's cwd      default two levels above this script
+#                                         (wheelhouse/runbooks/ -> project root)
+#   TEMPLATE_SOURCE  the install record   default one level above this script
+#                                         (wheelhouse/.template-source)
 
 set -euo pipefail
 shopt -s nullglob
 
 MAIN_SESSIONS="${MAIN_SESSIONS:-$HOME/.claude/sessions}"
-# Recorded before the default is applied: "the caller named a root" and "the
-# root happens to equal the default" are different facts, and only the first
-# says whether this project knows which seats are its own.
-SEATS_ROOT_GIVEN="${SEATS_ROOT:+1}"
-SEATS_ROOT="${SEATS_ROOT:-$HOME/.claude-seats}"
 PROJECT_CWD="${PROJECT_CWD:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+TEMPLATE_SOURCE="${TEMPLATE_SOURCE:-$(dirname "${BASH_SOURCE[0]}")/../.template-source}"
+
+# The seat root, and WHERE IT CAME FROM. The provenance is reported rather than
+# inferred later: an environment override, a derived root and the bare fallback
+# are three different situations and only the last is a warning.
+NAMESPACE=""
+SEATS_ROOT_FALLBACK=""
+[ -r "$TEMPLATE_SOURCE" ] && NAMESPACE="$(sed -n 's/^namespace=//p' "$TEMPLATE_SOURCE" | head -1)"
+if [ -n "${SEATS_ROOT:-}" ]; then
+  SEATS_ROOT_FROM="the environment"
+elif [ -n "$NAMESPACE" ]; then
+  SEATS_ROOT="$HOME/.claude-seats-$NAMESPACE"
+  SEATS_ROOT_FROM="namespace=$NAMESPACE recorded in $TEMPLATE_SOURCE"
+else
+  SEATS_ROOT="$HOME/.claude-seats"
+  SEATS_ROOT_FROM="the shared fallback — no namespace= recorded for this install"
+  SEATS_ROOT_FALLBACK=1
+fi
 
 DRY_RUN=0
 COMMANDER_PID=""
@@ -186,19 +227,54 @@ if [ ${#SEATS[@]} -eq 0 ]; then
 fi
 [ ${#SEATS[@]} -gt 0 ] || die "no seats found under $SEATS_ROOT"
 
-# The scope this run is about to wire, stated before it wires anything. An
-# unscoped root that is also unfiltered is the multi-fleet collision: this run
-# will wire every seat directory on the machine, whichever project it belongs
-# to. It is a warning and not a refusal because it is the correct behaviour for
-# the single-fleet machine every install predating the namespace is running on.
+# The scope this run is about to wire, stated before it wires anything.
 say "seat root: $SEATS_ROOT"
-if [ -z "$SEATS_ROOT_GIVEN" ] && [ -z "$SEATS_NAMED" ]; then
-  warn "wire-seats: SEATS_ROOT is unset, so this is the shared default root and"
-  warn "            every seat directory under it will be wired — including any"
-  warn "            belonging to another wheelhouse on this machine. Set this"
-  warn "            project's SEATS_ROOT (wheelhouse/fleet/SEATS.md, '### Seat"
-  warn "            namespace') or name its seats as arguments."
+say "           (from $SEATS_ROOT_FROM)"
+if [ -n "$SEATS_ROOT_FALLBACK" ] && [ -z "$SEATS_NAMED" ]; then
+  warn "wire-seats: no namespace= is recorded for this install, so this is the"
+  warn "            shared fallback root and every seat directory under it is in"
+  warn "            scope — including any belonging to another wheelhouse on this"
+  warn "            machine. Record one (wheelhouse/fleet/SEATS.md, '### Seat"
+  warn "            namespace'), set SEATS_ROOT, or name this project's seats as"
+  warn "            arguments. The preflight below refuses on any foreign seat it"
+  warn "            can identify, but it can only see seats that are RUNNING."
 fi
+
+# --- foreign-seat preflight -------------------------------------------------
+# The tooth. Everything above narrows what is in scope; this refuses what is in
+# scope and does not belong. It runs BEFORE the first copy, because a refusal
+# in the middle of the wiring loop leaves half a fleet wired to a stranger.
+foreign_cwd_preflight() {
+  local seat sessions f pid rcwd owner found=""
+  for seat in "${SEATS[@]}"; do
+    sessions="$SEATS_ROOT/$seat/sessions"
+    [ -d "$sessions" ] || continue
+    for f in "$sessions"/*.json; do
+      pid="$(pid_of "$f")"
+      is_live "$pid" || continue
+      rcwd="$(field "$f" cwd)"
+      [ "$rcwd" = "$PROJECT_CWD" ] && continue
+      # A row a previous run copied in belongs to the commander or to some
+      # other session, and says nothing about which fleet this SEAT is in.
+      # Same test as the forward leg below, deliberately: an UNOWNABLE row is
+      # one that leg would copy, so it is one this preflight has to judge.
+      owner="$(owner_of "$pid")"
+      [ -n "$owner" ] && [ "$owner" != "$SEATS_ROOT/$seat" ] && continue
+      if [ -z "$found" ]; then
+        warn "wire-seats: a seat in scope belongs to a different project."
+        warn "            contracts/SEATS.md requires a seat to be started at its"
+        warn "            project root, so the cwd its live session recorded is"
+        warn "            which fleet it is in. This project's root is:"
+        warn "              $PROJECT_CWD"
+        found=1
+      fi
+      warn "            $seat  (pid $pid) records cwd:"
+      warn "              ${rcwd:-<unreadable — treated as foreign>}"
+    done
+  done
+  [ -z "$found" ] || die "refusing to wire — nothing was copied. Point SEATS_ROOT at this project's own seat root, or name this project's seats as arguments; wheelhouse/runbooks/UPGRADE.md step 7 has the migration if these fleets share a root."
+}
+foreign_cwd_preflight
 
 # --- commander --------------------------------------------------------------
 # Every seat shares the commander's cwd, so cwd alone cannot tell them apart;

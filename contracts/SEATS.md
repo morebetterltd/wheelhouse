@@ -28,6 +28,8 @@ From the commander's side, seat health stays what the rules below say: probe onc
 
 This is a licensing-compliance statement, not a preference or a scaling guideline. It does not change with the size of your fleet, and it is the reason each seat needs its own configuration directory rather than sharing one.
 
+This has a collision consequence worth stating before any wiring is discussed: two PROJECTS pointing at the same seat directory share that directory's login, so the rule above stops being true of your fleet before a single registry is copied. That failure is silent and it is upstream of everything the discovery runbook does.
+
 How the subscriptions you hold get divided across several fleets on one machine is the operator's call, not this template's. The rule above says a seat is not shared; it says nothing about which wheelhouse a given seat belongs to, and that allocation is a decision about your own licences that no template is in a position to make for you.
 
 ### Rules
@@ -79,8 +81,15 @@ folder's `CLAUDE.md` and every path in the contracts is written relative to the
 project root, so a seat started anywhere else reads a different project or none.
 
 ```bash
-export SEATS_ROOT="$HOME/.claude-seats-<namespace>"   # this project's, from ### Seat namespace below
-export CLAUDE_CONFIG_DIR="$SEATS_ROOT/<seat-name>"
+export CLAUDE_CONFIG_DIR="$HOME/.claude-seats-<namespace>/<seat-name>"
+
+# This directory must be this seat's or nobody's. One that already holds
+# sessions started somewhere else is another fleet's seat, and adopting it
+# joins two projects at the login AND at the registry.
+if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
+  sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
+fi
+
 cd /path/to/project-root
 claude
 ```
@@ -90,6 +99,15 @@ Substitute the seat's name from the roster below, this project's namespace from
 `wheelhouse/STARTUP.md` carries all three already filled in. A seat whose name
 does not match its roster entry is a seat the commander cannot address, and that
 failure looks exactly like an idle seat.
+
+**Read what that check prints before you run `claude`.** Nothing printed is the
+ordinary answer: the directory is new, or it is this seat's and idle. This
+project's own root printed is fine — that is this seat, previously run. **Any
+other path is a STOP**, and it is not a permissions problem or a stale file: it
+is another wheelhouse's seat, and the path printed names the project it serves.
+Pick a directory this fleet owns rather than sharing that one. This check exists
+because the collision it catches has been reached in practice and was caught by
+a person being suspicious rather than by anything in this procedure (2026-08-22).
 
 **The namespace is one recorded value with two consequences, and neither is
 redundant with the other.** It names this project's seat root, and it is the
@@ -105,6 +123,22 @@ project. The root separates the fleets on disk; the prefix separates them in the
 registry they share. This was not hypothetical: a second wheelhouse installed on
 a machine that already ran one found the first fleet's seat directories sitting
 in the place it was about to use (reported 2026-08-22).
+
+**And the crossing runs both ways, with the return leg the worse one.** The
+obvious half is that the newcomer's wiring can reach the incumbent's seats. The
+half that is missed is the reverse copy: the newcomer's COMMANDER is written
+into the incumbent's seat registries, so a running fleet's workers become
+addressable by — and report to — a commander from another project, without
+anything in either fleet changing or announcing it. Reproduced against a
+two-fleet fixture, 2026-08-22.
+
+**Where the value actually lives.** `### Seat namespace` below is the human
+record; the machine record is `namespace=` in `wheelhouse/.template-source`,
+which is what `wire-seats.sh` reads so the operator has nothing to remember and
+nothing to pass. The two must say the same string, and `.template-source` is the
+one that decides — it is the copy a program acts on. That file already exists,
+is already per-install, and is already read by other steps, which is why the
+namespace went there rather than into a new file to keep in sync.
 
 **3. On the first run only, log in — as this seat's own account.** The session
 will ask. Use the account the roster pins to this seat and no other; an account
@@ -126,10 +160,11 @@ configuration directories also isolate each session's registry, so until you run
 `wheelhouse/runbooks/SEAT_DISCOVERY.md` the commander cannot address the seat by
 name and the seat cannot reach the commander at all — and an unreachable seat is
 indistinguishable from an idle one. Run that runbook from the project root after
-launching or relaunching any seat, with this project's seat root — the same
-`SEATS_ROOT` from step 2 — in the environment, so the wiring sees this fleet's
-seats and no other's. You run it, not the commander: an agent cannot write into
-its own session registry.
+launching or relaunching any seat. It derives this project's seat root from the
+recorded namespace itself, so there is nothing to pass and nothing to remember,
+and it refuses the run outright if a seat in scope turns out to belong to
+another project. You run it, not the commander: an agent cannot write into its
+own session registry.
 
 Wiring makes the seat reachable, not identifiable — registry rows carry derived
 names — so the commander's next act, before it dispatches anything, is a roll
@@ -170,15 +205,15 @@ Generated at install.
 
 ### Seat namespace
 
-<!-- The one value the interview derives for seats, and the only place it is
-     recorded. Two lines: the namespace itself (short, lowercase, filesystem-
-     safe — usually this project's own name), and the seat root it names,
-     $HOME/.claude-seats-<namespace>. Every other seat-naming surface is
-     derived from these and must agree with them: the roster's seat names
-     carry the namespace as a prefix, wheelhouse/STARTUP.md's launch blocks
-     export this root, and wire-seats.sh is invoked with it. A machine that
-     hosts one wheelhouse today may host two next month, and the value costs
-     nothing until it does. -->
+<!-- The one value the interview derives for seats. Two lines: the namespace
+     itself (short, lowercase, filesystem-safe — usually this project's own
+     name), and the seat root it names, $HOME/.claude-seats-<namespace>.
+     The MACHINE record is namespace= in wheelhouse/.template-source, which is
+     what wire-seats.sh reads; this section is the human one and must carry the
+     same string. Every other seat-naming surface derives from it: the roster's
+     seat names carry the namespace as a prefix, and wheelhouse/STARTUP.md's
+     launch blocks name the root. A machine that hosts one wheelhouse today may
+     host two next month, and the value costs nothing until it does. -->
 
 ### Roster
 
