@@ -20,13 +20,24 @@ Use plain `cp`. Symlinks are ignored by discovery.
 
 ```bash
 cd /path/to/project-root
+export SEATS_ROOT="$HOME/.claude-seats-<namespace>"   # from wheelhouse/fleet/SEATS.md, '### Seat namespace'
 wheelhouse/runbooks/wire-seats.sh --dry-run    # read-only: prints the plan
 wheelhouse/runbooks/wire-seats.sh
 ```
 
+`SEATS_ROOT` is this project's seat root and is part of the script's interface,
+not a testing hook. With no seat names the script wires every directory under
+it, so pointing it at the shared default on a machine that hosts a second
+wheelhouse wires that wheelhouse's seats into this commander's registry — and a
+dispatch to `seat-worker-1` then lands on whichever project's worker answered.
+The script says which root it is using on every run and warns when the root is
+the unscoped default; `wire-seats.sh --help` carries the full rationale. Existing
+installs that predate the namespace still work unchanged on the default while
+they are the only fleet on their machine — `UPGRADE.md`'s step 7 is the move.
+
 **The commander cannot run this for you.** An agent writing into its own session registry is blocked by the permission classifier, so the fleet cannot wire itself — this is an operator step by construction, or a launcher's, and no amount of asking the commander nicely will change it.
 
-Seat names come from the roster in `wheelhouse/fleet/SEATS.md`, which is the one authoritative list — the roster table, not the declined seats recorded beneath it, which are the seats this project does not have. Do not invent names here or copy them from an example: a seat whose name does not match its roster entry is a seat the commander cannot address, and the failure looks exactly like an idle seat. With no arguments the script wires every seat directory it finds, which is the same set on a machine whose seats all belong to this project; where one machine hosts several projects' seats, name them:
+Seat names come from the roster in `wheelhouse/fleet/SEATS.md`, which is the one authoritative list — the roster table, not the declined seats recorded beneath it, which are the seats this project does not have. Do not invent names here or copy them from an example: a seat whose name does not match its roster entry is a seat the commander cannot address, and the failure looks exactly like an idle seat. With no arguments the script wires every seat directory under `SEATS_ROOT`, which is this project's seats and no other once that root is this project's. Naming them explicitly is the belt to that braces, and the only protection an install still on the shared default has:
 
 ```bash
 wheelhouse/runbooks/wire-seats.sh {{SEAT_NAMES}}   # space-separated; from the roster in wheelhouse/fleet/SEATS.md
@@ -51,6 +62,14 @@ The roll call is what binds name to seat. Ask every seat for three things:
 3. whether it has work in flight.
 
 Keep the resulting map — `myproject-4f = seat-reviewer` — in the commander's working context and dispatch by seat name from there.
+
+**Then assert the map is unambiguous, before the first dispatch.** Every seat name in it must resolve to exactly one live row in the commander's registry, and every `CLAUDE_CONFIG_DIR` the roll call collected must sit under this project's `SEATS_ROOT`. The seat root is per-project; the commander's registry is not, so a machine hosting several wheelhouses can put two live rows behind one name, and a name with two rows dispatches to whichever answers:
+
+```bash
+ls ~/.claude/sessions/*.json | wc -l          # rows the commander can address
+```
+
+Read the roll call's answers against that, not the count alone: a config directory outside this project's seat root is another fleet's seat wired in by mistake, and a seat name that two rows both claim is a STOP. Unwire the stranger — delete the copied row from `~/.claude/sessions/` — and re-run step 1 with this project's `SEATS_ROOT` set, rather than dispatching and hoping. A dispatch that lands in another project is not visible from here: the bead goes quiet, which is what a working seat also looks like.
 
 **The binding is per-launch.** A restarted seat comes back with a new pid and a new derived name, so it needs re-wiring AND re-rolling. A commander dispatching from yesterday's map is addressing a session that no longer exists, or worse, one that now belongs to a different seat.
 

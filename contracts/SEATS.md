@@ -28,6 +28,8 @@ From the commander's side, seat health stays what the rules below say: probe onc
 
 This is a licensing-compliance statement, not a preference or a scaling guideline. It does not change with the size of your fleet, and it is the reason each seat needs its own configuration directory rather than sharing one.
 
+How the subscriptions you hold get divided across several fleets on one machine is the operator's call, not this template's. The rule above says a seat is not shared; it says nothing about which wheelhouse a given seat belongs to, and that allocation is a decision about your own licences that no template is in a position to make for you.
+
 ### Rules
 
 - **One bead in flight per seat.** The graph is the single source of work state.
@@ -70,20 +72,39 @@ occupied until the binary is on this machine's PATH.
 start it at the project root.** The configuration directory is per-seat because
 that is what makes one seat one subscription; two seats sharing one directory
 share a login, and the seat-accounting rule above stops being true of your fleet.
-The `cd` matters as much: the commander is defined by the folder's `CLAUDE.md`
-and every path in the contracts is written relative to the project root, so a
-seat started anywhere else reads a different project or none.
+It sits under a per-PROJECT root for a second reason: one machine can host more
+than one wheelhouse, and these directories are the only thing keeping their
+fleets apart on disk. The `cd` matters as much: the commander is defined by the
+folder's `CLAUDE.md` and every path in the contracts is written relative to the
+project root, so a seat started anywhere else reads a different project or none.
 
 ```bash
-export CLAUDE_CONFIG_DIR="$HOME/.claude-seats/<seat-name>"
+export SEATS_ROOT="$HOME/.claude-seats-<namespace>"   # this project's, from ### Seat namespace below
+export CLAUDE_CONFIG_DIR="$SEATS_ROOT/<seat-name>"
 cd /path/to/project-root
 claude
 ```
 
-Substitute the seat's name from the roster below and this project's real root —
-`wheelhouse/STARTUP.md` carries both already filled in. A seat whose name does
-not match its roster entry is a seat the commander cannot address, and that
+Substitute the seat's name from the roster below, this project's namespace from
+`### Seat namespace` below, and this project's real root —
+`wheelhouse/STARTUP.md` carries all three already filled in. A seat whose name
+does not match its roster entry is a seat the commander cannot address, and that
 failure looks exactly like an idle seat.
+
+**The namespace is one recorded value with two consequences, and neither is
+redundant with the other.** It names this project's seat root, and it is the
+prefix every seat name on the roster carries. The ROOT is what the wiring reads:
+`wheelhouse/runbooks/wire-seats.sh` enumerates it, so a scoped root is what stops
+one fleet's wiring from sweeping up another fleet's seats. What the wiring WRITES
+into is the commander's own session registry, and that is scoped by nothing —
+two wheelhouses whose commanders both run under the principal's default
+configuration directory deposit their seat rows in the same registry. Two seats
+named `seat-worker-1` there are two rows the roll call cannot tell apart, and a
+dispatch addressed to that name lands on whichever one answered, in whichever
+project. The root separates the fleets on disk; the prefix separates them in the
+registry they share. This was not hypothetical: a second wheelhouse installed on
+a machine that already ran one found the first fleet's seat directories sitting
+in the place it was about to use (reported 2026-08-22).
 
 **3. On the first run only, log in — as this seat's own account.** The session
 will ask. Use the account the roster pins to this seat and no other; an account
@@ -105,12 +126,18 @@ configuration directories also isolate each session's registry, so until you run
 `wheelhouse/runbooks/SEAT_DISCOVERY.md` the commander cannot address the seat by
 name and the seat cannot reach the commander at all — and an unreachable seat is
 indistinguishable from an idle one. Run that runbook from the project root after
-launching or relaunching any seat. You run it, not the commander: an agent
-cannot write into its own session registry.
+launching or relaunching any seat, with this project's seat root — the same
+`SEATS_ROOT` from step 2 — in the environment, so the wiring sees this fleet's
+seats and no other's. You run it, not the commander: an agent cannot write into
+its own session registry.
 
 Wiring makes the seat reachable, not identifiable — registry rows carry derived
 names — so the commander's next act, before it dispatches anything, is a roll
-call that asks each seat its name and binds the map. Then verify by asking the
+call that asks each seat its name and binds the map. The roll call also asserts
+that no name in that map is ambiguous in the registry it just read: the seat root
+is per-project but the commander's registry is not, so on a machine hosting
+several wheelhouses one name can resolve to two live rows. Two rows for one name
+is a STOP, not a warning. Then verify by asking the
 seat to message the commander unprompted, addressing it by name. A round trip
 does not test this: a reply travels back the way the message came without ever
 consulting the seat's registry, so it passes while half the wiring is missing. A
@@ -140,6 +167,18 @@ Commander + one worker + one reviewer. That is a working loop. Add seats when a 
 ## This project
 
 Generated at install.
+
+### Seat namespace
+
+<!-- The one value the interview derives for seats, and the only place it is
+     recorded. Two lines: the namespace itself (short, lowercase, filesystem-
+     safe — usually this project's own name), and the seat root it names,
+     $HOME/.claude-seats-<namespace>. Every other seat-naming surface is
+     derived from these and must agree with them: the roster's seat names
+     carry the namespace as a prefix, wheelhouse/STARTUP.md's launch blocks
+     export this root, and wire-seats.sh is invoked with it. A machine that
+     hosts one wheelhouse today may host two next month, and the value costs
+     nothing until it does. -->
 
 ### Roster
 

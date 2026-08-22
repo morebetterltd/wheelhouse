@@ -214,6 +214,26 @@ bd list --status open,in_progress,blocked,deferred --limit 0   # then read them 
 
 Fix what you find, in the same commit as the upgrade. This is manual on purpose — a convention change is exactly the kind of thing that needs a human deciding what it means in each place it appears.
 
+### The seat namespace, if you installed before it existed
+
+Every install made before 2026-08-22 is in this position, so this is a normal starting point and not a sign anything is wrong. Those installs put every seat under one shared `$HOME/.claude-seats/`, and `wire-seats.sh` defaulted to enumerating it. On a machine running one wheelhouse that is correct and keeps working — the default is still the shared path for exactly this reason, and **an upgrade does not break your fleet.** It becomes a collision the moment a second wheelhouse lands on the same machine: the newcomer's wiring sweeps up your seats, and a dispatch to `seat-worker-1` can be answered by either project's worker.
+
+Step 4 above will have printed `project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Seat namespace`. That line is this migration announcing itself, and here is what to do with it.
+
+Do it now if this machine already hosts, or is about to host, more than one wheelhouse. Otherwise record the namespace and defer the move; the value costs nothing until a second fleet arrives, and having it written down is what makes the move a rename rather than an investigation.
+
+1. **Choose the namespace and write it down.** Short, lowercase, filesystem-safe — this project's own name is almost always right. Add `### Seat namespace` to `wheelhouse/fleet/SEATS.md`'s project half, above `### Roster`, carrying the namespace and the root it names, `$HOME/.claude-seats-<namespace>`. This is the one recorded value; everything below is derived from it and must agree with it.
+2. **Move the seat directories, with the seats shut down.** A seat is a running session holding its configuration directory open; move it underneath a live one and you have a seat writing into a path that no longer exists. Close the terminals first.
+
+   ```bash
+   mkdir -p "$HOME/.claude-seats-<namespace>"
+   mv "$HOME/.claude-seats/<seat-name>" "$HOME/.claude-seats-<namespace>/<namespace>-<seat-name>"
+   ```
+
+   The rename in that second path is the other half: the prefix is what keeps two fleets' seat names apart in the commander's registry, which stays shared whatever you do to the seat roots. Repeat per seat, then `rmdir "$HOME/.claude-seats"` if it is now empty — and if it is not, read what is left before deleting anything, because on a multi-fleet machine what remains is another project's fleet.
+3. **Update the derived surfaces.** The roster in `wheelhouse/fleet/SEATS.md` takes the prefixed names; `wheelhouse/STARTUP.md`'s launch blocks take the `SEATS_ROOT` export and the prefixed names; any `wire-seats.sh` invocation you have written down or scripted takes `SEATS_ROOT`. These are the surfaces step 7's sweep is about, and the seat namespace is the convention that moved.
+4. **Relaunch, re-wire, re-roll.** Seat registrations are per-process and the roll-call binding is per-launch, so the seats come back with new pids and new derived names. Run `wire-seats.sh` with the new `SEATS_ROOT`, then the roll call, then the unambiguity assertion in `SEAT_DISCOVERY.md` step 2 — which is the check that tells you the move actually took.
+
 A real example, from the upgrade this procedure was written from. That upgrade changed one thing upstream: a path convention, `crew/` to `wheelhouse/crew/`. The contracts were re-copied correctly and the check passed 6/6. The install's very first bead — filed by the bootstrap itself — still read *"Implement crew/bench.sh against crew/BENCH.md"*, and its acceptance criterion pointed at `contracts/BENCH.md`, a template path that does not exist in an installed project at all. Nothing was broken and no check could have caught it, because no check looks at the graph. It was found by reading, and fixed by editing the bead.
 
 That is the shape of what step 7 catches: not damage, but the parts of your project that quietly went on speaking the old dialect.

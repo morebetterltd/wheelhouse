@@ -8,12 +8,19 @@ This specimen shows only what the interview writes: the roster below, and the se
 
 ## This project
 
+### Seat namespace
+
+`ebb` — seat root `$HOME/.claude-seats-ebb`, and the prefix every seat name below
+carries. Derived once at the install interview. The launch blocks in
+`wheelhouse/STARTUP.md` export that root, and `wire-seats.sh` is invoked with it;
+if any of those three disagree, this line is the one that is right.
+
 ### Roster
 
 | Seat | Role brief | Account | Notes |
 |---|---|---|---|
-| `seat-worker-1` | `wheelhouse/fleet/WORKER.md` | `ebb-fleet-1` | Primary implementation |
-| `seat-reviewer` | `wheelhouse/crew/REVIEWER.md` | `ebb-fleet-2` | Never authors what it reviews |
+| `ebb-worker-1` | `wheelhouse/fleet/WORKER.md` | `ebb-fleet-1` | Primary implementation |
+| `ebb-reviewer` | `wheelhouse/crew/REVIEWER.md` | `ebb-fleet-2` | Never authors what it reviews |
 | (commander) | this folder's `CLAUDE.md` | (principal's own) | The principal's own session |
 
 ### Declined seats
@@ -45,7 +52,8 @@ This specimen shows only the generated half. The file at `wheelhouse/fleet/SEATS
   ### Minimum viable fleet
 
 ## This project             <- everything from here down is generated, and is the
-  ### Roster                   only part this specimen shows
+  ### Seat namespace           only part this specimen shows
+  ### Roster
   ### Declined seats
 ```
 

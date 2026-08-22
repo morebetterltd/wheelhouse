@@ -39,14 +39,41 @@
 #                       non-seat sessions share the project cwd)
 #   seat ...            seat names to wire, from the roster in
 #                       wheelhouse/fleet/SEATS.md. Default is every directory
-#                       in SEATS_ROOT, which is the same set on a machine whose
-#                       seats all belong to this project and a superset on one
-#                       that hosts several -- name them explicitly there.
+#                       in SEATS_ROOT, which is this project's seats and no
+#                       other once SEATS_ROOT is set per project -- see below.
+#
+# SEATS_ROOT -- this project's seat root, and an INTERFACE rather than a test
+# hook. Set it to what wheelhouse/fleet/SEATS.md's `### Seat namespace` records,
+# which is the same value the seats' own CLAUDE_CONFIG_DIR exports carry:
+#
+#   SEATS_ROOT="$HOME/.claude-seats-<namespace>" wheelhouse/runbooks/wire-seats.sh
+#
+# Why it is per-project. This script ENUMERATES the root: with no seat names it
+# wires every directory under it. One machine can host several wheelhouses, and
+# under the shared default below every one of them sees every other one's seats
+# -- so a second fleet's wiring copies the first fleet's registrations into its
+# own commander's registry, and a dispatch to `seat-worker-1` can land on
+# another project's worker. Observed on a real machine, 2026-08-22: a wheelhouse
+# being installed found another wheelhouse's four seat directories already
+# sitting in the place it was about to use.
+#
+# The root is half the fix and the seat NAMES are the other half. What this
+# script writes into is MAIN_SESSIONS, the commander's own registry, and that is
+# scoped by nothing -- two fleets whose commanders run under the principal's
+# default configuration directory land their rows in one place. A scoped root
+# stops the wiring crossing fleets; a namespaced seat name is what stops the
+# ADDRESSING crossing them, because two rows called `seat-worker-1` in one
+# registry are two rows the roll call cannot tell apart.
+#
+# The default is deliberately the old shared path, so an install that predates
+# the namespace keeps working unchanged while it is the only fleet on its
+# machine. It is the collision state the moment a second one arrives:
+# wheelhouse/runbooks/UPGRADE.md carries the migration.
 #
 # Env overrides (all default to the real fleet; set them to point at a fixture
 # tree when testing):
 #   MAIN_SESSIONS   commander registry   default ~/.claude/sessions
-#   SEATS_ROOT      seat config dirs     default ~/.claude-seats
+#   SEATS_ROOT      seat config dirs     default ~/.claude-seats (see above)
 #   PROJECT_CWD     commander's cwd      default two levels above this script
 #                                        (wheelhouse/runbooks/ -> project root)
 
@@ -54,6 +81,10 @@ set -euo pipefail
 shopt -s nullglob
 
 MAIN_SESSIONS="${MAIN_SESSIONS:-$HOME/.claude/sessions}"
+# Recorded before the default is applied: "the caller named a root" and "the
+# root happens to equal the default" are different facts, and only the first
+# says whether this project knows which seats are its own.
+SEATS_ROOT_GIVEN="${SEATS_ROOT:+1}"
 SEATS_ROOT="${SEATS_ROOT:-$HOME/.claude-seats}"
 PROJECT_CWD="${PROJECT_CWD:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
@@ -149,10 +180,25 @@ MAIN_SESSIONS="$(cd "$MAIN_SESSIONS" && pwd)"
 SEATS_ROOT="$(cd "$SEATS_ROOT" && pwd)"
 MAIN_CONFIG_DIR="$(dirname "$MAIN_SESSIONS")"
 
+SEATS_NAMED=$([ ${#SEATS[@]} -gt 0 ] && echo 1 || echo "")
 if [ ${#SEATS[@]} -eq 0 ]; then
   for d in "$SEATS_ROOT"/*/; do SEATS+=("$(basename "$d")"); done
 fi
 [ ${#SEATS[@]} -gt 0 ] || die "no seats found under $SEATS_ROOT"
+
+# The scope this run is about to wire, stated before it wires anything. An
+# unscoped root that is also unfiltered is the multi-fleet collision: this run
+# will wire every seat directory on the machine, whichever project it belongs
+# to. It is a warning and not a refusal because it is the correct behaviour for
+# the single-fleet machine every install predating the namespace is running on.
+say "seat root: $SEATS_ROOT"
+if [ -z "$SEATS_ROOT_GIVEN" ] && [ -z "$SEATS_NAMED" ]; then
+  warn "wire-seats: SEATS_ROOT is unset, so this is the shared default root and"
+  warn "            every seat directory under it will be wired — including any"
+  warn "            belonging to another wheelhouse on this machine. Set this"
+  warn "            project's SEATS_ROOT (wheelhouse/fleet/SEATS.md, '### Seat"
+  warn "            namespace') or name its seats as arguments."
+fi
 
 # --- commander --------------------------------------------------------------
 # Every seat shares the commander's cwd, so cwd alone cannot tell them apart;
