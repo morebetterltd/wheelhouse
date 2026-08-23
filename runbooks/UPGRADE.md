@@ -256,10 +256,12 @@ Do it now if this machine already hosts, or is about to host, more than one whee
        sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
      fi
      cd /path/to/project-root
-     claude
+     claude --permission-mode auto
      ```
 
      Those three middle lines go in EVERY per-seat block, not once at the top of the file. They print the project roots of any sessions the directory already holds: nothing, or this project's root, is fine; any other path is another fleet's seat and a STOP. The upgrade re-copies the contract that explains the check, but `STARTUP.md` is yours and is the surface your operator actually pastes from — if the check does not land here, the install has the reasoning and not the tooth.
+
+     The `--permission-mode auto` on the last line is part of the promoted launch command, not an example flourish: it is what keeps a promoted seat from stalling on permission dialogs in a terminal nobody is watching — routine actions run without asking, reviewed by the harness's classifier instead of by you — and an operator who wants a stricter seat omits the flag and sits with the prompts. `contracts/SEATS.md`'s launch procedure carries the full sentence and the version stamp; carry the flag into your rebuilt blocks the same way you carry the check.
 
    **There is no `SEATS_ROOT` to write down anywhere, and that is the point of this upgrade.** Once step 1 has recorded `namespace=`, `wire-seats.sh` derives its own seat root and takes nothing; a bare `wheelhouse/runbooks/wire-seats.sh` is the whole invocation. Any `SEATS_ROOT` export you find in your `STARTUP.md`, a note, or a script is from before and should come out — the environment variable survives as a documented override for a relocated seat tree or a fixture, not as anything this migration asks you to set. Re-introducing it here would put back the remembered value this change exists to remove.
 4. **Relaunch, re-wire, re-roll.** Seat registrations are per-process and the roll-call binding is per-launch, so the seats come back with new pids and new derived names. Run each seat's launch block — reading what the foreign-directory check prints, which is the first place a half-finished move shows up — then `wheelhouse/runbooks/wire-seats.sh` with nothing passed. Read the `seat root:` line it prints: it should name `$HOME/.claude-seats-<namespace>` and say it came from `namespace=`, and if it still names the shared path then step 1 did not take. Then the roll call, then the unambiguity assertion in `SEAT_DISCOVERY.md` step 2 — which is the check that tells you the move actually took.
