@@ -85,6 +85,10 @@ Prefer the file or stdin form for anything with command output in it: a multi-li
 
 The reviewer reads the branch **without disturbing it** — `wheelhouse/crew/REVIEWER.md` has the rule and the reason. It re-runs what is cheap rather than quoting the report, checks the claims as well as the code, and says explicitly what it could not re-run. Where it cannot verify something in principle, it routes rather than approving or bouncing — that clause is in the same file, and it distinguishes two kinds of unverifiable that need different handling.
 
+If the bead's done is behavioral, the bench is part of "what is cheap" whether or not it is quick, and the order to run it in is: **bench first, reading second.** An ephemeral reviewer exists only while it is taking a turn, so a bench started at the end of the review is a bench started at the end of the reviewer — and the seat that backgrounds one and goes idle is the seat the commander finds hours later, still holding no verdict. Starting it first turns the wait into the static half of the review, which is work the reviewer owes anyway.
+
+A bench that will not fit in one turn splits the review into **two dispatches** rather than one seat promising to return. Dispatch one: static half done, bench started, output aimed at a home the graph can reach, and an interim comment on the bead saying what is running, at which SHA, and that a collecting dispatch is owed — with no verdict line on it, because nothing has been concluded. Dispatch two: a reviewer collects the output, checks it against the SHA and artifact identity the interim comment named, and writes the verdict. The commander owns the second dispatch. That is the point of the shape: the wake has to sit with a party that outlives the seat, and on the bead rather than in anyone's memory. `wheelhouse/crew/REVIEWER.md` carries the obligations, including the two ways a collected bench result can be the wrong result.
+
 **What the receiver does:** executes. Not reads. The difference is the whole review.
 
 **What it costs otherwise:** a reviewer that recommends a remedy it has not run is making a claim about behaviour like any other. Four such remedies were defective in the rounds behind this document, and each was caught by the author exercising them rather than applying them.
@@ -118,6 +122,8 @@ That includes the unglamorous ones: a premise that turned out wrong, a scope cho
 It also includes the evidence itself, and there the same reasoning reaches one step further than most people take it. A report or a verdict that cites a file rather than pasting its contents has recorded the sentence and left the proof somewhere else — and the somewhere else, in this loop, is usually a bench output directory or a worktree, both of which are gone by the time anyone re-reads the bead. `wheelhouse/GRAPH.md`'s *Where evidence lives* states which homes qualify and in what order to do it. Stages 3 and 5 are where it applies: the report and the verdict are the two artifacts that cite.
 
 ## When it does not go straight through
+
+**A review goes quiet with a bench in flight.** Check the bead before you probe. A reviewer part-way through a split review has left an interim comment saying so, and that comment is the difference between a seat that owes you a wake and a seat that has died — which look identical from outside. If it is there, the next move is the collecting dispatch, not a probe; if it is not, treat the seat as quiet and read the next paragraph.
 
 **A report goes quiet.** Probe once, then nudge once. A seat that cannot be reached looks exactly like a seat that is idle, and the distinction matters before you re-dispatch the work to someone else. If both go unanswered, declare the seat dead and relaunch it per `wheelhouse/fleet/SEATS.md`'s launch procedure — its Lifecycle section says why re-dispatching the in-flight bead is the whole cost.
 
