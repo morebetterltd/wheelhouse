@@ -208,6 +208,15 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
   What IS worth stopping for: a non-zero exit, a refusal to create `.beads/`, or a message naming a conflicting existing database. Anything else, run `bd doctor`, paste the output, and continue — but know that on bd builds using the embedded backend (the current default) `bd doctor` prints "not yet supported in embedded mode" and diagnoses nothing; that message is itself a normal result, not a failure. Treat any upgrade suggestions as advisory.
 
+- **Set the graph's role explicitly, immediately after `bd init`:**
+
+  ```bash
+  git config beads.role maintainer
+  git config --get beads.role   # must print: maintainer
+  ```
+
+  Current bd builds set this themselves — measured on bd 1.2.2, a fresh `bd init` leaves `git config --get beads.role` printing `maintainer` — but older builds did not, and upstream tracks init and upgrade paths that leave it unset (gastownhall/beads#2950). Left unset, every bd command prints `warning: beads.role not configured (GH#2950)` on stderr, and role detection falls back to a deprecated remote-URL heuristic that reads a plain-HTTPS `origin` as `contributor`. That value is not cosmetic: the role drives bd's multi-repo routing, and `contributor` routes `bd create` — and with it `bd list` and `bd ready` — to a separate planning repository (`~/.beads-planning` by default) instead of this project's graph, which breaks "the graph is the single source of work state" without an error. `maintainer` is the right value here in every case, because a wheelhouse owns its graph at the install root by design; a principal who genuinely wants contributor routing is installing something other than what this procedure installs, and that is a decision to record, not a default to detect. The command is idempotent — if the role was already `maintainer`, setting it again changes nothing, and the read-back is the evidence either way.
+
 - **Reconcile `AGENTS.md` — conditionally.** `bd init` writes an `AGENTS.md` at the root. On some bd builds its session-completion section mandates pushing ("work is NOT complete until `git push` succeeds", "NEVER stop before pushing"); on current builds it is conservative and says the opposite ("Do not commit or push without clear authority"). **Read the file bd actually wrote before acting**, because one sentence of what you append depends on which one you have.
 
   Keep bd's useful content — the command reference is genuinely handy — and override the mandate. Append this to `AGENTS.md` in every case, unchanged:
