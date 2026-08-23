@@ -164,7 +164,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    b. "What does the bench need in order to do that — what artifact does it take, and what has to be set up and cleaned away around the assertion?" Ask both halves. A long-running target (a server, an emulated device, a container) has to be started and stopped. A one-shot artifact (a CLI, a library, a batch job) starts nothing, but it almost always needs something created for it to act on and removed afterwards — a scratch directory, a throwaway database, a copied input. Asking only about the target invites "nothing" from a principal whose bench does need a fixture, and the answer is then recorded as though the question had been the wider one.
 
-   c. "When it goes wrong, what does that look like in the logs or output — what should the bench scan for and treat as failure?"
+   c. "When it goes wrong, what does that look like in the logs or output — what should the bench scan for and treat as failure?" Then ask where that appears, and how the bench tells this artifact's failures from everyone else's: a scan reading from a location shared with other processes — a machine-wide crash-report directory, a system log — needs the scoping filter (a process name, a bundle id, a log tag) recorded with the patterns, per `crew/BENCH.md` clause 7's scoping half, or the bench fails on any bystander that stumbles during the run window. "The location is private to the artifact" is a complete answer — record it as the reason no filter is needed.
 
    d. "What does someone need installed or running before they can execute this bench at all?"
 

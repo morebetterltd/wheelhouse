@@ -28,6 +28,8 @@ A bench must satisfy all eight of these. They are stack-agnostic on purpose — 
 
 7. **Measurements are not verdicts.** Any number the bench emits — a threshold, a heuristic, a similarity score — is reported as a measurement, and the doc states what it CANNOT distinguish. A check that prints a conclusion it did not establish is worse than no check, because it replaces a reviewer's judgment with a sentence.
 
+   The clause has a scoping half: **a stage may only FAIL on evidence attributable to the subject under test.** A scan that reads from a location shared with other processes — a machine-wide crash-report directory, a system log, anywhere the whole machine writes — sees the whole machine, and an unfiltered diff of it turns any bystander's failure into this artifact's verdict. The worked case: a bench FAILed a run on one new crash report, and the report belonged to the operating system's search daemon — every stage that exercised the app had passed on the same run, while the scan was an unfiltered directory diff and its doc promised "for the app's process". "crash-scan FAIL" reads to a reviewer as "this change crashed the app", which is the most damaging thing a bench can say falsely, and on a machine running several benches or simulators at once, off-target signals are routine rather than rare. Scope the FAIL by an identifier the signal itself carries — a process name, a bundle id, a log tag — and record what the filter excluded as a measurement in the retained evidence: a bystander's crash is still worth a reviewer's eye, it just is not this artifact's verdict.
+
 8. **It is re-runnable by someone who did not write it**, on a fresh checkout, from documented prerequisites.
 
 ### The stub
@@ -106,6 +108,14 @@ nothing has not established that nothing went wrong, only that none of these
 patterns appeared. If the principal cannot answer yet, say so here rather than
 inventing patterns; a scan matching strings nobody has ever seen in this
 project's output passes every run and catches nothing.
+
+Say how each scan attributes what it finds to THIS artifact. A location only
+this artifact writes needs no filter -- say that. A shared location (a
+machine-wide crash-report directory, a system log) needs the scoping filter
+named here -- the process name, bundle id or log tag the scan matches before
+treating a finding as failure -- per clause 7's scoping half. A scan clause
+written without one fails this bench on any bystander process that stumbles
+during the run window.
 -->
 
 ### Prerequisites
