@@ -25,6 +25,8 @@ This project's seat root is `$HOME/.claude-seats-ebb` and its seat names are pre
 
 Each block ends with the check from the launch procedure: it prints the project roots of any sessions the directory already holds. Nothing, or `/Users/you/code/ebb`, is fine. Any other path is another fleet's seat — stop, do not run `claude` against it.
 
+`--permission-mode auto` is what keeps a promoted seat from stalling on permission dialogs in a terminal nobody is watching — routine actions run without asking, reviewed by the harness's classifier instead of by you — and omitting the flag runs the seat stricter, prompting per the harness's defaults.
+
 `ebb-worker-1`, on account `ebb-fleet-1`:
 
 ```bash
@@ -33,7 +35,7 @@ if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
   sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
 fi
 cd ~/code/ebb
-claude
+claude --permission-mode auto
 ```
 
 `ebb-reviewer`, on account `ebb-fleet-2`:
@@ -44,7 +46,7 @@ if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
   sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
 fi
 cd ~/code/ebb
-claude
+claude --permission-mode auto
 ```
 
 Then paste that seat's standing prompt from `wheelhouse/fleet/SEATS.md`, with `<seat-name>` replaced by the name above and only that seat's role brief kept. The seat idles until the commander sends it work by name.

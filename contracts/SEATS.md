@@ -91,8 +91,18 @@ if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
 fi
 
 cd /path/to/project-root
-claude
+claude --permission-mode auto
 ```
+
+`--permission-mode auto` is what keeps a promoted seat from stalling on
+permission dialogs in a terminal nobody is watching: routine actions run
+without asking, reviewed by the harness's own classifier model instead of by
+you, and omitting the flag runs the seat stricter — it prompts per the
+harness's defaults, at the price of an operator sitting with it. (Flag
+verified against `claude --help` and the harness's permission-modes
+documentation, Claude Code 2.1.241, 2026-08-22; on current builds and plans
+auto is often already the starting mode, and the flag pins the promoted
+default explicitly rather than leaving it to version and settings.)
 
 Substitute the seat's name from the roster below, this project's namespace from
 `### Seat namespace` below, and this project's real root —
