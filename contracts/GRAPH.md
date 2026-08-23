@@ -53,6 +53,14 @@ A closed bead still carrying `needs-review` renders as in-flight in the listing 
 
 > Version-stamped: every statement above is a fact about a particular CLI build, not an eternal truth. Verified against bd 1.2.2 on 2026-08-19. Correct this file if your build differs, and say so in your report rather than working around it quietly.
 
+### The template-report marker
+
+The second label the loop depends on, and the only other one this contract names. `needs-review` marks where a bead sits in this fleet's queue; `template-report` marks what the bead is ABOUT — a defect in the wheelhouse template itself or in the tooling every seat runs on, as opposed to work on this project's product. The two are independent and a bead may carry both: a template-class finding is reviewed like any other.
+
+It exists so that the finding can be found by someone who did not file it. `bd list --label template-report` reaches every one of them; a sweep by judgment, or by grepping titles, reaches only the ones phrased the way the reader guessed. So the label is not a synonym for the `Report <tool> issue: ...` bead title that `wheelhouse/crew/DESIGNER.md` prescribes — the title says which tool and what broke, and the label is what makes the bead reachable without reading it. File both.
+
+**If this fleet is not running on the machine that owns the template, the label alone reaches nobody.** It marks the bead in a graph the template's maintainers cannot see, so file the finding as a GitHub issue on the template's repository as well — `github.com/morebetterltd/wheelhouse` for an install from that template, or whatever remote `wheelhouse/.template-source` records if you installed from a fork.
+
 ## This project
 
 Generated at install.

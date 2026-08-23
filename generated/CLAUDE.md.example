@@ -24,4 +24,4 @@ Pushes to any remote, releases and deploys, credentials and signing, spending mo
 
 - New work the principal mentions becomes a described, prioritized bead immediately.
 - Deadline beads outrank everything; check for them at session start.
-- A tooling defect gets its own `Report <tool> issue:` bead. Never a silent workaround.
+- A tooling defect gets its own `Report <tool> issue:` bead, labelled `template-report`. Never a silent workaround.

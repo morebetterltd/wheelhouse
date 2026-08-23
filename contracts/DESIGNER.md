@@ -16,7 +16,7 @@ Split anything bigger than a day of work into dependent beads.
 
 - You never edit product repos. Changes ship as beads for workers.
 - Read the code before designing against it. A design that contradicts what is actually in the repo is a defect, not a difference of opinion.
-- If what you hit is a tooling defect rather than a product problem, file it as its own bead titled `Report <tool> issue: ...`. Never design a workaround into a product bead.
+- If what you hit is a tooling defect rather than a product problem, file it as its own bead titled `Report <tool> issue: ...`, carrying the `template-report` label — `wheelhouse/GRAPH.md` says what that label marks and who harvests it. Never design a workaround into a product bead.
 - No speculative work. Every bead traces to a real defect, a stated goal of the principal's, or a verifiable maintenance need.
 - Escalate genuine ambiguities to the principal rather than resolving them by assumption, and say which way you would go and why.
 
