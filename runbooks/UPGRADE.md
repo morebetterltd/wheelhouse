@@ -203,12 +203,16 @@ rm -f wheelhouse/.template-source.bak
 An upgrade re-copies the contracts and the runbooks and reaches nothing else. If the change altered a convention — a path form, a command name, a label — then your generated files and your existing beads still speak the old one:
 
 - `CLAUDE.md`, `wheelhouse/ISA.md`, `wheelhouse/STARTUP.md`, and the `## This project` sections you just preserved;
-- every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install.
+- every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install;
+- the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
 
 ```bash
 git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ | grep -E '^[-+].*`[a-z/.]+`' | sort -u
 bd list --status open,in_progress,blocked,deferred --limit 0   # then read them for the old convention
+bd list --label template-report --limit 0                      # empty is the expected result here, not the finished one
 ```
+
+**An added convention needs this sweep as much as a renamed one, and hides better.** A rename leaves the old string sitting in your files where a diff of the contracts will point at it. An addition leaves nothing behind: `bd list --label template-report` on a graph that predates the label prints `No issues found.`, which is what a graph with genuinely nothing to mark also prints. The two are told apart by reading the unclosed beads from the sweep above for `Report <tool> issue: ...` titles and labelling those — `bd update <id> --add-label template-report` — and by checking your `CLAUDE.md` against `generated/CLAUDE.md.example` for the line the current template writes.
 
 **Every unclosed state, not just `open`.** `bd list --status open` means the stored status `open` and nothing else, so a bead someone has claimed is invisible to it — and the beads most likely to carry an old dialect, the long-lived ones filed at install, are also the ones most likely to be claimed. Measured on the graph this fix was written from: `--status open` printed `No issues found.` while four unclosed beads existed, all `in_progress`. Comma-separated is the form to use; `bd` 1.2.2 documents that repeating `-s` silently overwrites the previous value rather than accumulating. Not `--all`, which adds every closed bead — those are history, and nobody is going to act on their text again. `--limit 0` because `bd list` defaults to 50 and a sweep that stops early is the same vacuous check in a different costume.
 
