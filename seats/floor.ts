@@ -243,6 +243,9 @@ function assess(seat: Seat): Assessment {
   if (rec && rec.pid && !alive && !rec.stoppedAt) {
     return { cue: "red", line: `PROCESS GONE — pid ${rec.pid} died; check ${path.relative(ROOT, seat.errLog)}` };
   }
+  if (rec?.lastCapacityEvent) {
+    return { cue: "amber", line: `QUOTA EXHAUSTED — dispatch failed at ${rec.lastCapacityEvent.at}: ${rec.lastCapacityEvent.detail}` };
+  }
   if (QUOTA_RE.test(errBlob)) {
     return { cue: "amber", line: "QUOTA EXHAUSTED — seat cannot take work until it resets" };
   }
@@ -336,6 +339,7 @@ function statusLines(seats: Seat[], width: number): string[] {
     if (rec) {
       out.push(truncate(`  pid ${rec.pid ?? "-"}${pidAlive(rec.pid) ? " (alive)" : ""}  session ${rec.sessionId ?? "-"}`, width));
       out.push(truncate(`  last bead ${rec.lastBead ?? "-"}  dispatched ${rec.lastDispatchAt ?? "-"}`, width));
+      out.push(truncate(`  capacity ${rec.lastCapacityEvent ? `QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}` : "ok (no recorded capacity event)"}`, width));
     } else {
       out.push(`  ${C.dim}no state.json record${C.reset}`);
     }

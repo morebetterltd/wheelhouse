@@ -435,3 +435,55 @@ if a project ever needs isolation against a *hostile* seat process rather
 than a confused one, that is an OS-level control (separate users, sandboxing)
 and out of scope for this template; what the template guarantees is that its
 own machinery, contracts, and validated arguments never take a foreign path.
+
+<!-- ===== two-seat concurrency + capacity (bead wheelhouse-project-41h) — new section starts here ===== -->
+
+## Running the concurrency exercise
+
+```bash
+bash seats/concurrency.selftest.sh
+```
+
+Two seats from one roster, worked as one exercise: both spawned, handed
+DISTINCT beads back-to-back (the second dispatch goes out before the first
+turn is waited on), and proven not to touch each other. The assertions, in
+order: overlapping RUNNING (both `state.json` pids alive with both turns in
+flight at the same moment — `agent_start` seen, no `agent_end` yet, in both
+logs); each seat's events land ONLY in its own log; no cross-talk on FIFOs
+(each seat has its own, and the log check doubles as the FIFO check — a
+crossed FIFO would land a response in the wrong log); worktree isolation
+(the exercise builds two scratch git worktrees on distinct `fleet/<bead>`
+branches, points each seat's bead at its own, and asserts each bead's work
+footprint landed only there — the same one-worktree-per-bead contract
+`contracts/WORKER.md` binds real workers to); and both seats stopping
+cleanly.
+
+Hermetic like the other selftests: a stub `pi` in a temp HOME, your real
+seats untouched, cmp-guarded canaries (one merges both seats into a shared
+log, one cuts the capacity stamp) proving the checks still bite. One
+real-pi leg at the end spawns TWO real seats borrowing your login,
+dispatches trivial prompts concurrently, and asserts both `agent_end`s
+arrive with disjoint logs; the same `WHEELHOUSE_REAL_PI_PROVIDER` +
+`WHEELHOUSE_REAL_PI_MODEL` pin (always both together) and the same SKIP
+rules as the adapter selftest's real leg apply.
+
+## Capacity events
+
+Visibility only — the adapter still meters nothing and brokers nothing.
+When a `dispatch` fails and the failure looks like an account limit
+(quota / usage limit / 429 / rate limit, in the response error or the
+seat's stderr tail), the adapter stamps the seat's `state.json` entry:
+
+```json
+"lastCapacityEvent": { "at": "<ISO time>", "detail": "<the error text>" }
+```
+
+Three places read the stamp: `adapter.ts status` prints a `CAPACITY:` line
+under the seat; the floor's rail renders the AMBER `QUOTA EXHAUSTED` cue
+from it (the raw-stream scan the floor already did remains, as the fallback
+for limit noise the adapter never saw); and the floor's STATUS cell shows a
+per-seat `capacity` line — `ok (no recorded capacity event)` or the stamped
+event. A later dispatch that LANDS clears the stamp, so a stale event
+cannot outlive the evidence for it. What none of this does, on purpose:
+predict resets, count tokens, or route work — the commander reads the
+amber line and decides; a broker would be deciding for them.

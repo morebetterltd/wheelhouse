@@ -112,6 +112,7 @@ interface SeatRecord {
   model?: string;
   lastBead?: string;
   lastDispatchAt?: string;
+  lastCapacityEvent?: { at: string; detail: string };
 }
 
 interface State {
@@ -245,6 +246,32 @@ async function rpc(
     await sleep(100);
   }
   throw new Error(`timed out after ${timeoutMs}ms waiting for ${command.type} response`);
+}
+
+// Capacity visibility (visibility ONLY — nothing here meters or brokers
+// quota). Same pattern the floor uses, kept in both places on purpose: the
+// adapter stamps state.json when a dispatch fails quota-shaped, the floor
+// renders from the stamp AND keeps scanning raw streams for what the
+// adapter never saw.
+const QUOTA_RE = /quota|rate.?limit|429|usage limit|exhaust|out of credits|insufficient.credit/i;
+
+/** Last few KB of the seat's stderr log — where pi complains about limits. */
+function stderrTail(rec: { log: string }, maxBytes = 8 * 1024): string {
+  const errLog = rec.log.replace(/\.jsonl$/, ".stderr.log");
+  try {
+    const size = fs.statSync(errLog).size;
+    const start = Math.max(0, size - maxBytes);
+    const fd = fs.openSync(errLog, "r");
+    try {
+      const buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      return buf.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -388,10 +415,25 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     message: `Bead ${beadId}\n\n${text}`,
     streamingBehavior: "followUp",
   });
-  if (!resp.success) die(`dispatch failed: ${resp.error}`);
+  if (!resp.success) {
+    // A failure that looks like an account limit is a CAPACITY fact worth
+    // keeping: stamp it so `status` and the floor can surface it after this
+    // process is gone. Anything else stays a plain failure.
+    const blob = `${resp.error ?? ""}\n${stderrTail(rec)}`;
+    if (QUOTA_RE.test(blob)) {
+      const state = readState();
+      state.seats[name].lastCapacityEvent = {
+        at: new Date().toISOString(),
+        detail: String(resp.error ?? "quota-shaped stderr"),
+      }; // capacity-record
+      writeState(state);
+    }
+    die(`dispatch failed: ${resp.error}`);
+  }
   const state = readState();
   state.seats[name].lastBead = beadId;
   state.seats[name].lastDispatchAt = new Date().toISOString();
+  delete state.seats[name].lastCapacityEvent; // a dispatch that lands clears it
   writeState(state);
   console.log(`dispatched ${beadId} to ${name}; watch ${rec.log}`);
 }
@@ -429,6 +471,9 @@ function cmdStatus(): void {
     const pid = alive ? `pid ${rec.pid}` : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     console.log(`${name.padEnd(16)} ${alive ? "RUNNING" : "STOPPED"}  ${pid.padEnd(11)} last-event ${lastEvent(rec.log)}${bead}`);
+    if (rec.lastCapacityEvent) {
+      console.log(`${" ".repeat(16)} CAPACITY: quota-shaped dispatch failure at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
+    }
   }
 }
 
