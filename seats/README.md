@@ -373,3 +373,65 @@ touched): it asserts pi's ps title is bare and that pi holds its stdin FIFO
 where `lsof` sees it — the premise and the mechanism, re-verified against
 the pi actually installed. That probe SKIPs, with the reason printed, only
 when `pi` is absent.
+
+<!-- ===== project isolation (bead wheelhouse-project-4pk) — new section starts here ===== -->
+
+## Project isolation — what is guaranteed, and what is not
+
+Two fleets on one machine must not be able to reach into each other: one
+project's worker must not mutate another project's beads, worktree, or
+evidence. That holds — but it is important to be precise about WHY it holds,
+because the honest answer is not "the operating system prevents it".
+
+```bash
+bash seats/isolation.selftest.sh
+```
+
+Hermetic like the others: two complete fixture projects (A and B), each with
+its own seat namespace root, roster, graph dir, and worktrees dir, built in a
+temp HOME with a stub `pi` and a logging fake `bd`. Only A's machinery ever
+runs; B exists to be reached for. It proves three different kinds of thing:
+
+**What IS guaranteed — by construction.** Every durable path the machinery
+writes is derived from the project's own tree: `state.json`, `run/`, `logs/`,
+and `verdicts/` all join from the directory `adapter.ts`/`verify.ts` live in,
+and the seat directories live under `$HOME/.pi-seats-<namespace>/`, one
+namespace per project. A's `trust.json` grants A's project root and nothing
+else; no B path appears in A's roster or state. The selftest asserts each of
+these from the code and from the artifacts a hard run leaves behind, and
+asserts B's entire tree and seat root are byte-identical after A spawns,
+dispatches, stops, resumes, and makes a bead-graph call.
+
+**What IS guaranteed — by contract at the doors.** The arguments that could
+smuggle a foreign path in are either refused or inert: a seat name is
+validated to a single path segment (a name like `../projB` is a loud STOP),
+and a bead id is never used as a path — it rides in the prompt text and in
+`state.json`'s `lastBead` field as data, verbatim. `bd` scopes itself by
+walking up from the cwd the adapter chose, which is the project's own root,
+so a seat's graph calls resolve to its own store. The selftest probes each
+door with B-shaped arguments and watches nothing land.
+
+**What is NOT guaranteed — OS enforcement.** All seats on a machine run as
+one user with no sandbox. The selftest's hostile leg dispatches a stub seat
+that deliberately attempts four cross-project writes — appending to B's log,
+overwriting B's `state.json`, creating a file in B's worktree, touching B's
+graph dir — and on a default setup all four SUCCEED. The test reports that
+truthfully instead of pretending otherwise. The boundary statement it prints:
+
+> Isolation between projects is by construction and contract, not OS
+> enforcement: every path the wheelhouse machinery writes is derived from
+> the project's own root and its namespaced seat root, and path-shaped
+> arguments are refused — but the processes all run as one user with no
+> sandbox, so the operating system does not forbid a hostile or compromised
+> seat from writing into another project. This selftest proves no wheelhouse
+> code path takes a foreign path even when handed one; it also proves,
+> honestly, that the OS would permit one.
+
+Two consequences worth keeping in view. First, the roster is trusted,
+commander-authored configuration: an operator who writes another project's
+directory into `account.dir` will be obeyed — the machinery defends against
+its own arguments and code paths, not against its own configuration. Second,
+if a project ever needs isolation against a *hostile* seat process rather
+than a confused one, that is an OS-level control (separate users, sandboxing)
+and out of scope for this template; what the template guarantees is that its
+own machinery, contracts, and validated arguments never take a foreign path.
