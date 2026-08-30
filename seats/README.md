@@ -212,3 +212,65 @@ A login whose OAuth refresh token has gone stale is NOT skipped: the real
 leg fails the same way every real `pi` run on the machine would, and the
 fix is `pi /login`, not a looser test. `seats/logs/` is where seat
 runtime logs land; it is per-machine noise and git ignores it.
+
+## The bridge
+
+The bridge is how a human looks at the fleet: ONE tmux window per project,
+built by `seats/cockpit.sh` and viewed through `seats/floor.ts`.
+
+```bash
+seats/cockpit.sh [namespace]     # builds (or re-attaches to) session wh-<ns>
+```
+
+Session `wh-<namespace>` (default namespace: the project dirname), window
+`0:bridge`, two panes:
+
+- **Left — the commander seat.** The cockpit does NOT launch the commander;
+  it prints the launch instructions and hands you a shell. The commander is
+  interactive and the human starts it.
+- **Right — the floor**, full height: `bun seats/floor.ts`. Spotlight and
+  rail are one program, so the right side is one pane.
+
+Re-running `cockpit.sh` attaches to the existing session — it never builds a
+duplicate. The tmux status bar carries the project name and the key hints.
+
+### The floor
+
+`floor.ts` is READ-ONLY: it reads `state.json`, `seats.json`, and
+`seats/logs/*.jsonl`, and never writes to a FIFO or to state. Two regions:
+
+- **Spotlight** (top): pinned to ONE seat, that seat's event log humanized —
+  `[tool]`, `[think]`, `[say]`, `[turn_end]` with turn stats. The spotlight
+  moves ONLY on your keys; nothing steals it.
+- **Rail** (bottom): one line per seat, `[1]`..`[9]`, plus `[0] STATUS`, each
+  with an attention cue:
+
+  | cue | meaning |
+  |---|---|
+  | red | AUTH DEAD (re-login command shown) or PROCESS GONE (pid died) |
+  | amber | QUOTA EXHAUSTED, IDLE with ready work (`bd ready` count), REVIEW BLOCKED (a BOUNCE waiting), or a missing event log |
+  | green | VERDICT LANDED (APPROVE/DISCOVER seen in the seat's output) |
+
+  Failure states are DISTINCT named lines, never silence: a dead process, a
+  dead login, an exhausted quota, a blocked review, and a missing log each
+  say exactly what they are.
+
+Keys: `1`-`9` pin a seat, `0` pins the full STATUS view, `f` toggles
+follow-mode (OFF by default; when on, the spotlight tracks the most recently
+active log), `o` toggles an overview grid of every seat, `q` quits.
+
+`--once` renders a single frame to stdout and exits — what the selftest and
+any script uses; `--pin <1-9|0|seat-name>` and `--overview` set the view.
+
+### Proving the bridge still works
+
+```bash
+bash seats/floor.selftest.sh
+```
+
+Hermetic: synthetic logs and state in a temp fixture, a stub `bd`, frames
+rendered with `--once` — your real seats and your tmux are untouched. Covers
+every rail cue above, the STATUS cell, the missing-log degradation, and two
+cmp-guarded canaries. The tmux leg builds the bridge on a private tmux
+socket and proves `cockpit.sh` idempotent; it prints a SKIP line (and still
+passes) when tmux is not installed.
