@@ -271,6 +271,23 @@ Like the roster, it holds NO tokens — names, paths, pids, and session ids
 only. It is per-machine runtime state, not product, and git ignores it along
 with `seats/run/` and `seats/logs/`.
 
+`sessionId` is NOT stable across a seat's lifetime, and nothing here relies
+on it being so — only `sessionFile` is the continuity key. Pi hands back a
+fresh `sessionId` on every relaunch attached via `--session <file>`
+(`resume`, and `dispatch`'s cwd-mismatch relaunch alike — confirmed on a
+real-pi leg, not just the cwd-changing case), even though it keeps
+appending to the SAME session file and the conversation carries forward.
+`sessionId` is stored and printed purely as a point-in-time label for a
+human reading `status`, `spawn`/`stop`/`resume`'s console output, or
+`floor`'s per-seat block — none of it is compared against a prior value.
+Continuity is asserted and enforced entirely through `sessionFile`:
+`resume` and the relaunch inside `dispatch` both pass the RECORDED
+`sessionFile` to `--session`, and `recover.ts`'s printed resume suggestions
+key off `sessionFile` (existence, and a same-file RUNNING match for the
+double-resume refusal) and `lastBead`, never `sessionId`. `verify.ts`
+never reads `sessionId` at all — author/verifier distinctness there is
+`account.dir`, not the session.
+
 ## Proving it still works
 
 ```bash

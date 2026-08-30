@@ -214,14 +214,20 @@ wait "$DEADPID" 2>/dev/null
 phase "1. SIGKILL mid-turn — DEAD, bead named, printed resume re-attaches the same session"
 adapter_run spawn worker-1
 [ $RC -eq 0 ] || { echo "selftest: fixture spawn failed: $OUT" >&2; exit 2; }
-KPID="$(state_get worker-1 pid)"
-if [ "$(ps -p "$KPID" -o command= | sed 's/ *$//')" = "pi" ]; then
+SPAWN_PID="$(state_get worker-1 pid)"
+if [ "$(ps -p "$SPAWN_PID" -o command= | sed 's/ *$//')" = "pi" ]; then
   pass "stub mimics the title rewrite: the live seat's ps line is bare 'pi', no argv"
 else
-  fail "stub did not rewrite its title (ps: '$(ps -p "$KPID" -o command=)') — this suite would not be testing the real process shape"
+  fail "stub did not rewrite its title (ps: '$(ps -p "$SPAWN_PID" -o command=)') — this suite would not be testing the real process shape"
 fi
+mkdir -p "$PROJ/.wheelhouse-worktrees/bead-98m"
 adapter_run dispatch worker-1 bead-98m "SLOW think about it"
 [ $RC -eq 0 ] || { echo "selftest: fixture dispatch failed: $OUT" >&2; exit 2; }
+# dispatch relaunches into the bead's worktree (the spawn above rooted at
+# the project root, not this bead) — a NEW pid, same session file. The pid
+# to kill mid-turn is whichever one is actually running now, not the one
+# spawn reported before dispatch replaced it.
+KPID="$(state_get worker-1 pid)"
 SESS="$(state_get worker-1 sessionFile)"
 kill -9 "$KPID" 2>/dev/null
 i=0; while kill -0 "$KPID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
