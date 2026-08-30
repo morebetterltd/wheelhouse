@@ -107,7 +107,7 @@ symlink is a grant pi never matches.
 ## Running a seat
 
 ```bash
-bun seats/adapter.ts spawn    <seat>                    # start it
+bun seats/adapter.ts spawn    <seat> [bead-id]          # start it
 bun seats/adapter.ts dispatch <seat> <bead-id> <text>   # hand it a bead
 bun seats/adapter.ts steer    <seat> <text>             # redirect mid-turn
 bun seats/adapter.ts status                             # liveness, every seat
@@ -126,12 +126,22 @@ to `seats/logs/<seat>.jsonl` (every event, one JSON line each; stderr lands
 beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
 one line, and reads the response out of the log.
 
+The seat's process cwd is the bead's worktree by construction, not a prompt
+telling it to `cd` there. Without a bead id, `spawn` starts the seat rooted
+at the project root; with one, or on `dispatch` for a bead the seat is not
+already sitting in, cwd resolves to `.wheelhouse-worktrees/<bead-id>` — which
+has to exist already (a worker's own claim, or whoever dispatches) — and a
+missing worktree is a loud STOP, never a silent fall-back to the root.
+`dispatch` transparently stops and relaunches the seat, attached to the same
+session, when its cwd does not already match the bead being dispatched.
+
 `dispatch` prefixes the message with `Bead <bead-id>` and queues behind the
 current turn if the seat is mid-stream; redirecting the CURRENT turn is what
 `steer` is for. `stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
-attached to it (`--session`), so the context it built up comes back warm.
+attached to it (`--session`), rooted back in the same cwd it was running in,
+so the context it built up comes back warm.
 
 What the adapter is NOT: a supervisor. Nothing restarts a dead seat, meters
 quota, or retries. It runs seats; noticing them is the commander's job.

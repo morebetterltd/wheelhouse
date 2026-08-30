@@ -111,6 +111,11 @@ if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); proc
 const args = process.argv.slice(2);
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
+// The adapter sets our cwd by construction (child_process spawn's cwd
+// option), not by telling us in a prompt to cd there. Recording it here
+// lets the selftest see what the OS-level cwd actually was, not what the
+// adapter merely printed.
+fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const sessDir = path.join(agentDir, "sessions");
 fs.mkdirSync(sessDir, { recursive: true });
 let sessionFile, sessionId;
@@ -209,6 +214,7 @@ RUN_PROJ="$PROJ"
 STATE="$PROJ/seats/state.json"
 LOG="$PROJ/seats/logs/worker-1.jsonl"
 ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
 
 wait_for() {   # $1 = file, $2 = substring, $3 = seconds
@@ -274,12 +280,25 @@ else fail "role brief not passed, or not the worker's brief"; fi
 if grep -q '"--provider","anthropic","--model","stub-model-1"' "$ARGV" 2>/dev/null; then
   pass "roster's provider and model pin the launch"
 else fail "provider/model from seats.json did not reach pi's argv"; fi
+if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ" ]; then
+  pass "spawn with no bead id roots the seat at the project root"
+else fail "spawn's cwd was $(cat "$CWD_FILE" 2>/dev/null) — expected $PROJ"; fi
 run spawn worker-1
 if [ $RC -ne 0 ] && says "already running"; then
   pass "a second spawn of a live seat is refused"
 else fail "spawning an already-running seat did not stop (exit $RC)"; fi
 
 phase "2. dispatch — prompt round trip lands in log and session"
+PID_BEFORE_BAD="$(state_get pid)"
+run dispatch worker-1 no-such-bead "hello adapter"
+if [ $RC -ne 0 ] && says "does not exist"; then
+  pass "dispatching a bead with no worktree is a loud STOP"
+else fail "dispatch to a bead with no worktree did not STOP (exit $RC): $OUT"; fi
+if [ "$(state_get pid)" = "$PID_BEFORE_BAD" ] && kill -0 "$PID_BEFORE_BAD" 2>/dev/null; then
+  pass "the seat is left running, not stopped, when the target worktree is missing"
+else fail "a rejected dispatch left the seat stopped (pid was $PID_BEFORE_BAD, now $(state_get pid))"; fi
+
+mkdir -p "$PROJ/.wheelhouse-worktrees/bead-x"
 SESS="$(state_get sessionFile)"
 SESS_LINES_BEFORE=$(wc -l < "$SESS" | tr -d ' ')
 run dispatch worker-1 bead-x "hello adapter"
@@ -297,8 +316,15 @@ else fail "session file did not grow"; fi
 if [ "$(state_get lastBead)" = "bead-x" ]; then
   pass "state.json records the dispatched bead"
 else fail "lastBead not recorded"; fi
+if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ/.wheelhouse-worktrees/bead-x" ]; then
+  pass "dispatch relaunched the seat rooted in the bead's worktree, by construction"
+else fail "seat cwd after dispatch was $(cat "$CWD_FILE" 2>/dev/null) — expected the bead-x worktree"; fi
+if grep -q "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null; then
+  pass "the cwd-changing relaunch reattached the SAME session (--session), not a cold start"
+else fail "relaunch did not carry --session with the prior session file"; fi
 
 phase "3. steer — a redirect lands inside a turn still in flight"
+mkdir -p "$PROJ/.wheelhouse-worktrees/bead-y"
 run dispatch worker-1 bead-y "SLOW long think"
 run steer worker-1 "change course"
 if [ $RC -eq 0 ]; then pass "steer exits 0"
@@ -438,6 +464,7 @@ EOF
   RLOG="$RPROJ/seats/logs/worker-1.jsonl"
   rstate_get() { bun -e "const s=require('$RSTATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
 
+  mkdir -p "$RPROJ/.wheelhouse-worktrees/smoke-1" "$RPROJ/.wheelhouse-worktrees/smoke-2"
   rrun spawn worker-1
   if [ $RC -eq 0 ]; then pass "real: spawn exits 0 ($OUT)"
   else fail "real: spawn exited $RC: $OUT"; fi

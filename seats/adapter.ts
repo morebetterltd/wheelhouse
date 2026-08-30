@@ -29,12 +29,20 @@
  *
  * Usage: bun seats/adapter.ts <command> [args]
  *
- *   spawn    <seat>                    start the seat from seats/seats.json
+ *   spawn    <seat> [bead-id]          start the seat from seats/seats.json
  *   dispatch <seat> <bead-id> <text>   send a prompt (queues if mid-turn)
  *   steer    <seat> <text>             redirect the current turn
  *   status                             liveness + last event, every seat
  *   stop     <seat>                    graceful SIGTERM; session survives
  *   resume   <seat>                    respawn attached to the recorded session
+ *
+ * A seat's process cwd is the bead's worktree, not the project root and not
+ * prompt discipline: spawn with a bead id, or dispatch a bead the running
+ * seat is not already sitting in, resolves to
+ * `.wheelhouse-worktrees/<bead-id>` and STOPs loudly if that directory does
+ * not exist yet — the worktree is a precondition dispatch enforces, not one
+ * it creates. dispatch transparently stops and relaunches (attached to the
+ * same session) when the seat's cwd does not already match the bead.
  */
 
 import { spawn } from "node:child_process";
@@ -50,9 +58,18 @@ const STATE_FILE = path.join(SEATS_DIR, "state.json");
 const RUN_DIR = path.join(SEATS_DIR, "run");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
 const ROSTER_FILE = path.join(SEATS_DIR, "seats.json");
+const WORKTREES_DIR = path.join(ROOT, ".wheelhouse-worktrees");
 
 // One knob for every wait in this file; the selftest raises it for real pi.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_RPC_TIMEOUT_MS || 20000);
+
+/** A bead's worktree, by the convention every worker and reviewer already
+ * follows (wheelhouse/fleet/WORKER.md): `.wheelhouse-worktrees/<bead-id>`
+ * beside seats/. This does not create it — it names where dispatch expects
+ * to find it already created (worker claim, or the commander's own setup). */
+function beadWorktreeDir(beadId: string): string {
+  return path.join(WORKTREES_DIR, beadId);
+}
 
 function die(msg: string): never {
   process.stderr.write(`STOP: ${msg}\n`);
@@ -111,6 +128,7 @@ interface SeatRecord {
   accountDir: string;
   role: string;
   roleBrief: string;
+  cwd: string;
   fifo: string;
   log: string;
   sessionId: string | null;
@@ -303,7 +321,22 @@ function roleBriefPath(role: string): string {
   return brief;
 }
 
-async function launch(name: string, entry: SeatEntry, sessionFile: string | null): Promise<void> {
+// The seat's process cwd IS the bead's worktree — construction, not a
+// prompt telling the seat to cd there. Callers compute cwd from the bead id
+// (beadWorktreeDir); launch() only ever starts a process in a directory
+// that already exists, never creates one. Checked BEFORE anything is
+// stopped or spawned: a dispatch aimed at a bead with no worktree must
+// refuse loudly and leave whatever was already running alone, not kill a
+// live seat on the way to discovering the target doesn't exist.
+function requireCwdDir(cwd: string): string {
+  if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+    die(`seat cwd target does not exist or is not a directory: ${cwd} — create the worktree before spawning/dispatching there (see wheelhouse/fleet/WORKER.md)`);
+  }
+  return cwd;
+}
+
+async function launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
+  requireCwdDir(cwd);
   const state = readState();
   const existing = state.seats[name];
   if (existing && pidAlive(existing.pid)) {
@@ -352,7 +385,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
     `exec pi ${args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ")} ` +
     `0<> '${fifo}' >> '${log}' 2>> '${errLog}'`;
   const child = spawn("bash", ["-c", shellCmd], {
-    cwd: ROOT,
+    cwd,
     env: { ...process.env, PI_CODING_AGENT_DIR: accountDir },
     detached: true,
     stdio: "ignore",
@@ -378,6 +411,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
     accountDir,
     role: entry.role,
     roleBrief: brief,
+    cwd,
     fifo,
     log,
     sessionId: st.data?.sessionId ?? null,
@@ -390,8 +424,8 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   console.log(`  events -> ${log}`);
 }
 
-async function cmdSpawn(name: string): Promise<void> {
-  await launch(name, requireSeat(name), null);
+async function cmdSpawn(name: string, beadId?: string): Promise<void> {
+  await launch(name, requireSeat(name), null, beadId ? beadWorktreeDir(beadId) : ROOT);
 }
 
 async function cmdResume(name: string): Promise<void> {
@@ -402,7 +436,10 @@ async function cmdResume(name: string): Promise<void> {
   if (!fs.existsSync(rec.sessionFile)) {
     die(`recorded session file is gone: ${rec.sessionFile} — spawn a fresh seat instead`);
   }
-  await launch(name, requireSeat(name), rec.sessionFile);
+  // Resuming keeps the seat where it was working, not the project root: the
+  // cwd it was launched into last time, falling back to ROOT only for a
+  // state.json record from before this field existed.
+  await launch(name, requireSeat(name), rec.sessionFile, rec.cwd ?? ROOT);
 }
 
 function requireRunning(name: string): SeatRecord {
@@ -413,7 +450,20 @@ function requireRunning(name: string): SeatRecord {
 }
 
 async function cmdDispatch(name: string, beadId: string, text: string): Promise<void> {
-  const rec = requireRunning(name);
+  let rec = requireRunning(name);
+  const targetCwd = beadWorktreeDir(beadId);
+  if (rec.cwd !== targetCwd) {
+    // Construction, not prompt discipline: a seat handed a DIFFERENT bead
+    // than the one it is sitting in gets stopped and relaunched attached to
+    // its own session, but rooted in the new bead's worktree, before the
+    // prompt goes anywhere near it. Checked BEFORE stopping anything — a
+    // missing worktree must refuse loudly with the seat left exactly as it
+    // was, not stopped on the way to discovering the target doesn't exist.
+    requireCwdDir(targetCwd);
+    await cmdStop(name);
+    await launch(name, requireSeat(name), rec.sessionFile, targetCwd);
+    rec = requireRunning(name);
+  }
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
   const resp = await rpc(rec, {
@@ -521,8 +571,8 @@ const [cmd, ...rest] = process.argv.slice(2);
 async function main(): Promise<void> {
   switch (cmd) {
     case "spawn":
-      if (rest.length !== 1) die("usage: adapter.ts spawn <seat>");
-      return cmdSpawn(validateSeatName(rest[0]));
+      if (rest.length !== 1 && rest.length !== 2) die("usage: adapter.ts spawn <seat> [bead-id]");
+      return cmdSpawn(validateSeatName(rest[0]), rest[1] !== undefined ? validateSegment("bead id", rest[1]) : undefined);
     case "dispatch":
       if (rest.length !== 3) die("usage: adapter.ts dispatch <seat> <bead-id> <text>");
       return cmdDispatch(validateSeatName(rest[0]), validateSegment("bead id", rest[1]), rest[2]);
