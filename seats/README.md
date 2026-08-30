@@ -285,16 +285,35 @@ bun seats/recover.ts
 
 Run it at commander start — after a commander restart, a killed Pi process,
 or a machine reboot — and it tells you what survived. It reads three things
-and nothing else: `seats/state.json`, `seats/run/`, and the live process
-table. Every recorded seat comes back as one of:
+and nothing else: `seats/state.json`, `seats/run/`, and each candidate
+process's open-file table (`lsof`). Every recorded seat comes back as one of:
 
 | class | meaning |
 |---|---|
-| `RUNNING` | The recorded pid is alive AND its command line carries this seat's role brief, so it is our process — not a stranger holding a recycled pid. |
-| `DEAD` | The process is gone (or the pid was reused) but the session file is intact. Resumable: if a bead was in flight, the seat line names it and the EXACT resume command is printed beneath. |
+| `RUNNING` | The recorded pid is alive AND holds this seat's FIFO open — so it is our process, whatever its ps line says. |
+| `DEAD` | The process is gone, or the pid is alive but does not hold the FIFO (reused/foreign), while the session file is intact. Resumable: if a bead was in flight, the seat line names it and the EXACT resume command is printed beneath. |
 | `STALE` | A state entry with no session artifacts on disk. Nothing to resume; spawn fresh when the seat is needed. |
 
-What it will and will not do:
+Identity is established by file descriptors, never by command lines. Pi
+rewrites its process title: a live seat's ps line is exactly `pi` — no role
+brief, no session path, no argv at all (verified against pi 0.84.x; the
+selftest's real-binary probe re-checks this premise on your machine). So
+anything that greps `ps` for a seat's paths calls every live real seat dead,
+resumes over it, and unlinks the FIFO it is reading. What a live seat cannot
+hide is its open fds: the adapter starts every seat with stdin opened
+read-write on `seats/run/<seat>.stdin`, so a process that holds that FIFO IS
+that seat, and one that does not — whatever its pid or title — is not.
+
+The same mechanism answers the machine-restart story. After a reboot every
+pid in `state.json` is stale, and some of those numbers come back alive as
+unrelated processes — pids are dense and recycled. `kill -0` alone would
+call such a seat RUNNING, skip the resume, and strand its bead. Holding the
+seat's FIFO is a test a recycled pid cannot pass, and a `tail -f` or editor
+that merely carries a seat path in its argv cannot pass it either. The seat
+classifies DEAD — resumable, because the session file is what holds the
+seat's memory, and it survived the reboot even though the process did not.
+
+What recover will and will not do:
 
 - **It never resumes anything itself.** Resuming is a commander decision;
   recover puts the command and the bead id in front of you and stops. Its
@@ -306,31 +325,28 @@ What it will and will not do:
   runs first after an interruption is structurally unable to.
 - **It refuses a double-resume.** If a DEAD seat's session is already
   attached — another recorded seat RUNNING on the same session file, or any
-  live process whose command line names it (a `--session` resume the state
-  never caught) — recover prints `REFUSED double-resume` naming the holder
-  instead of a resume command. One session with two writers is corruption
-  with extra steps.
+  live process holding that file open — recover prints
+  `REFUSED double-resume` naming the holder instead of a resume command.
+  One session with two writers is corruption with extra steps. (The
+  open-file check is best-effort for resumes the state never recorded; the
+  state-based check covers everything the adapter did record.)
+- **It requires `lsof`** (present on macOS and virtually every Linux) and
+  STOPs honestly without it rather than guessing identity from `ps`.
 
-The machine-restart story is the reason classification checks the command
-line and not just `kill -0`. After a reboot every pid in `state.json` is
-stale, and some of those numbers will be alive again as unrelated processes
-— pids are dense and recycled. A liveness probe alone would call such a seat
-RUNNING, skip the resume, and strand its bead. Recover treats "pid alive" as
-necessary but not sufficient: the process must also carry the seat's role
-brief in its argv (the adapter passes it via `--append-system-prompt`, so it
-is always there for a real seat). Alive-but-unrecognized reads as
-`pid N reused by another process` and the seat classifies DEAD — resumable,
-because the session file is what holds the seat's memory, and it survived
-the reboot even though the process did not.
-
-The forced-interruption exercise is `seats/recover.selftest.sh`: hermetic
-with the same stub `pi` as the adapter's selftest, it SIGKILLs a seat
-mid-turn and proves the DEAD classification, the named bead, and that the
-printed resume command re-attaches the SAME session file; simulates a
-commander restart (fresh process, `state.json` only) including the
-reused-pid case; proves the double-resume refusal on both detection paths;
-proves orphaned-FIFO cleanup removes only what is dead; and asserts the
-no-duplicate-integration guard — `state.json` byte-identical, zero `pi`
-spawns, zero `bd` calls — with canaries (cmp-guarded sabotage of copies)
-checking that the checks themselves still bite. There is deliberately no
-real-pi leg: recover reads state and the process table, nothing model-side.
+The forced-interruption exercise is `seats/recover.selftest.sh`. Phases 1-5
+and the canaries are hermetic, against a stub `pi` that rewrites its process
+title to bare `pi` exactly like the real binary — so the hermetic suite
+classifies the same argv-less process shape the real fleet presents. They
+SIGKILL a seat mid-turn and prove the DEAD classification, the named bead,
+and that the printed resume command re-attaches the SAME session file;
+simulate a commander restart (fresh process, `state.json` only) including
+the reused-pid and argv-spoof cases; prove the double-resume refusal on both
+detection paths; prove orphaned-FIFO cleanup removes only what is dead; and
+assert the no-duplicate-integration guard — `state.json` byte-identical,
+zero `pi` spawns, zero `bd` calls — with cmp-guarded canaries checking that
+the checks themselves still bite. Phase 6 then probes the REAL binary,
+login-free (a dummy env API key; no request is made and no login is
+touched): it asserts pi's ps title is bare and that pi holds its stdin FIFO
+where `lsof` sees it — the premise and the mechanism, re-verified against
+the pi actually installed. That probe SKIPs, with the reason printed, only
+when `pi` is absent.

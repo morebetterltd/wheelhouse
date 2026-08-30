@@ -3,24 +3,34 @@
  * recover.ts — what is left of the fleet after an interruption?
  *
  * Run at commander start (or any time you are unsure what survived): it reads
- * seats/state.json, seats/run/, and the live process table, and tells you the
- * truth about every recorded seat. It NEVER acts on that truth beyond one
- * safe janitorial step — removing FIFOs whose reader is gone. It does not
- * resume, spawn, dispatch, touch state.json, or call bd; resuming is a
- * decision, and decisions belong to the commander.
+ * seats/state.json, seats/run/, and each candidate process's open file table,
+ * and tells you the truth about every recorded seat. It NEVER acts on that
+ * truth beyond one safe janitorial step — removing FIFOs whose reader is gone.
+ * It does not resume, spawn, dispatch, touch state.json, or call bd; resuming
+ * is a decision, and decisions belong to the commander.
+ *
+ * Identity is established by FILE DESCRIPTORS, never by command lines. Pi
+ * rewrites its process title: a live seat's ps line is exactly `pi` with no
+ * argv (verified against pi 0.84.x — the selftest's real-binary probe
+ * documents this premise), so anything that greps ps for the role brief or
+ * a session path calls every live real seat dead. What a live seat CANNOT
+ * hide is its open fds: the adapter starts every seat with stdin opened
+ * read-write on seats/run/<seat>.stdin, so a process that holds that FIFO is
+ * that seat, and a process that does not — whatever its pid or its title —
+ * is not. This is also reuse-proof (a recycled pid after reboot does not
+ * hold our FIFO) and spoof-proof (a `tail -f` on the role brief carries the
+ * path in its argv but holds no FIFO).
  *
  * Classification, per seat in state.json:
  *
- *   RUNNING  the recorded pid is alive AND its command line carries this
- *            seat's role brief — so it is our process, not a stranger that
- *            inherited the pid after a reboot (pids are dense; `kill -0`
- *            alone cannot tell a survivor from a reuse).
- *   DEAD     the process is gone (or the pid was reused) but the recorded
- *            session file still exists. Resumable: for a seat with a
- *            lastBead, the exact resume command is printed alongside the
- *            bead id. Refused when something is already attached to the
- *            same session — resuming twice is how one session gets two
- *            writers.
+ *   RUNNING  the recorded pid is alive AND holds this seat's FIFO open
+ *            (`lsof -p <pid>` names it).
+ *   DEAD     the process is gone — or the pid is alive but does not hold
+ *            the FIFO (reused/foreign) — and the recorded session file
+ *            still exists. Resumable: for a seat with a lastBead, the exact
+ *            resume command is printed alongside the bead id. Refused when
+ *            something is already attached to the same session — resuming
+ *            twice is how one session gets two writers.
  *   STALE    a state entry with no session artifacts on disk. Nothing to
  *            resume; spawn fresh when the seat is needed again.
  *
@@ -28,6 +38,9 @@
  * seats that are not RUNNING (a FIFO with no reader blocks nothing but lies
  * to the next `ls`); each removal is printed. The adapter's launch path
  * recreates a missing FIFO, so removal never breaks a later resume.
+ *
+ * Requires `lsof` (present on macOS and virtually every Linux); a machine
+ * without it gets a STOP, not a guess.
  *
  * Usage: bun seats/recover.ts
  */
@@ -71,6 +84,11 @@ interface Row {
   detail: string;
 }
 
+function die(msg: string): never {
+  process.stderr.write(`STOP: ${msg}\n`);
+  process.exit(1);
+}
+
 function readState(): State {
   if (!fs.existsSync(STATE_FILE)) return { seats: {} };
   return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
@@ -86,43 +104,72 @@ function pidAlive(pid: number | null): boolean {
   }
 }
 
-/**
- * One snapshot of the live process table: pid -> full command line. Taken
- * once, up front, so every judgment below reads the same instant. `kill -0`
- * answers "is this pid alive"; only the command line answers "is this pid
- * still the process we started" — after a machine restart every recorded pid
- * is stale, and some will be alive again as something else entirely.
- */
-function psTable(): Map<number, string> {
-  const out = execFileSync("ps", ["-axo", "pid=,command="], {
-    encoding: "utf8",
-    maxBuffer: 32 * 1024 * 1024,
-  });
-  const map = new Map<number, string>();
-  for (const line of out.split("\n")) {
-    const m = line.match(/^\s*(\d+)\s+(.*)$/);
-    if (m) map.set(Number(m[1]), m[2]);
+/** The n-lines (open file names) of `lsof -p <pid>`; [] for a dead pid. */
+function openPaths(pid: number): string[] {
+  let out: string;
+  try {
+    out = execFileSync("lsof", ["-Fn", "-p", String(pid)], {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch (e: any) {
+    if (e.code === "ENOENT") die("lsof is not on PATH — recover cannot establish process identity without it");
+    return []; // lsof exits non-zero: pid gone, or nothing visible to us
   }
-  return map;
+  return out
+    .split("\n")
+    .filter((l) => l.startsWith("n"))
+    .map((l) => l.slice(1));
 }
 
 /**
- * Is our seat process the one holding this pid? The adapter launches pi with
- * `--append-system-prompt <roleBrief>`, so the brief's absolute path sits in
- * the process's argv. A pid that is alive but whose command line does not
- * carry the brief is a reuse — a different process that inherited the number
- * — and must be treated as gone, never signalled or trusted.
+ * Does this pid hold this path open? Compared against both the recorded
+ * path and its canonicalized form — lsof reports physical paths, and a
+ * project reached through a symlink records the logical one.
  */
-function classify(rec: SeatRecord, ps: Map<number, string>): { cls: Cls; detail: string } {
+function pidHoldsPath(pid: number, p: string): boolean {
+  const wanted = new Set([p]);
+  try {
+    wanted.add(fs.realpathSync(p));
+  } catch {
+    /* path gone from disk; raw compare still applies */
+  }
+  return openPaths(pid).some((n) => wanted.has(n));
+}
+
+/**
+ * Pids (other than our own) holding a REGULAR file open, via `lsof <file>`.
+ * By-path lsof is dependable for regular files (session files are), and
+ * NOT for FIFOs — which is why seat identity above goes per-pid instead.
+ */
+function pidsHoldingFile(file: string): number[] {
+  let out: string;
+  try {
+    out = execFileSync("lsof", ["-Fp", "--", file], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch (e: any) {
+    if (e.code === "ENOENT") die("lsof is not on PATH — recover cannot establish process identity without it");
+    return []; // exit 1: nobody holds it (or the file is gone)
+  }
+  return out
+    .split("\n")
+    .filter((l) => l.startsWith("p"))
+    .map((l) => Number(l.slice(1)))
+    .filter((pid) => Number.isFinite(pid) && pid !== process.pid);
+}
+
+function classify(rec: SeatRecord): { cls: Cls; detail: string } {
   const alive = rec.pid != null && pidAlive(rec.pid);
-  const cmd = alive ? (ps.get(rec.pid!) ?? "") : "";
-  const ours = alive && !!rec.roleBrief && cmd.includes(rec.roleBrief);
+  const ours = alive && !!rec.fifo && pidHoldsPath(rec.pid!, rec.fifo);
   const sessionIntact = !!rec.sessionFile && fs.existsSync(rec.sessionFile);
 
-  if (ours) return { cls: "RUNNING", detail: `pid ${rec.pid}` };
+  if (ours) return { cls: "RUNNING", detail: `pid ${rec.pid} holds the seat FIFO` };
 
   let gone: string;
-  if (alive) gone = `pid ${rec.pid} reused by another process`;
+  if (alive) gone = `pid ${rec.pid} alive but not holding this seat's FIFO — reused or foreign, treated as gone`;
   else if (rec.pid == null && rec.stoppedAt) gone = `stopped gracefully at ${rec.stoppedAt}`;
   else gone = `pid ${rec.pid ?? "?"} gone`;
 
@@ -131,49 +178,42 @@ function classify(rec: SeatRecord, ps: Map<number, string>): { cls: Cls; detail:
 }
 
 /**
- * Something is already attached to this seat's session — either another
- * recorded seat classified RUNNING on the same session file, or any live
- * process whose command line names the file (`--session <file>` from a
- * resume the state never recorded). Either way a second resume would give
- * one session two writers, so the resume command is refused, not printed.
+ * Something is already attached to this seat's session — another recorded
+ * seat classified RUNNING on the same session file, or any live process
+ * holding the session file open (best-effort: a resume the state never
+ * recorded is only visible while the file is held). Either way a second
+ * resume would give one session two writers, so the resume command is
+ * refused, not printed.
  */
-function sessionAttachment(
-  name: string,
-  rec: SeatRecord,
-  rows: Row[],
-  ps: Map<number, string>
-): string | null {
+function sessionAttachment(name: string, rec: SeatRecord, rows: Row[]): string | null {
   if (!rec.sessionFile) return null;
   for (const r of rows) {
     if (r.name !== name && r.cls === "RUNNING" && r.rec.sessionFile === rec.sessionFile) {
       return `seat ${r.name} (pid ${r.rec.pid})`;
     }
   }
-  for (const [pid, cmd] of ps) {
-    if (pid === process.pid) continue;
-    if (cmd.includes(rec.sessionFile)) return `pid ${pid} (${cmd.slice(0, 120)})`;
-  }
+  const holders = pidsHoldingFile(rec.sessionFile);
+  if (holders.length > 0) return `pid ${holders[0]} (holds the session file open)`;
   return null;
 }
 
 function main(): void {
   const state = readState();
-  const ps = psTable();
 
   const rows: Row[] = Object.entries(state.seats).map(([name, rec]) => {
-    const { cls, detail } = classify(rec, ps);
+    const { cls, detail } = classify(rec);
     return { name, rec, cls, detail };
   });
 
   if (rows.length === 0) {
     console.log(`no seats recorded in ${STATE_FILE} — nothing to recover`);
   } else {
-    console.log("seat classification (state.json + process table):");
+    console.log("seat classification (state.json + run/ + open-fd tables):");
     for (const { name, rec, cls, detail } of rows) {
       const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
       console.log(`${name.padEnd(16)} ${cls.padEnd(8)} ${detail}${bead}`);
       if (cls === "DEAD") {
-        const attachedBy = sessionAttachment(name, rec, rows, ps); // attach-check
+        const attachedBy = sessionAttachment(name, rec, rows); // attach-check
         if (attachedBy) {
           console.log(`  REFUSED double-resume: session already attached by ${attachedBy}`);
         } else if (rec.lastBead) {
