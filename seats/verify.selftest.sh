@@ -8,7 +8,9 @@
 # in a temp HOME on a private PATH, so your real seats and your real pi are
 # never touched or required. The scripted replies drive all four verdict
 # paths: APPROVE, BOUNCE, DISCOVER, and the malformed output that must map
-# to an error, not a judgment.
+# to an error, not a judgment — plus the heterogeneous-evidence gate: bead-
+# named artifacts committed on the branch, floor-checked at the tip, where
+# an APPROVE over a missing/empty/mistyped artifact must be exit 1.
 #
 # The self-approval case is the one this tool exists for: an author seat and
 # a verifier seat resolving to the SAME account directory must be a STOP
@@ -29,7 +31,7 @@
 # Usage: verify.selftest.sh [path-to-verify.ts]
 #
 # Exit 0 = verify.ts works here. Non-zero = read the FAIL lines: a failure
-# in phases 1-6 or the real leg means verify.ts broke; a canary failure
+# in phases 1-8 or the real leg means verify.ts broke; a canary failure
 # means these checks cannot be trusted to tell you either way.
 
 set -uo pipefail   # deliberately not -e: half these cases are meant to fail
@@ -368,8 +370,97 @@ if ! grep -rq "$SENTINEL" "$VDIR" 2>/dev/null; then
   pass "auth.json's content appears nowhere in seats/verdicts/"
 else fail "the auth sentinel leaked into a verdict file"; fi
 
-phase "8. canary — can these checks detect a broken verify.ts?"
-# 8a: a verify.ts whose account-distinctness gate never fires
+phase "8. evidence — artifacts the bead names gate the verdict"
+# The floor checks read the TIP SHA, not any checkout (GRAPH.md's
+# committed-path evidence home), so the fixtures are COMMITTED onto the
+# branch under review via a throwaway worktree: a real bench log, a valid
+# 1x1 PNG, a zero-byte .png, a zero-width PNG, and a text file posing as
+# .png. The missing-artifact case needs no fixture at all.
+EV_WT="$FIX/ev-wt"
+if git -C "$PROJ" worktree add -q "$EV_WT" fleet/bead-1 2>/dev/null; then
+  mkdir -p "$EV_WT/evidence"
+  printf 'bench: 12 assertions, 0 failures\nPASS\n' > "$EV_WT/evidence/bench.log"
+  "$NODE_BIN" -e '
+    const fs = require("fs");
+    const d = process.argv[1] + "/evidence";
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+    fs.writeFileSync(d + "/screen.png", png);
+    const zerodim = Buffer.from(png); zerodim.writeUInt32BE(0, 16);  // IHDR width = 0
+    fs.writeFileSync(d + "/zerodim.png", zerodim);
+    fs.writeFileSync(d + "/empty.png", Buffer.alloc(0));
+    fs.writeFileSync(d + "/fake.png", "not a png at all\n");
+  ' "$EV_WT"
+  ( cd "$EV_WT" &&
+    git add evidence &&
+    git -c user.email=selftest@local -c user.name=selftest commit -q -m evidence ) \
+    || fail "could not commit evidence fixtures onto fleet/bead-1"
+  git -C "$PROJ" worktree remove -f "$EV_WT" 2>/dev/null
+else
+  fail "could not create the evidence fixture worktree"
+fi
+
+cat > "$REPLY" <<'EOF'
+Opened both artifacts: the bench log records a passing run, the screenshot
+shows the expected screen. Done holds.
+VERDICT: APPROVE
+EOF
+run bead-8a fleet/bead-1 worker-1 --evidence evidence/bench.log,evidence/screen.png
+if [ $RC -eq 0 ]; then pass "APPROVE over a satisfied bench log + screenshot exits 0"
+else fail "satisfied heterogeneous evidence exited $RC: $OUT"; fi
+if grep -q "## Evidence checks" "$VDIR/bead-8a.md" 2>/dev/null \
+   && grep -q "evidence/bench.log — exists, .* bytes, non-empty — OK" "$VDIR/bead-8a.md" 2>/dev/null \
+   && grep -q "evidence/screen.png — exists, .* bytes, PNG 1x1 — OK" "$VDIR/bead-8a.md" 2>/dev/null; then
+  pass "verdict file records per-artifact checks: exists, bytes, type probe"
+else fail "evidence checks missing from the verdict record"; fi
+if grep -q "evidence/screen.png" "$VARGV" 2>/dev/null && grep -q "floor" "$VARGV" 2>/dev/null; then
+  pass "the floor-check results reach the verifier's prompt"
+else fail "evidence floor results not in the prompt argv"; fi
+
+cat > "$REPLY" <<'EOF'
+VERDICT: APPROVE
+EOF
+run bead-8b fleet/bead-1 worker-1 --evidence evidence/empty.png
+if [ $RC -eq 1 ] && says "unsatisfied evidence" && says "EMPTY"; then
+  pass "APPROVE over a zero-byte screenshot is malformed, exit 1"
+else fail "zero-byte artifact APPROVE not refused (exit $RC): $OUT"; fi
+run bead-8c fleet/bead-1 worker-1 --evidence evidence/nothing.png
+if [ $RC -eq 1 ] && says "unsatisfied evidence" && says "MISSING at the tip SHA"; then
+  pass "APPROVE over an artifact absent from the tip is malformed, exit 1"
+else fail "missing artifact APPROVE not refused (exit $RC): $OUT"; fi
+run bead-8d fleet/bead-1 worker-1 --evidence evidence/fake.png
+if [ $RC -eq 1 ] && says "NOT a PNG"; then
+  pass "a text file posing as .png is caught by the magic-byte probe"
+else fail "fake .png not refused (exit $RC): $OUT"; fi
+run bead-8e fleet/bead-1 worker-1 --evidence evidence/zerodim.png
+if [ $RC -eq 1 ] && says "degenerate PNG (0x1)"; then
+  pass "a PNG with a zero dimension is degenerate, refused"
+else fail "zero-dimension PNG not refused (exit $RC): $OUT"; fi
+
+cat > "$REPLY" <<'EOF'
+The named screenshot is missing from the branch; the done cannot hold.
+VERDICT: BOUNCE
+EOF
+run bead-8f fleet/bead-1 worker-1 --evidence evidence/nothing.png
+if [ $RC -eq 2 ]; then pass "the gate blocks only APPROVE — BOUNCE over failed evidence still exits 2"
+else fail "BOUNCE with unsatisfied evidence exited $RC (want 2): $OUT"; fi
+if grep -q "MISSING at the tip SHA" "$VDIR/bead-8f.md" 2>/dev/null; then
+  pass "the failed floor check is still recorded on a BOUNCE"
+else fail "failed evidence check not recorded in the BOUNCE verdict file"; fi
+
+cat > "$REPLY" <<'EOF'
+VERDICT: APPROVE
+EOF
+run bead-8g fleet/bead-1 worker-1 --evidence /etc/passwd
+if [ $RC -eq 1 ] && says "invalid evidence path"; then
+  pass "an absolute evidence path is a STOP"
+else fail "absolute evidence path not refused (exit $RC): $OUT"; fi
+run bead-8g fleet/bead-1 worker-1 --evidence ../escape.png
+if [ $RC -eq 1 ] && says "invalid evidence path"; then
+  pass "a dot-dot evidence path is a STOP"
+else fail "dot-dot evidence path not refused (exit $RC): $OUT"; fi
+
+phase "9. canary — can these checks detect a broken verify.ts?"
+# 9a: a verify.ts whose account-distinctness gate never fires
 CAN_A="$FIX/can-a"
 sed 's|if (authorDir === verifierDir) { // distinctness-gate|if (false) { // distinctness-gate|' \
   "$VERIFY" > "$FIX/can-a-verify.ts"
@@ -400,7 +491,7 @@ EOF
   fi
 fi
 
-# 8b: a verify.ts that reports a verdict it never recorded
+# 9b: a verify.ts that reports a verdict it never recorded
 CAN_B="$FIX/can-b"
 sed 's|^  fs.writeFileSync(verdictFile, record); // verdict-write$|  ; // verdict-write|' \
   "$VERIFY" > "$FIX/can-b-verify.ts"
@@ -421,10 +512,29 @@ EOF
     fail "canary: the verdict-write sabotage did not present as phase 1 would catch it (exit $RC, file $([ -f "$CAN_B/seats/verdicts/bead-1.md" ] && echo present || echo absent))"
   fi
 fi
+# 9c: a verify.ts whose evidence gate never fires
+CAN_C="$FIX/can-c"
+sed 's|if (verdict === "APPROVE" \&\& evidenceUnsatisfied.length > 0) { // evidence-gate|if (false) { // evidence-gate|' \
+  "$VERIFY" > "$FIX/can-c-verify.ts"
+if cmp -s "$VERIFY" "$FIX/can-c-verify.ts"; then
+  fail "canary: could not disarm the evidence gate — the line no longer matches, so the canary proves nothing"
+else
+  build_proj "$CAN_C" can-c "$FIX/can-c-verify.ts"
+  RUN_PROJ="$CAN_C"
+  cat > "$REPLY" <<'EOF'
+VERDICT: APPROVE
+EOF
+  run bead-1 fleet/bead-1 worker-1 --evidence evidence/nothing.png
+  if [ $RC -eq 0 ]; then
+    pass "canary: a verify.ts that approves over missing evidence is caught by the exit-1 check"
+  else
+    fail "canary: the evidence-gate sabotage did not present as phase 8 would catch it (exit $RC): $OUT"
+  fi
+fi
 RUN_PROJ="$PROJ"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 
-phase "9. real pi — one smoke leg through the actual binary (SKIP-able)"
+phase "10. real pi — one smoke leg through the actual binary (SKIP-able)"
 REAL_AUTH="$HOME/.pi/agent/auth.json"
 real_auth_is_identity() {
   [ -f "$REAL_AUTH" ] && [ -n "$(tr -d '{}[:space:]' < "$REAL_AUTH" 2>/dev/null)" ]
@@ -506,6 +616,6 @@ if [ $FAILED -eq 0 ]; then
   exit 0
 fi
 echo "$FAILED check(s) failed."
-echo "If the failures are in phases 1-7 or the real leg, verify.ts broke or its"
+echo "If the failures are in phases 1-8 or the real leg, verify.ts broke or its"
 echo "output wording moved. If a failure is in the canary, fix this test first."
 exit 1

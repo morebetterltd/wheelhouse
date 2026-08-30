@@ -180,6 +180,43 @@ tracked verdicts directory would invite citing a third that dies with the
 checkout. Transcribe the decisive extract onto the bead before citing the
 verdict; the file is where you transcribe FROM.
 
+### Evidence the bead names
+
+When the bead's done requires artifacts beside a code/test outcome — a
+screenshot, a bench log, a deployment probe's captured output — the
+commander names them at dispatch, and they become part of the verdict
+contract:
+
+```bash
+bun seats/verify.ts <bead-id> <branch> <author-seat> --evidence <path>[,<path>...]
+```
+
+Paths are repo-relative and read from the TIP SHA (`git cat-file blob
+<tip>:<path>`), never from a checkout: `wheelhouse/GRAPH.md` admits a
+committed path the bead names as an evidence home, and a file that exists
+only in someone's worktree is not one. The WORKER produces the evidence
+and commits it on the branch; the verifier collects and judges it —
+nothing here drives a browser or an emulator.
+
+Before the verifier spawns, `verify.ts` runs a FLOOR check per artifact —
+exists at the SHA, non-empty, type-probed (`.png` gets magic bytes plus
+IHDR dimensions; every other extension gets the non-empty floor) — and
+hands the results to the verifier in the prompt. The floor is not the
+judgment: a valid PNG of the wrong screen is a BOUNCE only the verifier's
+reading can produce. The checks land in the verdict file under
+`## Evidence checks`.
+
+The gate mirrors the NOT BENCHED parser rule: an APPROVE while any named
+artifact fails the floor is MALFORMED — exit 1, never a clean 0 a merge
+script could act on — while BOUNCE and DISCOVER pass through unchanged
+(a failed floor check is a fine BOUNCE reason, and the record still
+carries the checks). Why a flag rather than parsing `Evidence:` lines out
+of `bd show`: the bead text here is a human rendering, and `bd` may be
+unreachable from the dispatcher (which the bead-claim embed already
+tolerates); the commander reads the bead and restates its requirement as
+arguments — the same relationship the bead claim itself has to the
+dispatch.
+
 ### state.json
 
 `seats/state.json` is the seat ↔ process ↔ session record, one entry per

@@ -25,7 +25,27 @@
  * DISCOVER never files beads. The proposal is recorded in the verdict file
  * and printed; acting on it is the commander's decision.
  *
+ * HETEROGENEOUS EVIDENCE: when the bead's done requires artifacts no shell
+ * assertion stands in for — a screenshot, a bench log, a deployment probe's
+ * captured output — the commander names them with --evidence as repo-relative
+ * paths. Each is read from the TIP SHA (`git cat-file blob <tip>:<path>`),
+ * never from a checkout: GRAPH.md admits committed paths as an evidence home,
+ * and a file that exists only in someone's worktree is not one. Per artifact,
+ * a FLOOR check runs before the spawn — exists at the SHA, non-empty, and
+ * type-probed (.png: magic bytes + IHDR dimensions; anything else: non-empty)
+ * — and the results go into the prompt and the verdict record. The floor is
+ * not the judgment: the verifier still opens each artifact and judges its
+ * content against the claim. But an APPROVE while any floor check fails is
+ * MALFORMED — exit 1, mirroring the NOT BENCHED parser rule — never exit 0.
+ *
+ * Why an argument rather than parsing `Evidence:` lines out of `bd show`:
+ * the bead text reaching this dispatcher is a human rendering (and bd may be
+ * unreachable, which beadClaim already tolerates). The commander reads the
+ * bead and restates its requirement as arguments — the same relationship the
+ * bead claim itself already has to the dispatch.
+ *
  * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
+ *          [--evidence <path>[,<path>...]]
  *
  * Exit: 0 APPROVE | 2 BOUNCE | 3 DISCOVER | 1 anything else (including a
  * malformed or missing verdict — the machine must never mistake an error
@@ -76,6 +96,82 @@ function validateSegment(kind: string, value: string): string {
     die(`invalid ${kind} ${JSON.stringify(value)} (${bad}) — must be a single path segment: no /, no .., no whitespace, no quotes`);
   }
   return value;
+}
+
+/**
+ * Evidence paths are repo-relative and become `git cat-file blob <tip>:<path>`
+ * arguments. Absolute paths, dot segments, whitespace, and quotes are refused
+ * loudly — an evidence path escaping the repository is not evidence on the
+ * branch under review.
+ */
+function validateEvidencePath(p: string): string {
+  const bad =
+    p.length === 0 ? "empty" :
+    p.startsWith("/") ? "absolute" :
+    /\\/.test(p) ? "a backslash" :
+    p.split("/").some((s) => s === "." || s === ".." || s === "") ? "a dot or empty segment" :
+    /\s/.test(p) ? "whitespace" :
+    /['"`]/.test(p) ? "a quote character" :
+    null;
+  if (bad !== null) {
+    die(`invalid evidence path ${JSON.stringify(p)} (${bad}) — must be repo-relative: no leading /, no .., no whitespace, no quotes`);
+  }
+  return p;
+}
+
+interface EvidenceCheck {
+  path: string;
+  exists: boolean;
+  bytes: number;
+  probe: string;   // what the type probe concluded, human-readable
+  ok: boolean;     // the floor: exists, non-empty, right type
+}
+
+/**
+ * The type probe: .png gets a real check — PNG magic bytes, then width and
+ * height out of the IHDR — because a screenshot is the artifact most worth
+ * faking accidentally (a zero-byte capture, a text file renamed .png). Every
+ * other extension gets the non-empty floor; deepening a probe for a new
+ * artifact kind belongs here, next to this comment.
+ */
+function probeArtifact(p: string, buf: Buffer): { ok: boolean; probe: string } {
+  if (buf.length === 0) return { ok: false, probe: "EMPTY (0 bytes)" };
+  if (/\.png$/i.test(p)) {
+    const magic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    if (buf.length < 24 || !buf.subarray(0, 8).equals(magic)) {
+      return { ok: false, probe: "NOT a PNG (magic bytes wrong)" };
+    }
+    const w = buf.readUInt32BE(16);
+    const h = buf.readUInt32BE(20);
+    if (w === 0 || h === 0) return { ok: false, probe: `degenerate PNG (${w}x${h})` };
+    return { ok: true, probe: `PNG ${w}x${h}` };
+  }
+  return { ok: true, probe: "non-empty" };
+}
+
+/** Read each named artifact from the tip SHA and run its floor check. A path
+ * that is not a blob at that SHA (missing, or a directory) reads as absent. */
+function checkEvidence(tip: string, paths: string[]): EvidenceCheck[] {
+  return paths.map((p) => {
+    let buf: Buffer;
+    try {
+      buf = execFileSync("git", ["cat-file", "blob", `${tip}:${p}`], {
+        cwd: ROOT,
+        maxBuffer: 256 * 1024 * 1024,
+      });
+    } catch {
+      return { path: p, exists: false, bytes: 0, probe: "MISSING at the tip SHA", ok: false };
+    }
+    const { ok, probe } = probeArtifact(p, buf);
+    return { path: p, exists: true, bytes: buf.length, probe, ok };
+  });
+}
+
+function evidenceLines(checks: EvidenceCheck[]): string[] {
+  return checks.map(
+    (c) =>
+      `- ${c.path} — ${c.exists ? `exists, ${c.bytes} bytes, ${c.probe}` : c.probe} — ${c.ok ? "OK" : "UNSATISFIED"}`
+  );
 }
 
 /** Canonical form for comparing two account dirs: tilde-expanded, resolved,
@@ -168,9 +264,21 @@ function beadClaim(beadId: string): string {
 }
 
 function main(): void {
-  const [beadId, branch, authorSeat, verifierArg] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  const evidencePaths: string[] = [];
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--evidence") {
+      const v = argv[++i];
+      if (!v) die("--evidence requires <path>[,<path>...]");
+      for (const p of v.split(",")) evidencePaths.push(validateEvidencePath(p.trim()));
+    } else {
+      positional.push(argv[i]);
+    }
+  }
+  const [beadId, branch, authorSeat, verifierArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat]");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--evidence <path>[,<path>...]]");
   }
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
@@ -217,6 +325,23 @@ function main(): void {
     die(`branch "${branch}" does not resolve to a commit in ${ROOT} — nothing to verify`);
   }
 
+  // --- evidence floor checks, against the SHA the verdict is about ----------
+  const evidence = checkEvidence(tip, evidencePaths);
+  const evidenceUnsatisfied = evidence.filter((c) => !c.ok);
+  const evidencePrompt =
+    evidence.length === 0
+      ? []
+      : [
+          ``,
+          `Evidence the bead names, floor-checked by the dispatcher at ${tip}:`,
+          ...evidenceLines(evidence),
+          `The floor (exists, non-empty, right type) is not the judgment: open each`,
+          `artifact (git cat-file blob ${tip}:<path>) and judge its content against`,
+          `the claim it supports, recording what you inspected. While any check above`,
+          `reads UNSATISFIED, the done does not hold as stated and an APPROVE cannot`,
+          `be delivered — the dispatcher will refuse it as malformed.`,
+        ];
+
   // --- the one-shot ---------------------------------------------------------
   const prompt = [
     `You are dispatched as the EPHEMERAL verifier for bead ${beadId}.`,
@@ -226,6 +351,7 @@ function main(): void {
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
     beadClaim(beadId),
+    ...evidencePrompt,
     ``,
     `Verify whether the bead's stated done holds at that SHA, per your brief.`,
     `Confirm the branch still resolves to the SHA above before relying on your reading.`,
@@ -282,6 +408,19 @@ function main(): void {
   }
   const verdictShown = notBenched ? `${verdict} — NOT BENCHED: ${notBenched}` : verdict;
 
+  // An APPROVE over a missing, empty, or mistyped artifact the bead requires
+  // is a defect in the verdict, not a judgment — same family as the NOT
+  // BENCHED parser rule: malformed, exit 1, never a clean 0 the dispatcher
+  // could merge on. BOUNCE and DISCOVER pass through: a failed floor check
+  // is a fine BOUNCE reason, and the record below still carries the checks.
+  if (verdict === "APPROVE" && evidenceUnsatisfied.length > 0) { // evidence-gate
+    die(
+      `verdict APPROVE with unsatisfied evidence — the bead names artifacts that fail the floor at ${tip}:\n` +
+        evidenceLines(evidenceUnsatisfied).map((l) => `      ${l}`).join("\n") +
+        `\n      An APPROVE cannot stand on evidence that is not there; this is malformed, not a judgment.`
+    );
+  }
+
   // --- record, then report --------------------------------------------------
   fs.mkdirSync(VERDICTS_DIR, { recursive: true });
   const verdictFile = path.join(VERDICTS_DIR, `${beadId}.md`);
@@ -301,6 +440,18 @@ function main(): void {
     verdict === "DISCOVER"
       ? `> DISCOVER: proposal recorded below for the commander; no beads were filed.`
       : ``,
+    ...(evidence.length > 0
+      ? [
+          ``,
+          `## Evidence checks`,
+          ``,
+          `Floor checks the dispatcher ran against ${tip} before the spawn`,
+          `(exists, bytes, type probe). The verifier's judgment of the content`,
+          `is in its output below.`,
+          ``,
+          ...evidenceLines(evidence),
+        ]
+      : []),
     ``,
     `## Verifier output`,
     ``,
@@ -311,6 +462,9 @@ function main(): void {
 
   console.log(`VERDICT: ${verdictShown}  (bead ${beadId}, tip ${tip.slice(0, 12)}, verifier ${verifierSeat})`);
   console.log(`  full output -> ${verdictFile}`);
+  if (evidence.length > 0) {
+    console.log(`  evidence: ${evidence.length} named artifact(s) floor-checked at the tip, ${evidenceUnsatisfied.length} unsatisfied`);
+  }
   if (verdict === "DISCOVER") {
     console.log(`  DISCOVER files no beads — the proposal waits in the verdict file for the commander.`);
   }

@@ -77,6 +77,31 @@ report what you started, at which SHA, where the output will land — and
 emit no `VERDICT:` line. A bench that has been started has told you
 nothing yet.
 
+### Evidence the bead names
+
+A bead's done can require an artifact no shell assertion stands in for —
+a screenshot, a bench log, the captured output of a deployment probe. The
+bead names such artifacts at committed paths on the branch under review
+(`wheelhouse/GRAPH.md`, *Where evidence lives*), and your dispatch may
+carry them as part of the verdict contract, each with a floor check the
+dispatcher ran before you spawned: the artifact exists at the SHA under
+review, it is not empty, and it is the kind of file it claims to be.
+
+The floor is not the judgment. A file can exist, carry valid image bytes,
+and show the wrong screen; a bench log can be non-empty and record a
+failing run. Open each named artifact yourself, judge its content against
+the claim it is supposed to support, and record in your evidence what you
+inspected and what it showed. The worker produced the evidence; you
+collect and judge it — a verifier that regenerates the artifact itself is
+verifying its own work, not the branch's.
+
+While any named artifact fails the floor — missing, empty, degenerate —
+the done does not hold as stated, and an APPROVE is a defect in the
+verdict exactly as an unbenched behavioral APPROVE is; a dispatcher that
+carries the floor checks refuses to deliver one. Say which artifact
+failed and why in a BOUNCE, or in a DISCOVER when the absence shows the
+bead is mis-scoped rather than unfinished.
+
 ### When no bench covers the part you are verifying
 
 A project's bench can cover only some of what the project ships;
