@@ -207,11 +207,22 @@ repository is — the scratch one included, and disposable specifically
 because nothing about it matters except that it exists and is not the
 live checkout.
 
-Known gap, same class recover.ts's fixture sweep exists for elsewhere in
-this codebase: `process.on("exit", ...)` cannot run on SIGKILL, so killing
-the dispatcher process mid-verification leaves the scratch worktree (and
-its `git worktree` registration) behind. No sweep for this exists yet —
-out of scope for the bead that added the mechanism.
+`process.on("exit", ...)` cannot run on SIGKILL, so killing the dispatcher
+process mid-verification leaves the scratch worktree (and its `git
+worktree` registration) behind — same gap class recover.ts's fixture
+sweep exists for elsewhere in this codebase. `sweepStaleScratchWorktrees()`
+closes it: run once at the start of every `verify.ts` invocation, it asks
+`git worktree list --porcelain` which worktrees are actually registered
+against `ROOT` (never guesses from a directory listing — a shared
+`os.tmpdir()` can hold same-prefixed scratch dirs from an unrelated
+project's `verify.ts` on the same machine), filters to the
+`wheelhouse-verify-<pid>-*` naming `makeScratchCwd()` uses, and reclaims
+only the ones whose stamped owning pid is no longer alive. Unlike
+recover.ts's sweep, it never needs an fd-based cross-check against pid
+reuse: that sweep KILLS live processes, so a reused pid is a real hazard;
+this one only ever removes a directory and a worktree registration, and a
+dead pid means the run that made it has already exited — full stop,
+whatever the OS later did with that pid number.
 
 The verifier seat comes from the roster: the one entry with
 `"role": "verifier"`, or the optional fourth argument when there are

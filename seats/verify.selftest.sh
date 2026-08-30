@@ -562,7 +562,37 @@ fi
 RUN_PROJ="$PROJ"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 
-phase "10. real pi — one smoke leg through the actual binary (SKIP-able)"
+phase "10. sweep — a SIGKILLed run's scratch worktree is reclaimed, a live one is spared"
+# sweepStaleScratchWorktrees() runs at the very top of main(), before argv
+# is even validated, so a bare no-args invocation (an immediate usage STOP)
+# exercises it as cheaply as a full round trip does.
+ORPHAN_DIR="$FIX/wheelhouse-verify-999999999-orphan"
+mkdir -p "$ORPHAN_DIR"
+git -C "$PROJ" worktree add --detach "$ORPHAN_DIR" HEAD >/dev/null 2>&1
+sleep 5 & LIVE_OWNER_PID=$!
+LIVE_DIR="$FIX/wheelhouse-verify-${LIVE_OWNER_PID}-live"
+mkdir -p "$LIVE_DIR"
+git -C "$PROJ" worktree add --detach "$LIVE_DIR" HEAD >/dev/null 2>&1
+if git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" && git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR"; then
+  pass "both a planted orphan (dead pid) and a planted live (real pid) scratch worktree are registered"
+else fail "could not plant both test scratch worktrees before sweeping"; fi
+
+run   # no args: usage STOP, but only after sweepStaleScratchWorktrees() ran
+if ! git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" && [ ! -d "$ORPHAN_DIR" ]; then
+  pass "the orphaned scratch worktree (dead pid) was reclaimed: unregistered and removed from disk"
+else fail "the orphan was NOT reclaimed — still registered or still on disk: $(git -C "$PROJ" worktree list)"; fi
+if git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ -d "$LIVE_DIR" ]; then
+  pass "the live scratch worktree (real running pid) was spared — still registered and on disk"
+else fail "the live worktree was swept even though its owner pid is still alive"; fi
+
+kill "$LIVE_OWNER_PID" 2>/dev/null
+i=0; while kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+run   # a second sweep pass, now that the "live" owner has actually exited
+if ! git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
+  pass "once its owner pid actually exits, a later sweep reclaims that worktree too"
+else fail "the formerly-live worktree was not reclaimed after its owner pid died: $(git -C "$PROJ" worktree list)"; fi
+
+phase "11. real pi — one smoke leg through the actual binary (SKIP-able)"
 REAL_AUTH="$HOME/.pi/agent/auth.json"
 real_auth_is_identity() {
   [ -f "$REAL_AUTH" ] && [ -n "$(tr -d '{}[:space:]' < "$REAL_AUTH" 2>/dev/null)" ]

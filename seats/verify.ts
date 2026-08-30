@@ -92,13 +92,16 @@ const TIMEOUT_MS = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || 900000);
  * only so a stray write has somewhere harmless to land, and so `git`
  * commands run from inside it resolve at all. Removed on every exit path
  * via `process.on("exit", ...)`, which still fires synchronous cleanup
- * when `die()` calls `process.exit()` mid-run. Known gap, same class
- * recover.ts's fixture sweep exists for elsewhere in this codebase: a
- * SIGKILL of the dispatcher process itself skips the "exit" event and
- * leaves the scratch worktree behind — out of scope for this change.
+ * when `die()` calls `process.exit()` mid-run. The one path that skips
+ * "exit" — a SIGKILL of the dispatcher — is handled by
+ * sweepStaleScratchWorktrees() below, run once at the top of every
+ * invocation, not by anything here.
+ *
+ * Named `wheelhouse-verify-<owning-pid>-<random>` so a later sweep can
+ * tell which process made it without asking anything but the path.
  */
 function makeScratchCwd(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wheelhouse-verify-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-verify-${process.pid}-`));
   try {
     execFileSync("git", ["-C", ROOT, "worktree", "add", "--detach", dir, "HEAD"], { stdio: "pipe" });
   } catch (e: any) {
@@ -113,6 +116,68 @@ function makeScratchCwd(): string {
     }
   });
   return dir;
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    return e.code === "EPERM"; // exists, not ours to signal — still alive
+  }
+}
+
+/**
+ * Reclaims scratch worktrees a SIGKILLed dispatcher left behind —
+ * makeScratchCwd()'s process.on("exit") cleanup cannot fire on SIGKILL,
+ * so a killed run orphans both the tmp directory and its `git worktree`
+ * registration. Run once at the top of every invocation, before anything
+ * else, so a diagnosis-only run that STOPs early still sweeps up after
+ * whichever prior run left a mess.
+ *
+ * Asks git itself which worktrees are registered against ROOT rather than
+ * globbing the tmp directory: `os.tmpdir()` is shared machine-wide, and a
+ * DIFFERENT project's verify.ts (or a whole other wheelhouse fleet on the
+ * same box) can leave same-prefixed scratch dirs there — `git worktree
+ * list` only ever names worktrees that belong to THIS repository, so
+ * nothing gets touched that ROOT does not already confirm is its own.
+ * Filters those to the `wheelhouse-verify-<pid>-*` naming makeScratchCwd()
+ * uses, and reclaims only the ones whose stamped pid is no longer alive.
+ *
+ * No fd-based cross-check the way recover.ts's fixture sweep needs one:
+ * that sweep KILLS live processes, so a reused pid is a real hazard it
+ * has to rule out before pulling the trigger. This sweep never touches a
+ * process, only a directory and a worktree registration — a dead pid
+ * means the verify.ts invocation that owned this scratch worktree has
+ * already exited, full stop, whether or not the OS later handed that pid
+ * to something unrelated. The asymmetry runs the safe way: a wrong
+ * reading here means "swept one run late," never "swept a worktree still
+ * in use" — an alive pid is always treated as still owning its worktree,
+ * reused or not.
+ */
+function sweepStaleScratchWorktrees(): void {
+  let listing: string;
+  try {
+    listing = execFileSync("git", ["-C", ROOT, "worktree", "list", "--porcelain"], { encoding: "utf8" });
+  } catch {
+    return; // nothing to sweep if ROOT itself will not answer
+  }
+  const worktreePaths = listing
+    .split("\n")
+    .filter((l) => l.startsWith("worktree "))
+    .map((l) => l.slice("worktree ".length));
+  for (const p of worktreePaths) {
+    const m = path.basename(p).match(/^wheelhouse-verify-(\d+)-/);
+    if (!m) continue; // not one of ours
+    if (pidAlive(Number(m[1]))) continue; // owner still running — not stale
+    try {
+      execFileSync("git", ["-C", ROOT, "worktree", "remove", "--force", p], { stdio: "ignore" });
+    } catch {
+      try { fs.rmSync(p, { recursive: true, force: true }); } catch {}
+      try { execFileSync("git", ["-C", ROOT, "worktree", "prune"], { stdio: "ignore" }); } catch {}
+    }
+    process.stderr.write(`swept: removed orphaned scratch worktree ${p} (owner pid ${m[1]} is gone)\n`);
+  }
 }
 
 function die(msg: string): never {
@@ -312,6 +377,7 @@ function beadClaim(beadId: string): string {
 }
 
 function main(): void {
+  sweepStaleScratchWorktrees();
   const argv = process.argv.slice(2);
   const evidencePaths: string[] = [];
   const positional: string[] = [];
