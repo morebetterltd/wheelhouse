@@ -9,12 +9,14 @@ Two processes pointed at different directories cannot share or clobber each
 other's identity, and a reviewer seat on its own directory is what makes
 "never the author's account" a fact on disk rather than a policy.
 
-Three files live here:
+Four files live here:
 
 - `seats.json.example` — the roster format. Copy it to `seats.json` and edit.
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
   project root, and prints the export line and the one-time login command.
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, resume.
+- `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
+  and maps its verdict to an exit code.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, which only `pi /login` writes and which never enters git.
@@ -125,6 +127,50 @@ attached to it (`--session`), so the context it built up comes back warm.
 What the adapter is NOT: a supervisor. Nothing restarts a dead seat, meters
 quota, or retries. It runs seats; noticing them is the commander's job.
 
+## Verifying a branch
+
+```bash
+bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
+```
+
+One invocation = one verdict. Unlike the seats above, the verifier is
+EPHEMERAL: `verify.ts` spawns one `pi -p --no-session` on the verifier
+seat's account — no session saved, nothing to resume — with
+`contracts/VERIFIER.md` appended to the system prompt, hands it the bead
+claim (via `bd show` when `bd` is reachable, otherwise the verifier reads
+the bead itself) and the branch's tip SHA, and parses the single
+`VERDICT:` line out of the reply.
+
+The verifier seat comes from the roster: the one entry with
+`"role": "verifier"`, or the optional fourth argument when there are
+several. Before ANYTHING spawns, `verify.ts` compares the author seat's
+`account.dir` (roster first, `seats/state.json` as fallback for a retired
+seat) against the verifier's, both canonicalized — the same directory
+means the same `auth.json` means the same account, and that is a loud
+STOP, not a warning. "Never verify what you authored" is enforced on disk
+here, before the model ever runs.
+
+The exit code IS the verdict, so the commander's scripts can branch on it:
+
+| exit | meaning |
+|---|---|
+| `0` | APPROVE — the bead's done holds, evidence in the output. May carry the brief's `— NOT BENCHED: <gap>` qualifier, preserved in the verdict file: read it before merging on a partial-coverage approval. |
+| `2` | BOUNCE — defects listed; redispatch to the author |
+| `3` | DISCOVER — the bead itself needs the commander's judgment |
+| `1` | error — no verdict exists: a STOP, a dead pi, or output with no (or an ambiguous) `VERDICT:` line. Never treat as a verdict. |
+
+DISCOVER files no beads. The verifier's proposal is recorded for the
+commander, who decides what the graph should say about it — a verifier
+that wrote to the graph would be deciding, not reporting.
+
+The full verifier output lands in `seats/verdicts/<bead-id>.md`. That file
+is a WORKING COPY for the commander, and git ignores it deliberately:
+`wheelhouse/GRAPH.md` ("Where evidence lives") admits exactly two evidence
+homes — the bead itself, or a committed path the bead names — and a
+tracked verdicts directory would invite citing a third that dies with the
+checkout. Transcribe the decisive extract onto the bead before citing the
+verdict; the file is where you transcribe FROM.
+
 ### state.json
 
 `seats/state.json` is the seat ↔ process ↔ session record, one entry per
@@ -150,14 +196,19 @@ with `seats/run/` and `seats/logs/`.
 ```bash
 bash seats/seat-env.selftest.sh
 bash seats/adapter.selftest.sh
+bash seats/verify.selftest.sh
 ```
 
-Hermetic — both build seats in a temp HOME with a stub `pi`, and your real
-seats are never touched. Each ends with a canary phase that breaks a copy of
+Hermetic — all three build seats in a temp HOME with a stub `pi`, and your
+real seats are never touched. Each has a canary phase that breaks a copy of
 the thing under test and checks the tests notice; if a canary survives, the
-selftest fails even when everything else passed. The adapter selftest adds
-one real-pi smoke leg at the end — spawn, dispatch, agent_end, resume, and
-the session file growing — which borrows your own `pi /login` inside the
-temp fixture; it prints a SKIP line (and still passes) if `pi` or the login
-is missing, or if `WHEELHOUSE_SKIP_REAL_PI=1`. `seats/logs/` is where seat
+selftest fails even when everything else passed. The adapter and verify
+selftests each add one real-pi smoke leg at the end — the adapter's runs
+spawn, dispatch, agent_end, resume, and the session file growing; verify's
+runs one scripted-reply verdict through the real binary — borrowing your
+own `pi /login` inside the temp fixture; each prints a SKIP line (and still
+passes) if `pi` or the login is missing, or if `WHEELHOUSE_SKIP_REAL_PI=1`.
+A login whose OAuth refresh token has gone stale is NOT skipped: the real
+leg fails the same way every real `pi` run on the machine would, and the
+fix is `pi /login`, not a looser test. `seats/logs/` is where seat
 runtime logs land; it is per-machine noise and git ignores it.

@@ -1,0 +1,430 @@
+#!/usr/bin/env bash
+#
+# verify.selftest.sh — does verify.ts still do what seats/README.md claims,
+# on THIS machine?
+#
+# Hermetic: every phase but the last runs against a stub `pi` — a node script
+# that records its argv and environment, prints a scripted reply, and exits —
+# in a temp HOME on a private PATH, so your real seats and your real pi are
+# never touched or required. The scripted replies drive all four verdict
+# paths: APPROVE, BOUNCE, DISCOVER, and the malformed output that must map
+# to an error, not a judgment.
+#
+# The self-approval case is the one this tool exists for: an author seat and
+# a verifier seat resolving to the SAME account directory must be a STOP
+# BEFORE anything spawns — asserted by checking the stub was never invoked.
+#
+# The canary phase sabotages COPIES of verify.ts — once with the account-
+# distinctness gate disarmed, once with the verdict-file write cut — and
+# checks these tests notice. Each sabotage is guarded with cmp: if the sed
+# no longer bites, the canary says so instead of proving nothing.
+#
+# The last phase is ONE real-pi smoke leg (SKIP-able): a fixture project
+# whose VERIFIER.md brief is a scripted-reply instruction, so one trivial
+# model turn proves the spawn/parse/record plumbing against the real binary.
+# It borrows your login the way adapter.selftest.sh does; no pi, no login,
+# or WHEELHOUSE_SKIP_REAL_PI=1 each print a SKIP line and the hermetic
+# phases still decide the exit code.
+#
+# Usage: verify.selftest.sh [path-to-verify.ts]
+#
+# Exit 0 = verify.ts works here. Non-zero = read the FAIL lines: a failure
+# in phases 1-6 or the real leg means verify.ts broke; a canary failure
+# means these checks cannot be trusted to tell you either way.
+
+set -uo pipefail   # deliberately not -e: half these cases are meant to fail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+VERIFY="${1:-$HERE/verify.ts}"
+[ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
+command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run verify.ts" >&2; exit 2; }
+NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
+GIT_BIN="$(command -v git)" || { echo "selftest: git is required" >&2; exit 2; }
+REAL_PI="$(command -v pi || true)"
+
+FAILED=0
+FIX=""
+
+pass() { printf '  ok    %s\n' "$*"; }
+fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
+skip() { printf '  SKIP  %s\n' "$*"; }
+phase(){ printf '\n%s\n' "$*"; }
+
+cleanup() { [ -n "$FIX" ] && rm -rf "$FIX"; return 0; }
+trap cleanup EXIT INT TERM
+
+# --- fixture -----------------------------------------------------------------
+# Canonicalized for the same reason the other seat selftests canonicalize: on
+# macOS mktemp hands out /var/... paths that are really /private/var/...
+FIX="$(mktemp -d)"
+FIX="$(cd "$FIX" && pwd -P)"
+HOME_FIX="$FIX/home"
+BIN="$FIX/bin"
+mkdir -p "$HOME_FIX" "$BIN"
+RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
+
+# The stub pi: one shot. Records argv and PI_CODING_AGENT_DIR into the agent
+# dir, touches an "invoked" marker, prints the scripted reply named by
+# STUB_REPLY_FILE, exits STUB_EXIT (default 0). No sessions, no protocol —
+# the one-shot path is argv in, stdout out, and that is what gets asserted.
+cat > "$BIN/pi" <<'STUB'
+#!/usr/bin/env node
+const fs = require("fs"), path = require("path");
+const agentDir = process.env.PI_CODING_AGENT_DIR;
+if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
+fs.mkdirSync(agentDir, { recursive: true });
+fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(path.join(agentDir, "invoked"), "");
+const reply = process.env.STUB_REPLY_FILE;
+if (reply) process.stdout.write(fs.readFileSync(reply, "utf8"));
+process.exit(Number(process.env.STUB_EXIT || 0));
+STUB
+chmod +x "$BIN/pi"
+[ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
+
+# A fixture project: verify.ts expects to live at <root>/seats/verify.ts with
+# the brief at <root>/contracts/VERIFIER.md, and the root to be a git repo
+# holding the branch under review.
+SENTINEL='SENTINEL-TOKEN-9c2e'
+build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
+  local proj="$1" ns="$2" src="$3" d
+  mkdir -p "$proj/seats" "$proj/contracts"
+  cp "$src" "$proj/seats/verify.ts"
+  printf '# Crew: Verifier\n\nfixture brief — the stub never reads it, the argv check does.\n' \
+    > "$proj/contracts/VERIFIER.md"
+  cat > "$proj/seats/seats.json" <<EOF
+{
+  "commander": { "role": "commander", "external": true, "runtime": "claude-code" },
+  "seats": {
+    "worker-1": {
+      "role": "worker",
+      "provider": "anthropic",
+      "model": "stub-model-1",
+      "account": { "dir": "~/.pi-seats-$ns/worker-1" }
+    },
+    "verifier": {
+      "role": "verifier",
+      "provider": "openai",
+      "model": "stub-model-v",
+      "account": { "dir": "~/.pi-seats-$ns/verifier" }
+    }
+  }
+}
+EOF
+  for d in worker-1 verifier; do
+    mkdir -p "$HOME_FIX/.pi-seats-$ns/$d"
+    printf '{\n  "%s": true\n}\n' "$proj" > "$HOME_FIX/.pi-seats-$ns/$d/trust.json"
+    printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-$ns/$d/auth.json"
+  done
+  ( cd "$proj" &&
+    git init -q &&
+    git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base &&
+    git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
+}
+
+PROJ="$FIX/proj"
+build_proj "$PROJ" alpha "$VERIFY"
+TIP="$(git -C "$PROJ" rev-parse fleet/bead-1)"
+
+REPLY="$FIX/reply.txt"
+run() {   # runs verify.ts in the fixture; args pass through
+  OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" \
+    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+  RC=$?
+}
+says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+RUN_PROJ="$PROJ"
+VDIR="$PROJ/seats/verdicts"
+VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
+VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
+
+phase "1. APPROVE — verdict parsed, recorded, exit 0, and what was launched"
+cat > "$REPLY" <<EOF
+Checked the done: diff at $TIP adds the thing the bead asks for.
+\$ git show --stat fleet/bead-1
+ 1 file changed
+VERDICT: APPROVE
+EOF
+run bead-1 fleet/bead-1 worker-1
+if [ $RC -eq 0 ]; then pass "APPROVE exits 0"
+else fail "APPROVE path exited $RC: $OUT"; fi
+if says "VERDICT: APPROVE"; then pass "the verdict is printed for the dispatcher"
+else fail "no VERDICT: APPROVE in output: $OUT"; fi
+if [ -f "$VDIR/bead-1.md" ]; then pass "verdict file written to seats/verdicts/bead-1.md"
+else fail "no verdict file at $VDIR/bead-1.md"; fi
+if grep -q "verdict: APPROVE" "$VDIR/bead-1.md" 2>/dev/null \
+   && grep -q "tip: $TIP" "$VDIR/bead-1.md" 2>/dev/null \
+   && grep -q "git show --stat" "$VDIR/bead-1.md" 2>/dev/null; then
+  pass "verdict file carries verdict, tip SHA, and the evidence excerpt"
+else fail "verdict file is missing verdict, tip, or evidence"; fi
+if grep -q "Working copy only" "$VDIR/bead-1.md" 2>/dev/null; then
+  pass "verdict file names itself a working copy, not an evidence home"
+else fail "verdict file does not carry the working-copy warning"; fi
+if [ -f "$VARGV" ] && grep -q '"-p","--no-session"' "$VARGV"; then
+  pass "pi was launched one-shot: -p --no-session"
+else fail "argv.json missing or pi not launched with -p --no-session"; fi
+if grep -q "\"--append-system-prompt\",\"$PROJ/contracts/VERIFIER.md\"" "$VARGV" 2>/dev/null; then
+  pass "role brief injected: --append-system-prompt names contracts/VERIFIER.md"
+else fail "verifier brief not passed"; fi
+if grep -q '"--provider","openai","--model","stub-model-v"' "$VARGV" 2>/dev/null; then
+  pass "the VERIFIER seat's provider and model pin the launch (not the author's)"
+else fail "verifier provider/model from seats.json did not reach pi's argv"; fi
+if grep -q "bead-1" "$VARGV" && grep -q "$TIP" "$VARGV" && grep -q "bd show bead-1" "$VARGV"; then
+  pass "prompt carries the bead id, the tip SHA, and the bead-claim reference"
+else fail "prompt is missing bead id, tip SHA, or bead claim"; fi
+
+cat > "$REPLY" <<EOF
+Static half verified; no bench covers the docs deployable this touches.
+VERDICT: APPROVE — NOT BENCHED: the docs deployable
+EOF
+run bead-1nb fleet/bead-1 worker-1
+if [ $RC -eq 0 ]; then pass "APPROVE — NOT BENCHED still exits 0"
+else fail "NOT BENCHED APPROVE exited $RC: $OUT"; fi
+if grep -q "verdict: APPROVE — NOT BENCHED: the docs deployable" "$VDIR/bead-1nb.md" 2>/dev/null; then
+  pass "the NOT BENCHED qualifier survives into the verdict record"
+else fail "NOT BENCHED qualifier lost from the verdict file"; fi
+
+phase "2. BOUNCE — exit 2"
+rm -f "$VDIR/bead-2.md"
+cat > "$REPLY" <<'EOF'
+The done requires X; the diff does Y.
+VERDICT: BOUNCE
+EOF
+run bead-2 fleet/bead-1 worker-1
+if [ $RC -eq 2 ]; then pass "BOUNCE exits 2"
+else fail "BOUNCE path exited $RC (want 2): $OUT"; fi
+if grep -q "verdict: BOUNCE" "$VDIR/bead-2.md" 2>/dev/null; then
+  pass "BOUNCE verdict recorded"
+else fail "no BOUNCE verdict file"; fi
+
+phase "3. DISCOVER — exit 3, proposal recorded, no beads filed"
+rm -f "$VDIR/bead-3.md"
+cat > "$REPLY" <<'EOF'
+The bead asks to fix a function that no longer exists; the premise is stale.
+Proposal: retarget the bead at the module that replaced it.
+VERDICT: DISCOVER
+EOF
+run bead-3 fleet/bead-1 worker-1
+if [ $RC -eq 3 ]; then pass "DISCOVER exits 3"
+else fail "DISCOVER path exited $RC (want 3): $OUT"; fi
+if says "DISCOVER files no beads"; then
+  pass "the dispatcher says out loud that no beads were filed"
+else fail "no files-no-beads line in output: $OUT"; fi
+if grep -q "no beads were filed" "$VDIR/bead-3.md" 2>/dev/null \
+   && grep -q "Proposal: retarget" "$VDIR/bead-3.md" 2>/dev/null; then
+  pass "verdict file records the proposal for the commander"
+else fail "verdict file missing the proposal or the no-beads note"; fi
+# The graph is out of reach in this fixture (no bd on PATH), so a DISCOVER
+# that tried to file a bead would have died loudly instead of exiting 3 —
+# the clean exit above is itself the no-write evidence.
+
+phase "4. self-approval — same account dir is a STOP before any spawn"
+rm -f "$VINVOKED"
+# A roster whose verifier points at the AUTHOR's directory:
+cp "$PROJ/seats/seats.json" "$FIX/seats.json.good"
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats.verifier.account.dir = j.seats["worker-1"].account.dir;
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$PROJ/seats/seats.json"
+check_self_approval() {   # $1 = label
+  local label="$1"
+  run bead-4 fleet/bead-1 worker-1
+  if [ $RC -eq 1 ] && says "SAME account directory"; then
+    pass "$label: identical account dirs refused with a STOP, exit 1"
+  else fail "$label: self-approval not refused (exit $RC): $OUT"; fi
+  if [ ! -f "$HOME_FIX/.pi-seats-alpha/worker-1/invoked" ] && [ ! -f "$VINVOKED" ]; then
+    pass "$label: nothing was spawned — the stub was never invoked"
+  else fail "$label: the stub pi ran despite the identity collision"; fi
+}
+cat > "$REPLY" <<'EOF'
+VERDICT: APPROVE
+EOF
+check_self_approval "self-approval"
+cp "$FIX/seats.json.good" "$PROJ/seats/seats.json"
+rm -f "$HOME_FIX/.pi-seats-alpha/worker-1/invoked" "$VINVOKED"
+
+phase "5. malformed output — an error, never a judgment"
+rm -f "$VDIR/bead-5.md"
+cat > "$REPLY" <<'EOF'
+I looked at the diff and it seems fine to me. Great work.
+EOF
+run bead-5 fleet/bead-1 worker-1
+if [ $RC -eq 1 ] && says "no VERDICT"; then
+  pass "missing VERDICT: line exits 1 with a STOP"
+else fail "missing verdict not treated as error (exit $RC): $OUT"; fi
+if [ ! -f "$VDIR/bead-5.md" ]; then
+  pass "no verdict file written for a non-verdict"
+else fail "a verdict file was written despite there being no verdict"; fi
+cat > "$REPLY" <<'EOF'
+VERDICT: APPROVE
+wait, actually:
+VERDICT: BOUNCE
+EOF
+run bead-5 fleet/bead-1 worker-1
+if [ $RC -eq 1 ] && says "2 VERDICT: lines"; then
+  pass "two conflicting VERDICT: lines exit 1 rather than picking one"
+else fail "ambiguous double verdict not refused (exit $RC): $OUT"; fi
+cat > "$REPLY" <<'EOF'
+VERDICT: BOUNCE — NOT BENCHED: something
+EOF
+run bead-5 fleet/bead-1 worker-1
+if [ $RC -eq 1 ] && says "APPROVE and nothing else"; then
+  pass "NOT BENCHED on a non-APPROVE verdict exits 1"
+else fail "NOT BENCHED on BOUNCE not refused (exit $RC): $OUT"; fi
+cat > "$REPLY" <<'EOF'
+VERDICT: SHIP-IT
+EOF
+run bead-5 fleet/bead-1 worker-1
+if [ $RC -eq 1 ] && says "malformed verdict"; then
+  pass "an unknown verdict value exits 1"
+else fail "unknown verdict value not refused (exit $RC): $OUT"; fi
+cat > "$REPLY" <<'EOF'
+VERDICT: APPROVE
+EOF
+OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_EXIT=3 \
+  bun "$PROJ/seats/verify.ts" bead-5 fleet/bead-1 worker-1 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && says "pi exited 3"; then
+  pass "a failing pi exits 1 even when a VERDICT line is present"
+else fail "pi failure not treated as error (exit $RC): $OUT"; fi
+
+phase "6. preconditions — the STOPs that guard the spawn"
+run bead-6 no-such-branch worker-1
+if [ $RC -eq 1 ] && says "does not resolve"; then
+  pass "a branch that does not resolve is a STOP"
+else fail "missing branch not refused (exit $RC): $OUT"; fi
+run bead-6 fleet/bead-1 no-such-seat
+if [ $RC -eq 1 ] && says "no seat named"; then
+  pass "an unknown author seat is a STOP — distinctness needs a named account"
+else fail "unknown author seat not refused (exit $RC): $OUT"; fi
+run bead-6 fleet/bead-1 worker-1 worker-1
+if [ $RC -eq 1 ] && says 'not "verifier"'; then
+  pass "naming a non-verifier seat as the verifier is a STOP"
+else fail "non-verifier verifier seat not refused (exit $RC): $OUT"; fi
+: > "$HOME_FIX/.pi-seats-alpha/verifier/auth.json"
+run bead-6 fleet/bead-1 worker-1
+if [ $RC -eq 1 ] && says "no identity"; then
+  pass "a verifier seat that was never logged in is a STOP"
+else fail "identity-less verifier not refused (exit $RC): $OUT"; fi
+printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-alpha/verifier/auth.json"
+
+phase "7. no tokens — identity never leaks into the verdict record"
+if ! grep -rq "$SENTINEL" "$VDIR" 2>/dev/null; then
+  pass "auth.json's content appears nowhere in seats/verdicts/"
+else fail "the auth sentinel leaked into a verdict file"; fi
+
+phase "8. canary — can these checks detect a broken verify.ts?"
+# 8a: a verify.ts whose account-distinctness gate never fires
+CAN_A="$FIX/can-a"
+sed 's|if (authorDir === verifierDir) { // distinctness-gate|if (false) { // distinctness-gate|' \
+  "$VERIFY" > "$FIX/can-a-verify.ts"
+if cmp -s "$VERIFY" "$FIX/can-a-verify.ts"; then
+  fail "canary: could not disarm the distinctness gate — the line no longer matches, so the canary proves nothing"
+else
+  build_proj "$CAN_A" can-a "$FIX/can-a-verify.ts"
+  env HOME="$HOME_FIX" bun -e '
+    const fs = require("fs");
+    const f = process.argv[1];
+    const j = JSON.parse(fs.readFileSync(f, "utf8"));
+    j.seats.verifier.account.dir = j.seats["worker-1"].account.dir;
+    fs.writeFileSync(f, JSON.stringify(j, null, 2));
+  ' "$CAN_A/seats/seats.json"
+  RUN_PROJ="$CAN_A"
+  VINVOKED="$HOME_FIX/.pi-seats-can-a/verifier/invoked"
+  cat > "$REPLY" <<'EOF'
+VERDICT: APPROVE
+EOF
+  CANARY_FAILED_BEFORE=$FAILED
+  check_self_approval "canary" > /dev/null 2>&1
+  if [ $FAILED -gt $CANARY_FAILED_BEFORE ]; then
+    FAILED=$CANARY_FAILED_BEFORE
+    pass "canary: a verify.ts that lets the author verify itself is caught"
+  else
+    FAILED=$((CANARY_FAILED_BEFORE + 1))
+    fail "canary: a verify.ts with its distinctness gate disarmed PASSED — these checks prove nothing"
+  fi
+fi
+
+# 8b: a verify.ts that reports a verdict it never recorded
+CAN_B="$FIX/can-b"
+sed 's|^  fs.writeFileSync(verdictFile, record); // verdict-write$|  ; // verdict-write|' \
+  "$VERIFY" > "$FIX/can-b-verify.ts"
+if cmp -s "$VERIFY" "$FIX/can-b-verify.ts"; then
+  fail "canary: could not cut the verdict write — the line no longer matches, so the canary proves nothing"
+else
+  build_proj "$CAN_B" can-b "$FIX/can-b-verify.ts"
+  RUN_PROJ="$CAN_B"
+  CB_TIP="$(git -C "$CAN_B" rev-parse fleet/bead-1)"
+  cat > "$REPLY" <<'EOF'
+evidence here
+VERDICT: APPROVE
+EOF
+  run bead-1 fleet/bead-1 worker-1
+  if [ $RC -eq 0 ] && [ ! -f "$CAN_B/seats/verdicts/bead-1.md" ]; then
+    pass "canary: a verify.ts with its verdict write cut is caught by the file check"
+  else
+    fail "canary: the verdict-write sabotage did not present as phase 1 would catch it (exit $RC, file $([ -f "$CAN_B/seats/verdicts/bead-1.md" ] && echo present || echo absent))"
+  fi
+fi
+RUN_PROJ="$PROJ"
+VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
+
+phase "9. real pi — one smoke leg through the actual binary (SKIP-able)"
+REAL_AUTH="$HOME/.pi/agent/auth.json"
+real_auth_is_identity() {
+  [ -f "$REAL_AUTH" ] && [ -n "$(tr -d '{}[:space:]' < "$REAL_AUTH" 2>/dev/null)" ]
+}
+if [ "${WHEELHOUSE_SKIP_REAL_PI:-}" = "1" ]; then
+  skip "real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1"
+elif [ -z "$REAL_PI" ]; then
+  skip "real-pi leg: no pi on PATH (npm install -g @earendil-works/pi-coding-agent)"
+elif ! real_auth_is_identity; then
+  skip "real-pi leg: $REAL_AUTH missing or empty — run pi /login once as yourself"
+else
+  RPROJ="$FIX/realproj"
+  RHOME="$FIX/realhome"
+  mkdir -p "$RHOME"
+  HOME_SAVE="$HOME_FIX"; HOME_FIX="$RHOME"
+  build_proj "$RPROJ" real "$VERIFY"
+  HOME_FIX="$HOME_SAVE"
+  # The smoke brief scripts the reply, so one trivial model turn exercises
+  # spawn -> parse -> record against the real binary without a real review.
+  cat > "$RPROJ/contracts/VERIFIER.md" <<'EOF'
+SMOKE TEST. Ignore the task in the prompt. Reply with exactly this single
+line and nothing else, using no tools:
+VERDICT: APPROVE
+EOF
+  # Borrow the real login into the VERIFIER seat only; it dies with the fixture.
+  RSEAT="$RHOME/.pi-seats-real/verifier"
+  cp "$REAL_AUTH" "$RSEAT/auth.json" && chmod 600 "$RSEAT/auth.json"
+  [ -f "$HOME/.pi/agent/settings.json" ] && cp "$HOME/.pi/agent/settings.json" "$RSEAT/settings.json"
+  # No --provider/--model pin: whatever your login can actually run.
+  env HOME="$RHOME" bun -e '
+    const fs = require("fs");
+    const f = process.argv[1];
+    const j = JSON.parse(fs.readFileSync(f, "utf8"));
+    delete j.seats.verifier.provider; delete j.seats.verifier.model;
+    fs.writeFileSync(f, JSON.stringify(j, null, 2));
+  ' "$RPROJ/seats/seats.json"
+  REAL_PATH="$(dirname "$REAL_PI"):$(dirname "$(command -v bun)"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
+  OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_VERIFY_TIMEOUT_MS=180000 \
+    bun "$RPROJ/seats/verify.ts" smoke-1 fleet/bead-1 worker-1 2>&1)"; RC=$?
+  if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
+    pass "real: one-shot spawn/parse/record round-trips through the real pi"
+  else fail "real: smoke leg exited $RC: $OUT"; fi
+  if grep -q "verdict: APPROVE" "$RPROJ/seats/verdicts/smoke-1.md" 2>/dev/null; then
+    pass "real: verdict file recorded"
+  else fail "real: no verdict file from the real leg"; fi
+fi
+
+printf '\n'
+if [ $FAILED -eq 0 ]; then
+  echo "verify.ts works on this machine."
+  exit 0
+fi
+echo "$FAILED check(s) failed."
+echo "If the failures are in phases 1-7 or the real leg, verify.ts broke or its"
+echo "output wording moved. If a failure is in the canary, fix this test first."
+exit 1

@@ -6,3 +6,9 @@ seats/logs/
 # seat runtime state and command FIFOs are per-machine, never product
 seats/state.json
 seats/run/
+
+# verdict files are the commander's WORKING COPIES, never product: evidence
+# the graph can cite lives on the bead or at a committed path the bead names
+# (wheelhouse/GRAPH.md, "Where evidence lives") — a tracked verdicts/ would
+# invite citing a path that dies with this checkout
+seats/verdicts/
