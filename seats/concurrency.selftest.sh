@@ -253,7 +253,10 @@ run_two_seat_exercise() {
 
   # Both dispatches go out before either turn is waited on — that is the
   # concurrency under test. SLOW keeps both turns in flight long enough to
-  # observe the overlap.
+  # observe the overlap. The adapter roots seats in the project-local bead
+  # worktree path; the stub's WORKDIR marker separately names where to leave
+  # the proof footprint.
+  mkdir -p "$RUN_PROJ/.wheelhouse-worktrees/bead-a" "$RUN_PROJ/.wheelhouse-worktrees/bead-b"
   run dispatch worker-a bead-a "SLOW MARKER-ALPHA work bead-a in WORKDIR:$wta"
   [ $RC -eq 0 ] && pass "$label: bead-a dispatched to worker-a" || fail "$label: dispatch a exited $RC: $OUT"
   run dispatch worker-b bead-b "SLOW MARKER-BRAVO work bead-b in WORKDIR:$wtb"
@@ -311,6 +314,7 @@ run_two_seat_exercise "hermetic" "$FIX/wt-bead-a" "$FIX/wt-bead-b"
 
 phase "2. capacity visibility — a quota-shaped failure is stamped and rendered"
 run spawn worker-a
+mkdir -p "$RUN_PROJ/.wheelhouse-worktrees/bead-q" "$RUN_PROJ/.wheelhouse-worktrees/bead-ok"
 run dispatch worker-a bead-q "QUOTA please"
 if [ $RC -ne 0 ] && says "dispatch failed"; then
   pass "quota-shaped dispatch fails loudly"
@@ -373,6 +377,7 @@ if cmp -s "$ADAPTER" "$CAN_B/seats/adapter.ts"; then
 else
   RUN_PROJ="$CAN_B"
   run spawn worker-a > /dev/null 2>&1
+  mkdir -p "$RUN_PROJ/.wheelhouse-worktrees/bead-q"
   run dispatch worker-a bead-q "QUOTA please" > /dev/null 2>&1
   if [ -z "$(state_get worker-a lastCapacityEvent)" ]; then
     pass "canary: an adapter with the capacity stamp cut is caught (no lastCapacityEvent lands)"
@@ -393,7 +398,7 @@ if [ "${WHEELHOUSE_SKIP_REAL_PI:-}" = "1" ]; then
 elif [ -z "$REAL_PI" ]; then
   skip "real-pi leg: no pi on PATH (npm install -g @earendil-works/pi-coding-agent)"
 elif ! real_auth_is_identity; then
-  skip "real-pi leg: $REAL_AUTH missing or empty — run pi /login once as yourself"
+  skip "real-pi leg: $REAL_AUTH missing or empty — run pi, then /login inside the REPL once as yourself"
 else
   RPROJ="$FIX/realproj"
   RHOME="$FIX/realhome"

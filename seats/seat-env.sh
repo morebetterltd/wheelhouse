@@ -19,7 +19,9 @@
 # so the root is resolved through pwd -P before it is written — a symlinked
 # path (/tmp vs /private/tmp) would write a key pi never matches, which is
 # the same silent skip by another door. The script never writes auth.json —
-# only `pi /login` may do that — and it refuses to disturb one that holds an
+# OAuth login is `/login` typed inside the interactive Pi REPL, while an
+# api_key seat gets its identity from an operator-written auth.json or a
+# provider env var at spawn — and it refuses to disturb one that holds an
 # identity, because auth.json IS the seat's identity and overwriting it with
 # a different account has no undo.
 #
@@ -117,9 +119,11 @@ else
 fi
 
 # --- auth --------------------------------------------------------------------
-# auth.json is written by `pi /login` and by nothing else, this script
-# included. If it holds an identity, the seat is somebody; printing a login
-# command next to it invites a re-login that silently makes it somebody else.
+# auth.json is written by the operator's credential step, not by this script:
+# OAuth via `/login` inside the interactive Pi REPL writes it, and api_key file
+# setup writes it by hand. If it holds an identity, the seat is somebody;
+# printing a login flow next to it invites a re-login that silently makes it
+# somebody else.
 # Existence alone is not identity: pi auto-creates an EMPTY {} auth.json on
 # its first headless run, and a seat with only that has never been logged in.
 auth_is_identity() {
@@ -148,7 +152,12 @@ note "point a process at this seat:"
 note "  export PI_CODING_AGENT_DIR=\"$seat_dir\""
 if [ "$login_needed" -eq 1 ]; then
   note ""
-  note "one-time login (writes $auth_file; sign in as the account this seat should BE):"
-  note "  PI_CODING_AGENT_DIR=\"$seat_dir\" pi /login"
+  note "one-time OAuth login (writes $auth_file; sign in as the account this seat should BE):"
+  note "  PI_CODING_AGENT_DIR=\"$seat_dir\" pi"
+  note "  # in the Pi REPL: type /login, complete the browser flow, then type /exit"
+  note "api_key alternative: either write $auth_file yourself as"
+  note "  {\"<provider>\": {\"type\": \"api_key\", \"key\": \"<the key>\"}}  (chmod 600)"
+  note "  or export the provider's env var (for example ANTHROPIC_API_KEY) in the shell that spawns the seat."
+  note "  auth.json survives new shells; the env-var route writes nothing to disk."
 fi
 exit 0

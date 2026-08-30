@@ -94,8 +94,9 @@ check_provision() {   # $1 = label, $2 = seat name (must not exist yet)
     pass "$label: export line names this seat's own directory"
   else fail "$label: export line missing or names the wrong directory"; fi
 
-  if says "pi /login"; then pass "$label: fresh seat gets a one-time login command"
-  else fail "$label: no login command for a seat with no auth.json"; fi
+  if says "PI_CODING_AGENT_DIR=\"$d\" pi" && says "type /login" && says "type /exit" && says "api_key alternative"; then
+    pass "$label: fresh seat gets a one-time credential flow"
+  else fail "$label: no complete credential flow for a seat with no auth.json"; fi
 }
 
 check_auth_refusal() {   # $1 = label, $2 = seat name (auth.json must exist)
@@ -111,9 +112,9 @@ check_auth_refusal() {   # $1 = label, $2 = seat name (auth.json must exist)
     pass "$label: existing auth.json left byte-identical"
   else fail "$label: auth.json was modified"; fi
 
-  if says "pi /login"; then
-    fail "$label: printed a login command beside a live auth.json"
-  else pass "$label: no login command beside a live auth.json"; fi
+  if says "type /login" || says "api_key alternative"; then
+    fail "$label: printed a credential flow beside a live auth.json"
+  else pass "$label: no credential flow beside a live auth.json"; fi
 
   if says "already logged in"; then pass "$label: says why the login command is withheld"
   else fail "$label: withheld the login command without saying why"; fi
@@ -145,8 +146,8 @@ phase "3b. an EMPTY {} auth.json is not a login — pi auto-creates one headless
 printf '{}\n' > "$D2/auth.json"
 cp "$D2/auth.json" "$FIX/empty-auth-before.json"
 run alpha worker-2 "$PROJECT"
-if [ $RC -eq 0 ] && says "pi /login"; then
-  pass "a seat with only pi's auto-created {} auth.json still gets the login command"
+if [ $RC -eq 0 ] && says "type /login" && says "api_key alternative"; then
+  pass "a seat with only pi's auto-created {} auth.json still gets the credential flow"
 else fail "the {} auth.json was mistaken for a logged-in seat (exit $RC)"; fi
 if cmp -s "$D2/auth.json" "$FIX/empty-auth-before.json"; then
   pass "the empty auth.json itself is left byte-identical"

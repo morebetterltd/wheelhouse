@@ -272,7 +272,7 @@ function assess(seat: Seat): Assessment {
   const alive = pidAlive(rec?.pid);
 
   if (AUTH_RE.test(errBlob)) {
-    return { cue: "red", line: `AUTH DEAD — re-login: PI_CODING_AGENT_DIR=${rec?.accountDir ?? "<dir>"} pi /login` };
+    return { cue: "red", line: `AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=${rec?.accountDir ?? "<dir>"} pi, then /login in the REPL; api_key: auth.json or provider env var` };
   }
   if (rec && rec.pid && !alive && !rec.stoppedAt) {
     return { cue: "red", line: `PROCESS GONE — pid ${rec.pid} died; check ${path.relative(ROOT, seat.errLog)}` };

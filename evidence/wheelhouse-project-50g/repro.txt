@@ -1,0 +1,43 @@
+# wheelhouse-project-50g repro: pi 0.84.4 treats /login as prompt text when passed as a CLI argument
+
+Command: pi --version
+0.84.4
+
+Command: pi auth --help (auth has no login subcommand)
+Usage:
+  pi auth print-api-key [--provider <provider>] [--model <model>]
+  pi auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]
+  pi auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]
+
+Auth commands require at least one of --provider or --model. Checks refresh expired OAuth credentials by default; --no-refresh prevents this. --credentials emits the credential, or includes it in JSON output.
+
+Command: PI_CODING_AGENT_DIR=$(mktemp -d) pi -p /login --no-session
+Temp PI_CODING_AGENT_DIR: /var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/tmp.kgf85fQO4H
+`/login` only works **inside the interactive Pi REPL**. It won’t run as a command in this API chat.
+
+Use:
+
+```bash
+pi
+```
+
+Then, inside Pi, type:
+
+```text
+/login
+```
+
+Complete the browser flow, then:
+
+```text
+/exit
+```
+
+For a wheelhouse seat login, use that seat’s directory:
+
+```bash
+PI_CODING_AGENT_DIR="$HOME/.pi-seats-<namespace>/<seat-name>" pi
+```
+
+Then type `/login` inside the REPL.
+exit=0

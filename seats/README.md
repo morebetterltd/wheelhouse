@@ -13,15 +13,16 @@ Four files live here:
 
 - `seats.json.example` — the roster format. Copy it to `seats.json` and edit.
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
-  project root, and prints the export line and the one-time login command.
+  project root, and prints the export line and the one-time credential flow.
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, resume.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
-seat's `auth.json`, which only `pi /login` writes and which never enters git.
-The roster is safe to commit precisely because it records only names and
-paths; the moment a credential appears in it, that stops being true.
+seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi
+REPL or by an operator placing an api_key entry; it never enters git. The
+roster is safe to commit precisely because it records only names and paths;
+the moment a credential appears in it, that stops being true.
 
 ## The roster format
 
@@ -77,11 +78,15 @@ For each seat in the roster, once. The script:
    vs `/private/tmp` would write a key pi never matches, the same silent
    skip by another door;
 4. prints the `export PI_CODING_AGENT_DIR=...` line and, if the seat has no
-   `auth.json` yet, the one-time login command.
+   `auth.json` yet, the one-time credential flow.
 
-Run the login command it prints, sign in with the account that seat should
-BE, and the seat exists. Re-running the script for an existing seat changes
-nothing and exits 0.
+For OAuth seats, launch the REPL exactly as printed with `PI_CODING_AGENT_DIR`
+set, type `/login` inside the REPL, complete the browser flow, then type
+`/exit`; that writes the seat's `auth.json`. For an `api_key` seat, either
+write the provider entry into `auth.json` yourself or export the provider's env
+var in the shell that spawns the seat; the file route survives new shells, and
+the env-var route writes nothing to disk. Re-running the script for an existing
+seat changes nothing and exits 0.
 
 What the script refuses to do, and why:
 
@@ -90,7 +95,8 @@ What the script refuses to do, and why:
   To re-login deliberately, remove the file yourself first. Existence alone
   is not identity, though: pi auto-creates an empty `{}` auth.json on a
   first headless run, and the script treats that as not-logged-in — the
-  login command still prints, and `pi /login` fills the file in place.
+  credential flow still prints, and OAuth `/login` inside the REPL (or the
+  api_key file route) fills the file in place.
 - It will not rewrite a `trust.json` it did not write. The file may carry
   grants an operator added by hand, and shell is the wrong tool to edit
   JSON — if the project root is missing from an existing trust file, the
@@ -116,7 +122,7 @@ bun seats/adapter.ts resume   <seat>                    # reattach that session
 ```
 
 `spawn` reads the seat's roster entry, refuses a seat whose directory or
-login is missing (it prints the exact `seat-env.sh` or `pi /login` command
+login is missing (it prints the exact `seat-env.sh` command or login flow
 instead), and starts one long-lived `pi --mode rpc` process: agent directory
 from `account.dir`, provider and model pinned from the roster, and the
 role's crew brief — `contracts/<ROLE>.md` — appended to the system prompt at
@@ -343,12 +349,13 @@ selftest fails even when everything else passed. The adapter and verify
 selftests each add one real-pi smoke leg at the end — the adapter's runs
 spawn, dispatch, agent_end, resume, and the session file growing; verify's
 runs one scripted-reply verdict through the real binary — borrowing your
-own `pi /login` inside the temp fixture; each prints a SKIP line (and still
-passes) if `pi` or the login is missing, or if `WHEELHOUSE_SKIP_REAL_PI=1`.
-A login whose OAuth refresh token has gone stale is NOT skipped: the real
-leg fails the same way every real `pi` run on the machine would, and the
-fix is `pi /login`, not a looser test. `seats/logs/` is where seat
-runtime logs land; it is per-machine noise and git ignores it.
+own interactive `pi` login inside the temp fixture; each prints a SKIP line
+(and still passes) if `pi` or the login is missing, or if
+`WHEELHOUSE_SKIP_REAL_PI=1`. A login whose OAuth refresh token has gone stale
+is NOT skipped: the real leg fails the same way every real `pi` run on the
+machine would, and the fix is `pi`, then `/login` inside the REPL, not a
+looser test. `seats/logs/` is where seat runtime logs land; it is per-machine
+noise and git ignores it.
 
 Two more real-leg notes. When the login that works on this machine is NOT
 pi's default provider, pin the real legs explicitly — set BOTH
@@ -399,7 +406,7 @@ or to state. Two regions:
 
   | cue | meaning |
   |---|---|
-  | red | AUTH DEAD (re-login command shown) or PROCESS GONE (pid died) |
+  | red | AUTH DEAD (credential flow shown) or PROCESS GONE (pid died) |
   | amber | QUOTA EXHAUSTED, IDLE with ready work (`bd ready` count), REVIEW BLOCKED (a BOUNCE waiting), EVIDENCE UNSATISFIED (a verdict whose evidence floor checks failed), VERDICT UNREADABLE (a verdict file with no parseable verdict line — routed to human), or a missing event log |
   | green | VERDICT LANDED (APPROVE/DISCOVER seen in the seat's output) |
 
@@ -639,7 +646,7 @@ against the actual rendered output:
 | class | injected via | must render as |
 |---|---|---|
 | quota exhaustion | stub seat answers a dispatch with a 429-shaped error | amber `QUOTA EXHAUSTED` naming the failed dispatch; `status` prints `CAPACITY:` |
-| auth failure | empty `{}` auth.json (spawn refused) + a 401 in the event stream | red `AUTH DEAD` with the exact `pi /login` command — never the quota line |
+| auth failure | empty `{}` auth.json (spawn refused) + a 401 in the event stream | red `AUTH DEAD` with the exact login flow — never the quota line |
 | dead process | SIGKILL a running stub seat | red `PROCESS GONE` naming the `.stderr.log`; `status` prints `DIED` (never the calm `STOPPED` a graceful stop earns); `recover.ts` classifies it `DEAD` |
 | blocked review | real `verify.ts` run whose verdict is BOUNCE | amber `REVIEW BLOCKED` naming the bead — never green, never idle |
 | unsatisfied evidence | real `verify.ts` run with a bead-named artifact missing at the tip | `verify.ts` refuses APPROVE-over-failed-floor (exit 1, nothing recorded); a recorded BOUNCE with failed checks renders amber `EVIDENCE UNSATISFIED` naming the bead; a verdict file with no parseable verdict line renders `VERDICT UNREADABLE — routed to human` |
