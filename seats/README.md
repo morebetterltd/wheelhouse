@@ -44,6 +44,15 @@ Each seat entry:
 | `model` | The model the seat is pinned to, in the provider's own id format. |
 | `account.dir` | The seat's agent directory — the value `PI_CODING_AGENT_DIR` is set to. By convention `~/.pi-seats-<namespace>/<seat-name>`, where the namespace is this project's (recorded as `namespace=` in `wheelhouse/.template-source`). This field is the record; the convention just explains where it came from. |
 
+Two gotchas about `provider` + `model`. The set of valid model ids depends on
+the ACCOUNT behind the seat, not just the provider — e.g. Codex via a ChatGPT
+account (`openai-codex`) rejects ids an API key accepts — so check
+`pi --list-models` on the machine and account that will run the seat before
+pinning. And always pin the two together: a `--provider` given to pi WITHOUT a
+`--model` does not pick that provider's default — it silently falls back to
+the default provider entirely, and the seat runs on a different vendor than
+the roster says.
+
 The reviewer's `account.dir` must differ from every worker's. Same directory
 means same `auth.json` means same account, and a review from the author's own
 account is not a review.
