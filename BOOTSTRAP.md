@@ -493,7 +493,7 @@ Run each of these and paste what it prints:
   grep -rn "{{" CLAUDE.md wheelhouse/ | grep -v "^wheelhouse/runbooks/"
   ```
 
-  Expect zero. The HTML comments in the contracts' `## This project` sections are guidance, not placeholders, and do not count here. `runbooks/` is excluded deliberately: runbooks are copied verbatim, so any brace syntax they carry — today only `UPGRADE.md`'s prose about the retired `{{SEAT_NAMES}}` mechanism, pending that runbook's own rewrite — is the template's text, not an unfilled blank the installer left. Before this exclusion the check failed on every correct install, on a file the installer never authored.
+  Expect zero. The HTML comments in the contracts' `## This project` sections are guidance, not placeholders, and do not count here. `runbooks/` is excluded deliberately: runbooks are copied verbatim, so any brace syntax one ever carries is the template's text, not an unfilled blank the installer left. Before this exclusion the check failed on every correct install, on a file the installer never authored.
 
   What to do with them: **when you have content for a section, REPLACE its comment with that content. When you have nothing, leave the comment where it is.** The comment is a prompt for whoever fills the section later, so it stops being useful the moment the section is filled — and a section carrying both guidance and content reads as though the content is an example of what to write.
 - **Confirm the bench stub fails.** It is the one file whose whole job is to exit non-zero:

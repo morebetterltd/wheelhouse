@@ -75,25 +75,43 @@ git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/     # skip if BA
 
 Read it. If nothing changed in `contracts/`, you are already current and there is nothing to do.
 
-## 3. Copy what the template owns — the seven contracts by name, then the runbooks
+## 3. Copy what the template owns — the eight contracts by name, the runbooks, and the seats machinery
 
 ```bash
 cp "$TEMPLATE/contracts/WORKER.md"   wheelhouse/fleet/WORKER.md.new
 cp "$TEMPLATE/contracts/SEATS.md"    wheelhouse/fleet/SEATS.md.new
 cp "$TEMPLATE/contracts/REVIEWER.md" wheelhouse/crew/REVIEWER.md.new
 cp "$TEMPLATE/contracts/DESIGNER.md" wheelhouse/crew/DESIGNER.md.new
+cp "$TEMPLATE/contracts/VERIFIER.md" wheelhouse/crew/VERIFIER.md.new
 cp "$TEMPLATE/contracts/BENCH.md"    wheelhouse/crew/BENCH.md.new
 cp "$TEMPLATE/contracts/GRAPH.md"    wheelhouse/GRAPH.md.new
 cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 ```
 
-**Seven `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade.
+**Eight `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade. This list matches `BOOTSTRAP.md` step 2's — eight briefs plus the stub it alone copies — and step 5's integrity check is what catches the two drifting apart.
+
+### The seats machinery comes too
+
+The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `verify.ts`, `floor.ts`, `cockpit.sh`, `recover.ts`, their selftests, `seats.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. What it can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
+
+```bash
+mkdir -p seats
+for f in "$TEMPLATE"/seats/*; do
+  cp -p "$f" "seats/$(basename "$f")"
+done
+if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
+for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
+  grep -qxF "$e" .gitignore 2>/dev/null || printf '%s\n' "$e" >> .gitignore
+done
+```
+
+`seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing. If your install predates `seats/` entirely — every seat a Claude Code session — this copy is the first half of a real migration, and the second half is written out at the end of step 7.
 
 ### The runbooks come too
 
-An upgrade owes `runbooks/` the same currency it owes `contracts/`, and this is where that is paid. Until this section existed the procedure reached nothing but the seven contracts, so a by-the-book upgrade left the project running yesterday's procedures against today's contracts — measured on a real run of this file, baseline `e39f376` to `221623d`: three runbooks left at the baseline's bytes and two scripts, `wire-seats.sh` and `wire-seats.selftest.sh`, that never arrived at all. The project keeps operating out of `RUNNING_THE_LOOP.md`, and nothing above or below this step looks at it.
+An upgrade owes `runbooks/` the same currency it owes `contracts/`, and this is where that is paid. Until this section existed the procedure reached nothing but the contracts, so a by-the-book upgrade left the project running yesterday's procedures against today's contracts — measured on a real run of this file, baseline `e39f376` to `221623d`: three runbooks left at the baseline's bytes and two newly-added files that never arrived at all. The project keeps operating out of `RUNNING_THE_LOOP.md`, and nothing above or below this step looks at it.
 
-Runbooks are copied rather than spliced because they have no project half to protect: `BOOTSTRAP.md` step 5 copies the whole directory verbatim, and no part of the install writes into one. But "no project half" is not "nobody has touched it" — `SEAT_DISCOVERY.md` ships `{{SEAT_NAMES}}` to be filled at promotion, and any project may have annotated a procedure it runs every day. So the copy is conditional on the same arbiter the splice uses, moved from inside the file to across time: a runbook still byte-identical to the **baseline's** copy is one you never edited, and it is replaced. One that differs is yours, and it is left alone and named for you to merge by hand.
+Runbooks are copied rather than spliced because they have no project half to protect: `BOOTSTRAP.md` step 2 copies the whole directory verbatim, and no part of the install writes into one. But "no project half" is not "nobody has touched it" — any project may have annotated a procedure it runs every day. So the copy is conditional on the same arbiter the splice uses, moved from inside the file to across time: a runbook still byte-identical to the **baseline's** copy is one you never edited, and it is replaced. One that differs is yours, and it is left alone and named for you to merge by hand.
 
 ```bash
 mkdir -p wheelhouse/runbooks
@@ -112,7 +130,7 @@ for f in "$TEMPLATE"/runbooks/*; do
 done
 ```
 
-`cp -p`, not `cp`: two of these are executable scripts a human runs as commands, and a runbook that arrives without its executable bit fails at the moment a seat cannot be reached. If your `commit=` is `unknown` the middle branch cannot run — there is no baseline to compare against — and every runbook that differs is reported as yours. That is the conservative direction on purpose: the cost is a hand-merge you did not need, against a silently clobbered procedure you would not have noticed.
+`cp -p`, not `cp`: it preserves the file mode, so a runbook that ships executable arrives executable. Today's three runbooks are all prose and the habit costs nothing — the era when this directory carried scripts is why it is written down. If your `commit=` is `unknown` the middle branch cannot run — there is no baseline to compare against — and every runbook that differs is reported as yours. That is the conservative direction on purpose: the cost is a hand-merge you did not need, against a silently clobbered procedure you would not have noticed.
 
 ## 4. Splice: new contract, your project section
 
@@ -139,6 +157,7 @@ splice wheelhouse/fleet/WORKER.md.new   wheelhouse/fleet/WORKER.md
 splice wheelhouse/fleet/SEATS.md.new    wheelhouse/fleet/SEATS.md
 splice wheelhouse/crew/REVIEWER.md.new  wheelhouse/crew/REVIEWER.md
 splice wheelhouse/crew/DESIGNER.md.new  wheelhouse/crew/DESIGNER.md
+splice wheelhouse/crew/VERIFIER.md.new  wheelhouse/crew/VERIFIER.md
 splice wheelhouse/crew/BENCH.md.new     wheelhouse/crew/BENCH.md
 splice wheelhouse/GRAPH.md.new          wheelhouse/GRAPH.md
 splice wheelhouse/INTEGRATOR.md.new     wheelhouse/INTEGRATOR.md
@@ -155,8 +174,8 @@ Do not split on the first occurrence of the words "this project", and do not spl
 
 ## 5. Re-verify — the same checks the install runs
 
-- **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all seven, and no `FAIL` lines after them. That check is also this runbook's backstop: a contract missing from the copy list above never installs, and the check says so rather than passing quietly. Do not skip it on the grounds that the copies looked right. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
-- **Your bench is the file you had before, whichever file that was.** Step 3 copies seven named `.md` files and the contents of `runbooks/`, and neither list can reach `wheelhouse/crew/bench.sh` — so the check is that nothing reached it, and it reads the same in both states:
+- **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all eight, and no `FAIL` lines after them. That check is also this runbook's backstop: a contract missing from the copy list above never installs, and the check says so rather than passing quietly. Do not skip it on the grounds that the copies looked right. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
+- **Your bench is the file you had before, whichever file that was.** Step 3 copies eight named `.md` files, the contents of `runbooks/`, and the template's `seats/` files, and none of those lists can reach `wheelhouse/crew/bench.sh` — so the check is that nothing reached it, and it reads the same in both states:
 
   ```bash
   git diff --stat -- wheelhouse/crew/bench.sh          # expect: nothing. The upgrade is not committed until step 8.
@@ -218,17 +237,15 @@ bd list --label template-report --limit 0                      # empty is the ex
 
 Fix what you find, in the same commit as the upgrade. This is manual on purpose — a convention change is exactly the kind of thing that needs a human deciding what it means in each place it appears.
 
-### The seat namespace, if you installed before it existed
+### From v1 Claude seats to Pi seats, if you installed before the seat rebuild
 
-Every install made before 2026-08-22 is in this position, so this is a normal starting point and not a sign anything is wrong. Those installs put every seat under one shared `$HOME/.claude-seats/`, and `wire-seats.sh` defaulted to enumerating it. On a machine running one wheelhouse that is correct and keeps working — the fallback is still the shared path for exactly this reason, and **an upgrade does not break your fleet.** It becomes a collision the moment a second wheelhouse lands on the same machine, and it runs both ways: the newcomer's wiring sweeps up your seats, and the newcomer's COMMANDER is copied into your seats' registries, so your running workers become addressable by and will report to a commander from another project.
+Every install made from a template before 2026-08-30 is in this position, so this is a normal starting point and not a sign anything is wrong. In those installs a seat was a standing Claude Code session: a per-seat `CLAUDE_CONFIG_DIR` under `$HOME/.claude-seats*/`, launch blocks in `STARTUP.md` an operator pasted into terminals, `wire-seats.sh` writing commander registrations, and `SEAT_DISCOVERY.md`'s roll call binding names to sessions. All of that is v1, and none of it exists in what step 3 just delivered. Today a seat is a commander-owned Pi RPC process: `seats/seats.json` is the roster, `seats/seat-env.sh` provisions each seat's isolated account directory under `$HOME/.pi-seats-<namespace>/`, and `bun seats/adapter.ts` spawns, dispatches, and stops them — `wheelhouse/fleet/SEATS.md` carries the contract and `seats/README.md` documents every command. The template commit the old machinery last shipped in is tagged `v1-claude-seats` in the template repo; that tag is the frozen reference if you ever need to read how the old wiring worked, and nothing after it will.
 
-**What the upgrade gives you before you do anything.** The new `wire-seats.sh` carries a foreign-seat preflight: it reads the cwd each in-scope seat's live session recorded and refuses the whole run, writing nothing, if any of them is not this project's root. That protects a still-shared root against the case above, and it is the reason this migration is deferrable rather than urgent. It only sees RUNNING seats, so it is a backstop and not a substitute for the move.
+**An upgrade does not break your fleet mid-flight.** Nothing in steps 3 and 4 touches a running session or its config directory; your v1 seats keep working from the files they were launched from until you retire them. What IS true the moment step 3 lands is that your installed runbooks and contracts describe the Pi shape while your `STARTUP.md` and seat directories are still v1 — so treat this migration as one sitting, not a background task.
 
-Step 4 above will have printed `project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Seat namespace`. That line is this migration announcing itself, and here is what to do with it.
+Step 4 above will have printed `project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Declined seats` (and `new, copied whole: wheelhouse/crew/VERIFIER.md` before it): the new seat contract and the verifier arriving are this migration announcing itself. Here is the order that works:
 
-Do it now if this machine already hosts, or is about to host, more than one wheelhouse. Otherwise record the namespace and defer the move; the value costs nothing until a second fleet arrives, and having it written down is what makes the move a rename rather than an investigation.
-
-1. **Choose the namespace and write it down, in the file the script reads.** Short, lowercase, filesystem-safe — this project's own name is almost always right. `wire-seats.sh` derives its seat root from `namespace=` in `wheelhouse/.template-source`, so that line is the one that changes behaviour; until it exists the script uses the shared fallback.
+1. **Record the namespace, in the file the machinery reads.** Short, lowercase, filesystem-safe — this project's own directory name is almost always right. It names this project's seat root, `$HOME/.pi-seats-<namespace>`, which is what keeps two fleets' accounts apart on one machine; `BOOTSTRAP.md` step 3's question 7 says why in full.
 
    ```bash
    grep -q '^namespace=' wheelhouse/.template-source \
@@ -238,37 +255,22 @@ Do it now if this machine already hosts, or is about to host, more than one whee
    grep '^namespace=' wheelhouse/.template-source
    ```
 
-   Your `.template-source` predates the field, so the append branch is the one that will run — the `grep -q` guard is there so re-running this does not add a second line. Then add `### Seat namespace` to `wheelhouse/fleet/SEATS.md`'s project half, above `### Roster`, carrying the same string and the root it names, `$HOME/.claude-seats-<namespace>`. That section is the human record; `.template-source` is the one a program acts on, and it decides.
-2. **Move the seat directories, with the seats shut down.** A seat is a running session holding its configuration directory open; move it underneath a live one and you have a seat writing into a path that no longer exists. Close the terminals first.
+   A v1 `.template-source` predates the field, so the append branch is the one that will run — the `grep -q` guard is there so re-running this does not add a second line. If you were mid-way through the old namespace migration and a `namespace=` line already exists, the sed branch keeps it to one line and the value you already chose is fine: the string carries over, only the root it names changes from the retired `.claude-seats-` form to `.pi-seats-`.
 
-   Decide each seat's new name first, then move it into that name in one step — the directory's basename IS the seat name, so a move that keeps the old basename leaves the rename half of this migration undone.
+2. **Shut the v1 seats down and remove the v1 machinery from your project.** Close the seat terminals first — a v1 seat is a session an operator launched, and nothing in the new machinery manages or even sees it. Then delete the files v1 installed and this template no longer ships; they are dead weight that reads as live instructions to anyone who finds them:
 
    ```bash
-   mkdir -p "$HOME/.claude-seats-<namespace>"
-   mv "$HOME/.claude-seats/<old-seat-name>" "$HOME/.claude-seats-<namespace>/<its rostered namespaced name>"
+   rm -f wheelhouse/runbooks/wire-seats.sh wheelhouse/runbooks/wire-seats.selftest.sh
+   rm -f wheelhouse/runbooks/SEAT_DISCOVERY.md
    ```
 
-   The destination is the name you are giving that seat on the roster, not the old name with something glued to the front — a seat that was `seat-worker-1` becomes `<namespace>-worker-1`, not `<namespace>-seat-worker-1`. The prefix is what keeps two fleets' seat names apart in the commander's registry, which stays shared whatever you do to the seat roots, and a name nobody would have chosen at install is a name that reads as a mistake for the life of the project. Repeat per seat, then `rmdir "$HOME/.claude-seats"` if it is now empty — and if it is not, read what is left before deleting anything, because on a multi-fleet machine what remains is another project's fleet.
-3. **Rewrite the derived surfaces to the interface this upgrade actually ships.** Two of them, and the shape is not what a pre-namespace install has on the page today:
+   Guarded with `-f` because which of these a v1 install actually has depends on when it installed; absent files are the fine case. Sweep your own surfaces for the same era's residue while you are here: any `CLAUDE_CONFIG_DIR` export, `SEATS_ROOT` export, foreign-directory check, or `claude --permission-mode auto` launch block in `wheelhouse/STARTUP.md`, and any note that points a reader at the roll call or `SEAT_DISCOVERY.md`. Those blocks are the v1 launch surface, and every one of them comes out — `STARTUP.md`'s job is now to name this project's namespace and seat names over the `seats/` commands, in the shape `BOOTSTRAP.md` step 5 writes for a fresh install.
 
-   - The roster in `wheelhouse/fleet/SEATS.md` takes the new namespaced names, matching the directories you just moved.
-   - `wheelhouse/STARTUP.md`'s launch blocks take the namespaced `CLAUDE_CONFIG_DIR` **and the foreign-directory check that now belongs in every one of them.** The upgraded `contracts/SEATS.md` launch procedure and `generated/STARTUP.md.example` are the shape to copy:
+3. **Interview yourself into a roster, and write `seats/seats.json`.** This is `BOOTSTRAP.md` step 3, question 7, run over the fleet you already have instead of a proposed one — read it and answer it for real, because two of its facts did not exist in v1: each seat's **provider** (`openai-codex` by ChatGPT-subscription OAuth, or an `api_key` provider — an Anthropic seat is an API-key seat, since the API rejects third-party subscription auth) and its **pinned model**, validated against `pi --list-models`. Seat names carry no namespace prefix — `worker-1`, not `<namespace>-worker-1`; the per-project seat ROOT is what keeps fleets apart now, and the adapter addresses seats per-project. Your v1 roster in `wheelhouse/fleet/SEATS.md`'s project half is the list of seats to walk; rewrite that section as the human record of the new roster (and fill `### Declined seats` with any v1 seat you are not carrying forward, reason and date), while `seats/seats.json` is the machine record every command reads. No secret enters `seats.json`, ever.
 
-     ```bash
-     export CLAUDE_CONFIG_DIR="$HOME/.claude-seats-<namespace>/<seat-name>"
-     if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
-       sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
-     fi
-     cd /path/to/project-root
-     claude --permission-mode auto
-     ```
+4. **Provision and probe each seat.** `BOOTSTRAP.md` step 4, verbatim: `seats/seat-env.sh <namespace> <seat-name>` once per seat, the one-time `pi /login` (or `auth.json` / env-var key placement) as that seat's own account, then the readiness probe. The one-seat-one-account rule survives the rebuild unchanged: the reviewer's and verifier's directories must differ from every worker's.
 
-     Those three middle lines go in EVERY per-seat block, not once at the top of the file. They print the project roots of any sessions the directory already holds: nothing, or this project's root, is fine; any other path is another fleet's seat and a STOP. The upgrade re-copies the contract that explains the check, but `STARTUP.md` is yours and is the surface your operator actually pastes from — if the check does not land here, the install has the reasoning and not the tooth.
-
-     The `--permission-mode auto` on the last line is part of the promoted launch command, not an example flourish: it is what keeps a promoted seat from stalling on permission dialogs in a terminal nobody is watching — routine actions run without asking, reviewed by the harness's classifier instead of by you — and an operator who wants a stricter seat omits the flag and sits with the prompts. `contracts/SEATS.md`'s launch procedure carries the full sentence and the version stamp; carry the flag into your rebuilt blocks the same way you carry the check.
-
-   **There is no `SEATS_ROOT` to write down anywhere, and that is the point of this upgrade.** Once step 1 has recorded `namespace=`, `wire-seats.sh` derives its own seat root and takes nothing; a bare `wheelhouse/runbooks/wire-seats.sh` is the whole invocation. Any `SEATS_ROOT` export you find in your `STARTUP.md`, a note, or a script is from before and should come out — the environment variable survives as a documented override for a relocated seat tree or a fixture, not as anything this migration asks you to set. Re-introducing it here would put back the remembered value this change exists to remove.
-4. **Relaunch, re-wire, re-roll.** Seat registrations are per-process and the roll-call binding is per-launch, so the seats come back with new pids and new derived names. Run each seat's launch block — reading what the foreign-directory check prints, which is the first place a half-finished move shows up — then `wheelhouse/runbooks/wire-seats.sh` with nothing passed. Read the `seat root:` line it prints: it should name `$HOME/.claude-seats-<namespace>` and say it came from `namespace=`, and if it still names the shared path then step 1 did not take. Then the roll call, then the unambiguity assertion in `SEAT_DISCOVERY.md` step 2 — which is the check that tells you the move actually took.
+5. **Retire the old roots, last.** The v1 config directories under `$HOME/.claude-seats*/` hold real logins, so they are the one thing you delete only after the new seats have passed their probes and a real dispatch has come back. Read what is left before deleting anything — on a machine that hosted more than one v1 wheelhouse, what remains under a shared root is another project's fleet.
 
 A real example, from the upgrade this procedure was written from. That upgrade changed one thing upstream: a path convention, `crew/` to `wheelhouse/crew/`. The contracts were re-copied correctly and the check passed 6/6. The install's very first bead — filed by the bootstrap itself — still read *"Implement crew/bench.sh against crew/BENCH.md"*, and its acceptance criterion pointed at `contracts/BENCH.md`, a template path that does not exist in an installed project at all. Nothing was broken and no check could have caught it, because no check looks at the graph. It was found by reading, and fixed by editing the bead.
 
@@ -278,7 +280,7 @@ That is the shape of what step 7 catches: not damage, but the parts of your proj
 
 ```bash
 NEW=$(sed -n 's/^commit=//p' wheelhouse/.template-source | cut -c1-12)
-git add wheelhouse/ CLAUDE.md .beads/
+git add wheelhouse/ seats/ .gitignore CLAUDE.md .beads/
 git commit -m "Upgrade wheelhouse contracts to $NEW"
 ```
 
