@@ -468,9 +468,17 @@ function cmdStatus(): void {
   for (const name of names) {
     const rec = state.seats[name];
     const alive = pidAlive(rec.pid);
-    const pid = alive ? `pid ${rec.pid}` : "stopped";
+    // A seat nobody stopped whose pid is gone DIED — that is a failure, and
+    // rendering it as the same calm STOPPED a graceful stop earns would be
+    // a failure conflated into a normal state. Say which one it is.
+    const died = !alive && rec.pid != null && !rec.stoppedAt;
+    const word = alive ? "RUNNING" : died ? "DIED" : "STOPPED";
+    const pid = alive ? `pid ${rec.pid}` : died ? `pid ${rec.pid} gone` : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
-    console.log(`${name.padEnd(16)} ${alive ? "RUNNING" : "STOPPED"}  ${pid.padEnd(11)} last-event ${lastEvent(rec.log)}${bead}`);
+    console.log(`${name.padEnd(16)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${lastEvent(rec.log)}${bead}`);
+    if (died) {
+      console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} is gone and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
+    }
     if (rec.lastCapacityEvent) {
       console.log(`${" ".repeat(16)} CAPACITY: quota-shaped dispatch failure at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
     }

@@ -296,8 +296,9 @@ duplicate. The tmux status bar carries the project name and the key hints.
 
 ### The floor
 
-`floor.ts` is READ-ONLY: it reads `state.json`, `seats.json`, and
-`seats/logs/*.jsonl`, and never writes to a FIFO or to state. Two regions:
+`floor.ts` is READ-ONLY: it reads `state.json`, `seats.json`,
+`seats/logs/*.jsonl`, and `seats/verdicts/*.md`, and never writes to a FIFO
+or to state. Two regions:
 
 - **Spotlight** (top): pinned to ONE seat, that seat's event log humanized —
   `[tool]`, `[think]`, `[say]`, `[turn_end]` with turn stats. The spotlight
@@ -308,12 +309,14 @@ duplicate. The tmux status bar carries the project name and the key hints.
   | cue | meaning |
   |---|---|
   | red | AUTH DEAD (re-login command shown) or PROCESS GONE (pid died) |
-  | amber | QUOTA EXHAUSTED, IDLE with ready work (`bd ready` count), REVIEW BLOCKED (a BOUNCE waiting), or a missing event log |
+  | amber | QUOTA EXHAUSTED, IDLE with ready work (`bd ready` count), REVIEW BLOCKED (a BOUNCE waiting), EVIDENCE UNSATISFIED (a verdict whose evidence floor checks failed), VERDICT UNREADABLE (a verdict file with no parseable verdict line — routed to human), or a missing event log |
   | green | VERDICT LANDED (APPROVE/DISCOVER seen in the seat's output) |
 
   Failure states are DISTINCT named lines, never silence: a dead process, a
-  dead login, an exhausted quota, a blocked review, and a missing log each
-  say exactly what they are.
+  dead login, an exhausted quota, a blocked review, unsatisfied evidence,
+  an unreadable verdict, and a missing log each say exactly what they are.
+  The STATUS view (`0`) leads with an `ALERTS` roll-up listing every red or
+  amber seat, so no failure needs scrolling to find.
 
 Keys: `1`-`9` pin a seat, `0` pins the full STATUS view, `f` toggles
 follow-mode (OFF by default; when on, the spotlight tracks the most recently
@@ -524,3 +527,37 @@ event. A later dispatch that LANDS clears the stamp, so a stale event
 cannot outlive the evidence for it. What none of this does, on purpose:
 predict resets, count tokens, or route work — the commander reads the
 amber line and decides; a broker would be deciding for them.
+
+<!-- ===== failure legibility (bead wheelhouse-project-045) — new section starts here ===== -->
+
+## Failure legibility — every failure class is its own visible state
+
+```bash
+bash seats/legibility.selftest.sh
+```
+
+The claim this exercise proves: quota exhaustion, auth failure, a dead
+process, a blocked review, and unsatisfied evidence are DISTINCT visible
+states in the floor and in `adapter.ts status`, and none of them can render
+as completion. Each class is injected — through the real machinery where it
+has a door (a quota-shaped dispatch failure through the stub seat, a spawn
+refusal on an empty `{}` auth.json, a SIGKILLed pid, a real `verify.ts`
+run), deterministically simulated where it does not — and then asserted
+against the actual rendered output:
+
+| class | injected via | must render as |
+|---|---|---|
+| quota exhaustion | stub seat answers a dispatch with a 429-shaped error | amber `QUOTA EXHAUSTED` naming the failed dispatch; `status` prints `CAPACITY:` |
+| auth failure | empty `{}` auth.json (spawn refused) + a 401 in the event stream | red `AUTH DEAD` with the exact `pi /login` command — never the quota line |
+| dead process | SIGKILL a running stub seat | red `PROCESS GONE` naming the `.stderr.log`; `status` prints `DIED` (never the calm `STOPPED` a graceful stop earns); `recover.ts` classifies it `DEAD` |
+| blocked review | real `verify.ts` run whose verdict is BOUNCE | amber `REVIEW BLOCKED` naming the bead — never green, never idle |
+| unsatisfied evidence | real `verify.ts` run with a bead-named artifact missing at the tip | `verify.ts` refuses APPROVE-over-failed-floor (exit 1, nothing recorded); a recorded BOUNCE with failed checks renders amber `EVIDENCE UNSATISFIED` naming the bead; a verdict file with no parseable verdict line renders `VERDICT UNREADABLE — routed to human` |
+
+The cross-check stages every class at once across separate seats and asserts
+the rail and the STATUS `ALERTS` roll-up list each one distinctly, with no
+success rendering (`VERDICT LANDED`, `GREEN`, idle, working) anywhere on an
+afflicted seat. The canaries are cmp-guarded like the other selftests', and
+include a cue-conflation canary: a floor copy sabotaged so auth renders with
+the quota wording must be CAUGHT by the distinctness checks — two failure
+classes collapsing into one line is exactly the illegibility this exercise
+exists to prevent.

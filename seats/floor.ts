@@ -15,13 +15,16 @@
  * spotlight tracks the most recently active log), `o` toggles an overview
  * grid of every seat, `q` quits.
  *
- * READ-ONLY by contract: this program reads state.json, seats.json, and the
- * logs. It never writes to a FIFO, never touches state.json, never signals a
- * seat. It is a window, not a hand.
+ * READ-ONLY by contract: this program reads state.json, seats.json, the
+ * logs, and seats/verdicts/*.md. It never writes to a FIFO, never touches
+ * state.json, never signals a seat. It is a window, not a hand.
  *
  * Failure states are DISTINCT LINES, never silence: a seat whose process is
  * gone, whose auth is dead, whose quota is exhausted, whose review bounced,
- * or whose log is missing each gets its own named line in the rail.
+ * whose verdict's evidence floor failed (or whose verdict file is
+ * unreadable), or whose log is missing each gets its own named line in the
+ * rail — and the STATUS cell leads with an ALERTS roll-up of every red or
+ * amber seat.
  *
  * Usage: bun seats/floor.ts [--once] [--pin <1-9|0|seat-name>] [--overview]
  *   --once      render a single frame to stdout and exit (for tests/scripts)
@@ -189,6 +192,37 @@ interface Assessment {
 const AUTH_RE = /auth|unauthoriz|401|forbidden|token.*(expired|invalid|revoked)|log ?in required|credential/i;
 const QUOTA_RE = /quota|rate.?limit|429|usage limit|exhaust|out of credits|insufficient.credit/i;
 
+const VERDICTS_DIR = path.join(SEATS_DIR, "verdicts");
+
+interface VerdictFile {
+  verdict: "APPROVE" | "BOUNCE" | "DISCOVER" | null; // null = unreadable
+  unsatisfied: number; // evidence floor checks that read UNSATISFIED
+  file: string;
+}
+
+/**
+ * The verdict file verify.ts leaves for a bead, if one exists. Two failure
+ * states live ONLY here, so the floor must read it: evidence floor checks
+ * that read UNSATISFIED (verify.ts records them under "## Evidence checks"),
+ * and a file whose verdict line is missing or malformed — which is an error
+ * routed to a human, never a judgment, exactly as verify.ts's exit-1 rule
+ * says. Only the failure states are surfaced from here; a clean APPROVE
+ * still renders through the event-log path like before.
+ */
+function readVerdictFile(bead: string | null | undefined): VerdictFile | null {
+  if (!bead) return null;
+  const file = path.join(VERDICTS_DIR, `${bead}.md`);
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  const m = text.match(/^- verdict:\s*(APPROVE|BOUNCE|DISCOVER)\b/m);
+  const unsatisfied = (text.match(/—\s*UNSATISFIED\s*$/gm) ?? []).length;
+  return { verdict: (m?.[1] as VerdictFile["verdict"]) ?? null, unsatisfied, file };
+}
+
 let readyCache: { at: number; count: number | null } = { at: 0, count: null };
 /** How many beads are ready to claim. Read-only shell-out, cached, optional. */
 function readyCount(): number | null {
@@ -248,6 +282,23 @@ function assess(seat: Seat): Assessment {
   }
   if (QUOTA_RE.test(errBlob)) {
     return { cue: "amber", line: "QUOTA EXHAUSTED — seat cannot take work until it resets" };
+  }
+  // Verdict-file states (verify.ts's record for this seat's last bead).
+  // Failure states only: unreadable beats everything the file could say,
+  // and unsatisfied evidence beats the verdict word — even an APPROVE in
+  // the file must never render green while a floor check reads UNSATISFIED.
+  const vf = readVerdictFile(rec?.lastBead);
+  if (vf) {
+    const rel = path.relative(ROOT, vf.file);
+    if (vf.verdict === null) {
+      return { cue: "amber", line: `VERDICT UNREADABLE — routed to human: no parseable verdict line in ${rel}` };
+    }
+    if (vf.unsatisfied > 0) {
+      return { cue: "amber", line: `EVIDENCE UNSATISFIED — ${vf.unsatisfied} floor check(s) failed on ${rec!.lastBead}; see ${rel}` };
+    }
+    if (vf.verdict === "BOUNCE") {
+      return { cue: "amber", line: `REVIEW BLOCKED — VERDICT: BOUNCE on ${rec!.lastBead}; redispatch to author` };
+    }
   }
   if (verdict === "BOUNCE") {
     return { cue: "amber", line: `REVIEW BLOCKED — VERDICT: BOUNCE on ${rec?.lastBead ?? "last bead"}; redispatch to author` };
@@ -332,6 +383,16 @@ function statusLines(seats: Seat[], width: number): string[] {
   const ready = readyCount();
   out.push(ready === null ? `${C.dim}bd ready: unavailable${C.reset}` : `bd ready: ${ready} bead(s) waiting`);
   out.push("");
+  // Alerts first: every red/amber seat on one screen, before the per-seat
+  // detail — a failure the commander has to scroll for is a failure hidden.
+  const alerts = seats.map((s) => ({ s, a: assess(s) })).filter(({ a }) => a.cue === "red" || a.cue === "amber");
+  if (alerts.length > 0) {
+    out.push(`${C.bold}ALERTS (${alerts.length})${C.reset}`);
+    for (const { s, a } of alerts) {
+      out.push(truncate(`  ${cueMark(a.cue)}  ${s.name} — ${a.line}`, width + 20));
+    }
+    out.push("");
+  }
   for (const s of seats) {
     const a = assess(s);
     const rec = s.record;
