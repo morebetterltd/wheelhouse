@@ -46,7 +46,13 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # --- fixture -----------------------------------------------------------------
+# The fixture path is canonicalized because the script canonicalizes the root
+# it grants (pi matches trust keys against the canonicalized cwd), and on
+# macOS mktemp hands out /var/... paths that are really /private/var/... —
+# an uncanonicalized fixture would fail every trust-content check for reasons
+# that have nothing to do with seat-env.sh.
 FIX="$(mktemp -d)"
+FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 PROJECT="$FIX/project"
@@ -131,9 +137,23 @@ if cmp -s "$D1/trust.json" "$FIX/trust-before.json"; then
   pass "rerun leaves trust.json byte-identical"
 else fail "rerun rewrote trust.json"; fi
 
-phase "3. refusal — an existing auth.json is identity, not clutter"
+phase "3. refusal — an auth.json holding an identity is identity, not clutter"
 printf '{"fixture":"sentinel-identity"}\n' > "$D1/auth.json"
 check_auth_refusal "auth" "worker-1"
+
+phase "3b. an EMPTY {} auth.json is not a login — pi auto-creates one headless"
+printf '{}\n' > "$D2/auth.json"
+cp "$D2/auth.json" "$FIX/empty-auth-before.json"
+run alpha worker-2 "$PROJECT"
+if [ $RC -eq 0 ] && says "pi /login"; then
+  pass "a seat with only pi's auto-created {} auth.json still gets the login command"
+else fail "the {} auth.json was mistaken for a logged-in seat (exit $RC)"; fi
+if cmp -s "$D2/auth.json" "$FIX/empty-auth-before.json"; then
+  pass "the empty auth.json itself is left byte-identical"
+else fail "the empty auth.json was modified"; fi
+if says "not a login"; then pass "says why an existing-but-empty auth.json is not a login"
+else fail "printed a login command over an existing auth.json without explaining"; fi
+rm "$D2/auth.json"
 
 phase "4. refusal — a trust file this script did not write"
 FOREIGN="$HOME_FIX/.pi-seats-alpha/worker-foreign"
@@ -165,6 +185,13 @@ run alpha worker-3 "$PROJECT/does-not-exist"
 if [ $RC -ne 0 ]; then pass "a project root that does not exist is refused"
 else fail "trust was granted to a directory that is not there"; fi
 
+phase "5b. a symlinked root is canonicalized — pi matches canonical paths only"
+ln -s "$PROJECT" "$FIX/sym-root"
+run alpha worker-sym "$FIX/sym-root"
+if [ $RC -eq 0 ] && cmp -s "$HOME_FIX/.pi-seats-alpha/worker-sym/trust.json" "$FIX/expected-trust.json"; then
+  pass "a root passed through a symlink is granted by its physical path"
+else fail "the symlinked root was written as-is — a trust key pi never matches (exit $RC)"; fi
+
 phase "6. default project root — the checkout you run it from"
 OUT="$(cd "$PROJECT" && env HOME="$HOME_FIX" PATH="$RUN_PATH" "$SCRIPT" alpha worker-4 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && cmp -s "$HOME_FIX/.pi-seats-alpha/worker-4/trust.json" "$FIX/expected-trust.json"; then
@@ -192,7 +219,7 @@ else
 fi
 
 SAB_AUTH="$FIX/seat-env-no-auth-guard.sh"
-sed 's|^if \[ -e "\$auth_file" \]; then$|if false; then|' "$SCRIPT" > "$SAB_AUTH"
+sed 's|^if auth_is_identity; then$|if false; then|' "$SCRIPT" > "$SAB_AUTH"
 chmod +x "$SAB_AUTH"
 if cmp -s "$SCRIPT" "$SAB_AUTH"; then
   fail "canary: could not cut the auth guard — its line no longer matches the pattern this test cuts, so the canary proves nothing"

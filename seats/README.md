@@ -55,9 +55,15 @@ For each seat in the roster, once. The script:
 
 1. checks `pi` is on PATH — a MISSING line is a STOP;
 2. creates `$HOME/.pi-seats-<namespace>/<seat-name>/`;
-3. writes `trust.json` pre-granting the project root. Pi's RPC mode never
-   prompts, so trust has to exist before the first run or the seat stalls on
-   a question nobody is there to answer;
+3. writes `trust.json` pre-granting the project root. Trust has to exist
+   before the first run because a headless run without it does not stall or
+   error — it silently SKIPS the project's `.pi/` resources (config,
+   `SYSTEM.md`), and nothing in the output says so: the seat just behaves as
+   if the project had none, which is far worse than a loud failure. The root
+   is canonicalized (`pwd -P`) before it is written, because pi matches
+   trust keys against the canonicalized cwd — a symlinked path like `/tmp`
+   vs `/private/tmp` would write a key pi never matches, the same silent
+   skip by another door;
 4. prints the `export PI_CODING_AGENT_DIR=...` line and, if the seat has no
    `auth.json` yet, the one-time login command.
 
@@ -69,7 +75,10 @@ What the script refuses to do, and why:
 
 - It never writes or touches `auth.json`. That file is the seat's identity;
   a re-login can replace it with a different account, and there is no undo.
-  To re-login deliberately, remove the file yourself first.
+  To re-login deliberately, remove the file yourself first. Existence alone
+  is not identity, though: pi auto-creates an empty `{}` auth.json on a
+  first headless run, and the script treats that as not-logged-in — the
+  login command still prints, and `pi /login` fills the file in place.
 - It will not rewrite a `trust.json` it did not write. The file may carry
   grants an operator added by hand, and shell is the wrong tool to edit
   JSON — if the project root is missing from an existing trust file, the
@@ -79,7 +88,9 @@ One thing trust-to-the-project-root does not cover: workers run in worktrees
 under `.wheelhouse-worktrees/`, which on most layouts sits INSIDE the project
 root and is covered by the grant. If your worktrees live elsewhere, add that
 directory to the seat's `trust.json` by hand — a flat JSON map of absolute
-directory → `true`.
+directory → `true`. Use the physical path (`pwd -P` in that directory): pi
+matches trust keys against the canonicalized cwd, so a key written through a
+symlink is a grant pi never matches.
 
 ## Proving it still works
 

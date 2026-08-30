@@ -10,13 +10,18 @@
 # share or clobber each other's identity.
 #
 # This script creates the directory for one seat, pre-grants trust for the
-# project root (Pi's RPC mode never prompts, so trust must exist before the
-# first run or the seat stalls on a question nobody is there to answer), and
-# prints the two lines the operator needs: the export that points a process at
-# the seat, and the one-time login. It never writes auth.json — only
-# `pi /login` may do that — and it refuses to disturb one that already
-# exists, because auth.json IS the seat's identity and overwriting it with a
-# different account has no undo.
+# project root, and prints the two lines the operator needs: the export that
+# points a process at the seat, and the one-time login. The trust grant must
+# exist before the first run because a headless run with no trust does NOT
+# stall or error — it silently skips the project's .pi/ resources (config,
+# SYSTEM.md), and nothing in the output says so: the seat just behaves as if
+# the project had none. Pi matches trust keys against the CANONICALIZED cwd,
+# so the root is resolved through pwd -P before it is written — a symlinked
+# path (/tmp vs /private/tmp) would write a key pi never matches, which is
+# the same silent skip by another door. The script never writes auth.json —
+# only `pi /login` may do that — and it refuses to disturb one that holds an
+# identity, because auth.json IS the seat's identity and overwriting it with
+# a different account has no undo.
 #
 # Usage: seat-env.sh <namespace> <seat-name> [project-root]
 #
@@ -45,7 +50,7 @@ if command -v pi >/dev/null 2>&1; then
 else
   echo "MISSING pi"
   echo "        seats run on the Pi coding agent; without it there is no login to run"
-  echo "        install it: npm install -g @mariozechner/pi   # or see https://github.com/badlogic/pi-mono"
+  echo "        install it: npm install -g @earendil-works/pi-coding-agent   # or see https://github.com/earendil-works/pi"
   exit 1
 fi
 
@@ -73,6 +78,11 @@ case "$root" in
 esac
 [ -d "$root" ] || die "project root does not exist: $root — trust granted to a path that is not there protects nothing and hides a typo"
 
+# Canonicalize before writing: pi matches trust keys against the CANONICALIZED
+# cwd, so a symlinked root (/tmp vs /private/tmp) would write a key pi never
+# matches — the grant would exist and protect nothing.
+root="$(cd "$root" && pwd -P)" || die "could not resolve the physical path of $root"
+
 seat_dir="$HOME/.pi-seats-$ns/$seat"
 trust_file="$seat_dir/trust.json"
 auth_file="$seat_dir/auth.json"
@@ -85,8 +95,10 @@ mkdir -p "$seat_dir" || die "could not create $seat_dir"
 note "dir     $seat_dir"
 
 # --- trust -------------------------------------------------------------------
-# Pi reads trust.json as a flat map of absolute directory -> bool. RPC mode
-# never prompts, so the grant is written here, before the seat ever runs.
+# Pi reads trust.json as a flat map of absolute directory -> bool. A headless
+# run with no matching grant does not stall or error — it silently skips the
+# project's .pi/ resources and nothing surfaces it — so the grant is written
+# here, before the seat ever runs.
 expected_trust="$(printf '{\n  "%s": true\n}' "$root")"
 write_trust() { printf '%s\n' "$expected_trust" > "$trust_file"; }
 
@@ -106,15 +118,26 @@ fi
 
 # --- auth --------------------------------------------------------------------
 # auth.json is written by `pi /login` and by nothing else, this script
-# included. If it exists, the seat is somebody; printing a login command next
-# to it invites a re-login that silently makes it somebody else.
+# included. If it holds an identity, the seat is somebody; printing a login
+# command next to it invites a re-login that silently makes it somebody else.
+# Existence alone is not identity: pi auto-creates an EMPTY {} auth.json on
+# its first headless run, and a seat with only that has never been logged in.
+auth_is_identity() {
+  [ -e "$auth_file" ] || return 1
+  [ -n "$(tr -d '{}[:space:]' < "$auth_file" 2>/dev/null)" ]
+}
+
 login_needed=1
-if [ -e "$auth_file" ]; then
+if auth_is_identity; then
   login_needed=0
   note "exists  $auth_file — this seat is already logged in; not printing a"
   note "        login command. This script never touches auth.json: it is the"
   note "        seat's identity and overwriting it has no undo. To re-login"
   note "        deliberately, remove it first:  rm \"$auth_file\""
+elif [ -e "$auth_file" ]; then
+  note "empty   $auth_file — pi auto-creates an empty {} auth.json on a first"
+  note "        headless run; that is not a login. The login command below"
+  note "        fills it in place."
 fi
 
 # --- hand-back ---------------------------------------------------------------
