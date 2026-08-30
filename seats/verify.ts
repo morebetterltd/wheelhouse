@@ -67,6 +67,54 @@ const BRIEF = path.join(ROOT, "contracts", "VERIFIER.md");
 // One-shot verification reads a diff and maybe runs a bench; give it room.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || 900000);
 
+/**
+ * A throwaway git worktree, used ONLY as the one-shot verifier spawn's
+ * process cwd — construction, not contract discipline. VERIFIER.md already
+ * says "read-only on the work," but that is a rule the model can ignore;
+ * the same hazard class adapter.ts's per-bead cwd (see seats/README.md,
+ * "Running a seat") closes for a confused WORKER applies to a confused or
+ * adversarial verifier turn that runs a bare `write`/`edit` against a
+ * relative path — with cwd: ROOT that lands in the live checkout, exactly
+ * the checkout every other seat and the commander depend on.
+ *
+ * It has to be a real worktree of THIS repository, not an arbitrary empty
+ * directory: the verifier's own default reading mechanism (VERIFIER.md,
+ * "Reading a branch without disturbing it") is bare `git diff`/`git show`
+ * with no `-C` flag, so its cwd must already be a valid working directory
+ * sharing this repository's object database and refs, or every git command
+ * the verifier runs fails before it reads a single line of the branch.
+ * verify.ts's OWN git calls (branch resolution, checkEvidence) are
+ * unaffected either way — they already pass `cwd: ROOT` explicitly, which
+ * has nothing to do with the spawned pi PROCESS's cwd.
+ *
+ * Detached at ROOT's own HEAD — an arbitrary, always-resolvable commit.
+ * The checked-out content is never read by anyone; the worktree exists
+ * only so a stray write has somewhere harmless to land, and so `git`
+ * commands run from inside it resolve at all. Removed on every exit path
+ * via `process.on("exit", ...)`, which still fires synchronous cleanup
+ * when `die()` calls `process.exit()` mid-run. Known gap, same class
+ * recover.ts's fixture sweep exists for elsewhere in this codebase: a
+ * SIGKILL of the dispatcher process itself skips the "exit" event and
+ * leaves the scratch worktree behind — out of scope for this change.
+ */
+function makeScratchCwd(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wheelhouse-verify-"));
+  try {
+    execFileSync("git", ["-C", ROOT, "worktree", "add", "--detach", dir, "HEAD"], { stdio: "pipe" });
+  } catch (e: any) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    die(`could not create a scratch worktree for the verifier spawn: ${(e.stderr ?? e.message).toString().trim()}`);
+  }
+  process.on("exit", () => {
+    try {
+      execFileSync("git", ["-C", ROOT, "worktree", "remove", "--force", dir], { stdio: "ignore" });
+    } catch {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    }
+  });
+  return dir;
+}
+
 function die(msg: string): never {
   process.stderr.write(`STOP: ${msg}\n`);
   process.exit(1);
@@ -364,16 +412,16 @@ function main(): void {
   if (entry.model) args.push("--model", entry.model);
   args.push(prompt);
 
-  // cwd is ROOT, not a bead's worktree — intentional, unlike adapter.ts's
-  // per-bead worker seats. The verifier is one turn, read-only, and its own
-  // brief (VERIFIER.md, "Reading a branch without disturbing it") answers
-  // from the canonical repository by default (`git diff`/`git show` read
-  // the object database and don't care which directory they run in, as
-  // long as it has the branch's ref); if it genuinely needs a working
-  // tree it creates its OWN rather than reuse anyone else's. See
-  // seats/README.md, "Verifying a branch" for the full comparison.
+  // cwd is a throwaway scratch worktree, not ROOT and not a bead's
+  // worktree — construction closing the confused-writer hazard, still
+  // distinct from adapter.ts's per-bead worker seats (a worker's cwd needs
+  // to BE the bead; the verifier's cwd only needs to be A repository the
+  // branch's ref resolves from, which any worktree of this repo is). See
+  // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
+  // the full reasoning.
+  const scratchCwd = makeScratchCwd();
   const res = spawnSync("pi", args, {
-    cwd: ROOT,
+    cwd: scratchCwd,
     env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir },
     encoding: "utf8",
     timeout: TIMEOUT_MS,

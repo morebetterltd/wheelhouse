@@ -160,29 +160,58 @@ claim (via `bd show` when `bd` is reachable, otherwise the verifier reads
 the bead itself) and the branch's tip SHA, and parses the single
 `VERDICT:` line out of the reply.
 
-Unlike a worker seat, the verifier always spawns with cwd fixed at the
-project root (`ROOT`) — never a bead's worktree, and this is intentional,
-not an oversight adapter.ts's per-bead cwd construction (see "Running a
-seat" above) simply hasn't reached yet. A worker lives in one bead's
-worktree for a whole session and edits real files there with bash/edit
-tools, so pinning its process cwd to that worktree by construction is what
-keeps a confused worker off the live checkout. The verifier does neither:
-it is one turn, read-only, and its brief (`contracts/VERIFIER.md`, "Reading
-a branch without disturbing it") tells it to answer from the canonical
-repository by default — `git diff <base> <sha>` and `git show <sha>:<path>`
-read the object database directly and do not care which directory they run
-in, as long as it is a clone that has the branch's ref, which `ROOT` always
-is. `verify.ts` itself never touches a worktree either: evidence paths are
-read with `git cat-file blob <tip>:<path>` (see "Evidence the bead names"
-below), by design, never from a checkout — GRAPH.md names the bead and a
-committed path as the only two evidence homes, and a worker's worktree is
-neither. On the rare turn where the verifier genuinely needs a real
-working tree — to build, to run the thing — its own brief tells it to
-create one of its own (`git worktree add <its-own-path> <sha>`) rather than
-reuse anyone else's, because "never run `git checkout` in a directory you
-did not create" rules out standing in a worker's worktree even for that.
-So a worker's cwd needs to BE the bead; the verifier's cwd only needs to be
-somewhere the bead's ref resolves from, and the project root already is.
+Unlike a worker seat, the verifier's process cwd is never a bead's
+worktree — but as of this bead it is not the project root either. The
+one-shot `pi` spawn gets a THROWAWAY scratch worktree (`makeScratchCwd()`
+in verify.ts): a real `git worktree add --detach <tmp-path> HEAD` against
+`ROOT`, created right before the spawn and removed on every exit path via
+`process.on("exit", ...)`. This closes the same hazard class adapter.ts's
+per-bead cwd construction (see "Running a seat" above) closes for a
+confused worker: `contracts/VERIFIER.md` says "read-only on the work," but
+that is a rule the model can ignore, and a confused or adversarial turn
+that runs a bare `write`/`edit` against a relative path needs somewhere
+harmless to land, not the live checkout every other seat and the commander
+depend on.
+
+It has to be a real worktree of THIS repository, not an arbitrary empty
+directory, because the verifier's own default reading mechanism
+(`contracts/VERIFIER.md`, "Reading a branch without disturbing it") is
+bare `git diff <base> <sha>` and `git show <sha>:<path>` with no `-C`
+flag — those read the object database directly and do not care which
+directory they run in, as long as it is a clone that has the branch's
+ref, but an unrelated directory with no `.git` in its ancestry fails
+every one of them before the verifier reads a single line. Detached at
+`ROOT`'s own `HEAD` (an arbitrary, always-resolvable commit): the
+checked-out content is never read by anyone, it exists purely so the
+directory both IS a valid git working directory and is disposable.
+
+`verify.ts` itself never touches this scratch worktree, or any worktree,
+for its OWN git calls — those are unaffected by any of this and keep
+explicit `cwd: ROOT` regardless of where the spawned `pi` process runs:
+branch resolution (`git rev-parse --verify`) and evidence reads
+(`git cat-file blob <tip>:<path>`, see "Evidence the bead names" below)
+run from verify.ts's own Node process via `execFileSync(..., { cwd: ROOT
+})`, which has nothing to do with the separate child process cwd the
+spawned `pi` binary gets. GRAPH.md names the bead and a committed path as
+the only two evidence homes, and neither a worker's worktree nor the
+verifier's own scratch worktree is either. On the rare turn where the
+verifier genuinely needs a real working tree beyond its scratch cwd — to
+build, to run the thing — its own brief still tells it to create one of
+its own (`git worktree add <its-own-path> <sha>`) rather than reuse
+anyone else's, because "never run `git checkout` in a directory you did
+not create" rules out standing in a worker's worktree even for that.
+
+So a worker's cwd needs to BE the bead; the verifier's cwd only needs to
+be A repository the bead's ref resolves from, which any worktree of this
+repository is — the scratch one included, and disposable specifically
+because nothing about it matters except that it exists and is not the
+live checkout.
+
+Known gap, same class recover.ts's fixture sweep exists for elsewhere in
+this codebase: `process.on("exit", ...)` cannot run on SIGKILL, so killing
+the dispatcher process mid-verification leaves the scratch worktree (and
+its `git worktree` registration) behind. No sweep for this exists yet —
+out of scope for the bead that added the mechanism.
 
 The verifier seat comes from the roster: the one entry with
 `"role": "verifier"`, or the optional fourth argument when there are

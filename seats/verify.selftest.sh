@@ -114,6 +114,10 @@ if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); proc
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
+// The dispatcher sets our cwd by construction (a scratch worktree), not by
+// telling us in a prompt to stay off the live checkout. Recording it here
+// lets the selftest see what the OS-level cwd actually was.
+fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
 if (reply) process.stdout.write(fs.readFileSync(reply, "utf8"));
 process.exit(Number(process.env.STUB_EXIT || 0));
@@ -176,6 +180,7 @@ RUN_PROJ="$PROJ"
 VDIR="$PROJ/seats/verdicts"
 VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
+VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
 
 phase "1. APPROVE — verdict parsed, recorded, exit 0, and what was launched"
 cat > "$REPLY" <<EOF
@@ -211,6 +216,29 @@ else fail "verifier provider/model from seats.json did not reach pi's argv"; fi
 if grep -q "bead-1" "$VARGV" && grep -q "$TIP" "$VARGV" && grep -q "bd show bead-1" "$VARGV"; then
   pass "prompt carries the bead id, the tip SHA, and the bead-claim reference"
 else fail "prompt is missing bead id, tip SHA, or bead claim"; fi
+
+# --- scratch cwd: construction, not contract discipline ---------------------
+# The verifier's process cwd must be A repository the branch's ref resolves
+# from (so its own bare `git diff`/`git show` still work — proven by phase 1
+# itself already succeeding, and by phase 8's evidence reads below, both
+# unchanged from before this bead), but it must NOT be $PROJ: a confused or
+# adversarial turn that writes to a relative path must land somewhere that
+# dies with the process, not in the live checkout.
+SCRATCH_CWD="$(cat "$VCWD" 2>/dev/null)"
+if [ -n "$SCRATCH_CWD" ] && [ "$SCRATCH_CWD" != "$PROJ" ]; then
+  pass "the verifier's cwd is NOT the project root"
+else fail "the verifier's cwd was \"$SCRATCH_CWD\" — expected anything but $PROJ"; fi
+case "$SCRATCH_CWD" in
+  */wheelhouse-verify-*)
+    pass "the verifier's cwd is the scratch worktree makeScratchCwd() creates" ;;
+  *) fail "the verifier's cwd \"$SCRATCH_CWD\" does not look like a wheelhouse-verify-* scratch dir" ;;
+esac
+if git -C "$PROJ" worktree list | grep -qF "$SCRATCH_CWD"; then
+  fail "the scratch worktree $SCRATCH_CWD is still registered after verify.ts exited — cleanup did not run"
+else pass "the scratch worktree is unregistered after verify.ts exited (process-exit cleanup ran)"; fi
+if [ -d "$SCRATCH_CWD" ]; then
+  fail "the scratch worktree directory $SCRATCH_CWD still exists on disk after verify.ts exited"
+else pass "the scratch worktree directory no longer exists on disk"; fi
 
 cat > "$REPLY" <<EOF
 Static half verified; no bench covers the docs deployable this touches.
