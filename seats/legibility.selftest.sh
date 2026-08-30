@@ -240,6 +240,7 @@ ME=$$   # alive for the whole run
 phase "phase 1: QUOTA — a quota-shaped dispatch failure is amber, never done"
 arun spawn q-seat
 [ $RC -eq 0 ] && pass "q-seat spawns against the stub" || fail "q-seat spawn: rc=$RC: $OUT"
+mkdir -p "$PROJ/.wheelhouse-worktrees/bead-q"
 arun dispatch q-seat bead-q "QUOTA please"
 if [ $RC -ne 0 ] && says "dispatch failed"; then
   pass "quota-shaped dispatch fails loudly (rc=$RC) — non-success at the adapter"
@@ -259,11 +260,11 @@ if seatline q-seat | grep -q "AMBER"; then pass "floor: quota cue is AMBER"
 else fail "floor: quota cue is not AMBER: $(seatline q-seat)"; fi
 
 # =============================================================================
-phase "phase 2: AUTH FAILURE — red, names the re-login command, distinct from quota"
+phase "phase 2: AUTH FAILURE — red, names the credential flow, distinct from quota"
 arun spawn a-seat
-if [ $RC -ne 0 ] && says "no identity" && says "pi /login"; then
-  pass "spawn on an empty {} auth.json is refused, printing the pi /login command"
-else fail "authless spawn was not refused with the login command (rc=$RC): $OUT"; fi
+if [ $RC -ne 0 ] && says "no identity" && says "type /login" && says "api_key"; then
+  pass "spawn on an empty {} auth.json is refused, printing the credential flow"
+else fail "authless spawn was not refused with the credential flow (rc=$RC): $OUT"; fi
 # The stream-visible half: a seat that DID run and then hit a 401 mid-flight.
 cat > "$PROJ/seats/logs/a-seat.jsonl" <<'EOF'
 {"type":"agent_start"}
@@ -274,8 +275,8 @@ inject_seat a-seat "$ME" ""
 # the rail's width budget truncates the tail of the line; render WIDE for the
 # full-command assertion (the distinctness checks below use the normal width).
 COLS=400 render
-if seatline a-seat | grep -q "AUTH DEAD" && seatline a-seat | grep -q "pi /login"; then
-  pass "floor: red AUTH DEAD with the re-login command"
+if seatline a-seat | grep -q "AUTH DEAD" && seatline a-seat | grep -q "then /login in the REPL" && seatline a-seat | grep -q "api_key"; then
+  pass "floor: red AUTH DEAD with the credential flow"
 else fail "floor: no AUTH DEAD line for a-seat: $(seatline a-seat)"; fi
 render
 if seatline a-seat | grep -q " RED"; then pass "floor: auth cue is RED"
@@ -450,7 +451,7 @@ fi
 # canary 3 (cue conflation): force AUTH to render with the QUOTA wording —
 # two classes collapsing into one line MUST be caught by the distinctness check.
 SAB3="$PROJ/seats/floor-sab3.ts"
-sed 's|AUTH DEAD — re-login: PI_CODING_AGENT_DIR=${rec?.accountDir ?? "<dir>"} pi /login|QUOTA EXHAUSTED — seat cannot take work until it resets|' "$FLOOR" > "$SAB3"
+sed 's|AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=${rec?.accountDir ?? "<dir>"} pi, then /login in the REPL; api_key: auth.json or provider env var|QUOTA EXHAUSTED — seat cannot take work until it resets|' "$FLOOR" > "$SAB3"
 if cmp -s "$FLOOR" "$SAB3"; then
   fail "canary 3: sed no longer bites (auth line moved) — fix this test"
 else

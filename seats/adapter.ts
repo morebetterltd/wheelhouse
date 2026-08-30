@@ -25,7 +25,8 @@
  *
  * No tokens, ever: state.json and the logs record names, paths, pids, and
  * session ids. Identity stays in each seat's auth.json, which only
- * `pi /login` writes.
+ * OAuth `/login` inside the interactive Pi REPL or an operator-written api_key
+ * entry writes.
  *
  * Usage: bun seats/adapter.ts <command> [args]
  *
@@ -354,7 +355,8 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   if (!authIsIdentity(authFile)) {
     die(
       `seat "${name}" has no identity — ${authFile} is missing or empty.\n` +
-        `      log the seat in once: PI_CODING_AGENT_DIR="${accountDir}" pi /login`
+        `      OAuth: PI_CODING_AGENT_DIR="${accountDir}" pi, then type /login in the REPL and /exit after the browser flow\n` +
+        `      api_key: write ${authFile} or export the provider env var in the shell that spawns this seat`
     );
   }
 

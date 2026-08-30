@@ -602,7 +602,7 @@ if [ "${WHEELHOUSE_SKIP_REAL_PI:-}" = "1" ]; then
 elif [ -z "$REAL_PI" ]; then
   skip "real-pi leg: no pi on PATH (npm install -g @earendil-works/pi-coding-agent)"
 elif ! real_auth_is_identity; then
-  skip "real-pi leg: $REAL_AUTH missing or empty — run pi /login once as yourself"
+  skip "real-pi leg: $REAL_AUTH missing or empty — run pi, then /login inside the REPL once as yourself"
 else
   RPROJ="$FIX/realproj"
   RHOME="$FIX/realhome"

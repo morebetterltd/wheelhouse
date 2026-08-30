@@ -421,10 +421,12 @@ function main(): void {
         `      provision it first: seats/seat-env.sh <namespace> ${verifierSeat} "${ROOT}"`
     );
   }
-  if (!authIsIdentity(path.join(verifierDir, "auth.json"))) {
+  const verifierAuthFile = path.join(verifierDir, "auth.json");
+  if (!authIsIdentity(verifierAuthFile)) {
     die(
-      `verifier seat "${verifierSeat}" has no identity — log it in once:\n` +
-        `      PI_CODING_AGENT_DIR="${verifierDir}" pi /login`
+      `verifier seat "${verifierSeat}" has no identity — give it credentials once:\n` +
+        `      OAuth: PI_CODING_AGENT_DIR="${verifierDir}" pi, then type /login in the REPL and /exit after the browser flow\n` +
+        `      api_key: write ${verifierAuthFile} or export the provider env var in the shell that spawns this verifier`
     );
   }
 
