@@ -3,7 +3,7 @@
  * verify.ts — commander-facing dispatch of the EPHEMERAL verifier pass.
  *
  * One invocation = one verdict. It spawns a one-shot `pi -p --no-session`
- * on the VERIFIER seat's own agent directory, with contracts/VERIFIER.md
+ * on the VERIFIER seat's own agent directory, with the VERIFIER crew brief
  * appended to the system prompt, hands it the bead claim and the branch's
  * tip SHA, and parses the single `VERDICT:` line out of what comes back.
  * Nothing persists on the verifier's side — no session, no memory — which
@@ -56,13 +56,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
+import { resolveRoleBrief } from "./briefs";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
 const ROSTER_FILE = path.join(SEATS_DIR, "seats.json");
 const STATE_FILE = path.join(SEATS_DIR, "state.json");
 const VERDICTS_DIR = path.join(SEATS_DIR, "verdicts");
-const BRIEF = path.join(ROOT, "contracts", "VERIFIER.md");
 
 // One-shot verification reads a diff and maybe runs a bench; give it room.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || 900000);
@@ -398,7 +398,12 @@ function main(): void {
   validateSegment("seat name", authorSeat);
   if (verifierArg) validateSegment("seat name", verifierArg);
 
-  if (!fs.existsSync(BRIEF)) die(`no verifier brief at ${BRIEF}`);
+  let brief: string;
+  try {
+    brief = resolveRoleBrief(ROOT, "verifier");
+  } catch (e: any) {
+    die(e.message);
+  }
 
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
   if (!entry.account?.dir) die(`verifier seat "${verifierSeat}" has no account.dir in seats/seats.json`);
@@ -475,7 +480,7 @@ function main(): void {
     `evidence above it. If you cannot deliver a verdict, emit no VERDICT: line at all.`,
   ].join("\n");
 
-  const args = ["-p", "--no-session", "--append-system-prompt", BRIEF];
+  const args = ["-p", "--no-session", "--append-system-prompt", brief];
   if (entry.provider) args.push("--provider", entry.provider);
   if (entry.model) args.push("--model", entry.model);
   args.push(prompt);

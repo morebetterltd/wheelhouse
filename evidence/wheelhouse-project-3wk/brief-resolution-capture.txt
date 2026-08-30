@@ -1,0 +1,25 @@
+# wheelhouse-project-3wk brief resolution evidence
+
+## Pre-fix adapter STOP repro: installed layout exists, contracts/ absent
+$ env HOME=<tmp>/home PATH=<tmp>/bin:<tool-paths> bun <old>/seats/adapter.ts spawn worker-1
+exit=1
+STOP: no crew brief for role "worker" — expected <tmp>/pre-adapter/contracts/WORKER.md
+
+## Pre-fix verify STOP repro: installed layout exists, contracts/ absent
+$ env HOME=<tmp>/home PATH=<tmp>/bin:<tool-paths> bun <old>/seats/verify.ts bead-1 fleet/bead-1 worker-1
+exit=1
+STOP: no verifier brief at <tmp>/pre-verify/contracts/VERIFIER.md
+
+## Post-fix adapter resolution: installed layout, contracts/ absent
+$ env HOME=<tmp>/home PATH=<tmp>/bin:<tool-paths> bun <new>/seats/adapter.ts spawn worker-1
+exit=0
+seat worker-1: pid 40107, session abd12547-7900-46e7-b76e-f91405f0c0a8
+  events -> <tmp>/post-adapter/seats/logs/worker-1.jsonl
+argv=["--mode","rpc","--append-system-prompt","<tmp>/post-adapter/wheelhouse/fleet/WORKER.md"]
+
+## Post-fix verify resolution: installed layout, contracts/ absent
+$ env HOME=<tmp>/home PATH=<tmp>/bin:<tool-paths> bun <new>/seats/verify.ts bead-1 fleet/bead-1 worker-1
+exit=0
+VERDICT: APPROVE  (bead bead-1, tip 058c7e65777d, verifier verifier)
+  full output -> <tmp>/post-verify/seats/verdicts/bead-1.md
+argv=["-p","--no-session","--append-system-prompt","<tmp>/post-verify/wheelhouse/crew/VERIFIER.md","You are dispatched as the EPHEMERAL verifier for bead bead-1.\n\nBranch under review: fleet/bead-1\nTip SHA at dispatch: 058c7e65777d952b817e3ba5297562880b762c3e\nAuthor seat: worker-1 (account-distinctness from you was asserted before this spawn)\n\nThe dispatcher could not run `bd show bead-1` — read the bead yourself (`bd show bead-1`) before judging anything against it.\n\nVerify whether the bead's stated done holds at that SHA, per your brief.\nConfirm the branch still resolves to the SHA above before relying on your reading.\nEnd with exactly one line: VERDICT: APPROVE | BOUNCE | DISCOVER, with your\nevidence above it. If you cannot deliver a verdict, emit no VERDICT: line at all."]

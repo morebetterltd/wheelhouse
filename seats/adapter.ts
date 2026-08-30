@@ -52,6 +52,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { resolveRoleBrief } from "./briefs";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -315,11 +316,11 @@ function requireSeat(name: string): SeatEntry {
 }
 
 function roleBriefPath(role: string): string {
-  const brief = path.join(ROOT, "contracts", `${role.toUpperCase()}.md`);
-  if (!fs.existsSync(brief)) {
-    die(`no crew brief for role "${role}" — expected ${brief}`);
+  try {
+    return resolveRoleBrief(ROOT, role);
+  } catch (e: any) {
+    die(e.message);
   }
-  return brief;
 }
 
 // The seat's process cwd IS the bead's worktree — construction, not a
