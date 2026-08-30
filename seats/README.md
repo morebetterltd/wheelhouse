@@ -274,3 +274,63 @@ every rail cue above, the STATUS cell, the missing-log degradation, and two
 cmp-guarded canaries. The tmux leg builds the bridge on a private tmux
 socket and proves `cockpit.sh` idempotent; it prints a SKIP line (and still
 passes) when tmux is not installed.
+
+<!-- ===== recovery (bead wheelhouse-project-98m) — new section starts here ===== -->
+
+## Recovering after an interruption
+
+```bash
+bun seats/recover.ts
+```
+
+Run it at commander start — after a commander restart, a killed Pi process,
+or a machine reboot — and it tells you what survived. It reads three things
+and nothing else: `seats/state.json`, `seats/run/`, and the live process
+table. Every recorded seat comes back as one of:
+
+| class | meaning |
+|---|---|
+| `RUNNING` | The recorded pid is alive AND its command line carries this seat's role brief, so it is our process — not a stranger holding a recycled pid. |
+| `DEAD` | The process is gone (or the pid was reused) but the session file is intact. Resumable: if a bead was in flight, the seat line names it and the EXACT resume command is printed beneath. |
+| `STALE` | A state entry with no session artifacts on disk. Nothing to resume; spawn fresh when the seat is needed. |
+
+What it will and will not do:
+
+- **It never resumes anything itself.** Resuming is a commander decision;
+  recover puts the command and the bead id in front of you and stops. Its
+  only writes are FIFO removals under `seats/run/` for seats that are not
+  RUNNING — each one printed — and the adapter recreates a missing FIFO at
+  the next spawn or resume, so cleanup never costs you a seat. It does not
+  touch `state.json`, spawn `pi`, or call `bd`: recovering must never
+  re-dispatch or re-integrate work that already happened, so the tool that
+  runs first after an interruption is structurally unable to.
+- **It refuses a double-resume.** If a DEAD seat's session is already
+  attached — another recorded seat RUNNING on the same session file, or any
+  live process whose command line names it (a `--session` resume the state
+  never caught) — recover prints `REFUSED double-resume` naming the holder
+  instead of a resume command. One session with two writers is corruption
+  with extra steps.
+
+The machine-restart story is the reason classification checks the command
+line and not just `kill -0`. After a reboot every pid in `state.json` is
+stale, and some of those numbers will be alive again as unrelated processes
+— pids are dense and recycled. A liveness probe alone would call such a seat
+RUNNING, skip the resume, and strand its bead. Recover treats "pid alive" as
+necessary but not sufficient: the process must also carry the seat's role
+brief in its argv (the adapter passes it via `--append-system-prompt`, so it
+is always there for a real seat). Alive-but-unrecognized reads as
+`pid N reused by another process` and the seat classifies DEAD — resumable,
+because the session file is what holds the seat's memory, and it survived
+the reboot even though the process did not.
+
+The forced-interruption exercise is `seats/recover.selftest.sh`: hermetic
+with the same stub `pi` as the adapter's selftest, it SIGKILLs a seat
+mid-turn and proves the DEAD classification, the named bead, and that the
+printed resume command re-attaches the SAME session file; simulates a
+commander restart (fresh process, `state.json` only) including the
+reused-pid case; proves the double-resume refusal on both detection paths;
+proves orphaned-FIFO cleanup removes only what is dead; and asserts the
+no-duplicate-integration guard — `state.json` byte-identical, zero `pi`
+spawns, zero `bd` calls — with canaries (cmp-guarded sabotage of copies)
+checking that the checks themselves still bite. There is deliberately no
+real-pi leg: recover reads state and the process table, nothing model-side.
