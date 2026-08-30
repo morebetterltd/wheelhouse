@@ -67,23 +67,29 @@ function expandTilde(p: string): string {
 
 /**
  * A seat name is used as a path segment (run/<seat>.stdin, logs/<seat>.jsonl)
- * and lands inside the quoted shell command that launches pi. Anything that
- * is not one plain segment — separators, dot-dirs, whitespace, quotes —
- * would write outside seats/ or break the launch line, so it is refused
- * loudly, naming the offending key.
+ * and lands inside the quoted shell command that launches pi. A bead id is
+ * used the same way at dispatch (recover.ts's printed resume-suggestion
+ * quotes it back). Anything that is not one plain segment — separators,
+ * dot-dirs, whitespace, quotes — would write outside seats/, break the
+ * launch line, or split printed output across lines, so it is refused
+ * loudly, naming the offending key. Same rules as verify.ts's validateSegment.
  */
-function validateSeatName(name: string): string {
+function validateSegment(kind: string, value: string): string {
   const bad =
-    name.length === 0 ? "empty" :
-    name === "." || name === ".." ? "a dot segment" :
-    /[/\\]/.test(name) ? "a path separator" :
-    /\s/.test(name) ? "whitespace" :
-    /['"`]/.test(name) ? "a quote character" :
+    value.length === 0 ? "empty" :
+    value === "." || value === ".." ? "a dot segment" :
+    /[/\\]/.test(value) ? "a path separator" :
+    /\s/.test(value) ? "whitespace" :
+    /['"`]/.test(value) ? "a quote character" :
     null;
   if (bad !== null) {
-    die(`invalid seat name ${JSON.stringify(name)} (${bad}) — a seat name must be a single path segment: no /, no .., no whitespace, no quotes`);
+    die(`invalid ${kind} ${JSON.stringify(value)} (${bad}) — must be a single path segment: no /, no .., no whitespace, no quotes`);
   }
-  return name;
+  return value;
+}
+
+function validateSeatName(name: string): string {
+  return validateSegment("seat name", name);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +525,7 @@ async function main(): Promise<void> {
       return cmdSpawn(validateSeatName(rest[0]));
     case "dispatch":
       if (rest.length !== 3) die("usage: adapter.ts dispatch <seat> <bead-id> <text>");
-      return cmdDispatch(validateSeatName(rest[0]), rest[1], rest[2]);
+      return cmdDispatch(validateSeatName(rest[0]), validateSegment("bead id", rest[1]), rest[2]);
     case "steer":
       if (rest.length !== 2) die("usage: adapter.ts steer <seat> <text>");
       return cmdSteer(validateSeatName(rest[0]), rest[1]);
