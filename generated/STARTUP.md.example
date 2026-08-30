@@ -19,51 +19,29 @@ The folder's `CLAUDE.md` makes this session the commander. No launcher required.
 
 ## 2. Seats
 
-Each seat is a terminal you open and leave open — the session in it IS the seat. One terminal per seat, one account per seat. `wheelhouse/fleet/SEATS.md`'s "Launching a seat" is the full procedure, including the `claude` check, the first-run login, the standing prompt to paste as the first message, and what the seat does afterwards. The blocks below are that procedure with this project's root, seat root and seat names already filled in.
+Each seat is a persistent `pi` process the commander owns — provisioned once, then started with the adapter. Nothing here is a terminal you keep open, and there is nothing to paste into a seat: the role brief is injected at spawn. `wheelhouse/fleet/SEATS.md` is the contract; `seats/README.md` documents every command below.
 
-This project's seat root is `$HOME/.claude-seats-ebb` and its seat names are prefixed `ebb-` — namespace `ebb`, recorded as `namespace=ebb` in `wheelhouse/.template-source` and written out in `### Seat namespace` in `wheelhouse/fleet/SEATS.md`. That root is per-project because this machine may host another wheelhouse; the prefix is per-project because the commander's registry is shared even when the roots are not.
-
-Each block ends with the check from the launch procedure: it prints the project roots of any sessions the directory already holds. Nothing, or `/Users/you/code/ebb`, is fine. Any other path is another fleet's seat — stop, do not run `claude` against it.
-
-`--permission-mode auto` is what keeps a promoted seat from stalling on permission dialogs in a terminal nobody is watching — routine actions run without asking, reviewed by the harness's classifier instead of by you — and omitting the flag runs the seat stricter, prompting per the harness's defaults.
-
-`ebb-worker-1`, on account `ebb-fleet-1`:
-
-```bash
-export CLAUDE_CONFIG_DIR="$HOME/.claude-seats-ebb/ebb-worker-1"
-if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
-  sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
-fi
-cd ~/code/ebb
-claude --permission-mode auto
-```
-
-`ebb-reviewer`, on account `ebb-fleet-2`:
-
-```bash
-export CLAUDE_CONFIG_DIR="$HOME/.claude-seats-ebb/ebb-reviewer"
-if [ -d "$CLAUDE_CONFIG_DIR/sessions" ]; then
-  sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p' "$CLAUDE_CONFIG_DIR"/sessions/*.json 2>/dev/null | sort -u
-fi
-cd ~/code/ebb
-claude --permission-mode auto
-```
-
-Then paste that seat's standing prompt from `wheelhouse/fleet/SEATS.md`, with `<seat-name>` replaced by the name above and only that seat's role brief kept. The seat idles until the commander sends it work by name.
-
-## 3. Wire discovery, roll call, then verify
-
-Per-seat config directories isolate each seat's session registry, so until the registrations are shared the commander cannot message a seat and no seat can reach the commander. You run the wiring, not the commander — an agent cannot write its own registry:
+Provision each roster seat once (safe to re-run; it changes nothing for a seat that exists). The script creates the seat's agent directory under `$HOME/.pi-seats-ebb/`, pre-grants trust for the project root, and prints the one-time login for the account that seat should BE — run that login before the first spawn:
 
 ```bash
 cd ~/code/ebb
-wheelhouse/runbooks/wire-seats.sh --dry-run   # read-only: prints the plan
-wheelhouse/runbooks/wire-seats.sh
+seats/seat-env.sh ebb worker-1
+seats/seat-env.sh ebb reviewer
 ```
 
-Nothing to pass: the script reads `namespace=ebb` out of `wheelhouse/.template-source`, prints the root it settled on, and refuses the run if any seat in scope turns out to belong to another project on this machine.
+Then, on any later cold start, just spawn from the roster:
 
-Re-run it whenever a seat restarts. Then ask the commander for a roll call before it dispatches anything: wiring makes seats reachable but anonymous — registry rows carry derived names like `ebb-4f`, not seat names — and the roll call is what binds the map, then asserts no name in it resolves to two live rows. Finally have each seat message the commander unprompted, by name; a round trip only proves the commander can reach the seat. A seat that cannot answer gets relaunched, then re-wired and re-rolled. Full procedure and the reasoning: `wheelhouse/runbooks/SEAT_DISCOVERY.md`.
+```bash
+bun seats/adapter.ts spawn worker-1
+bun seats/adapter.ts spawn reviewer
+bun seats/adapter.ts status          # every seat, liveness
+```
+
+`resume <seat>` instead of `spawn` reattaches a seat to the session it was stopped with, context warm — use it when a stop or reboot interrupted work in flight.
+
+## 3. Watch it
+
+The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id> ...`) and each seat's event stream lands in `seats/logs/<seat>.jsonl`. The bridge — one tmux window per project, commander pane plus a floor of seat panes to spotlight — is the cockpit shape for watching the fleet; see `seats/` for what your install ships for it, and `bun seats/adapter.ts status` is the no-cockpit fallback that always works.
 
 ## 4. Feed it
 
@@ -71,4 +49,4 @@ Speak backlog items to the commander in plain language. It files them as beads, 
 
 ## Shutdown
 
-Close the terminals in any order. In-flight work resumes from the graph.
+`bun seats/adapter.ts stop <seat>` for each running seat — graceful, session kept — or just shut the machine down; in-flight work resumes from the graph, and `resume` brings a stopped seat back warm.

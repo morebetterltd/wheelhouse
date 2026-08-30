@@ -4,22 +4,11 @@ What to change once the loop has proven itself, and what to leave alone until th
 
 Every graduation here is deliberately NOT the default. A template that ships the endpoint hands a brand-new, untested fleet the authority a working one earned. Each of these is a thing to take when you have evidence, not on installation day.
 
-## Ephemeral dispatches to standing seats
+## Persistent seats are the default now, not a graduation
 
-**Start:** the commander dispatches subagents per task. They do the work, report, and end.
+Earlier versions of this template made this section's first rung — ephemeral dispatches that do the work, report, and end — the shipped default, and persistent seats a graduation with real chores attached: per-seat config directories, operator-run registry wiring after every relaunch, a roll call every session generation, a standing prompt pasted by hand. Those chores were the cost of building standing seats out of interactive terminal sessions, and they are gone because the seat is no longer a terminal: it is a commander-owned `pi --mode rpc` process the adapter spawns with the role injected, addressable by roster name from the moment it starts (`wheelhouse/fleet/SEATS.md`; commands in `seats/README.md`).
 
-**Graduate to:** standing sessions, one per subscription, addressable by name, that idle between dispatches and hold context across them.
-
-**Take it when:** you are dispatching often enough that context re-establishment is the slow part, and the worker/reviewer loop has produced merges you trusted.
-
-Promotion is configuration, not a rewrite: the briefs do not change, only how long the session lives. What it costs is a manual reset ritual between beads — `wheelhouse/fleet/SEATS.md`'s Lifecycle section carries that, along with why the ephemeral shape needs no lifecycle management at all.
-
-It also costs two standing chores that the ephemeral shape does not have, both in `wheelhouse/runbooks/SEAT_DISCOVERY.md`, and both are part of taking this graduation rather than optional polish afterwards:
-
-- **Wiring, by the operator, after every launch or relaunch.** Standing seats are addressed by name, and per-seat config directories isolate the registries that make names resolve. `wheelhouse/runbooks/wire-seats.sh` shares them in both directions. The commander cannot run it — an agent writing its own session registry is blocked — so promotion moves a step onto the human that nobody had to do before.
-- **A roll call before the first dispatch of every session generation.** Wiring makes seats reachable, not identifiable: registry rows carry derived names, so the commander must ask each seat who it is and hold the map. Restart a seat and its name changes, which is why this is per-generation rather than once.
-
-Take the graduation only if you will actually do both. A promoted fleet that skips them dispatches to whoever answers, and the failure reads as a seat behaving strangely rather than as a wiring step nobody ran.
+So there is nothing to graduate to here. A persistent seat costs no wiring, no roll call, no reset ritual — the session is a warm cache that survives stop and resume, and spawning fresh is one command. What this section still owes you is the judgment the old graduation encoded: a persistent seat idling is a subscription doing nothing, so take seats for the roles you actually dispatch to, and note that the verifier stays deliberately ephemeral — one shot, no session — because for a review gate, independence is worth more than a warm cache.
 
 ## Principal-confirmed merges to auto-merge on APPROVE
 
@@ -53,15 +42,9 @@ The precondition is in `wheelhouse/crew/REVIEWER.md`: an APPROVE without bench e
 
 **Return to per-push when** the scope changes, a new remote or repository appears, the principal's instruction is unclear, or anything was pushed that should not have been. Going back is cheap and is not a punishment; the ladder is not one-way.
 
-## One vendor to cross-vendor seats
+## Cross-vendor seats
 
-**Start:** every seat on the same agent runtime.
-
-**Graduate to:** some worker seats on a different vendor's agent, taking well-scoped implementation beads.
-
-**Take it when:** your briefs are genuinely runtime-agnostic — which you will only know once a seat on a second runtime has shipped a bead through the same review gate.
-
-Untried at the time of writing. Recorded as a direction, not a recommendation: exporting unexercised design as instruction is how a template teaches something that does not work.
+Not a graduation either: the vendor is a per-seat roster field. Each entry in `seats/seats.json` records its own `provider` and `model`, so a second vendor's worker is a roster line plus a provisioning run and a login (`seats/README.md`), on the same runtime and under the same briefs — the crew briefs are canonical prose injected at spawn, identical whichever model reads them. The judgment that survives from when this was a graduation: give a new vendor's seat well-scoped implementation beads first, and treat the same review gate passing its work as the evidence your briefs really are model-agnostic.
 
 ## Adding seats
 
