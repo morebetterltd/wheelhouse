@@ -160,6 +160,30 @@ claim (via `bd show` when `bd` is reachable, otherwise the verifier reads
 the bead itself) and the branch's tip SHA, and parses the single
 `VERDICT:` line out of the reply.
 
+Unlike a worker seat, the verifier always spawns with cwd fixed at the
+project root (`ROOT`) — never a bead's worktree, and this is intentional,
+not an oversight adapter.ts's per-bead cwd construction (see "Running a
+seat" above) simply hasn't reached yet. A worker lives in one bead's
+worktree for a whole session and edits real files there with bash/edit
+tools, so pinning its process cwd to that worktree by construction is what
+keeps a confused worker off the live checkout. The verifier does neither:
+it is one turn, read-only, and its brief (`contracts/VERIFIER.md`, "Reading
+a branch without disturbing it") tells it to answer from the canonical
+repository by default — `git diff <base> <sha>` and `git show <sha>:<path>`
+read the object database directly and do not care which directory they run
+in, as long as it is a clone that has the branch's ref, which `ROOT` always
+is. `verify.ts` itself never touches a worktree either: evidence paths are
+read with `git cat-file blob <tip>:<path>` (see "Evidence the bead names"
+below), by design, never from a checkout — GRAPH.md names the bead and a
+committed path as the only two evidence homes, and a worker's worktree is
+neither. On the rare turn where the verifier genuinely needs a real
+working tree — to build, to run the thing — its own brief tells it to
+create one of its own (`git worktree add <its-own-path> <sha>`) rather than
+reuse anyone else's, because "never run `git checkout` in a directory you
+did not create" rules out standing in a worker's worktree even for that.
+So a worker's cwd needs to BE the bead; the verifier's cwd only needs to be
+somewhere the bead's ref resolves from, and the project root already is.
+
 The verifier seat comes from the roster: the one entry with
 `"role": "verifier"`, or the optional fourth argument when there are
 several. Before ANYTHING spawns, `verify.ts` compares the author seat's

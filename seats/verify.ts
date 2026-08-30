@@ -364,6 +364,14 @@ function main(): void {
   if (entry.model) args.push("--model", entry.model);
   args.push(prompt);
 
+  // cwd is ROOT, not a bead's worktree — intentional, unlike adapter.ts's
+  // per-bead worker seats. The verifier is one turn, read-only, and its own
+  // brief (VERIFIER.md, "Reading a branch without disturbing it") answers
+  // from the canonical repository by default (`git diff`/`git show` read
+  // the object database and don't care which directory they run in, as
+  // long as it has the branch's ref); if it genuinely needs a working
+  // tree it creates its OWN rather than reuse anyone else's. See
+  // seats/README.md, "Verifying a branch" for the full comparison.
   const res = spawnSync("pi", args, {
     cwd: ROOT,
     env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir },
