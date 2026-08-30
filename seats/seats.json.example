@@ -1,0 +1,27 @@
+{
+  "commander": {
+    "role": "commander",
+    "external": true,
+    "runtime": "claude-code"
+  },
+  "seats": {
+    "worker-1": {
+      "role": "worker",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5",
+      "account": { "dir": "~/.pi-seats-myproject/worker-1" }
+    },
+    "worker-2": {
+      "role": "worker",
+      "provider": "openai",
+      "model": "gpt-5.2-codex",
+      "account": { "dir": "~/.pi-seats-myproject/worker-2" }
+    },
+    "reviewer": {
+      "role": "reviewer",
+      "provider": "anthropic",
+      "model": "claude-opus-5",
+      "account": { "dir": "~/.pi-seats-myproject/reviewer" }
+    }
+  }
+}

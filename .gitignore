@@ -1,1 +1,4 @@
 .DS_Store
+
+# seat runtime logs are per-machine noise, never product
+seats/logs/
