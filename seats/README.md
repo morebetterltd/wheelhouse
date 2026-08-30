@@ -9,11 +9,12 @@ Two processes pointed at different directories cannot share or clobber each
 other's identity, and a reviewer seat on its own directory is what makes
 "never the author's account" a fact on disk rather than a policy.
 
-Two files live here:
+Three files live here:
 
 - `seats.json.example` — the roster format. Copy it to `seats.json` and edit.
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
   project root, and prints the export line and the one-time login command.
+- `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, resume.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, which only `pi /login` writes and which never enters git.
@@ -92,14 +93,71 @@ directory → `true`. Use the physical path (`pwd -P` in that directory): pi
 matches trust keys against the canonicalized cwd, so a key written through a
 symlink is a grant pi never matches.
 
+## Running a seat
+
+```bash
+bun seats/adapter.ts spawn    <seat>                    # start it
+bun seats/adapter.ts dispatch <seat> <bead-id> <text>   # hand it a bead
+bun seats/adapter.ts steer    <seat> <text>             # redirect mid-turn
+bun seats/adapter.ts status                             # liveness, every seat
+bun seats/adapter.ts stop     <seat>                    # graceful; session kept
+bun seats/adapter.ts resume   <seat>                    # reattach that session
+```
+
+`spawn` reads the seat's roster entry, refuses a seat whose directory or
+login is missing (it prints the exact `seat-env.sh` or `pi /login` command
+instead), and starts one long-lived `pi --mode rpc` process: agent directory
+from `account.dir`, provider and model pinned from the roster, and the
+role's crew brief — `contracts/<ROLE>.md` — appended to the system prompt at
+launch, which is the only time Pi takes configuration. The process outlives
+the adapter: its stdin is a FIFO under `seats/run/`, its stdout appends raw
+to `seats/logs/<seat>.jsonl` (every event, one JSON line each; stderr lands
+beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
+one line, and reads the response out of the log.
+
+`dispatch` prefixes the message with `Bead <bead-id>` and queues behind the
+current turn if the seat is mid-stream; redirecting the CURRENT turn is what
+`steer` is for. `stop` is SIGTERM — Pi's graceful path — and deliberately
+never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
+not shooting. The session survives a stop, and `resume` respawns the seat
+attached to it (`--session`), so the context it built up comes back warm.
+
+What the adapter is NOT: a supervisor. Nothing restarts a dead seat, meters
+quota, or retries. It runs seats; noticing them is the commander's job.
+
+### state.json
+
+`seats/state.json` is the seat ↔ process ↔ session record, one entry per
+seat name, written by the adapter and read by every later invocation:
+
+| Field | What it is |
+|---|---|
+| `pid` | The running `pi` process, or `null` after a stop. |
+| `startedAt` / `stoppedAt` | ISO timestamps of the last spawn / stop. |
+| `accountDir` | The agent directory the process was pointed at. |
+| `role` / `roleBrief` | The roster role and the brief file injected at launch. |
+| `fifo` / `log` | Where commands go in and events come out. |
+| `sessionId` / `sessionFile` | Pi's session, as `get_state` reported it; `sessionFile` is what `resume` reattaches. |
+| `model` | The roster's model pin at launch, if any. |
+| `lastBead` / `lastDispatchAt` | The most recent dispatch, for `status`. |
+
+Like the roster, it holds NO tokens — names, paths, pids, and session ids
+only. It is per-machine runtime state, not product, and git ignores it along
+with `seats/run/` and `seats/logs/`.
+
 ## Proving it still works
 
 ```bash
 bash seats/seat-env.selftest.sh
+bash seats/adapter.selftest.sh
 ```
 
-Hermetic — it builds seats in a temp HOME with a stub `pi`, and your real
-seats are never touched. It ends with a canary phase that breaks a copy of
-the script and checks the tests notice; if the canary survives, the selftest
-fails even when everything else passed. `seats/logs/` is where seat runtime
-logs land; it is per-machine noise and git ignores it.
+Hermetic — both build seats in a temp HOME with a stub `pi`, and your real
+seats are never touched. Each ends with a canary phase that breaks a copy of
+the thing under test and checks the tests notice; if a canary survives, the
+selftest fails even when everything else passed. The adapter selftest adds
+one real-pi smoke leg at the end — spawn, dispatch, agent_end, resume, and
+the session file growing — which borrows your own `pi /login` inside the
+temp fixture; it prints a SKIP line (and still passes) if `pi` or the login
+is missing, or if `WHEELHOUSE_SKIP_REAL_PI=1`. `seats/logs/` is where seat
+runtime logs land; it is per-machine noise and git ignores it.

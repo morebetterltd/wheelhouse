@@ -2,3 +2,7 @@
 
 # seat runtime logs are per-machine noise, never product
 seats/logs/
+
+# seat runtime state and command FIFOs are per-machine, never product
+seats/state.json
+seats/run/
