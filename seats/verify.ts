@@ -58,6 +58,26 @@ function expandTilde(p: string): string {
   return p;
 }
 
+/**
+ * Bead ids and seat names are used as single path segments here — the
+ * verdict file is verdicts/<bead-id>.md, and seat names index the roster
+ * whose account dirs get spawned on. Anything that is not one plain
+ * segment is refused loudly, naming the offending value.
+ */
+function validateSegment(kind: string, value: string): string {
+  const bad =
+    value.length === 0 ? "empty" :
+    value === "." || value === ".." ? "a dot segment" :
+    /[/\\]/.test(value) ? "a path separator" :
+    /\s/.test(value) ? "whitespace" :
+    /['"`]/.test(value) ? "a quote character" :
+    null;
+  if (bad !== null) {
+    die(`invalid ${kind} ${JSON.stringify(value)} (${bad}) — must be a single path segment: no /, no .., no whitespace, no quotes`);
+  }
+  return value;
+}
+
 /** Canonical form for comparing two account dirs: tilde-expanded, resolved,
  * and realpath'd when the directory exists — /tmp vs /private/tmp must not
  * read as two different accounts. */
@@ -152,6 +172,9 @@ function main(): void {
   if (!beadId || !branch || !authorSeat) {
     die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat]");
   }
+  validateSegment("bead id", beadId);
+  validateSegment("seat name", authorSeat);
+  if (verifierArg) validateSegment("seat name", verifierArg);
 
   if (!fs.existsSync(BRIEF)) die(`no verifier brief at ${BRIEF}`);
 

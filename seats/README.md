@@ -222,6 +222,20 @@ leg fails the same way every real `pi` run on the machine would, and the
 fix is `pi /login`, not a looser test. `seats/logs/` is where seat
 runtime logs land; it is per-machine noise and git ignores it.
 
+Two more real-leg notes. When the login that works on this machine is NOT
+pi's default provider, pin the real legs explicitly — set BOTH
+`WHEELHOUSE_REAL_PI_PROVIDER` and `WHEELHOUSE_REAL_PI_MODEL` (together,
+per the roster gotcha above); unset, the legs run whatever the login's
+default resolves to. And a selftest killed with SIGKILL cannot run its
+cleanup trap, so it can leave its temp fixture — and, for the adapter
+selftest, a live detached stub seat — behind. Fixture dirs are pid-stamped
+(`wheelhouse-{adapter,verify}-selftest.<pid>.*` under `$TMPDIR`), and every
+later run starts by sweeping stale ones: it kills only pids the fixture's
+own `state.json` records AND that still hold files open under that fixture
+(the same fd-based identity rule `recover.ts` uses), removes the dir, and
+prints what it swept. SIGKILL residue therefore lasts only until the next
+run; to clean it by hand, those pid-stamped dirs are the whole footprint.
+
 ## The bridge
 
 The bridge is how a human looks at the fleet: ONE tmux window per project,

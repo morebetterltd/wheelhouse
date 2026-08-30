@@ -56,7 +56,44 @@ trap cleanup EXIT INT TERM
 # --- fixture -----------------------------------------------------------------
 # Canonicalized for the same reason the other seat selftests canonicalize: on
 # macOS mktemp hands out /var/... paths that are really /private/var/...
-FIX="$(mktemp -d)"
+# --- stale-fixture sweep -----------------------------------------------------
+# The EXIT trap below cannot run on SIGKILL, so a killed selftest leaves its
+# fixture dir behind (verify's pi runs are one-shot, so unlike the adapter
+# selftest no live seat should outlive it — the sweep still checks). Fixture
+# dirs are pid-stamped (wheelhouse-verify-selftest.<pid>.XXXXXX) so a later
+# run can tell a dead owner from a live one. The sweep kills only pids that a
+# fixture's own state.json records AND that still hold files open under that
+# fixture — the fd-based identity rule recover.ts uses, because a pid number
+# alone proves nothing after reuse — then removes the dir, printing
+# everything it swept.
+FIX_PREFIX="wheelhouse-verify-selftest"
+sweep_stale_fixtures() {
+  # find, not a glob: a glob with no match stays literal in bash but is an
+  # error in zsh, and these scripts are exercised under both.
+  local base="${TMPDIR:-/tmp}" d stamp phys sf pid
+  while IFS= read -r d; do
+    [ -d "$d" ] || continue
+    stamp="${d##*/}"; stamp="${stamp#"$FIX_PREFIX".}"; stamp="${stamp%%.*}"
+    case "$stamp" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$stamp" 2>/dev/null && continue   # owner still running — not stale
+    phys="$(cd "$d" 2>/dev/null && pwd -P)" || phys="$d"
+    while IFS= read -r sf; do
+      [ -f "$sf" ] || continue
+      for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
+        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
+          kill "$pid" 2>/dev/null
+          echo "swept: killed leaked seat pid $pid (held open files under $d)"
+        fi
+      done
+    done < <(find "$d" -mindepth 3 -maxdepth 3 -path "*/seats/state.json" 2>/dev/null)
+    rm -rf "$d"
+    echo "swept: removed stale fixture $d"
+  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -name "$FIX_PREFIX.*" 2>/dev/null)
+  return 0
+}
+sweep_stale_fixtures
+
+FIX="$(mktemp -d "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")"
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
@@ -309,6 +346,22 @@ if [ $RC -eq 1 ] && says "no identity"; then
   pass "a verifier seat that was never logged in is a STOP"
 else fail "identity-less verifier not refused (exit $RC): $OUT"; fi
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-alpha/verifier/auth.json"
+check_bad_segment() {   # $1 = label, $2 = bead, $3 = author, $4 = expected phrase
+  run "$2" fleet/bead-1 "$3"
+  if [ $RC -eq 1 ] && says "$4"; then
+    pass "$1 is a STOP"
+  else fail "$1 not refused (exit $RC): $OUT"; fi
+}
+check_bad_segment "an author seat with a path separator" bead-6 "wor/ker" "invalid seat name"
+check_bad_segment "an author seat of dot-dot" bead-6 ".." "invalid seat name"
+check_bad_segment "an author seat with whitespace" bead-6 "wor ker" "invalid seat name"
+check_bad_segment "an author seat with a quote" bead-6 'wor"ker' "invalid seat name"
+check_bad_segment "an empty author seat" bead-6 "" "usage:"
+check_bad_segment "a bead id with a path separator (it names the verdict file)" "bead/6" worker-1 "invalid bead id"
+run bead-6 fleet/bead-1 worker-1 "veri/fier"
+if [ $RC -eq 1 ] && says "invalid seat name"; then
+  pass "an explicit verifier seat with a path separator is a STOP"
+else fail "bad explicit verifier seat not refused (exit $RC): $OUT"; fi
 
 phase "7. no tokens — identity never leaks into the verdict record"
 if ! grep -rq "$SENTINEL" "$VDIR" 2>/dev/null; then
@@ -400,12 +453,17 @@ EOF
   RSEAT="$RHOME/.pi-seats-real/verifier"
   cp "$REAL_AUTH" "$RSEAT/auth.json" && chmod 600 "$RSEAT/auth.json"
   [ -f "$HOME/.pi/agent/settings.json" ] && cp "$HOME/.pi/agent/settings.json" "$RSEAT/settings.json"
-  # No --provider/--model pin: whatever your login can actually run.
+  # No --provider/--model pin by default: whatever your login can actually
+  # run. When the working login is NOT pi's default provider, pin both
+  # (always together — see the roster gotcha in README.md):
+  #   WHEELHOUSE_REAL_PI_PROVIDER=... WHEELHOUSE_REAL_PI_MODEL=...
   env HOME="$RHOME" bun -e '
     const fs = require("fs");
     const f = process.argv[1];
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
-    delete j.seats.verifier.provider; delete j.seats.verifier.model;
+    const p = process.env.WHEELHOUSE_REAL_PI_PROVIDER, m = process.env.WHEELHOUSE_REAL_PI_MODEL;
+    if (p && m) { j.seats.verifier.provider = p; j.seats.verifier.model = m; }
+    else { delete j.seats.verifier.provider; delete j.seats.verifier.model; }
     fs.writeFileSync(f, JSON.stringify(j, null, 2));
   ' "$RPROJ/seats/seats.json"
   REAL_PATH="$(dirname "$REAL_PI"):$(dirname "$(command -v bun)"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
@@ -417,6 +475,29 @@ EOF
   if grep -q "verdict: APPROVE" "$RPROJ/seats/verdicts/smoke-1.md" 2>/dev/null; then
     pass "real: verdict file recorded"
   else fail "real: no verdict file from the real leg"; fi
+  # The hermetic no-leak phase proves the rule with a sentinel; the real leg
+  # must hold the same line for the REAL credential, before the fixture (and
+  # the copied auth.json) is deleted: no string value from auth.json may
+  # appear in the verdict record.
+  AUTH_LEAK=0
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    if grep -rqF -- "$tok" "$RPROJ/seats/verdicts/" 2>/dev/null; then
+      AUTH_LEAK=1
+    fi
+  done < <("$NODE_BIN" -e '
+    const fs = require("fs");
+    const out = [];
+    const walk = (v) => {
+      if (typeof v === "string") { if (v.length >= 16 && !v.includes("\n")) out.push(v); }
+      else if (v && typeof v === "object") for (const k of Object.keys(v)) walk(v[k]);
+    };
+    walk(JSON.parse(fs.readFileSync(process.argv[1], "utf8")));
+    for (const t of out) process.stdout.write(t + "\n");
+  ' "$RSEAT/auth.json")
+  if [ "$AUTH_LEAK" -eq 0 ]; then
+    pass "real: no auth material in the verdict record before fixture deletion"
+  else fail "real: a value from the borrowed auth.json appears in seats/verdicts/"; fi
 fi
 
 printf '\n'

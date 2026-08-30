@@ -57,7 +57,42 @@ trap cleanup EXIT INT TERM
 # --- fixture -----------------------------------------------------------------
 # Canonicalized for the same reason seat-env.selftest.sh canonicalizes: on
 # macOS mktemp hands out /var/... paths that are really /private/var/...
-FIX="$(mktemp -d)"
+# --- stale-fixture sweep -----------------------------------------------------
+# The EXIT trap below cannot run on SIGKILL, so a killed selftest leaves its
+# fixture dir — and possibly a live detached seat — behind. Fixture dirs are
+# pid-stamped (wheelhouse-adapter-selftest.<pid>.XXXXXX) so a later run can tell a
+# dead owner from a live one. The sweep kills only pids that a fixture's own
+# state.json records AND that still hold files open under that fixture — the
+# fd-based identity rule recover.ts uses, because a pid number alone proves
+# nothing after reuse — then removes the dir, printing everything it swept.
+FIX_PREFIX="wheelhouse-adapter-selftest"
+sweep_stale_fixtures() {
+  # find, not a glob: a glob with no match stays literal in bash but is an
+  # error in zsh, and these scripts are exercised under both.
+  local base="${TMPDIR:-/tmp}" d stamp phys sf pid
+  while IFS= read -r d; do
+    [ -d "$d" ] || continue
+    stamp="${d##*/}"; stamp="${stamp#"$FIX_PREFIX".}"; stamp="${stamp%%.*}"
+    case "$stamp" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$stamp" 2>/dev/null && continue   # owner still running — not stale
+    phys="$(cd "$d" 2>/dev/null && pwd -P)" || phys="$d"
+    while IFS= read -r sf; do
+      [ -f "$sf" ] || continue
+      for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
+        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
+          kill "$pid" 2>/dev/null
+          echo "swept: killed leaked seat pid $pid (held open files under $d)"
+        fi
+      done
+    done < <(find "$d" -mindepth 3 -maxdepth 3 -path "*/seats/state.json" 2>/dev/null)
+    rm -rf "$d"
+    echo "swept: removed stale fixture $d"
+  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -name "$FIX_PREFIX.*" 2>/dev/null)
+  return 0
+}
+sweep_stale_fixtures
+
+FIX="$(mktemp -d "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")"
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
@@ -210,6 +245,23 @@ check_spawn() {   # $1 = label
     pass "$label: state.json records a session file that exists"
   else fail "$label: no session file recorded, or it does not exist"; fi
 }
+
+phase "0. seat-name validation — a name is one path segment or it is refused"
+check_bad_name() {   # $1 = label, $2 = offending name
+  run spawn "$2"
+  if [ $RC -ne 0 ] && says "invalid seat name"; then
+    pass "seat name with $1 is refused with a loud STOP"
+  else fail "seat name with $1 was not refused (exit $RC): $OUT"; fi
+}
+check_bad_name "a path separator" "wor/ker"
+check_bad_name "a dot segment" ".."
+check_bad_name "whitespace" "wor ker"
+check_bad_name "a quote" 'wor"ker'
+check_bad_name "nothing (empty)" ""
+run spawn "wor/ker"
+if says '"wor/ker"'; then
+  pass "the STOP names the offending key"
+else fail "the STOP does not name the offending key: $OUT"; fi
 
 phase "1. spawn — process, identity, and what was actually launched"
 check_spawn "spawn"
@@ -364,12 +416,19 @@ else
   printf '{\n  "%s": true\n}\n' "$RPROJ" > "$RSEAT/trust.json"
   cp "$REAL_AUTH" "$RSEAT/auth.json" && chmod 600 "$RSEAT/auth.json"
   [ -f "$HOME/.pi/agent/settings.json" ] && cp "$HOME/.pi/agent/settings.json" "$RSEAT/settings.json"
-  # No --provider/--model pin: whatever your login can actually run.
+  # No --provider/--model pin by default: whatever your login can actually
+  # run. When the working login is NOT pi's default provider, pin both
+  # (always together — see the roster gotcha in README.md):
+  #   WHEELHOUSE_REAL_PI_PROVIDER=... WHEELHOUSE_REAL_PI_MODEL=...
+  RPIN=""
+  if [ -n "${WHEELHOUSE_REAL_PI_PROVIDER:-}" ] && [ -n "${WHEELHOUSE_REAL_PI_MODEL:-}" ]; then
+    RPIN="\"provider\": \"$WHEELHOUSE_REAL_PI_PROVIDER\", \"model\": \"$WHEELHOUSE_REAL_PI_MODEL\", "
+  fi
   cat > "$RPROJ/seats/seats.json" <<EOF
 {
   "commander": { "role": "commander", "external": true, "runtime": "claude-code" },
   "seats": {
-    "worker-1": { "role": "worker", "account": { "dir": "$RSEAT" } }
+    "worker-1": { "role": "worker", $RPIN"account": { "dir": "$RSEAT" } }
   }
 }
 EOF
@@ -403,6 +462,29 @@ EOF
     pass "real: the SAME session file grew across resume ($RL_BEFORE -> $RL_AFTER lines)"
   else fail "real: session file did not grow, or resume opened a different one"; fi
   rrun stop worker-1
+  # The hermetic no-leak phase proves the rule with a sentinel; the real leg
+  # must hold the same line for the REAL credential, before the fixture (and
+  # the copied auth.json) is deleted: no string value from auth.json may
+  # appear in state.json or any log.
+  AUTH_LEAK=0
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    if grep -qF -- "$tok" "$RSTATE" 2>/dev/null || grep -rqF -- "$tok" "$RPROJ/seats/logs/" 2>/dev/null; then
+      AUTH_LEAK=1
+    fi
+  done < <("$NODE_BIN" -e '
+    const fs = require("fs");
+    const out = [];
+    const walk = (v) => {
+      if (typeof v === "string") { if (v.length >= 16 && !v.includes("\n")) out.push(v); }
+      else if (v && typeof v === "object") for (const k of Object.keys(v)) walk(v[k]);
+    };
+    walk(JSON.parse(fs.readFileSync(process.argv[1], "utf8")));
+    for (const t of out) process.stdout.write(t + "\n");
+  ' "$RSEAT/auth.json")
+  if [ "$AUTH_LEAK" -eq 0 ]; then
+    pass "real: no auth material in state.json or the logs before fixture deletion"
+  else fail "real: a value from the borrowed auth.json appears in state.json or a log"; fi
 fi
 
 printf '\n'
@@ -411,6 +493,6 @@ if [ $FAILED -eq 0 ]; then
   exit 0
 fi
 echo "$FAILED check(s) failed."
-echo "If the failures are in phases 1-6 or the real leg, the adapter broke or"
+echo "If the failures are in phases 0-6 or the real leg, the adapter broke or"
 echo "its output wording moved. If a failure is in the canary, fix this test first."
 exit 1

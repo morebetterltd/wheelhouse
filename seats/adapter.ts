@@ -65,6 +65,27 @@ function expandTilde(p: string): string {
   return p;
 }
 
+/**
+ * A seat name is used as a path segment (run/<seat>.stdin, logs/<seat>.jsonl)
+ * and lands inside the quoted shell command that launches pi. Anything that
+ * is not one plain segment — separators, dot-dirs, whitespace, quotes —
+ * would write outside seats/ or break the launch line, so it is refused
+ * loudly, naming the offending key.
+ */
+function validateSeatName(name: string): string {
+  const bad =
+    name.length === 0 ? "empty" :
+    name === "." || name === ".." ? "a dot segment" :
+    /[/\\]/.test(name) ? "a path separator" :
+    /\s/.test(name) ? "whitespace" :
+    /['"`]/.test(name) ? "a quote character" :
+    null;
+  if (bad !== null) {
+    die(`invalid seat name ${JSON.stringify(name)} (${bad}) — a seat name must be a single path segment: no /, no .., no whitespace, no quotes`);
+  }
+  return name;
+}
+
 // ---------------------------------------------------------------------------
 // Roster and state
 // ---------------------------------------------------------------------------
@@ -442,21 +463,21 @@ async function main(): Promise<void> {
   switch (cmd) {
     case "spawn":
       if (rest.length !== 1) die("usage: adapter.ts spawn <seat>");
-      return cmdSpawn(rest[0]);
+      return cmdSpawn(validateSeatName(rest[0]));
     case "dispatch":
       if (rest.length !== 3) die("usage: adapter.ts dispatch <seat> <bead-id> <text>");
-      return cmdDispatch(rest[0], rest[1], rest[2]);
+      return cmdDispatch(validateSeatName(rest[0]), rest[1], rest[2]);
     case "steer":
       if (rest.length !== 2) die("usage: adapter.ts steer <seat> <text>");
-      return cmdSteer(rest[0], rest[1]);
+      return cmdSteer(validateSeatName(rest[0]), rest[1]);
     case "status":
       return cmdStatus();
     case "stop":
       if (rest.length !== 1) die("usage: adapter.ts stop <seat>");
-      return cmdStop(rest[0]);
+      return cmdStop(validateSeatName(rest[0]));
     case "resume":
       if (rest.length !== 1) die("usage: adapter.ts resume <seat>");
-      return cmdResume(rest[0]);
+      return cmdResume(validateSeatName(rest[0]));
     default:
       die("usage: adapter.ts spawn|dispatch|steer|status|stop|resume ...");
   }
