@@ -13,7 +13,7 @@
     },
     "worker-2": {
       "role": "worker",
-      "provider": "openai",
+      "provider": "openai-codex",
       "model": "gpt-5.5",
       "account": { "dir": "~/.pi-seats-myproject/worker-2" }
     },

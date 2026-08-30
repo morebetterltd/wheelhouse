@@ -2,36 +2,46 @@
 
 You are installing a wheelhouse — a standing agent fleet over a shared work graph — into the user's project. You are talking to the PRINCIPAL: the person who owns this project and whose judgment the fleet defers to.
 
-Work in this order. Do not reorder, and do not write anything before the interview in step 4 is answered.
+Six steps, in this order. Do not reorder. Steps 1 and 2 write nothing that depends on an answer; nothing the interview decides is written before step 3 is answered.
 
-## 0. Before anything writes — the tools this needs, and what was here before you
+1. Prerequisites — the tools, and what was here before you
+2. Get the template in, verbatim
+3. Read, then interview — ending in a written roster
+4. Provision the seats
+5. Initialize the graph and write the install (verify and commit included)
+6. Close the loop — the smoke dispatch that proves the install
+
+## 1. Before anything writes — the tools this needs, and what was here before you
 
 Two observations, both taken before anything writes: the binaries this procedure depends on, and the state of the project as you found it. They share a step because they share that property — each is cheap now and expensive or impossible later.
 
-### 0a. The tools this procedure needs
+### 1a. The tools this procedure needs
 
 This procedure, and the runbooks and contracts it installs, invoke a handful of binaries. Someone installing on their own machine for the first time has no reason to already have them, and a missing one surfaces halfway through as a bare `command not found` — at which point part of the install exists and part does not, which is the state this whole document is written to avoid.
 
-It runs before step 1 rather than alongside it, even though step 1 is where the "verify before you trust it" rule lives, because the clone step 1 is about to verify was made by `git`, and a missing `bd` is cheaper to find now than after the interview. This part writes nothing, so re-running it costs nothing either.
+It runs before step 2 rather than alongside it, even though step 2 is where the "verify before you trust it" rule lives, because the clone step 2 is about to verify was made by `git`, and a missing `bd` is cheaper to find now than after the interview. This part writes nothing, so re-running it costs nothing either.
 
-Four are worth checking. Everything else the procedure runs — `sed`, `grep`, `diff`, `cp`, `mv`, `find`, `mktemp`, `date`, `basename`, `cut`, `ls`, `xargs`, `ps`, `tail`, `printf`, `rm`, `mkdir`, `cat`, `env` — is the POSIX baseline that ships with macOS and every Linux. Checking for those would fail nothing and teach installers to skip the block, which is the same reason step 1 checks the contracts by name rather than counting them.
+Seven are worth checking. Everything else the procedure runs — `sed`, `grep`, `diff`, `cp`, `mv`, `find`, `mktemp`, `date`, `basename`, `cut`, `ls`, `xargs`, `ps`, `tail`, `printf`, `rm`, `mkdir`, `cat`, `env` — is the POSIX baseline that ships with macOS and every Linux. Checking for those would fail nothing and teach installers to skip the block, which is the same reason step 2 checks the contracts by name rather than counting them.
 
 Deliberately NOT on the list: `gh`. Nothing in `BOOTSTRAP.md`, `runbooks/` or `contracts/` invokes it — measured by grep, not assumed — so do not install it on this file's account. If you add a tool to the list, measure the same way: the list is only worth what it was checked against.
 
-Also deliberately NOT on the list, for a different reason: `pi` and `bun`, the seat runtime and the interpreter that drives it. The seats machinery does invoke them, but only once someone takes a seat — and an install that declines every seat is a legitimate install whose principal may never run one. Checking them here would block that install on tools it never uses, so the check lives at the first moment something actually runs the binary: `seats/seat-env.sh` checks for `pi` before it provisions anything, and a MISSING line there is a STOP for that seat. This sentence exists so the decision is readable in the file rather than only in whoever made it.
+`pi` and `bun` — the seat runtime and the interpreter that drives it — ARE on the list, and that is a decision worth a sentence, because an earlier revision excluded them on the grounds that an install declining every seat never runs them. The exclusion was reversed (ratified 2026-08-30): the seats are the fleet, an installer discovering mid-provisioning that the runtime is absent is exactly the half-made state this step exists to prevent, and the no-seat install remains legitimate at the roster interview rather than by keeping the runtime unchecked. `claude` is checked for the same reason on the commander's behalf: the commander seat is a Claude Code session in the install root, and it is the one seat every install has. `seats/seat-env.sh` still re-checks `pi` before it provisions anything — that guard is per-seat and stays.
 
 ```bash
 # Positional parameters, not a whitespace-split string: zsh does not word-split an
 # unquoted variable, so a `for t in $TOOLS` loop there runs ONCE over the whole list
 # and reports one nonexistent tool while checking none of them. "$@" iterates
-# identically in bash and zsh -- the same reason step 6's integrity check uses it.
+# identically in bash and zsh -- the same reason step 5's integrity check uses it.
 # Each entry is tool:why:how; only the first two colons are separators, so `how` may
 # contain a URL and `why` may not contain a colon.
 set -- \
   "git:clones the template, and carries every branch, worktree and merge the fleet runs on:brew install git   # macOS also ships one with the Xcode command line tools" \
   "bd:is the work graph -- every unit of work the fleet holds lives in it:brew install beads   # or see https://github.com/gastownhall/beads" \
-  "bash:runs wheelhouse/crew/bench.sh, which ships with a bash shebang and is invoked as bash in step 6:preinstalled on macOS and every Linux; brew install bash for a current one" \
-  "awk:splits each contract into its contract half and its project half -- step 6's integrity check and runbooks/UPGRADE.md's splice both depend on it:preinstalled on macOS and every Linux"
+  "bash:runs wheelhouse/crew/bench.sh, which ships with a bash shebang and is invoked as bash in step 5:preinstalled on macOS and every Linux; brew install bash for a current one" \
+  "awk:splits each contract into its contract half and its project half -- step 5's integrity check and runbooks/UPGRADE.md's splice both depend on it:preinstalled on macOS and every Linux" \
+  "pi:is the seat runtime -- every worker, reviewer and verifier seat is a Pi process, and step 4's provisioning and probe both run it:npm install -g @earendil-works/pi-coding-agent   # or see https://github.com/earendil-works/pi" \
+  "bun:runs the seat adapter, verifier and floor (seats/adapter.ts, verify.ts, floor.ts) -- without it seats cannot be spawned or dispatched:brew install oven-sh/bun/bun   # or see https://bun.sh" \
+  "claude:is the commander's harness -- the principal's own session in the install root is a Claude Code session, and step 6 closes the loop from it:npm install -g @anthropic-ai/claude-code   # or see https://docs.anthropic.com/en/docs/claude-code"
 
 MISSING=0
 for entry in "$@"; do
@@ -63,29 +73,29 @@ git --version
 bd --version
 ```
 
-`wheelhouse/GRAPH.md`'s claims about the work graph's CLI were measured on bd 1.2.2, and step 6 re-verifies them against whatever you have. Print the version here so that step has something to compare against, and so a later reader can tell which build this install was made on.
+`wheelhouse/GRAPH.md`'s claims about the work graph's CLI were measured on bd 1.2.2, and step 5's verification re-verifies them against whatever you have. Print the version here so that step has something to compare against, and so a later reader can tell which build this install was made on.
 
-### 0b. What was here before you — the survey that cannot be taken later
+### 1b. What was here before you — the survey that cannot be taken later
 
 Take this from the project directory you are installing into, not from the template clone. If you are not standing in it yet, go there first: a survey of the wrong directory returns a clean answer about a project nobody is installing into.
 
 - **STOP IMMEDIATELY, without writing anything, if `wheelhouse/` or `CLAUDE.md` already exists here.** Say what exists and ask the principal what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable.
-- **If neither exists, say so out loud.** That sentence is the record every later step reads. This procedure creates both names itself — the `wheelhouse/` directory step 1 makes for `.template-source`, and the `CLAUDE.md` that `bd init` writes in step 5 — and neither trips this check, because both appear after this survey. That is the whole reason the survey lives here and not further down: seeing those files at step 2 or step 6 tells you nothing, and seeing them now tells you everything.
+- **If neither exists, say so out loud.** That sentence is the record every later step reads. This procedure creates both names itself — the `wheelhouse/` directory step 2 makes for `.template-source`, and the `CLAUDE.md` that `bd init` writes in step 5 — and neither trips this check, because both appear after this survey. That is the whole reason the survey lives here and not further down: seeing those files at step 3 or step 5 tells you nothing, and seeing them now tells you everything.
 
-This is the one observation in the procedure that expires. Every other check can be re-run at any point and give the same answer; this one is about a state that step 1 destroys. If you find yourself past step 1 having never taken it, the cheap answer is gone — ask the principal directly, and read `git log --oneline -1 -- CLAUDE.md wheelhouse`, where a path with history predates you. An empty answer proves nothing in the other direction, since an untracked file that was already here has no history either.
+This is the one observation in the procedure that expires. Every other check can be re-run at any point and give the same answer; this one is about a state that step 2 destroys. If you find yourself past step 2 having never taken it, the cheap answer is gone — ask the principal directly, and read `git log --oneline -1 -- CLAUDE.md wheelhouse`, where a path with history predates you. An empty answer proves nothing in the other direction, since an untracked file that was already here has no history either.
 
-## 1. Confirm you actually have the template
+## 2. Get the template in, verbatim
 
-You are already following instructions from this clone, so verify it before trusting any more of it. This comes before the project checks deliberately: everything below depends on these files being real, and a wheelhouse installed from an empty clone is worse than no install.
+You are already following instructions from this clone, so verify it before trusting any more of it. This comes before the project checks deliberately: everything below depends on these files being real, and a wheelhouse installed from an empty clone is worse than no install. This step then copies everything that is copied VERBATIM — contracts, runbooks, the seats machinery, the bench stub. Nothing here depends on an interview answer; everything the interview decides is written in steps 3 and 5.
 
 
 You were told to clone this repo into a temporary directory. Before you read another word of it, confirm the clone produced something:
 
 - `$TEMPLATE/BOOTSTRAP.md`, `$TEMPLATE/contracts/` and `$TEMPLATE/contracts/WORKER.md` all exist and are non-empty.
-- All eight contract files are present — seven briefs plus the bench stub:
+- All nine contract files are present — eight briefs plus the bench stub:
 
   ```bash
-  for f in WORKER.md SEATS.md REVIEWER.md DESIGNER.md BENCH.md GRAPH.md INTEGRATOR.md bench.sh.stub; do
+  for f in WORKER.md SEATS.md REVIEWER.md DESIGNER.md VERIFIER.md BENCH.md GRAPH.md INTEGRATOR.md bench.sh.stub; do
     test -s "$TEMPLATE/contracts/$f" || echo "MISSING: contracts/$f"
   done
   ```
@@ -106,7 +116,7 @@ mkdir -p wheelhouse
 cat wheelhouse/.template-source
 ```
 
-`namespace=` is written empty here and filled in step 5, because its value comes from the interview that has not happened yet. It is this project's seat namespace: the value `seats/seat-env.sh` is invoked with, and the one that names this project's seat root (`$HOME/.pi-seats-<namespace>`), which is what keeps two fleets' seat directories apart on one machine. It lives in this file rather than in a file of its own because `.template-source` is already per-install and already read by other steps.
+`namespace=` is written empty here and filled at the end of step 3's interview, because its value comes from an answer that has not been given yet. It is this project's seat namespace: the value `seats/seat-env.sh` is invoked with, and the one that names this project's seat root (`$HOME/.pi-seats-<namespace>`), which is what keeps two fleets' seat directories apart on one machine. It lives in this file rather than in a file of its own because `.template-source` is already per-install and already read by other steps.
 
 Every later step reads `path=` out of that file rather than trusting `$TEMPLATE` to still be set:
 
@@ -114,21 +124,43 @@ Every later step reads `path=` out of that file rather than trusting `$TEMPLATE`
 TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 ```
 
-**`path=` is the one field that is expected to die, and that is a decision rather than an oversight.** The README has you clone into `mktemp -d`, so the path you just recorded points into a directory the OS reclaims — routinely before the first upgrade wants it. A durable clone kept beside the project was the alternative and was not taken: it is a second copy of the contracts that ages silently, and every reader who finds it then has to work out whether it or `commit=` is the truth. `source=` and `commit=` are the durable half, and step 6's integrity check re-clones from `source=` the moment it finds the path dead — the same recovery `runbooks/UPGRADE.md` needs anyway, so the temporary path costs a clone at the moment of use rather than a stale directory for the life of the project. Record it, and expect it to be gone later.
+**`path=` is the one field that is expected to die, and that is a decision rather than an oversight.** The README has you clone into `mktemp -d`, so the path you just recorded points into a directory the OS reclaims — routinely before the first upgrade wants it. A durable clone kept beside the project was the alternative and was not taken: it is a second copy of the contracts that ages silently, and every reader who finds it then has to work out whether it or `commit=` is the truth. `source=` and `commit=` are the durable half, and step 5's integrity check re-clones from `source=` the moment it finds the path dead — the same recovery `runbooks/UPGRADE.md` needs anyway, so the temporary path costs a clone at the moment of use rather than a stale directory for the life of the project. Record it, and expect it to be gone later.
 
 `installed=` records when this project first installed and is never rewritten afterwards; `upgraded=` is the one an upgrade updates. The `commit=` line is the provenance record. It is what tells a future reader which version of the contracts this project installed, and it is the baseline the upgrade path in the README compares against. Without it, "re-copy the contracts" has nothing to diff from.
 
 **A clone of an empty or unpushed repository exits 0.** It creates the directory, prints nothing alarming, and leaves you with nothing to install. If the files above are missing, STOP and tell the principal the template is empty or unreachable — do not proceed, and do not reconstruct the contracts from memory or from this document. A wheelhouse whose contracts were invented by the installer is worse than no wheelhouse, because it looks like the real thing.
 
-## 2. Preflight — verify the project, then report what you found
+### Confirm the project, then report what you found
 
-
-- Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue. A correction here means step 0b surveyed the wrong directory and step 1 wrote into it — say so, and take the survey again in the directory you have just been given.
-- Step 0 established that `bd` is on PATH and printed its version. Carry that version forward rather than re-deriving it; if you skipped step 0, go and run it now instead of checking `bd` alone here, because it is not the only tool that has to be there.
+- Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue. A correction here means step 1b surveyed the wrong directory and this step wrote into it — say so, and take the survey again in the directory you have just been given.
+- Step 1 established that every named tool is on PATH and printed the versions. Carry `bd`'s version forward rather than re-deriving it; if you skipped step 1, go and run it now instead of checking `bd` alone here, because it is not the only tool that has to be there.
 - Report uncommitted changes if there are any. Do not block on them; the principal may be mid-work.
-- **Report what step 0b's survey found** — whether `wheelhouse/` or `CLAUDE.md` was here before this install, which is the check that guards an unrecoverable overwrite. Carry the answer forward; do not re-derive it from what you can see now. Step 1 created `wheelhouse/` for `.template-source` and `bd init` will create `CLAUDE.md` in step 5, so the directory in front of you cannot answer the question any more. If you skipped step 0b, do not guess: go back and read its last paragraph, which says what to do once the cheap answer is gone.
+- **Report what step 1b's survey found** — whether `wheelhouse/` or `CLAUDE.md` was here before this install, which is the check that guards an unrecoverable overwrite. Carry the answer forward; do not re-derive it from what you can see now. This step created `wheelhouse/` for `.template-source` and `bd init` will create `CLAUDE.md` in step 5, so the directory in front of you cannot answer the question any more. If you skipped step 1b, do not guess: go back and read its last paragraph, which says what to do once the cheap answer is gone.
 
-## 3. Read before you ask
+### Copy the verbatim half of the install
+
+Everything in this list is copied whole and unedited. The interview-derived content — every `## This project` fill, `CLAUDE.md`, the ISA, `STARTUP.md`, `seats/seats.json` — is written in steps 3 and 5, not here; what this step lands is the half that is byte-identical in every project.
+
+- Create `wheelhouse/crew/` and `wheelhouse/fleet/`.
+- Copy **verbatim** from the template's `contracts/`:
+  - `WORKER.md` and `SEATS.md` into `wheelhouse/fleet/`
+  - `REVIEWER.md`, `DESIGNER.md`, `VERIFIER.md`, `BENCH.md` into `wheelhouse/crew/`
+  - `GRAPH.md` and `INTEGRATOR.md` into `wheelhouse/`
+  - the whole `runbooks/` directory into `wheelhouse/runbooks/`. `SEATS.md` and `STARTUP.md` both point at these by path, and a runbook that is only in the template is a broken link in the project.
+  - `bench.sh.stub` to `wheelhouse/crew/bench.sh`, executable, unchanged — **it exits non-zero on purpose.** A stub that exits 0 lets the first APPROVE through on nothing.
+- Copy the whole `seats/` directory from the template to `seats/` at the install root, scripts kept executable (`cp -R "$TEMPLATE/seats" seats`). This is the machinery every seat runs on — `seat-env.sh` (provisioning), `adapter.ts` (spawn/dispatch/status/stop/resume), `verify.ts` (the ephemeral verifier pass), `floor.ts` and `cockpit.sh` (the bridge), `recover.ts` (post-interruption triage), their selftests, and `seats/README.md`, which documents every command. It lands at the ROOT rather than under `wheelhouse/` because every path the contracts and runbooks print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative, and a copy that lands anywhere else breaks each of them. `seats/seats.json.example` arrives with it as the roster format's reference; the real `seats.json` is written by step 3's interview.
+- The seats machinery writes per-machine runtime state beside itself — `seats/run/` (FIFOs), `seats/logs/` (event streams), `seats/state.json` (pid/session records), `seats/verdicts/` (the commander's working copies of verifier output) — none of which is product, so keep it out of git now, before anything creates it. The guard first line is the same trailing-newline repair the worktree entry in step 5's commit section explains; it is not decoration.
+
+  ```bash
+  if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
+  for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
+    grep -qxF "$e" .gitignore 2>/dev/null || printf '%s\n' "$e" >> .gitignore
+  done
+  ```
+
+- **Do not edit a single line of any `## Contract` section, now or ever.** They are identical in every project by design; a project that edits its contract has forked from every other one silently. To be unambiguous about what "verbatim" means here: you copy the whole file, and step 5 appends or fills ONLY below the `## This project` heading. Copying verbatim and later filling the project section are the same operation, not competing instructions.
+
+## 3. Read, then interview
 
 Survey the repository so your questions are informed: build and dependency files, language and framework, test setup, CI config, existing docs, whether there are multiple product repos beneath this root, and how the project is built and run.
 
@@ -141,11 +173,11 @@ git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD   # if there is a re
 
 Ask the principal for the merge target and check the name you are given against that list. `branch --list` does not answer the question either — it returns the SET of branches that exist, and which one merges target is not a property of the repository. That is the point rather than a hedge: swapping one command for another would reproduce the same defect with better manners, because the failure was never the command, it was taking a value from a tool that was answering something adjacent. Note what `git -C <repo> symbolic-ref --short HEAD` does NOT tell you: it reports the branch currently checked out, which in a worktree is the worktree's own feature branch. Measured on one repository — `master` from its own checkout, `fleet/<bead-id>` from a worktree beside it, and nothing in either answer says which question was asked.
 
-You are forming PROPOSED ANSWERS to step 4. Asking a principal what language their own project is in tells them you did not look.
+You are forming PROPOSED ANSWERS to the interview below. Asking a principal what language their own project is in tells them you did not look.
 
-## 4. Interview — propose, then confirm
+### The interview — propose, then confirm
 
-Ask in as few turns as you can manage. Lead each question with your proposal from step 3, so the principal is correcting rather than composing.
+Ask in as few turns as you can manage. Lead each question with your proposal from the survey above, so the principal is correcting rather than composing.
 
 1. **Product repos, and therefore the shape of this install.** "I see \<what you found\>. Are these the repos the fleet will change, and are they separate git repos from this root?"
 
@@ -154,7 +186,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
    - **Umbrella root.** This directory is a container; the product lives in one or more separate git repos beneath it. The wheelhouse installs at the container root, the graph spans the repos below it, and workers create worktrees BESIDE the product repos at the container root (for example `<root>/.wheelhouse-worktrees/<bead-id>`), never inside them — same reason as the single-repo case below, and it also keeps the graph reachable from inside the worktree, which `contracts/GRAPH.md` explains (a worktree's `.git` is a file the workspace walk passes through; a nested repo's `.git` is a directory that stops it).
    - **Single repo.** This directory IS the product — one repo, no container. This is the ordinary case and it is fully supported: the wheelhouse installs at the product root, `CLAUDE.md` and `wheelhouse/` are committed alongside the code, and a worker's worktree is a SIBLING directory outside the repo (for example `../.wheelhouse-worktrees/<bead-id>`), so the worktree never nests inside the repo it is branching from.
 
-   **When both shapes fit, one question decides it: is this repo something other people clone as-is?** A template, a starter kit, a library whose repository IS the deliverable — anything whose consumers take the working tree rather than a built artifact. If yes, install the umbrella shape even where a single repo would otherwise be the obvious call: this root becomes a container holding the fleet's machinery, and the consumer-facing repo stays pristine beneath it. The single-repo shape commits `CLAUDE.md` and `wheelhouse/` alongside the code, so everyone who clones receives the installer's fleet state — commander context written for one principal, an ISA stating one project's goal, a work graph of beads that are not theirs — and the first stranger who runs this procedure inside their clone trips step 0b's stop check on files they never wrote. Where single-repo is genuinely required, keep the install out of the tree with `.git/info/exclude` rather than `.gitignore`, and say plainly that it is machine-local: it is not itself committed, so a second seat cloning that repo has to repeat it. This template's own install took the umbrella shape for exactly this reason (2026-08-20) — the product is the wheelhouse template, and its consumers clone it.
+   **When both shapes fit, one question decides it: is this repo something other people clone as-is?** A template, a starter kit, a library whose repository IS the deliverable — anything whose consumers take the working tree rather than a built artifact. If yes, install the umbrella shape even where a single repo would otherwise be the obvious call: this root becomes a container holding the fleet's machinery, and the consumer-facing repo stays pristine beneath it. The single-repo shape commits `CLAUDE.md` and `wheelhouse/` alongside the code, so everyone who clones receives the installer's fleet state — commander context written for one principal, an ISA stating one project's goal, a work graph of beads that are not theirs — and the first stranger who runs this procedure inside their clone trips step 1b's stop check on files they never wrote. Where single-repo is genuinely required, keep the install out of the tree with `.git/info/exclude` rather than `.gitignore`, and say plainly that it is machine-local: it is not itself committed, so a second seat cloning that repo has to repeat it. This template's own install took the umbrella shape for exactly this reason (2026-08-20) — the product is the wheelhouse template, and its consumers clone it.
 
    Say which shape you are installing, and record it in the worker's `## This project` section along with where worktrees go. A worker that guesses this wrong creates a worktree inside the repo and pollutes the very diff it is meant to produce.
 
@@ -178,38 +210,80 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 6. **Priorities.** `wheelhouse/GRAPH.md` has a project section for what P0 to P3 mean here. Offer this default and ask them to amend rather than compose: **P0 blocks the fleet or has an external deadline; P1 is the core loop; P2 is maintenance; P3 is nice-to-have.** If they accept it unchanged, say so in the file — a scheme that was confirmed reads differently from one that was assumed.
 
-7. **Seats — derive the namespace once, then walk the roster one seat at a time.** Do not offer a fleet shape and ask whether they want it. A roster proposed whole is accepted whole, and the seat that goes missing is the one nobody was asked about: today that is reliably the designer, because its absence looks like a smaller install rather than a gap.
+7. **Seats — the namespace once, then the roster walked one seat at a time.** Do not offer a fleet shape and ask whether they want it. A roster proposed whole is accepted whole, and the seat that goes missing is the one nobody was asked about: today that is reliably the designer, because its absence looks like a smaller install rather than a gap.
 
-   <!-- TODO(zzk): the three namespace paragraphs below still describe the deleted
-        claude-seats machinery — the $HOME/.claude-seats-<namespace> root, namespace-
-        prefixed seat names, wire-seats.sh and the shared session registry. Under Pi
-        seats the namespace's one remaining job is naming the seat root
-        $HOME/.pi-seats-<namespace> that seats/seat-env.sh is invoked with; roster
-        names are seats.json keys and need no prefix. Rewrite with the rest of the
-        interview. -->
-   **The namespace comes first, because every seat name you are about to collect carries it.** Propose one — short, lowercase, filesystem-safe; this project's own directory name is almost always right — and say what it decides: this project's seat root is `$HOME/.claude-seats-<namespace>`, and every seat on the roster is named `<namespace>-<role>`. Ask them to correct the string, not to design the scheme.
+   **The namespace comes first, because everything you are about to write sits under it.** Propose one — short, lowercase, filesystem-safe; this project's own directory name is almost always right — and say what it decides: this project's seat root is `$HOME/.pi-seats-<namespace>`, the directory every seat's account lands under and the value `seats/seat-env.sh` is invoked with. Ask them to correct the string, not to design the scheme. Say why in one sentence, because a principal who does not know the reason will shorten it back out later: a machine can host more than one wheelhouse, and per-project seat roots are what keep two fleets' accounts apart on disk — same directory would mean same `auth.json` would mean one login serving two fleets, which is the collision `wheelhouse/fleet/SEATS.md`'s seat-accounting section forbids. That is the namespace's ONLY job now: seat NAMES are `seats/seats.json` keys, addressed per-project by the adapter, and carry no prefix — `worker-1`, not `<namespace>-worker-1`.
 
-   Say why, in one sentence, because a principal who does not know the reason will shorten it back out later: a machine can host more than one wheelhouse, and seats are the one thing two wheelhouses share by default. The root keeps their seat directories apart on disk, which is what stops one fleet's `wire-seats.sh` sweeping up another's; the name prefix keeps them apart in the commander's session registry, which is NOT per-project and is where a dispatch to `seat-worker-1` would otherwise land on whichever project's worker answered. A second wheelhouse installed on a machine that already ran one hit exactly this, 2026-08-22.
-
-   **Derive it once and record it once.** The value is recorded as `namespace=` in `wheelhouse/.template-source` — that is the copy `wire-seats.sh` reads, which is why the operator never has to pass a seat root — and written out for humans in `wheelhouse/fleet/SEATS.md`'s `### Seat namespace`. Everything else is derived at the moment you write it: the roster's names and `wheelhouse/STARTUP.md`'s launch blocks. Ask a second time and you will get a second answer, and the surface that disagrees will be the one nobody reads until a seat cannot be reached.
-
-   The commander is not on the list and is not a question. It is the principal's own session in the directory whose `CLAUDE.md` you are about to write, so it exists whether or not anyone names it. Say that, then take the rest individually — each answer is yes-with-a-count or no:
+   The commander is not a question. It is the principal's own session in the directory whose `CLAUDE.md` you are about to write, so it exists whether or not anyone names it; it goes into `seats.json` as the `commander` entry, marked `"external": true`, because it runs on its own harness and the adapter manages nothing about it. Say that, then walk the rest individually — each answer is yes-with-a-count or no:
 
    - **Worker** — implements beads on branches, per `wheelhouse/fleet/WORKER.md`. "How many worker seats? One is the working minimum; a second goes in when the reviewer is idle waiting for work."
    - **Reviewer** — gates every diff before it merges and never reviews what it authored, per `wheelhouse/crew/REVIEWER.md`. "How many reviewer seats? One, until a single reviewer is the thing everything waits on."
+   - **Verifier** — the EPHEMERAL one-shot pass `seats/verify.ts` dispatches on a finished branch, per `wheelhouse/crew/VERIFIER.md`. It is a roster entry and an account, not a standing process: nothing spawns until a branch needs a verdict. Its `account.dir` must differ from every worker's — `verify.ts` compares the directories on disk and refuses to run the author's own account, so a fleet without a distinct verifier account has no verifier it can use. Step 6's smoke loop wants this seat; without it, the smoke verdict falls to the solo path.
    - **Designer** — decomposes goals into implementation-ready beads, per `wheelhouse/crew/DESIGNER.md`. Offer it out loud even when you expect a no: "Do you want a designer seat? It earns its place when you are spending more time decomposing work than deciding direction — otherwise you hold that yourself."
 
-   For each seat also ask the name it answers to and the account it is pinned to, since one seat is one subscription and the roster records both. Propose the name already carrying the namespace — `<namespace>-worker-1` rather than `seat-worker-1` — so the prefix is a thing they correct rather than a thing you have to reconcile afterwards.
+   **For each seat taken, collect four facts — they are the roster's columns, and `seats/seats.json` records exactly these:**
+
+   - **Name**: the `seats.json` key the seat answers to (`worker-1`, `reviewer`, `verifier`). Short, role-shaped, no namespace prefix.
+   - **Provider**: whose model, and on whose account. Two routes are measured (2026-08-30) and anything else `pi` supports is legitimate:
+     - `openai-codex` — a ChatGPT subscription, via OAuth: the seat's one-time `pi /login` signs in as that account. Probed working headlessly on a real subscription.
+     - `anthropic` — an Anthropic API key, metered. **Anthropic subscription OAuth is NOT a route for a seat**: the API rejects third-party subscription auth outright (measured twice, 400 "third-party apps draw from extra usage"), so an Anthropic seat is an `api_key` seat, and only the commander — a Claude Code session, unaffected — runs on an Anthropic subscription.
+   - **Model**: pinned, and VALIDATED before it is written. Run `pi --list-models | awk '$1=="<provider>"'` and offer only ids from that listing — the filter is the awk, because the command's optional search argument is a fuzzy match over whole rows, not a provider filter (measured: searching `openai-codex` returned `openai` and `openrouter` rows too). A model the runtime does not list for that provider is a typo the seat discovers at its first dispatch. Two measured properties of the listing matter here: it shows only providers whose credentials RESOLVE for the process running it, so a provider absent from YOUR listing may simply be one you are not logged into — not one pi lacks — and the same filtered command run under a seat's `PI_CODING_AGENT_DIR` after step 4 doubles as that seat's readiness check. And ids collide across providers (`gpt-5.4` exists under both `openai-codex` and plain `openai`, with different limits), which is one more reason provider and model are always passed together. Two gotchas are load-bearing (bead l0e): the model must be pinned in the roster, because a bare `--provider` silently falls back to the DEFAULT provider rather than erroring; and ChatGPT-subscription accounts accept only the `openai-codex` list (the `gpt-5.4` / `gpt-5.5` / `gpt-5.6-*` family) — never propose `gpt-5.2-codex` or anything else from the plain `openai` (API-key) list to a subscription seat.
+   - **Account directory**: `~/.pi-seats-<namespace>/<seat-name>` — derived, not asked; offer it for correction only if the principal keeps accounts somewhere unusual. The reviewer's and verifier's directories must differ from every worker's, per the seat-accounting rule.
+
+   **No secret ever enters `seats.json` — it records names, roles, providers, models and directories, and that is why it is safe to commit.** How an `api_key` seat gets its key, both routes verified against pi 0.84.x: either write the seat's `auth.json` yourself after step 4 provisions the directory — `{"<provider>": {"type": "api_key", "key": "<the key>"}}`, e.g. `{"anthropic": {"type": "api_key", "key": "sk-ant-..."}}`, permissions `0600` — or keep the key out of files entirely and export the provider's own env var (`ANTHROPIC_API_KEY` for anthropic; the name is the provider's own, and it is `GEMINI_API_KEY`, not `GOOGLE_API_KEY`, for google) in the shell that spawns the seat. Know the resolution order, because it has a silent edge: `--api-key`, then `auth.json`, then the env var — so a credential sitting in the seat's `auth.json` BEATS an exported key without a word, and switching a seat from the file route to the env route means removing that provider's `auth.json` entry, not just exporting. The file route is the one that survives a new shell; the env route is the one that never touches disk. This is an `api_key`-seat section only: `openai-codex` has NO env-var route — it is OAuth, and only `pi /login` can give that seat its identity. Either way the key lives with the operator, never in the roster, never in git, never on a bead.
 
    How the principal's subscriptions get divided across several fleets on one machine is their call and not this procedure's. If they raise it, say so and move on; the seat-accounting rule constrains sharing a seat, not which wheelhouse a seat belongs to.
 
    **Write down the no's as well as the yes's.** A refused seat goes into `wheelhouse/fleet/SEATS.md` under `### Declined seats` with the principal's reason and the date. An absence on the page is the same absence whether the seat was refused or never raised, so only the recorded no answers "why is there no designer?" when it is asked six weeks from now.
 
-   Declining every seat is a legitimate answer rather than a failed interview — the commander alone is a working install, and step 8 takes the worker seat itself for the first bead. Say so instead of pushing back.
+   Declining every seat is a legitimate answer rather than a failed interview — the commander alone is a working install, step 6 says what the smoke loop becomes in that shape, and the commander takes the worker seat itself for the first bead. Say so instead of pushing back.
 
    If the reviewer seat is among the declined, say in the same breath what review then looks like, so the answer is on the table now rather than a surprise when the first branch is ready: declining the seat declines a standing session, not the review itself. The solo path is in `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, section "When one human holds every seat" — the principal reviews agent-authored changes, or a fresh session that did not author the change is dispatched as reviewer — and the author-review ban holds unchanged in every shape.
 
-## 5. Write
+### Record what the interview decided — the machine copies, before anything derives from them
+
+Two writes close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
+
+**First, the namespace, into `wheelhouse/.template-source`** — the machine record, the value `seats/seat-env.sh` is invoked with:
+
+```bash
+sed -i.bak "s|^namespace=.*|namespace=<the namespace>|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+grep '^namespace=' wheelhouse/.template-source     # read it back; this value is what every file below quotes
+```
+
+An install upgrading over a `.template-source` that has no `namespace=` line at all — every install predating this field — appends one instead; `runbooks/UPGRADE.md` covers that case.
+
+**Then `seats/seats.json`, from the read-back value** — the roster's machine record, in the format `seats/README.md` documents and `seats/seats.json.example` shows: the `commander` entry marked external, then one entry per taken seat carrying exactly the four facts collected above, `account.dir` spelled under `~/.pi-seats-<namespace>/`. If every seat was declined, write the file anyway with the commander entry and an empty `seats` map — a roster that says "nobody" is a record; an absent file is a question. Read it back with `bun -e 'console.log(JSON.stringify(require("./seats/seats.json"), null, 2))'` or equivalent so a syntax error surfaces now, at the moment of writing, not at the first spawn.
+
+## 4. Provision the seats
+
+One pass per roster seat, from the records just written — and if the roster took no seats, say so and move to step 5; this step then has nothing to do, which is a report, not a failure.
+
+For each seat in `seats/seats.json`:
+
+1. **Provision the directory**: `seats/seat-env.sh <namespace> <seat-name>` — run once, safe to re-run. It creates `$HOME/.pi-seats-<namespace>/<seat-name>/`, pre-grants trust for the project root (canonicalized, because pi matches trust keys against the physical path), and prints the export line plus — for a seat with no identity yet — the one-time login command. It never writes `auth.json`; a MISSING or STOP line from it is a stop for that seat.
+2. **Give the seat its identity, by the route its provider takes**:
+   - a subscription seat (`openai-codex`): run the printed `PI_CODING_AGENT_DIR=... pi /login`, signing in as the account that seat should BE — in the login picker that account type is labelled "ChatGPT Plus/Pro (Codex)". The login-per-account rule is `wheelhouse/fleet/SEATS.md`'s seat-accounting section, and this is the step where "one seat = one subscription" becomes true on disk;
+   - an `api_key` seat: place the key by whichever route question 7 recorded — the seat's `auth.json` (`{"<provider>": {"type": "api_key", "key": "..."}}`, `0600`) or the provider's env var at spawn time. Never paste the key into the conversation, the roster, or a bead.
+3. **Probe the binding, one seat at a time, and paste what it prints.** Two tiers, cheap one first. The free tier asks whether the seat's credential resolves at all, spends no tokens, and its exit code is readable by a script:
+
+   ```bash
+   PI_CODING_AGENT_DIR="$HOME/.pi-seats-<namespace>/<seat-name>" \
+     pi auth check --provider <provider> --json     # {"status":"ready",...} exit 0 | {"status":"not_ready",...} exit 1
+   ```
+
+   Then the binding proof — the check that the seat's account, provider and model actually resolve TOGETHER, which `auth check` cannot see: a login can be ready against an account whose plan does not carry the pinned model, and nothing before this line would say so:
+
+   ```bash
+   PI_CODING_AGENT_DIR="$HOME/.pi-seats-<namespace>/<seat-name>" \
+     pi -p --no-session --provider <provider> --model <model> "reply OK"
+   ```
+
+   Expect a reply containing `OK`. Both commands select the account through `PI_CODING_AGENT_DIR` — measured: the same probe answers `OK` under a logged-in directory and "No API key found" under a fresh one. `--no-session` keeps the probe out of the seat's session history; the provider and model are the ROSTER's, spelled out, because the probe exists to test exactly that pair (a bare `--provider` falls back to the default provider silently — the l0e gotcha again, and here it would make the probe vacuous). A probe that errors names the weakest link — dead login, wrong model for the plan, revoked key — and the seat is not provisioned until it answers. Do not proceed to step 6's smoke loop claiming a seat this probe has not passed.
+
+A seat the probe fails and the principal cannot fix now is recorded as declined-for-now in `### Declined seats` with the probe's error as the reason — that keeps the roster honest about what actually exists, and moving it back is one interview question later.
+
+## 5. Initialize the graph and write the install
 
 - `bd init` in the project root; confirm the graph exists. Its output is verbose and mentions daemons, migrations and sync; that is normal and not an error. **Expect two side effects it does not ask about:** it creates config files well beyond `.beads/` (a `CLAUDE.md` at the root if none exists, `.claude/settings.json` with a SessionStart hook, `.codex/`, `.agents/`), and on recent builds it **commits them itself**, authored as the signed-in git user. Neither is an error. The `CLAUDE.md` it creates is a scaffold; the next steps write the commander content into that same file, keeping bd's managed block. Review its auto-commit rather than being surprised by it in `git log` later.
 
@@ -250,47 +324,27 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
   It is a second append rather than a line struck out of the first, because the conditional half is the half installers get wrong: a paste-then-delete leaves two installers on the same branch with different files, and an override quoting "landing the plane" into a conservative `AGENTS.md` that never says it reads as an error to the next person who checks. Appending nothing is an easier instruction to follow exactly than deleting something.
 
   Say plainly in your hand-back that you did this and why. A principal who later reads `AGENTS.md` unaware of the override will be confused by it, and the fleet's behaviour will look like disobedience rather than policy.
-- Create `wheelhouse/crew/` and `wheelhouse/fleet/`.
-- Copy **verbatim** from the template's `contracts/`:
-  - `WORKER.md` and `SEATS.md` into `wheelhouse/fleet/`
-  - `REVIEWER.md`, `DESIGNER.md`, `VERIFIER.md`, `BENCH.md` into `wheelhouse/crew/`
-  - `GRAPH.md` and `INTEGRATOR.md` into `wheelhouse/`
-  - the whole `runbooks/` directory into `wheelhouse/runbooks/`. `SEATS.md` and `STARTUP.md` both point at these by path, and a runbook that is only in the template is a broken link in the project.
-  <!-- TODO(zzk): the seats/ machinery (seat-env.sh, adapter.ts, verify.ts,
-       seats.json.example, their selftests and README) also has to reach the
-       install; where it lands and how the interview writes seats.json belong to
-       the step-map rewrite on that bead. -->
-  - `bench.sh.stub` to `wheelhouse/crew/bench.sh`, executable, unchanged — **it exits non-zero on purpose.** A stub that exits 0 lets the first APPROVE through on nothing.
-- To be unambiguous about what "verbatim" means here: you copy the whole file, then append or fill ONLY below the `## This project` heading. Copying verbatim and filling the project section are the same operation, not competing instructions.
-- **Do not edit a single line of any `## Contract` section.** They are identical in every project by design; a project that edits its contract has forked from every other one silently.
+- The verbatim half — contracts, runbooks, the seats machinery, the bench stub — is already in place from step 2. What this step writes is the interview's half: the `## This project` fills below, plus `CLAUDE.md`, the ISA, and `STARTUP.md`. The rule from step 2 holds while you do it: **not a single line of any `## Contract` section changes**; you append or fill ONLY below the `## This project` heading.
 
 **How to fill a `## This project` section, precisely.** Find the FIRST line in the file that is exactly `## This project` — the whole line, nothing else on it. FIRST, not last: the integrity check below and `runbooks/UPGRADE.md` both stop at the first match, and a last-match rule would absorb project content into the contract half the moment a project section legitimately quotes that heading. Everything above that line is the contract and is not yours to touch; everything below it is yours to write. Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A contract may legitimately discuss its own structure, and a naive match has already destroyed one contract file this way — deleting a licensing-compliance rule while every automated check still passed.
 - Fill each file's `## This project` section from the interview: the designer's territory, the worker's repos and its empty gotchas section, the reviewer's branch and worktree conventions, the bench's run-proof, and the integrator's push authority — the last in the principal's own words, with the date, because it is the one section that records a permission rather than a fact.
-- **The bench's five sections come from four answers — hold the mapping here, at the moment of writing, rather than recalling step 4's version of it.** Q2(a) fills *What proves it did its job*. **Q2(b) fills TWO**: the artifact half of the answer goes in *What the artifact is*, the setup-and-teardown half in *What is set up and torn down around the assertion*. Q2(c) fills *What the error scan looks for*, and Q2(d) fills *Prerequisites*. The two-for-one is what a writer loses between reading the question and filling the file, and the section that then goes unwritten is the artifact — which is clause 2's whole subject and the one thing a verdict has to name. A section the principal did not answer is recorded as unanswered, here as everywhere; what this bullet prevents is a section left empty because the answer was given and filed under the other heading.
+- **The bench's five sections come from four answers — hold the mapping here, at the moment of writing, rather than recalling step 3's version of it.** Q2(a) fills *What proves it did its job*. **Q2(b) fills TWO**: the artifact half of the answer goes in *What the artifact is*, the setup-and-teardown half in *What is set up and torn down around the assertion*. Q2(c) fills *What the error scan looks for*, and Q2(d) fills *Prerequisites*. The two-for-one is what a writer loses between reading the question and filling the file, and the section that then goes unwritten is the artifact — which is clause 2's whole subject and the one thing a verdict has to name. A section the principal did not answer is recorded as unanswered, here as everywhere; what this bullet prevents is a section left empty because the answer was given and filed under the other heading.
 - The integrator's third section, "How a shipped record gets corrected here", has no interview question on purpose: unless the principal volunteers a convention, fill it with the contract's own default — a follow-up commit naming the corrected commit's identifier, history never rewritten — and label it "adopted from the contract's default" so a later principal knows it was a default rather than their decision. Two cold installs both had to guess this; the default they guessed is now the documented one.
-- **Record the namespace in `wheelhouse/.template-source` FIRST, before any file that derives from it.** It is the machine copy — the string `seats/seat-env.sh` is invoked with, naming this project's seat root `$HOME/.pi-seats-<namespace>` — and it is what you read back when you write the files below, so that they are copies of a record rather than several recollections of a conversation.
-
-  ```bash
-  sed -i.bak "s|^namespace=.*|namespace=<the namespace>|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
-  grep '^namespace=' wheelhouse/.template-source     # read it back; this value is what the files below quote
-  ```
-
-  An install upgrading over a `.template-source` that has no `namespace=` line at all — every install predating this field — appends one instead; `runbooks/UPGRADE.md` step 7 covers that case.
-- Fill `wheelhouse/fleet/SEATS.md`'s `## This project` section from question 7's answers, **both parts**. **The roster first**: one line per seat that was taken, mirroring `seats/seats.json` — name, role brief, provider, model, and agent directory (`account.dir`, under the `$HOME/.pi-seats-<namespace>/` root the value you just recorded names). `seats.json` is the machine record and decides; this table is the human record and must agree with it, so write both from the recorded namespace rather than from your memory of the interview. Then `### Declined seats`: one line per seat that was refused, carrying the reason in the principal's words and the date. A roster listing only what was taken is indistinguishable from one where the question was never asked, which is the reason the interview walks the seats individually in the first place. If every seat was declined, the roster holds the commander line alone and the declined section holds the rest — that is a filled section, not an empty one. Its `## Contract` section — which carries the seat-accounting rule — is copied verbatim like every other contract.
+- Fill `wheelhouse/fleet/SEATS.md`'s `## This project` section from question 7's answers, **both parts**, quoting the two machine records step 3 wrote — `namespace=` read back out of `wheelhouse/.template-source`, and `seats/seats.json` — rather than your memory of the conversation. **The roster first, under a `### Roster` heading**: an intro line naming the seat root the recorded namespace decides (`$HOME/.pi-seats-<namespace>/` and where it is recorded), then one line per seat that was taken, mirroring `seats/seats.json` column for column — name, role brief, provider, model, agent directory (`account.dir`) — with the commander's line carrying its "the principal's own session, external in the roster" shape; `generated/SEATS.md.example` in the template shows the table. `seats.json` is the machine record and decides; this table is the human record and must agree with it. Then `### Declined seats`: one line per seat that was refused, carrying the reason in the principal's words and the date. A roster listing only what was taken is indistinguishable from one where the question was never asked, which is the reason the interview walks the seats individually in the first place. If every seat was declined, the roster holds the commander line alone and the declined section holds the rest — that is a filled section, not an empty one. Its `## Contract` section — which carries the seat-accounting rule — stays verbatim like every other contract.
 - Write `CLAUDE.md` at the root: commander-session context, product changes happen in product repos via workers, new work becomes a bead immediately, deadline beads outrank everything, a tooling defect gets its own `Report <tool> issue:` bead labelled `template-report` rather than a silent workaround, plus the principal-only actions from Q4 and the merge policy from Q5. The label is the one item on that list a program acts on later — `wheelhouse/GRAPH.md` says what it marks and who harvests it — so write it as the literal string, not as a description of one.
 - Write `wheelhouse/ISA.md`: the goal from Q3, empty claims, empty decisions, and any anti-claims stated. **Do not invent claims.** An ISA with fabricated claims is worse than an empty one.
-- Write `wheelhouse/STARTUP.md`: this project's cold-start card. It is what step 8 and the commander point at when it is time to actually start a session, so its job is to resolve rather than to restate — the seat MECHANICS live in `wheelhouse/fleet/SEATS.md`'s "Running a seat" paragraph and in `seats/README.md`, identically in every project, and this file is where those mechanics meet this project's real namespace and real seat names. Four things, in this order, and none of them optional:
+- Write `wheelhouse/STARTUP.md`: this project's cold-start card. It is what step 6 and the commander point at when it is time to actually start a session, so its job is to resolve rather than to restate — the seat MECHANICS live in `wheelhouse/fleet/SEATS.md`'s "Running a seat" paragraph and in `seats/README.md`, identically in every project, and this file is where those mechanics meet this project's real namespace and real seat names. Four things, in this order, and none of them optional:
 
   1. **The commander.** `cd` to this project's real absolute root, then `claude`. Say that the folder's `CLAUDE.md` is what makes that session the commander, so no launcher is needed.
-  2. **Provisioning and spawning, from the roster you have just written.** One `seats/seat-env.sh <namespace> <seat-name>` line per roster seat — run once, safe to re-run — with a sentence saying it prints the one-time `pi /login` for the account that seat should BE, and that the login-per-account rule is `wheelhouse/fleet/SEATS.md`'s seat-accounting section. Then the spawn lines: `bun seats/adapter.ts spawn <seat>` per seat, plus `status`, and a sentence saying `resume` is the warm reattach after a stop or reboot. Take the namespace and the names from the sections you have just written, not from your memory of the interview. There is nothing to paste into a seat — say so, because the role brief is injected at spawn. **Copy no seat name that is not on the roster**, and if the roster took no seats, say that in place of this section rather than inventing a specimen seat.
-  3. **Watching the fleet.** How dispatches go out (`bun seats/adapter.ts dispatch <seat> <bead-id> ...`) and where each seat's events land (`seats/logs/<seat>.jsonl`), with `bun seats/adapter.ts status` as the always-available liveness view, and a pointer at whatever bridge/cockpit tooling `seats/` ships for watching panes. Point at `seats/README.md` for what every command means rather than restating it.
+  2. **Provisioning and spawning, from the roster you have just written.** One `seats/seat-env.sh <namespace> <seat-name>` line per roster seat — run once, safe to re-run — with a sentence saying it prints the one-time `pi /login` for the account that seat should BE (an `api_key` seat places its key instead, by the route question 7 recorded), and that the login-per-account rule is `wheelhouse/fleet/SEATS.md`'s seat-accounting section. Then the spawn lines: `bun seats/adapter.ts spawn <seat>` per seat, plus `status`, and a sentence saying `resume` is the warm reattach after a stop or reboot. Take the namespace and the names from the sections you have just written, not from your memory of the interview. There is nothing to paste into a seat — say so, because the role brief is injected at spawn. **Copy no seat name that is not on the roster**, and if the roster took no seats, say that in place of this section rather than inventing a specimen seat.
+  3. **Watching the fleet.** How dispatches go out (`bun seats/adapter.ts dispatch <seat> <bead-id> ...`) and where each seat's events land (`seats/logs/<seat>.jsonl`), with `bun seats/adapter.ts status` as the always-available liveness view. Then the bridge, by name, because it is real machinery this install just copied and a vague pointer here is the difference between a cockpit that gets used and one that gets rediscovered months in: `seats/cockpit.sh <namespace>` builds (or re-attaches to — it never duplicates) the project's tmux session `wh-<namespace>`, commander pane on the left, and `bun seats/floor.ts` on the right is the read-only floor — spotlight one seat, rail of every seat's attention cues. Write the real namespace into that line. Point at `seats/README.md`'s "The bridge" section for the keys and what each cue means rather than restating them.
   4. **How work reaches the fleet** — the principal speaks backlog items to the commander, which files them as beads — and that shutdown is `bun seats/adapter.ts stop <seat>` (or just shutting the machine down), because sessions survive a stop and in-flight work resumes from the graph.
 
   Do not reproduce the contract's Running-a-seat prose here. A second copy of a contract's text in a generated file is a copy that drifts, and this one would drift in every project separately.
 
 `generated/` in the template holds specimens of these files. They are examples of the SHAPE. Never copy them — they describe an invented project.
 
-## 6. Verify — show the output, do not summarize it
+### Verify — show the output, do not summarize it
 
 Run each of these and paste what it prints:
 
@@ -325,7 +379,7 @@ Run each of these and paste what it prints:
   # The pair list is positional parameters, not a whitespace-split string:
   # zsh (the macOS default shell) does not word-split an unquoted variable, so a
   # `for pair in $PAIRS` loop there runs ONCE over the whole list, diffs the wrong
-  # files, and leaves six of seven contracts unchecked while exiting 0. "$@" iterates
+  # files, and leaves seven of eight contracts unchecked while exiting 0. "$@" iterates
   # identically in bash and zsh. Found by a cold install run in zsh, 2026-08-20.
   set -- \
     fleet/WORKER.md:WORKER.md fleet/SEATS.md:SEATS.md \
@@ -392,7 +446,7 @@ Run each of these and paste what it prints:
 
 - `bd ready` — returns without error. On an empty graph this prints nothing, which is indistinguishable from a broken install, so prove the graph round-trips instead: create a real first bead, list it, and leave it in place as the fleet's first piece of work.
 
-  **The bead carries the label `wheelhouse-bootstrap`, and that label is how step 8 finds it again.** Step 8 dispatches this bead minutes from now and has to pick it out of whatever else the graph holds; matching on its title, or on it being the only ready bead, works on an empty graph and nowhere else — a wheelhouse gets installed into projects that were already tracking their work here. The label is documented in this file rather than in `wheelhouse/GRAPH.md` because it is not a fleet signal: `GRAPH.md`'s `needs-review` marks a queue every bead passes through for as long as the fleet runs, while this marker is written by step 6, read once by step 8, and never used again.
+  **The bead carries the label `wheelhouse-bootstrap`, and that label is how step 6 finds it again.** Step 6 dispatches this bead minutes from now and has to pick it out of whatever else the graph holds; matching on its title, or on it being the only ready bead, works on an empty graph and nowhere else — a wheelhouse gets installed into projects that were already tracking their work here. The label is documented in this file rather than in `wheelhouse/GRAPH.md` because it is not a fleet signal: `GRAPH.md`'s `needs-review` marks a queue every bead passes through for as long as the fleet runs, while this marker is written here, read once by step 6, and never used again.
 
   **Look before you create — this is a step re-runs and upgrades repeat.**
 
@@ -400,7 +454,7 @@ Run each of these and paste what it prints:
   bd list --label wheelhouse-bootstrap --all
   ```
 
-  If that names a bead, the bench bead already exists: create nothing, say which bead it is and what state it is in, and move on. A second one is worse than none, because two beads carrying the same marker put step 8 back to choosing, which is the whole thing the marker removes.
+  If that names a bead, the bench bead already exists: create nothing, say which bead it is and what state it is in, and move on. A second one is worse than none, because two beads carrying the same marker put step 6 back to choosing, which is the whole thing the marker removes.
 
   If it prints `No issues found`, look once more before you conclude the bead is absent. An install made from a template older than this marker left a bench bead with no label on it, and the label filter cannot see it — `bd list --all` and read the titles. If one is there, stamp it rather than duplicating it, and say you did:
 
@@ -475,7 +529,7 @@ Run each of these and paste what it prints:
 - Confirm every file you created exists and is non-empty.
 - Print the resulting tree.
 
-## 7. Commit
+### Commit
 
 Commit the install so the principal can see exactly what was added and revert it in one step:
 
@@ -493,9 +547,9 @@ git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"
 
 The loop is the rule below — "never `git add` a path you have not seen in the status output" — written as something you can run, and it is a loop rather than one `git add` line because `git add` is atomic: a single absent pathspec fails the whole command having staged nothing. It is an `if` rather than an `&&` chain because the chain form reports the healthy path as a failure. A loop's exit status is its last iteration's, and `guard && git add` exits non-zero whenever that guard is false — so an install with nothing left to stage, which is the ordinary outcome when bd has already committed `.beads/`, ends on a non-zero status and any caller, CI step or wrapper that reads it calls the install failed. Measured at exit 1 in that state under bash, zsh and sh; the `if` form exits 0 in every state. It does NOT abort a `set -e` script mid-run — `A && B` is an AND-OR list, which `set -e` exempts, and execution continues past the false guard in all three shells. The list is a list of CANDIDATES; status decides. Anything else this install wrote — a `.gitattributes` bd added, a `.gitignore` you appended to below — you add to the candidate list yourself after seeing it in that first status.
 
-**Not every install commits.** If step 4 landed on a single repo whose install you kept out of the tree with `.git/info/exclude`, there is nothing here to stage — `CLAUDE.md`, `wheelhouse/` and `.beads/` are excluded on purpose, and committing them is the exact outcome that decision exists to prevent. Hand the principal that fact in place of a commit SHA, and with it the two consequences they will otherwise meet later: the revert-in-one-step above is not available to them, and a second seat cloning that repo receives none of this and has to repeat the exclusion by hand.
+**Not every install commits.** If step 3 landed on a single repo whose install you kept out of the tree with `.git/info/exclude`, there is nothing here to stage — `CLAUDE.md`, `wheelhouse/` and `.beads/` are excluded on purpose, and committing them is the exact outcome that decision exists to prevent. Hand the principal that fact in place of a commit SHA, and with it the two consequences they will otherwise meet later: the revert-in-one-step above is not available to them, and a second seat cloning that repo receives none of this and has to repeat the exclusion by hand.
 
-Before you stage, make the worktree directory invisible to this repository. Workers create worktrees at the location you recorded in step 4, and in the umbrella shape that location is INSIDE this repo — so every worktree that exists shows up as untracked in the container root's `git status` from then on, which is the diff pollution the location was chosen to avoid, arriving one level up.
+Before you stage, make the worktree directory invisible to this repository. Workers create worktrees at the location you recorded in step 3, and in the umbrella shape that location is INSIDE this repo — so every worktree that exists shows up as untracked in the container root's `git status` from then on, which is the diff pollution the location was chosen to avoid, arriving one level up.
 
 ```bash
 # umbrella shape: the worktree directory sits inside this repo
@@ -558,50 +612,69 @@ No commands, and it is a legitimate choice — but state the consequence rather 
 
 Do not push. Pushing is a principal-only action, here and in every wheelhouse.
 
-## 8. Take the seat, and hand back from it
+## 6. Close the loop — the smoke dispatch that proves the install
 
 You are a session in the directory whose `CLAUDE.md` you just wrote, and that file says a session in this directory is a commander session. So you are the commander already, and the first commander action is yours to perform rather than to recommend. An install that ends on a reading list gives the principal the standards, the procedure and the homework, and leaves the loop unstarted — which is the one thing the install exists to start. Observed on a real install, 2026-08-21: every file was correct and nothing was running.
 
-Four things, in this order.
+Step 5's checks verified the FILES. This step verifies the FLEET, by the only measure that means anything: one bead travels the whole loop — dispatched through the adapter to a real seat, worked, reported with evidence, and judged by the one-shot verifier — and the verdict lands where the graph can read it. Until that has happened once, "the install works" is a claim about bytes on disk.
+
+Five things, in this order.
 
 **Hand back what is now true.** Plainly, and with the two halves kept apart, because a principal who cannot tell them apart will trust the stubs:
 
-- what exists — the files, the graph, the shape you installed and where worktrees go, the merge policy and the principal-only actions in the principal's own words, and anything you corrected on the way through: the `AGENTS.md` override from step 5, any `GRAPH.md` status correction from step 6, and which `.beads/` durability shape you found in step 7 and what was chosen about it;
+- what exists — the files, the graph, the shape you installed and where worktrees go, the merge policy and the principal-only actions in the principal's own words, and anything you corrected on the way through: the `AGENTS.md` override from step 5, any `GRAPH.md` status correction from its verification, and which `.beads/` durability shape you found at its commit and what was chosen about it;
 - what is deliberately STUBBED and therefore not yet true — `wheelhouse/crew/bench.sh` exits non-zero on purpose, the worker's gotchas section is empty because gotchas are earned rather than invented, and the ISA's claims are empty for the same reason.
 
 **Read the loop you are about to run.** `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, now, before the dispatch below — you are executing its first stage in the next paragraph, not filing it for someone to read later. The contracts say what each role owes; that runbook says what the sequence looks like and what to do on the days it does not go straight through, and whoever has the contracts and not the runbook has the standards and no procedure. The role contracts are then read at the stage that needs them — `wheelhouse/fleet/WORKER.md` when you dispatch, `wheelhouse/crew/REVIEWER.md` when a branch lands, `wheelhouse/INTEGRATOR.md` when one is approved, `wheelhouse/GRAPH.md` for the review queue — and the runbook's closing table says which is which. That is the reading list, and it is a step inside this action rather than a parting gift.
 
-**Make the first dispatch.** Read the graph rather than your memory of it:
+**Run the smoke loop — the install's own verification, and the fleet's first revolution.** It runs whenever step 4 left at least one worker seat with a passing probe; the one legitimate skip is below.
+
+1. **Spawn what the smoke needs**, per `wheelhouse/STARTUP.md`: the worker seat (`bun seats/adapter.ts spawn <worker-seat>`), and confirm with `bun seats/adapter.ts status`. The verifier needs no spawn — it is ephemeral by design and `seats/verify.ts` starts it at the moment of judgment.
+2. **File the smoke bead**, sized to prove plumbing and nothing else:
+
+   ```bash
+   bd create "Smoke: prove the loop closes" -p 1 --labels wheelhouse-smoke \
+     --description="Install smoke check. Done: a file SMOKE.md exists on branch fleet/<this bead's id> containing the single line 'the loop closes', committed, with the worker's report and evidence on this bead. Work in a worktree per wheelhouse/fleet/WORKER.md; the branch itself is disposable once the verdict lands."
+   ```
+
+   Trivial is the point: the bead exists to exercise dispatch, worktree, branch, report and verdict, and any failure it surfaces is an install failure, undiluted by real work's ambiguity.
+3. **Dispatch it through the adapter, and wait on the bead**: `bun seats/adapter.ts dispatch <worker-seat> <bead-id> <the dispatch text>` — composed per the runbook's stage 1: the bead id, the repo, a way to read anything it points at that changes nothing. The report arrives ON THE BEAD, not in a message; a silent seat gets the probe-then-nudge from `wheelhouse/fleet/SEATS.md`'s rules, not a guess.
+4. **Verdict, by the one-shot verifier**: `bun seats/verify.ts <bead-id> fleet/<bead-id> <worker-seat>`. The exit code IS the verdict — 0 APPROVE, 2 BOUNCE, 3 DISCOVER, 1 no-verdict-exists — and the full output lands in `seats/verdicts/<bead-id>.md`, which git ignores because it is a working copy. **Transcribe the decisive extract onto the bead before citing it** (`wheelhouse/GRAPH.md`, "Where evidence lives"), then close the smoke bead naming the verdict. If the roster has no verifier seat, or `verify.ts` refuses because the only verifier shares the author's account, the verdict comes from the solo path instead — the principal, or a fresh session that authored nothing — recorded on the bead in the same shape, and say plainly that the mechanical verifier leg went unexercised.
+5. **The loop closing IS the install verification.** A BOUNCE or an error is not an embarrassment to smooth over — it is the install failing loudly at the cheapest possible moment, and it stops this procedure exactly as a FAIL in step 5 would: diagnose, fix, re-run the smoke. Merging the one-line branch is not required for the verdict to count; whether it merges or is deleted is the principal's call under question 5's policy.
+
+**The one legitimate skip.** If step 4 provisioned no seat that passed its probe — every seat declined, or every provisioning attempt failed and was recorded — the smoke loop has nothing to run on. Skip it SAYING SO, with the reason, in the hand-back and on the record (the declined-seats section already carries it): the solo-install doctrine holds, the commander alone is a working install, and the first real bead below then runs the loop's solo path as its own de-facto smoke. What is not legitimate is skipping it quietly, or skipping it while a probed seat sits idle.
+
+**Make the first real dispatch.** Read the graph rather than your memory of it:
 
 ```bash
 bd ready                                 # the graph you are dispatching into
-bd ready --label wheelhouse-bootstrap    # the bead step 6 left for you
+bd ready --label wheelhouse-bootstrap    # the bead step 5 left for you
 ```
 
-The second command is the one that finds the bead; the first is there so you see what else is in flight before you dispatch into it. Step 6 stamped the bench bead with `wheelhouse-bootstrap` for exactly this handoff, because on a graph that already held work — the ordinary case for a project adopting a wheelhouse — "the ready bead step 6 created" is not something `bd ready` alone can tell you.
+The second command is the one that finds the bead; the first is there so you see what else is in flight before you dispatch into it (the closed smoke bead is not among it). Step 5 stamped the bench bead with `wheelhouse-bootstrap` for exactly this handoff, because on a graph that already held work — the ordinary case for a project adopting a wheelhouse — "the ready bead step 5 created" is not something `bd ready` alone can tell you.
 
 That bead is real work rather than a placeholder: implement `wheelhouse/crew/bench.sh` against `wheelhouse/crew/BENCH.md`. It goes first because until the bench is real no verdict on this project may claim its software runs, so every approval until then is an approval of a diff somebody read. Dispatch it per the runbook's stage 1 — name the bead id and the repository, give a way to read anything it points at that changes nothing, and state done if the bead does not already state it.
 
 Two answers are not one bead, and neither is a reason to guess which bead was meant:
 
-- **Nothing listed.** On bd 1.2.2 that prints `No ready work found` and exits 0, so read the text. `bd list --label wheelhouse-bootstrap --all` separates the two causes. If it shows a CLOSED bead, this install went in over a graph whose bench was already implemented — say so, and make the first dispatch from the highest-priority bead `bd ready` does show. If it shows nothing at all, step 6 did not complete; go back and finish it there, where its verification runs, rather than creating the bead here.
+- **Nothing listed.** On bd 1.2.2 that prints `No ready work found` and exits 0, so read the text. `bd list --label wheelhouse-bootstrap --all` separates the two causes. If it shows a CLOSED bead, this install went in over a graph whose bench was already implemented — say so, and make the first dispatch from the highest-priority bead `bd ready` does show. If it shows nothing at all, step 5 did not complete; go back and finish it there, where its verification runs, rather than creating the bead here.
 - **More than one.** An earlier partial run left a duplicate. Say so to the principal and dispatch none of them until you are told which one is live — a duplicate bench bead is cheap to resolve now and expensive after two seats have worked it.
 
-Where that dispatch goes depends on the per-seat answers from step 4's question 7. Read the roster in `wheelhouse/fleet/SEATS.md` rather than your memory of the conversation:
+Where that dispatch goes depends on the per-seat answers from step 3's question 7. Read the roster in `wheelhouse/fleet/SEATS.md` rather than your memory of the conversation:
 
-- **A worker seat is on the roster.** Provision and spawn every seat the roster names, then dispatch the bead to the worker. The procedure is written down twice over, deliberately: `wheelhouse/fleet/SEATS.md`'s "Running a seat" is the contract's one paragraph — `seats/seat-env.sh` once per seat, the one-time login as that seat's own account, then `bun seats/adapter.ts spawn` and `dispatch`, with `seats/README.md` documenting every command — and `wheelhouse/STARTUP.md` is the same steps with this project's namespace and seat names already substituted. Follow `STARTUP.md`; if it is thinner than what you just wrote in step 5, the contract is the authority and the STARTUP.md you wrote is the thing to fix. Then hold the commander's seat and wait for the report to arrive on the bead, not in a message.
-- **No worker seat.** Say so, and take the worker seat yourself for this one: claim the bead, work in a worktree at the location step 4 recorded, and report on the bead the way `wheelhouse/fleet/WORKER.md` requires of anyone.
+- **A worker seat is on the roster.** The seats are provisioned from step 4 and the worker is already spawned from the smoke loop; spawn any the roster names that are not running yet, then dispatch the bead to the worker. The procedure is written down twice over, deliberately: `wheelhouse/fleet/SEATS.md`'s "Running a seat" is the contract's one paragraph — `seats/seat-env.sh` once per seat, the one-time login as that seat's own account, then `bun seats/adapter.ts spawn` and `dispatch`, with `seats/README.md` documenting every command — and `wheelhouse/STARTUP.md` is the same steps with this project's namespace and seat names already substituted. Follow `STARTUP.md`; if it is thinner than what you just wrote in step 5, the contract is the authority and the STARTUP.md you wrote is the thing to fix. Then hold the commander's seat and wait for the report to arrive on the bead, not in a message.
+- **No worker seat.** Say so, and take the worker seat yourself for this one: claim the bead, work in a worktree at the location step 3 recorded, and report on the bead the way `wheelhouse/fleet/WORKER.md` requires of anyone.
 
 Then check the roster for the reviewer, whichever branch you took. The one role the author of a change may not also hold is the reviewer's for that same change — `wheelhouse/crew/REVIEWER.md` forbids author-review, and it is the one merge that care cannot recover afterwards. If no reviewer seat is on the roster, say now how this bead WILL be reviewed, while there is a whole bead's worth of time to arrange it rather than at the moment the branch is ready to merge. An empty roster is not an empty bench of reviewers: `wheelhouse/runbooks/RUNNING_THE_LOOP.md`'s "When one human holds every seat" section is the solo path — the principal reviews an agent-authored change themselves, or a fresh session that did not author the change is dispatched as its reviewer, and the verdict lands on the bead in the same format either way. Name which of those this install will use, or which reviewer seat will be filled instead.
 
 **Run the loop you just started.** The dispatch was `wheelhouse/runbooks/RUNNING_THE_LOOP.md`'s stage 1, and stage 1 is not a finish line: an install that ends on a dispatch hands the principal a fleet with one message in flight and nobody carrying it forward, which is the reading-list failure again with a better opening move. You are the commander for as long as this session lasts, so carry the bead through the runbook's stages yourself. What carrying looks like depends on the same roster read as the dispatch:
 
-- **Seats are on the roster.** Command them. The worker's report arrives on the bead — that is where you read it, not in a message. When it lands, dispatch the reviewer seat the same stage-1 way: the bead id, the branch, a way to read it that changes nothing, `wheelhouse/crew/REVIEWER.md` as its brief. When the verdict lands, integrate per `wheelhouse/INTEGRATOR.md` — confirm the tip you merge equals the head that was reviewed, act on the PUSH line rather than the VERDICT line for anything leaving the machine — and close the bead per the runbook's last stage, dropping the review-queue label in the same breath. Merge under the policy step 4's question 5 recorded. Its default is that the principal confirms each merge, and the principal is the person you are talking to: ask in so many words, rather than reading the install conversation as standing consent. Where nobody else is in the conversation — a solo install, where you hold the commander seat and there is no second party to turn to — you are that person, and the question survives: put it and answer it on the bead, so the merge cites an authorization a later reader can find rather than one that only ever existed inside a session.
+- **Seats are on the roster.** Command them. The worker's report arrives on the bead — that is where you read it, not in a message. When it lands, dispatch the reviewer seat the same stage-1 way: the bead id, the branch, a way to read it that changes nothing, `wheelhouse/crew/REVIEWER.md` as its brief. When the verdict lands, integrate per `wheelhouse/INTEGRATOR.md` — confirm the tip you merge equals the head that was reviewed, act on the PUSH line rather than the VERDICT line for anything leaving the machine — and close the bead per the runbook's last stage, dropping the review-queue label in the same breath. Merge under the policy step 3's question 5 recorded. Its default is that the principal confirms each merge, and the principal is the person you are talking to: ask in so many words, rather than reading the install conversation as standing consent. Where nobody else is in the conversation — a solo install, where you hold the commander seat and there is no second party to turn to — you are that person, and the question survives: put it and answer it on the bead, so the merge cites an authorization a later reader can find rather than one that only ever existed inside a session.
 - **No seats — you took the worker seat above.** Take it in earnest, in this session: the dispatch was addressed to you, and describing how you would implement the bead is not implementing it. The bench bead is sized for a first session — one script against a written brief. Do the work under the dispatch's own terms; the claim, the worktree and the evidence-carrying report are already in the bullet that took the seat, and the branch name and everything else a worker owes are in `wheelhouse/fleet/WORKER.md`, the contract that bullet named. Then route the review down the solo path you just named. The principal reads the diff and writes the verdict on the bead, or a fresh session that holds nothing of this conversation is dispatched as reviewer per the runbook's "When one human holds every seat" section — and that section's subagent form means the fresh session needs no second terminal, provided its dispatch is composed from the bead and the branch and carries nothing of this session's account of the work; the section says why the empty context is the whole point, and what to check before trusting it. When the verdict is on the bead, change hats once more and integrate exactly as the roster case above: tip equals reviewed head, question 5's policy, close and drop the label. The default policy holds here too — the principal confirms each merge, and they are one question away.
 
 Two limits, stated here because this is the paragraph that would otherwise over-promise. **A session decides in turns, but turn boundaries do not stop processes.** The loop's decisions happen only when someone takes a turn — "carry the bead through the stages" means the loop advances each time you act and each time the principal returns and says to continue, and a report that lands while the conversation is idle waits for the next turn. Do not read that as "nothing runs while nobody is talking": measured on pi 0.84.1 (2026-08-30), a process a turn puts in the background keeps running after the turn ends and after the seat's process exits normally; an idle seat initiates nothing on its own — its event log, left alone for five minutes, did not grow by a byte — but a dispatch already queued behind a busy seat fires the moment the current work drains, with nobody present. Between turns the loop is quiet, not inert: what a turn set in motion continues, and what was queued will run. "No merge happens unattended" therefore holds because the contracts place the merge inside an attended integrator turn and the permission gate below sits in front of it — it is policy, not physics, and on any other harness both halves of this paragraph are measurements to redo, not assumptions to import. Say where the loop stands whenever you hand the turn back, so the principal knows what a "continue" will do — and say what you have left running or queued, because that part does not wait for the "continue". And **every write the loop makes passes through this session's permission settings** — the worker's commits, the report and the verdict on the bead, the merge itself. A step that stalls on a permission prompt is the reader's gate working, not the procedure failing; the answer belongs to the principal, not to a workaround.
 
-Either way, say which seat you are sitting in and what you are waiting for. Once the first bead is closed, the loop has run end to end and the fleet is operating — the remaining actions are the commander's ordinary ones and they follow from this first loop rather than replacing it: file the beads for the ideal state from step 4's question 3, and launch any seats you have not launched yet per `wheelhouse/STARTUP.md`.
+Either way, say which seat you are sitting in and what you are waiting for. Once the first bead is closed, the loop has run end to end and the fleet is operating — the remaining actions are the commander's ordinary ones and they follow from this first loop rather than replacing it: file the beads for the ideal state from step 3's question 3, and launch any seats you have not launched yet per `wheelhouse/STARTUP.md`.
 
 ## Failure behavior
 

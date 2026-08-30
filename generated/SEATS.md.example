@@ -14,7 +14,7 @@ One line per seat, mirroring `seats/seats.json` — the machine record, which de
 
 | Seat | Role brief | Provider | Model | Agent directory |
 |---|---|---|---|---|
-| `worker-1` | `wheelhouse/fleet/WORKER.md` | `openai` | `gpt-5.5` | `~/.pi-seats-ebb/worker-1` |
+| `worker-1` | `wheelhouse/fleet/WORKER.md` | `openai-codex` | `gpt-5.5` | `~/.pi-seats-ebb/worker-1` |
 | `reviewer` | `wheelhouse/crew/REVIEWER.md` | `anthropic` | `claude-opus-5` | `~/.pi-seats-ebb/reviewer` — never authors what it reviews, so its directory differs from every worker's |
 | (commander) | this folder's `CLAUDE.md` | — | — | none: the principal's own session, `"external": true` in the roster |
 
