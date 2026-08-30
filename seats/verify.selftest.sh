@@ -38,7 +38,9 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
+BRIEFS="$(cd "$(dirname "$VERIFY")" && pwd)/briefs.ts"
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
+[ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run verify.ts" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
 GIT_BIN="$(command -v git)" || { echo "selftest: git is required" >&2; exit 2; }
@@ -133,6 +135,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   local proj="$1" ns="$2" src="$3" d
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$src" "$proj/seats/verify.ts"
+  cp "$BRIEFS" "$proj/seats/briefs.ts"
   printf '# Crew: Verifier\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/VERIFIER.md"
   cat > "$proj/seats/seats.json" <<EOF
@@ -165,6 +168,14 @@ EOF
     git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
 
+build_installed_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
+  local proj="$1" ns="$2" src="$3"
+  build_proj "$proj" "$ns" "$src"
+  rm -rf "$proj/contracts"
+  mkdir -p "$proj/wheelhouse/fleet" "$proj/wheelhouse/crew"
+  printf '# Crew: Verifier\n\ninstalled-layout verifier brief.\n' > "$proj/wheelhouse/crew/VERIFIER.md"
+}
+
 PROJ="$FIX/proj"
 build_proj "$PROJ" alpha "$VERIFY"
 TIP="$(git -C "$PROJ" rev-parse fleet/bead-1)"
@@ -181,6 +192,33 @@ VDIR="$PROJ/seats/verdicts"
 VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
+
+phase "installed layout — wheelhouse/crew brief is preferred without contracts/"
+INST_PROJ="$FIX/installed-proj"
+build_installed_proj "$INST_PROJ" installed "$VERIFY"
+RUN_PROJ="$INST_PROJ"
+VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
+INST_TIP="$(git -C "$INST_PROJ" rev-parse fleet/bead-1)"
+cat > "$REPLY" <<EOF
+Checked installed-layout fixture at $INST_TIP.
+VERDICT: APPROVE
+EOF
+run bead-installed fleet/bead-1 worker-1
+if [ $RC -eq 0 ]; then pass "installed layout: APPROVE exits 0 with no contracts/ directory"
+else fail "installed layout: verify exited $RC: $OUT"; fi
+if grep -q "\"--append-system-prompt\",\"$INST_PROJ/wheelhouse/crew/VERIFIER.md\"" "$VARGV" 2>/dev/null; then
+  pass "installed layout: verifier brief resolves to wheelhouse/crew/VERIFIER.md"
+else fail "installed layout: verifier brief was not the installed path"; fi
+MISS_PROJ="$FIX/missing-brief-proj"
+build_proj "$MISS_PROJ" missing "$VERIFY"
+rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"
+RUN_PROJ="$MISS_PROJ"
+run bead-missing fleet/bead-1 worker-1
+if [ $RC -ne 0 ] && says "$MISS_PROJ/wheelhouse/crew/VERIFIER.md" && says "$MISS_PROJ/contracts/VERIFIER.md"; then
+  pass "missing brief: STOP names both installed and template paths tried"
+else fail "missing brief: STOP did not name both paths (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"
+VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 
 phase "1. APPROVE — verdict parsed, recorded, exit 0, and what was launched"
 cat > "$REPLY" <<EOF

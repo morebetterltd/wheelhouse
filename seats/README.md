@@ -40,7 +40,7 @@ Each seat entry:
 
 | Field | What it is |
 |---|---|
-| `role` | What the seat does: `worker`, `reviewer`, `verifier`. Free-form string; the crew briefs in `contracts/` define what each role means. |
+| `role` | What the seat does: `worker`, `reviewer`, `verifier`. Free-form string; the crew briefs define what each role means. Installed fleets read `wheelhouse/fleet/WORKER.md` for workers and `wheelhouse/crew/<ROLE>.md` for other roles, with `contracts/<ROLE>.md` retained as the template-tree fallback. |
 | `provider` | Whose model the seat runs (`anthropic`, `openai`, ...). Recorded so the roster answers "which vendor is this seat" without starting the seat. |
 | `model` | The model the seat is pinned to, in the provider's own id format. |
 | `account.dir` | The seat's agent directory — the value `PI_CODING_AGENT_DIR` is set to. By convention `~/.pi-seats-<namespace>/<seat-name>`, where the namespace is this project's (recorded as `namespace=` in `wheelhouse/.template-source`). This field is the record; the convention just explains where it came from. |
@@ -125,8 +125,11 @@ bun seats/adapter.ts resume   <seat>                    # reattach that session
 login is missing (it prints the exact `seat-env.sh` command or login flow
 instead), and starts one long-lived `pi --mode rpc` process: agent directory
 from `account.dir`, provider and model pinned from the roster, and the
-role's crew brief — `contracts/<ROLE>.md` — appended to the system prompt at
-launch, which is the only time Pi takes configuration. The process outlives
+role's crew brief appended to the system prompt at launch, which is the only
+time Pi takes configuration. Brief resolution prefers the installed fleet
+layout (`wheelhouse/fleet/WORKER.md` for workers, `wheelhouse/crew/<ROLE>.md`
+for other roles) and falls back to the template layout (`contracts/<ROLE>.md`).
+The process outlives
 the adapter: its stdin is a FIFO under `seats/run/`, its stdout appends raw
 to `seats/logs/<seat>.jsonl` (every event, one JSON line each; stderr lands
 beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
@@ -161,7 +164,7 @@ bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
 One invocation = one verdict. Unlike the seats above, the verifier is
 EPHEMERAL: `verify.ts` spawns one `pi -p --no-session` on the verifier
 seat's account — no session saved, nothing to resume — with
-`contracts/VERIFIER.md` appended to the system prompt, hands it the bead
+the resolved VERIFIER brief appended to the system prompt, hands it the bead
 claim (via `bd show` when `bd` is reachable, otherwise the verifier reads
 the bead itself) and the branch's tip SHA, and parses the single
 `VERDICT:` line out of the reply.
@@ -173,16 +176,16 @@ in verify.ts): a real `git worktree add --detach <tmp-path> HEAD` against
 `ROOT`, created right before the spawn and removed on every exit path via
 `process.on("exit", ...)`. This closes the same hazard class adapter.ts's
 per-bead cwd construction (see "Running a seat" above) closes for a
-confused worker: `contracts/VERIFIER.md` says "read-only on the work," but
-that is a rule the model can ignore, and a confused or adversarial turn
+confused worker: `VERIFIER.md` says "read-only on the work," but that is a
+rule the model can ignore, and a confused or adversarial turn
 that runs a bare `write`/`edit` against a relative path needs somewhere
 harmless to land, not the live checkout every other seat and the commander
 depend on.
 
 It has to be a real worktree of THIS repository, not an arbitrary empty
 directory, because the verifier's own default reading mechanism
-(`contracts/VERIFIER.md`, "Reading a branch without disturbing it") is
-bare `git diff <base> <sha>` and `git show <sha>:<path>` with no `-C`
+(`VERIFIER.md`, "Reading a branch without disturbing it") is bare
+`git diff <base> <sha>` and `git show <sha>:<path>` with no `-C`
 flag — those read the object database directly and do not care which
 directory they run in, as long as it is a clone that has the branch's
 ref, but an unrelated directory with no `.git` in its ancestry fails

@@ -32,7 +32,9 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ADAPTER="${1:-$HERE/adapter.ts}"
+BRIEFS="$(cd "$(dirname "$ADAPTER")" && pwd)/briefs.ts"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
+[ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run adapter.ts" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
 REAL_PI="$(command -v pi || true)"
@@ -183,6 +185,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   local proj="$1" ns="$2" seatdir
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
+  cp "$BRIEFS" "$proj/seats/briefs.ts"
   printf '# Fleet: Worker\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
@@ -202,6 +205,14 @@ EOF
   mkdir -p "$seatdir"
   printf '{\n  "%s": true\n}\n' "$proj" > "$seatdir/trust.json"
   printf '{"stub":"%s"}\n' "$SENTINEL" > "$seatdir/auth.json"
+}
+
+build_installed_proj() {   # $1 = project dir, $2 = seat namespace
+  local proj="$1" ns="$2" seatdir
+  build_proj "$proj" "$ns"
+  rm -rf "$proj/contracts"
+  mkdir -p "$proj/wheelhouse/fleet" "$proj/wheelhouse/crew"
+  printf '# Fleet: Worker\n\ninstalled-layout worker brief.\n' > "$proj/wheelhouse/fleet/WORKER.md"
 }
 
 PROJ="$FIX/proj"
@@ -234,6 +245,27 @@ wait_for_from() {   # $1 = file, $2 = byte offset, $3 = substring, $4 = seconds
   done
   return 1
 }
+
+phase "installed layout — wheelhouse/fleet brief is preferred without contracts/"
+INST_PROJ="$FIX/installed-proj"
+build_installed_proj "$INST_PROJ" installed
+RUN_PROJ="$INST_PROJ"; STATE="$INST_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-installed/worker-1/argv.json"
+run spawn worker-1
+if [ $RC -eq 0 ]; then pass "installed layout: spawn exits 0 with no contracts/ directory"
+else fail "installed layout: spawn exited $RC: $OUT"; fi
+if grep -q "\"--append-system-prompt\",\"$INST_PROJ/wheelhouse/fleet/WORKER.md\"" "$ARGV" 2>/dev/null; then
+  pass "installed layout: worker brief resolves to wheelhouse/fleet/WORKER.md"
+else fail "installed layout: worker brief was not the installed path"; fi
+run stop worker-1 >/dev/null 2>&1
+MISS_PROJ="$FIX/missing-brief-proj"
+build_proj "$MISS_PROJ" missing
+rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"
+RUN_PROJ="$MISS_PROJ"; STATE="$MISS_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-missing/worker-1/argv.json"
+run spawn worker-1
+if [ $RC -ne 0 ] && says "$MISS_PROJ/wheelhouse/fleet/WORKER.md" && says "$MISS_PROJ/contracts/WORKER.md"; then
+  pass "missing brief: STOP names both installed and template paths tried"
+else fail "missing brief: STOP did not name both paths (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
 # --- the spawn checks, parameterized so the canary can reuse them ------------
 check_spawn() {   # $1 = label
