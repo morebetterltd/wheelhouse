@@ -60,4 +60,22 @@ These fields are optional. A valid ISA is valid because it speaks the section gr
 
 ## Conformance
 
-A conforming ISA can be verified from its file history: goal text traces to principal words, decisions precede the work that implements them, pending evidence is distinguishable from established claims, and claim-changing merges move the claim record or explain why not. The acceptance bead for this intent layer fills in the history-only verification procedure.
+A conforming ISA can be verified from its file history. The verifier needs the repository history for `wheelhouse/ISA.md` and the graph's bead timestamps; it does not need the conversation that produced either.
+
+### History-only test
+
+Run from the install root:
+
+```bash
+git log --format='%H %cI %s' -- wheelhouse/ISA.md
+git log -p -- wheelhouse/ISA.md
+bd show <bead-id> --json
+```
+
+For a stage of work under test:
+
+1. **DECISIONS-BEFORE-WORK.** Find the principal direction in a `## Decisions` diff. The entry must be dated and attributed, and the commit containing it must predate the `started_at` timestamp of each bead that traces to that direction, or be the same commit/turn that filed and dispatched those beads. The graph supplies the bead timestamps; the ISA history supplies the decision commit and date.
+2. **MERGE-APPENDS-CLAIM.** For each merge that changes what is true of the project, find a `## Claims` diff that cites the merged tip and the evidence home accepted by `wheelhouse/GRAPH.md`. The claim commit must correlate with the merge it cites: same integration commit, or a corrective follow-up commit that names the corrected commit identifier. A merge that changes no claim must instead have the bead record the explicit `no claim moved, because ...` escape hatch.
+3. **Limits.** This verifies presence, ordering, and citation shape, not truth. It cannot prove that the principal really said the attributed words, that the evidence home contains sufficient evidence, or that a `no claim moved` explanation is correct. Those remain reviewer/integrator judgments.
+
+A nonconformity is recorded as a finding and corrected with a follow-up commit that names what it corrects. Do not rewrite history to make the old record look as if it had always conformed.
