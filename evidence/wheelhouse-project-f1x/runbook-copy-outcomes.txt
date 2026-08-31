@@ -1,0 +1,10 @@
+$ tmp=$(mktemp -d)
+$ set up throwaway template git repo and installed wheelhouse fixture
+$ run corrected runbook-copy loop with BASE readable for alpha/beta and unreadable for gamma
+runbook updated: alpha.md
+runbook YOURS, merge by hand: beta.md
+runbook baseline unreadable — re-run before hand-merging: gamma.md
+$ verify file bytes after loop
+alpha=target alpha
+beta=project beta
+gamma=project gamma

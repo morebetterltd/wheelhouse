@@ -111,7 +111,7 @@ done
 
 An upgrade owes `runbooks/` the same currency it owes `contracts/`, and this is where that is paid. Until this section existed the procedure reached nothing but the contracts, so a by-the-book upgrade left the project running yesterday's procedures against today's contracts — measured on a real run of this file, baseline `e39f376` to `221623d`: three runbooks left at the baseline's bytes and two newly-added files that never arrived at all. The project keeps operating out of `RUNNING_THE_LOOP.md`, and nothing above or below this step looks at it.
 
-Runbooks are copied rather than spliced because they have no project half to protect: `BOOTSTRAP.md` step 2 copies the whole directory verbatim, and no part of the install writes into one. But "no project half" is not "nobody has touched it" — any project may have annotated a procedure it runs every day. So the copy is conditional on the same arbiter the splice uses, moved from inside the file to across time: a runbook still byte-identical to the **baseline's** copy is one you never edited, and it is replaced. One that differs is yours, and it is left alone and named for you to merge by hand.
+Runbooks are copied rather than spliced because they have no project half to protect: `BOOTSTRAP.md` step 2 copies the whole directory verbatim, and no part of the install writes into one. But "no project half" is not "nobody has touched it" — any project may have annotated a procedure it runs every day. So the copy is conditional on the same arbiter the splice uses, moved from inside the file to across time: a runbook still byte-identical to the **baseline's** copy is one you never edited, and it is replaced. One that differs from a successfully-read baseline is yours, and it is left alone and named for you to merge by hand; one whose baseline cannot be read is named separately so you re-run before deciding whether any hand-merge is real.
 
 ```bash
 mkdir -p wheelhouse/runbooks
@@ -119,18 +119,26 @@ for f in "$TEMPLATE"/runbooks/*; do
   b=$(basename "$f")
   if [ ! -e "wheelhouse/runbooks/$b" ]; then
     cp -p "$f" "wheelhouse/runbooks/$b"; echo "runbook ARRIVED: $b"
-  elif git -C "$TEMPLATE" show "${BASE:-unknown}:runbooks/$b" 2>/dev/null \
-       | diff -q - "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
-    cp -p "$f" "wheelhouse/runbooks/$b"; echo "runbook updated: $b"
-  elif diff -q "$f" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
-    echo "runbook current: $b"
-  else
-    echo "runbook YOURS, merge by hand: $b"
+    continue
   fi
+
+  baseline=$(mktemp)
+  if git -C "$TEMPLATE" show "${BASE:-unknown}:runbooks/$b" >"$baseline" 2>/dev/null; then
+    if diff -q "$baseline" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
+      cp -p "$f" "wheelhouse/runbooks/$b"; echo "runbook updated: $b"
+    elif diff -q "$f" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
+      echo "runbook current: $b"
+    else
+      echo "runbook YOURS, merge by hand: $b"
+    fi
+  else
+    echo "runbook baseline unreadable — re-run before hand-merging: $b"
+  fi
+  rm -f "$baseline"
 done
 ```
 
-`cp -p`, not `cp`: it preserves the file mode, so a runbook that ships executable arrives executable. Today's three runbooks are all prose and the habit costs nothing — the era when this directory carried scripts is why it is written down. If your `commit=` is `unknown` the middle branch cannot run — there is no baseline to compare against — and every runbook that differs is reported as yours. That is the conservative direction on purpose: the cost is a hand-merge you did not need, against a silently clobbered procedure you would not have noticed.
+`cp -p`, not `cp`: it preserves the file mode, so a runbook that ships executable arrives executable. Today's three runbooks are all prose and the habit costs nothing — the era when this directory carried scripts is why it is written down. If your `commit=` is `unknown`, or the baseline read fails for any other reason, the comparison cannot run — there is no trusted baseline to compare against — and the runbook is reported as `baseline unreadable` rather than `YOURS`. That is the conservative direction on purpose: the cost is re-running before a possible hand-merge, against either a silently clobbered procedure or a spurious hand-merge queue you would not have noticed.
 
 ## 4. Splice: new contract, your project section
 
