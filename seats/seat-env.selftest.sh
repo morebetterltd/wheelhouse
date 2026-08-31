@@ -7,10 +7,11 @@
 # so your real seats, your real ~/.pi-seats-* directories, and your real pi
 # install are never touched or required. Every claim the README makes is
 # exercised: isolation (two seats, two directories, two distinct auth.json
-# paths), the trust pre-grant's exact content, idempotency, and the two
-# refusals — an existing auth.json is left byte-identical with no login
-# command printed beside it, and a foreign trust.json stops the run rather
-# than being rewritten.
+# paths), the namespace-root .project backlink, the trust pre-grant's exact
+# content, idempotency, and the refusals — an existing auth.json is left
+# byte-identical with no login command printed beside it, a namespace-root
+# backlink for a different project stops the run, and a foreign trust.json
+# stops the run rather than being rewritten.
 #
 # The last phase is a canary. It sabotages COPIES of the script — once with
 # the trust write cut out, once with the auth guard cut out — and checks that
@@ -86,6 +87,10 @@ check_provision() {   # $1 = label, $2 = seat name (must not exist yet)
   if [ -d "$d" ]; then pass "$label: seat directory created"
   else fail "$label: $d was not created"; fi
 
+  if [ -f "$HOME_FIX/.pi-seats-alpha/.project" ] && grep -qxF "project=$PROJECT" "$HOME_FIX/.pi-seats-alpha/.project" && grep -Eq '^written_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$HOME_FIX/.pi-seats-alpha/.project"; then
+    pass "$label: namespace root .project backlink records this project"
+  else fail "$label: namespace root .project backlink missing or wrong"; fi
+
   if cmp -s "$d/trust.json" "$FIX/expected-trust.json"; then
     pass "$label: trust.json pre-grants the project root, exactly"
   else fail "$label: trust.json missing or wrong for $seatname"; fi
@@ -130,13 +135,32 @@ if [ "$D1/auth.json" != "$D2/auth.json" ] && [ -d "$D1" ] && [ -d "$D2" ]; then
 else fail "both seats resolve to one auth.json path"; fi
 
 phase "2. idempotency"
+cp "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before"
 cp "$D1/trust.json" "$FIX/trust-before.json"
 run alpha worker-1 "$PROJECT"
 if [ $RC -eq 0 ] && says "current"; then pass "rerun exits 0 and says the trust grant is already current"
 else fail "rerun was not idempotent (exit $RC)"; fi
+if cmp -s "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before"; then
+  pass "rerun leaves the namespace root .project backlink byte-identical"
+else fail "rerun rewrote the namespace root .project backlink"; fi
 if cmp -s "$D1/trust.json" "$FIX/trust-before.json"; then
   pass "rerun leaves trust.json byte-identical"
 else fail "rerun rewrote trust.json"; fi
+
+phase "2b. refusal — namespace root belongs to one project"
+OTHER_PROJECT="$FIX/other-project"
+mkdir -p "$OTHER_PROJECT"
+cp "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before-collision"
+run alpha worker-collision "$OTHER_PROJECT"
+if [ $RC -ne 0 ] && says "already belongs to a different project"; then
+  pass "a .project backlink for a different root STOPS the run"
+else fail "a different project root reused the namespace without a STOP (exit $RC)"; fi
+if cmp -s "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before-collision"; then
+  pass "the collision refusal leaves the .project backlink byte-identical"
+else fail "the collision refusal rewrote the .project backlink"; fi
+if [ ! -e "$HOME_FIX/.pi-seats-alpha/worker-collision" ]; then
+  pass "the collision refusal does not create the requested seat directory"
+else fail "the collision refusal still created the requested seat directory"; fi
 
 phase "3. refusal — an auth.json holding an identity is identity, not clutter"
 printf '{"fixture":"sentinel-identity"}\n' > "$D1/auth.json"
