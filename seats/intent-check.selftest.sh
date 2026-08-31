@@ -95,17 +95,38 @@ expect_output merge_fail 'without ISA movement'
 say 'ok 2 - planted merge without claim movement FAILs'
 pass_count=$((pass_count + 1))
 
-# 3. A planted open bead without Trace: fails.
+# 3. A planted merge that moves the ISA in the merge commit passes without an escape hatch.
+merge_pass="$FIXTURE/merge-pass"
+make_fixture "$merge_pass"
+move_bead=$(new_bead "$merge_pass" 'Merged work with claim movement' 'Trace: selftest ISA-moving merge.')
+( cd "$merge_pass"
+  git checkout -q -b "fleet/$move_bead"
+  printf 'changed\n' >product.txt
+  git add product.txt
+  git commit -q -m 'Product change'
+  git checkout -q main
+  git merge --no-ff --no-commit "fleet/$move_bead" >/dev/null
+  printf '\n- claim moved with this merge.\n' >>wheelhouse/ISA.md
+  git add wheelhouse/ISA.md product.txt
+  git commit -q -m "Merge fleet/$move_bead: claim moved in merge"
+)
+run_capture merge_pass sh -c "cd '$merge_pass' && '$CHECK' ."
+expect_rc merge_pass 0
+expect_output merge_pass 'intent-check: PASS'
+say 'ok 3 - ISA-moving merge PASSes without escape hatch'
+pass_count=$((pass_count + 1))
+
+# 4. A planted open bead without Trace: fails.
 trace_fail="$FIXTURE/trace-fail"
 make_fixture "$trace_fail"
 new_bead "$trace_fail" 'Traceless planted bead' 'No trace line here.' >/dev/null
 run_capture trace_fail sh -c "cd '$trace_fail' && '$CHECK' ."
 expect_rc trace_fail 1
 expect_output trace_fail 'no literal Trace:'
-say 'ok 3 - planted traceless bead FAILs'
+say 'ok 4 - planted traceless bead FAILs'
 pass_count=$((pass_count + 1))
 
-# 4. An install whose ISA is not committed exits with the distinct unrunnable code.
+# 5. An install whose ISA is not committed exits with the distinct unrunnable code.
 unrun="$FIXTURE/uncommitted-isa"
 mkdir -p "$unrun"
 ( cd "$unrun"
@@ -120,7 +141,7 @@ mkdir -p "$unrun"
 run_capture uncommitted sh -c "cd '$unrun' && '$CHECK' ."
 expect_rc uncommitted 2
 expect_output uncommitted 'UNRUNNABLE:'
-say 'ok 4 - uncommitted ISA exits distinct unrunnable code 2'
+say 'ok 5 - uncommitted ISA exits distinct unrunnable code 2'
 pass_count=$((pass_count + 1))
 
 say "intent-check.selftest: PASS ($pass_count legs)"
