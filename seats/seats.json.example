@@ -9,13 +9,13 @@
       "role": "worker",
       "provider": "anthropic",
       "model": "claude-sonnet-5",
-      "account": { "dir": "~/.pi-seats-myproject/worker-1" }
+      "account": { "dir": "~/.pi-seats-myproject/worker-1", "label": "kk-personal-anthropic" }
     },
     "worker-2": {
       "role": "worker",
       "provider": "openai-codex",
       "model": "gpt-5.5",
-      "account": { "dir": "~/.pi-seats-myproject/worker-2" }
+      "account": { "dir": "~/.pi-seats-myproject/worker-2", "label": "work-chatgpt-2" }
     },
     "reviewer": {
       "role": "reviewer",

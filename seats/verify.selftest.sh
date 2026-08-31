@@ -456,6 +456,28 @@ OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_EXIT=
 if [ $RC -eq 1 ] && says "pi exited 3"; then
   pass "a failing pi exits 1 even when a VERDICT line is present"
 else fail "pi failure not treated as error (exit $RC): $OUT"; fi
+if ! says "account label:"; then
+  pass "a verifier roster without account.label still reaches the provider-error path"
+else fail "unlabeled verifier unexpectedly printed an account.label: $OUT"; fi
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats.verifier.account.label = "fixture-verifier-account";
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$PROJ/seats/seats.json"
+OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_EXIT=3 \
+  bun "$PROJ/seats/verify.ts" bead-5-label fleet/bead-1 worker-1 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && says "pi exited 3" && says "account label: fixture-verifier-account"; then
+  pass "provider-error stderr path includes verifier account.label when present"
+else fail "provider-error path did not include verifier account.label (exit $RC): $OUT"; fi
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  delete j.seats.verifier.account.label;
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$PROJ/seats/seats.json"
 
 phase "6. preconditions — the STOPs that guard the spawn"
 run bead-6 no-such-branch worker-1

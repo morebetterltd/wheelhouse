@@ -34,7 +34,9 @@
 #                 carries a .project backlink naming the absolute project
 #                 root; a different root there is a STOP, because it means two
 #                 fleets would share the same seat-root namespace.
-#   seat-name     the seat, as named in seats/seats.json
+#   seat-name     the seat, as named in seats/seats.json; if that roster entry
+#                 has account.label, the summary prints it. The label is a
+#                 human-meaningful account hint and NEVER a secret.
 #   project-root  absolute directory to pre-grant trust for; defaults to the
 #                 top of the git checkout you run this from, else the cwd
 #
@@ -93,6 +95,30 @@ project_file="$seat_root/.project"
 seat_dir="$seat_root/$seat"
 trust_file="$seat_dir/trust.json"
 auth_file="$seat_dir/auth.json"
+roster_file="$root/seats/seats.json"
+account_label=""
+
+# Optional roster hint for humans. Missing seats.json, missing JS runtime,
+# absent account.label, or a non-string label all mean "no label to print";
+# the seat remains fully supported. The label is documented as NEVER a secret,
+# so it is safe to echo in this provisioning summary when present.
+json_runtime=""
+if command -v node >/dev/null 2>&1; then
+  json_runtime="node"
+elif command -v bun >/dev/null 2>&1; then
+  json_runtime="bun"
+fi
+if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
+  account_label="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const label = j.seats?.[seat]?.account?.label;
+      if (typeof label === "string" && label.length > 0) process.stdout.write(label);
+    } catch {}
+  ' "$roster_file" "$seat")"
+fi
 
 # --- the namespace root backlink --------------------------------------------
 # The seat-root namespace is the collision boundary between projects. Record
@@ -178,6 +204,9 @@ fi
 # --- hand-back ---------------------------------------------------------------
 note ""
 note "seat ready: $seat_dir"
+if [ -n "$account_label" ]; then
+  note "account label: $account_label"
+fi
 note ""
 note "point a process at this seat:"
 note "  export PI_CODING_AGENT_DIR=\"$seat_dir\""

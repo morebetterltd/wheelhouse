@@ -267,6 +267,28 @@ if [ $RC -ne 0 ] && says "$MISS_PROJ/wheelhouse/fleet/WORKER.md" && says "$MISS_
 else fail "missing brief: STOP did not name both paths (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
+phase "roster account.label — shown when present, optional when absent"
+LABEL_PROJ="$FIX/label-proj"
+build_proj "$LABEL_PROJ" labeled
+RUN_PROJ="$LABEL_PROJ"; STATE="$LABEL_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-labeled/worker-1/argv.json"
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].account.label = "fixture-human-account";
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$LABEL_PROJ/seats/seats.json"
+run spawn worker-1
+if [ $RC -eq 0 ] && says "account label: fixture-human-account"; then
+  pass "spawn output includes account.label when the roster has one"
+else fail "spawn did not include account.label when present (exit $RC): $OUT"; fi
+run status
+if [ $RC -eq 0 ] && says "account fixture-human-account"; then
+  pass "status output includes account.label when the roster has one"
+else fail "status did not include account.label when present (exit $RC): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
 # --- the spawn checks, parameterized so the canary can reuse them ------------
 check_spawn() {   # $1 = label
   local label="$1" pid
@@ -371,6 +393,9 @@ run status
 if [ $RC -eq 0 ] && says "worker-1" && says "RUNNING"; then
   pass "a fresh status invocation reads worker-1 as RUNNING from state.json"
 else fail "status did not survive adapter restart (exit $RC): $OUT"; fi
+if ! says "account fixture-human-account"; then
+  pass "status still works for a roster with no account.label"
+else fail "status carried a label from a different roster into an unlabeled seat: $OUT"; fi
 
 phase "5. no tokens — identity never leaks into state or logs"
 if ! grep -q "$SENTINEL" "$STATE" && ! grep -rq "$SENTINEL" "$PROJ/seats/logs/"; then

@@ -120,7 +120,7 @@ interface SeatEntry {
   provider?: string;
   model?: string;
   external?: boolean;
-  account?: { dir: string };
+  account?: { dir: string; label?: string };
 }
 
 interface SeatRecord {
@@ -128,6 +128,7 @@ interface SeatRecord {
   startedAt: string;
   stoppedAt?: string;
   accountDir: string;
+  accountLabel?: string;
   role: string;
   roleBrief: string;
   cwd: string;
@@ -323,6 +324,16 @@ function roleBriefPath(role: string): string {
   }
 }
 
+function accountLabel(entry: SeatEntry | undefined, rec?: SeatRecord): string | undefined {
+  const label = entry?.account?.label ?? rec?.accountLabel;
+  return typeof label === "string" && label.length > 0 ? label : undefined;
+}
+
+function accountLabelSuffix(entry: SeatEntry | undefined, rec?: SeatRecord): string {
+  const label = accountLabel(entry, rec);
+  return label ? ` (account label: ${label})` : "";
+}
+
 // The seat's process cwd IS the bead's worktree — construction, not a
 // prompt telling the seat to cd there. Callers compute cwd from the bead id
 // (beadWorktreeDir); launch() only ever starts a process in a directory
@@ -339,6 +350,7 @@ function requireCwdDir(cwd: string): string {
 
 async function launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
   requireCwdDir(cwd);
+  const labelSuffix = accountLabelSuffix(entry);
   const state = readState();
   const existing = state.seats[name];
   if (existing && pidAlive(existing.pid)) {
@@ -348,14 +360,14 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   const accountDir = expandTilde(entry.account!.dir);
   if (!fs.existsSync(accountDir)) {
     die(
-      `seat directory does not exist: ${accountDir}\n` +
+      `seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n` +
         `      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`
     );
   }
   const authFile = path.join(accountDir, "auth.json");
   if (!authIsIdentity(authFile)) {
     die(
-      `seat "${name}" has no identity — ${authFile} is missing or empty.\n` +
+      `seat "${name}"${labelSuffix} has no identity — ${authFile} is missing or empty.\n` +
         `      OAuth: PI_CODING_AGENT_DIR="${accountDir}" pi, then type /login in the REPL and /exit after the browser flow\n` +
         `      api_key: write ${authFile} or export the provider env var in the shell that spawns this seat`
     );
@@ -404,14 +416,15 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   try {
     st = await rpc(probe, { type: "get_state" });
   } catch (e: any) {
-    die(`spawned pid ${pid} but ${e.message}`);
+    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. stderr tail:\n${stderrTail(probe)}`);
   }
-  if (!st.success) die(`get_state failed on fresh seat: ${st.error}`);
+  if (!st.success) die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. stderr tail:\n${stderrTail(probe)}`);
 
   state.seats[name] = {
     pid,
     startedAt: new Date().toISOString(),
     accountDir,
+    ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
     roleBrief: brief,
     cwd,
@@ -423,7 +436,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
     ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}),
   };
   writeState(state); // spawn-record
-  console.log(`seat ${name}: pid ${pid}, session ${state.seats[name].sessionId}`);
+  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`);
   console.log(`  events -> ${log}`);
 }
 
@@ -487,7 +500,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
       }; // capacity-record
       writeState(state);
     }
-    die(`dispatch failed: ${resp.error}`);
+    die(`dispatch failed for seat "${name}"${accountLabelSuffix(requireSeat(name), rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
   }
   const state = readState();
   state.seats[name].lastBead = beadId;
@@ -524,6 +537,7 @@ function cmdStatus(): void {
     console.log("no seats recorded in seats/state.json");
     return;
   }
+  const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   for (const name of names) {
     const rec = state.seats[name];
     const alive = pidAlive(rec.pid);
@@ -534,7 +548,9 @@ function cmdStatus(): void {
     const word = alive ? "RUNNING" : died ? "DIED" : "STOPPED";
     const pid = alive ? `pid ${rec.pid}` : died ? `pid ${rec.pid} gone` : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
-    console.log(`${name.padEnd(16)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${lastEvent(rec.log)}${bead}`);
+    const label = accountLabel(roster[name], rec);
+    const labelText = label ? `  account ${label}` : "";
+    console.log(`${name.padEnd(16)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${lastEvent(rec.log)}${bead}${labelText}`);
     if (died) {
       console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} is gone and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
