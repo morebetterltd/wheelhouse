@@ -199,7 +199,7 @@ Your install records its baseline in `wheelhouse/.template-source`: the template
 
 ## Pairs well with an intent layer
 
-The commander seat is a plain Claude Code session, and it works fine as exactly that. It also pairs well with personal-AI-infrastructure tooling on the commander's side — a layer that holds your goals and context above any one task graph, in the vein of Daniel Miessler's [LifeOS](https://github.com/danielmiessler/LifeOS) (formerly PAI, the Personal AI Infrastructure). The fleet executes; a layer like that helps decide which hill is worth climbing, and keeps verification discipline on the human side of the loop. Nothing in this template requires it.
+The commander seat is a plain Claude Code session, and it works fine as exactly that. It also pairs well with personal-AI-infrastructure tooling on the commander's side — a layer that holds your goals and context above any one task graph. [`INTENT.md`](INTENT.md) specifies the ISA grammar any such layer must speak: goal, claims, decisions, anti-claims, evidence stubs, and claim updates on merge. Daniel Miessler's [LifeOS](https://github.com/danielmiessler/LifeOS) is one example of an intent layer; a PAI-style setup is another. The fleet executes; a layer like that helps decide which hill is worth climbing, and keeps verification discipline on the human side of the loop. Nothing in this template requires it.
 
 ## Credit
 

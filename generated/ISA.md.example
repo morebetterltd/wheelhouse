@@ -1,18 +1,33 @@
+---
+# Optional machine-readable extension for intent layers; the section headings
+# below are the grammar. Remove this block if no tool reads it.
+principal_stated_goal: "A public tide-table API that answers correctly for any UK coastal station, and a daily ingest that keeps it current without human attention. (Principal, 2026-08-20)"
+phase: initial
+progress: 0/0
+slug: ebb
+iteration: 0
+---
+
 # Ebb — State of Record
 
-The ideal state this fleet is iterating toward, what has been established, and what was decided along the way. Written at install from the principal's answer; maintained by the commander.
+The ideal state this fleet is iterating toward, what has been established, and what was decided along the way. Written at install from the principal's answer; maintained by the commander. The grammar is specified in `INTENT.md`.
 
 ## Goal
 
-A public tide-table API that answers correctly for any UK coastal station, and a daily ingest that keeps it current without human attention.
+Principal said "A public tide-table API that answers correctly for any UK coastal station, and a daily ingest that keeps it current without human attention" in the install interview at 2026-08-20.
+
+Goal evolutions are appended here the same way: verbatim words, attribution, and date. They supersede without erasing the earlier goal.
 
 ## Claims
 
-Established facts, each with the evidence that established it. A claim without evidence is a hope.
+Established facts, each dated, evidence-citing, and falsifier-naming. Evidence must live where `wheelhouse/GRAPH.md` says evidence lives. A claim without evidence is a hope; a claim without a falsifier is not yet sharp enough to carry the project.
 
 <!--
 Empty at install, and deliberately so. An ISA with fabricated claims is worse
 than an empty one, because the next reader treats it as authoritative.
+
+When a claim is pending, keep it visibly pending instead of promoting it:
+- PENDING: <claim under test>. Evidence owed: <artifact or observation>, to land at <bead comment or committed path>. Falsifier: <what would disprove it>.
 -->
 
 ## Anti-claims
@@ -23,6 +38,8 @@ What this fleet is explicitly NOT doing, so nobody re-proposes it every month.
 
 ## Decisions
 
-| Date | Decision | Why |
+Principal direction lands here before, or in the same breath as, the beads implementing it are dispatched. The decision entry is what those beads trace to.
+
+| Date | Decision | Why / Trace |
 |---|---|---|
 | | | |
