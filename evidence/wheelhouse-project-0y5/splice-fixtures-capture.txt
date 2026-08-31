@@ -1,0 +1,30 @@
+$ bash evidence/wheelhouse-project-0y5/run-splice-fixtures.sh
+project section UPSTREAM, not in yours — wheelhouse/fleet/WORKER.md: ### New upstream heading
+[normal] exit=0
+[normal] headings=1
+[normal] content:
+    # New contract
+    
+    contract line
+    ## This project
+    
+    kept project line
+STOP: existing contract has no '## This project' heading: wheelhouse/fleet/WORKER.md
+Adopt it first: copy the new contract half whole, then hand-fold the existing content under a freshly added '## This project' heading as described above.
+[headingless] exit=1
+[headingless] headings=0
+[headingless] content:
+    # Hand-built brief
+    
+    local content without the expected heading
+new, copied whole: wheelhouse/fleet/WORKER.md
+[absent] exit=0
+[absent] headings=1
+[absent] content:
+    # New contract
+    
+    contract line
+    ## This project
+    
+    new scaffold
+    ### New upstream heading
