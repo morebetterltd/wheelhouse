@@ -473,6 +473,14 @@ Run each of these and paste what it prints:
   ```
 
   Two things measured on bd 1.2.2, both of which turn a check into a no-op if you assume otherwise: `bd list --label` hides closed issues unless `--all` is given, so an install upgrading over a graph whose bench bead was already implemented and closed reads as a graph with no bench bead at all and files a duplicate; and an empty result exits 0, so the answer is in the text rather than the exit status. Establish both against the build you have.
+- **Check the intent gate arrived with the seats machinery.** It is copied in step 2, but a missing file there strands the integrate/close hook the runbook now names.
+
+  ```bash
+  test -x seats/intent-check.sh
+  bash seats/intent-check.selftest.sh    # expect: intent-check.selftest: PASS (... legs)
+  ```
+
+  The selftest is the important half: an executable file can still be an empty gate. It plants both passing and failing fixtures, including the distinct `UNRUNNABLE` exit for installs whose ISA is not committed.
 - A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
 
   ```bash

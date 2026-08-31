@@ -92,7 +92,7 @@ cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 
 ### The seats machinery comes too
 
-The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `verify.ts`, `floor.ts`, `cockpit.sh`, `recover.ts`, their selftests, `seats.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. What it can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
+The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `verify.ts`, `floor.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, their selftests, `seats.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. What it can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
 
 ```bash
 mkdir -p seats
@@ -270,6 +270,7 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 
 - `CLAUDE.md`, `wheelhouse/ISA.md`, `wheelhouse/STARTUP.md`, and the `## This project` sections you just preserved;
 - if the target template changed `generated/CLAUDE.md.example`, read that specimen and hand-merge the matching standing behaviors into your real `CLAUDE.md`; generated examples are not installed by an upgrade, so existing installs do not learn new Decisions-before-beads, Goal-before-dispatch, or Claims-move-on-merge rules unless you add them;
+- the intent layer's other paths are covered by the upgrade mechanics above: `GRAPH.md` and `INTEGRATOR.md` contract halves move through the splice list, `RUNNING_THE_LOOP.md` moves through the runbook copy, and `seats/intent-check.sh` moves through the seats copy; verify those three outputs rather than hand-editing them here;
 - every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install;
 - the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
 
