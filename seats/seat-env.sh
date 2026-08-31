@@ -30,7 +30,10 @@
 #   namespace     this project's seat namespace, recorded as namespace= in
 #                 wheelhouse/.template-source; directories land under
 #                 $HOME/.pi-seats-<namespace>/ so two fleets on one machine
-#                 cannot reach into each other's seats
+#                 cannot reach into each other's seats. The namespace root
+#                 carries a .project backlink naming the absolute project
+#                 root; a different root there is a STOP, because it means two
+#                 fleets would share the same seat-root namespace.
 #   seat-name     the seat, as named in seats/seats.json
 #   project-root  absolute directory to pre-grant trust for; defaults to the
 #                 top of the git checkout you run this from, else the cwd
@@ -85,9 +88,37 @@ esac
 # matches — the grant would exist and protect nothing.
 root="$(cd "$root" && pwd -P)" || die "could not resolve the physical path of $root"
 
-seat_dir="$HOME/.pi-seats-$ns/$seat"
+seat_root="$HOME/.pi-seats-$ns"
+project_file="$seat_root/.project"
+seat_dir="$seat_root/$seat"
 trust_file="$seat_dir/trust.json"
 auth_file="$seat_dir/auth.json"
+
+# --- the namespace root backlink --------------------------------------------
+# The seat-root namespace is the collision boundary between projects. Record
+# the reverse mapping on disk so a hand-chosen namespace is self-identifying
+# from the folder side. Re-running for the same root leaves the file
+# byte-identical; finding a different root is a STOP, because two fleets would
+# then share one namespace root and therefore could share accounts.
+if [ -e "$seat_root" ] && [ ! -d "$seat_root" ]; then
+  die "$seat_root exists and is not a directory — refusing to guess what it is"
+fi
+mkdir -p "$seat_root" || die "could not create $seat_root"
+if [ -e "$project_file" ]; then
+  existing_project="$(sed -n 's/^project=//p' "$project_file" | head -1)"
+  if [ "$existing_project" = "$root" ]; then
+    note "current $project_file (already records $root)"
+  else
+    die "$project_file records project=$existing_project, not $root.
+      This namespace root already belongs to a different project; choose a
+      different namespace or inspect $seat_root before provisioning seats."
+  fi
+else
+  { printf 'project=%s\n' "$root"
+    printf 'written_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$project_file" || die "could not write $project_file"
+  note "wrote   $project_file (records $root)"
+fi
 
 # --- the directory -----------------------------------------------------------
 if [ -e "$seat_dir" ] && [ ! -d "$seat_dir" ]; then

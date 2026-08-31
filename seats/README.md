@@ -69,8 +69,13 @@ seats/seat-env.sh <namespace> <seat-name> [project-root]
 For each seat in the roster, once. The script:
 
 1. checks `pi` is on PATH — a MISSING line is a STOP;
-2. creates `$HOME/.pi-seats-<namespace>/<seat-name>/`;
-3. writes `trust.json` pre-granting the project root. Trust has to exist
+2. creates `$HOME/.pi-seats-<namespace>/` and its `<seat-name>/` child;
+3. writes `$HOME/.pi-seats-<namespace>/.project`, a backlink with the
+   canonical absolute project root (`project=...`) and `written_at=...`. The
+   backlink is idempotent: a rerun for the same root leaves it untouched, while
+   a different root is a loud STOP because it means two projects are trying to
+   share one namespace root;
+4. writes `trust.json` pre-granting the project root. Trust has to exist
    before the first run because a headless run without it does not stall or
    error — it silently SKIPS the project's `.pi/` resources (config,
    `SYSTEM.md`), and nothing in the output says so: the seat just behaves as
@@ -79,7 +84,7 @@ For each seat in the roster, once. The script:
    trust keys against the canonicalized cwd — a symlinked path like `/tmp`
    vs `/private/tmp` would write a key pi never matches, the same silent
    skip by another door;
-4. prints the `export PI_CODING_AGENT_DIR=...` line and, if the seat has no
+5. prints the `export PI_CODING_AGENT_DIR=...` line and, if the seat has no
    `auth.json` yet, the one-time credential flow.
 
 For OAuth seats, launch the REPL exactly as printed with `PI_CODING_AGENT_DIR`
@@ -99,6 +104,10 @@ What the script refuses to do, and why:
   first headless run, and the script treats that as not-logged-in — the
   credential flow still prints, and OAuth `/login` inside the REPL (or the
   api_key file route) fills the file in place.
+- It will not reuse a namespace root whose `.project` backlink names a
+  different project root. That STOP is the cross-fleet collision the namespace
+  exists to prevent; choose a different namespace or inspect the existing
+  `$HOME/.pi-seats-<namespace>/` before proceeding.
 - It will not rewrite a `trust.json` it did not write. The file may carry
   grants an operator added by hand, and shell is the wrong tool to edit
   JSON — if the project root is missing from an existing trust file, the

@@ -1,0 +1,89 @@
+$ git branch --show-current; git rev-parse HEAD; git rev-parse fleet/wheelhouse-project-ag1
+fleet/wheelhouse-project-ag1
+f82c9e8f184bb4db6f392f8b92f461b4f2179423
+f82c9e8f184bb4db6f392f8b92f461b4f2179423
+
+$ bash seats/seat-env.selftest.sh
+
+1. two seats, one namespace — isolation
+  ok    seat one: fresh seat run exits 0
+  ok    seat one: seat directory created
+  ok    seat one: namespace root .project backlink records this project
+  ok    seat one: trust.json pre-grants the project root, exactly
+  ok    seat one: export line names this seat's own directory
+  ok    seat one: fresh seat gets a one-time credential flow
+  ok    seat two: fresh seat run exits 0
+  ok    seat two: seat directory created
+  ok    seat two: namespace root .project backlink records this project
+  ok    seat two: trust.json pre-grants the project root, exactly
+  ok    seat two: export line names this seat's own directory
+  ok    seat two: fresh seat gets a one-time credential flow
+  ok    the two seats' auth.json paths are distinct — accounts cannot collide
+
+2. idempotency
+  ok    rerun exits 0 and says the trust grant is already current
+  ok    rerun leaves the namespace root .project backlink byte-identical
+  ok    rerun leaves trust.json byte-identical
+
+2b. refusal — namespace root belongs to one project
+  ok    a .project backlink for a different root STOPS the run
+  ok    the collision refusal leaves the .project backlink byte-identical
+  ok    the collision refusal does not create the requested seat directory
+
+3. refusal — an auth.json holding an identity is identity, not clutter
+  ok    auth: run over a logged-in seat exits 0
+  ok    auth: existing auth.json left byte-identical
+  ok    auth: no credential flow beside a live auth.json
+  ok    auth: says why the login command is withheld
+
+3b. an EMPTY {} auth.json is not a login — pi auto-creates one headless
+  ok    a seat with only pi's auto-created {} auth.json still gets the credential flow
+  ok    the empty auth.json itself is left byte-identical
+  ok    says why an existing-but-empty auth.json is not a login
+
+4. refusal — a trust file this script did not write
+  ok    a trust.json missing the project root STOPS the run, with the reason
+  ok    the refusal wrote nothing over the foreign trust file
+
+5. refusing to guess
+  ok    no pi on PATH is a STOP, named as MISSING
+  ok    a relative project root is refused
+  ok    a seat name with '..' is refused
+  ok    a project root that does not exist is refused
+
+5b. a symlinked root is canonicalized — pi matches canonical paths only
+  ok    a root passed through a symlink is granted by its physical path
+
+6. default project root — the checkout you run it from
+  ok    with no root argument, trust is granted to the directory the run stood in
+
+7. canary — can these checks detect a broken script?
+  ok    canary: a script that grants no trust is caught
+  ok    canary: a script that invites a re-login over a live identity is caught
+
+seat-env.sh works on this machine.
+
+$ grep -n "Derive the default deterministically\|\.project\|different project root\|retrofits" BOOTSTRAP.md runbooks/UPGRADE.md seats/seat-env.sh seats/seat-env.selftest.sh seats/README.md
+BOOTSTRAP.md:215:   **The namespace comes first, because everything you are about to write sits under it.** Derive the default deterministically from the exact project directory name, lowercased and made filesystem-safe as one path segment (for example, collapse or replace characters the filesystem should not carry in a seat-root name; do not shorten or rebrand it). That default is the rule, not a suggestion. Correct it only for an actual collision on this machine or because the principal explicitly chooses a different namespace. Say what it decides: this project's seat root is `$HOME/.pi-seats-<namespace>`, the directory every seat's account lands under and the value `seats/seat-env.sh` is invoked with. Ask them to confirm or correct the derived string, not to design the scheme. Say why in one sentence, because a principal who does not know the reason will shorten it back out later: a machine can host more than one wheelhouse, and per-project seat roots are what keep two fleets' accounts apart on disk — same directory would mean same `auth.json` would mean one login serving two fleets, which is the collision `wheelhouse/fleet/SEATS.md`'s seat-accounting section forbids. That is the namespace's ONLY job now: seat NAMES are `seats/seats.json` keys, addressed per-project by the adapter, and carry no prefix — `worker-1`, not `<namespace>-worker-1`.
+BOOTSTRAP.md:264:1. **Provision the directory**: `seats/seat-env.sh <namespace> <seat-name>` — run once, safe to re-run. It creates `$HOME/.pi-seats-<namespace>/<seat-name>/`, writes `$HOME/.pi-seats-<namespace>/.project` as the backlink to this canonical project root (or STOPS if that namespace root already names a different project), pre-grants trust for the project root (canonicalized, because pi matches trust keys against the physical path), and prints the export line plus — for a seat with no identity yet — the one-time credential flow. It never writes `auth.json`; a MISSING or STOP line from it is a stop for that seat.
+runbooks/UPGRADE.md:297:1. **Record the namespace, in the file the machinery reads.** Derive the default deterministically from the exact project directory name, lowercased and made filesystem-safe as one path segment. That default is the rule; correct it only for an actual collision on this machine or because the principal explicitly chooses a different namespace. It names this project's seat root, `$HOME/.pi-seats-<namespace>`, which is what keeps two fleets' accounts apart on one machine; `BOOTSTRAP.md` step 3's question 7 says why in full.
+runbooks/UPGRADE.md:320:4. **Provision and probe each seat.** `BOOTSTRAP.md` step 4, verbatim: `seats/seat-env.sh <namespace> <seat-name>` once per seat, the one-time OAuth flow (`PI_CODING_AGENT_DIR=... pi`, then `/login` inside the REPL, then `/exit`) or api_key placement (`auth.json` / provider env var) as that seat's own account, then the readiness probe. Re-running `seat-env.sh` on an existing Pi seat also retrofits `$HOME/.pi-seats-<namespace>/.project` without touching `auth.json`; if that backlink already names a different project root, the STOP is the collision signal to resolve before provisioning continues. The one-seat-one-account rule survives the rebuild unchanged: the reviewer's and verifier's directories must differ from every worker's. For the proving dispatch, have the commander create `.wheelhouse-worktrees/<bead-id>` before adapter dispatch; STOP can recover a missing worktree, but this order saves one failed dispatch.
+seats/seat-env.sh:34:#                 carries a .project backlink naming the absolute project
+seats/seat-env.sh:92:project_file="$seat_root/.project"
+seats/seat-env.selftest.sh:10:# paths), the namespace-root .project backlink, the trust pre-grant's exact
+seats/seat-env.selftest.sh:90:  if [ -f "$HOME_FIX/.pi-seats-alpha/.project" ] && grep -qxF "project=$PROJECT" "$HOME_FIX/.pi-seats-alpha/.project" && grep -Eq '^written_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$HOME_FIX/.pi-seats-alpha/.project"; then
+seats/seat-env.selftest.sh:91:    pass "$label: namespace root .project backlink records this project"
+seats/seat-env.selftest.sh:92:  else fail "$label: namespace root .project backlink missing or wrong"; fi
+seats/seat-env.selftest.sh:138:cp "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before"
+seats/seat-env.selftest.sh:143:if cmp -s "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before"; then
+seats/seat-env.selftest.sh:144:  pass "rerun leaves the namespace root .project backlink byte-identical"
+seats/seat-env.selftest.sh:145:else fail "rerun rewrote the namespace root .project backlink"; fi
+seats/seat-env.selftest.sh:153:cp "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before-collision"
+seats/seat-env.selftest.sh:156:  pass "a .project backlink for a different root STOPS the run"
+seats/seat-env.selftest.sh:157:else fail "a different project root reused the namespace without a STOP (exit $RC)"; fi
+seats/seat-env.selftest.sh:158:if cmp -s "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before-collision"; then
+seats/seat-env.selftest.sh:159:  pass "the collision refusal leaves the .project backlink byte-identical"
+seats/seat-env.selftest.sh:160:else fail "the collision refusal rewrote the .project backlink"; fi
+seats/README.md:73:3. writes `$HOME/.pi-seats-<namespace>/.project`, a backlink with the
+seats/README.md:107:- It will not reuse a namespace root whose `.project` backlink names a
+seats/README.md:108:  different project root. That STOP is the cross-fleet collision the namespace
