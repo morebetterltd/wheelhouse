@@ -86,7 +86,7 @@ while IFS= read -r repo; do
     continue
   fi
   git -C "$repo" log --merges --since="$isa_time" --format='%H%x09%s' "$branch" >"$merge_list"
-  while IFS='        ' read -r merge subject; do
+  while IFS="$(printf '\t')" read -r merge subject; do
     [ -n "$merge" ] || continue
     case "$merge" in "$isa_commit") continue ;; esac
     bead=$(printf '%s\n' "$subject" | sed -n 's/.*fleet\/\([^: ]*\).*/\1/p' | head -1)
