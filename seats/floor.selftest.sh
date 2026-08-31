@@ -73,15 +73,26 @@ LOGS="$PROJ/seats/logs"
 ME=$$   # a pid that is definitely alive while this test runs
 GONE=3999999   # far above macOS/Linux pid ranges: definitely not alive
 
+NOW_MS=1893456000000 # 2030-01-01T00:00:00Z, fixed so ages are deterministic
+RECENT_ISO="2029-12-31T23:59:48Z"
+OLD_ISO="2029-12-31T23:49:00Z"
+
 # Seat "busy": a full humanizable turn, currently mid-turn on a tool.
 cat > "$LOGS/busy.jsonl" <<EOF
-{"type":"agent_start"}
-{"type":"thinking","text":"pondering the diff"}
-{"type":"tool_execution_start","toolName":"bash","args":{"cmd":"git status"}}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}
-{"type":"agent_end","messages":[1,2,3]}
-{"type":"agent_start"}
-{"type":"tool_execution_start","toolName":"read","args":{"path":"README.md"}}
+{"type":"agent_start","timestamp":"$RECENT_ISO"}
+{"type":"thinking","text":"pondering the diff","timestamp":"$RECENT_ISO"}
+{"type":"tool_execution_start","toolName":"bash","args":{"cmd":"git status"},"timestamp":"$RECENT_ISO"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]},"timestamp":"$RECENT_ISO"}
+{"type":"agent_end","messages":[1,2,3],"timestamp":"$RECENT_ISO"}
+{"type":"agent_start","timestamp":"$RECENT_ISO"}
+{"type":"tool_execution_start","toolName":"read","args":{"path":"README.md"},"timestamp":"$RECENT_ISO"}
+EOF
+
+# Seat "quiet": alive and mid-turn, but the newest event is older than the
+# default 10m threshold, so it must be visually flagged.
+cat > "$LOGS/quiet.jsonl" <<EOF
+{"type":"agent_start","timestamp":"$OLD_ISO"}
+{"type":"tool_execution_start","toolName":"bash","args":{"cmd":"long bench"},"timestamp":"$OLD_ISO"}
 EOF
 
 # Seat "idle": turn finished, nothing in flight — with ready work waiting.
@@ -128,14 +139,16 @@ cat > "$PROJ/seats/seats.json" <<EOF
 {
   "commander": { "role": "commander", "external": true, "runtime": "claude-code" },
   "seats": {
-    "busy":     { "role": "worker",   "account": { "dir": "$FIX/acct/busy" } },
-    "idle":     { "role": "worker",   "account": { "dir": "$FIX/acct/idle" } },
-    "gone":     { "role": "worker",   "account": { "dir": "$FIX/acct/gone" } },
-    "authless": { "role": "worker",   "account": { "dir": "$FIX/acct/authless" } },
-    "quota":    { "role": "worker",   "account": { "dir": "$FIX/acct/quota" } },
-    "reviewer": { "role": "reviewer", "account": { "dir": "$FIX/acct/reviewer" } },
-    "bounced":  { "role": "reviewer", "account": { "dir": "$FIX/acct/bounced" } },
-    "nolog":    { "role": "worker",   "account": { "dir": "$FIX/acct/nolog" } }
+    "busy":     { "role": "worker",   "provider": "openai-codex", "model": "gpt-5.5", "account": { "dir": "$FIX/acct/busy", "label": "busy@example" } },
+    "quiet":    { "role": "worker",   "provider": "openai-codex", "model": "gpt-5.5", "account": { "dir": "$FIX/acct/quiet", "label": "quiet@example" } },
+    "idle":     { "role": "worker",   "provider": "anthropic", "model": "claude-fable-5", "account": { "dir": "$FIX/acct/idle" } },
+    "gone":     { "role": "worker",   "provider": "openai-codex", "model": "gpt-5.4", "account": { "dir": "$FIX/acct/gone" } },
+    "authless": { "role": "worker",   "provider": "anthropic", "model": "claude-fable-5", "account": { "dir": "$FIX/acct/authless" } },
+    "quota":    { "role": "worker",   "provider": "openai-codex", "model": "gpt-5.5", "account": { "dir": "$FIX/acct/quota" } },
+    "reviewer": { "role": "reviewer", "provider": "anthropic", "model": "claude-fable-5", "account": { "dir": "$FIX/acct/reviewer", "label": "review-account" } },
+    "bounced":  { "role": "reviewer", "provider": "anthropic", "model": "claude-fable-5", "account": { "dir": "$FIX/acct/bounced" } },
+    "nolog":    { "role": "worker",   "provider": "openai-codex", "model": "gpt-5.5", "account": { "dir": "$FIX/acct/nolog" } },
+    "verifier": { "role": "verifier", "provider": "anthropic", "model": "claude-fable-5", "account": { "dir": "$FIX/acct/verifier", "label": "verify-account" } }
   }
 }
 EOF
@@ -147,6 +160,8 @@ seat_rec() { # name pid extra-json
 {
   printf '{"seats":{'
   seat_rec busy     "$ME"   ',"lastBead":"wh-busy-1"'
+  printf ','
+  seat_rec quiet    "$ME"   ',"lastBead":"wh-quiet-1"'
   printf ','
   seat_rec idle     "$ME"
   printf ','
@@ -167,7 +182,7 @@ seat_rec() { # name pid extra-json
 RUN_PATH="$FIX/bin:$(dirname "$(command -v bun)"):/usr/bin:/bin"
 render() { # floor-file args...
   local f="$1"; shift
-  OUT="$(env PATH="$RUN_PATH" COLUMNS=140 LINES=60 NO_COLOR=1 bun "$f" --once "$@" 2>&1)"
+  OUT="$(env PATH="$RUN_PATH" COLUMNS=180 LINES=70 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$f" --once "$@" 2>&1)"
   RC=$?
 }
 has() { printf '%s\n' "$OUT" | grep -q "$1"; }
@@ -187,9 +202,21 @@ render "$PROJ/seats/floor.ts" --pin busy
 # --- phase 2: the rail shows every seat with the right cue -------------------
 phase "phase 2: rail — all seats, distinct failure lines, never silence"
 render "$PROJ/seats/floor.ts" --pin 1
-for s in busy idle gone authless quota reviewer bounced nolog; do
+for s in busy quiet idle gone authless quota reviewer bounced nolog verifier; do
   has "$s" && pass "rail lists $s" || fail "rail is missing seat $s"
 done
+has 'busy.*worker.*openai-codex/gpt-5.5.*busy@example.*wh-busy-1.*12s ago' \
+  && pass "row shape includes role, provider/model, account label, active bead, and humanized age" \
+  || fail "busy row is missing one-glance columns: $(printf '%s\n' "$OUT" | grep busy | head -1)"
+has 'idle.*anthropic/claude-fable-5.*| - |' \
+  && pass "missing account.label renders as dash" \
+  || fail "idle row did not render a dash for absent account.label: $(printf '%s\n' "$OUT" | grep idle | head -1)"
+has 'quiet.*QUIET.*wh-quiet-1.*11m ago' \
+  && pass "old running seat is flagged QUIET with humanized age" \
+  || fail "quiet row missing QUIET/11m age: $(printf '%s\n' "$OUT" | grep quiet | head -1)"
+has 'verifier.*verifier.*anthropic/claude-fable-5.*verify-account.*| .*off.* - | - | -' \
+  && pass "rostered verifier absent from state renders as a seat row with state dash" \
+  || fail "absent verifier row wrong: $(printf '%s\n' "$OUT" | grep verifier | head -1)"
 has "PROCESS GONE"        && pass "gone: PROCESS GONE line (red)"     || fail "no PROCESS GONE line"
 has "AUTH DEAD"           && pass "authless: AUTH DEAD line (red)"    || fail "no AUTH DEAD line"
 has "QUOTA EXHAUSTED"     && pass "quota: QUOTA EXHAUSTED line"       || fail "no QUOTA EXHAUSTED line"
@@ -200,6 +227,11 @@ has "no event log yet"    && pass "nolog: missing log is a named line"    || fai
 has " RED"   && has " AMBER" && has " GREEN" \
   && pass "cue words RED/AMBER/GREEN all present" || fail "cue words missing"
 has '\[0\] STATUS' && pass "rail has the [0] STATUS cell" || fail "no [0] STATUS row"
+if printf '%s\n' "$OUT" | grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T'; then
+  fail "rail exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | head -1)"
+else
+  pass "rail exposes humanized ages, not raw epoch/ISO timestamps"
+fi
 
 # --- phase 3: 0 pins STATUS; overview renders --------------------------------
 phase "phase 3: STATUS cell and overview grid"
@@ -207,21 +239,47 @@ render "$PROJ/seats/floor.ts" --pin 0
 [ $RC -eq 0 ] && has "STATUS" && pass "--pin 0 renders STATUS"  || fail "pin 0 did not render STATUS: $OUT"
 has "bd ready: 2"   && pass "STATUS shows bd ready count"       || fail "no bd ready count in STATUS"
 has "last bead wh-rev-9" && pass "STATUS shows per-seat detail" || fail "no per-seat detail in STATUS"
+has "last activity 12s ago" && pass "STATUS uses humanized last-activity age" || fail "STATUS did not show humanized last activity"
+if printf '%s\n' "$OUT" | grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T'; then
+  fail "STATUS exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | head -1)"
+else
+  pass "STATUS exposes humanized ages, not raw epoch/ISO timestamps"
+fi
 render "$PROJ/seats/floor.ts" --overview
 [ $RC -eq 0 ] && has "OVERVIEW" && pass "--overview renders the grid" || fail "overview failed: $OUT"
 has '\[tool\] read' && pass "overview shows recent events per seat"   || fail "overview missing events"
 
 # --- phase 4: degradation, not crashes ---------------------------------------
 phase "phase 4: missing pieces degrade with named lines"
-render "$PROJ/seats/floor.ts" --pin 8   # nolog seat in the spotlight
+render "$PROJ/seats/floor.ts" --pin nolog   # nolog seat in the spotlight
 [ $RC -eq 0 ] && pass "spotlight on log-less seat exits 0" || fail "crashed on missing log: $OUT"
 has "no event log yet for nolog" && pass "spotlight names the missing log" || fail "no named missing-log line"
 EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats"; cp "$FLOOR" "$EMPTY/seats/floor.ts"
 render "$EMPTY/seats/floor.ts"
 [ $RC -eq 0 ] && has "no seats" && pass "no roster/state degrades to a named line" || fail "empty project: rc=$RC: $OUT"
 
-# --- phase 5: canaries (guarded with cmp) ------------------------------------
-phase "phase 5: canaries — sabotage a copy, checks must notice"
+# --- phase 5: interactive repaint is in-place, not append-only ---------------
+phase "phase 5: repaint — repeated frames return home and clear to end"
+CAPTURE_FILE="$FIX/repaint.capture"
+env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$PROJ/seats/floor.ts" > "$CAPTURE_FILE" 2>&1 &
+FLOOR_PID=$!
+sleep 2
+kill "$FLOOR_PID" 2>/dev/null
+wait "$FLOOR_PID" 2>/dev/null
+CAPTURE="$(cat "$CAPTURE_FILE")"
+if [ -s "$CAPTURE_FILE" ]; then pass "multi-frame capture produced output before the scripted stop"
+else fail "multi-frame capture produced no output"; fi
+HOME_CLEAR_COUNT="$(printf '%s' "$CAPTURE" | python3 -c 'import sys; s=sys.stdin.read(); print(s.count("\x1b[H\x1b[J"))')"
+if [ "$HOME_CLEAR_COUNT" -ge 2 ]; then pass "multi-frame capture contains repeated cursor-home + clear-to-end repaint sequences"
+else fail "multi-frame capture did not show repeated in-place repaint sequences (count=$HOME_CLEAR_COUNT)"; fi
+if printf '%s' "$CAPTURE" | python3 -c 'import sys; frames=[f for f in sys.stdin.read().split("\x1b[H\x1b[J") if f]; raise SystemExit(0 if frames and max(x.count("\n") for x in frames) <= 24 else 1)'; then
+  pass "multi-frame capture stays within the terminal height per frame — no scroll drift"
+else
+  fail "multi-frame capture grew past the terminal height, indicating scroll drift"
+fi
+
+# --- phase 6: canaries (guarded with cmp) ------------------------------------
+phase "phase 6: canaries — sabotage a copy, checks must notice"
 SAB1="$PROJ/seats/floor-sab1.ts"
 sed '/PROCESS GONE/d' "$PROJ/seats/floor.ts" > "$SAB1"
 if cmp -s "$PROJ/seats/floor.ts" "$SAB1"; then
@@ -241,8 +299,8 @@ else
   else pass "canary 2: cutting the missing-log line is caught by phase 4's check"; fi
 fi
 
-# --- phase 6: tmux leg — cockpit.sh idempotency on a private socket ----------
-phase "phase 6: cockpit.sh (tmux leg)"
+# --- phase 7: tmux leg — cockpit.sh idempotency on a private socket ----------
+phase "phase 7: cockpit.sh (tmux leg)"
 if ! command -v tmux >/dev/null 2>&1; then
   skip "tmux not on PATH — cockpit leg not run (floor checks above still decide)"
 elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
@@ -272,6 +330,6 @@ if [ $FAILED -eq 0 ]; then
   exit 0
 fi
 echo "$FAILED check(s) failed."
-echo "If a failure is in phases 1-4 or 6, the floor or cockpit broke (or their"
-echo "wording moved). If a failure is in phase 5, fix this test first."
+echo "If a failure is in phases 1-5 or 7, the floor or cockpit broke (or their"
+echo "wording moved). If a failure is in phase 6, fix this test first."
 exit 1

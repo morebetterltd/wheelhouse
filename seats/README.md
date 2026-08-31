@@ -429,8 +429,17 @@ or to state. Two regions:
 - **Spotlight** (top): pinned to ONE seat, that seat's event log humanized —
   `[tool]`, `[think]`, `[say]`, `[turn_end]` with turn stats. The spotlight
   moves ONLY on your keys; nothing steals it.
-- **Rail** (bottom): one line per seat, `[1]`..`[9]`, plus `[0] STATUS`, each
-  with an attention cue:
+- **Rail** (bottom): one line per rostered seat, plus `[0] STATUS`. Each row
+  is `name | role | provider/model | account label | state | active bead |
+  last activity`. `account.label` is optional in `seats.json` and renders as
+  `-` when absent. Last activity is a humanized age (`12s ago`, `9m ago`)
+  derived from the newest timestamp in `seats/logs/<seat>.jsonl`, with file
+  mtime as the fallback; raw epochs are not shown. A live RUNNING seat whose
+  last activity is older than the quiet threshold (default 10m,
+  `FLOOR_QUIET_AFTER_MS` to override) is flagged `QUIET`. Verifier or other
+  ephemeral seats absent from `state.json` still render from the roster with
+  state `-`, so the crew list stays complete. Each row also carries an
+  attention cue:
 
   | cue | meaning |
   |---|---|
@@ -459,10 +468,12 @@ bash seats/floor.selftest.sh
 
 Hermetic: synthetic logs and state in a temp fixture, a stub `bd`, frames
 rendered with `--once` — your real seats and your tmux are untouched. Covers
-every rail cue above, the STATUS cell, the missing-log degradation, and two
-cmp-guarded canaries. The tmux leg builds the bridge on a private tmux
-socket and proves `cockpit.sh` idempotent; it prints a SKIP line (and still
-passes) when tmux is not installed.
+every rail cue above, the STATUS cell, roster-only ephemeral seats, planted
+last-activity ages and the `QUIET` threshold flag, the missing-log
+degradation, a multi-frame repaint capture proving cursor-home/clear-to-end
+redraw without scroll drift, and two cmp-guarded canaries. The tmux leg builds
+the bridge on a private tmux socket and proves `cockpit.sh` idempotent; it
+prints a SKIP line (and still passes) when tmux is not installed.
 
 <!-- ===== recovery (bead wheelhouse-project-98m) — new section starts here ===== -->
 
