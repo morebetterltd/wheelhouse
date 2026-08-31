@@ -8,6 +8,11 @@ The commander is a Claude Code session — yours. Every other seat is a persiste
 
 This repo is the template. It ships the contracts those roles share, the seat machinery they run on, worked examples, and a bootstrap procedure that installs the whole thing into a project by interviewing you about that project.
 
+Two paths:
+
+- **Fresh project, no wheelhouse yet:** go to [Install](#install).
+- **Existing wheelhouse, of any age:** go to [Upgrading](#upgrading). Pre-Pi installs with v1 Claude Code seats are covered there too.
+
 ## Prerequisites
 
 - **a git repository you want the fleet to work on.** The wheelhouse installs into a project you already have; it does not start one for you.
@@ -128,6 +133,55 @@ Your install ships a bench stub that exits non-zero. Until you implement it, no 
 A seat is a standing session pinned to **one subscription, serving one human beneficiary**. No seat serves anyone else. This is a licensing-compliance statement, not a preference, and it does not change with the size of your fleet.
 
 ## Upgrading
+
+Already have a `wheelhouse/` in this project? Use this path, even if it is an early v1 install from before Pi seats. The same paste block covers current installs and the v1 Claude Code seats-to-Pi migration.
+
+Open a Claude Code session in your project root and paste the block below into that session.
+
+**Paste the whole block into Claude; you run none of it yourself.** The block is addressed to Claude, and the shell command inside it is Claude's to execute — which is why it opens with a sentence rather than a command, and why pasting the block into a terminal fails on its first line.
+
+```text
+Upgrade the wheelhouse in this repo.
+
+Clone the current template somewhere temporary and read its runbooks/UPGRADE.md,
+then follow it exactly against this installed project:
+
+  TEMPLATE=$(mktemp -d) && \
+    git clone https://github.com/morebetterltd/wheelhouse.git "$TEMPLATE" && \
+    test -s "$TEMPLATE/runbooks/UPGRADE.md" || \
+    { echo "TEMPLATE CLONE FAILED OR EMPTY - STOP" >&2; exit 1; }
+  echo "template at: $TEMPLATE"
+
+That command exits non-zero if anything went wrong, so do not judge it by its
+output alone. An empty clone exits 0 and looks like success; upgrading from one
+copies nothing current and can make the old files look intentionally preserved.
+If it fails, STOP and tell me.
+
+Note the printed path. UPGRADE has you keep using it as TEMPLATE, because a
+shell variable does not survive between your tool calls.
+
+Before you copy anything, read this installed project's wheelhouse/.template-source.
+That file is the baseline record: where this project installed from, which commit
+it installed or last upgraded to, and whether a namespace is already recorded. If
+it is missing, or if it predates namespace=, follow UPGRADE.md's recovery and
+migration steps exactly; pre-Pi v1 Claude Code seats are covered there.
+
+runbooks/UPGRADE.md from the cloned template is the authoritative procedure — it
+tells you how to reconstruct a missing baseline, get enough history to diff,
+copy the template-owned files, preserve every `## This project` half, migrate v1
+Claude Code seats to Pi seats when needed, verify, sweep generated files and the
+work graph, and record the upgrade. Follow it in order and do not skip the
+verification step.
+
+Three things before you start:
+- This directory is the project root. The installed wheelhouse to upgrade is
+  here. Confirm with me if that looks wrong.
+- Do not overwrite project-owned content. Splice contracts by the exact
+  `## This project` heading rule, keep those project halves whole, and stop on
+  any missing heading or mismatch instead of guessing.
+- If any step cannot complete, or the installed state does not match the runbook,
+  STOP and tell me. Do not work around it.
+```
 
 When these contracts improve, you re-copy the eight contract files and the `seats/` machinery, and keep your `## This project` sections. The two-section split is what makes that safe, and there is no tooling for it deliberately — a file copy you understand beats a migration you do not.
 

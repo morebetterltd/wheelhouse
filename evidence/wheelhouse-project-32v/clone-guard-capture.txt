@@ -1,0 +1,15 @@
+$ git rev-parse --abbrev-ref HEAD && git rev-parse HEAD && git rev-parse fleet/wheelhouse-project-32v
+fleet/wheelhouse-project-32v
+2af000992f2813e276978f8bcf766bf97d79b35c
+2af000992f2813e276978f8bcf766bf97d79b35c
+
+EXPECT: real clone fragment exits 0 and produces non-empty runbooks/UPGRADE.md.
+$ TEMPLATE=$(mktemp -d) && git clone https://github.com/morebetterltd/wheelhouse.git "$TEMPLATE" && test -s "$TEMPLATE/runbooks/UPGRADE.md" || { echo "TEMPLATE CLONE FAILED OR EMPTY - STOP" >&2; exit 1; }; echo "template at: $TEMPLATE"; ls -l "$TEMPLATE/runbooks/UPGRADE.md"; rm -rf "$TEMPLATE"
+Cloning into '/var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/tmp.oZB1aOdMx3'...
+template at: /var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/tmp.oZB1aOdMx3
+-rw-r--r--  1 codeshack-vii  staff  29938 Aug 30 21:42 /var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/tmp.oZB1aOdMx3/runbooks/UPGRADE.md
+
+EXPECT: a clone operation can exit 0 while leaving the target empty; the guard then exits 1 before any upgrade can proceed.
+$ EMPTY=$(mktemp -d); ( true && test -s "$EMPTY/runbooks/UPGRADE.md" ) || { echo "TEMPLATE CLONE FAILED OR EMPTY - STOP" >&2; exit 1; }
+TEMPLATE CLONE FAILED OR EMPTY - STOP
+guard exit status: 1 (test status before STOP: 1)
