@@ -107,6 +107,60 @@ function truncate(s: string, n: number): string {
   return flat.length > n ? flat.slice(0, Math.max(0, n - 1)) + "…" : flat;
 }
 
+function nowMs(): number {
+  const forced = Number(process.env.FLOOR_NOW_MS || "");
+  return Number.isFinite(forced) && forced > 0 ? forced : Date.now();
+}
+
+function quietAfterMs(): number {
+  const forced = Number(process.env.FLOOR_QUIET_AFTER_MS || "");
+  return Number.isFinite(forced) && forced > 0 ? forced : 10 * 60 * 1000;
+}
+
+function humanAge(ms: number | null): string {
+  if (ms === null) return "-";
+  const delta = Math.max(0, nowMs() - ms);
+  const sec = Math.floor(delta / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+function eventTimeMs(ev: any): number | null {
+  for (const key of ["timestamp", "time", "created_at", "createdAt", "at"]) {
+    const v = ev?.[key];
+    if (typeof v === "number" && Number.isFinite(v)) return v < 10_000_000_000 ? v * 1000 : v;
+    if (typeof v === "string") {
+      const t = Date.parse(v);
+      if (Number.isFinite(t)) return t;
+    }
+  }
+  return null;
+}
+
+function lastActivityMs(seat: Seat, events: string[] | null = tailLines(seat.log)): number | null {
+  let best: number | null = null;
+  if (events) {
+    for (const line of events) {
+      try {
+        const t = eventTimeMs(JSON.parse(line));
+        if (t !== null && (best === null || t > best)) best = t;
+      } catch {
+        /* raw lines fall through to mtime */
+      }
+    }
+  }
+  if (best !== null) return best;
+  try {
+    return fs.statSync(seat.log).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Model: seats, events, assessment
 // ---------------------------------------------------------------------------
@@ -114,6 +168,9 @@ function truncate(s: string, n: number): string {
 interface Seat {
   name: string;
   role: string;
+  provider: string;
+  model: string;
+  accountLabel: string;
   record: any | null; // state.json entry, if any
   log: string;
   errLog: string;
@@ -128,7 +185,10 @@ function listSeats(): Seat[] {
   for (const n of Object.keys(state)) if (!names.includes(n)) names.push(n);
   return names.map((name) => ({
     name,
-    role: state[name]?.role ?? roster[name]?.role ?? "?",
+    role: roster[name]?.role ?? state[name]?.role ?? "?",
+    provider: roster[name]?.provider ?? "-",
+    model: roster[name]?.model ?? "-",
+    accountLabel: roster[name]?.account?.label ?? "-",
     record: state[name] ?? null,
     log: state[name]?.log ?? path.join(LOG_DIR, `${name}.jsonl`),
     errLog: path.join(LOG_DIR, `${name}.stderr.log`),
@@ -278,7 +338,8 @@ function assess(seat: Seat): Assessment {
     return { cue: "red", line: `PROCESS GONE — pid ${rec.pid} died; check ${path.relative(ROOT, seat.errLog)}` };
   }
   if (rec?.lastCapacityEvent) {
-    return { cue: "amber", line: `QUOTA EXHAUSTED — dispatch failed at ${rec.lastCapacityEvent.at}: ${rec.lastCapacityEvent.detail}` };
+    const at = eventTimeMs({ at: rec.lastCapacityEvent.at });
+    return { cue: "amber", line: `QUOTA EXHAUSTED — dispatch failed at ${humanAge(at)}: ${rec.lastCapacityEvent.detail}` };
   }
   if (QUOTA_RE.test(errBlob)) {
     return { cue: "amber", line: "QUOTA EXHAUSTED — seat cannot take work until it resets" };
@@ -306,8 +367,8 @@ function assess(seat: Seat): Assessment {
   if (verdict === "APPROVE" || verdict === "DISCOVER") {
     return { cue: "green", line: `VERDICT LANDED — ${verdict}${rec?.lastBead ? ` on ${rec.lastBead}` : ""}` };
   }
-  if (!rec) return { cue: "off", line: "never spawned" };
-  if (!rec.pid && rec.stoppedAt) return { cue: "off", line: `stopped ${rec.stoppedAt} (session kept)` };
+  if (!rec) return { cue: "off", line: "-" };
+  if (!rec.pid && rec.stoppedAt) return { cue: "off", line: `stopped ${humanAge(eventTimeMs({ at: rec.stoppedAt }))} (session kept)` };
   if (!alive) return { cue: "red", line: `PROCESS GONE — no live pid; check ${path.relative(ROOT, seat.errLog)}` };
   if (events === null) {
     return { cue: "amber", line: `no event log yet — ${path.relative(ROOT, seat.log)} missing` };
@@ -337,6 +398,26 @@ function cueMark(cue: Cue): string {
   }
 }
 
+function isQuiet(seat: Seat, activityMs: number | null = lastActivityMs(seat)): boolean {
+  const rec = seat.record;
+  return Boolean(rec?.pid && pidAlive(rec.pid) && activityMs !== null && nowMs() - activityMs > quietAfterMs());
+}
+
+function stateText(a: Assessment, quiet: boolean): string {
+  return `${quiet ? "QUIET " : ""}${cueMark(a.cue)} ${a.line}`;
+}
+
+function seatRow(seat: Seat, a: Assessment, width: number): string {
+  const rec = seat.record;
+  const active = rec?.lastBead ?? "-";
+  const activity = lastActivityMs(seat);
+  const vendor = `${seat.provider}/${seat.model}`;
+  return truncate(
+    `${seat.name} | ${seat.role} | ${vendor} | ${seat.accountLabel} | ${stateText(a, isQuiet(seat, activity))} | ${active} | ${humanAge(activity)}`,
+    width + 80,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -349,23 +430,22 @@ interface View {
 
 function railLines(seats: Seat[], view: View, width: number): string[] {
   const out: string[] = [];
-  out.push(`${C.inverse}${C.bold} RAIL ${C.reset}${C.dim} 1-9 pin  0 status  f follow(${view.follow ? "ON" : "off"})  o overview  q quit${C.reset}`);
-  seats.slice(0, 9).forEach((s, i) => {
+  out.push(`${C.inverse}${C.bold} RAIL ${C.reset}${C.dim} name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(${view.follow ? "ON" : "off"})  o overview  q quit${C.reset}`);
+  seats.forEach((s, i) => {
     const n = i + 1;
     const a = assess(s);
     const sel = !view.overview && view.pin === n ? `${C.cyan}▶${C.reset}` : " ";
-    out.push(truncate(`${sel}[${n}] ${s.name.padEnd(14)} ${cueMark(a.cue)}  ${a.line}`, width + 20));
+    out.push(truncate(`${sel}[${n}] ${seatRow(s, a, width)}`, width + 90));
   });
-  if (seats.length > 9) out.push(`${C.dim}  (+${seats.length - 9} more seats not on the rail)${C.reset}`);
   const sel0 = !view.overview && view.pin === 0 ? `${C.cyan}▶${C.reset}` : " ";
-  out.push(`${sel0}[0] ${"STATUS".padEnd(14)} ${C.dim}●${C.reset} cell   full fleet status`);
+  out.push(`${sel0}[0] STATUS | - | -/- | - | ${C.dim}●${C.reset} cell full fleet status | - | -`);
   return out;
 }
 
 function spotlightLines(seat: Seat, height: number, width: number): string[] {
   const a = assess(seat);
   const rec = seat.record;
-  const head = `${C.inverse}${C.bold} SPOTLIGHT ${C.reset} ${C.bold}${seat.name}${C.reset} (${seat.role}${rec?.pid && pidAlive(rec.pid) ? `, pid ${rec.pid}` : ""})  ${cueMark(a.cue)} ${a.line}`;
+  const head = `${C.inverse}${C.bold} SPOTLIGHT ${C.reset} ${C.bold}${seat.name}${C.reset} (${seat.role}; ${seat.provider}/${seat.model}; account ${seat.accountLabel}; last ${humanAge(lastActivityMs(seat))}${rec?.pid && pidAlive(rec.pid) ? `; pid ${rec.pid}` : ""})  ${stateText(a, isQuiet(seat))}`;
   const out = [truncate(head, width + 40)];
   const events = tailLines(seat.log);
   if (events === null) {
@@ -389,18 +469,18 @@ function statusLines(seats: Seat[], width: number): string[] {
   if (alerts.length > 0) {
     out.push(`${C.bold}ALERTS (${alerts.length})${C.reset}`);
     for (const { s, a } of alerts) {
-      out.push(truncate(`  ${cueMark(a.cue)}  ${s.name} — ${a.line}`, width + 20));
+      out.push(truncate(`  ${stateText(a, isQuiet(s))}  ${s.name} — ${a.line}`, width + 20));
     }
     out.push("");
   }
   for (const s of seats) {
     const a = assess(s);
     const rec = s.record;
-    out.push(truncate(`${C.bold}${s.name}${C.reset} (${s.role})  ${cueMark(a.cue)}  ${a.line}`, width + 40));
+    out.push(`${C.bold}${seatRow(s, a, width)}${C.reset}`);
     if (rec) {
       out.push(truncate(`  pid ${rec.pid ?? "-"}${pidAlive(rec.pid) ? " (alive)" : ""}  session ${rec.sessionId ?? "-"}`, width));
-      out.push(truncate(`  last bead ${rec.lastBead ?? "-"}  dispatched ${rec.lastDispatchAt ?? "-"}`, width));
-      out.push(truncate(`  capacity ${rec.lastCapacityEvent ? `QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}` : "ok (no recorded capacity event)"}`, width));
+      out.push(truncate(`  last bead ${rec.lastBead ?? "-"}  last activity ${humanAge(lastActivityMs(s))}`, width));
+      out.push(truncate(`  capacity ${rec.lastCapacityEvent ? `QUOTA ${humanAge(eventTimeMs({ at: rec.lastCapacityEvent.at }))} — ${rec.lastCapacityEvent.detail}` : "ok (no recorded capacity event)"}`, width));
     } else {
       out.push(`  ${C.dim}no state.json record${C.reset}`);
     }
@@ -414,7 +494,7 @@ function overviewLines(seats: Seat[], width: number): string[] {
   const out = [`${C.inverse}${C.bold} OVERVIEW ${C.reset} every seat, last two events  ${C.dim}(1-9/0 to pin, o to leave)${C.reset}`];
   seats.forEach((s, i) => {
     const a = assess(s);
-    out.push(truncate(`[${i + 1}] ${s.name.padEnd(14)} ${cueMark(a.cue)}  ${a.line}`, width + 20));
+    out.push(truncate(`[${i + 1}] ${seatRow(s, a, width)}`, width + 90));
     const events = tailLines(s.log);
     if (events === null) {
       out.push(`     ${C.dim}no event log yet — ${path.relative(ROOT, s.log)} missing${C.reset}`);
@@ -436,15 +516,11 @@ function frame(view: View, rows: number, cols: number): string {
     // this is the only automatic movement, and the user opted into it.
     let best = -1;
     let bestAt = -1;
-    seats.slice(0, 9).forEach((s, i) => {
-      try {
-        const at = fs.statSync(s.log).mtimeMs;
-        if (at > bestAt) {
-          bestAt = at;
-          best = i;
-        }
-      } catch {
-        /* no log, cannot lead */
+    seats.forEach((s, i) => {
+      const at = lastActivityMs(s);
+      if (at !== null && at > bestAt) {
+        bestAt = at;
+        best = i;
       }
     });
     if (best >= 0) pin = best + 1;
@@ -517,9 +593,9 @@ function restore(): void {
 }
 
 function render(): void {
-  const rows = process.stdout.rows || 40;
-  const cols = process.stdout.columns || 100;
-  process.stdout.write("\x1b[H\x1b[2J" + frame(view, rows - 1, cols));
+  const rows = process.stdout.rows || Number(process.env.LINES || 40);
+  const cols = process.stdout.columns || Number(process.env.COLUMNS || 100);
+  process.stdout.write("\x1b[H\x1b[J" + frame(view, rows - 1, cols));
 }
 
 if (process.stdout.isTTY) process.stdout.write(ALT_ON);
