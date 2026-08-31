@@ -44,6 +44,8 @@ What remains forbidden, in every shape: the session that authored a change writi
 
 **What crosses:** a bead id, and enough for someone to start without asking.
 
+The commander reads `wheelhouse/ISA.md`'s Goal before choosing what to send next, because dispatch is a claim about what advances that goal. A bead with no stateable trace under `wheelhouse/GRAPH.md`'s rule is not dispatched; fix the bead first.
+
 The commander names the bead, the repository, and — if it points at any existing commit or branch — **a way to read it that changes nothing**. `wheelhouse/crew/REVIEWER.md` carries the rule and why the wording is what it is; the short version is that a dispatch naming a bare identifier makes the receiver find somewhere to open it, and the somewhere they choose may be someone else's working tree.
 
 Say what "done" is if the bead does not already. If the receiver has to reconstruct it, they will reconstruct a version.
@@ -108,11 +110,15 @@ A BOUNCE lists each defect as its own point: what is wrong, where, and what done
 
 `wheelhouse/INTEGRATOR.md` is the contract and it is short. The operational core: confirm the tip you merged equals the head that was reported, by comparing identifiers rather than by reading command output. A merge that covers less than the reader assumes still prints a genuine diffstat and exits zero.
 
+The same contract carries the claim-move duty: update `wheelhouse/ISA.md`'s Claims with the merge, or state on the bead why no claim moved. Do not duplicate that rule here; this stage points at the contract that owns it.
+
+Run the intent-check gate at `seats/intent-check.sh` before integrating when that script is present. If this template has not yet received the sibling bead that ships it, the path is still the agreed gate path and this line is the ordering marker.
+
 Push per your project's recorded authority, in `wheelhouse/INTEGRATOR.md`'s project section. If that section is empty, the answer is that nobody has decided yet, and the decision is the principal's rather than yours.
 
 ### 7. Close
 
-Close the bead and drop the review-queue label in the same breath. A closed bead still carrying it reads as in-flight to everyone else. `wheelhouse/GRAPH.md` says so; it is listed here because it is the step most often forgotten at the end of a long round.
+Close the bead and drop the review-queue label in the same breath, after the integrator has satisfied `wheelhouse/INTEGRATOR.md`'s claim-move duty or its explicit no-claim-moved escape hatch. A closed bead still carrying it reads as in-flight to everyone else. `wheelhouse/GRAPH.md` says so; it is listed here because it is the step most often forgotten at the end of a long round.
 
 ## Where things are recorded
 
@@ -156,7 +162,7 @@ The obligations live with the roles, and duplicating them here would let the two
 |---|---|
 | what a worker owes and how to report it | `wheelhouse/fleet/WORKER.md` |
 | what a verdict must contain, and reading a branch safely | `wheelhouse/crew/REVIEWER.md` |
-| what a verdict authorises, and confirming what you merged | `wheelhouse/INTEGRATOR.md` |
+| what a verdict authorises, confirming what you merged, and moving Claims with a merge | `wheelhouse/INTEGRATOR.md` |
 | how work state is tracked, the review queue, and where cited evidence must live | `wheelhouse/GRAPH.md` |
 | what a bench must satisfy | `wheelhouse/crew/BENCH.md` |
 | seats, the roster, and running them | `wheelhouse/fleet/SEATS.md`, commands in `seats/README.md` |

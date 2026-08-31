@@ -16,6 +16,12 @@ A fast-forward merge of a branch that lags what the worker committed prints a ge
 
 This is the other half of the worker's obligation to report a head that is the branch's. Two people reporting truthfully about different refs is enough to lose work, and neither of them can see it from where they stand.
 
+### Move the claims with the merge
+
+A merge that changes what is true of the project is not integrated until `wheelhouse/ISA.md`'s Claims move with it. Append or amend a claim citing the merged tip and the evidence home named by `wheelhouse/GRAPH.md`'s *Where evidence lives*, so a later reader can connect the project's stated truth to the branch that made it true.
+
+The honest escape hatch is explicit because without it the duty will be ignored wholesale: if the merge changes no claim, state that on the bead and say why — for example, `no claim moved, because this was a refactor` or `no claim moved, because this was a documentation-only fix`. Silence is not the escape hatch. These duties attach to the integrating function, whether the integrator is a person, a standing session, or CI.
+
 ### Dispatch so that nobody has to disturb anyone
 
 - A dispatch that names a commit also names a way to read it that changes nothing — the canonical repository and a read-only command, not a path.
