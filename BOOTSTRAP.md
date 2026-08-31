@@ -467,7 +467,7 @@ Run each of these and paste what it prints:
   ```bash
   bd create "Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md" -p 1 \
     --labels wheelhouse-bootstrap \
-    --description="The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: the eight clauses in wheelhouse/crew/BENCH.md."
+    --description="Trace: install procedure wheelhouse-bootstrap carve-out. The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: the eight clauses in wheelhouse/crew/BENCH.md."
   bd ready                                 # must now list that bead
   bd ready --label wheelhouse-bootstrap    # must list that bead and nothing else
   ```
@@ -634,7 +634,7 @@ Five things, in this order.
 
    ```bash
    bd create "Smoke: prove the loop closes" -p 1 --labels wheelhouse-smoke \
-     --description="Install smoke check. Done: a file SMOKE.md exists on branch fleet/<this bead's id> containing the single line 'the loop closes', committed, with the worker's report and evidence on this bead. Work in a worktree per wheelhouse/fleet/WORKER.md; the branch itself is disposable once the verdict lands."
+     --description="Trace: install procedure wheelhouse-smoke carve-out. Install smoke check. Done: a file SMOKE.md exists on branch fleet/<this bead's id> containing the single line 'the loop closes', committed, with the worker's report and evidence on this bead. Work in a worktree per wheelhouse/fleet/WORKER.md; the branch itself is disposable once the verdict lands."
    ```
 
    Trivial is the point: the bead exists to exercise dispatch, worktree, branch, report and verdict, and any failure it surfaces is an install failure, undiluted by real work's ambiguity.
