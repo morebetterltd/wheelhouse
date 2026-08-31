@@ -28,9 +28,10 @@
  * HETEROGENEOUS EVIDENCE: when the bead's done requires artifacts no shell
  * assertion stands in for — a screenshot, a bench log, a deployment probe's
  * captured output — the commander names them with --evidence as repo-relative
- * paths. Each is read from the TIP SHA (`git cat-file blob <tip>:<path>`),
- * never from a checkout: GRAPH.md admits committed paths as an evidence home,
- * and a file that exists only in someone's worktree is not one. Per artifact,
+ * paths in the branch's PRODUCT repo. Each is read from the TIP SHA
+ * (`git cat-file blob <tip>:<path>`), never from a checkout: GRAPH.md admits
+ * committed paths as an evidence home, and a file that exists only in someone's
+ * worktree is not one. Per artifact,
  * a FLOOR check runs before the spawn — exists at the SHA, non-empty, and
  * type-probed (.png: magic bytes + IHDR dimensions; anything else: non-empty)
  * — and the results go into the prompt and the verdict record. The floor is
@@ -45,7 +46,11 @@
  * bead claim itself already has to the dispatch.
  *
  * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
- *          [--evidence <path>[,<path>...]]
+ *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]
+ *
+ * Single-repo installs need no configuration: --repo defaults to ROOT. Umbrella
+ * installs pass --repo for the product repository that owns <branch>; evidence
+ * paths stay relative to that product repository.
  *
  * Exit: 0 APPROVE | 2 BOUNCE | 3 DISCOVER | 1 anything else (including a
  * malformed or missing verdict — the machine must never mistake an error
@@ -84,10 +89,11 @@ const TIMEOUT_MS = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || 900000);
  * sharing this repository's object database and refs, or every git command
  * the verifier runs fails before it reads a single line of the branch.
  * verify.ts's OWN git calls (branch resolution, checkEvidence) are
- * unaffected either way — they already pass `cwd: ROOT` explicitly, which
- * has nothing to do with the spawned pi PROCESS's cwd.
+ * unaffected either way — they pass an explicit cwd for the branch's git
+ * repository (`--repo` when an umbrella install needs one), which has nothing
+ * to do with the spawned pi PROCESS's cwd.
  *
- * Detached at ROOT's own HEAD — an arbitrary, always-resolvable commit.
+ * Detached at the branch repo's own HEAD — an arbitrary, always-resolvable commit.
  * The checked-out content is never read by anyone; the worktree exists
  * only so a stray write has somewhere harmless to land, and so `git`
  * commands run from inside it resolve at all. Removed on every exit path
@@ -100,17 +106,17 @@ const TIMEOUT_MS = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || 900000);
  * Named `wheelhouse-verify-<owning-pid>-<random>` so a later sweep can
  * tell which process made it without asking anything but the path.
  */
-function makeScratchCwd(): string {
+function makeScratchCwd(repoRoot: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-verify-${process.pid}-`));
   try {
-    execFileSync("git", ["-C", ROOT, "worktree", "add", "--detach", dir, "HEAD"], { stdio: "pipe" });
+    execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, "HEAD"], { stdio: "pipe" });
   } catch (e: any) {
     fs.rmSync(dir, { recursive: true, force: true });
-    die(`could not create a scratch worktree for the verifier spawn: ${(e.stderr ?? e.message).toString().trim()}`);
+    die(`could not create a scratch worktree for the verifier spawn in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
   }
   process.on("exit", () => {
     try {
-      execFileSync("git", ["-C", ROOT, "worktree", "remove", "--force", dir], { stdio: "ignore" });
+      execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { stdio: "ignore" });
     } catch {
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
     }
@@ -135,12 +141,12 @@ function pidAlive(pid: number): boolean {
  * else, so a diagnosis-only run that STOPs early still sweeps up after
  * whichever prior run left a mess.
  *
- * Asks git itself which worktrees are registered against ROOT rather than
- * globbing the tmp directory: `os.tmpdir()` is shared machine-wide, and a
- * DIFFERENT project's verify.ts (or a whole other wheelhouse fleet on the
- * same box) can leave same-prefixed scratch dirs there — `git worktree
- * list` only ever names worktrees that belong to THIS repository, so
- * nothing gets touched that ROOT does not already confirm is its own.
+ * Asks git itself which worktrees are registered against the branch's repo
+ * rather than globbing the tmp directory: `os.tmpdir()` is shared machine-wide,
+ * and a DIFFERENT project's verify.ts (or a whole other wheelhouse fleet on the
+ * same box) can leave same-prefixed scratch dirs there — `git worktree list`
+ * only ever names worktrees that belong to THIS repository, so nothing gets
+ * touched that the branch repository does not already confirm is its own.
  * Filters those to the `wheelhouse-verify-<pid>-*` naming makeScratchCwd()
  * uses, and reclaims only the ones whose stamped pid is no longer alive.
  *
@@ -155,12 +161,12 @@ function pidAlive(pid: number): boolean {
  * in use" — an alive pid is always treated as still owning its worktree,
  * reused or not.
  */
-function sweepStaleScratchWorktrees(): void {
+function sweepStaleScratchWorktrees(repoRoot: string): void {
   let listing: string;
   try {
-    listing = execFileSync("git", ["-C", ROOT, "worktree", "list", "--porcelain"], { encoding: "utf8" });
+    listing = execFileSync("git", ["-C", repoRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" });
   } catch {
-    return; // nothing to sweep if ROOT itself will not answer
+    return; // nothing to sweep if the branch repository itself will not answer
   }
   const worktreePaths = listing
     .split("\n")
@@ -171,10 +177,10 @@ function sweepStaleScratchWorktrees(): void {
     if (!m) continue; // not one of ours
     if (pidAlive(Number(m[1]))) continue; // owner still running — not stale
     try {
-      execFileSync("git", ["-C", ROOT, "worktree", "remove", "--force", p], { stdio: "ignore" });
+      execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", p], { stdio: "ignore" });
     } catch {
       try { fs.rmSync(p, { recursive: true, force: true }); } catch {}
-      try { execFileSync("git", ["-C", ROOT, "worktree", "prune"], { stdio: "ignore" }); } catch {}
+      try { execFileSync("git", ["-C", repoRoot, "worktree", "prune"], { stdio: "ignore" }); } catch {}
     }
     process.stderr.write(`swept: removed orphaned scratch worktree ${p} (owner pid ${m[1]} is gone)\n`);
   }
@@ -217,6 +223,30 @@ function validateSegment(kind: string, value: string): string {
  * loudly — an evidence path escaping the repository is not evidence on the
  * branch under review.
  */
+function resolveRepoRoot(repoArg: string | undefined): string {
+  if (!repoArg) return ROOT;
+  const expanded = expandTilde(repoArg);
+  const abs = path.resolve(ROOT, expanded);
+  let real: string;
+  try {
+    real = fs.realpathSync(abs);
+  } catch {
+    die(`--repo ${JSON.stringify(repoArg)} does not exist (resolved from ${ROOT})`);
+  }
+  let inside = "";
+  try {
+    inside = execFileSync("git", ["-C", real, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" }).trim();
+  } catch {
+    die(`--repo ${JSON.stringify(repoArg)} is not a git worktree (resolved to ${real})`);
+  }
+  if (inside !== "true") die(`--repo ${JSON.stringify(repoArg)} is not inside a git worktree (resolved to ${real})`);
+  try {
+    return execFileSync("git", ["-C", real, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  } catch {
+    die(`could not resolve git top-level for --repo ${JSON.stringify(repoArg)} (resolved to ${real})`);
+  }
+}
+
 function validateEvidencePath(p: string): string {
   const bad =
     p.length === 0 ? "empty" :
@@ -264,12 +294,12 @@ function probeArtifact(p: string, buf: Buffer): { ok: boolean; probe: string } {
 
 /** Read each named artifact from the tip SHA and run its floor check. A path
  * that is not a blob at that SHA (missing, or a directory) reads as absent. */
-function checkEvidence(tip: string, paths: string[]): EvidenceCheck[] {
+function checkEvidence(repoRoot: string, tip: string, paths: string[]): EvidenceCheck[] {
   return paths.map((p) => {
     let buf: Buffer;
     try {
       buf = execFileSync("git", ["cat-file", "blob", `${tip}:${p}`], {
-        cwd: ROOT,
+        cwd: repoRoot,
         maxBuffer: 256 * 1024 * 1024,
       });
     } catch {
@@ -377,22 +407,27 @@ function beadClaim(beadId: string): string {
 }
 
 function main(): void {
-  sweepStaleScratchWorktrees();
   const argv = process.argv.slice(2);
   const evidencePaths: string[] = [];
+  let repoArg: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--evidence") {
       const v = argv[++i];
       if (!v) die("--evidence requires <path>[,<path>...]");
       for (const p of v.split(",")) evidencePaths.push(validateEvidencePath(p.trim()));
+    } else if (argv[i] === "--repo") {
+      repoArg = argv[++i];
+      if (!repoArg) die("--repo requires <path-to-branch-repo>");
     } else {
       positional.push(argv[i]);
     }
   }
+  const repoRoot = resolveRepoRoot(repoArg);
+  sweepStaleScratchWorktrees(repoRoot);
   const [beadId, branch, authorSeat, verifierArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--evidence <path>[,<path>...]]");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]");
   }
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
@@ -439,15 +474,15 @@ function main(): void {
   let tip: string;
   try {
     tip = execFileSync("git", ["rev-parse", "--verify", `${branch}^{commit}`], {
-      cwd: ROOT,
+      cwd: repoRoot,
       encoding: "utf8",
     }).trim();
   } catch {
-    die(`branch "${branch}" does not resolve to a commit in ${ROOT} — nothing to verify`);
+    die(`branch "${branch}" does not resolve to a commit in ${repoRoot} — nothing to verify`);
   }
 
   // --- evidence floor checks, against the SHA the verdict is about ----------
-  const evidence = checkEvidence(tip, evidencePaths);
+  const evidence = checkEvidence(repoRoot, tip, evidencePaths);
   const evidenceUnsatisfied = evidence.filter((c) => !c.ok);
   const evidencePrompt =
     evidence.length === 0
@@ -457,7 +492,7 @@ function main(): void {
           `Evidence the bead names, floor-checked by the dispatcher at ${tip}:`,
           ...evidenceLines(evidence),
           `The floor (exists, non-empty, right type) is not the judgment: open each`,
-          `artifact (git cat-file blob ${tip}:<path>) and judge its content against`,
+          `artifact (git -C ${repoRoot} cat-file blob ${tip}:<path>) and judge its content against`,
           `the claim it supports, recording what you inspected. While any check above`,
           `reads UNSATISFIED, the done does not hold as stated and an APPROVE cannot`,
           `be delivered — the dispatcher will refuse it as malformed.`,
@@ -468,6 +503,7 @@ function main(): void {
     `You are dispatched as the EPHEMERAL verifier for bead ${beadId}.`,
     ``,
     `Branch under review: ${branch}`,
+    `Branch repository: ${repoRoot}`,
     `Tip SHA at dispatch: ${tip}`,
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
@@ -492,7 +528,7 @@ function main(): void {
   // branch's ref resolves from, which any worktree of this repo is). See
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
-  const scratchCwd = makeScratchCwd();
+  const scratchCwd = makeScratchCwd(repoRoot);
   const res = spawnSync("pi", args, {
     cwd: scratchCwd,
     env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir },
@@ -558,6 +594,7 @@ function main(): void {
     ``,
     `- bead: ${beadId}`,
     `- branch: ${branch}`,
+    `- branch-repo: ${repoRoot}`,
     `- tip: ${tip}`,
     `- author-seat: ${authorSeat}`,
     `- verifier-seat: ${verifierSeat} (${verifierDir})`,
