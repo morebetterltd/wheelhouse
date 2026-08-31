@@ -9,7 +9,7 @@ Two processes pointed at different directories cannot share or clobber each
 other's identity, and a reviewer seat on its own directory is what makes
 "never the author's account" a fact on disk rather than a policy.
 
-Four files live here:
+The main files here:
 
 - `seats.json.example` — the roster format. Copy it to `seats.json` and edit.
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
@@ -17,6 +17,8 @@ Four files live here:
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, resume.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code.
+- `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
+- `floor.ts` — read-only status display for the commander cockpit.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi
@@ -355,6 +357,23 @@ double-resume refusal) and `lastBead`, never `sessionId`. `verify.ts`
 never reads `sessionId` at all — author/verifier distinctness there is
 `account.dir`, not the session.
 
+## Intent gate
+
+```bash
+seats/intent-check.sh [product-repo ...]
+bash seats/intent-check.selftest.sh
+```
+
+Run `intent-check.sh` at integrate/close. It checks process state against the
+ISA (`INTENT.md` defines the ISA format): merges on the target branch since the
+last committed `wheelhouse/ISA.md` movement need either a Claims update or a bead
+comment saying `no claim moved, because ...`, and open/in-progress beads need a
+literal `Trace: ` line unless they match GRAPH.md's install/report carve-outs.
+It is a gate, not a consumer bench clause: it reads git history and bd JSON, and
+never writes to the graph, the ISA, or any repository. If `wheelhouse/ISA.md` is
+not committed in this install, the command exits 2 with `UNRUNNABLE` rather than
+passing silently.
+
 ## Proving it still works
 
 ```bash
@@ -362,6 +381,7 @@ bash seats/evidence-scrub.selftest.sh
 bash seats/seat-env.selftest.sh
 bash seats/adapter.selftest.sh
 bash seats/verify.selftest.sh
+bash seats/intent-check.selftest.sh
 ```
 
 When retaining a run as committed evidence, write it through the scrubber instead of redirecting raw output:
