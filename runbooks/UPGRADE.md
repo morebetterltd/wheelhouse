@@ -269,6 +269,7 @@ rm -f wheelhouse/.template-source.bak
 An upgrade re-copies the contracts and the runbooks and reaches nothing else. If the change altered a convention — a path form, a command name, a label — then your generated files and your existing beads still speak the old one:
 
 - `CLAUDE.md`, `wheelhouse/ISA.md`, `wheelhouse/STARTUP.md`, and the `## This project` sections you just preserved;
+- if the target template changed `generated/CLAUDE.md.example`, read that specimen and hand-merge the matching standing behaviors into your real `CLAUDE.md`; generated examples are not installed by an upgrade, so existing installs do not learn new Decisions-before-beads, Goal-before-dispatch, or Claims-move-on-merge rules unless you add them;
 - every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install;
 - the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
 
