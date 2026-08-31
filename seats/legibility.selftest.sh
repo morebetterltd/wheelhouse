@@ -188,12 +188,58 @@ copy_fixture_ts() {
         case "$dep" in *.ts) ;; *) dep="$dep.ts" ;; esac
         case "$dep" in */*) echo "selftest: fixture setup cannot copy nested TypeScript dependency: $spec from $f" >&2; exit 2 ;; esac
         case " $queue " in *" $dep "*) ;; *) queue="$queue $dep"; changed=1 ;; esac
-      done < <(sed -n "s/^[[:space:]]*import[[:space:]].*from[[:space:]]*[\"']\(\.\/[^\"']*\)[\"'].*/\1/p" "$SRC/$f")
+      done < <("$NODE_BIN" -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'"'"'](\.\/[^"'"'"']+)["'"'"']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'"'"'](\.\/[^"'"'"']+)["'"'"']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' "$SRC/$f")
     done
     [ "$changed" -eq 0 ] && break
   done
   for f in $queue; do cp "$SRC/$f" "$PROJ/seats/"; done
 }
+
+phase "fixture import scanner — multiline, side-effect, and re-export imports are copied"
+SCAN_SRC="$FIX/import-scan-src"
+SCAN_PROJ="$FIX/import-scan-proj"
+mkdir -p "$SCAN_SRC" "$SCAN_PROJ/seats"
+cat > "$SCAN_SRC/adapter.ts" <<'EOF'
+import {
+  multi
+} from "./multi";
+export const adapter = multi;
+EOF
+cat > "$SCAN_SRC/floor.ts" <<'EOF'
+import "./side-effect";
+export const floor = true;
+EOF
+cat > "$SCAN_SRC/verify.ts" <<'EOF'
+export { reexported } from "./re-exported";
+EOF
+cat > "$SCAN_SRC/recover.ts" <<'EOF'
+export const recover = true;
+EOF
+printf 'export const multi = true;\n' > "$SCAN_SRC/multi.ts"
+printf 'export const side = true;\n' > "$SCAN_SRC/side-effect.ts"
+printf 'export const reexported = true;\n' > "$SCAN_SRC/re-exported.ts"
+ORIG_SRC="$SRC"; ORIG_PROJ="$PROJ"; ORIG_SEED_TS="$SEED_TS"
+SRC="$SCAN_SRC"; PROJ="$SCAN_PROJ"; SEED_TS="adapter.ts floor.ts verify.ts recover.ts"
+copy_fixture_ts
+SRC="$ORIG_SRC"; PROJ="$ORIG_PROJ"; SEED_TS="$ORIG_SEED_TS"
+for dep in multi.ts side-effect.ts re-exported.ts; do
+  if [ -f "$SCAN_PROJ/seats/$dep" ]; then pass "fixture import scanner copies $dep"
+  else fail "fixture import scanner missed $dep"; fi
+done
+
 copy_fixture_ts
 printf '# Fleet: Worker\n\nfixture brief.\n'   > "$PROJ/contracts/WORKER.md"
 printf '# Crew: Verifier\n\nfixture brief.\n'  > "$PROJ/contracts/VERIFIER.md"
