@@ -75,6 +75,8 @@ Some items are unverifiable by you in principle rather than for want of effort. 
 
 The second kind is the dangerous one, because it does not announce itself — it feels verified. You had their agreement to the idea, and the step from "they agreed with this" to "said with their agreement" is a short one taken in good faith, with nothing at the moment of writing to catch it. A clause that says only "route to the party who can" is silently assuming the first shape.
 
+Before an APPROVE that rests on a principal decision someone else relayed — spend, credential grant, scope change, or any other assent that is not yours to give — check the relay comment has the graph's fixed form: `principal said "<verbatim words>" in <channel> at <timestamp>`. The quote, channel, and time are the provenance; without all three, the relay is still an unverifiable assent claim, not evidence you can accept.
+
 Name those items, say plainly that you cannot check them and why, and route each to the party who can — or, for the second kind, to the one party who is. Do not approve one as checked, do not bounce it as unsupported, and above all do not let it pass in silence: an unverifiable item that ships without comment is indistinguishable in the record from a verified one, which is how an unchecked claim acquires the authority of a reviewed one.
 
 The item closes when its holder confirms it, and their confirmation belongs on the work item in their own words rather than in your account of them. A reviewer who routes an item honestly has done the review correctly; the gap is in the role, not in the reviewer.

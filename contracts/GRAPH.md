@@ -8,6 +8,8 @@ Copied byte-for-byte into every project. Do not edit this section.
 
 - **One bead in flight per seat.** A seat working two things is a seat reporting on neither.
 - **Beads carry their evidence as comments.** The decision trail has to survive the close, because the reason a thing was done outlives everyone's memory of doing it.
+- **Comment authorship is configured, not inferred.** Every seat sets `BEADS_ACTOR` to its seat name in the environment the seat runs under, so the bead's comment author field says which seat spoke. One-line setup: export it before spawning or resuming the seat, e.g. `BEADS_ACTOR=worker-1 bun seats/adapter.ts spawn worker-1` (and keep that variable in the pane or service that later dispatches/resumes it). This mechanism is version-stamped against bd 1.2.2 (measured 2026-08-31: `BEADS_ACTOR=<name> bd comment ...` rendered the comment author as `<name>`); re-verify on your bd build the same way this file asks for every CLI behavior.
+- **A principal decision relayed by someone else has a fixed form.** Write `principal said "<verbatim words>" in <channel> at <timestamp>`. The quote, channel, and time are all required. A paraphrase, or a relay missing any one of the three, is the relayer's opinion about the principal's decision, not the principal's decision in the graph.
 - **Work discovered mid-task becomes a bead, not a detour.** Report it, file it, stay on your own bead.
 - **A bead's done is stated by its author and judged by the reviewer.** Neither the worker nor the reviewer gets to move it.
 
