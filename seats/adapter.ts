@@ -519,7 +519,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
       }; // capacity-record
       writeState(state);
     }
-    die(`dispatch failed for seat "${name}"${accountLabelSuffix(requireSeat(name), rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
+    die(`dispatch failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
   }
   const state = readState();
   state.seats[name].lastBead = beadId;

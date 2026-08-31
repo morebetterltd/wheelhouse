@@ -333,6 +333,19 @@ if seatline q-seat | grep -q "QUOTA EXHAUSTED — dispatch failed at"; then
 else fail "floor: no QUOTA EXHAUSTED line for q-seat: $(seatline q-seat)"; fi
 if seatline q-seat | grep -q "AMBER"; then pass "floor: quota cue is AMBER"
 else fail "floor: quota cue is not AMBER: $(seatline q-seat)"; fi
+cp "$PROJ/seats/seats.json" "$FIX/seats.before-roster-drop.json"
+env HOME="$HOME_FIX" ROSTER="$PROJ/seats/seats.json" bun -e '
+  const fs = require("fs");
+  const f = process.env.ROSTER;
+  const roster = JSON.parse(fs.readFileSync(f, "utf8"));
+  delete roster.seats["q-seat"];
+  fs.writeFileSync(f, JSON.stringify(roster, null, 2) + "\n");
+'
+arun dispatch q-seat bead-q "QUOTA after roster removal"
+if [ $RC -ne 0 ] && says "dispatch failed" && says "429: usage limit reached" && ! says "no seat named"; then
+  pass "dispatch failure keeps the real error when the seat vanished from the roster"
+else fail "dispatch failure was masked after roster removal (rc=$RC): $OUT"; fi
+cp "$FIX/seats.before-roster-drop.json" "$PROJ/seats/seats.json"
 
 # =============================================================================
 phase "phase 2: AUTH FAILURE — red, names the credential flow, distinct from quota"
