@@ -1,0 +1,11 @@
+$ test -f runbooks/UPGRADE.md && echo subject:runbooks/UPGRADE.md
+subject:runbooks/UPGRADE.md
+
+$ grep -n -C 1 "normal sitting still has a seam\|commander create .*before adapter dispatch" runbooks/UPGRADE.md
+253-
+254:**An upgrade does not break your fleet mid-flight.** Nothing in steps 3 and 4 touches a running session or its config directory; your v1 seats keep working from the files they were launched from until you retire them. What IS true the moment step 3 lands is that your installed runbooks and contracts describe the Pi shape while your `STARTUP.md` and seat directories are still v1 — so treat this migration as one sitting, not a background task. The normal sitting still has a seam: commit the upgrade proper first, then pause for principal-only seat credentials and land the roster in a second commit.
+255-
+--
+280-
+281:4. **Provision and probe each seat.** `BOOTSTRAP.md` step 4, verbatim: `seats/seat-env.sh <namespace> <seat-name>` once per seat, the one-time OAuth flow (`PI_CODING_AGENT_DIR=... pi`, then `/login` inside the REPL, then `/exit`) or api_key placement (`auth.json` / provider env var) as that seat's own account, then the readiness probe. The one-seat-one-account rule survives the rebuild unchanged: the reviewer's and verifier's directories must differ from every worker's. For the proving dispatch, have the commander create `.wheelhouse-worktrees/<bead-id>` before adapter dispatch; STOP can recover a missing worktree, but this order saves one failed dispatch.
+282-
