@@ -49,7 +49,9 @@ Two gotchas about `provider` + `model`. The set of valid model ids depends on
 the ACCOUNT behind the seat, not just the provider — e.g. Codex via a ChatGPT
 account (`openai-codex`) rejects ids an API key accepts — so check
 `pi --list-models` on the machine and account that will run the seat before
-pinning. And always pin the two together: a `--provider` given to pi WITHOUT a
+pinning. The `model` value may include Pi's `:<thinking>` suffix, such as
+`gpt-5.6-sol:high`; the adapter passes it verbatim to pi's `--model` flag.
+And always pin the two together: a `--provider` given to pi WITHOUT a
 `--model` does not pick that provider's default — it silently falls back to
 the default provider entirely, and the seat runs on a different vendor than
 the roster says.
