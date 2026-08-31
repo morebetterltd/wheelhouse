@@ -1,0 +1,6 @@
+Expected: pi accepts --provider openai-codex with --model gpt-5.6-sol:high and returns the requested sentinel.
+$ pi -p --no-session --provider openai-codex --model gpt-5.6-sol:high "Reply with exactly: wheelhouse-project-82l thinking suffix ok"
+exit_status=0
+--- stdout (scrubbed) ---
+wheelhouse-project-82l thinking suffix ok
+--- stderr (scrubbed) ---

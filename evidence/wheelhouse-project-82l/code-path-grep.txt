@@ -1,0 +1,3 @@
+$ rg -n "args\.push\(\"--model\", entry\.model\)|exec pi" seats/adapter.ts
+379:  if (entry.model) args.push("--model", entry.model);
+388:    `exec pi ${args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ")} ` +
