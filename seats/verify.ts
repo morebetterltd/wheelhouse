@@ -334,7 +334,7 @@ interface SeatEntry {
   provider?: string;
   model?: string;
   external?: boolean;
-  account?: { dir: string };
+  account?: { dir: string; label?: string };
 }
 
 function readRoster(): Record<string, SeatEntry> {
@@ -343,6 +343,16 @@ function readRoster(): Record<string, SeatEntry> {
   }
   const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
   return raw.seats ?? {};
+}
+
+function accountLabel(entry: SeatEntry | undefined): string | undefined {
+  const label = entry?.account?.label;
+  return typeof label === "string" && label.length > 0 ? label : undefined;
+}
+
+function accountLabelSuffix(entry: SeatEntry | undefined): string {
+  const label = accountLabel(entry);
+  return label ? ` (account label: ${label})` : "";
 }
 
 /** An account dir for a seat name: the roster is authoritative; state.json
@@ -544,7 +554,7 @@ function main(): void {
   const stderr = res.stderr ?? "";
   if (res.status !== 0) {
     die(
-      `pi exited ${res.status ?? `signal ${res.signal}`} — no verdict. stderr tail:\n` +
+      `pi exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}"${accountLabelSuffix(entry)} — no verdict. stderr tail:\n` +
         stderr.slice(-2000)
     );
   }

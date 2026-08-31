@@ -21,8 +21,9 @@ Four files live here:
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi
 REPL or by an operator placing an api_key entry; it never enters git. The
-roster is safe to commit precisely because it records only names and paths;
-the moment a credential appears in it, that stops being true.
+roster is safe to commit precisely because it records only names, paths, and
+optional non-secret human labels; the moment a credential appears in it, that
+stops being true.
 
 ## The roster format
 
@@ -44,6 +45,7 @@ Each seat entry:
 | `provider` | Whose model the seat runs (`anthropic`, `openai`, ...). Recorded so the roster answers "which vendor is this seat" without starting the seat. |
 | `model` | The model the seat is pinned to, in the provider's own id format. |
 | `account.dir` | The seat's agent directory — the value `PI_CODING_AGENT_DIR` is set to. By convention `~/.pi-seats-<namespace>/<seat-name>`, where the namespace is this project's (recorded as `namespace=` in `wheelhouse/.template-source`). This field is the record; the convention just explains where it came from. |
+| `account.label` | Optional free-form, human-meaningful account label (`kk-personal-anthropic`, `work-chatgpt-2`) printed in status/provisioning/error output so an operator can tell which real account backs the seat. It is NEVER a secret: do not put tokens, keys, passwords, emails you would not commit, or other credentials here. Omit it freely; existing rosters without labels stay valid. |
 
 Two gotchas about `provider` + `model`. The set of valid model ids depends on
 the ACCOUNT behind the seat, not just the provider — e.g. Codex via a ChatGPT
@@ -133,8 +135,9 @@ bun seats/adapter.ts resume   <seat>                    # reattach that session
 ```
 
 `spawn` reads the seat's roster entry, refuses a seat whose directory or
-login is missing (it prints the exact `seat-env.sh` command or login flow
-instead), and starts one long-lived `pi --mode rpc` process: agent directory
+login is missing (it prints the exact `seat-env.sh` command or login flow,
+with `account.label` when the roster has one, instead), and starts one
+long-lived `pi --mode rpc` process: agent directory
 from `account.dir`, provider and model pinned from the roster, and the
 role's crew brief appended to the system prompt at launch, which is the only
 time Pi takes configuration. Brief resolution prefers the installed fleet

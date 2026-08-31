@@ -57,14 +57,25 @@ FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 PROJECT="$FIX/project"
-mkdir -p "$HOME_FIX" "$BIN" "$PROJECT" "$FIX/emptybin"
+mkdir -p "$HOME_FIX" "$BIN" "$PROJECT/seats" "$FIX/emptybin"
 printf '#!/bin/sh\nexit 0\n' > "$BIN/pi"
 chmod +x "$BIN/pi"
-RUN_PATH="$BIN:/usr/bin:/bin"
+RUN_PATH="$BIN:$(dirname "$(command -v bun)"):/usr/bin:/bin"
 
 # What trust.json must contain, written down BEFORE anything runs, so a wrong
 # answer has something to be wrong against.
 printf '{\n  "%s": true\n}\n' "$PROJECT" > "$FIX/expected-trust.json"
+
+cat > "$PROJECT/seats/seats.json" <<'EOF'
+{
+  "seats": {
+    "worker-labeled": {
+      "role": "worker",
+      "account": { "dir": "~/.pi-seats-alpha/worker-labeled", "label": "fixture-human-account" }
+    }
+  }
+}
+EOF
 
 # Assert the subjects exist before anything measures them: a stub pi that is
 # not executable and a project dir that was never made would fail every check
@@ -133,6 +144,16 @@ D2="$HOME_FIX/.pi-seats-alpha/worker-2"
 if [ "$D1/auth.json" != "$D2/auth.json" ] && [ -d "$D1" ] && [ -d "$D2" ]; then
   pass "the two seats' auth.json paths are distinct — accounts cannot collide"
 else fail "both seats resolve to one auth.json path"; fi
+
+phase "1b. optional account.label — provisioning summary shows it when present"
+check_provision "labeled seat" "worker-labeled"
+if says "account label: fixture-human-account"; then
+  pass "provisioning summary includes account.label from seats.json"
+else fail "provisioning summary did not include account.label: $OUT"; fi
+run alpha worker-unlabeled "$PROJECT"
+if [ $RC -eq 0 ] && ! says "account label:"; then
+  pass "provisioning still works when account.label is absent"
+else fail "absent account.label broke provisioning or printed a stale label (exit $RC): $OUT"; fi
 
 phase "2. idempotency"
 cp "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before"
