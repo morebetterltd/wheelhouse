@@ -56,7 +56,7 @@ git -C /path/to/template-clone fetch --unshallow
 git -C /path/to/template-clone pull
 ```
 
-Then point your baseline at it, because `path=` from install time was a `mktemp -d` directory the operating system has almost certainly deleted:
+Then point your baseline at it, because `path=` from install time was a `mktemp -d` directory the operating system has almost certainly deleted, and a durable clone recorded there may be behind the target you are upgrading to. If `git -C "$TEMPLATE" rev-parse "${TARGET:-main}"` cannot see the target, fast-forward that clone or re-clone before you keep going:
 
 ```bash
 TEMPLATE=/path/to/template-clone
@@ -262,7 +262,7 @@ grep -q '^upgraded=' wheelhouse/.template-source \
 rm -f wheelhouse/.template-source.bak
 ```
 
-**Leave `installed=` alone.** It records when this project first installed, which is a different fact from when it last upgraded, and re-running the install block would overwrite it with today's date and lose that.
+**Leave `installed=` alone, or `adopted=` if this project was adopted rather than freshly installed.** It records when this project first took the contracts, which is a different fact from when it last upgraded, and re-running the install block would overwrite it with today's date and lose that.
 
 ## 7. Sweep what the contracts do not cover
 
@@ -313,7 +313,7 @@ Step 4 above will have printed `project section UPSTREAM, not in yours — wheel
    rm -f wheelhouse/runbooks/SEAT_DISCOVERY.md
    ```
 
-   Guarded with `-f` because which of these a v1 install actually has depends on when it installed; absent files are the fine case. Sweep your own surfaces for the same era's residue while you are here: any `CLAUDE_CONFIG_DIR` export, `SEATS_ROOT` export, foreign-directory check, or `claude --permission-mode auto` launch block in `wheelhouse/STARTUP.md`, and any note that points a reader at the roll call or `SEAT_DISCOVERY.md`. Those blocks are the v1 launch surface, and every one of them comes out — `STARTUP.md`'s job is now to name this project's namespace and seat names over the `seats/` commands, in the shape `BOOTSTRAP.md` step 5 writes for a fresh install.
+   Guarded with `-f` because which of these a v1 install actually has depends on when it installed; absent files are the fine case. Your install may hold them at other paths, as Releaf did with `wire-seats.sh` under `wheelhouse/fleet/`; find the old v1 files by name before deciding they are absent. Sweep your own surfaces for the same era's residue while you are here: any `CLAUDE_CONFIG_DIR` export, `SEATS_ROOT` export, foreign-directory check, or `claude --permission-mode auto` launch block in `wheelhouse/STARTUP.md`, and any note that points a reader at the roll call or `SEAT_DISCOVERY.md`. Those blocks are the v1 launch surface, and every one of them comes out — `STARTUP.md`'s job is now to name this project's namespace and seat names over the `seats/` commands, in the shape `BOOTSTRAP.md` step 5 writes for a fresh install.
 
 3. **Interview yourself into a roster, and write `seats/seats.json`.** This is `BOOTSTRAP.md` step 3, question 7, run over the fleet you already have instead of a proposed one — read it and answer it for real, because two of its facts did not exist in v1: each seat's **provider** (`openai-codex` by ChatGPT-subscription OAuth, or an `api_key` provider — an Anthropic seat is an API-key seat, since the API rejects third-party subscription auth) and its **pinned model**, validated against `pi --list-models`. If the upgrader is Claude Code and has `AskUserQuestion`, conduct the migration interview through the tool: option lists per seat for carry or decline, provider, and pinned model; free prose is only the fallback when the tool is absent. Field precedent: a real five-seat roster fit in two `AskUserQuestion` rounds. Seat names carry no namespace prefix — `worker-1`, not `<namespace>-worker-1`; the per-project seat ROOT is what keeps fleets apart now, and the adapter addresses seats per-project. Your v1 roster in `wheelhouse/fleet/SEATS.md`'s project half is the list of seats to walk; rewrite that section as the human record of the new roster (and fill `### Declined seats` with any v1 seat you are not carrying forward, reason and date), while `seats/seats.json` is the machine record every command reads. No secret enters `seats.json`, ever.
 
@@ -326,6 +326,12 @@ A real example, from the upgrade this procedure was written from. That upgrade c
 That is the shape of what step 7 catches: not damage, but the parts of your project that quietly went on speaking the old dialect.
 
 ## 8. Commit
+
+Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt:
+
+```bash
+git status --short
+```
 
 ```bash
 NEW=$(sed -n 's/^commit=//p' wheelhouse/.template-source | cut -c1-12)
