@@ -5,9 +5,9 @@ fleet/wheelhouse-project-32v
 
 EXPECT: real clone fragment exits 0 and produces non-empty runbooks/UPGRADE.md.
 $ TEMPLATE=$(mktemp -d) && git clone https://github.com/morebetterltd/wheelhouse.git "$TEMPLATE" && test -s "$TEMPLATE/runbooks/UPGRADE.md" || { echo "TEMPLATE CLONE FAILED OR EMPTY - STOP" >&2; exit 1; }; echo "template at: $TEMPLATE"; ls -l "$TEMPLATE/runbooks/UPGRADE.md"; rm -rf "$TEMPLATE"
-Cloning into '/var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/tmp.oZB1aOdMx3'...
-template at: /var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/tmp.oZB1aOdMx3
--rw-r--r--  1 codeshack-vii  staff  29938 Aug 30 21:42 /var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/tmp.oZB1aOdMx3/runbooks/UPGRADE.md
+Cloning into '[tmpdir]'...
+template at: [tmpdir]
+-rw-r--r--  1 [user]  [group]  29938 Aug 30 21:42 [tmpdir]/runbooks/UPGRADE.md
 
 EXPECT: a clone operation can exit 0 while leaving the target empty; the guard then exits 1 before any upgrade can proceed.
 $ EMPTY=$(mktemp -d); ( true && test -s "$EMPTY/runbooks/UPGRADE.md" ) || { echo "TEMPLATE CLONE FAILED OR EMPTY - STOP" >&2; exit 1; }
