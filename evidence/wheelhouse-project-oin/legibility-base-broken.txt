@@ -1,0 +1,99 @@
+$ git rev-parse --abbrev-ref HEAD
+fleet/wheelhouse-project-oin
+$ git rev-parse HEAD
+d8128d488496135755bdc6b2f66c2164d47ee87b
+$ bash seats/legibility.selftest.sh
+
+phase 1: QUOTA — a quota-shaped dispatch failure is amber, never done
+  FAIL  q-seat spawn: rc=1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  quota dispatch did not fail (rc=1): error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  no lastCapacityEvent stamped for q-seat
+  FAIL  adapter status has no CAPACITY line: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  floor: no QUOTA EXHAUSTED line for q-seat: SPOTLIGHT q-seat (worker) ○ off never spawned
+no event log yet for q-seat — seats/logs/q-seat.jsonl missing
+▶[1] q-seat ○ off never spawned
+  FAIL  floor: quota cue is not AMBER: SPOTLIGHT q-seat (worker) ○ off never spawned
+no event log yet for q-seat — seats/logs/q-seat.jsonl missing
+▶[1] q-seat ○ off never spawned
+
+phase 2: AUTH FAILURE — red, names the credential flow, distinct from quota
+  FAIL  authless spawn was not refused with the credential flow (rc=1): error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  ok    floor: red AUTH DEAD with the credential flow
+  ok    floor: auth cue is RED
+  ok    auth line is DISTINCT from the quota line
+
+phase 3: DEAD PROCESS — SIGKILL, red PROCESS GONE, recover says DEAD
+  FAIL  d-seat spawn: rc=1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  ok    d-seat pid  SIGKILLed
+  FAIL  floor: no PROCESS GONE line naming the stderr log: [3] d-seat ○ off never spawned
+  FAIL  floor: dead-process cue is not RED: [3] d-seat ○ off never spawned
+  ok    dead-process line is DISTINCT from the auth line
+  FAIL  adapter status does not say DIED for the killed seat: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  adapter status DIED line does not name the stderr log: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  recover.ts did not classify d-seat DEAD: seat classification (state.json + run/ + open-fd tables):
+a-seat           STALE    pid 44003 alive but not holding this seat's FIFO — reused or foreign, treated as gone; no session artifacts
+  nothing to resume; spawn fresh when needed: bun [tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/adapter.ts spawn a-seat
+
+phase 4: BLOCKED REVIEW — a BOUNCE verdict file renders amber, never done
+  FAIL  verify.ts BOUNCE run: rc=1 (want 2): error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/verify.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  floor: no REVIEW BLOCKED line naming bead-rev: [4] r-seat ● AMBER IDLE with ready work — 1 bead(s) in bd ready
+  ok    a blocked review never renders as done or idle
+
+phase 5: UNSATISFIED EVIDENCE — refusal, distinct rendering, unreadable routes to human
+  FAIL  APPROVE over missing evidence was not refused (rc=1, want 1): error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/verify.ts'
+
+Bun v1.3.1 (macOS arm64)
+  ok    the refused APPROVE recorded no verdict file — an error is not a judgment
+  FAIL  BOUNCE-with-unsatisfied run: rc=1 (want 2), or no UNSATISFIED in the record
+  FAIL  floor: no EVIDENCE UNSATISFIED line for e-seat: [5] e-seat ● AMBER IDLE with ready work — 1 bead(s) in bd ready
+  ok    unsatisfied evidence never renders as APPROVE
+  ok    floor: a malformed verdict file reads VERDICT UNREADABLE — routed to human
+  ok    an unreadable verdict never renders as success
+
+cross-check: all five classes staged at once — every state distinct, no success anywhere
+  FAIL  rail is missing: QUOTA EXHAUSTED
+  ok    rail shows: AUTH DEAD
+  FAIL  rail is missing: PROCESS GONE
+  FAIL  rail is missing: REVIEW BLOCKED
+  FAIL  rail is missing: EVIDENCE UNSATISFIED
+  ok    rail shows: VERDICT UNREADABLE
+  ok    no success rendering (VERDICT LANDED / GREEN) anywhere on the rail
+  FAIL  STATUS ALERTS roll-up wrong or missing: ALERTS (4)
+  FAIL  STATUS is missing: QUOTA EXHAUSTED
+  ok    STATUS shows: AUTH DEAD
+  FAIL  STATUS is missing: PROCESS GONE
+  FAIL  STATUS is missing: REVIEW BLOCKED
+  FAIL  STATUS is missing: EVIDENCE UNSATISFIED
+  ok    STATUS shows: VERDICT UNREADABLE
+  ok    no success rendering in STATUS either
+  FAIL  adapter status cross-check failed: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-legibility-selftest.44003.9tRz8f/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+
+canaries — sabotage a copy; these checks must notice (all cmp-guarded)
+  ok    canary 1: cutting the EVIDENCE UNSATISFIED state is caught by phase 5's check
+  ok    canary 2: cutting the VERDICT UNREADABLE state is caught by phase 5's check
+  ok    canary 3: forcing auth to wear quota's wording is caught by the distinctness checks
+  ok    canary 4: cutting DIED is caught by phase 3's adapter-status check
+
+28 check(s) failed.
+If the failures are in phases 1-5 or the cross-check, a failure state went
+invisible or conflated (or its wording moved). If a failure is in the
+canaries, fix this test first.
+exit status: 1

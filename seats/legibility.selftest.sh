@@ -34,7 +34,8 @@ set -uo pipefail   # deliberately not -e: the injected failures are meant to fai
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 SRC="${1:-$HERE}"
-for f in floor.ts adapter.ts verify.ts recover.ts; do
+SEED_TS="floor.ts adapter.ts verify.ts recover.ts"
+for f in $SEED_TS; do
   [ -f "$SRC/$f" ] || { echo "selftest: not found: $SRC/$f" >&2; exit 2; }
 done
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
@@ -165,7 +166,29 @@ chmod +x "$BIN/pi"
 # --- the fixture project ------------------------------------------------------
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats/logs" "$PROJ/contracts"
-cp "$SRC/floor.ts" "$SRC/adapter.ts" "$SRC/verify.ts" "$SRC/recover.ts" "$PROJ/seats/"
+copy_fixture_ts() {
+  # Keep the hermetic fixture honest when a seat script extracts a new helper:
+  # copy every local .ts dependency reachable from the seeded scripts. A missing
+  # helper is a setup error (exit 2), not a failure-class judgment.
+  local queue="$SEED_TS" seen=" " f spec dep changed
+  while :; do
+    changed=0
+    for f in $queue; do
+      case "$seen" in *" $f "*) continue ;; esac
+      [ -f "$SRC/$f" ] || { echo "selftest: fixture setup missing TypeScript dependency: $SRC/$f" >&2; exit 2; }
+      seen="$seen$f "
+      while IFS= read -r spec; do
+        dep="${spec#./}"
+        case "$dep" in *.ts) ;; *) dep="$dep.ts" ;; esac
+        case "$dep" in */*) echo "selftest: fixture setup cannot copy nested TypeScript dependency: $spec from $f" >&2; exit 2 ;; esac
+        case " $queue " in *" $dep "*) ;; *) queue="$queue $dep"; changed=1 ;; esac
+      done < <(sed -n "s/^[[:space:]]*import[[:space:]].*from[[:space:]]*[\"']\(\.\/[^\"']*\)[\"'].*/\1/p" "$SRC/$f")
+    done
+    [ "$changed" -eq 0 ] && break
+  done
+  for f in $queue; do cp "$SRC/$f" "$PROJ/seats/"; done
+}
+copy_fixture_ts
 printf '# Fleet: Worker\n\nfixture brief.\n'   > "$PROJ/contracts/WORKER.md"
 printf '# Crew: Verifier\n\nfixture brief.\n'  > "$PROJ/contracts/VERIFIER.md"
 
