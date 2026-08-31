@@ -1,6 +1,6 @@
 $ WHEELHOUSE_REAL_PI_PROVIDER=openai-codex WHEELHOUSE_REAL_PI_MODEL=gpt-5.4 bash seats/adapter.selftest.sh
-swept: killed leaked seat pid 27983 (held open files under /var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/wheelhouse-adapter-selftest.63334.FHB6gR)
-swept: removed stale fixture /var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/wheelhouse-adapter-selftest.63334.FHB6gR
+swept: killed leaked seat pid 27983 (held open files under [tmpdir]/wheelhouse-adapter-selftest.63334.FHB6gR)
+swept: removed stale fixture [tmpdir]/wheelhouse-adapter-selftest.63334.FHB6gR
 
 installed layout — wheelhouse/fleet brief is preferred without contracts/
   ok    installed layout: spawn exits 0 with no contracts/ directory
@@ -69,12 +69,12 @@ roster model suffix — malformed thinking suffix is pi's validation failure, su
 
 8. real pi — one smoke leg, spawn/dispatch/agent_end/resume/grow
   ok    real: spawn exits 0 (seat worker-1: pid 25809, session 01a05802-bdff-7a6b-8d92-10d25b56206b
-  events -> /private/var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/wheelhouse-adapter-selftest.16249.QRJIBh/realproj/seats/logs/worker-1.jsonl)
+  events -> [tmpdir]/wheelhouse-adapter-selftest.16249.QRJIBh/realproj/seats/logs/worker-1.jsonl)
   ok    real: dispatch accepted
   ok    real: agent_end captured
   ok    real: stop exits 0
   ok    real: resume exits 0 (seat worker-1: pid 30282, session 01a05802-bfbf-7fbc-87b8-2ab987e569b0
-  events -> /private/var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/wheelhouse-adapter-selftest.16249.QRJIBh/realproj/seats/logs/worker-1.jsonl)
+  events -> [tmpdir]/wheelhouse-adapter-selftest.16249.QRJIBh/realproj/seats/logs/worker-1.jsonl)
   ok    real: post-resume dispatch reached agent_end
   ok    real: the SAME session file grew across resume (5 -> 7 lines)
   ok    real: no auth material in state.json or the logs before fixture deletion
