@@ -464,6 +464,32 @@ if [ "$(state_get lastBead)" = "bead-y" ]; then
 else fail "lastBead was lost across resume"; fi
 run stop worker-1
 
+phase "6b. pruned cwd — dispatch falls back visibly; plain resume STOPs"
+run resume worker-1
+if [ $RC -eq 0 ]; then pass "pruned cwd setup: resume exits 0 before pruning"
+else fail "pruned cwd setup: resume exited $RC: $OUT"; fi
+OLD_SESS="$(state_get sessionFile)"
+rm -rf "$PROJ/.wheelhouse-worktrees/bead-y"
+mkdir -p "$PROJ/.wheelhouse-worktrees/bead-z"
+run dispatch worker-1 bead-z "hello after prune"
+if [ $RC -eq 0 ]; then pass "pruned cwd dispatch: dispatch exits 0 via fallback"
+else fail "pruned cwd dispatch: exited $RC: $OUT"; fi
+if says "session continuity intentionally dropped" && says "recorded cwd is gone" && says "falling back to fresh spawn"; then
+  pass "pruned cwd dispatch: fallback announcement is visible and names why"
+else fail "pruned cwd dispatch: fallback announcement missing (exit $RC): $OUT"; fi
+if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null; then
+  pass "pruned cwd dispatch: fallback used a fresh session rather than --session"
+else fail "pruned cwd dispatch: fallback still attached the pruned-cwd session"; fi
+if [ "$(state_get lastBead)" = "bead-z" ]; then
+  pass "pruned cwd dispatch: state records the new dispatched bead"
+else fail "pruned cwd dispatch: lastBead was not updated"; fi
+run stop worker-1
+rm -rf "$PROJ/.wheelhouse-worktrees/bead-z"
+run resume worker-1
+if [ $RC -ne 0 ] && says "recorded seat cwd is gone" && says "fallback" && says "dispatch"; then
+  pass "pruned cwd resume: no-dispatch-target resume STOPs and names the fallback limitation"
+else fail "pruned cwd resume: did not STOP with fallback limitation (exit $RC): $OUT"; fi
+
 phase "7. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
 CAN_A="$FIX/can-a"

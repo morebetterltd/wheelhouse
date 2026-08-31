@@ -454,8 +454,17 @@ async function cmdResume(name: string): Promise<void> {
   }
   // Resuming keeps the seat where it was working, not the project root: the
   // cwd it was launched into last time, falling back to ROOT only for a
-  // state.json record from before this field existed.
-  await launch(name, requireSeat(name), rec.sessionFile, rec.cwd ?? ROOT);
+  // state.json record from before this field existed. If that cwd was pruned,
+  // a plain resume has no new dispatch target to fall back to, so STOP rather
+  // than guessing a replacement and silently changing identity.
+  const resumeCwd = rec.cwd ?? ROOT;
+  if (!fs.existsSync(resumeCwd) || !fs.statSync(resumeCwd).isDirectory()) {
+    die(
+      `recorded seat cwd is gone: ${resumeCwd} — cannot resume recorded session. ` +
+        `The pruned-cwd fallback intentionally drops session continuity only during dispatch, where the new bead worktree is the fallback target; spawn a fresh seat or dispatch to a bead with an existing worktree instead.`
+    );
+  }
+  await launch(name, requireSeat(name), rec.sessionFile, resumeCwd);
 }
 
 function requireRunning(name: string): SeatRecord {
@@ -476,8 +485,18 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     // missing worktree must refuse loudly with the seat left exactly as it
     // was, not stopped on the way to discovering the target doesn't exist.
     requireCwdDir(targetCwd);
+    const recordedCwd = rec.cwd ?? ROOT;
+    const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     await cmdStop(name);
-    await launch(name, requireSeat(name), rec.sessionFile, targetCwd);
+    if (recordedCwdExists) {
+      await launch(name, requireSeat(name), rec.sessionFile, targetCwd);
+    } else {
+      console.log(
+        `seat ${name}: session continuity intentionally dropped because recorded cwd is gone: ${recordedCwd}; ` +
+          `falling back to fresh spawn in dispatch target ${targetCwd}`
+      );
+      await launch(name, requireSeat(name), null, targetCwd);
+    }
     rec = requireRunning(name);
   }
   // followUp: a new bead queues behind the current turn instead of erroring
