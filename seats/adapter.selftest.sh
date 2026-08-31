@@ -111,6 +111,18 @@ const fs = require("fs"), path = require("path"), crypto = require("crypto");
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
 const args = process.argv.slice(2);
+const mi = args.indexOf("--model");
+if (mi !== -1) {
+  const model = args[mi + 1] || "";
+  const colon = model.lastIndexOf(":");
+  if (colon !== -1) {
+    const thinking = model.slice(colon + 1);
+    if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(thinking)) {
+      process.stderr.write("stub pi: unsupported thinking level " + JSON.stringify(thinking) + " in --model " + JSON.stringify(model) + "\n");
+      process.exit(2);
+    }
+  }
+}
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
 // The adapter sets our cwd by construction (child_process spawn's cwd
@@ -195,7 +207,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
     "worker-1": {
       "role": "worker",
       "provider": "anthropic",
-      "model": "stub-model-1",
+      "model": "stub-model-1:high",
       "account": { "dir": "~/.pi-seats-$ns/worker-1" }
     }
   }
@@ -289,6 +301,23 @@ else fail "status did not include account.label when present (exit $RC): $OUT"; 
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
+phase "roster model suffix — malformed thinking suffix is pi's validation failure, surfaced at spawn"
+BAD_SUFFIX_PROJ="$FIX/bad-suffix-proj"
+build_proj "$BAD_SUFFIX_PROJ" bad-suffix
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].model = "stub-model-1:turbo";
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$BAD_SUFFIX_PROJ/seats/seats.json"
+RUN_PROJ="$BAD_SUFFIX_PROJ"; STATE="$BAD_SUFFIX_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-bad-suffix/worker-1/argv.json"
+run spawn worker-1
+if [ $RC -ne 0 ] && says "unsupported thinking level" && says "stderr tail"; then
+  pass "malformed suffix: pi rejects it and adapter surfaces the stderr tail"
+else fail "malformed suffix was not a loud pi validation failure (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
 # --- the spawn checks, parameterized so the canary can reuse them ------------
 check_spawn() {   # $1 = label
   local label="$1" pid
@@ -331,9 +360,12 @@ else fail "argv.json missing or pi not launched with --mode rpc"; fi
 if grep -q "\"--append-system-prompt\",\"$PROJ/contracts/WORKER.md\"" "$ARGV" 2>/dev/null; then
   pass "role brief injected: --append-system-prompt names contracts/WORKER.md"
 else fail "role brief not passed, or not the worker's brief"; fi
-if grep -q '"--provider","anthropic","--model","stub-model-1"' "$ARGV" 2>/dev/null; then
-  pass "roster's provider and model pin the launch"
-else fail "provider/model from seats.json did not reach pi's argv"; fi
+if grep -q '"--provider","anthropic","--model","stub-model-1:high"' "$ARGV" 2>/dev/null; then
+  pass "roster's provider and model-plus-thinking pin the launch"
+else fail "provider/model-plus-thinking from seats.json did not reach pi's argv"; fi
+if [ "$(state_get model)" = "stub-model-1:high" ]; then
+  pass "state.json records the exact model-plus-thinking pin"
+else fail "state.json model was $(state_get model) — expected stub-model-1:high"; fi
 if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ" ]; then
   pass "spawn with no bead id roots the seat at the project root"
 else fail "spawn's cwd was $(cat "$CWD_FILE" 2>/dev/null) — expected $PROJ"; fi
