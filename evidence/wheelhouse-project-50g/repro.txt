@@ -12,7 +12,7 @@ Usage:
 Auth commands require at least one of --provider or --model. Checks refresh expired OAuth credentials by default; --no-refresh prevents this. --credentials emits the credential, or includes it in JSON output.
 
 Command: PI_CODING_AGENT_DIR=$(mktemp -d) pi -p /login --no-session
-Temp PI_CODING_AGENT_DIR: /var/folders/yj/r5q28dt541jc82976c9pb1vc0000gp/T/tmp.kgf85fQO4H
+Temp PI_CODING_AGENT_DIR: [tmpdir]
 `/login` only works **inside the interactive Pi REPL**. It won’t run as a command in this API chat.
 
 Use:
