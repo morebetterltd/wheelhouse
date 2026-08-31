@@ -176,6 +176,44 @@ build_installed_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.
   printf '# Crew: Verifier\n\ninstalled-layout verifier brief.\n' > "$proj/wheelhouse/crew/VERIFIER.md"
 }
 
+build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.ts source
+  local umb="$1" ns="$2" src="$3" product="$1/product"
+  mkdir -p "$umb/seats" "$umb/contracts" "$product"
+  cp "$src" "$umb/seats/verify.ts"
+  cp "$BRIEFS" "$umb/seats/briefs.ts"
+  printf '# Crew: Verifier\n\numbrella verifier brief.\n' > "$umb/contracts/VERIFIER.md"
+  cat > "$umb/seats/seats.json" <<EOF
+{
+  "commander": { "role": "commander", "external": true, "runtime": "claude-code" },
+  "seats": {
+    "worker-1": {
+      "role": "worker",
+      "provider": "anthropic",
+      "model": "stub-model-1",
+      "account": { "dir": "~/.pi-seats-$ns/worker-1" }
+    },
+    "verifier": {
+      "role": "verifier",
+      "provider": "openai",
+      "model": "stub-model-v",
+      "account": { "dir": "~/.pi-seats-$ns/verifier" }
+    }
+  }
+}
+EOF
+  for d in worker-1 verifier; do
+    mkdir -p "$HOME_FIX/.pi-seats-$ns/$d"
+    printf '{\n  "%s": true\n}\n' "$umb" > "$HOME_FIX/.pi-seats-$ns/$d/trust.json"
+    printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-$ns/$d/auth.json"
+  done
+  ( cd "$product" &&
+    git init -q &&
+    mkdir -p evidence && printf 'product branch evidence\n' > evidence/bench.log &&
+    git add evidence/bench.log &&
+    git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
+    git branch fleet/bead-1 ) || { echo "selftest: could not build umbrella product git repo" >&2; exit 2; }
+}
+
 PROJ="$FIX/proj"
 build_proj "$PROJ" alpha "$VERIFY"
 TIP="$(git -C "$PROJ" rev-parse fleet/bead-1)"
@@ -217,6 +255,30 @@ run bead-missing fleet/bead-1 worker-1
 if [ $RC -ne 0 ] && says "$MISS_PROJ/wheelhouse/crew/VERIFIER.md" && says "$MISS_PROJ/contracts/VERIFIER.md"; then
   pass "missing brief: STOP names both installed and template paths tried"
 else fail "missing brief: STOP did not name both paths (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"
+VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
+
+phase "multi-repo umbrella layout — --repo selects the product repository"
+UMB_PROJ="$FIX/umbrella"
+build_umbrella_proj "$UMB_PROJ" umbrella "$VERIFY"
+RUN_PROJ="$UMB_PROJ"
+VARGV="$HOME_FIX/.pi-seats-umbrella/verifier/argv.json"
+UMB_TIP="$(git -C "$UMB_PROJ/product" rev-parse fleet/bead-1)"
+cat > "$REPLY" <<EOF
+Checked product repo tip $UMB_TIP and its committed evidence.
+VERDICT: APPROVE
+EOF
+run bead-umbrella fleet/bead-1 worker-1 --repo product --evidence evidence/bench.log
+if [ $RC -eq 0 ]; then pass "umbrella layout: APPROVE exits 0 when --repo names the product repo"
+else fail "umbrella layout: verify exited $RC: $OUT"; fi
+if grep -q "branch-repo: $UMB_PROJ/product" "$UMB_PROJ/seats/verdicts/bead-umbrella.md" 2>/dev/null \
+   && grep -q "evidence/bench.log — exists, .* bytes, non-empty — OK" "$UMB_PROJ/seats/verdicts/bead-umbrella.md" 2>/dev/null; then
+  pass "umbrella layout: verdict records the product repo and product-relative evidence floor check"
+else fail "umbrella layout: verdict did not record product repo and evidence check"; fi
+run bead-umbrella-missing fleet/bead-1 worker-1 --evidence evidence/bench.log
+if [ $RC -eq 1 ] && says "does not resolve" && says "$UMB_PROJ"; then
+  pass "umbrella layout: omitting --repo still measures the umbrella root and refuses the product branch"
+else fail "umbrella layout: missing --repo did not fail against the umbrella root (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"
 VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 
