@@ -144,9 +144,48 @@ done
 
 For each file, take the contract half from the new copy and the project half from yours. Use the same rule the install's integrity check uses — the FIRST line that is exactly `## This project`, whole line, nothing else on it (first-match is the safer rule: if a project section ever contained that literal line again, a last-match split would absorb project content into the contract half):
 
-A contract that did not exist at the commit you installed has no project half to keep. Copy those whole — do not splice them, because splicing against a file you do not have silently produces a contract with no `## This project` section, and then there is nowhere to record the things that section exists to record:
+A contract that did not exist at the commit you installed has no project half to keep. Copy those whole — do not splice them, because splicing against a file you do not have silently produces a contract with no `## This project` section, and then there is nowhere to record the things that section exists to record.
+
+An **existing** contract with no `## This project` heading is different from an absent contract, and it is a loud stop rather than a copy-whole case. That file is usually from a pre-template or hand-built adoption: copy the new contract half whole, then hand-fold the existing local text under one freshly-added `## This project` heading. Do not let the splice invent that shape, because the splice cannot know which of the old prose is local policy and which is obsolete contract text. The mechanical recovery is:
+
+1. save the old file somewhere temporary;
+2. copy the new `.new` contract to the target path;
+3. keep the copied contract half exactly as shipped through its first `## This project` line;
+4. move the old file's still-current local content below that heading, rewriting it as the project's section rather than pasting it blindly;
+5. re-run this step, which should now report exactly one heading for the file.
+
+That adoption path is separate from the absent-file path below: absent files are newly-arrived contracts and are copied whole, including the template's empty project-half scaffold.
 
 ```bash
+targets=(
+  wheelhouse/fleet/WORKER.md
+  wheelhouse/fleet/SEATS.md
+  wheelhouse/crew/REVIEWER.md
+  wheelhouse/crew/DESIGNER.md
+  wheelhouse/crew/VERIFIER.md
+  wheelhouse/crew/BENCH.md
+  wheelhouse/GRAPH.md
+  wheelhouse/INTEGRATOR.md
+)
+for target in "${targets[@]}"; do
+  [ -e "$target" ] || continue                 # absent: new contract since your install; splice() copies whole
+  heading_count=$(grep -cx '## This project' "$target" || true)
+  case "$heading_count" in
+    1) ;;
+    0)
+      echo "STOP: existing contract has no '## This project' heading: $target" >&2
+      echo "Adopt it first: copy the new contract half whole, then hand-fold the existing content under a freshly added '## This project' heading as described above." >&2
+      exit 1
+      ;;
+    *)
+      first_heading=$(grep -n '^## This project$' "$target" | head -1 | cut -d: -f1)
+      echo "STOP: existing contract has $heading_count '## This project' headings: $target" >&2
+      echo "The splice uses the first exact heading (line $first_heading); remove or rename the later duplicate before continuing." >&2
+      exit 1
+      ;;
+  esac
+done
+
 splice() {   # splice <new-contract> <your-file>
   if [ ! -e "$2" ]; then                      # new contract since your install
     cp "$1" "$2"; echo "new, copied whole: $2"; return
