@@ -30,6 +30,12 @@ COCKPIT="$HERE/cockpit.sh"
 [ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run floor.ts" >&2; exit 2; }
 
+SCRUB="$HERE/evidence-scrub.sh"
+[ -x "$SCRUB" ] || { echo "selftest: not executable: $SCRUB" >&2; exit 2; }
+# Selftest output is commonly redirected into committed evidence; scrub it as
+# it is written so temp dirs, home dirs, and usernames never enter captures.
+exec > >("$SCRUB") 2> >("$SCRUB" >&2)
+
 FAILED=0
 FIX=""
 SOCK=""

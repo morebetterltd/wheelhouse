@@ -44,6 +44,12 @@ GIT_BIN="$(command -v git)" || { echo "selftest: git is required" >&2; exit 2; }
 command -v lsof >/dev/null 2>&1 || command -v /usr/sbin/lsof >/dev/null 2>&1 \
   || { echo "selftest: lsof is required (recover.ts needs it)" >&2; exit 2; }
 
+SCRUB="$HERE/evidence-scrub.sh"
+[ -x "$SCRUB" ] || { echo "selftest: not executable: $SCRUB" >&2; exit 2; }
+# Selftest output is commonly redirected into committed evidence; scrub it as
+# it is written so temp dirs, home dirs, and usernames never enter captures.
+exec > >("$SCRUB") 2> >("$SCRUB" >&2)
+
 FAILED=0
 FIX=""
 

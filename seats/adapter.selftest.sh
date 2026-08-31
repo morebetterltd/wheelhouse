@@ -39,6 +39,12 @@ command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run adapt
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
 REAL_PI="$(command -v pi || true)"
 
+SCRUB="$HERE/evidence-scrub.sh"
+[ -x "$SCRUB" ] || { echo "selftest: not executable: $SCRUB" >&2; exit 2; }
+# Selftest output is commonly redirected into committed evidence; scrub it as
+# it is written so temp dirs, home dirs, and usernames never enter captures.
+exec > >("$SCRUB") 2> >("$SCRUB" >&2)
+
 FAILED=0
 FIX=""
 

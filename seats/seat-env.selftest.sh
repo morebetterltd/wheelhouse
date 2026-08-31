@@ -33,6 +33,12 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 SCRIPT="${1:-$(cd "$(dirname "$0")" && pwd)/seat-env.sh}"
 [ -x "$SCRIPT" ] || { echo "selftest: not executable: $SCRIPT" >&2; exit 2; }
 
+SCRUB="$(cd "$(dirname "$SCRIPT")" && pwd)/evidence-scrub.sh"
+[ -x "$SCRUB" ] || { echo "selftest: not executable: $SCRUB" >&2; exit 2; }
+# Selftest output is commonly redirected into committed evidence; scrub it as
+# it is written so temp dirs, home dirs, and usernames never enter captures.
+exec > >("$SCRUB") 2> >("$SCRUB" >&2)
+
 FAILED=0
 FIX=""
 

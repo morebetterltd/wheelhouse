@@ -358,12 +358,19 @@ never reads `sessionId` at all — author/verifier distinctness there is
 ## Proving it still works
 
 ```bash
+bash seats/evidence-scrub.selftest.sh
 bash seats/seat-env.selftest.sh
 bash seats/adapter.selftest.sh
 bash seats/verify.selftest.sh
 ```
 
-Hermetic — all three build seats in a temp HOME with a stub `pi`, and your
+When retaining a run as committed evidence, write it through the scrubber instead of redirecting raw output:
+
+```bash
+seats/evidence-scrub.sh -o evidence/<bead>/verify-selftest.txt -- bash seats/verify.selftest.sh
+```
+
+Hermetic — the seat-env, adapter, and verify selftests build seats in a temp HOME with a stub `pi`, and your
 real seats are never touched. Each has a canary phase that breaks a copy of
 the thing under test and checks the tests notice; if a canary survives, the
 selftest fails even when everything else passed. The adapter and verify
