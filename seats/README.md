@@ -43,7 +43,7 @@ Each seat entry:
 |---|---|
 | `role` | What the seat does: `worker`, `reviewer`, `verifier`. Free-form string; the crew briefs define what each role means. Installed fleets read `wheelhouse/fleet/WORKER.md` for workers and `wheelhouse/crew/<ROLE>.md` for other roles, with `contracts/<ROLE>.md` retained as the template-tree fallback. |
 | `provider` | Whose model the seat runs (`anthropic`, `openai`, ...). Recorded so the roster answers "which vendor is this seat" without starting the seat. |
-| `model` | The model the seat is pinned to, in the provider's own id format. |
+| `model` | The model the seat is pinned to, in the provider's own id format. Pin reasoning effort by appending Pi's thinking-level suffix to this same string, for example `gpt-5.6-sol:high`. |
 | `account.dir` | The seat's agent directory — the value `PI_CODING_AGENT_DIR` is set to. By convention `~/.pi-seats-<namespace>/<seat-name>`, where the namespace is this project's (recorded as `namespace=` in `wheelhouse/.template-source`). This field is the record; the convention just explains where it came from. |
 | `account.label` | Optional free-form, human-meaningful account label (`kk-personal-anthropic`, `work-chatgpt-2`) printed in status/provisioning/error output so an operator can tell which real account backs the seat. It is NEVER a secret: do not put tokens, keys, passwords, emails you would not commit, or other credentials here. Omit it freely; existing rosters without labels stay valid. |
 
@@ -51,12 +51,16 @@ Two gotchas about `provider` + `model`. The set of valid model ids depends on
 the ACCOUNT behind the seat, not just the provider — e.g. Codex via a ChatGPT
 account (`openai-codex`) rejects ids an API key accepts — so check
 `pi --list-models` on the machine and account that will run the seat before
-pinning. The `model` value may include Pi's `:<thinking>` suffix, such as
-`gpt-5.6-sol:high`; the adapter passes it verbatim to pi's `--model` flag.
-And always pin the two together: a `--provider` given to pi WITHOUT a
-`--model` does not pick that provider's default — it silently falls back to
-the default provider entirely, and the seat runs on a different vendor than
-the roster says.
+pinning. Reasoning effort is pinned only through Pi's `:<thinking>` model suffix:
+`"model": "gpt-5.6-sol:high"`, not a separate roster field. That keeps the
+roster to one spelling for one Pi CLI input: the adapter passes the full
+`model` value verbatim to pi's `--model` flag. Pi owns model and thinking-level
+validation; if the suffix is malformed or unsupported for the selected model,
+spawn fails loudly because the adapter cannot get the initial `get_state` reply
+and prints pi's stderr tail. And always pin provider and model together: a
+`--provider` given to pi WITHOUT a `--model` does not pick that provider's
+default — it silently falls back to the default provider entirely, and the seat
+runs on a different vendor than the roster says.
 
 The reviewer's `account.dir` must differ from every worker's. Same directory
 means same `auth.json` means same account, and a review from the author's own
