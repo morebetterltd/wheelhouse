@@ -1,0 +1,49 @@
+
+1. SIGKILL mid-turn — DEAD, bead named, printed resume re-attaches the same session
+  ok    stub mimics the title rewrite: the live seat's ps line is bare 'pi', no argv
+  ok    seat pid 28212 force-killed mid-turn
+  ok    recover exits 0
+  ok    killed seat classified DEAD
+  ok    the unfinished bead is named on the seat line
+  ok    exact resume command printed
+  ok    the killed seat's orphaned FIFO was removed and printed
+  ok    the printed resume command runs clean
+  ok    resume re-attached via --session
+  ok    the SAME session file was re-attached and grew — no acceptance state lost
+  ok    lastBead survived the kill/resume cycle
+
+2. commander-restart simulation — fresh process, state.json only, all classes correct
+  ok    fresh recover process exits 0
+  ok    live seat classified RUNNING (holds its FIFO, despite a bare-pi ps line)
+  ok    dead pid with intact session classified DEAD, resume offered
+  ok    entry with no session artifacts classified STALE, no resume offered
+  ok    live-but-reused pid classified DEAD and called out (restart hazard)
+  ok    argv spoof (tail -f on the role brief) classified DEAD — identity is fds, not command lines
+
+3. double-resume refusal — an attached session gets REFUSED, not a command
+  ok    ghost sharing a RUNNING seat's session is DEAD
+  ok    resume REFUSED, naming who holds the session
+  ok    no resume command printed for the refused seat
+
+4. orphaned FIFO cleanup — dead and unrecorded FIFOs go, the live one stays
+  ok    dead seat's FIFO removed and printed
+  ok    FIFO with no state entry removed and printed
+  ok    the RUNNING seat's FIFO was left alone
+
+5. no duplicate integration — recover observes; its only writes are FIFO removals
+  ok    state.json byte-identical after recover (no lastBead mutation, no re-dispatch record)
+  ok    no pi spawned (bare-'pi'-titled process count: 8 before, 8 after)
+  ok    no bd calls (fake bd on PATH logged nothing)
+
+6. real binary — the premise probe: pi's ps title is bare, its FIFO is not hidden
+  ok    real pi started login-free in the RPC shape (pid 32176)
+  ok    real pi's ps line is exactly 'pi' — NO argv: any command-line identity test is blind here
+  ok    real pi holds its stdin FIFO where lsof sees it — the identity mechanism recover relies on
+
+7. canary — can these checks detect a broken recover?
+  ok    canary: a recover that skips FIFO cleanup is caught (orphan still on disk)
+  ok    real recover refuses when a live process holds the session file open (fd path, not argv)
+  ok    canary: a recover with the attachment check cut prints the double-resume — and is caught
+
+recover.ts works on this machine.
+rc=0
