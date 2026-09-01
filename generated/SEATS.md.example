@@ -10,7 +10,7 @@ This specimen shows only what the interview writes: the roster below, and the se
 
 ### Roster
 
-One line per seat, mirroring `seats/seats.json` — the machine record, which decides; this table is the human record and must agree with it. Agent directories land under `$HOME/.pi-seats-ebb/` (namespace `ebb`, recorded as `namespace=ebb` in `wheelhouse/.template-source`).
+One line per seat, mirroring `seats/seats.json` — the machine record, which decides; this table is the human record and must agree with it. Agent directories land under `$HOME/.pi-seats-ebb/` (namespace `ebb`, recorded as `namespace=ebb` in `wheelhouse/.template-source`). Each model was pinned per seat from the live `pi --list-models` listing at install (BOOTSTRAP question 8's read-back table), not from a remembered family.
 
 | Seat | Role brief | Provider | Model | Agent directory |
 |---|---|---|---|---|
