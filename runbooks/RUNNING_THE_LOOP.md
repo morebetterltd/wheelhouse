@@ -46,6 +46,8 @@ What remains forbidden, in every shape: the session that authored a change writi
 
 The commander reads `wheelhouse/ISA.md`'s Goal before choosing what to send next, because dispatch is a claim about what advances that goal. A bead with no stateable trace under `wheelhouse/GRAPH.md`'s rule is not dispatched; fix the bead first.
 
+Defined work is ready work: once something is described as a bead, the commander dispatches it immediately, never waiting for the principal's explicit go. Holding work is the exception, and it is expressed IN the graph — a blocking kickoff-gate bead — or by the per-action principal-only classes a project names (releases and tags, license, public-facing identity). A commander that waits to be poked ruins the magic of an autonomous fleet.
+
 The commander names the bead, the repository, and — if it points at any existing commit or branch — **a way to read it that changes nothing**. `wheelhouse/crew/REVIEWER.md` carries the rule and why the wording is what it is; the short version is that a dispatch naming a bare identifier makes the receiver find somewhere to open it, and the somewhere they choose may be someone else's working tree.
 
 Say what "done" is if the bead does not already. If the receiver has to reconstruct it, they will reconstruct a version.
