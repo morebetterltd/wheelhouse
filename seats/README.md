@@ -494,7 +494,7 @@ or to state. Two regions:
 
 Keys: `1`-`9` pin a seat, `0` pins the full STATUS view, `f` toggles
 follow-mode (OFF by default; when on, the spotlight tracks the most recently
-active log), `o` toggles an overview grid of every seat, `q` quits.
+active log), `o` toggles an overview grid of every seat, and `q` returns to overview instead of exiting the tmux pane. Use Ctrl-C to quit the floor.
 
 `--once` renders a single frame to stdout and exits — what the selftest and
 any script uses; `--pin <1-9|0|seat-name>` and `--overview` set the view.

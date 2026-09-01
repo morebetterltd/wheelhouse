@@ -13,7 +13,8 @@
  * The spotlight moves ONLY on user action: keys 1-9 pin a seat, 0 pins the
  * full STATUS view, `f` toggles follow-mode (OFF by default; when on, the
  * spotlight tracks the most recently active log), `o` toggles an overview
- * grid of every seat, `q` quits.
+ * grid of every seat, `q` also returns to overview instead of exiting the
+ * tmux pane. Use Ctrl-C to quit.
  *
  * READ-ONLY by contract: this program reads state.json, seats.json, the
  * logs, and seats/verdicts/*.md. It never writes to a FIFO, never touches
@@ -430,7 +431,7 @@ interface View {
 
 function railLines(seats: Seat[], view: View, width: number): string[] {
   const out: string[] = [];
-  out.push(`${C.inverse}${C.bold} RAIL ${C.reset}${C.dim} name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(${view.follow ? "ON" : "off"})  o overview  q quit${C.reset}`);
+  out.push(`${C.inverse}${C.bold} RAIL ${C.reset}${C.dim} name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(${view.follow ? "ON" : "off"})  o/q overview  Ctrl-C quit${C.reset}`);
   seats.forEach((s, i) => {
     const n = i + 1;
     const a = assess(s);
@@ -604,9 +605,12 @@ if (process.stdin.isTTY) {
   process.stdin.resume();
   process.stdin.on("data", (b: Buffer) => {
     const k = b.toString("utf8");
-    if (k === "q" || k === "\x03") {
+    if (k === "\x03") {
       restore();
       process.exit(0);
+    } else if (k === "q") {
+      view.overview = true;
+      view.follow = false;
     } else if (/^[1-9]$/.test(k)) {
       view.pin = Number(k);
       view.follow = false; // a manual pin always wins over follow
