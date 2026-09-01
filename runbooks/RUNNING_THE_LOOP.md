@@ -68,20 +68,21 @@ The worker sets the bead in progress, then works in a git worktree it creates it
 
 **What crosses:** a branch, a head, and a set of claims about what is true of them.
 
-Report **on the bead**, as notes. Not in a message, not only in a terminal someone was watching. This is the loop's single most reliable failure: an artifact that lives only in a message is invisible to everyone who was not in that conversation, and it blocks whoever needs it next. Everything that went through the graph survived; the things that lived in messages had to be re-sent.
+Report **on the bead**, as a comment. Not in a message, not only in a terminal someone was watching. This is the loop's single most reliable failure: an artifact that lives only in a message is invisible to everyone who was not in that conversation, and it blocks whoever needs it next. Everything that went through the graph survived; the things that lived in messages had to be re-sent.
 
 A report says what changed, the head, and the evidence for each claim — command output, not adjectives. `wheelhouse/fleet/WORKER.md` is specific about the form. Then add the review-queue label; `wheelhouse/GRAPH.md` names it and explains why it is a label rather than a status. The worker does **not** close the bead. Closing belongs to stage 7, after review and integration; a worker close with `needs-review` still attached is not a handoff, it is a corrupted queue entry.
 
-On bd 1.2.2 the note text is a flag value. For a one-line report this is direct; for a real report, write the file first and pass its contents deliberately:
+The comment text is a positional argument, not a flag. On bd 1.2.2 the `-m` most people reach for first is not a flag this CLI has, and it fails before writing anything (`unknown shorthand flag: 'm' in -m`, exit 1) — which is the good case, since a report that silently did not land is the failure this stage is about:
 
 ```bash
-bd update <bead-id> --append-notes "the report text"        # short reports
-bd update <bead-id> --append-notes "$(cat report.md)"       # a real report, written in a file first
-bd update <bead-id> --add-label needs-review                # enter the review queue
+bd comment <bead-id> "the report text"        # short reports
+bd comment <bead-id> --file report.md         # a real report, written in a file first
+cat report.md | bd comment <bead-id> --stdin  # same, from a pipe
+bd update <bead-id> --add-label needs-review  # enter the review queue
 # no bd close here — the commander/integrator closes after review + merge
 ```
 
-Prefer the file form for anything with command output in it: a multi-line report typed as one shell-quoted argument is one stray quote away from a mangled note, and the file also leaves you the text to re-send if the write fails. Verify the form against your own build the way `wheelhouse/GRAPH.md` asks — `bd update --help` enumerates `--append-notes` — rather than carrying this paragraph forward on faith.
+Prefer the file or stdin form for anything with command output in it: a multi-line report typed as one shell-quoted argument is one stray quote away from a mangled comment, and `--file` also leaves you the text to re-send if the write fails. Verify the form against your own build the way `wheelhouse/GRAPH.md` asks — `bd comment --help` enumerates it in one line — rather than carrying this paragraph forward on faith.
 
 **What it costs otherwise:** a head reported from inside a detached worktree was true of everything the author could see and false of the branch. The integrator's fast-forward merge then took four commits of six, printed a real diffstat, and exited zero.
 
