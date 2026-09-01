@@ -49,8 +49,10 @@ set -uo pipefail   # deliberately not -e: several cases are meant to fail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SEATS_SRC="${1:-$HERE}"
 ADAPTER="$SEATS_SRC/adapter.ts"
+BRIEFS="$SEATS_SRC/briefs.ts"
 SEAT_ENV="$SEATS_SRC/seat-env.sh"
 [ -f "$ADAPTER" ]  || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
+[ -f "$BRIEFS" ]  || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 [ -f "$SEAT_ENV" ] || { echo "selftest: not found: $SEAT_ENV" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
@@ -227,6 +229,7 @@ build_proj() {   # $1 = project dir, $2 = namespace, $3 = seat name
   local proj="$1" ns="$2" seat="$3"
   mkdir -p "$proj/seats" "$proj/contracts" "$proj/.beads" "$proj/.wheelhouse-worktrees/wt-1"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
+  cp "$BRIEFS" "$proj/seats/briefs.ts"
   printf 'graph store of %s\n' "$proj" > "$proj/.beads/marker.txt"
   printf 'worktree of %s\n' "$proj" > "$proj/.wheelhouse-worktrees/wt-1/marker.txt"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
@@ -342,6 +345,7 @@ log_mark() { [ -f "$LOG_A" ] && wc -c < "$LOG_A" | tr -d ' ' || echo 0; }
 phase "2. A's machinery runs hard; every write lands inside A's boundaries"
 arun spawn worker-a
 [ $RC -eq 0 ] && pass "A: spawn exits 0" || fail "A: spawn exited $RC: $OUT"
+mkdir -p "$PROJA/.wheelhouse-worktrees/bead-a1"
 MARK=$(log_mark)
 arun dispatch worker-a bead-a1 "ordinary work; B lives at $PROJB and its graph at $PROJB/.beads — mentioning a path is not touching it"
 [ $RC -eq 0 ] && pass "A: dispatch exits 0" || fail "A: dispatch exited $RC: $OUT"
@@ -378,6 +382,7 @@ if [ -d "$PROJA/.beads" ] && [ -d "$PROJB/.beads" ] \
    && [ ! -L "$PROJA/.beads" ] && [ ! -L "$PROJB/.beads" ]; then
   pass "the fixture graphs are separate real stores (no symlink between them)"
 else fail "graph dirs missing or symlinked"; fi
+mkdir -p "$PROJA/.wheelhouse-worktrees/bead-g1"
 MARK=$(log_mark)
 arun dispatch worker-a bead-g1 "GRAPH: update your bead"
 wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 || fail "A: GRAPH turn never ended"
@@ -405,19 +410,17 @@ arun stop "../projB"
 if [ $RC -ne 0 ] && says "invalid seat name"; then
   pass "stop with a path-shaped seat name is refused"
 else fail "stop '../projB' was not refused (exit $RC): $OUT"; fi
-# A bead id is never used as a path: it rides in the prompt text and in
-# state.json's lastBead field as DATA. Hand it a B-shaped path and prove
-# nothing is created there and B stays untouched.
+# A bead id is validated before it can reach cwd construction or prompt text.
+# Hand it a B-shaped path and prove it is refused, nothing is created there,
+# and B stays untouched.
 MARK=$(log_mark)
 arun dispatch worker-a "../../projB/pwn" "bead id shaped like a path into B"
-[ $RC -eq 0 ] || fail "dispatch with a path-shaped BEAD ID errored (exit $RC) — expected inert acceptance: $OUT"
-wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 || fail "A: path-bead turn never ended"
+if [ $RC -ne 0 ] && says "invalid bead id"; then
+  pass "dispatch with a path-shaped BEAD ID is refused before it can be interpreted as a path"
+else fail "dispatch with a path-shaped BEAD ID was not refused (exit $RC): $OUT"; fi
 if [ ! -e "$FIX/projB/pwn" ] && [ ! -e "$PROJA/seats/../../projB/pwn" ]; then
   pass "no file appeared where a path-interpreted bead id would land"
 else fail "a bead id was interpreted as a path: $FIX/projB/pwn exists"; fi
-if [ "$(astate_get lastBead)" = "../../projB/pwn" ]; then
-  pass "the bead id landed in state.json verbatim, as data"
-else fail "lastBead is not the literal dispatched id: $(astate_get lastBead)"; fi
 b_pristine "after the door probes"
 arun stop worker-a
 
@@ -436,6 +439,7 @@ XRUN() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" \
   bun "$PROJA/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
 XRUN spawn worker-a
 [ $RC -eq 0 ] || fail "hostile leg: spawn exited $RC: $OUT"
+mkdir -p "$PROJA/.wheelhouse-worktrees/bead-h1"
 MARK=$(log_mark)
 XRUN dispatch worker-a bead-h1 "XPROBE: attempt the cross-project writes"
 wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 || fail "hostile leg: turn never ended"
@@ -486,6 +490,7 @@ CAN_BD_LOG="$FIX/bd-calls.canary.log"
 BRUN() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$CAN_BD_LOG" \
   WH_CANARY_BD_CWD="$PROJB" bun "$PROJA/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
 BRUN spawn worker-a
+mkdir -p "$PROJA/.wheelhouse-worktrees/bead-c1"
 MARK=$(log_mark)
 BRUN dispatch worker-a bead-c1 "GRAPH: canary call"
 wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 || fail "canary 6b: turn never ended"
