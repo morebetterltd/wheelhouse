@@ -47,8 +47,10 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RECOVER="${1:-$HERE/recover.ts}"
 ADAPTER="$HERE/adapter.ts"
+BRIEFS="$HERE/briefs.ts"
 [ -f "$RECOVER" ] || { echo "selftest: not found: $RECOVER" >&2; exit 2; }
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER (recover's resume commands point at it)" >&2; exit 2; }
+[ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
 command -v lsof >/dev/null 2>&1 || { echo "selftest: lsof is required (recover's identity mechanism)" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
@@ -184,6 +186,7 @@ PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats" "$PROJ/contracts"
 cp "$ADAPTER" "$PROJ/seats/adapter.ts"
 cp "$RECOVER" "$PROJ/seats/recover.ts"
+cp "$BRIEFS" "$PROJ/seats/briefs.ts"
 printf '# Fleet: Worker\n\nfixture brief.\n' > "$PROJ/contracts/WORKER.md"
 cat > "$PROJ/seats/seats.json" <<EOF
 {
