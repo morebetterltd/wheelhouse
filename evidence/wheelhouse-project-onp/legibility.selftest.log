@@ -1,0 +1,70 @@
+
+fixture import scanner — multiline, side-effect, and re-export imports are copied
+  ok    fixture import scanner copies multi.ts
+  ok    fixture import scanner copies side-effect.ts
+  ok    fixture import scanner copies re-exported.ts
+
+phase 1: QUOTA — a quota-shaped dispatch failure is amber, never done
+  ok    q-seat spawns against the stub
+  ok    quota-shaped dispatch fails loudly (rc=1) — non-success at the adapter
+  ok    state.json carries the capacity stamp
+  ok    adapter status surfaces the CAPACITY line
+  ok    floor: amber QUOTA EXHAUSTED names the failed dispatch
+  ok    floor: quota cue is AMBER
+  ok    dispatch failure keeps the real error when the seat vanished from the roster
+
+phase 2: AUTH FAILURE — red, names the credential flow, distinct from quota
+  ok    spawn on an empty {} auth.json is refused, printing the credential flow
+  ok    floor: red AUTH DEAD with the credential flow
+  ok    floor: auth cue is RED
+  ok    auth line is DISTINCT from the quota line
+
+phase 3: DEAD PROCESS — SIGKILL, red PROCESS GONE, recover says DEAD
+  ok    d-seat spawns
+  ok    d-seat pid 8608 SIGKILLed
+  ok    floor: red PROCESS GONE names the stderr log
+  ok    floor: dead-process cue is RED
+  ok    dead-process line is DISTINCT from the auth line
+  ok    adapter status says DIED, not the calm STOPPED of a graceful stop
+  ok    adapter status points at the stderr log
+  ok    recover.ts classifies the SIGKILLed seat DEAD
+
+phase 4: BLOCKED REVIEW — a BOUNCE verdict file renders amber, never done
+  ok    real verify.ts run recorded a BOUNCE verdict for bead-rev
+  ok    floor: amber REVIEW BLOCKED names the bead
+  ok    a blocked review never renders as done or idle
+
+phase 5: UNSATISFIED EVIDENCE — refusal, distinct rendering, unreadable routes to human
+  ok    verify.ts refuses APPROVE-over-failed-floor: exit 1, named as malformed
+  ok    the refused APPROVE recorded no verdict file — an error is not a judgment
+  ok    BOUNCE with failed floor checks is recorded, checks carried in the file
+  ok    floor: EVIDENCE UNSATISFIED is its own state, naming the bead
+  ok    unsatisfied evidence never renders as APPROVE
+  ok    floor: a malformed verdict file reads VERDICT UNREADABLE — routed to human
+  ok    an unreadable verdict never renders as success
+
+cross-check: all five classes staged at once — every state distinct, no success anywhere
+  ok    rail shows: QUOTA EXHAUSTED
+  ok    rail shows: AUTH DEAD
+  ok    rail shows: PROCESS GONE
+  ok    rail shows: REVIEW BLOCKED
+  ok    rail shows: EVIDENCE UNSATISFIED
+  ok    rail shows: VERDICT UNREADABLE
+  ok    no success rendering (VERDICT LANDED / GREEN) anywhere on the rail
+  ok    STATUS leads with ALERTS listing all 6 afflicted seats
+  ok    STATUS shows: QUOTA EXHAUSTED
+  ok    STATUS shows: AUTH DEAD
+  ok    STATUS shows: PROCESS GONE
+  ok    STATUS shows: REVIEW BLOCKED
+  ok    STATUS shows: EVIDENCE UNSATISFIED
+  ok    STATUS shows: VERDICT UNREADABLE
+  ok    no success rendering in STATUS either
+  ok    adapter status: capacity + death visible, nothing reads as approval
+
+canaries — sabotage a copy; these checks must notice (all cmp-guarded)
+  ok    canary 1: cutting the EVIDENCE UNSATISFIED state is caught by phase 5's check
+  ok    canary 2: cutting the VERDICT UNREADABLE state is caught by phase 5's check
+  ok    canary 3: forcing auth to wear quota's wording is caught by the distinctness checks
+  ok    canary 4: cutting DIED is caught by phase 3's adapter-status check
+
+every failure class is legible on this machine.

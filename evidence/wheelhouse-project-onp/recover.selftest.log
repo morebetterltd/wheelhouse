@@ -1,0 +1,5 @@
+selftest: fixture spawn failed: error: Cannot find module './briefs' from '[tmpdir]tmp.MyadfvR1sG/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+
+1. SIGKILL mid-turn — DEAD, bead named, printed resume re-attaches the same session
