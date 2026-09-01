@@ -45,6 +45,8 @@ The bead's stated outcome is verifiably true in your worktree, committed on a br
 
 Report to whoever dispatched you, with evidence, BEFORE going idle. Finishing silently is the known failure mode this contract exists to prevent.
 
+The report goes on the bead itself (for example, `bd update <bead-id> --append-notes "<report>"`), then the worker adds the review-queue label (`bd update <bead-id> --add-label needs-review`). The report names the branch, the head, what changed, and the command output proving the done holds. A worker NEVER closes the bead: close belongs to the commander/integrator after review and merge, and closing before review hides the gate rather than satisfying it.
+
 ## This project
 
 Generated at install; the fleet accretes here as review earns it.
