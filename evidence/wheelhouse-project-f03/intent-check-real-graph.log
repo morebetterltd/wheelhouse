@@ -1,0 +1,13 @@
+$ bash seats/intent-check.sh
+warning: beads.role not configured (GH#2950).
+  Fix: git config beads.role maintainer
+  Or:  git config beads.role contributor
+FAIL: bead wheelhouse-project-759 is closed while still labelled needs-review; only the commander/integrator closes after review and must drop the review-queue label in the same breath
+FAIL: bead wheelhouse-project-fkk is closed while still labelled needs-review; only the commander/integrator closes after review and must drop the review-queue label in the same breath
+warning: beads.role not configured (GH#2950).
+  Fix: git config beads.role maintainer
+  Or:  git config beads.role contributor
+FAIL: bead wheelhouse-project-inn has no literal Trace: line in its description: GATE: pre-publication full-history leak audit — blocks any template repo visibility flip
+FAIL: bead wheelhouse-project-c8m has no literal Trace: line in its description: Cockpit floor pane death is permanent — rebuild missing panes on re-run
+intent-check: FAIL (4 finding(s))
+rc=1 (expected nonzero in this graph because existing closed needs-review beads are now flagged)

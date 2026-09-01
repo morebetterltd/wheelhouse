@@ -52,7 +52,7 @@ For the layout this contract's own interview prescribes — product repos beneat
 
 ### The review queue
 
-This bd build has no in_review status. Valid statuses are open, in_progress, blocked, deferred, closed, pinned, hooked (verified against bd 1.2.2 by attempting `bd list --status in_review` and reading the rejection). The needs-review LABEL is the review-queue signal: the worker adds it at done, closing drops it in the same breath. Re-verify this against your own bd version — it is a fact about a build, not about beads.
+This bd build has no in_review status. Valid statuses are open, in_progress, blocked, deferred, closed, pinned, hooked (verified against bd 1.2.2 by attempting `bd list --status in_review` and reading the rejection). The needs-review LABEL is the review-queue signal: the worker adds it at done, and the commander/integrator drops it in the same breath as closing after review and merge. Re-verify this against your own bd version — it is a fact about a build, not about beads.
 
 Two cautions when you re-verify. The probes disagree: `bd list --help` describes its `--status` filter as taking open, in_progress, blocked, deferred, closed — five — while both rejection messages name seven, adding pinned and hooked. Trust the rejection text over the help text. And the absence is a configurable default rather than a property: `bd config set status.custom in_review` is accepted, after which the status validates and beads render as IN_REVIEW. Either shape works; pick one and write it down here, because a fleet where half the seats use the label and half use a status is worse than either.
 

@@ -54,10 +54,11 @@ isa_time=$(git show -s --format=%cI "$isa_commit")
 repo_list=$(mktemp)
 merge_list=$(mktemp)
 issue_list=$(mktemp)
+closed_review_list=$(mktemp)
 id_list=$(mktemp)
 show_json=$(mktemp)
 comments_json=$(mktemp)
-trap 'rm -f "$repo_list" "$merge_list" "$issue_list" "$id_list" "$show_json" "$comments_json"' EXIT HUP INT TERM
+trap 'rm -f "$repo_list" "$merge_list" "$issue_list" "$closed_review_list" "$id_list" "$show_json" "$comments_json"' EXIT HUP INT TERM
 
 if [ "$#" -gt 0 ]; then
   for repo in "$@"; do
@@ -103,6 +104,16 @@ while IFS= read -r repo; do
     fi
   done <"$merge_list"
 done <"$repo_list"
+
+if ! bd list --status closed --label needs-review --limit 0 --json >"$closed_review_list"; then
+  say "UNRUNNABLE: bd list --status closed --label needs-review --json failed; cannot check review-queue closure discipline"
+  exit "$UNRUNNABLE"
+fi
+sed -n 's/^[[:space:]]*"id": "\([^"]*\)".*/\1/p' "$closed_review_list" >"$id_list"
+while IFS= read -r id; do
+  [ -n "$id" ] || continue
+  fail "bead $id is closed while still labelled needs-review; only the commander/integrator closes after review and must drop the review-queue label in the same breath"
+done <"$id_list"
 
 if ! bd list --status open,in_progress --limit 0 --json >"$issue_list"; then
   say "UNRUNNABLE: bd list --json failed; cannot check Trace: presence"
