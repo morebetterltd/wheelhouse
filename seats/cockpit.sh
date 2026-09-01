@@ -11,7 +11,9 @@
 #                 one program, so the right side is one pane, not two.
 #
 # Idempotent: if wh-<ns> already exists, re-running attaches to it (or prints
-# the attach command when there is no terminal) and creates nothing.
+# the attach command when there is no terminal) and creates no duplicate
+# sessions. If the bridge window lost its floor pane, re-running rebuilds that
+# pane before attaching.
 #
 # Hermetic testing hook: WHEELHOUSE_TMUX_SOCKET names a private tmux socket
 # (-L) so the selftest can build and destroy sessions without touching yours.
@@ -45,7 +47,7 @@ case "${1:-}" in
   │     claude                                                    │
   │                                                               │
   │ The pane to the right is the floor viewer (spotlight + rail): │
-  │   1-9 pin a seat   0 pin STATUS   f follow   o overview   q   │
+  │   1-9 pin a seat   0 pin STATUS   f follow   o/q overview     │
   └───────────────────────────────────────────────────────────────┘
 
 EOF
@@ -84,28 +86,40 @@ attach() {
   exec tmux attach-session -t "$S"
 }
 
+QSELF="$(printf '%q' "$SELF")"
+
+spawn_floor_pane() {
+  # Right pane, full height: the floor (spotlight + rail in one program).
+  # -l N% needs tmux >= 3.1; fall back to an even split if it is refused.
+  tmx split-window -h -l '45%' -t "$S:bridge" -c "$ROOT" "$QSELF --pane-floor" 2>/dev/null ||
+    tmx split-window -h -t "$S:bridge" -c "$ROOT" "$QSELF --pane-floor"
+}
+
 if tmx has-session -t "=$S" 2>/dev/null; then
+  if tmx list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx 'bridge'; then
+    PANES="$(tmx list-panes -t "$S:bridge" 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$PANES" = "1" ]; then
+      echo "bridge floor pane missing in $S:bridge; respawning it"
+      spawn_floor_pane
+      tmx select-pane -t "$S:bridge.0"
+    fi
+  fi
   echo "bridge already built: $S (re-run is attach, never a duplicate)"
   attach
   exit 0
 fi
 
-QSELF="$(printf '%q' "$SELF")"
-
 # Window 0:bridge — left pane is the commander seat.
 tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander"
 
-# Right pane, full height: the floor (spotlight + rail in one program).
-# -l N% needs tmux >= 3.1; fall back to an even split if it is refused.
-tmx split-window -h -l '45%' -t "$S:bridge" -c "$ROOT" "$QSELF --pane-floor" 2>/dev/null ||
-  tmx split-window -h -t "$S:bridge" -c "$ROOT" "$QSELF --pane-floor"
+spawn_floor_pane
 
 # Status bar: project on the left, the key hints on the right.
 tmx set-option -t "$S" status on
 tmx set-option -t "$S" status-left-length 30
 tmx set-option -t "$S" status-right-length 60
 tmx set-option -t "$S" status-left "[$S] "
-tmx set-option -t "$S" status-right "1-9 pin  0 status  f follow  o overview  q quit"
+tmx set-option -t "$S" status-right "1-9 pin  0 status  f follow  o/q overview"
 
 # Land focus on the commander pane.
 tmx select-pane -t "$S:bridge.0"

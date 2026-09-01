@@ -278,8 +278,28 @@ else
   fail "multi-frame capture grew past the terminal height, indicating scroll drift"
 fi
 
-# --- phase 6: canaries (guarded with cmp) ------------------------------------
-phase "phase 6: canaries — sabotage a copy, checks must notice"
+# --- phase 6: interactive q returns to overview, not process exit ------------
+phase "phase 6: interactive keys — q keeps the pane alive by returning to overview"
+if ! command -v expect >/dev/null 2>&1; then
+  skip "expect not on PATH — q key pty leg not run"
+else
+  QCAP="$FIX/q.expect"
+  env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" expect > "$QCAP" 2>&1 <<EOF
+set timeout 5
+spawn bun "$PROJ/seats/floor.ts"
+expect "RAIL"
+send "q"
+expect "OVERVIEW"
+send "\003"
+expect eof
+EOF
+  QRC=$?
+  if [ $QRC -eq 0 ]; then pass "q changes the live floor to OVERVIEW before Ctrl-C exits"
+  else fail "q did not reach OVERVIEW in the live floor: $(cat "$QCAP")"; fi
+fi
+
+# --- phase 7: canaries (guarded with cmp) ------------------------------------
+phase "phase 7: canaries — sabotage a copy, checks must notice"
 SAB1="$PROJ/seats/floor-sab1.ts"
 sed '/PROCESS GONE/d' "$PROJ/seats/floor.ts" > "$SAB1"
 if cmp -s "$PROJ/seats/floor.ts" "$SAB1"; then
@@ -299,8 +319,8 @@ else
   else pass "canary 2: cutting the missing-log line is caught by phase 4's check"; fi
 fi
 
-# --- phase 7: tmux leg — cockpit.sh idempotency on a private socket ----------
-phase "phase 7: cockpit.sh (tmux leg)"
+# --- phase 8: tmux leg — cockpit.sh idempotency on a private socket ----------
+phase "phase 8: cockpit.sh (tmux leg)"
 if ! command -v tmux >/dev/null 2>&1; then
   skip "tmux not on PATH — cockpit leg not run (floor checks above still decide)"
 elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
@@ -320,6 +340,15 @@ else
   [ $RC -eq 0 ] && has "already built" && pass "re-run attaches, never duplicates" || fail "re-run: rc=$RC: $OUT"
   SESSN="$(tmux -L "$SOCK" list-sessions 2>/dev/null | wc -l | tr -d ' ')"
   [ "$SESSN" = "1" ] && pass "still exactly 1 session after re-run" || fail "session count after re-run: $SESSN"
+  tmux -L "$SOCK" kill-pane -t wh-tfix:bridge.1 2>/dev/null
+  PANES="$(tmux -L "$SOCK" list-panes -t wh-tfix:bridge 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$PANES" = "1" ] && pass "simulated dead floor leaves only the commander pane" || fail "pane count after killing floor: $PANES"
+  crun
+  [ $RC -eq 0 ] && has "floor pane missing" && pass "re-run notices the missing floor pane" || fail "missing-floor re-run did not say it repaired the pane: rc=$RC: $OUT"
+  PANES="$(tmux -L "$SOCK" list-panes -t wh-tfix:bridge 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$PANES" = "2" ] && pass "re-run respawns the floor pane after pane death" || fail "pane count after missing-floor repair: $PANES"
+  SESSN="$(tmux -L "$SOCK" list-sessions 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$SESSN" = "1" ] && pass "still exactly 1 session after pane repair" || fail "session count after pane repair: $SESSN"
   tmux -L "$SOCK" kill-server 2>/dev/null
   SOCK=""
 fi
@@ -330,6 +359,6 @@ if [ $FAILED -eq 0 ]; then
   exit 0
 fi
 echo "$FAILED check(s) failed."
-echo "If a failure is in phases 1-5 or 7, the floor or cockpit broke (or their"
-echo "wording moved). If a failure is in phase 6, fix this test first."
+echo "If a failure is in phases 1-6 or 8, the floor or cockpit broke (or their"
+echo "wording moved). If a failure is in phase 7, fix this test first."
 exit 1
