@@ -41,7 +41,7 @@ bun seats/adapter.ts status          # every seat, liveness
 
 ## 3. Watch it
 
-The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id> ...`) and each seat's event stream lands in `seats/logs/<seat>.jsonl`. The bridge is the cockpit for watching the fleet: `seats/cockpit.sh ebb` builds (or re-attaches to — never duplicates) the tmux session `wh-ebb`, commander pane on the left and the floor — `bun seats/floor.ts`, read-only: spotlight one seat, rail of every seat's attention cues — on the right. Keys and cue meanings are in `seats/README.md`'s "The bridge" section; `bun seats/adapter.ts status` is the no-cockpit fallback that always works.
+The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id> ...`) and each seat's event stream lands in `seats/logs/<seat>.jsonl`. The bridge is the cockpit for watching the fleet: `seats/cockpit.sh ebb` builds (or re-attaches to — never duplicates, and re-runs respawn a missing floor pane) the tmux session `wh-ebb`, commander pane on the left and the floor — `bun seats/floor.ts`, read-only: spotlight one seat, rail of every seat's attention cues — on the right. Keys and cue meanings are in `seats/README.md`'s "The bridge" section; `bun seats/adapter.ts status` is the no-cockpit fallback that always works.
 
 ## 4. Feed it
 
