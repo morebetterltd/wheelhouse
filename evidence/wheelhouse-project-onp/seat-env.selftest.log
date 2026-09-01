@@ -1,0 +1,68 @@
+
+1. two seats, one namespace — isolation
+  ok    seat one: fresh seat run exits 0
+  ok    seat one: seat directory created
+  ok    seat one: namespace root .project backlink records this project
+  ok    seat one: trust.json pre-grants the project root, exactly
+  ok    seat one: export line names this seat's own directory
+  ok    seat one: fresh seat gets a one-time credential flow
+  ok    seat two: fresh seat run exits 0
+  ok    seat two: seat directory created
+  ok    seat two: namespace root .project backlink records this project
+  ok    seat two: trust.json pre-grants the project root, exactly
+  ok    seat two: export line names this seat's own directory
+  ok    seat two: fresh seat gets a one-time credential flow
+  ok    the two seats' auth.json paths are distinct — accounts cannot collide
+
+1b. optional account.label — provisioning summary shows it when present
+  ok    labeled seat: fresh seat run exits 0
+  ok    labeled seat: seat directory created
+  ok    labeled seat: namespace root .project backlink records this project
+  ok    labeled seat: trust.json pre-grants the project root, exactly
+  ok    labeled seat: export line names this seat's own directory
+  ok    labeled seat: fresh seat gets a one-time credential flow
+  ok    provisioning summary includes account.label from seats.json
+  ok    provisioning still works when account.label is absent
+
+2. idempotency
+  ok    rerun exits 0 and says the trust grant is already current
+  ok    rerun leaves the namespace root .project backlink byte-identical
+  ok    rerun leaves trust.json byte-identical
+
+2b. refusal — namespace root belongs to one project
+  ok    a .project backlink for a different root STOPS the run
+  ok    the collision refusal leaves the .project backlink byte-identical
+  ok    the collision refusal does not create the requested seat directory
+
+3. refusal — an auth.json holding an identity is identity, not clutter
+  ok    auth: run over a logged-in seat exits 0
+  ok    auth: existing auth.json left byte-identical
+  ok    auth: no credential flow beside a live auth.json
+  ok    auth: says why the login command is withheld
+
+3b. an EMPTY {} auth.json is not a login — pi auto-creates one headless
+  ok    a seat with only pi's auto-created {} auth.json still gets the credential flow
+  ok    the empty auth.json itself is left byte-identical
+  ok    says why an existing-but-empty auth.json is not a login
+
+4. refusal — a trust file this script did not write
+  ok    a trust.json missing the project root STOPS the run, with the reason
+  ok    the refusal wrote nothing over the foreign trust file
+
+5. refusing to guess
+  ok    no pi on PATH is a STOP, named as MISSING
+  ok    a relative project root is refused
+  ok    a seat name with '..' is refused
+  ok    a project root that does not exist is refused
+
+5b. a symlinked root is canonicalized — pi matches canonical paths only
+  ok    a root passed through a symlink is granted by its physical path
+
+6. default project root — the checkout you run it from
+  ok    with no root argument, trust is granted to the directory the run stood in
+
+7. canary — can these checks detect a broken script?
+  ok    canary: a script that grants no trust is caught
+  ok    canary: a script that invites a re-login over a live identity is caught
+
+seat-env.sh works on this machine.

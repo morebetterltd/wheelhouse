@@ -1,0 +1,20 @@
+
+1. reset refuses a seat mid-turn
+  ok    mid-turn: reset refuses a seat that is mid-turn
+  ok    mid-turn: the seat is left running untouched by a refused reset
+  ok    mid-turn: session record is unchanged by a refused reset
+
+2. reset on an idle seat: stop, discard session, cold respawn
+  ok    reset exits 0 on an idle seat
+  ok    reset relaunched the seat under a new pid
+  ok    reset's respawn produced a fresh session file, not the old one
+  ok    the discarded session file is left on disk, not deleted
+  ok    the post-reset spawn did not pass --session — it came back cold
+
+3. reset on a seat that is not running
+  ok    reset on a stopped seat is refused the same way dispatch/steer are
+
+4. canary — can the mid-turn check detect a reset with the refusal removed?
+  ok    canary: a reset with its mid-turn refusal cut is caught
+
+adapter.ts reset works on this machine.

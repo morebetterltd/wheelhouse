@@ -1,0 +1,37 @@
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 1 - clean state PASSes
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 2 - planted merge without claim movement FAILs
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+Automatic merge went well; stopped before committing as requested
+ok 3 - ISA-moving merge PASSes without escape hatch
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 4 - planted traceless bead FAILs
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 5 - uncommitted ISA exits distinct unrunnable code 2
+intent-check.selftest: PASS (5 legs)

@@ -1,0 +1,5 @@
+  ok    capture command writes a non-empty scrubbed evidence file
+  ok    planted tmp, home, and username values are redacted
+  ok    scrubbed capture contains none of the planted raw values
+
+evidence-scrub.selftest: PASS

@@ -138,6 +138,7 @@ bun seats/adapter.ts steer    <seat> <text>             # redirect mid-turn
 bun seats/adapter.ts status                             # liveness, every seat
 bun seats/adapter.ts stop     <seat>                    # graceful; session kept
 bun seats/adapter.ts resume   <seat>                    # reattach that session
+bun seats/adapter.ts reset    <seat>                    # stop, discard session, cold respawn
 ```
 
 `spawn` reads the seat's roster entry, refuses a seat whose directory or
@@ -171,6 +172,17 @@ never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
 attached to it (`--session`), rooted back in the same cwd it was running in,
 so the context it built up comes back warm.
+
+`reset` is the commander-owned reset of a seat's context — a seat's session
+is a disposable cache (see `contracts/SEATS.md`'s Lifecycle section for the
+named triggers: the initiative the seat was serving closed, context
+degradation such as compaction thrash or the seat arguing from stale
+assumptions, or a plain operator call). It stops the seat, discards the
+recorded session so the next spawn is cold, and respawns immediately — one
+command instead of a `stop` a human could follow with `resume` by habit and
+warm the exact context reset meant to drop. Like `stop`, it refuses loudly
+if the seat is mid-turn: never interrupt a running turn, only ever reset an
+idle one.
 
 What the adapter is NOT: a supervisor. Nothing restarts a dead seat, meters
 quota, or retries. It runs seats; noticing them is the commander's job.
@@ -380,6 +392,7 @@ passing silently.
 bash seats/evidence-scrub.selftest.sh
 bash seats/seat-env.selftest.sh
 bash seats/adapter.selftest.sh
+bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/intent-check.selftest.sh
 ```
