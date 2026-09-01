@@ -45,7 +45,7 @@ The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id
 
 ## 4. Feed it
 
-Speak backlog items to the commander in plain language. It files them as beads, the fleet claims them, the reviewer gates them with bench evidence, and merges land per this project's merge policy.
+Speak backlog items to the commander in plain language. It files them as beads, the fleet claims them, workers report done on the bead with comments and the `needs-review` label without closing, the reviewer gates them with bench evidence, and only the commander/integrator closes after merge per this project's merge policy.
 
 ## Shutdown
 

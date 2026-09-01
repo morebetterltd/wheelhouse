@@ -8,7 +8,7 @@ Read first: `wheelhouse/ISA.md` (state of record) and `wheelhouse/GRAPH.md` (how
 
 - Work graph: `.beads/` at this root, spanning every product repo below it. Ready work is what the fleet can pick up.
 - `service/` and `ingest/` are separate git repos, gitignored here. Product changes happen in them via fleet workers, never directly from a commander session.
-- Workers run in git worktrees, one branch per bead, and never push or merge.
+- Workers run in git worktrees, one branch per bead, report done on the bead with comments plus `needs-review`, and never push, merge, or close their own beads.
 
 ## Merge policy
 
