@@ -1,0 +1,61 @@
+
+0. provisioning — the REAL seat-env.sh builds both seats in the temp HOME
+  ok    seat-env.sh provisioned A's seat under .pi-seats-nsA
+  ok    seat-env.sh provisioned B's seat under .pi-seats-nsB
+
+1. config inspection — the isolation is written where claimed
+  ok    seat roots are disjoint per namespace (.pi-seats-nsA vs .pi-seats-nsB)
+  ok    A's trust.json grants A's project root
+  ok    A's trust.json contains no grant for B's root (B's path absent)
+  ok    B's trust.json contains no grant for A's root (symmetric)
+  ok    A's seats.json references no B path and no B namespace
+  ok    adapter's write surfaces (state.json, run/, logs/) all derive from its own project root
+  ok    adapter builds no absolute path from a literal — nothing escapes ROOT by construction
+
+2. A's machinery runs hard; every write lands inside A's boundaries
+  ok    A: spawn exits 0
+  ok    A: dispatch exits 0
+  ok    A: turn completed (agent_end)
+  ok    A: status reads A's own state
+  ok    A: stop exits 0
+  ok    A: resume exits 0
+  ok    write surfaces (state.json, run/, logs/) exist under A and only A (verdicts/: not exercised — verify.ts does not run here, and none appeared)
+  ok    A's state.json references no B path and no B namespace
+  ok    after the full benign run: B's project tree and seat root are byte-identical to the snapshot
+  ok    nothing new in $HOME outside A's own seat namespace
+
+3. bead-graph isolation — A's bd calls are scoped to A's store, never B's
+  ok    the fixture graphs are separate real stores (no symlink between them)
+  ok    the seat's bd call was captured (1 call(s) logged)
+  ok    every logged bd call resolved to A's graph dir
+  ok    zero B-scoped bd calls (B's path appears in no call, cwd, or resolved graph)
+  ok    after the graph leg: B's project tree and seat root are byte-identical to the snapshot
+
+4. the doors — path-shaped arguments refuse or stay inert data
+  ok    spawn with a seat name pointing at B is refused (seat-name validation)
+  ok    dispatch with a path-shaped seat name is refused
+  ok    stop with a path-shaped seat name is refused
+  ok    dispatch with a path-shaped BEAD ID is refused before it can be interpreted as a path
+  ok    no file appeared where a path-interpreted bead id would land
+  ok    after the door probes: B's project tree and seat root are byte-identical to the snapshot
+
+5. honesty — a HOSTILE seat process CAN reach B; the OS is not the wall
+  ok    all four cross-project attempts were made and reported
+  note  OS boundary: 4/4 hostile cross-writes SUCCEEDED — same user, no sandbox.
+  note  Isolation here is by construction and contract, not OS enforcement.
+  ok    the report and B's actual state agree (4 succeeded; B mutated: yes) — the test tells the truth either way
+  ok    after restoring B from the snapshot: B's project tree and seat root are byte-identical to the snapshot
+
+6. canary — can these checks detect a machinery that DOES cross over?
+  ok    canary 6a: an adapter that writes its logs into B is caught by the pristine-B check
+  ok    canary 6b: a bd call scoped to B's store IS visible to the B-scoped-call check
+  ok    after canary 6b (fake bd only logs; B untouched): B's project tree and seat root are byte-identical to the snapshot
+
+THE BOUNDARY: isolation between projects is by construction and contract,
+not OS enforcement. Every path the machinery writes derives from its own
+project root and namespaced seat root, and path-shaped arguments are
+refused — but one user, no sandbox: the OS permits a hostile seat to write
+anywhere, and phase 5 proved it rather than assuming otherwise.
+
+project isolation holds on this machine — on the stated terms.
+rc=0

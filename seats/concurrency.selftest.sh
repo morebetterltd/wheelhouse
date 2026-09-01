@@ -52,8 +52,10 @@ set -uo pipefail   # deliberately not -e: some cases are meant to fail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ADAPTER="${1:-$HERE/adapter.ts}"
 FLOOR="$HERE/floor.ts"
+BRIEFS="$HERE/briefs.ts"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
 [ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
+[ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
 GIT_BIN="$(command -v git)" || { echo "selftest: git is required for the worktree phase" >&2; exit 2; }
@@ -189,6 +191,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
   cp "$FLOOR" "$proj/seats/floor.ts"
+  cp "$BRIEFS" "$proj/seats/briefs.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
 {
@@ -338,7 +341,7 @@ if printf '%s' "$FLOOR_OUT" | grep -q 'AMBER.*QUOTA EXHAUSTED — dispatch faile
   pass "floor --once renders the AMBER QUOTA line from the recorded event"
 else fail "floor --once has no AMBER QUOTA line: $(printf '%s' "$FLOOR_OUT" | grep -i 'worker-a' | head -3)"; fi
 FLOOR_STATUS="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS=220 LINES=60 NO_COLOR=1 bun "$PROJ/seats/floor.ts" --once --pin 0 2>&1)"
-if printf '%s' "$FLOOR_STATUS" | grep -q 'capacity QUOTA at'; then
+if printf '%s' "$FLOOR_STATUS" | grep -q 'capacity QUOTA '; then
   pass "floor STATUS cell shows per-account capacity state"
 else fail "floor STATUS cell missing capacity line"; fi
 run dispatch worker-a bead-ok "plain work, no quota"
@@ -411,6 +414,7 @@ else
   mkdir -p "$RHOME"
   mkdir -p "$RPROJ/seats" "$RPROJ/contracts"
   cp "$ADAPTER" "$RPROJ/seats/adapter.ts"
+  cp "$BRIEFS" "$RPROJ/seats/briefs.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$RPROJ/contracts/WORKER.md"
   # Two real seats, BOTH borrowing your login (auth is copied per seat dir
   # and dies with the fixture; it never enters state.json or the logs —

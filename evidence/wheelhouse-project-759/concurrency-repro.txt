@@ -1,0 +1,59 @@
+
+1. two seats, one roster — spawn, overlap, isolation, clean stop
+  FAIL  hermetic: worker-a spawn exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  hermetic: worker-b spawn exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  hermetic: FIFOs missing or shared (a= b=)
+  FAIL  hermetic: dispatch a exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  hermetic: dispatch b exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  hermetic: pids not simultaneously alive (a= b=)
+  FAIL  hermetic: could not observe both turns in flight simultaneously
+  FAIL  hermetic: status does not show two RUNNING seats: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  hermetic: no agent_end in worker-a's log
+  FAIL  hermetic: no agent_end in worker-b's log
+  FAIL  hermetic: worker-a's dispatch text leaked into worker-b's log (or missing from its own)
+  FAIL  hermetic: worker-b's dispatch text leaked into worker-a's log (or missing from its own)
+  FAIL  hermetic: worktree cross-write (or missing footprint): [tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/wt-bead-a:  [tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/wt-bead-b:
+  ok    hermetic: the two worktrees are on distinct fleet/<bead> branches
+  FAIL  hermetic: worker-a stop exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  hermetic: worker-b stop exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+
+2. capacity visibility — a quota-shaped failure is stamped and rendered
+  FAIL  quota-shaped dispatch did not fail (exit 1): error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  no lastCapacityEvent in state.json after quota failure (got: )
+  FAIL  status does not surface the capacity event: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-concurrency-selftest.88028.WSWK8s/proj/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  floor --once has no AMBER QUOTA line: SPOTLIGHT worker-a (worker; anthropic/stub-a; account -; last -) ○ off -
+no event log yet for worker-a — seats/logs/worker-a.jsonl missing
+▶[1] worker-a | worker | anthropic/stub-a | - | ○ off - | - | -
+  FAIL  floor STATUS cell missing capacity line
+  ok    a dispatch that lands clears the capacity event
+
+3. canary — can these checks detect broken isolation and a lost stamp?
+  ok    canary: an adapter that merges both seats into one log is caught
+  ok    canary: an adapter with the capacity stamp cut is caught (no lastCapacityEvent lands)
+
+4. real pi — two real seats, concurrent dispatch, disjoint logs
+  SKIP  real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1
+
+20 check(s) failed.
+If the failures are in phases 1-2 or the real leg, the adapter or floor
+broke (or their wording moved). If a failure is in the canary, fix this
+test first.
+rc=1

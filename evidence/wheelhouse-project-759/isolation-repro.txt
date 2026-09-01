@@ -1,0 +1,93 @@
+grep: [tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/state.json: No such file or directory
+grep: [tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/state.json: No such file or directory
+
+0. provisioning — the REAL seat-env.sh builds both seats in the temp HOME
+  ok    seat-env.sh provisioned A's seat under .pi-seats-nsA
+  ok    seat-env.sh provisioned B's seat under .pi-seats-nsB
+
+1. config inspection — the isolation is written where claimed
+  ok    seat roots are disjoint per namespace (.pi-seats-nsA vs .pi-seats-nsB)
+  ok    A's trust.json grants A's project root
+  ok    A's trust.json contains no grant for B's root (B's path absent)
+  ok    B's trust.json contains no grant for A's root (symmetric)
+  ok    A's seats.json references no B path and no B namespace
+  ok    adapter's write surfaces (state.json, run/, logs/) all derive from its own project root
+  ok    adapter builds no absolute path from a literal — nothing escapes ROOT by construction
+
+2. A's machinery runs hard; every write lands inside A's boundaries
+  FAIL  A: spawn exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  A: dispatch exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  A: no agent_end after dispatch
+  FAIL  A: status failed: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  A: stop exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  A: resume exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  A write surface missing: [tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/state.json
+  FAIL  A write surface missing: [tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/run
+  FAIL  A write surface missing: [tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/logs
+  ok    A's state.json references no B path and no B namespace
+  ok    after the full benign run: B's project tree and seat root are byte-identical to the snapshot
+  ok    nothing new in $HOME outside A's own seat namespace
+
+3. bead-graph isolation — A's bd calls are scoped to A's store, never B's
+  ok    the fixture graphs are separate real stores (no symlink between them)
+  FAIL  A: GRAPH turn never ended
+  FAIL  no bd call reached the fake bd — the graph leg measured nothing
+  FAIL  a bd call resolved outside A's graph:
+  ok    zero B-scoped bd calls (B's path appears in no call, cwd, or resolved graph)
+  ok    after the graph leg: B's project tree and seat root are byte-identical to the snapshot
+
+4. the doors — path-shaped arguments refuse or stay inert data
+  FAIL  spawn '../projB' was not refused (exit 1): error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  dispatch with a B-path seat name was not refused (exit 1): error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  stop '../projB' was not refused (exit 1): error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  dispatch with a path-shaped BEAD ID errored (exit 1) — expected inert acceptance: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  A: path-bead turn never ended
+  ok    no file appeared where a path-interpreted bead id would land
+  FAIL  lastBead is not the literal dispatched id:
+  ok    after the door probes: B's project tree and seat root are byte-identical to the snapshot
+
+5. honesty — a HOSTILE seat process CAN reach B; the OS is not the wall
+  FAIL  hostile leg: spawn exited 1: error: Cannot find module './briefs' from '[tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/projA/seats/adapter.ts'
+
+Bun v1.3.1 (macOS arm64)
+  FAIL  hostile leg: turn never ended
+  FAIL  expected 4 attempt lines in [tmpdir]/wheelhouse-isolation-selftest.31660.L1R7x1/home/.pi-seats-nsA/worker-a/xprobe-report.txt, got:
+  note  OS boundary: 0/4 hostile cross-writes SUCCEEDED — same user, no sandbox.
+  note  Isolation here is by construction and contract, not OS enforcement.
+  ok    the report and B's actual state agree (0 succeeded; B mutated: no) — the test tells the truth either way
+  ok    after restoring B from the snapshot: B's project tree and seat root are byte-identical to the snapshot
+
+6. canary — can these checks detect a machinery that DOES cross over?
+  FAIL  canary 6a: a cross-writing adapter PASSED the pristine-B check — it proves nothing
+  FAIL  canary 6b: turn never ended
+  FAIL  canary 6b: a B-scoped bd call left no detectable trace — the phase-3 check proves nothing:
+  ok    after canary 6b (fake bd only logs; B untouched): B's project tree and seat root are byte-identical to the snapshot
+
+THE BOUNDARY: isolation between projects is by construction and contract,
+not OS enforcement. Every path the machinery writes derives from its own
+project root and namespaced seat root, and path-shaped arguments are
+refused — but one user, no sandbox: the OS permits a hostile seat to write
+anywhere, and phase 5 proved it rather than assuming otherwise.
+
+25 check(s) failed.
+If a failure is in phases 0-5, the isolation story broke or its wording
+moved. If a failure is in phase 6, fix this test before trusting it.
+rc=1

@@ -1,0 +1,575 @@
+==== seats/adapter.selftest.sh
+==== seats/concurrency.selftest.sh
+
+installed layout — wheelhouse/fleet brief is preferred without contracts/
+  ok    installed layout: spawn exits 0 with no contracts/ directory
+  ok    installed layout: worker brief resolves to wheelhouse/fleet/WORKER.md
+  ok    missing brief: STOP names both installed and template paths tried
+
+roster account.label — shown when present, optional when absent
+  ok    spawn output includes account.label when the roster has one
+  ok    status output includes account.label when the roster has one
+
+roster model suffix — malformed thinking suffix is pi's validation failure, surfaced at spawn
+  ok    malformed suffix: pi rejects it and adapter surfaces the stderr tail
+
+0. seat-name validation — a name is one path segment or it is refused
+  ok    seat name with a path separator is refused with a loud STOP
+  ok    seat name with a dot segment is refused with a loud STOP
+  ok    seat name with whitespace is refused with a loud STOP
+  ok    seat name with a quote is refused with a loud STOP
+  ok    seat name with nothing (empty) is refused with a loud STOP
+  ok    the STOP names the offending key
+
+1. spawn — process, identity, and what was actually launched
+  ok    spawn: spawn exits 0
+  ok    spawn: state.json records a live pid
+  ok    spawn: state.json records a session file that exists
+  ok    pi was launched in RPC mode
+  ok    role brief injected: --append-system-prompt names contracts/WORKER.md
+  ok    roster's provider and model-plus-thinking pin the launch
+  ok    state.json records the exact model-plus-thinking pin
+  ok    spawn with no bead id roots the seat at the project root
+  ok    a second spawn of a live seat is refused
+
+2. dispatch — prompt round trip lands in log and session
+  ok    dispatching a bead with no worktree is a loud STOP
+  ok    the seat is left running, not stopped, when the target worktree is missing
+  ok    dispatch exits 0
+  ok    agent_end captured in the event log
+  ok    the dispatched text (bead-prefixed) came back through the turn
+  ok    session file grew (1 -> 3 lines)
+  ok    state.json records the dispatched bead
+  ok    dispatch relaunched the seat rooted in the bead's worktree, by construction
+  ok    the cwd-changing relaunch reattached the SAME session (--session), not a cold start
+
+3. steer — a redirect lands inside a turn still in flight
+  ok    steer exits 0
+  ok    the steer reached the seat mid-turn
+
+4. state survives the adapter — every invocation is a fresh process
+  ok    a fresh status invocation reads worker-1 as RUNNING from state.json
+  ok    status still works for a roster with no account.label
+
+5. no tokens — identity never leaks into state or logs
+  ok    auth.json's content appears nowhere in state.json or the logs
+
+6. stop, then resume — the session comes back warm
+  ok    stop exits 0 and the process is gone
+  ok    state keeps the session but drops the pid
+  ok    resume: resume exits 0
+  ok    resume: relaunch attached the recorded session via --session
+  ok    the same session file grew on resume — warm context survives
+  ok    lastBead survives the stop/resume cycle
+
+6b. pruned cwd — dispatch falls back visibly; plain resume STOPs
+  ok    pruned cwd setup: resume exits 0 before pruning
+  ok    pruned cwd dispatch: dispatch exits 0 via fallback
+  ok    pruned cwd dispatch: fallback announcement is visible and names why
+  ok    pruned cwd dispatch: fallback used a fresh session rather than --session
+  ok    pruned cwd dispatch: state records the new dispatched bead
+  ok    pruned cwd resume: no-dispatch-target resume STOPs and names the fallback limitation
+
+7. canary — can these checks detect a broken adapter?
+  ok    canary: an adapter that records no state is caught
+  ok    canary: an adapter that resumes without the session is caught
+
+8. real pi — one smoke leg, spawn/dispatch/agent_end/resume/grow
+  SKIP  real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1
+
+adapter.ts works on this machine.
+==== seats/evidence-scrub.selftest.sh
+
+1. two seats, one roster — spawn, overlap, isolation, clean stop
+  ok    hermetic: worker-a spawns
+  ok    hermetic: worker-b spawns
+  ok    hermetic: each seat has its OWN FIFO (worker-a.stdin, worker-b.stdin)
+  ok    hermetic: bead-a dispatched to worker-a
+  ok    hermetic: bead-b dispatched to worker-b (before bead-a's turn ended)
+  ok    hermetic: overlapping RUNNING — both state.json pids alive at once (38529, 38697)
+  ok    hermetic: both turns in flight at the same moment (agent_start seen, no agent_end yet, both logs)
+  ok    hermetic: status shows both seats RUNNING
+  ok    hermetic: worker-a's turn finished
+  ok    hermetic: worker-b's turn finished
+  ok    hermetic: worker-a's events land ONLY in worker-a's log
+  ok    hermetic: worker-b's events land ONLY in worker-b's log
+  ok    hermetic: each bead's work landed only in its own worktree
+  ok    hermetic: the two worktrees are on distinct fleet/<bead> branches
+  ok    hermetic: worker-a stops cleanly
+  ok    hermetic: worker-b stops cleanly
+
+2. capacity visibility — a quota-shaped failure is stamped and rendered
+  ok    quota-shaped dispatch fails loudly
+  ok    state.json records lastCapacityEvent with the failure detail: {"at":"2026-09-01T02:09:36.397Z","detail":"429 rate limit exceeded — usage limit reached for this account"}
+  ok    adapter status surfaces the capacity event
+  ok    floor --once renders the AMBER QUOTA line from the recorded event
+  ok    floor STATUS cell shows per-account capacity state
+  ok    a dispatch that lands clears the capacity event
+
+3. canary — can these checks detect broken isolation and a lost stamp?
+  ok    canary: an adapter that merges both seats into one log is caught
+  ok    canary: an adapter with the capacity stamp cut is caught (no lastCapacityEvent lands)
+
+4. real pi — two real seats, concurrent dispatch, disjoint logs
+  SKIP  real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1
+
+two-seat concurrency and capacity visibility work on this machine.
+  ok    capture command writes a non-empty scrubbed evidence file
+  ok    planted tmp, home, and username values are redacted
+  ok    scrubbed capture contains none of the planted raw values
+
+evidence-scrub.selftest: PASS
+==== seats/floor.selftest.sh
+==== seats/intent-check.selftest.sh
+
+phase 1: spotlight renders the pinned seat's events
+  ok    --once --pin 1 exits 0
+  ok    spotlight header present
+  ok    pin 1 is seat busy
+  ok    [tool] line humanized
+  ok    [think] line humanized
+  ok    [turn_end] carries stats
+  ok    --pin by seat name works
+
+phase 2: rail — all seats, distinct failure lines, never silence
+  ok    rail lists busy
+  ok    rail lists quiet
+  ok    rail lists idle
+  ok    rail lists gone
+  ok    rail lists authless
+  ok    rail lists quota
+  ok    rail lists reviewer
+  ok    rail lists bounced
+  ok    rail lists nolog
+  ok    rail lists verifier
+  ok    row shape includes role, provider/model, account label, active bead, and humanized age
+  ok    missing account.label renders as dash
+  ok    old running seat is flagged QUIET with humanized age
+  ok    rostered verifier absent from state renders as a seat row with state dash
+  ok    gone: PROCESS GONE line (red)
+  ok    authless: AUTH DEAD line (red)
+  ok    quota: QUOTA EXHAUSTED line
+  ok    idle: IDLE-with-ready-work counts bd ready
+  ok    reviewer: VERDICT LANDED (green)
+  ok    bounced: REVIEW BLOCKED line
+  ok    nolog: missing log is a named line
+  ok    cue words RED/AMBER/GREEN all present
+  ok    rail has the [0] STATUS cell
+  ok    rail exposes humanized ages, not raw epoch/ISO timestamps
+
+phase 3: STATUS cell and overview grid
+  ok    --pin 0 renders STATUS
+  ok    STATUS shows bd ready count
+  ok    STATUS shows per-seat detail
+  ok    STATUS uses humanized last-activity age
+  ok    STATUS exposes humanized ages, not raw epoch/ISO timestamps
+  ok    --overview renders the grid
+  ok    overview shows recent events per seat
+
+phase 4: missing pieces degrade with named lines
+  ok    spotlight on log-less seat exits 0
+  ok    spotlight names the missing log
+  ok    no roster/state degrades to a named line
+
+phase 5: repaint — repeated frames return home and clear to end
+  ok    multi-frame capture produced output before the scripted stop
+  ok    multi-frame capture contains repeated cursor-home + clear-to-end repaint sequences
+  ok    multi-frame capture stays within the terminal height per frame — no scroll drift
+
+phase 6: canaries — sabotage a copy, checks must notice
+  ok    canary 1: cutting PROCESS GONE detection is caught by phase 2's check
+  ok    canary 2: cutting the missing-log line is caught by phase 4's check
+
+phase 7: cockpit.sh (tmux leg)
+  ok    first run builds the bridge
+  ok    session wh-tfix exists
+  ok    single window named bridge
+  ok    bridge has exactly 2 panes (commander + floor)
+  ok    re-run attaches, never duplicates
+  ok    still exactly 1 session after re-run
+
+floor.ts works on this machine.
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 1 - clean state PASSes
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 2 - planted merge without claim movement FAILs
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+Automatic merge went well; stopped before committing as requested
+ok 3 - ISA-moving merge PASSes without escape hatch
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 4 - planted traceless bead FAILs
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 5 - uncommitted ISA exits distinct unrunnable code 2
+intent-check.selftest: PASS (5 legs)
+==== seats/isolation.selftest.sh
+==== seats/legibility.selftest.sh
+
+0. provisioning — the REAL seat-env.sh builds both seats in the temp HOME
+  ok    seat-env.sh provisioned A's seat under .pi-seats-nsA
+  ok    seat-env.sh provisioned B's seat under .pi-seats-nsB
+
+1. config inspection — the isolation is written where claimed
+  ok    seat roots are disjoint per namespace (.pi-seats-nsA vs .pi-seats-nsB)
+  ok    A's trust.json grants A's project root
+  ok    A's trust.json contains no grant for B's root (B's path absent)
+  ok    B's trust.json contains no grant for A's root (symmetric)
+  ok    A's seats.json references no B path and no B namespace
+  ok    adapter's write surfaces (state.json, run/, logs/) all derive from its own project root
+  ok    adapter builds no absolute path from a literal — nothing escapes ROOT by construction
+
+2. A's machinery runs hard; every write lands inside A's boundaries
+  ok    A: spawn exits 0
+  ok    A: dispatch exits 0
+  ok    A: turn completed (agent_end)
+  ok    A: status reads A's own state
+  ok    A: stop exits 0
+  ok    A: resume exits 0
+  ok    write surfaces (state.json, run/, logs/) exist under A and only A (verdicts/: not exercised — verify.ts does not run here, and none appeared)
+  ok    A's state.json references no B path and no B namespace
+  ok    after the full benign run: B's project tree and seat root are byte-identical to the snapshot
+  ok    nothing new in $HOME outside A's own seat namespace
+
+3. bead-graph isolation — A's bd calls are scoped to A's store, never B's
+  ok    the fixture graphs are separate real stores (no symlink between them)
+  ok    the seat's bd call was captured (1 call(s) logged)
+  ok    every logged bd call resolved to A's graph dir
+  ok    zero B-scoped bd calls (B's path appears in no call, cwd, or resolved graph)
+  ok    after the graph leg: B's project tree and seat root are byte-identical to the snapshot
+
+4. the doors — path-shaped arguments refuse or stay inert data
+  ok    spawn with a seat name pointing at B is refused (seat-name validation)
+  ok    dispatch with a path-shaped seat name is refused
+  ok    stop with a path-shaped seat name is refused
+  ok    dispatch with a path-shaped BEAD ID is refused before it can be interpreted as a path
+  ok    no file appeared where a path-interpreted bead id would land
+  ok    after the door probes: B's project tree and seat root are byte-identical to the snapshot
+
+5. honesty — a HOSTILE seat process CAN reach B; the OS is not the wall
+  ok    all four cross-project attempts were made and reported
+  note  OS boundary: 4/4 hostile cross-writes SUCCEEDED — same user, no sandbox.
+  note  Isolation here is by construction and contract, not OS enforcement.
+  ok    the report and B's actual state agree (4 succeeded; B mutated: yes) — the test tells the truth either way
+  ok    after restoring B from the snapshot: B's project tree and seat root are byte-identical to the snapshot
+
+6. canary — can these checks detect a machinery that DOES cross over?
+  ok    canary 6a: an adapter that writes its logs into B is caught by the pristine-B check
+  ok    canary 6b: a bd call scoped to B's store IS visible to the B-scoped-call check
+  ok    after canary 6b (fake bd only logs; B untouched): B's project tree and seat root are byte-identical to the snapshot
+
+THE BOUNDARY: isolation between projects is by construction and contract,
+not OS enforcement. Every path the machinery writes derives from its own
+project root and namespaced seat root, and path-shaped arguments are
+refused — but one user, no sandbox: the OS permits a hostile seat to write
+anywhere, and phase 5 proved it rather than assuming otherwise.
+
+project isolation holds on this machine — on the stated terms.
+==== seats/recover.selftest.sh
+
+fixture import scanner — multiline, side-effect, and re-export imports are copied
+  ok    fixture import scanner copies multi.ts
+  ok    fixture import scanner copies side-effect.ts
+  ok    fixture import scanner copies re-exported.ts
+
+phase 1: QUOTA — a quota-shaped dispatch failure is amber, never done
+  ok    q-seat spawns against the stub
+  ok    quota-shaped dispatch fails loudly (rc=1) — non-success at the adapter
+  ok    state.json carries the capacity stamp
+  ok    adapter status surfaces the CAPACITY line
+  ok    floor: amber QUOTA EXHAUSTED names the failed dispatch
+  ok    floor: quota cue is AMBER
+  ok    dispatch failure keeps the real error when the seat vanished from the roster
+
+phase 2: AUTH FAILURE — red, names the credential flow, distinct from quota
+  ok    spawn on an empty {} auth.json is refused, printing the credential flow
+  ok    floor: red AUTH DEAD with the credential flow
+  ok    floor: auth cue is RED
+  ok    auth line is DISTINCT from the quota line
+
+phase 3: DEAD PROCESS — SIGKILL, red PROCESS GONE, recover says DEAD
+  ok    d-seat spawns
+  ok    d-seat pid 93300 SIGKILLed
+  ok    floor: red PROCESS GONE names the stderr log
+  ok    floor: dead-process cue is RED
+  ok    dead-process line is DISTINCT from the auth line
+  ok    adapter status says DIED, not the calm STOPPED of a graceful stop
+  ok    adapter status points at the stderr log
+  ok    recover.ts classifies the SIGKILLed seat DEAD
+
+phase 4: BLOCKED REVIEW — a BOUNCE verdict file renders amber, never done
+  ok    real verify.ts run recorded a BOUNCE verdict for bead-rev
+  ok    floor: amber REVIEW BLOCKED names the bead
+  ok    a blocked review never renders as done or idle
+
+phase 5: UNSATISFIED EVIDENCE — refusal, distinct rendering, unreadable routes to human
+  ok    verify.ts refuses APPROVE-over-failed-floor: exit 1, named as malformed
+  ok    the refused APPROVE recorded no verdict file — an error is not a judgment
+  ok    BOUNCE with failed floor checks is recorded, checks carried in the file
+  ok    floor: EVIDENCE UNSATISFIED is its own state, naming the bead
+  ok    unsatisfied evidence never renders as APPROVE
+  ok    floor: a malformed verdict file reads VERDICT UNREADABLE — routed to human
+  ok    an unreadable verdict never renders as success
+
+cross-check: all five classes staged at once — every state distinct, no success anywhere
+  ok    rail shows: QUOTA EXHAUSTED
+  ok    rail shows: AUTH DEAD
+  ok    rail shows: PROCESS GONE
+  ok    rail shows: REVIEW BLOCKED
+  ok    rail shows: EVIDENCE UNSATISFIED
+  ok    rail shows: VERDICT UNREADABLE
+  ok    no success rendering (VERDICT LANDED / GREEN) anywhere on the rail
+  ok    STATUS leads with ALERTS listing all 6 afflicted seats
+  ok    STATUS shows: QUOTA EXHAUSTED
+  ok    STATUS shows: AUTH DEAD
+  ok    STATUS shows: PROCESS GONE
+  ok    STATUS shows: REVIEW BLOCKED
+  ok    STATUS shows: EVIDENCE UNSATISFIED
+  ok    STATUS shows: VERDICT UNREADABLE
+  ok    no success rendering in STATUS either
+  ok    adapter status: capacity + death visible, nothing reads as approval
+
+canaries — sabotage a copy; these checks must notice (all cmp-guarded)
+  ok    canary 1: cutting the EVIDENCE UNSATISFIED state is caught by phase 5's check
+  ok    canary 2: cutting the VERDICT UNREADABLE state is caught by phase 5's check
+  ok    canary 3: forcing auth to wear quota's wording is caught by the distinctness checks
+  ok    canary 4: cutting DIED is caught by phase 3's adapter-status check
+
+every failure class is legible on this machine.
+==== seats/seat-env.selftest.sh
+
+1. SIGKILL mid-turn — DEAD, bead named, printed resume re-attaches the same session
+  ok    stub mimics the title rewrite: the live seat's ps line is bare 'pi', no argv
+  ok    seat pid 96124 force-killed mid-turn
+  ok    recover exits 0
+  ok    killed seat classified DEAD
+  ok    the unfinished bead is named on the seat line
+  ok    exact resume command printed
+  ok    the killed seat's orphaned FIFO was removed and printed
+  ok    the printed resume command runs clean
+  ok    resume re-attached via --session
+  ok    the SAME session file was re-attached and grew — no acceptance state lost
+  ok    lastBead survived the kill/resume cycle
+
+2. commander-restart simulation — fresh process, state.json only, all classes correct
+  ok    fresh recover process exits 0
+  ok    live seat classified RUNNING (holds its FIFO, despite a bare-pi ps line)
+  ok    dead pid with intact session classified DEAD, resume offered
+  ok    entry with no session artifacts classified STALE, no resume offered
+  ok    live-but-reused pid classified DEAD and called out (restart hazard)
+  ok    argv spoof (tail -f on the role brief) classified DEAD — identity is fds, not command lines
+
+3. double-resume refusal — an attached session gets REFUSED, not a command
+  ok    ghost sharing a RUNNING seat's session is DEAD
+  ok    resume REFUSED, naming who holds the session
+  ok    no resume command printed for the refused seat
+
+4. orphaned FIFO cleanup — dead and unrecorded FIFOs go, the live one stays
+  ok    dead seat's FIFO removed and printed
+  ok    FIFO with no state entry removed and printed
+  ok    the RUNNING seat's FIFO was left alone
+
+5. no duplicate integration — recover observes; its only writes are FIFO removals
+  ok    state.json byte-identical after recover (no lastBead mutation, no re-dispatch record)
+  ok    no pi spawned (bare-'pi'-titled process count: 8 before, 8 after)
+  ok    no bd calls (fake bd on PATH logged nothing)
+
+6. real binary — the premise probe: pi's ps title is bare, its FIFO is not hidden
+  ok    real pi started login-free in the RPC shape (pid 99710)
+  ok    real pi's ps line is exactly 'pi' — NO argv: any command-line identity test is blind here
+  ok    real pi holds its stdin FIFO where lsof sees it — the identity mechanism recover relies on
+
+7. canary — can these checks detect a broken recover?
+  ok    canary: a recover that skips FIFO cleanup is caught (orphan still on disk)
+  ok    real recover refuses when a live process holds the session file open (fd path, not argv)
+  ok    canary: a recover with the attachment check cut prints the double-resume — and is caught
+
+recover.ts works on this machine.
+==== seats/verify.selftest.sh
+
+1. two seats, one namespace — isolation
+  ok    seat one: fresh seat run exits 0
+  ok    seat one: seat directory created
+  ok    seat one: namespace root .project backlink records this project
+  ok    seat one: trust.json pre-grants the project root, exactly
+  ok    seat one: export line names this seat's own directory
+  ok    seat one: fresh seat gets a one-time credential flow
+  ok    seat two: fresh seat run exits 0
+  ok    seat two: seat directory created
+  ok    seat two: namespace root .project backlink records this project
+  ok    seat two: trust.json pre-grants the project root, exactly
+  ok    seat two: export line names this seat's own directory
+  ok    seat two: fresh seat gets a one-time credential flow
+  ok    the two seats' auth.json paths are distinct — accounts cannot collide
+
+1b. optional account.label — provisioning summary shows it when present
+  ok    labeled seat: fresh seat run exits 0
+  ok    labeled seat: seat directory created
+  ok    labeled seat: namespace root .project backlink records this project
+  ok    labeled seat: trust.json pre-grants the project root, exactly
+  ok    labeled seat: export line names this seat's own directory
+  ok    labeled seat: fresh seat gets a one-time credential flow
+  ok    provisioning summary includes account.label from seats.json
+  ok    provisioning still works when account.label is absent
+
+2. idempotency
+  ok    rerun exits 0 and says the trust grant is already current
+  ok    rerun leaves the namespace root .project backlink byte-identical
+  ok    rerun leaves trust.json byte-identical
+
+2b. refusal — namespace root belongs to one project
+  ok    a .project backlink for a different root STOPS the run
+  ok    the collision refusal leaves the .project backlink byte-identical
+  ok    the collision refusal does not create the requested seat directory
+
+3. refusal — an auth.json holding an identity is identity, not clutter
+  ok    auth: run over a logged-in seat exits 0
+  ok    auth: existing auth.json left byte-identical
+  ok    auth: no credential flow beside a live auth.json
+  ok    auth: says why the login command is withheld
+
+3b. an EMPTY {} auth.json is not a login — pi auto-creates one headless
+  ok    a seat with only pi's auto-created {} auth.json still gets the credential flow
+  ok    the empty auth.json itself is left byte-identical
+  ok    says why an existing-but-empty auth.json is not a login
+
+4. refusal — a trust file this script did not write
+  ok    a trust.json missing the project root STOPS the run, with the reason
+  ok    the refusal wrote nothing over the foreign trust file
+
+5. refusing to guess
+  ok    no pi on PATH is a STOP, named as MISSING
+  ok    a relative project root is refused
+  ok    a seat name with '..' is refused
+  ok    a project root that does not exist is refused
+
+5b. a symlinked root is canonicalized — pi matches canonical paths only
+  ok    a root passed through a symlink is granted by its physical path
+
+6. default project root — the checkout you run it from
+  ok    with no root argument, trust is granted to the directory the run stood in
+
+7. canary — can these checks detect a broken script?
+  ok    canary: a script that grants no trust is caught
+  ok    canary: a script that invites a re-login over a live identity is caught
+
+seat-env.sh works on this machine.
+
+installed layout — wheelhouse/crew brief is preferred without contracts/
+  ok    installed layout: APPROVE exits 0 with no contracts/ directory
+  ok    installed layout: verifier brief resolves to wheelhouse/crew/VERIFIER.md
+  ok    missing brief: STOP names both installed and template paths tried
+
+multi-repo umbrella layout — --repo selects the product repository
+  ok    umbrella layout: APPROVE exits 0 when --repo names the product repo
+  ok    umbrella layout: verdict records the product repo and product-relative evidence floor check
+  ok    umbrella layout: omitting --repo still measures the umbrella root and refuses the product branch
+
+1. APPROVE — verdict parsed, recorded, exit 0, and what was launched
+  ok    APPROVE exits 0
+  ok    the verdict is printed for the dispatcher
+  ok    verdict file written to seats/verdicts/bead-1.md
+  ok    verdict file carries verdict, tip SHA, and the evidence excerpt
+  ok    verdict file names itself a working copy, not an evidence home
+  ok    pi was launched one-shot: -p --no-session
+  ok    role brief injected: --append-system-prompt names contracts/VERIFIER.md
+  ok    the VERIFIER seat's provider and model pin the launch (not the author's)
+  ok    prompt carries the bead id, the tip SHA, and the bead-claim reference
+  ok    the verifier's cwd is NOT the project root
+  ok    the verifier's cwd is the scratch worktree makeScratchCwd() creates
+  ok    the scratch worktree is unregistered after verify.ts exited (process-exit cleanup ran)
+  ok    the scratch worktree directory no longer exists on disk
+  ok    APPROVE — NOT BENCHED still exits 0
+  ok    the NOT BENCHED qualifier survives into the verdict record
+
+2. BOUNCE — exit 2
+  ok    BOUNCE exits 2
+  ok    BOUNCE verdict recorded
+
+3. DISCOVER — exit 3, proposal recorded, no beads filed
+  ok    DISCOVER exits 3
+  ok    the dispatcher says out loud that no beads were filed
+  ok    verdict file records the proposal for the commander
+
+4. self-approval — same account dir is a STOP before any spawn
+  ok    self-approval: identical account dirs refused with a STOP, exit 1
+  ok    self-approval: nothing was spawned — the stub was never invoked
+
+5. malformed output — an error, never a judgment
+  ok    missing VERDICT: line exits 1 with a STOP
+  ok    no verdict file written for a non-verdict
+  ok    two conflicting VERDICT: lines exit 1 rather than picking one
+  ok    NOT BENCHED on a non-APPROVE verdict exits 1
+  ok    an unknown verdict value exits 1
+  ok    a failing pi exits 1 even when a VERDICT line is present
+  ok    a verifier roster without account.label still reaches the provider-error path
+  ok    provider-error stderr path includes verifier account.label when present
+
+6. preconditions — the STOPs that guard the spawn
+  ok    a branch that does not resolve is a STOP
+  ok    an unknown author seat is a STOP — distinctness needs a named account
+  ok    naming a non-verifier seat as the verifier is a STOP
+  ok    a verifier seat that was never logged in is a STOP
+  ok    an author seat with a path separator is a STOP
+  ok    an author seat of dot-dot is a STOP
+  ok    an author seat with whitespace is a STOP
+  ok    an author seat with a quote is a STOP
+  ok    an empty author seat is a STOP
+  ok    a bead id with a path separator (it names the verdict file) is a STOP
+  ok    an explicit verifier seat with a path separator is a STOP
+
+7. no tokens — identity never leaks into the verdict record
+  ok    auth.json's content appears nowhere in seats/verdicts/
+
+8. evidence — artifacts the bead names gate the verdict
+  ok    APPROVE over a satisfied bench log + screenshot exits 0
+  ok    verdict file records per-artifact checks: exists, bytes, type probe
+  ok    the floor-check results reach the verifier's prompt
+  ok    APPROVE over a zero-byte screenshot is malformed, exit 1
+  ok    APPROVE over an artifact absent from the tip is malformed, exit 1
+  ok    a text file posing as .png is caught by the magic-byte probe
+  ok    a PNG with a zero dimension is degenerate, refused
+  ok    the gate blocks only APPROVE — BOUNCE over failed evidence still exits 2
+  ok    the failed floor check is still recorded on a BOUNCE
+  ok    an absolute evidence path is a STOP
+  ok    a dot-dot evidence path is a STOP
+
+9. canary — can these checks detect a broken verify.ts?
+  ok    canary: a verify.ts that lets the author verify itself is caught
+  ok    canary: a verify.ts with its verdict write cut is caught by the file check
+  ok    canary: a verify.ts that approves over missing evidence is caught by the exit-1 check
+
+10. sweep — a SIGKILLed run's scratch worktree is reclaimed, a live one is spared
+  ok    both a planted orphan (dead pid) and a planted live (real pid) scratch worktree are registered
+  ok    the orphaned scratch worktree (dead pid) was reclaimed: unregistered and removed from disk
+  ok    the live scratch worktree (real running pid) was spared — still registered and on disk
+  ok    once its owner pid actually exits, a later sweep reclaims that worktree too
+
+11. real pi — one smoke leg through the actual binary (SKIP-able)
+  SKIP  real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1
+
+verify.ts works on this machine.
+rc=0
