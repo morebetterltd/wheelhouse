@@ -77,7 +77,22 @@ expect_output clean_pass 'intent-check: PASS'
 say 'ok 1 - clean state PASSes'
 pass_count=$((pass_count + 1))
 
-# 2. A planted merge with no ISA movement and no escape-hatch comment fails.
+# 2. A closed bead still carrying needs-review fails: worker handoff is notes
+# plus the review label, not close; commander/integrator close drops the label.
+closed_review="$FIXTURE/closed-review"
+make_fixture "$closed_review"
+closed_review_bead=$(new_bead "$closed_review" 'Closed but still needs review' 'Trace: selftest closed needs-review bead.')
+( cd "$closed_review"
+  bd update "$closed_review_bead" --add-label needs-review >/dev/null
+  bd close "$closed_review_bead" --reason 'selftest planted bad close' >/dev/null
+)
+run_capture closed_review sh -c "cd '$closed_review' && '$CHECK' ."
+expect_rc closed_review 1
+expect_output closed_review 'closed while still labelled needs-review'
+say 'ok 2 - closed bead still labelled needs-review FAILs'
+pass_count=$((pass_count + 1))
+
+# 3. A planted merge with no ISA movement and no escape-hatch comment fails.
 merge_fail="$FIXTURE/merge-fail"
 make_fixture "$merge_fail"
 merge_bead=$(new_bead "$merge_fail" 'Merged work' 'Trace: selftest planted merge.')
@@ -92,10 +107,10 @@ merge_bead=$(new_bead "$merge_fail" 'Merged work' 'Trace: selftest planted merge
 run_capture merge_fail sh -c "cd '$merge_fail' && '$CHECK' ."
 expect_rc merge_fail 1
 expect_output merge_fail 'without ISA movement'
-say 'ok 2 - planted merge without claim movement FAILs'
+say 'ok 3 - planted merge without claim movement FAILs'
 pass_count=$((pass_count + 1))
 
-# 3. A planted merge that moves the ISA in the merge commit passes without an escape hatch.
+# 4. A planted merge that moves the ISA in the merge commit passes without an escape hatch.
 merge_pass="$FIXTURE/merge-pass"
 make_fixture "$merge_pass"
 move_bead=$(new_bead "$merge_pass" 'Merged work with claim movement' 'Trace: selftest ISA-moving merge.')
@@ -113,20 +128,20 @@ move_bead=$(new_bead "$merge_pass" 'Merged work with claim movement' 'Trace: sel
 run_capture merge_pass sh -c "cd '$merge_pass' && '$CHECK' ."
 expect_rc merge_pass 0
 expect_output merge_pass 'intent-check: PASS'
-say 'ok 3 - ISA-moving merge PASSes without escape hatch'
+say 'ok 4 - ISA-moving merge PASSes without escape hatch'
 pass_count=$((pass_count + 1))
 
-# 4. A planted open bead without Trace: fails.
+# 5. A planted open bead without Trace: fails.
 trace_fail="$FIXTURE/trace-fail"
 make_fixture "$trace_fail"
 new_bead "$trace_fail" 'Traceless planted bead' 'No trace line here.' >/dev/null
 run_capture trace_fail sh -c "cd '$trace_fail' && '$CHECK' ."
 expect_rc trace_fail 1
 expect_output trace_fail 'no literal Trace:'
-say 'ok 4 - planted traceless bead FAILs'
+say 'ok 5 - planted traceless bead FAILs'
 pass_count=$((pass_count + 1))
 
-# 5. An install whose ISA is not committed exits with the distinct unrunnable code.
+# 6. An install whose ISA is not committed exits with the distinct unrunnable code.
 unrun="$FIXTURE/uncommitted-isa"
 mkdir -p "$unrun"
 ( cd "$unrun"
@@ -141,7 +156,7 @@ mkdir -p "$unrun"
 run_capture uncommitted sh -c "cd '$unrun' && '$CHECK' ."
 expect_rc uncommitted 2
 expect_output uncommitted 'UNRUNNABLE:'
-say 'ok 5 - uncommitted ISA exits distinct unrunnable code 2'
+say 'ok 6 - uncommitted ISA exits distinct unrunnable code 2'
 pass_count=$((pass_count + 1))
 
 say "intent-check.selftest: PASS ($pass_count legs)"
