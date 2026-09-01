@@ -36,6 +36,7 @@
  *   status                             liveness + last event, every seat
  *   stop     <seat>                    graceful SIGTERM; session survives
  *   resume   <seat>                    respawn attached to the recorded session
+ *   reset    <seat>                    stop, discard the session, respawn cold
  *
  * A seat's process cwd is the bead's worktree, not the project root and not
  * prompt discipline: spawn with a bead id, or dispatch a bead the running
@@ -467,6 +468,50 @@ async function cmdResume(name: string): Promise<void> {
   await launch(name, requireSeat(name), rec.sessionFile, resumeCwd);
 }
 
+/**
+ * reset = stop, discard the session, spawn cold. It exists for a context
+ * that has stopped earning its keep — the initiative it was serving closed,
+ * or the cache itself has gone stale — and it is deliberately NOT `stop` +
+ * `spawn` by hand: a bare `spawn` right after `stop` would attach nothing,
+ * but a bare `resume` would reattach the exact context reset means to drop,
+ * so this is the one path that stops, forgets, and comes back cold as a
+ * single command instead of a ritual two operators could get wrong two ways.
+ *
+ * Refuses loudly if the seat is mid-turn — the same rule stop's SIGTERM
+ * documentation already states (Lifecycle: never stop a seat mid-turn, a
+ * SIGTERM lands mid-turn and takes the running tool's whole process tree
+ * with it) — checked with get_state's isStreaming, the protocol's own
+ * busy signal, not a guess from the log.
+ */
+async function cmdReset(name: string): Promise<void> {
+  const rec = requireRunning(name);
+  const entry = requireSeat(name);
+  const st = await rpc(rec, { type: "get_state" });
+  if (!st.success) {
+    die(`get_state failed while checking seat "${name}" before reset: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
+  }
+  if (st.data?.isStreaming) {
+    die(
+      `seat "${name}" is mid-turn (isStreaming) — reset refuses to interrupt a running turn. ` +
+        `Wait for it to finish, or steer it, before resetting.`
+    );
+  }
+  const cwd = rec.cwd ?? ROOT;
+  await cmdStop(name);
+  // Discard the recorded session explicitly, ahead of the cold spawn below
+  // that would overwrite it anyway: if reset dies between stop and spawn,
+  // state.json must already show no session to resume into, not the stale
+  // one reset was meant to drop.
+  const state = readState();
+  if (state.seats[name]) {
+    state.seats[name].sessionId = null;
+    state.seats[name].sessionFile = null;
+    writeState(state); // reset-record
+  }
+  await launch(name, entry, null, cwd); // null sessionFile: cold, no --session
+  console.log(`seat ${name}: reset — session discarded, respawned cold`);
+}
+
 function requireRunning(name: string): SeatRecord {
   const rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
@@ -625,8 +670,11 @@ async function main(): Promise<void> {
     case "resume":
       if (rest.length !== 1) die("usage: adapter.ts resume <seat>");
       return cmdResume(validateSeatName(rest[0]));
+    case "reset":
+      if (rest.length !== 1) die("usage: adapter.ts reset <seat>");
+      return cmdReset(validateSeatName(rest[0]));
     default:
-      die("usage: adapter.ts spawn|dispatch|steer|status|stop|resume ...");
+      die("usage: adapter.ts spawn|dispatch|steer|status|stop|resume|reset ...");
   }
 }
 
