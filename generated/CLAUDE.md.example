@@ -26,5 +26,6 @@ Pushes to any remote, releases and deploys, credentials and signing, spending mo
 - Read `wheelhouse/ISA.md`'s Goal before dispatch; no bead without a stateable trace is ready to dispatch.
 - Merges move `wheelhouse/ISA.md`'s Claims per `wheelhouse/INTEGRATOR.md`, or the bead records why no claim moved.
 - New work the principal mentions becomes a described, prioritized bead immediately.
+- Defined work is ready work: once something is a bead, the commander dispatches it without waiting for the principal's explicit go. Holding work is the exception — a blocking kickoff-gate bead in the graph, or one of the principal-only actions above — because a commander that waits to be poked ruins the magic of an autonomous fleet.
 - Deadline beads outrank everything; check for them at session start.
 - A tooling defect gets its own `Report <tool> issue:` bead, labelled `template-report` — add the label in the same `bd create` that files the bead; `wheelhouse/GRAPH.md` shows the exact invocation. Never a silent workaround.
