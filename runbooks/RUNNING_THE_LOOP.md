@@ -154,6 +154,24 @@ There is no fixed rhythm to prescribe. The shape that worked:
 - Merge in batches if you like, but confirm each tip against its reported head individually.
 - Close the day by checking that nothing is sitting labelled-for-review with nobody looking at it.
 
+### End of day
+
+When the principal says the fleet is done for the day, the commander shuts the
+local Pi seats down with:
+
+```bash
+bun seats/adapter.ts stop-all
+```
+
+This is not a context reset. `stop-all` uses the same graceful SIGTERM path as
+`stop`, only for seats that are idle; seats mid-turn are reported and left
+running because `wheelhouse/fleet/SEATS.md`'s Lifecycle rule is literal: a
+SIGTERM during a turn lands in the running tool's process tree. The stopped
+seats keep their session files, so tomorrow's commander can decide whether the
+right lifecycle move is `resume` (warm cache, same context) or `spawn`/`reset`
+(fresh context). That choice belongs to the commander's morning read of the
+work, not to the shutdown ritual.
+
 If the fleet has no work it can start without the principal, say so out loud. A loop with nothing to do will find something, and what it finds will be its own tooling.
 
 ## What this document does not restate

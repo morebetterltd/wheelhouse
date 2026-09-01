@@ -1,0 +1,19 @@
+
+1. all-idle stop-all stops every running rostered seat
+  ok    worker-a spawned
+  ok    worker-b spawned
+  ok    stop-all prints a stopped line for each idle seat
+  ok    state.json clears pids for stopped seats
+  ok    sessions remain recorded and resumable after stop-all
+  ok    a stopped seat resumes warm after stop-all
+
+2. one busy seat is reported, not killed; idle peers still stop
+  ok    stop-all reports busy seat and still stops idle peer
+  ok    busy seat was not killed
+  ok    busy and stopped sessions remain resumable in state.json
+
+3. canary — removing the busy check must be caught
+  ok    canary: stop-all without the busy check kills the busy seat and is caught
+
+adapter.ts stop-all works on this machine.
+rc=0

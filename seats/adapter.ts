@@ -35,6 +35,7 @@
  *   steer    <seat> <text>             redirect the current turn
  *   status                             liveness + last event, every seat
  *   stop     <seat>                    graceful SIGTERM; session survives
+ *   stop-all                           SIGTERM every idle rostered seat; report busy seats
  *   resume   <seat>                    respawn attached to the recorded session
  *   reset    <seat>                    stop, discard the session, respawn cold
  *
@@ -624,6 +625,22 @@ function cmdStatus(): void {
   }
 }
 
+async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<string> {
+  // SIGTERM is pi's graceful path: it flushes stdout and exits 143. No
+  // SIGKILL fallback here — a seat that ignores SIGTERM is worth looking at,
+  // not shooting.
+  process.kill(rec.pid!, "SIGTERM");
+  const deadline = Date.now() + TIMEOUT_MS;
+  while (pidAlive(rec.pid) && Date.now() < deadline) await sleep(100);
+  if (pidAlive(rec.pid)) {
+    throw new Error(`pid ${rec.pid} is still alive after SIGTERM and ${TIMEOUT_MS}ms — look at it before escalating`);
+  }
+  rec.pid = null;
+  rec.stoppedAt = new Date().toISOString();
+  writeState(state);
+  return `seat ${name} stopped; session ${rec.sessionId} kept for resume`;
+}
+
 async function cmdStop(name: string): Promise<void> {
   const state = readState();
   const rec = state.seats[name];
@@ -632,19 +649,48 @@ async function cmdStop(name: string): Promise<void> {
     console.log(`seat ${name} is not running`);
     return;
   }
-  // SIGTERM is pi's graceful path: it flushes stdout and exits 143. No
-  // SIGKILL fallback here — a seat that ignores SIGTERM is worth looking at,
-  // not shooting.
-  process.kill(rec.pid!, "SIGTERM");
-  const deadline = Date.now() + TIMEOUT_MS;
-  while (pidAlive(rec.pid) && Date.now() < deadline) await sleep(100);
-  if (pidAlive(rec.pid)) {
-    die(`pid ${rec.pid} is still alive after SIGTERM and ${TIMEOUT_MS}ms — look at it before escalating`);
+  console.log(await stopRecord(state, name, rec));
+}
+
+async function cmdStopAll(): Promise<void> {
+  const roster = readRoster();
+  const state = readState();
+  const names = Object.keys(roster).filter((name) => !roster[name].external).sort();
+  if (names.length === 0) {
+    console.log("stop-all: no local rostered seats");
+    return;
   }
-  rec.pid = null;
-  rec.stoppedAt = new Date().toISOString();
-  writeState(state);
-  console.log(`seat ${name} stopped; session ${rec.sessionId} kept for resume`);
+  for (const name of names) {
+    const rec = state.seats[name];
+    if (!rec) {
+      console.log(`seat ${name}: no state record — not running`);
+      continue;
+    }
+    if (!pidAlive(rec.pid)) {
+      console.log(`seat ${name}: not running; session ${rec.sessionId ?? "-"} kept for resume`);
+      continue;
+    }
+    let st: any;
+    try {
+      st = await rpc(rec, { type: "get_state" });
+    } catch (e: any) {
+      console.log(`seat ${name}: REPORT unable to check idle state; left running (pid ${rec.pid}) — ${e.message}`);
+      continue;
+    }
+    if (!st.success) {
+      console.log(`seat ${name}: REPORT get_state failed; left running (pid ${rec.pid}) — ${st.error}`);
+      continue;
+    }
+    if (st.data?.isStreaming) {
+      console.log(`seat ${name}: BUSY mid-turn; NOT stopped (pid ${rec.pid}); session ${rec.sessionId ?? "-"} left resumable`);
+      continue;
+    }
+    try {
+      console.log(await stopRecord(state, name, rec));
+    } catch (e: any) {
+      console.log(`seat ${name}: REPORT stop failed; left for human inspection — ${e.message}`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -667,6 +713,9 @@ async function main(): Promise<void> {
     case "stop":
       if (rest.length !== 1) die("usage: adapter.ts stop <seat>");
       return cmdStop(validateSeatName(rest[0]));
+    case "stop-all":
+      if (rest.length !== 0) die("usage: adapter.ts stop-all");
+      return cmdStopAll();
     case "resume":
       if (rest.length !== 1) die("usage: adapter.ts resume <seat>");
       return cmdResume(validateSeatName(rest[0]));
@@ -674,7 +723,7 @@ async function main(): Promise<void> {
       if (rest.length !== 1) die("usage: adapter.ts reset <seat>");
       return cmdReset(validateSeatName(rest[0]));
     default:
-      die("usage: adapter.ts spawn|dispatch|steer|status|stop|resume|reset ...");
+      die("usage: adapter.ts spawn|dispatch|steer|status|stop|stop-all|resume|reset ...");
   }
 }
 
