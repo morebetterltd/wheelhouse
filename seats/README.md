@@ -14,7 +14,7 @@ The main files here:
 - `seats.json.example` — the roster format. Copy it to `seats.json` and edit.
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
   project root, and prints the export line and the one-time credential flow.
-- `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, resume.
+- `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, stop-all, resume.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
@@ -137,6 +137,7 @@ bun seats/adapter.ts dispatch <seat> <bead-id> <text>   # hand it a bead
 bun seats/adapter.ts steer    <seat> <text>             # redirect mid-turn
 bun seats/adapter.ts status                             # liveness, every seat
 bun seats/adapter.ts stop     <seat>                    # graceful; session kept
+bun seats/adapter.ts stop-all                           # stop every idle rostered seat; report busy seats
 bun seats/adapter.ts resume   <seat>                    # reattach that session
 bun seats/adapter.ts reset    <seat>                    # stop, discard session, cold respawn
 ```
@@ -171,7 +172,12 @@ current turn if the seat is mid-stream; redirecting the CURRENT turn is what
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
 attached to it (`--session`), rooted back in the same cwd it was running in,
-so the context it built up comes back warm.
+so the context it built up comes back warm. `stop-all` is the end-of-day form:
+it walks the roster, SIGTERMs only seats that answer `get_state` as idle,
+prints one outcome line per rostered local seat, and reports mid-turn seats as
+`BUSY ... NOT stopped` rather than interrupting them. That matters because a
+SIGTERM during a turn lands inside whatever tool tree the seat is currently
+running. Stopped seats keep their recorded session files for next-day resume.
 
 `reset` is the commander-owned reset of a seat's context — a seat's session
 is a disposable cache (see `contracts/SEATS.md`'s Lifecycle section for the
