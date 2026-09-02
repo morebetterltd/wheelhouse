@@ -242,6 +242,57 @@ function authIsIdentity(authFile: string): boolean {
   return body.length > 0;
 }
 
+const PROVIDER_ENV_VARS: Record<string, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  google: "GEMINI_API_KEY",
+  gemini: "GEMINI_API_KEY",
+};
+
+function providerEnvVar(provider: string): string | undefined {
+  return PROVIDER_ENV_VARS[provider];
+}
+
+function providerAuthEntry(authFile: string, provider: string): unknown {
+  if (!fs.existsSync(authFile)) return undefined;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(authFile, "utf8"));
+    if (parsed && typeof parsed === "object" && Object.prototype.hasOwnProperty.call(parsed, provider)) {
+      return (parsed as Record<string, unknown>)[provider];
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function requireLaunchCredential(name: string, entry: SeatEntry, accountDir: string, authFile: string, labelSuffix: string): void {
+  if (entry.account?.authRoute === "env") {
+    if (!entry.provider) die(`seat "${name}"${labelSuffix} uses account.authRoute=env but has no provider in seats/seats.json`);
+    const envVar = providerEnvVar(entry.provider);
+    if (!envVar) {
+      die(`seat "${name}"${labelSuffix} uses account.authRoute=env for provider ${JSON.stringify(entry.provider)}, but this adapter does not know that provider's env var`);
+    }
+    if (!process.env[envVar]) {
+      die(`seat "${name}"${labelSuffix} uses account.authRoute=env but ${envVar} is not set in the shell spawning this seat`);
+    }
+    if (providerAuthEntry(authFile, entry.provider) !== undefined) {
+      die(
+        `seat "${name}"${labelSuffix} uses account.authRoute=env, but ${authFile} contains a ${entry.provider} entry that pi checks before ${envVar}. ` +
+          `Remove that provider entry (do not replace it with an env stub) or switch the roster to account.authRoute=api_key; leaving it in place shadows the exported key.`
+      );
+    }
+    return;
+  }
+  if (!authIsIdentity(authFile)) {
+    die(
+      `seat "${name}"${labelSuffix} has no identity — ${authFile} is missing or empty.\n` +
+        `      OAuth: PI_CODING_AGENT_DIR="${accountDir}" pi, then type /login in the REPL and /exit after the browser flow\n` +
+        `      api_key: write ${authFile} or set account.authRoute=env and export the provider env var in the shell that spawns this seat`
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Talking to a running seat: FIFO in, log out
 // ---------------------------------------------------------------------------
@@ -423,13 +474,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
     );
   }
   const authFile = path.join(accountDir, "auth.json");
-  if (!authIsIdentity(authFile)) {
-    die(
-      `seat "${name}"${labelSuffix} has no identity — ${authFile} is missing or empty.\n` +
-        `      OAuth: PI_CODING_AGENT_DIR="${accountDir}" pi, then type /login in the REPL and /exit after the browser flow\n` +
-        `      api_key: write ${authFile} or export the provider env var in the shell that spawns this seat`
-    );
-  }
+  requireLaunchCredential(name, entry, accountDir, authFile, labelSuffix);
 
   const brief = roleBriefPath(entry.role);
   fs.mkdirSync(RUN_DIR, { recursive: true });
@@ -513,6 +558,7 @@ function cmdProbe(name: string): void {
   if (!entry.provider || !entry.model) {
     die(`seat "${name}"${labelSuffix} has no provider/model pin in seats/seats.json — probe must test the exact roster pair`);
   }
+  requireLaunchCredential(name, entry, accountDir, path.join(accountDir, "auth.json"), labelSuffix);
   const args = [
     "-p",
     "--no-session",

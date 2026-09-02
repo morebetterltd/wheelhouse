@@ -49,7 +49,7 @@ Each seat entry:
 | `model` | The model the seat is pinned to, in the provider's own id format. Pin reasoning effort by appending Pi's thinking-level suffix to this same string, for example `gpt-5.6-sol:high`. |
 | `account.dir` | The seat's agent directory — the value `PI_CODING_AGENT_DIR` is set to. By convention `~/.pi-seats-<namespace>/<seat-name>`, where the namespace is this project's (recorded as `namespace=` in `wheelhouse/.template-source`). This field is the record; the convention just explains where it came from. |
 | `account.label` | Optional free-form, human-meaningful account label (`kk-personal-anthropic`, `work-chatgpt-2`) printed in status/provisioning/error output so an operator can tell which real account backs the seat. It is NEVER a secret: do not put tokens, keys, passwords, emails you would not commit, or other credentials here. Omit it freely; existing rosters without labels stay valid. |
-| `account.authRoute` | Optional durable record of which credential route this seat's identity was given, one of `oauth`, `api_key`, `env` — the same three routes BOOTSTRAP.md's question 8 walks per seat (OAuth `/login` for a subscription seat; a written `auth.json` entry or an exported provider env var for an `api_key` seat). It records the route, never the credential itself. Omit it freely; existing rosters without it stay valid — `seat-env.sh` and `adapter.ts` only validate the value when the field is present, rejecting anything outside those three strings. |
+| `account.authRoute` | Optional durable record of which credential route this seat's identity was given, one of `oauth`, `api_key`, `env` — the same three routes BOOTSTRAP.md's question 8 walks per seat (OAuth `/login` for a subscription seat; a written `auth.json` entry for file-backed API-key identity; or an exported provider env var for env-backed API-key identity). It records the route, never the credential itself. Omit it freely; existing rosters without it stay valid — `seat-env.sh` and `adapter.ts` only validate the value when the field is present, rejecting anything outside those three strings. |
 
 Two gotchas about `provider` + `model`. The set of valid model ids depends on
 the ACCOUNT behind the seat, not just the provider — e.g. Codex via a ChatGPT
@@ -95,15 +95,18 @@ For each seat in the roster, once. The script:
    vs `/private/tmp` would write a key pi never matches, the same silent
    skip by another door;
 5. prints the `export PI_CODING_AGENT_DIR=...` line and, if the seat has no
-   `auth.json` yet, the one-time credential flow.
+   file identity yet, the credential flow for the route recorded in
+   `account.authRoute`.
 
 For OAuth seats, launch the REPL exactly as printed with `PI_CODING_AGENT_DIR`
 set, type `/login` inside the REPL, complete the browser flow, then type
-`/exit`; that writes the seat's `auth.json`. For an `api_key` seat, either
-write the provider entry into `auth.json` yourself or export the provider's env
-var in the shell that spawns the seat; the file route survives new shells, and
-the env-var route writes nothing to disk. Re-running the script for an existing
-seat changes nothing and exits 0.
+`/exit`; that writes the seat's `auth.json`. For an `api_key` file-route seat,
+write the provider entry into `auth.json` yourself. For an `env` route seat,
+export the provider's env var in the shell that spawns the seat and do not
+write an `auth.json` stub: Pi checks `auth.json` before the environment, so a
+provider entry in the file shadows the exported key. The file route survives
+new shells, and the env-var route writes nothing to disk. Re-running the script
+for an existing seat changes nothing and exits 0.
 
 What the script refuses to do, and why:
 
@@ -111,9 +114,11 @@ What the script refuses to do, and why:
   a re-login can replace it with a different account, and there is no undo.
   To re-login deliberately, remove the file yourself first. Existence alone
   is not identity, though: pi auto-creates an empty `{}` auth.json on a
-  first headless run, and the script treats that as not-logged-in — the
-  credential flow still prints, and OAuth `/login` inside the REPL (or the
-  api_key file route) fills the file in place.
+  first headless run, and the script treats that as not-logged-in. For OAuth
+  or api_key file-route seats, the credential flow still prints and fills the
+  file in place. For env-route seats, the adapter treats the exported provider
+  env var as the identity and refuses a provider entry in `auth.json` because
+  it would shadow that env var.
 - It will not reuse a namespace root whose `.project` backlink names a
   different project root. That STOP is the cross-fleet collision the namespace
   exists to prevent; choose a different namespace or inspect the existing
