@@ -140,6 +140,16 @@ fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 // it in OUR process env directly (not rely on an operator export reaching
 // us), so record what we actually got, not what anyone claims to have set.
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null }));
+if (args.includes("-p")) {
+  const prompt = args[args.length - 1] || "";
+  fs.writeFileSync(path.join(agentDir, "probe-prompt.txt"), prompt);
+  if (process.env.STUB_PROBE_FAIL) {
+    process.stderr.write(process.env.STUB_PROBE_FAIL + "\n");
+    process.exit(23);
+  }
+  process.stdout.write("OK\n");
+  process.exit(0);
+}
 const sessDir = path.join(agentDir, "sessions");
 fs.mkdirSync(sessDir, { recursive: true });
 let sessionFile, sessionId;
@@ -443,6 +453,24 @@ if grep -q '"BEADS_ACTOR":"custom-actor"' "${ARGV%argv.json}env.json" 2>/dev/nul
 else fail "override env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:custom-actor"; fi
 run stop worker-1
 run spawn worker-1
+
+phase "1c. probe — one-shot provider/model liveness check, no bead worktree"
+run probe worker-1
+if [ $RC -eq 0 ] && [ "$OUT" = "OK" ]; then pass "probe exits 0 and prints exactly OK"
+else fail "probe did not print OK (exit $RC): $OUT"; fi
+if grep -q '"-p","--no-session","--provider","anthropic","--model","stub-model-1:high"' "$ARGV" 2>/dev/null; then
+  pass "probe launches pi one-shot with --no-session and the roster provider/model"
+else fail "probe argv did not include the one-shot roster provider/model pin: $(cat "$ARGV" 2>/dev/null)"; fi
+if grep -q 'Reply with exactly the word OK. Use no tools.' "${ARGV%argv.json}probe-prompt.txt" 2>/dev/null; then
+  pass "probe sends the fixed one-line liveness turn"
+else fail "probe prompt was not the fixed liveness turn: $(cat "${ARGV%argv.json}probe-prompt.txt" 2>/dev/null)"; fi
+if [ ! -d "$PROJ/.wheelhouse-worktrees" ]; then
+  pass "probe did not require or create a bead worktree"
+else fail "probe created or required a bead worktree directory"; fi
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PROBE_FAIL='HTTP 429 quota exhausted' bun "$RUN_PROJ/seats/adapter.ts" probe worker-1 2>&1)"; RC=$?
+if [ $RC -eq 23 ] && [ "$OUT" = "HTTP 429 quota exhausted" ]; then
+  pass "probe failure preserves the provider error verbatim and exit status"
+else fail "probe failure was not verbatim (exit $RC): $OUT"; fi
 
 phase "2. dispatch — prompt round trip lands in log and session"
 PID_BEFORE_BAD="$(state_get pid)"

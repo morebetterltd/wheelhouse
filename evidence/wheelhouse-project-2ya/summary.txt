@@ -1,0 +1,25 @@
+Commands run from .wheelhouse-worktrees/wheelhouse-project-2ya.
+
+SPEC (a) RUNBOOK RULE
+$ rg -n "provider-side|adapter.ts probe|waiting on the principal" runbooks/RUNNING_THE_LOOP.md
+142:**A provider-side failure blocks a seat.** Credit balance, quota, 429, expired-token, invalid-token, and similar provider/auth failures are often transient or operator-fixable faster than a handoff round. Do not park the bead on the principal after the first failure. Run `bun seats/adapter.ts probe <seat>` at about two, five, and ten minutes after the failure, and run it again on every commander tick while the bead remains blocked. The probe is a one-line liveness turn outside any bead worktree, so it records no bead comment and does not spend the seat's work session. If any probe answers `OK`, close the blocked bead as commander-owned recovery and resume the loop. Only after those probes keep failing do you say "waiting on the principal", and the record should include the latest probe error rather than a summary guess.
+
+SPEC (b,c) ADAPTER PROBE FIXTURE SELFTEST
+$ ./seats/adapter.selftest.sh
+1c. probe — one-shot provider/model liveness check, no bead worktree
+  ok    probe exits 0 and prints exactly OK
+  ok    probe launches pi one-shot with --no-session and the roster provider/model
+  ok    probe sends the fixed one-line liveness turn
+  ok    probe did not require or create a bead worktree
+  ok    probe failure preserves the provider error verbatim and exit status
+adapter.ts works on this machine.
+
+SPEC (d) HERALD PROVIDER DISTRESS SELFTEST
+$ ./seats/herald.selftest.sh
+ok 3 - distress uses A2A failed state and carries quota detail
+ok 4 - provider-error distress detail names the adapter probe command
+herald.selftest: PASS (28 checks)
+
+SCRUB CHECK
+$ python3 scrub-check evidence/wheelhouse-project-2ya
+leak_matches []

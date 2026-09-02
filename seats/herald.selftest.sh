@@ -97,6 +97,8 @@ if [ "$(json_count 'r.class==="settle" && r.state==="terminal" && r.seat==="work
 else fail "missing settle/terminal inbox events"; fi
 if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /quota|429/.test(r.detail)')" = 1 ]; then pass "distress uses A2A failed state and carries quota detail"
 else fail "missing distress/failed inbox event"; fi
+if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /quota|429/.test(r.detail) && r.detail.includes("bun seats/adapter.ts probe worker-1")')" = 1 ]; then pass "provider-error distress detail names the adapter probe command"
+else fail "provider-error distress detail did not name the adapter probe command"; fi
 if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /Insufficient credits/.test(r.detail)')" = 1 ]; then pass "distress matches insufficient credits wording"
 else fail "missing insufficient-credits distress event"; fi
 if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /invalid_grant/.test(r.detail)')" = 1 ]; then pass "real provider 400 invalid_grant stderr becomes one distress"

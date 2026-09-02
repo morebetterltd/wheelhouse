@@ -259,6 +259,12 @@ function classify(obj: any): Candidate | null {
   return null;
 }
 
+function distressDetailForInbox(candidate: Candidate, seat: string): string {
+  if (candidate.eventClass !== "distress") return candidate.detail;
+  if (!DISTRESS_RE.test(candidate.detail)) return candidate.detail;
+  return truncate(`${candidate.detail}\nProbe command: bun seats/adapter.ts probe ${seat}`);
+}
+
 function eventId(relLog: string, offset: number, line: string, candidate: Candidate): string {
   return crypto.createHash("sha256")
     .update(`${relLog}\0${offset}\0${candidate.eventClass}\0${candidate.state}\0${line}`)
@@ -361,7 +367,7 @@ function scanOnce(): number {
             class: candidate.eventClass,
             state: candidate.state,
             title: candidate.title,
-            detail: candidate.detail,
+            detail: distressDetailForInbox(candidate, path.basename(file, ".jsonl")),
             source: { log: rel, offset: rec.offset, type: candidate.sourceType ?? null },
           });
           appended++;
