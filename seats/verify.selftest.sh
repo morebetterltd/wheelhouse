@@ -122,6 +122,10 @@ if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); proc
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
+// The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
+// beadsActorFor mirrored here for the verifier), not rely on an operator
+// export reaching this one-shot process.
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null }));
 // The dispatcher sets our cwd by construction (a scratch worktree), not by
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
@@ -226,7 +230,9 @@ TIP="$(git -C "$PROJ" rev-parse fleet/bead-1)"
 
 REPLY="$FIX/reply.txt"
 run() {   # runs verify.ts in the fixture; args pass through
-  OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" \
+  # BEADS_ACTOR unset on purpose: the dispatcher must set it in the spawned
+  # verifier's own env by construction, not forward whatever this shell has.
+  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
@@ -322,6 +328,9 @@ else fail "verifier provider/model from seats.json did not reach pi's argv"; fi
 if grep -q "bead-1" "$VARGV" && grep -q "$TIP" "$VARGV" && grep -q "bd show bead-1" "$VARGV"; then
   pass "prompt carries the bead id, the tip SHA, and the bead-claim reference"
 else fail "prompt is missing bead id, tip SHA, or bead claim"; fi
+if grep -q '"BEADS_ACTOR":"verifier"' "${VARGV%argv.json}env.json" 2>/dev/null; then
+  pass "the ephemeral verifier's own env carries BEADS_ACTOR=verifier, with no operator export"
+else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:verifier set by verify.ts itself"; fi
 
 # --- scratch cwd: construction, not contract discipline ---------------------
 # The verifier's process cwd must be A repository the branch's ref resolves

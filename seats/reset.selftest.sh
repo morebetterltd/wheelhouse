@@ -106,6 +106,7 @@ const args = process.argv.slice(2);
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null }));
 const sessDir = path.join(agentDir, "sessions");
 fs.mkdirSync(sessDir, { recursive: true });
 let sessionFile, sessionId;
@@ -190,7 +191,10 @@ EOF
 PROJ="$FIX/proj"
 build_proj "$PROJ" alpha
 
-run() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
+# BEADS_ACTOR unset on purpose, same reasoning as adapter.selftest.sh: reset
+# must set it in the cold-respawned seat's own env by construction, not by
+# forwarding whatever this shell happened to have.
+run() { OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
@@ -262,6 +266,9 @@ else fail "reset deleted the old session file — it should be discarded from st
 if ! grep -q '"--session"' "$ARGV" 2>/dev/null; then
   pass "the post-reset spawn did not pass --session — it came back cold"
 else fail "the post-reset spawn still attached --session — reset did not go cold"; fi
+if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
+  pass "reset's cold respawn carries BEADS_ACTOR=worker-1, with no operator export"
+else fail "reset's respawned seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
 run stop worker-1
 
 phase "3. reset on a seat that is not running"

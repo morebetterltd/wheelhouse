@@ -198,6 +198,23 @@ function expandTilde(p: string): string {
 }
 
 /**
+ * Same mechanism as adapter.ts's beadsActorFor, and for the same reason: the
+ * ephemeral verifier's own pi process must carry BEADS_ACTOR=<verifier seat>
+ * so its bd comment lands authored as the verifier, regardless of whether
+ * the operator or commander shell that invoked this dispatcher happened to
+ * export it. WHEELHOUSE_BEADS_ACTOR_<SEAT> (seat name upper-cased, non
+ * [A-Z0-9] turned into "_") overrides it; unset, the seat name is used as-is.
+ */
+function beadsActorEnvVar(name: string): string {
+  return `WHEELHOUSE_BEADS_ACTOR_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+}
+
+function beadsActorFor(name: string): string {
+  const override = process.env[beadsActorEnvVar(name)];
+  return override && override.length > 0 ? override : name;
+}
+
+/**
  * Bead ids and seat names are used as single path segments here — the
  * verdict file is verdicts/<bead-id>.md, and seat names index the roster
  * whose account dirs get spawned on. Anything that is not one plain
@@ -541,7 +558,7 @@ function main(): void {
   const scratchCwd = makeScratchCwd(repoRoot);
   const res = spawnSync("pi", args, {
     cwd: scratchCwd,
-    env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir },
+    env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir, BEADS_ACTOR: beadsActorFor(verifierSeat) },
     encoding: "utf8",
     timeout: TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,

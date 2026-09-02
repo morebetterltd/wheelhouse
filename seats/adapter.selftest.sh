@@ -136,6 +136,10 @@ fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
 // lets the selftest see what the OS-level cwd actually was, not what the
 // adapter merely printed.
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+// Same construction argument for BEADS_ACTOR: the adapter is supposed to set
+// it in OUR process env directly (not rely on an operator export reaching
+// us), so record what we actually got, not what anyone claims to have set.
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null }));
 const sessDir = path.join(agentDir, "sessions");
 fs.mkdirSync(sessDir, { recursive: true });
 let sessionFile, sessionId;
@@ -236,7 +240,14 @@ build_installed_proj() {   # $1 = project dir, $2 = seat namespace
 PROJ="$FIX/proj"
 build_proj "$PROJ" alpha
 
-run() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
+# BEADS_ACTOR is unset here on purpose, every invocation: the whole point of
+# this bug's fix is that the adapter sets it in the SPAWNED SEAT's env by
+# construction, not that it forwards whatever the invoking shell happened to
+# export. A selftest that left an ambient BEADS_ACTOR in place could pass
+# for the wrong reason — the operator-export mechanism working, not the
+# adapter setting it — so it is stripped before every `run`, and phase 1's
+# override case sets WHEELHOUSE_BEADS_ACTOR_WORKER_1 explicitly instead.
+run() { OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
@@ -414,10 +425,24 @@ else fail "state.json model was $(state_get model) — expected stub-model-1:hig
 if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ" ]; then
   pass "spawn with no bead id roots the seat at the project root"
 else fail "spawn's cwd was $(cat "$CWD_FILE" 2>/dev/null) — expected $PROJ"; fi
+if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
+  pass "the spawned seat's own env carries BEADS_ACTOR=worker-1, with no operator export"
+else fail "spawned seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1 set by the adapter itself"; fi
 run spawn worker-1
 if [ $RC -ne 0 ] && says "already running"; then
   pass "a second spawn of a live seat is refused"
 else fail "spawning an already-running seat did not stop (exit $RC)"; fi
+
+phase "1b. BEADS_ACTOR override — WHEELHOUSE_BEADS_ACTOR_<SEAT> beats the seat name"
+run stop worker-1
+OUT="$(env -u BEADS_ACTOR WHEELHOUSE_BEADS_ACTOR_WORKER_1=custom-actor HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+if [ $RC -eq 0 ]; then pass "spawn with the override env var exits 0"
+else fail "spawn with the override env var exited $RC: $OUT"; fi
+if grep -q '"BEADS_ACTOR":"custom-actor"' "${ARGV%argv.json}env.json" 2>/dev/null; then
+  pass "WHEELHOUSE_BEADS_ACTOR_WORKER_1 overrides the default seat-name actor"
+else fail "override env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:custom-actor"; fi
+run stop worker-1
+run spawn worker-1
 
 phase "2. dispatch — prompt round trip lands in log and session"
 PID_BEFORE_BAD="$(state_get pid)"
@@ -453,6 +478,9 @@ else fail "seat cwd after dispatch was $(cat "$CWD_FILE" 2>/dev/null) — expect
 if grep -q "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null; then
   pass "the cwd-changing relaunch reattached the SAME session (--session), not a cold start"
 else fail "relaunch did not carry --session with the prior session file"; fi
+if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
+  pass "the dispatch relaunch still carries BEADS_ACTOR=worker-1, with no operator export in this shell either"
+else fail "relaunched seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
 
 phase "3. steer — a redirect lands inside a turn still in flight"
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-y"
@@ -498,6 +526,9 @@ check_resume() {   # $1 = label; expects a stopped seat with a recorded session
   if grep -q "\"--session\",\"$sess\"" "$ARGV" 2>/dev/null; then
     pass "$label: relaunch attached the recorded session via --session"
   else fail "$label: --session with the recorded file is not in pi's argv"; fi
+  if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
+    pass "$label: resume still carries BEADS_ACTOR=worker-1"
+  else fail "$label: resumed seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
 }
 SESS_LINES_BEFORE=$(wc -l < "$SESS" | tr -d ' ')
 check_resume "resume"
@@ -507,6 +538,12 @@ else fail "session file unchanged after resume"; fi
 if [ "$(state_get lastBead)" = "bead-y" ]; then
   pass "lastBead survives the stop/resume cycle"
 else fail "lastBead was lost across resume"; fi
+run reset worker-1
+if [ $RC -eq 0 ]; then pass "reset exits 0"
+else fail "reset exited $RC: $OUT"; fi
+if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
+  pass "reset's cold respawn still carries BEADS_ACTOR=worker-1"
+else fail "reset's respawned seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
 run stop worker-1
 
 phase "6b. pruned cwd — dispatch falls back visibly; plain resume STOPs"
