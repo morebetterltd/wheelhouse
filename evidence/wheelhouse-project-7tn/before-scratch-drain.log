@@ -1,0 +1,14 @@
+$ WHEELHOUSE_HERALD_ROOT=$TMP bun seats/herald.ts --once  # BEFORE fix
+herald: appended 640 wake event(s)
+$ WHEELHOUSE_HERALD_ROOT=$TMP bun seats/herald.ts --drain > drain.jsonl
+$ python3 summarize drain.jsonl
+class counts: {'sentinel': 509, 'settle': 131}
+sentinel count: 509
+sentinel[1] seat=reviewer-codex source_type=tool_execution_update detail='{"type":"tool_execution_update","toolCallId":"call_BqI7NJcAGMXveZuFyj9F0w64|fc_0f6e223d692978f2016a977438756487d297d7169aee8f75de","toolName":"bash","args":{"command":"bd show whee'
+sentinel[2] seat=reviewer-codex source_type=tool_execution_update detail='{"type":"tool_execution_update","toolCallId":"call_BqI7NJcAGMXveZuFyj9F0w64|fc_0f6e223d692978f2016a977438756487d297d7169aee8f75de","toolName":"bash","args":{"command":"bd show whee'
+sentinel[3] seat=reviewer-codex source_type=tool_execution_update detail='{"type":"tool_execution_update","toolCallId":"call_BqI7NJcAGMXveZuFyj9F0w64|fc_0f6e223d692978f2016a977438756487d297d7169aee8f75de","toolName":"bash","args":{"command":"bd show whee'
+sentinel[4] seat=reviewer-codex source_type=tool_execution_end detail='(STOP/auth/quota), sentinel questions (@commander: lines in seat output).'
+sentinel[5] seat=reviewer-codex source_type=message_start detail='(STOP/auth/quota), sentinel questions (@commander: lines in seat output).'
+sentinel[6] seat=reviewer-codex source_type=message_end detail='(STOP/auth/quota), sentinel questions (@commander: lines in seat output).'
+sentinel[7] seat=reviewer-codex source_type=tool_execution_end detail='{"type":"assistant_message","message":"@commander: should I split this bead?"}'
+sentinel[8] seat=reviewer-codex source_type=message_start detail='{"type":"assistant_message","message":"@commander: should I split this bead?"}'
