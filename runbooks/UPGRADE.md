@@ -268,6 +268,12 @@ rm -f wheelhouse/.template-source.bak
 
 An upgrade re-copies the contracts and the runbooks and reaches nothing else. If the change altered a convention — a path form, a command name, a label — then your generated files and your existing beads still speak the old one:
 
+### Adopt the autonomy mandate in existing installs
+
+Ask the principal the same question current `BOOTSTRAP.md` asks: how far does the fleet take work? The default answer is **all the way** — merge, push, open and merge PRs, and deploy wherever the project has an automated deploy path — stopping only for this install's reserved actions or a genuine fork in product intent. Record the answer in `wheelhouse/INTEGRATOR.md`'s project section along with the explicit reserved list and the date. The mandate line must quote the principal directive verbatim: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done."
+
+Then hand-merge the same standing behavior into `CLAUDE.md` from `generated/CLAUDE.md.example`: the `## Autonomy mandate` section, the two-and-only-two reasons to interrupt the principal, and the restart checklist. Add an ISA Decision quoting the directive in `wheelhouse/ISA.md` so a restarted commander cannot lose it. Finally, read `AGENTS.md` if the install has one: keep bd's command reference, but append or update the wheelhouse override so bd's Conservative/default "do not push" text cannot be cited against the authority in `wheelhouse/INTEGRATOR.md`.
+
 - `CLAUDE.md`, `wheelhouse/ISA.md`, `wheelhouse/STARTUP.md`, and the `## This project` sections you just preserved;
 - if the target template changed `generated/CLAUDE.md.example` or `generated/STARTUP.md.example`, read that specimen and hand-merge the matching standing behaviors into your real `CLAUDE.md` or `wheelhouse/STARTUP.md`; generated examples are not installed by an upgrade, so existing installs do not learn new Decisions-before-beads, Goal-before-dispatch, Claims-move-on-merge, morning handoff archive, or end-of-day `stop-all` ritual rules unless you add them;
 - the intent layer's other paths are covered by the upgrade mechanics above: `GRAPH.md` and `INTEGRATOR.md` contract halves move through the splice list, `RUNNING_THE_LOOP.md` moves through the runbook copy, and `seats/intent-check.sh` moves through the seats copy; verify those three outputs rather than hand-editing them here;
