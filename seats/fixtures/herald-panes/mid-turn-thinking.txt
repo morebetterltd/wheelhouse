@@ -1,0 +1,72 @@
+
+  ┌─ COMMANDER PANE ─────────────────────────
+  │ This is the commander's seat. Launch your
+  │ commander here yourself — the cockpit nev
+  │                                          
+  │     cd [home]/Documents/_prct
+  │     claude                               
+  │                                          
+  │ The pane to the right is the floor viewer
+  │   1-9 pin a seat   0 pin STATUS   f follo
+  └──────────────────────────────────────────
+
+[user]@macbook-air wheelhouse-project 
+bridge already built: wh-wheelhouse-project (
+[user]@macbook-air wheelhouse-project 
+
+                                         ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+
+                                             ing System
+
+  🧠 MEMORY: F (0/8 fresh) · due: TELOS.md   
+  (never reviewed) · last curation +1 new →  
+  self 58m ago                               
+                                             
+  🗣️ Grace: I wake myself now. You'll hear   
+  from me when there's a decision, not when  
+  you ask.                                   
+
+✻ Churned for 1m 9s · done 8:38 AM           
+
+❯ If herald doesn't work, then you should    
+  get it fixed. The whole point of           
+  wheelhouse is that you can create your own 
+  work based on what you're seeing and what  
+  you find. I shouldn't need to jump in and  
+  tell you to fix problems you can clearly   
+  see.                                       
+                                             
+⏺ You're right. I filed jf4 and left it      
+  parked behind a P3. A P1 goes to the front.
+  Checking worker-1 and moving it.
+                                             
+  Ran 1 shell command                 
+                                             
+⏺ apj is already reported. Worker-1 is       
+  finishing its turn, so I'll wait for it to 
+  settle rather than kill it mid-stream, then
+  hand it jf4.                               
+                                          
+  Checking reviewer seats and whether 24r    
+  verdicts have landed                       
+  ⎿  $ bun seats/adapter.ts status 2>&1 |    
+     grep -E '^reviewer' | cut -c1-80; echo  
+     "=== 24r verdicts ==="; bd show         
+     wheelhouse-project-24r 2>/dev/null | sed
+     -n '/COMMENTS/,$p' | grep -n -E '^      
+     20[0-9-]+ |SHADOW \(|REVIEW             
+     \(|VERDICT|BOUNCE|PUSH:' | cut -c1-130  
+                                             
+✶ Fiddle-faddling… (57s · thinking)          
+  ⎿  Tip: Run /ultrareview for a cloud-based 
+     multi-agent review that finds and       
+     verifies bugs in your branch — 3 free   
+     reviews left                            
+     ✔ Update installed · Restart to update  
+─────────────────────────────────────────────
+❯                                          
+─────────────────────────────────────────────
+    LIFEOS ◉27%
+  ◈main 1h │ ✿—→                           
+  ◎ 📁0 ✦2 ⊕0                              
+  ⏵⏵ auto mode on (shift+tab to cycle) · ←…

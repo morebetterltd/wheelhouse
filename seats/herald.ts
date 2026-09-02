@@ -23,6 +23,7 @@ const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import
 const SEATS_DIR = path.join(ROOT, "seats");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
 const INBOX = path.join(SEATS_DIR, "inbox.jsonl");
+const HERALD_OUT_LOG = path.join(LOG_DIR, "herald.out.log");
 const DRAIN_CURSOR = path.join(SEATS_DIR, "inbox.cursor");
 const DRAIN_SEEN = path.join(SEATS_DIR, "inbox.seen.json");
 const STATE_FILE = path.join(SEATS_DIR, "herald.state.json");
@@ -222,13 +223,27 @@ function tmuxOutput(args: string[]): string {
   return execFileSync("tmux", tmuxArgs(args), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
+function logPoke(outcome: string, detail = ""): void {
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+  const suffix = detail ? ` ${detail.replace(/\s+/g, " ").trim()}` : "";
+  fs.appendFileSync(HERALD_OUT_LOG, `${new Date().toISOString()} poke ${outcome}${suffix}\n`);
+}
+
+function paneTextLooksIdleClaude(paneText: string): boolean {
+  // Claude Code's current prompt UI is a bordered input box: a standalone
+  // `❯` prompt line followed by a status/footer line. During a turn that
+  // same box can still be visible below an active status line, so exclude the
+  // measured active markers first.
+  if (/[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(paneText)) return false;
+  if (/\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(paneText)) return false;
+  return /(?:^|\n)\s*(?:[>❯]|Human:|You:)\s*(?:\n|$)/.test(paneText) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
+}
+
 function commanderPaneIdleClaude(): boolean {
   if (!TMUX_PANE) return false;
   try {
-    const command = tmuxOutput(["display-message", "-p", "-t", TMUX_PANE, "#{pane_current_command}"]);
-    if (command !== "claude") return false;
-    const paneText = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-20"]);
-    return /(?:^|\n)\s*(?:[>❯]|Human:|You:)\s*$/.test(paneText) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
+    const paneText = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-30"]);
+    return paneTextLooksIdleClaude(paneText);
   } catch {
     return false;
   }
@@ -237,8 +252,15 @@ function commanderPaneIdleClaude(): boolean {
 function pokeCommanderIfSafe(state: HeraldState): void {
   const inboxSize = fs.existsSync(INBOX) ? fs.statSync(INBOX).size : 0;
   if (inboxSize <= 0 || state.lastPokedInboxSize === inboxSize) return;
-  if (!commanderPaneIdleClaude()) return;
-  execFileSync("tmux", tmuxArgs(["send-keys", "-t", TMUX_PANE, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
+  if (!TMUX_PANE) { logPoke("no-pane", `inbox=${inboxSize}`); return; }
+  if (!commanderPaneIdleClaude()) { logPoke("not-idle", `pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
+  try {
+    execFileSync("tmux", tmuxArgs(["send-keys", "-t", TMUX_PANE, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
+  } catch (e: any) {
+    logPoke("send-failed", `pane=${TMUX_PANE} inbox=${inboxSize} error=${e?.message || e}`);
+    throw e;
+  }
+  logPoke("sent", `pane=${TMUX_PANE} inbox=${inboxSize}`);
   state.lastPokedInboxSize = inboxSize;
   writeState(state);
 }
