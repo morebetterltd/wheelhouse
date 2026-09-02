@@ -1,0 +1,7 @@
+$ python3 count agent_end stopReason=error in worker-1/reviewer/reviewer-codex live logs (read-only)
+worker-1 {(True, 'WebSocket error'): 9, (True, 'fetch failed'): 1, (True, 'terminated'): 4, (True, 'Codex SSE response headers timed out after 300000ms'): 2}
+examples [(30360, True, 'WebSocket error'), (34087, True, 'fetch failed'), (35422, True, 'terminated')]
+reviewer {(True, 'Request timed out.'): 5, (True, 'terminated'): 2, (False, 'The model refused to complete the request'): 1}
+examples [(4067, True, 'Request timed out.'), (5887, True, 'Request timed out.'), (6578, True, 'terminated')]
+reviewer-codex {(True, 'WebSocket error'): 1, (True, 'terminated'): 1}
+examples [(54162, True, 'WebSocket error'), (57268, True, 'terminated')]

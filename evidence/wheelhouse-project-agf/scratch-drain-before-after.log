@@ -1,0 +1,12 @@
+$ WHEELHOUSE_HERALD_ROOT=$TMP/before bun $TMP/herald-before.ts --once  # BEFORE fix, copied live logs
+herald: appended 170 wake event(s)
+$ WHEELHOUSE_HERALD_ROOT=$TMP/before bun $TMP/herald-before.ts --drain > drain-before.jsonl
+$ summarize before
+class counts: {'settle': 170}
+$ WHEELHOUSE_HERALD_ROOT=$TMP/after bun seats/herald.ts --once  # AFTER fix, copied live logs
+herald: appended 143 wake event(s)
+$ WHEELHOUSE_HERALD_ROOT=$TMP/after bun seats/herald.ts --drain > drain-after.jsonl
+$ summarize after
+class counts: {'distress': 1, 'settle': 142}
+retry_transient_wake_count: 0
+nonretry_error_distress_examples: [('reviewer', 'The model refused to complete the request')]

@@ -60,7 +60,8 @@ EOF
 chmod +x "$FIX/bin/tmux"
 SEND_LOG="$FIX/send-keys.log"
 
-cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
+{
+cat <<'JSONL'
 {"type":"agent_start","message":"working"}
 {"type":"agent_end","messages":["done"],"usage":{"input_tokens":1,"output_tokens":2}}
 {"type":"response","command":"prompt","success":false,"error":"429 usage limit reached: quota exhausted"}
@@ -74,19 +75,30 @@ cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"@commander: should I split this bead?"}]}}
 {"type":"assistant_message","message":"the author field is ordinary prose, not a failure"}
 JSONL
+cat "$ROOT/seats/fixtures/herald-events/agent-end-retry-websocket.json"
+cat "$ROOT/seats/fixtures/herald-events/agent-end-retry-sse-timeout.json"
+cat "$ROOT/seats/fixtures/herald-events/agent-end-error-no-retry.json"
+cat "$ROOT/seats/fixtures/herald-events/agent-end-normal-stop.json"
+} > "$PROJ/seats/logs/worker-1.jsonl"
 
 OUT="$(run_herald --once 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 5 wake event'; then pass "captures settle, distress, and sentinel events without matching author as auth"
-else fail "herald --once did not capture exactly five events (rc=$RC): $OUT"; fi
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 7 wake event'; then pass "captures settle, distress, sentinel, and non-retried error events without retry wakes"
+else fail "herald --once did not capture exactly seven events (rc=$RC): $OUT"; fi
 
-if [ "$(json_count 'r.class==="settle" && r.state==="terminal" && r.seat==="worker-1"')" = 1 ]; then pass "settle uses A2A terminal state"
-else fail "missing settle/terminal inbox event"; fi
+if [ "$(json_count 'r.class==="settle" && r.state==="terminal" && r.seat==="worker-1"')" = 2 ]; then pass "settle uses A2A terminal state"
+else fail "missing settle/terminal inbox events"; fi
 if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /quota|429/.test(r.detail)')" = 1 ]; then pass "distress uses A2A failed state and carries quota detail"
 else fail "missing distress/failed inbox event"; fi
 if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /Insufficient credits/.test(r.detail)')" = 1 ]; then pass "distress matches insufficient credits wording"
 else fail "missing insufficient-credits distress event"; fi
 if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /invalid_grant/.test(r.detail)')" = 1 ]; then pass "real provider 400 invalid_grant stderr becomes one distress"
 else fail "missing provider invalid_grant distress event"; fi
+if [ "$(json_count 'r.class==="distress" && r.state==="failed" && r.title==="seat turn failed" && /model refused/.test(r.detail)')" = 1 ]; then pass "agent_end stopReason=error without retry becomes distress with errorMessage detail"
+else fail "missing non-retried agent_end error distress"; fi
+if [ "$(json_count 'r.source.type==="agent_end" && /Codex SSE response headers timed out|WebSocket error/.test(r.detail) && r.class!=="distress"')" = 0 ] && [ "$(json_count 'r.class==="distress" && /Codex SSE response headers timed out/.test(r.detail)')" = 0 ]; then pass "agent_end stopReason=error with willRetry=true produces no wake"
+else fail "retried agent_end error produced a wake"; fi
+if [ "$(json_count 'r.class==="settle" && r.state==="terminal" && /normal stopReason stop/.test(r.detail)')" = 1 ]; then pass "agent_end normal stopReason remains settle"
+else fail "normal agent_end stopReason did not settle exactly once"; fi
 if [ "$(json_count 'r.class==="distress" && (/toolcall_delta|thinking_delta|credentials bench|auth considerations/.test(r.detail) || r.detail==="stop")')" = 0 ]; then pass "recorded false-positive message_update shapes produce zero distress"
 else fail "message_update stop/thinking false positives reached distress"; fi
 if [ "$(json_count 'r.class==="sentinel" && r.state==="input-required" && /@commander: should I split this bead/.test(r.detail)')" = 1 ]; then pass "turn-end assistant @commander line becomes one sentinel wake"
@@ -107,7 +119,7 @@ DRAIN1="$FIX/drain1.out"
 DRAIN2="$FIX/drain2.out"
 run_herald --drain > "$DRAIN1"
 run_herald --drain > "$DRAIN2"
-if [ "$(line_count "$DRAIN1")" = 5 ] && [ ! -s "$DRAIN2" ] && [ "$(cat "$PROJ/seats/inbox.cursor")" = "$(wc -c < "$PROJ/seats/inbox.jsonl" | tr -d ' ')" ]; then
+if [ "$(line_count "$DRAIN1")" = 7 ] && [ ! -s "$DRAIN2" ] && [ "$(cat "$PROJ/seats/inbox.cursor")" = "$(wc -c < "$PROJ/seats/inbox.jsonl" | tr -d ' ')" ]; then
   pass "drain cursor emits unread wake events once, deduping stable ids, then advances to EOF"
 else
   fail "drain cursor/dedup failed: drain1=$(line_count "$DRAIN1") drain2_bytes=$(wc -c < "$DRAIN2" | tr -d ' ') cursor=$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo missing)"

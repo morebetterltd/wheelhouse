@@ -1,0 +1,27 @@
+Commands run from .wheelhouse-worktrees/wheelhouse-project-agf.
+
+SELFTEST
+$ ./seats/herald.selftest.sh
+See selftest.log. Result: herald.selftest: PASS (24 checks)
+
+READ-ONLY LIVE LOG SHAPES
+$ python3 count agent_end stopReason=error in worker-1/reviewer/reviewer-codex live logs (read-only)
+See live-agent-end-error-counts.log. It records retried WebSocket / SSE / terminated agent_end stopReason=error examples, plus a non-retried live error shape used for the distress fixture.
+
+SCRATCH DRAIN BEFORE/AFTER (copied live logs; scratch state/inbox/log roots; live herald not stopped/restarted)
+$ WHEELHOUSE_HERALD_ROOT=$TMP/before bun $TMP/herald-before.ts --once  # BEFORE fix, copied live logs
+herald: appended 170 wake event(s)
+$ WHEELHOUSE_HERALD_ROOT=$TMP/before bun $TMP/herald-before.ts --drain > drain-before.jsonl
+$ summarize before
+class counts: {'settle': 170}
+$ WHEELHOUSE_HERALD_ROOT=$TMP/after bun seats/herald.ts --once  # AFTER fix, copied live logs
+herald: appended 143 wake event(s)
+$ WHEELHOUSE_HERALD_ROOT=$TMP/after bun seats/herald.ts --drain > drain-after.jsonl
+$ summarize after
+class counts: {'distress': 1, 'settle': 142}
+retry_transient_wake_count: 0
+nonretry_error_distress_examples: [('reviewer', 'The model refused to complete the request')]
+
+SCRUB CHECK
+$ python3 scrub-check evidence/wheelhouse-project-agf + seats/fixtures/herald-events
+leak_matches []
