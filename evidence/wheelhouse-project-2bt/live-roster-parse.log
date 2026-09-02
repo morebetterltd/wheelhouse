@@ -1,0 +1,5 @@
+$ node validates umbrella live seats/seats.json shadow fields
+shadow true: reviewer-codex
+shadow true: reviewer-glm
+seat_count=6
+invalid_shadow_count=0

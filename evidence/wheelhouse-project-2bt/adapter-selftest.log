@@ -1,0 +1,114 @@
+$ bash seats/adapter.selftest.sh
+
+installed layout — wheelhouse/fleet brief is preferred without contracts/
+  ok    installed layout: spawn exits 0 with no contracts/ directory
+  ok    installed layout: worker brief resolves to wheelhouse/fleet/WORKER.md
+  ok    missing brief: STOP names both installed and template paths tried
+
+roster account.label — shown when present, optional when absent
+  ok    spawn output includes account.label when the roster has one
+  ok    status output includes account.label when the roster has one
+
+roster account.authRoute — absent is valid, present-valid passes, present-invalid is a loud STOP
+  ok    authRoute absent: spawn exits 0 (pre-existing roster stays valid)
+  ok    authRoute present-valid (api_key): spawn exits 0
+  ok    authRoute present-invalid: adapter STOPs naming the offending value and the allowed set
+
+roster shadow — absent is false, true is visible in status, non-boolean is a loud STOP
+  ok    shadow absent: status does not mark the seat as shadow
+  ok    shadow present-true: status marks the seat as shadow
+  ok    shadow present-invalid: adapter STOPs naming the offending value and boolean requirement
+
+roster model suffix — malformed thinking suffix is pi's validation failure, surfaced at spawn
+  ok    malformed suffix: pi rejects it and adapter surfaces the stderr tail
+
+0. seat-name validation — a name is one path segment or it is refused
+  ok    seat name with a path separator is refused with a loud STOP
+  ok    seat name with a dot segment is refused with a loud STOP
+  ok    seat name with whitespace is refused with a loud STOP
+  ok    seat name with a quote is refused with a loud STOP
+  ok    seat name with nothing (empty) is refused with a loud STOP
+  ok    the STOP names the offending key
+
+1. spawn — process, identity, and what was actually launched
+  ok    spawn: spawn exits 0
+  ok    spawn: state.json records a live pid
+  ok    spawn: state.json records a session file that exists
+  ok    pi was launched in RPC mode
+  ok    role brief injected: --append-system-prompt names contracts/WORKER.md
+  ok    roster's provider and model-plus-thinking pin the launch
+  ok    state.json records the exact model-plus-thinking pin
+  ok    spawn with no bead id roots the seat at the project root
+  ok    the spawned seat's own env carries BEADS_ACTOR=worker-1, with no operator export
+  ok    a second spawn of a live seat is refused
+
+1b. BEADS_ACTOR override — WHEELHOUSE_BEADS_ACTOR_<SEAT> beats the seat name
+  ok    spawn with the override env var exits 0
+  ok    WHEELHOUSE_BEADS_ACTOR_WORKER_1 overrides the default seat-name actor
+
+1c. probe — one-shot provider/model liveness check, no bead worktree
+  ok    probe exits 0 and prints exactly OK
+  ok    probe launches pi one-shot with --no-session and the roster provider/model
+  ok    probe sends the fixed one-line liveness turn
+  ok    probe did not require or create a bead worktree
+  ok    probe failure preserves the provider error verbatim and exit status
+
+2. dispatch — prompt round trip lands in log and session
+  ok    dispatching a bead with no worktree is a loud STOP
+  ok    the seat is left running, not stopped, when the target worktree is missing
+  ok    dispatch exits 0
+  ok    agent_end captured in the event log
+  ok    the dispatched text (bead-prefixed) came back through the turn
+  ok    session file grew (1 -> 3 lines)
+  ok    state.json records the dispatched bead
+  ok    dispatch relaunched the seat rooted in the bead's worktree, by construction
+  ok    the cwd-changing relaunch reattached the SAME session (--session), not a cold start
+  ok    the dispatch relaunch still carries BEADS_ACTOR=worker-1, with no operator export in this shell either
+
+3. steer — a redirect lands inside a turn still in flight
+  ok    steer exits 0
+  ok    the steer reached the seat mid-turn
+
+4. state survives the adapter — every invocation is a fresh process
+  ok    a fresh status invocation reads worker-1 as RUNNING from state.json
+  ok    status still works for a roster with no account.label
+
+5. no tokens — identity never leaks into state or logs
+  ok    auth.json's content appears nowhere in state.json or the logs
+
+6. stop, then resume — the session comes back warm
+  ok    stop exits 0 and the process is gone
+  ok    state keeps the session but drops the pid
+  ok    resume: resume exits 0
+  ok    resume: relaunch attached the recorded session via --session
+  ok    resume: resume still carries BEADS_ACTOR=worker-1
+  ok    the same session file grew on resume — warm context survives
+  ok    lastBead survives the stop/resume cycle
+  ok    reset exits 0
+  ok    reset's cold respawn still carries BEADS_ACTOR=worker-1
+
+6b. pruned cwd — dispatch falls back visibly; plain resume STOPs
+  ok    pruned cwd setup: resume exits 0 before pruning
+  ok    pruned cwd dispatch: dispatch exits 0 via fallback
+  ok    pruned cwd dispatch: fallback announcement is visible and names why
+  ok    pruned cwd dispatch: fallback used a fresh session rather than --session
+  ok    pruned cwd dispatch: state records the new dispatched bead
+  ok    pruned cwd resume: no-dispatch-target resume STOPs and names the fallback limitation
+
+7. canary — can these checks detect a broken adapter?
+  ok    canary: an adapter that records no state is caught
+  ok    canary: an adapter that resumes without the session is caught
+
+8. real pi — one smoke leg, spawn/dispatch/agent_end/resume/grow
+  ok    real: spawn exits 0 (seat worker-1: pid 52793, session 01a063cb-b970-7175-899d-c6fcb264e952
+  events -> [tmpdir]wheelhouse-adapter-selftest.34765.Ul7sru/realproj/seats/logs/worker-1.jsonl)
+  ok    real: dispatch accepted
+  ok    real: agent_end captured
+  ok    real: stop exits 0
+  ok    real: resume exits 0 (seat worker-1: pid 55816, session 01a063cb-be16-75fe-825d-ae47319da5ef
+  events -> [tmpdir]wheelhouse-adapter-selftest.34765.Ul7sru/realproj/seats/logs/worker-1.jsonl)
+  ok    real: post-resume dispatch reached agent_end
+  ok    real: the SAME session file grew across resume (5 -> 7 lines)
+  ok    real: no auth material in state.json or the logs before fixture deletion
+
+adapter.ts works on this machine.
