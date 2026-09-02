@@ -70,7 +70,7 @@ sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f whe
 
 ```bash
 BASE=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
-git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/     # skip if BASE is 'unknown'
+git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ || true     # skip if BASE is 'unknown'; diff exits 1 when differences exist
 ```
 
 Read it. If nothing changed in `contracts/`, you are already current and there is nothing to do.
