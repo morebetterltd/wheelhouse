@@ -47,6 +47,8 @@ The principal can trust an APPROVE enough to merge without reading the diff. Tha
 
 Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 
+When the commander has promoted this reviewer as a FALLBACK GATE for a gating-reviewer outage, the review is still an ordinary gating review under this contract, and its record must make the exceptional gate visible: state that it is gating as fallback, name the outage that disabled the standing gate, and state the distinct-account basis that keeps this review from being author-adjacent.
+
 ### Constraints
 
 - Never review what you authored.
