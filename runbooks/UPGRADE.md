@@ -25,7 +25,7 @@ git show --stat <that-commit> | head -20
 #    the newest template commit whose contracts equal yours is your baseline
 cd /path/to/template-clone
 for c in $(git rev-list HEAD -- contracts/); do
-  if diff -rq <(git show $c:contracts/WORKER.md) /path/to/project/wheelhouse/fleet/WORKER.md >/dev/null 2>&1; then
+  if diff -rq <(git show ${c}:contracts/WORKER.md) /path/to/project/wheelhouse/fleet/WORKER.md >/dev/null 2>&1; then
     echo "candidate baseline: $c"; break
   fi
 done
@@ -340,7 +340,7 @@ That is the shape of what step 7 catches: not damage, but the parts of your proj
 
 ## 8. Commit
 
-Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt:
+Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you either stage it deliberately or replace the broad directory add with explicit paths.
 
 ```bash
 git status --short

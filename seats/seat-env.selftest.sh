@@ -66,7 +66,7 @@ PROJECT="$FIX/project"
 mkdir -p "$HOME_FIX" "$BIN" "$PROJECT/seats" "$FIX/emptybin"
 printf '#!/bin/sh\nexit 0\n' > "$BIN/pi"
 chmod +x "$BIN/pi"
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):/usr/bin:/bin"
+RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):/usr/bin:/bin"
 
 # What trust.json must contain, written down BEFORE anything runs, so a wrong
 # answer has something to be wrong against.
@@ -120,48 +120,48 @@ check_provision() {   # $1 = label, $2 = seat name (must not exist yet)
   local label="$1" seatname="$2" d
   d="$HOME_FIX/.pi-seats-alpha/$seatname"
   run alpha "$seatname" "$PROJECT"
-  if [ $RC -eq 0 ]; then pass "$label: fresh seat run exits 0"
-  else fail "$label: fresh seat run exited $RC"; fi
+  if [ $RC -eq 0 ]; then pass "${label}: fresh seat run exits 0"
+  else fail "${label}: fresh seat run exited $RC"; fi
 
-  if [ -d "$d" ]; then pass "$label: seat directory created"
-  else fail "$label: $d was not created"; fi
+  if [ -d "$d" ]; then pass "${label}: seat directory created"
+  else fail "${label}: $d was not created"; fi
 
   if [ -f "$HOME_FIX/.pi-seats-alpha/.project" ] && grep -qxF "project=$PROJECT" "$HOME_FIX/.pi-seats-alpha/.project" && grep -Eq '^written_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$HOME_FIX/.pi-seats-alpha/.project"; then
-    pass "$label: namespace root .project backlink records this project"
-  else fail "$label: namespace root .project backlink missing or wrong"; fi
+    pass "${label}: namespace root .project backlink records this project"
+  else fail "${label}: namespace root .project backlink missing or wrong"; fi
 
   if cmp -s "$d/trust.json" "$FIX/expected-trust.json"; then
-    pass "$label: trust.json pre-grants the project root, exactly"
-  else fail "$label: trust.json missing or wrong for $seatname"; fi
+    pass "${label}: trust.json pre-grants the project root, exactly"
+  else fail "${label}: trust.json missing or wrong for $seatname"; fi
 
   if says "export PI_CODING_AGENT_DIR=\"$d\""; then
-    pass "$label: export line names this seat's own directory"
-  else fail "$label: export line missing or names the wrong directory"; fi
+    pass "${label}: export line names this seat's own directory"
+  else fail "${label}: export line missing or names the wrong directory"; fi
 
   if says "PI_CODING_AGENT_DIR=\"$d\" pi" && says "type /login" && says "type /exit" && says "api_key alternative"; then
-    pass "$label: fresh seat gets a one-time credential flow"
-  else fail "$label: no complete credential flow for a seat with no auth.json"; fi
+    pass "${label}: fresh seat gets a one-time credential flow"
+  else fail "${label}: no complete credential flow for a seat with no auth.json"; fi
 }
 
 check_auth_refusal() {   # $1 = label, $2 = seat name (auth.json must exist)
   local label="$1" seatname="$2" authf
   authf="$HOME_FIX/.pi-seats-alpha/$seatname/auth.json"
-  [ -s "$authf" ] || { fail "$label: fixture auth.json was never written — this check is measuring nothing"; return; }
+  [ -s "$authf" ] || { fail "${label}: fixture auth.json was never written — this check is measuring nothing"; return; }
   cp "$authf" "$FIX/auth-before.json"
   run alpha "$seatname" "$PROJECT"
-  if [ $RC -eq 0 ]; then pass "$label: run over a logged-in seat exits 0"
-  else fail "$label: run over a logged-in seat exited $RC"; fi
+  if [ $RC -eq 0 ]; then pass "${label}: run over a logged-in seat exits 0"
+  else fail "${label}: run over a logged-in seat exited $RC"; fi
 
   if cmp -s "$authf" "$FIX/auth-before.json"; then
-    pass "$label: existing auth.json left byte-identical"
-  else fail "$label: auth.json was modified"; fi
+    pass "${label}: existing auth.json left byte-identical"
+  else fail "${label}: auth.json was modified"; fi
 
   if says "type /login" || says "api_key alternative"; then
-    fail "$label: printed a credential flow beside a live auth.json"
-  else pass "$label: no credential flow beside a live auth.json"; fi
+    fail "${label}: printed a credential flow beside a live auth.json"
+  else pass "${label}: no credential flow beside a live auth.json"; fi
 
-  if says "already logged in"; then pass "$label: says why the login command is withheld"
-  else fail "$label: withheld the login command without saying why"; fi
+  if says "already logged in"; then pass "${label}: says why the login command is withheld"
+  else fail "${label}: withheld the login command without saying why"; fi
 }
 
 phase "1. two seats, one namespace — isolation"
@@ -189,10 +189,10 @@ phase "1c. optional account.authRoute — absent ok, present-valid ok, present-i
 # so this phase reads complete on its own.
 run alpha worker-unlabeled "$PROJECT"
 if [ $RC -eq 0 ]; then pass "authRoute absent: provisioning still exits 0"
-else fail "authRoute absent: provisioning exited $RC: $OUT"; fi
+else fail "authRoute absent: provisioning exited ${RC}: $OUT"; fi
 run alpha worker-authroute-ok "$PROJECT"
 if [ $RC -eq 0 ]; then pass "authRoute present-valid (env): provisioning exits 0"
-else fail "authRoute present-valid: provisioning exited $RC: $OUT"; fi
+else fail "authRoute present-valid: provisioning exited ${RC}: $OUT"; fi
 if says "env credential route" && says "Do not write an auth.json stub" && ! says "type /login"; then
   pass "authRoute env: provisioning prints env-only instructions and forbids auth.json stubs"
 else fail "authRoute env instructions were not specific enough: $OUT"; fi
@@ -208,10 +208,10 @@ else fail "authRoute present-non-string did not STOP as expected (exit $RC): $OU
 phase "1d. optional shadow — absent ok, present-true ok, present-invalid is a loud STOP"
 run alpha worker-unlabeled "$PROJECT"
 if [ $RC -eq 0 ]; then pass "shadow absent: provisioning still exits 0"
-else fail "shadow absent: provisioning exited $RC: $OUT"; fi
+else fail "shadow absent: provisioning exited ${RC}: $OUT"; fi
 run alpha worker-shadow-ok "$PROJECT"
 if [ $RC -eq 0 ]; then pass "shadow present-true: provisioning exits 0"
-else fail "shadow present-true: provisioning exited $RC: $OUT"; fi
+else fail "shadow present-true: provisioning exited ${RC}: $OUT"; fi
 run alpha worker-shadow-bad "$PROJECT"
 if [ $RC -ne 0 ] && says "invalid shadow" && says "\"yes\"" && says "boolean true or false"; then
   pass "shadow present-invalid: STOPs naming the offending value and boolean requirement"

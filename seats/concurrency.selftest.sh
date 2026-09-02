@@ -117,7 +117,7 @@ FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
+RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
 
 # The stub pi: same long-lived RPC shape as adapter.selftest.sh's, with two
 # additions this exercise needs:
@@ -250,15 +250,15 @@ run_two_seat_exercise() {
   local la="$RUN_PROJ/seats/logs/worker-a.jsonl" lb="$RUN_PROJ/seats/logs/worker-b.jsonl"
 
   run spawn worker-a
-  [ $RC -eq 0 ] && pass "$label: worker-a spawns" || fail "$label: worker-a spawn exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "${label}: worker-a spawns" || fail "${label}: worker-a spawn exited ${RC}: $OUT"
   run spawn worker-b
-  [ $RC -eq 0 ] && pass "$label: worker-b spawns" || fail "$label: worker-b spawn exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "${label}: worker-b spawns" || fail "${label}: worker-b spawn exited ${RC}: $OUT"
 
   local fa fb
   fa="$(state_get worker-a fifo)"; fb="$(state_get worker-b fifo)"
   if [ -n "$fa" ] && [ -n "$fb" ] && [ "$fa" != "$fb" ] && [ -p "$fa" ] && [ -p "$fb" ]; then
-    pass "$label: each seat has its OWN FIFO ($(basename "$fa"), $(basename "$fb"))"
-  else fail "$label: FIFOs missing or shared (a=$fa b=$fb)"; fi
+    pass "${label}: each seat has its OWN FIFO ($(basename "$fa"), $(basename "$fb"))"
+  else fail "${label}: FIFOs missing or shared (a=$fa b=$fb)"; fi
 
   # Both dispatches go out before either turn is waited on — that is the
   # concurrency under test. SLOW keeps both turns in flight long enough to
@@ -267,55 +267,55 @@ run_two_seat_exercise() {
   # the proof footprint.
   mkdir -p "$RUN_PROJ/.wheelhouse-worktrees/bead-a" "$RUN_PROJ/.wheelhouse-worktrees/bead-b"
   run dispatch worker-a bead-a "SLOW MARKER-ALPHA work bead-a in WORKDIR:$wta"
-  [ $RC -eq 0 ] && pass "$label: bead-a dispatched to worker-a" || fail "$label: dispatch a exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "${label}: bead-a dispatched to worker-a" || fail "${label}: dispatch a exited ${RC}: $OUT"
   run dispatch worker-b bead-b "SLOW MARKER-BRAVO work bead-b in WORKDIR:$wtb"
-  [ $RC -eq 0 ] && pass "$label: bead-b dispatched to worker-b (before bead-a's turn ended)" || fail "$label: dispatch b exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "${label}: bead-b dispatched to worker-b (before bead-a's turn ended)" || fail "${label}: dispatch b exited ${RC}: $OUT"
 
   # Overlap: both pids alive, both logs mid-turn (agent_start, no agent_end).
   local pa pb
   pa="$(state_get worker-a pid)"; pb="$(state_get worker-b pid)"
   if kill -0 "$pa" 2>/dev/null && kill -0 "$pb" 2>/dev/null; then
-    pass "$label: overlapping RUNNING — both state.json pids alive at once ($pa, $pb)"
-  else fail "$label: pids not simultaneously alive (a=$pa b=$pb)"; fi
+    pass "${label}: overlapping RUNNING — both state.json pids alive at once ($pa, $pb)"
+  else fail "${label}: pids not simultaneously alive (a=$pa b=$pb)"; fi
   if grep -q '"agent_start"' "$la" 2>/dev/null && ! grep -q '"agent_end"' "$la" 2>/dev/null \
      && grep -q '"agent_start"' "$lb" 2>/dev/null && ! grep -q '"agent_end"' "$lb" 2>/dev/null; then
-    pass "$label: both turns in flight at the same moment (agent_start seen, no agent_end yet, both logs)"
-  else fail "$label: could not observe both turns in flight simultaneously"; fi
+    pass "${label}: both turns in flight at the same moment (agent_start seen, no agent_end yet, both logs)"
+  else fail "${label}: could not observe both turns in flight simultaneously"; fi
   run status
   if says "worker-a" && says "worker-b" && [ "$(printf '%s\n' "$OUT" | grep -c RUNNING)" -ge 2 ]; then
-    pass "$label: status shows both seats RUNNING"
-  else fail "$label: status does not show two RUNNING seats: $OUT"; fi
+    pass "${label}: status shows both seats RUNNING"
+  else fail "${label}: status does not show two RUNNING seats: $OUT"; fi
 
-  wait_for "$la" '"agent_end"' 15 && pass "$label: worker-a's turn finished" || fail "$label: no agent_end in worker-a's log"
-  wait_for "$lb" '"agent_end"' 15 && pass "$label: worker-b's turn finished" || fail "$label: no agent_end in worker-b's log"
+  wait_for "$la" '"agent_end"' 15 && pass "${label}: worker-a's turn finished" || fail "${label}: no agent_end in worker-a's log"
+  wait_for "$lb" '"agent_end"' 15 && pass "${label}: worker-b's turn finished" || fail "${label}: no agent_end in worker-b's log"
 
   # Log isolation — and, through it, FIFO isolation: each dispatch was
   # written to one FIFO, so its echo landing only in that seat's log is the
   # no-cross-talk proof.
   if grep -q 'MARKER-ALPHA' "$la" 2>/dev/null && ! grep -q 'MARKER-ALPHA' "$lb" 2>/dev/null; then
-    pass "$label: worker-a's events land ONLY in worker-a's log"
-  else fail "$label: worker-a's dispatch text leaked into worker-b's log (or missing from its own)"; fi
+    pass "${label}: worker-a's events land ONLY in worker-a's log"
+  else fail "${label}: worker-a's dispatch text leaked into worker-b's log (or missing from its own)"; fi
   if grep -q 'MARKER-BRAVO' "$lb" 2>/dev/null && ! grep -q 'MARKER-BRAVO' "$la" 2>/dev/null; then
-    pass "$label: worker-b's events land ONLY in worker-b's log"
-  else fail "$label: worker-b's dispatch text leaked into worker-a's log (or missing from its own)"; fi
+    pass "${label}: worker-b's events land ONLY in worker-b's log"
+  else fail "${label}: worker-b's dispatch text leaked into worker-a's log (or missing from its own)"; fi
 
   # Worktree isolation: each seat's work footprint is in its own worktree
   # and nowhere else, and the worktrees sit on distinct branches.
   if [ -f "$wta/touched-by-bead-a" ] && [ ! -e "$wta/touched-by-bead-b" ] \
      && [ -f "$wtb/touched-by-bead-b" ] && [ ! -e "$wtb/touched-by-bead-a" ]; then
-    pass "$label: each bead's work landed only in its own worktree"
-  else fail "$label: worktree cross-write (or missing footprint): $(ls "$wta" "$wtb" 2>&1 | tr '\n' ' ')"; fi
+    pass "${label}: each bead's work landed only in its own worktree"
+  else fail "${label}: worktree cross-write (or missing footprint): $(ls "$wta" "$wtb" 2>&1 | tr '\n' ' ')"; fi
   local ba bb
   ba="$(git -C "$wta" branch --show-current 2>/dev/null)"
   bb="$(git -C "$wtb" branch --show-current 2>/dev/null)"
   if [ "$ba" = "fleet/bead-a" ] && [ "$bb" = "fleet/bead-b" ]; then
-    pass "$label: the two worktrees are on distinct fleet/<bead> branches"
-  else fail "$label: worktree branches wrong (a=$ba b=$bb)"; fi
+    pass "${label}: the two worktrees are on distinct fleet/<bead> branches"
+  else fail "${label}: worktree branches wrong (a=$ba b=$bb)"; fi
 
   run stop worker-a
-  [ $RC -eq 0 ] && pass "$label: worker-a stops cleanly" || fail "$label: worker-a stop exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "${label}: worker-a stops cleanly" || fail "${label}: worker-a stop exited ${RC}: $OUT"
   run stop worker-b
-  [ $RC -eq 0 ] && pass "$label: worker-b stops cleanly" || fail "$label: worker-b stop exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "${label}: worker-b stops cleanly" || fail "${label}: worker-b stop exited ${RC}: $OUT"
 }
 
 phase "1. two seats, one roster — spawn, overlap, isolation, clean stop"
@@ -445,17 +445,17 @@ EOF
   RLOG_B="$RPROJ/seats/logs/worker-b.jsonl"
 
   rrun spawn worker-a
-  [ $RC -eq 0 ] && pass "real: worker-a spawns ($OUT)" || fail "real: worker-a spawn exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "real: worker-a spawns ($OUT)" || fail "real: worker-a spawn exited ${RC}: $OUT"
   rrun spawn worker-b
-  [ $RC -eq 0 ] && pass "real: worker-b spawns ($OUT)" || fail "real: worker-b spawn exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "real: worker-b spawns ($OUT)" || fail "real: worker-b spawn exited ${RC}: $OUT"
   # Concurrent dispatch: bead-b goes out before bead-a's turn is waited on.
   rrun dispatch worker-a real-a "Reply with exactly the text REAL-CONC-ALPHA and nothing else. Use no tools."
-  [ $RC -eq 0 ] && pass "real: bead real-a dispatched" || fail "real: dispatch a exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "real: bead real-a dispatched" || fail "real: dispatch a exited ${RC}: $OUT"
   A_DONE_AT_B_DISPATCH="no"
   grep -q '"agent_end"' "$RLOG_A" 2>/dev/null && A_DONE_AT_B_DISPATCH="yes"
   rrun dispatch worker-b real-b "Reply with exactly the text REAL-CONC-BRAVO and nothing else. Use no tools."
   [ $RC -eq 0 ] && pass "real: bead real-b dispatched (worker-a's turn already ended at that moment: $A_DONE_AT_B_DISPATCH)" \
-                || fail "real: dispatch b exited $RC: $OUT"
+                || fail "real: dispatch b exited ${RC}: $OUT"
   wait_for "$RLOG_A" '"agent_end"' 180 && pass "real: worker-a agent_end captured" || fail "real: no agent_end for worker-a — tail: $(tail -c 300 "$RLOG_A" 2>/dev/null)"
   wait_for "$RLOG_B" '"agent_end"' 180 && pass "real: worker-b agent_end captured" || fail "real: no agent_end for worker-b — tail: $(tail -c 300 "$RLOG_B" 2>/dev/null)"
   if grep -q 'REAL-CONC-ALPHA' "$RLOG_A" 2>/dev/null && ! grep -q 'REAL-CONC-ALPHA' "$RLOG_B" 2>/dev/null \
@@ -463,9 +463,9 @@ EOF
     pass "real: logs are disjoint — each seat's turn landed only in its own log"
   else fail "real: cross-contamination between the two real seats' logs"; fi
   rrun stop worker-a
-  [ $RC -eq 0 ] && pass "real: worker-a stops cleanly" || fail "real: worker-a stop exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "real: worker-a stops cleanly" || fail "real: worker-a stop exited ${RC}: $OUT"
   rrun stop worker-b
-  [ $RC -eq 0 ] && pass "real: worker-b stops cleanly" || fail "real: worker-b stop exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "real: worker-b stops cleanly" || fail "real: worker-b stop exited ${RC}: $OUT"
 fi
 
 printf '\n'

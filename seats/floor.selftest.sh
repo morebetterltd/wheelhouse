@@ -190,7 +190,7 @@ has() { printf '%s\n' "$OUT" | grep -q "$1"; }
 # --- phase 1: pinned seat's events render, humanized -------------------------
 phase "phase 1: spotlight renders the pinned seat's events"
 render "$PROJ/seats/floor.ts" --pin 1
-[ $RC -eq 0 ] && pass "--once --pin 1 exits 0" || fail "--once exited $RC: $OUT"
+[ $RC -eq 0 ] && pass "--once --pin 1 exits 0" || fail "--once exited ${RC}: $OUT"
 has "SPOTLIGHT"            && pass "spotlight header present"        || fail "no SPOTLIGHT header"
 has "busy"                 && pass "pin 1 is seat busy"              || fail "busy not in frame"
 has '\[tool\] bash'        && pass "[tool] line humanized"           || fail "no [tool] bash line"
@@ -256,7 +256,7 @@ render "$PROJ/seats/floor.ts" --pin nolog   # nolog seat in the spotlight
 has "no event log yet for nolog" && pass "spotlight names the missing log" || fail "no named missing-log line"
 EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats"; cp "$FLOOR" "$EMPTY/seats/floor.ts"
 render "$EMPTY/seats/floor.ts"
-[ $RC -eq 0 ] && has "no seats" && pass "no roster/state degrades to a named line" || fail "empty project: rc=$RC: $OUT"
+[ $RC -eq 0 ] && has "no seats" && pass "no roster/state degrades to a named line" || fail "empty project: rc=${RC}: $OUT"
 
 # --- phase 5: interactive repaint is in-place, not append-only ---------------
 phase "phase 5: repaint — repeated frames return home and clear to end"
@@ -327,9 +327,9 @@ elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
   skip "cockpit.sh not found beside floor.ts — leg not run"
 else
   SOCK="whfloor$$"
-  crun() { OUT="$(env PATH="$RUN_PATH:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null 2>&1)"; RC=$?; }
+  crun() { OUT="$(env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null 2>&1)"; RC=$?; }
   crun
-  [ $RC -eq 0 ] && has "bridge built" && pass "first run builds the bridge" || fail "first run: rc=$RC: $OUT"
+  [ $RC -eq 0 ] && has "bridge built" && pass "first run builds the bridge" || fail "first run: rc=${RC}: $OUT"
   if tmux -L "$SOCK" has-session -t "=wh-tfix" 2>/dev/null; then pass "session wh-tfix exists"
   else fail "session wh-tfix missing"; fi
   WN="$(tmux -L "$SOCK" list-windows -t wh-tfix -F '#{window_name}' 2>/dev/null)"
@@ -337,14 +337,14 @@ else
   PANES="$(tmux -L "$SOCK" list-panes -t wh-tfix:bridge 2>/dev/null | wc -l | tr -d ' ')"
   [ "$PANES" = "2" ] && pass "bridge has exactly 2 panes (commander + floor)" || fail "pane count: $PANES"
   crun
-  [ $RC -eq 0 ] && has "already built" && pass "re-run attaches, never duplicates" || fail "re-run: rc=$RC: $OUT"
+  [ $RC -eq 0 ] && has "already built" && pass "re-run attaches, never duplicates" || fail "re-run: rc=${RC}: $OUT"
   SESSN="$(tmux -L "$SOCK" list-sessions 2>/dev/null | wc -l | tr -d ' ')"
   [ "$SESSN" = "1" ] && pass "still exactly 1 session after re-run" || fail "session count after re-run: $SESSN"
   tmux -L "$SOCK" kill-pane -t wh-tfix:bridge.1 2>/dev/null
   PANES="$(tmux -L "$SOCK" list-panes -t wh-tfix:bridge 2>/dev/null | wc -l | tr -d ' ')"
   [ "$PANES" = "1" ] && pass "simulated dead floor leaves only the commander pane" || fail "pane count after killing floor: $PANES"
   crun
-  [ $RC -eq 0 ] && has "floor pane missing" && pass "re-run notices the missing floor pane" || fail "missing-floor re-run did not say it repaired the pane: rc=$RC: $OUT"
+  [ $RC -eq 0 ] && has "floor pane missing" && pass "re-run notices the missing floor pane" || fail "missing-floor re-run did not say it repaired the pane: rc=${RC}: $OUT"
   PANES="$(tmux -L "$SOCK" list-panes -t wh-tfix:bridge 2>/dev/null | wc -l | tr -d ' ')"
   [ "$PANES" = "2" ] && pass "re-run respawns the floor pane after pane death" || fail "pane count after missing-floor repair: $PANES"
   SESSN="$(tmux -L "$SOCK" list-sessions 2>/dev/null | wc -l | tr -d ' ')"

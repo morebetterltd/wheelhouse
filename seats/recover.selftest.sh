@@ -101,7 +101,7 @@ HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
 # /usr/sbin is where macOS keeps lsof; recover dies honestly without it.
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/sbin:/sbin:/usr/bin:/bin"
+RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/sbin:/sbin:/usr/bin:/bin"
 
 # Fake bd: if recover ever reaches for the graph, this logs the call and the
 # no-bd-calls assertion in phase 5 catches it.
@@ -245,7 +245,7 @@ else fail "could not kill the stub seat"; fi
 
 recover_run
 if [ $RC -eq 0 ]; then pass "recover exits 0"
-else fail "recover exited $RC: $OUT"; fi
+else fail "recover exited ${RC}: $OUT"; fi
 if seat_line worker-1 | grep -q 'DEAD'; then pass "killed seat classified DEAD"
 else fail "worker-1 not classified DEAD: $OUT"; fi
 if seat_line worker-1 | grep -q 'bead bead-98m'; then pass "the unfinished bead is named on the seat line"
@@ -289,7 +289,7 @@ fs.writeFileSync('$STATE',JSON.stringify(s,null,2)+'\n');
 "
 recover_run
 if [ $RC -eq 0 ]; then pass "fresh recover process exits 0"
-else fail "recover exited $RC: $OUT"; fi
+else fail "recover exited ${RC}: $OUT"; fi
 if seat_line worker-1 | grep -q 'RUNNING'; then pass "live seat classified RUNNING (holds its FIFO, despite a bare-pi ps line)"
 else fail "worker-1 should be RUNNING: $OUT"; fi
 if seat_line worker-dead | grep -q 'DEAD' && says "resume worker-dead"; then
