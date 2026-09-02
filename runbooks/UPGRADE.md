@@ -97,7 +97,12 @@ The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapte
 ```bash
 mkdir -p seats
 for f in "$TEMPLATE"/seats/*; do
-  cp -p "$f" "seats/$(basename "$f")"
+  if [ -d "$f" ]; then
+    rm -rf "seats/$(basename "$f")"
+    cp -pR "$f" "seats/$(basename "$f")"
+  else
+    cp -p "$f" "seats/$(basename "$f")"
+  fi
 done
 if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
 for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
