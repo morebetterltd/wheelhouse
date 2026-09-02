@@ -1,0 +1,45 @@
+==== seats/fixtures/herald-panes/idle.txt
+
+  🗣️ Grace: The herald fix is being built by 
+  the fleet now, where it should have gone an
+  hour ago.                                  
+                                             
+✻ Worked for 1m 11s · done 8:39 AM           
+     ✔ Update installed · Restart to update  
+─────────────────────────────────────────────
+❯                                          
+─────────────────────────────────────────────
+    LIFEOS ◉27%
+  ◈main 1h │ ✿—→                           
+  ◎ 📁0 ✦2 ⊕0                              
+  ⏵⏵ auto mode on (shift+tab to cycle) · ←…
+==== seats/fixtures/herald-panes/mid-turn-thinking.txt
+                                             
+✶ Fiddle-faddling… (57s · thinking)          
+  ⎿  Tip: Run /ultrareview for a cloud-based 
+     multi-agent review that finds and       
+     verifies bugs in your branch — 3 free   
+     reviews left                            
+     ✔ Update installed · Restart to update  
+─────────────────────────────────────────────
+❯                                          
+─────────────────────────────────────────────
+    LIFEOS ◉27%
+  ◈main 1h │ ✿—→                           
+  ◎ 📁0 ✦2 ⊕0                              
+  ⏵⏵ auto mode on (shift+tab to cycle) · ←…
+==== seats/fixtures/herald-panes/tool-running.txt
+                                             
+✽ Fiddle-faddling… (1m 0s · thinking)        
+  ⎿  Tip: Run /ultrareview for a cloud-based 
+     multi-agent review that finds and       
+     verifies bugs in your branch — 3 free   
+     reviews left                            
+     ✔ Update installed · Restart to update  
+─────────────────────────────────────────────
+❯                                          
+─────────────────────────────────────────────
+    LIFEOS ◉27%
+  ◈main 1h │ ✿—→                           
+  ◎ 📁0 ✦2 ⊕0                              
+  ⏵⏵ auto mode on (shift+tab to cycle) · ←…

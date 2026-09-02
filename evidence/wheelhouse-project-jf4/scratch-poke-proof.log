@@ -1,0 +1,78 @@
+$ tmux capture-pane -p -J -t <scratch-session>:0.0 -S -12  # before
+    next settle. Filing without dispatching  
+    is parking.                              
+                                             
+  The 10-minute tick continues underneath all
+  of this.                                   
+                                         
+  🔧 CHANGE:                                 
+
+  - jf4 dispatched to worker-1 in its own    
+    worktree                                 
+  - OPERATIONAL_RULES: "seen problems are    
+    dispatched, not parked"               
+
+  ✅ VERIFY:                                 
+                                             
+  - Adapter confirmed the dispatch; worker-1 
+    was agent_settled before it              
+                                             
+  🧠 MEMORY: F (0/8 fresh) · due: TELOS.md   
+  (never reviewed) · last curation +1 new →  
+  self 59m ago                               
+
+  🗣️ Grace: The herald fix is being built by 
+  the fleet now, where it should have gone an
+  hour ago.                                  
+                                             
+✻ Worked for 1m 11s · done 8:39 AM           
+     ✔ Update installed · Restart to update  
+─────────────────────────────────────────────
+❯                                          
+─────────────────────────────────────────────
+    LIFEOS ◉27%
+  ◈main 1h │ ✿—→                           
+  ◎ 📁0 ✦2 ⊕0                              
+  ⏵⏵ auto mode on (shift+tab to cycle) · ←…
+bash-3.2$ 
+$ WHEELHOUSE_HERALD_ROOT=<scratch-project> WHEELHOUSE_HERALD_TMUX_PANE=<scratch-session>:0.0 bun seats/herald.ts --once
+herald: appended 1 wake event(s)
+$ cat <scratch-project>/seats/logs/herald.out.log
+2026-09-02T12:44:40.854Z poke sent pane=herald-jf4-68055:0.0 inbox=289
+$ tmux capture-pane -p -J -t <scratch-session>:0.0 -S -12  # after
+                                             
+  The 10-minute tick continues underneath all
+  of this.                                   
+                                         
+  🔧 CHANGE:                                 
+
+  - jf4 dispatched to worker-1 in its own    
+    worktree                                 
+  - OPERATIONAL_RULES: "seen problems are    
+    dispatched, not parked"               
+
+  ✅ VERIFY:                                 
+                                             
+  - Adapter confirmed the dispatch; worker-1 
+    was agent_settled before it              
+                                             
+  🧠 MEMORY: F (0/8 fresh) · due: TELOS.md   
+  (never reviewed) · last curation +1 new →  
+  self 59m ago                               
+
+  🗣️ Grace: The herald fix is being built by 
+  the fleet now, where it should have gone an
+  hour ago.                                  
+                                             
+✻ Worked for 1m 11s · done 8:39 AM           
+     ✔ Update installed · Restart to update  
+─────────────────────────────────────────────
+❯                                          
+─────────────────────────────────────────────
+    LIFEOS ◉27%
+  ◈main 1h │ ✿—→                           
+  ◎ 📁0 ✦2 ⊕0                              
+  ⏵⏵ auto mode on (shift+tab to cycle) · ←…
+bash-3.2$ check the fleet inbox
+bash: check: command not found
+bash-3.2$ 

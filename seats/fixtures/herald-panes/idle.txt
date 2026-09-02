@@ -1,0 +1,72 @@
+
+  ┌─ COMMANDER PANE ─────────────────────────
+  │ This is the commander's seat. Launch your
+  │ commander here yourself — the cockpit nev
+  │                                          
+  │     cd [home]/Documents/_prct
+  │     claude                               
+  │                                          
+  │ The pane to the right is the floor viewer
+  │   1-9 pin a seat   0 pin STATUS   f follo
+  └──────────────────────────────────────────
+
+[user]@macbook-air wheelhouse-project 
+bridge already built: wh-wheelhouse-project (
+[user]@macbook-air wheelhouse-project 
+
+                                         ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+
+                                             ing System
+
+                                             
+                                             
+⏺ ════ LifeOS ═══════════════════════════    
+                                             
+  Done. jf4 is now the work, not a note.     
+                                             
+  - Worker-1 is on jf4 (the dead herald poke,
+    P1). I waited for it to settle off apj
+    rather than kill its turn, then          
+    dispatched. apj is reported and waits for
+    reviewers.                               
+  - Reviewers are all mid-turn on 24r. When  
+    they settle: apj review, and fable's     
+    re-run of 5vz.                           
+  - Rule encoded: a defect I see gets filed
+    and placed at its priority in the same   
+    breath. A P1 preempts the queue at the   
+    next settle. Filing without dispatching  
+    is parking.                              
+                                             
+  The 10-minute tick continues underneath all
+  of this.                                   
+                                         
+  🔧 CHANGE:                                 
+
+  - jf4 dispatched to worker-1 in its own    
+    worktree                                 
+  - OPERATIONAL_RULES: "seen problems are    
+    dispatched, not parked"               
+
+  ✅ VERIFY:                                 
+                                             
+  - Adapter confirmed the dispatch; worker-1 
+    was agent_settled before it              
+                                             
+  🧠 MEMORY: F (0/8 fresh) · due: TELOS.md   
+  (never reviewed) · last curation +1 new →  
+  self 59m ago                               
+
+  🗣️ Grace: The herald fix is being built by 
+  the fleet now, where it should have gone an
+  hour ago.                                  
+                                             
+✻ Worked for 1m 11s · done 8:39 AM           
+     ✔ Update installed · Restart to update  
+─────────────────────────────────────────────
+❯                                          
+─────────────────────────────────────────────
+    LIFEOS ◉27%
+  ◈main 1h │ ✿—→                           
+  ◎ 📁0 ✦2 ⊕0                              
+  ⏵⏵ auto mode on (shift+tab to cycle) · ←…
