@@ -15,6 +15,7 @@ The main files here:
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
   project root, and prints the export line and the one-time credential flow.
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, stop-all, resume.
+- `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
@@ -401,6 +402,7 @@ bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/intent-check.selftest.sh
+bash seats/herald.selftest.sh
 ```
 
 When retaining a run as committed evidence, write it through the scrubber instead of redirecting raw output:
@@ -441,7 +443,7 @@ run; to clean it by hand, those pid-stamped dirs are the whole footprint.
 ## The bridge
 
 The bridge is how a human looks at the fleet: ONE tmux window per project,
-built by `seats/cockpit.sh` and viewed through `seats/floor.ts`.
+built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. Before it builds or attaches the tmux session, `cockpit.sh` starts the Dispatch Office herald (`bun seats/herald.ts`), verifies the recorded pid on every re-run, and restarts it if the pid is dead.
 
 ```bash
 seats/cockpit.sh [namespace]     # builds (or re-attaches to) session wh-<ns>
@@ -458,6 +460,22 @@ Session `wh-<namespace>` (default namespace: the project dirname), window
 
 Re-running `cockpit.sh` attaches to the existing session — it never builds a
 duplicate. The tmux status bar carries the project name and the key hints.
+
+The herald is a standalone, non-LLM daemon. It tails every `seats/logs/*.jsonl` seat stream and appends one JSON object per wake event to `seats/inbox.jsonl`:
+
+| class | A2A-state | Trigger |
+|---|---|---|
+| `settle` | `terminal` | a seat emits `agent_end` |
+| `distress` | `failed` | a seat output or failed response mentions STOP/auth/quota/rate-limit |
+| `sentinel` | `input-required` | a seat output line contains `@commander:` |
+
+Each inbox row carries a stable source identity (`source.log`, `source.offset`, source event type) and a content hash id, so daemon restarts and re-scans do not duplicate already-appended wake events. The inbox is append-only; commander-side draining is a separate cursor, `seats/inbox.cursor`, advanced only by:
+
+```bash
+bun seats/herald.ts --drain
+```
+
+`--drain` prints unread inbox JSONL to stdout and moves the cursor to EOF. It never writes seat logs, FIFOs, or `state.json`, and it never delivers prompts; send-keys/poke delivery is deliberately outside this bead.
 
 ### The floor
 
@@ -503,6 +521,7 @@ any script uses; `--pin <1-9|0|seat-name>` and `--overview` set the view.
 
 ```bash
 bash seats/floor.selftest.sh
+bash seats/herald.selftest.sh
 ```
 
 Hermetic: synthetic logs and state in a temp fixture, a stub `bd`, frames

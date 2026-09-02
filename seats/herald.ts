@@ -1,0 +1,267 @@
+#!/usr/bin/env bun
+/**
+ * herald.ts — Dispatch Office wake-event daemon.
+ *
+ * Non-LLM file carrier: tails seats/logs/*.jsonl and appends deduplicated
+ * wake events to seats/inbox.jsonl. The event `state` values deliberately use
+ * A2A task-update vocabulary (terminal, input-required, failed) so a later
+ * transport can swap the file out without renaming the commander's concepts.
+ */
+
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import.meta.dir, ".."));
+const SEATS_DIR = path.join(ROOT, "seats");
+const LOG_DIR = path.join(SEATS_DIR, "logs");
+const INBOX = path.join(SEATS_DIR, "inbox.jsonl");
+const DRAIN_CURSOR = path.join(SEATS_DIR, "inbox.cursor");
+const STATE_FILE = path.join(SEATS_DIR, "herald.state.json");
+const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
+const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
+const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
+
+const DISTRESS_RE = /\bSTOP\b|auth|unauthoriz|401|forbidden|token.*(expired|invalid|revoked)|log ?in required|credential|quota|rate.?limit|429|usage limit|exhaust|out of credits|insufficient.credit/i;
+const SENTINEL_RE = /@commander\s*:/i;
+
+type WakeClass = "settle" | "distress" | "sentinel";
+type A2AState = "terminal" | "input-required" | "failed";
+
+interface HeraldState {
+  logs: Record<string, { offset: number }>;
+  seen: string[];
+}
+
+interface Candidate {
+  eventClass: WakeClass;
+  state: A2AState;
+  title: string;
+  detail: string;
+  sourceType?: string;
+}
+
+function die(msg: string): never {
+  process.stderr.write(`STOP: ${msg}\n`);
+  process.exit(1);
+}
+
+function readState(): HeraldState {
+  if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    return { logs: parsed.logs ?? {}, seen: Array.isArray(parsed.seen) ? parsed.seen : [] };
+  } catch (e: any) {
+    die(`cannot parse ${STATE_FILE}: ${e.message}`);
+  }
+}
+
+function writeState(state: HeraldState): void {
+  fs.mkdirSync(SEATS_DIR, { recursive: true });
+  const tmp = `${STATE_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\n");
+  fs.renameSync(tmp, STATE_FILE);
+}
+
+function appendInbox(obj: unknown): void {
+  fs.mkdirSync(SEATS_DIR, { recursive: true });
+  fs.appendFileSync(INBOX, JSON.stringify(obj) + "\n");
+}
+
+function logFiles(): string[] {
+  if (!fs.existsSync(LOG_DIR)) return [];
+  return fs.readdirSync(LOG_DIR)
+    .filter((name) => name.endsWith(".jsonl") && name !== "inbox.jsonl")
+    .sort()
+    .map((name) => path.join(LOG_DIR, name));
+}
+
+function readCompleteLines(file: string, offset: number): { lines: { line: string; offset: number }[]; offset: number } {
+  const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
+  if (size < offset) offset = 0; // log rotation/truncation: reread from start
+  if (size === offset) return { lines: [], offset };
+  const fd = fs.openSync(file, "r");
+  let buf: Buffer;
+  try {
+    buf = Buffer.alloc(size - offset);
+    fs.readSync(fd, buf, 0, buf.length, offset);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const text = buf.toString("utf8");
+  const lastLf = text.lastIndexOf("\n");
+  if (lastLf === -1) return { lines: [], offset };
+  const complete = text.slice(0, lastLf + 1);
+  let running = offset;
+  const lines = complete.split("\n").filter(Boolean).map((line) => {
+    const at = running;
+    running += Buffer.byteLength(line + "\n");
+    return { line, offset: at };
+  });
+  return { lines, offset: offset + Buffer.byteLength(complete) };
+}
+
+function textOf(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(textOf).filter(Boolean).join("\n");
+  if (typeof value === "object") {
+    const obj: any = value;
+    const parts = [obj.text, obj.content, obj.message, obj.delta, obj.error, obj.output, obj.result, obj.messages]
+      .map(textOf).filter(Boolean);
+    if (parts.length > 0) return parts.join("\n");
+    try { return JSON.stringify(value); } catch { return String(value); }
+  }
+  return String(value);
+}
+
+function firstSentinelLine(text: string): string {
+  return text.split(/\r?\n/).find((line) => SENTINEL_RE.test(line))?.trim() ?? text.trim();
+}
+
+function truncate(s: string, n = 700): string {
+  const oneLine = s.replace(/\s+$/g, "");
+  return oneLine.length > n ? `${oneLine.slice(0, n - 1)}…` : oneLine;
+}
+
+function classify(obj: any): Candidate | null {
+  const text = textOf(obj);
+  const type = typeof obj?.type === "string" ? obj.type : undefined;
+  if (SENTINEL_RE.test(text)) {
+    return {
+      eventClass: "sentinel",
+      state: "input-required",
+      title: "sentinel question for commander",
+      detail: truncate(firstSentinelLine(text)),
+      sourceType: type,
+    };
+  }
+  if ((type === "response" && obj?.success === false) || DISTRESS_RE.test(text)) {
+    return {
+      eventClass: "distress",
+      state: "failed",
+      title: "seat distress",
+      detail: truncate(text || JSON.stringify(obj)),
+      sourceType: type,
+    };
+  }
+  if (type === "agent_end") {
+    return {
+      eventClass: "settle",
+      state: "terminal",
+      title: "seat turn settled",
+      detail: truncate(text || "agent_end"),
+      sourceType: type,
+    };
+  }
+  return null;
+}
+
+function eventId(relLog: string, offset: number, line: string, candidate: Candidate): string {
+  return crypto.createHash("sha256")
+    .update(`${relLog}\0${offset}\0${candidate.eventClass}\0${candidate.state}\0${line}`)
+    .digest("hex");
+}
+
+function scanOnce(): number {
+  const state = readState();
+  const seen = new Set(state.seen);
+  let appended = 0;
+  for (const file of logFiles()) {
+    const rel = path.relative(ROOT, file);
+    const prior = state.logs[rel]?.offset ?? 0;
+    const batch = readCompleteLines(file, prior);
+    state.logs[rel] = { offset: batch.offset };
+    const seat = path.basename(file, ".jsonl");
+    for (const rec of batch.lines) {
+      let obj: any;
+      try { obj = JSON.parse(rec.line); } catch { continue; }
+      const candidate = classify(obj);
+      if (!candidate) continue;
+      const id = eventId(rel, rec.offset, rec.line, candidate);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      appended++;
+      appendInbox({
+        id,
+        at: new Date().toISOString(),
+        seat,
+        class: candidate.eventClass,
+        state: candidate.state,
+        title: candidate.title,
+        detail: candidate.detail,
+        source: { log: rel, offset: rec.offset, type: candidate.sourceType ?? null },
+      });
+    }
+  }
+  state.seen = Array.from(seen).slice(-MAX_SEEN);
+  writeState(state);
+  return appended;
+}
+
+function readDrainCursor(): number {
+  if (!fs.existsSync(DRAIN_CURSOR)) return 0;
+  const n = Number(fs.readFileSync(DRAIN_CURSOR, "utf8").trim() || "0");
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function drain(): void {
+  const offset = readDrainCursor();
+  const size = fs.existsSync(INBOX) ? fs.statSync(INBOX).size : 0;
+  if (size < offset) {
+    fs.writeFileSync(DRAIN_CURSOR, "0\n");
+    return drain();
+  }
+  if (size === offset) return;
+  const fd = fs.openSync(INBOX, "r");
+  let buf: Buffer;
+  try {
+    buf = Buffer.alloc(size - offset);
+    fs.readSync(fd, buf, 0, buf.length, offset);
+  } finally {
+    fs.closeSync(fd);
+  }
+  process.stdout.write(buf.toString("utf8"));
+  fs.writeFileSync(DRAIN_CURSOR, `${size}\n`);
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e: any) { return e.code === "EPERM"; }
+}
+
+function status(): void {
+  if (!fs.existsSync(PID_FILE)) {
+    console.log("herald STOPPED — no pid file");
+    process.exit(1);
+  }
+  const pid = Number(fs.readFileSync(PID_FILE, "utf8").trim());
+  if (Number.isFinite(pid) && pidAlive(pid)) {
+    console.log(`herald RUNNING pid ${pid}`);
+    return;
+  }
+  console.log(`herald DEAD pid ${Number.isFinite(pid) ? pid : "?"}`);
+  process.exit(1);
+}
+
+async function daemon(): Promise<void> {
+  fs.mkdirSync(path.dirname(PID_FILE), { recursive: true });
+  fs.writeFileSync(PID_FILE, `${process.pid}\n`);
+  const cleanup = () => {
+    try {
+      if (fs.existsSync(PID_FILE) && fs.readFileSync(PID_FILE, "utf8").trim() === String(process.pid)) fs.unlinkSync(PID_FILE);
+    } catch { /* ignore */ }
+  };
+  process.on("exit", cleanup);
+  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+  process.on("SIGINT", () => { cleanup(); process.exit(130); });
+  for (;;) {
+    scanOnce();
+    await new Promise((r) => setTimeout(r, INTERVAL_MS));
+  }
+}
+
+const args = process.argv.slice(2);
+if (args.includes("--drain")) drain();
+else if (args.includes("--once")) console.log(`herald: appended ${scanOnce()} wake event(s)`);
+else if (args.includes("--status")) status();
+else daemon().catch((e) => die(e.message));
