@@ -122,7 +122,25 @@ interface SeatEntry {
   provider?: string;
   model?: string;
   external?: boolean;
-  account?: { dir: string; label?: string };
+  account?: { dir: string; label?: string; authRoute?: string };
+}
+
+// The three routes BOOTSTRAP.md's question 8 offers: `oauth` for a
+// subscription seat's REPL /login, `api_key` for a written auth.json entry,
+// `env` for a provider env var exported in the spawning shell. Durable but
+// optional — `seats/seats.json` written before this field existed has no
+// `account.authRoute` at all, and that stays a valid roster.
+const AUTH_ROUTES = ["oauth", "api_key", "env"] as const;
+
+function validateAuthRoute(seatName: string, entry: SeatEntry): void {
+  const route = entry.account?.authRoute;
+  if (route === undefined) return; // absent is valid — pre-existing rosters
+  if (!AUTH_ROUTES.includes(route as (typeof AUTH_ROUTES)[number])) {
+    die(
+      `seat "${seatName}" has an invalid account.authRoute ${JSON.stringify(route)} in seats/seats.json — ` +
+        `must be one of ${AUTH_ROUTES.join(", ")} (or omitted)`
+    );
+  }
 }
 
 interface SeatRecord {
@@ -153,7 +171,9 @@ function readRoster(): Record<string, SeatEntry> {
     die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   }
   const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
-  return raw.seats ?? {};
+  const seats: Record<string, SeatEntry> = raw.seats ?? {};
+  for (const [name, entry] of Object.entries(seats)) validateAuthRoute(name, entry);
+  return seats;
 }
 
 function readState(): State {
