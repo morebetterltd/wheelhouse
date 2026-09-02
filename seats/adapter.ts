@@ -158,6 +158,7 @@ interface SeatEntry {
   provider?: string;
   model?: string;
   external?: boolean;
+  shadow?: boolean;
   account?: { dir: string; label?: string; authRoute?: string };
 }
 
@@ -175,6 +176,16 @@ function validateAuthRoute(seatName: string, entry: SeatEntry): void {
     die(
       `seat "${seatName}" has an invalid account.authRoute ${JSON.stringify(route)} in seats/seats.json — ` +
         `must be one of ${AUTH_ROUTES.join(", ")} (or omitted)`
+    );
+  }
+}
+
+function validateShadow(seatName: string, entry: SeatEntry): void {
+  if (entry.shadow === undefined) return; // absent means false
+  if (typeof entry.shadow !== "boolean") {
+    die(
+      `seat "${seatName}" has an invalid shadow ${JSON.stringify(entry.shadow)} in seats/seats.json — ` +
+        `must be boolean true or false (or omitted)`
     );
   }
 }
@@ -208,7 +219,10 @@ function readRoster(): Record<string, SeatEntry> {
   }
   const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
   const seats: Record<string, SeatEntry> = raw.seats ?? {};
-  for (const [name, entry] of Object.entries(seats)) validateAuthRoute(name, entry);
+  for (const [name, entry] of Object.entries(seats)) {
+    validateAuthRoute(name, entry);
+    validateShadow(name, entry);
+  }
   return seats;
 }
 
@@ -705,7 +719,8 @@ function cmdStatus(): void {
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
     const labelText = label ? `  account ${label}` : "";
-    console.log(`${name.padEnd(16)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${lastEvent(rec.log)}${bead}${labelText}`);
+    const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
+    console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${lastEvent(rec.log)}${bead}${labelText}`);
     if (died) {
       console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} is gone and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
