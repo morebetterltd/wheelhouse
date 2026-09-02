@@ -31,6 +31,8 @@ const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
 const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
 const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
 const POKE_PHRASE = "check the fleet inbox";
+const POKE_STABILITY_MS = Math.max(3000, Number(process.env.WHEELHOUSE_HERALD_POKE_STABILITY_MS || 3000));
+const POKE_COOLDOWN_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_COOLDOWN_MS || 120_000));
 const TMUX_SESSION = process.env.WHEELHOUSE_HERALD_TMUX_SESSION || "";
 const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
 const TMUX_SOCKET = process.env.WHEELHOUSE_TMUX_SOCKET || "";
@@ -46,6 +48,7 @@ interface HeraldState {
   logs: Record<string, { offset: number }>;
   seen: string[];
   lastPokedInboxSize?: number;
+  lastPokedByPane?: Record<string, number>;
 }
 
 interface Candidate {
@@ -65,7 +68,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize };
+    return { logs: parsed.logs ?? {}, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {} };
   } catch (e: any) {
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
@@ -260,13 +263,26 @@ function paneTextLooksIdleClaude(paneText: string): boolean {
   return /(?:^|\n)\s*(?:[>❯]|Human:|You:)\s*(?:\n|$)/.test(paneText) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
 }
 
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, Math.floor(ms)));
+}
+
+function captureCommanderPane(): { command: string; text: string } | null {
+  const command = tmuxOutput(["display-message", "-p", "-t", TMUX_PANE, "#{pane_current_command}"]);
+  const text = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-30"]);
+  return { command, text };
+}
+
 function commanderPaneIdleClaude(): boolean {
   if (!TMUX_PANE) return false;
   try {
-    const command = tmuxOutput(["display-message", "-p", "-t", TMUX_PANE, "#{pane_current_command}"]);
-    if (!["claude", "node", "bun"].includes(command)) return false;
-    const paneText = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-30"]);
-    return paneTextLooksIdleClaude(paneText);
+    const first = captureCommanderPane();
+    if (!first || !["claude", "node", "bun"].includes(first.command)) return false;
+    if (!paneTextLooksIdleClaude(first.text)) return false;
+    sleepSync(POKE_STABILITY_MS);
+    const second = captureCommanderPane();
+    if (!second || second.command !== first.command) return false;
+    return second.text === first.text && paneTextLooksIdleClaude(second.text);
   } catch {
     return false;
   }
@@ -276,6 +292,8 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   const inboxSize = fs.existsSync(INBOX) ? fs.statSync(INBOX).size : 0;
   if (inboxSize <= 0 || state.lastPokedInboxSize === inboxSize) return;
   if (!TMUX_PANE) { logPoke("no-pane", `inbox=${inboxSize}`); return; }
+  const lastPoked = state.lastPokedByPane?.[TMUX_PANE] ?? 0;
+  if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("cooldown", `pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
   if (!commanderPaneIdleClaude()) { logPoke("not-idle", `pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
   try {
     execFileSync("tmux", tmuxArgs(["send-keys", "-t", TMUX_PANE, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
@@ -285,6 +303,7 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   }
   logPoke("sent", `pane=${TMUX_PANE} inbox=${inboxSize}`);
   state.lastPokedInboxSize = inboxSize;
+  state.lastPokedByPane = { ...(state.lastPokedByPane ?? {}), [TMUX_PANE]: Date.now() };
   writeState(state);
 }
 
