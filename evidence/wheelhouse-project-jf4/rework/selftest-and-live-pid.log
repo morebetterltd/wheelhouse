@@ -1,0 +1,25 @@
+$ ./seats/herald.selftest.sh
+ok 1 - captures settle, distress, and sentinel events without matching author as auth
+ok 2 - settle uses A2A terminal state
+ok 3 - distress uses A2A failed state and carries quota detail
+ok 4 - distress matches insufficient credits wording
+ok 5 - real provider 400 invalid_grant stderr becomes one distress
+ok 6 - recorded false-positive message_update shapes produce zero distress
+ok 7 - sentinel uses A2A input-required state and carries the question
+ok 8 - dedup/cursor prevents duplicate inbox appends on a re-scan
+ok 9 - drain cursor emits unread wake events once, deduping stable ids, then advances to EOF
+ok 10 - drain dedup survives a tiny MAX_SEEN eviction horizon
+ok 11 - fixture idle Claude UI receives exactly one constant-phrase poke
+ok 12 - sent poke attempt is logged with timestamp and pane
+ok 13 - seat-authored text never enters send-keys
+ok 14 - pane-state gate prevents poke into a bare shell
+ok 15 - allowlist gate classifies a ❯-prompt bare shell not-idle and does not poke
+ok 16 - fixture mid-turn Claude UI is logged not-idle and not poked
+ok 17 - fixture tool-running Claude UI is not poked
+ok 18 - poke attempt with no configured pane is logged no-pane
+ok 19 - cockpit starts the herald daemon
+ok 20 - cockpit verifies and restarts a dead herald on re-run
+herald.selftest: PASS (20 checks)
+$ cat ../../seats/run/herald.pid && ps -p $(cat ../../seats/run/herald.pid) -o pid=,command=
+23886
+23886 bun [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/seats/herald.ts
