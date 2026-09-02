@@ -242,6 +242,8 @@ function paneTextLooksIdleClaude(paneText: string): boolean {
 function commanderPaneIdleClaude(): boolean {
   if (!TMUX_PANE) return false;
   try {
+    const command = tmuxOutput(["display-message", "-p", "-t", TMUX_PANE, "#{pane_current_command}"]);
+    if (!["claude", "node", "bun"].includes(command)) return false;
     const paneText = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-30"]);
     return paneTextLooksIdleClaude(paneText);
   } catch {
