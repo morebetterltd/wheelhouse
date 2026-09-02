@@ -114,6 +114,41 @@ function validateSeatName(name: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Comment authorship (BEADS_ACTOR)
+// ---------------------------------------------------------------------------
+
+/**
+ * BEADS_ACTOR names which seat spoke, so a bead comment's author field says
+ * which seat wrote it (contracts/GRAPH.md, "Comment authorship is
+ * configured, not inferred"). This adapter sets it in every child pi
+ * process's own environment — spawn, resume, reset, and the cwd-changing
+ * relaunch inside dispatch, because all four call launch() below — rather
+ * than asking the operator to export it before invoking the adapter. An
+ * operator export cannot be the mechanism: one commander pane launches five
+ * seats with five different actor names, and dispatch/resume/reset relaunch
+ * a seat transparently from whatever env the adapter process happens to
+ * have at that later moment, which is not necessarily the env the operator
+ * exported into at spawn time. Construction beats convention here, the same
+ * way requireCwdDir() below makes a seat's cwd a fact of how it was spawned
+ * rather than an instruction inside a prompt.
+ *
+ * An operator override remains available, for the rare case a seat's bd
+ * comments need a different actor name than its seat name:
+ * WHEELHOUSE_BEADS_ACTOR_<SEAT>, with the seat name upper-cased and every
+ * character outside [A-Z0-9] turned into "_" (so "reviewer-codex" reads its
+ * override from WHEELHOUSE_BEADS_ACTOR_REVIEWER_CODEX). Optional, not
+ * required — the seat name alone is always a correct default.
+ */
+function beadsActorEnvVar(name: string): string {
+  return `WHEELHOUSE_BEADS_ACTOR_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+}
+
+function beadsActorFor(name: string): string {
+  const override = process.env[beadsActorEnvVar(name)];
+  return override && override.length > 0 ? override : name;
+}
+
+// ---------------------------------------------------------------------------
 // Roster and state
 // ---------------------------------------------------------------------------
 
@@ -403,7 +438,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
     `0<> '${fifo}' >> '${log}' 2>> '${errLog}'`;
   const child = spawn("bash", ["-c", shellCmd], {
     cwd,
-    env: { ...process.env, PI_CODING_AGENT_DIR: accountDir },
+    env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
     detached: true,
     stdio: "ignore",
   });
