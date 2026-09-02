@@ -1,6 +1,6 @@
 # Ebb — Cold Start
 
-State lives in git and the work graph, so this works after any shutdown, reboot, or fresh clone. Nothing needs saving on the way out.
+State lives in git and the work graph, so this works after any shutdown, reboot, or fresh clone. The one thing written on the way out is the handoff note — see Shutdown below and `wheelhouse/runbooks/RUNNING_THE_LOOP.md`'s "End of day".
 
 ## Minimum viable fleet
 
@@ -14,6 +14,13 @@ claude
 ```
 
 The folder's `CLAUDE.md` makes this session the commander. No launcher required.
+
+**If `wheelhouse/HANDOFF.md` exists, read it before anything else** — it is
+yesterday's commander writing to you: which seats to `resume` versus respawn,
+what is waiting on a verdict, the first dispatch to make. After ingesting it,
+archive it to `wheelhouse/handoffs/<sign-off date>.md` per the runbook's "Next
+morning" section. No note is the normal first-morning state — start from the
+graph.
 
 > If you run your own agent harness, launch the commander with it instead — the folder context does the rest.
 
@@ -49,4 +56,17 @@ Speak backlog items to the commander in plain language. It files them as beads, 
 
 ## Shutdown
 
-`bun seats/adapter.ts stop <seat>` for each running seat — graceful, session kept — or just shut the machine down; in-flight work resumes from the graph, and `resume` brings a stopped seat back warm.
+The end-of-day ritual, in order (`wheelhouse/runbooks/RUNNING_THE_LOOP.md`,
+"End of day"): dispatch each active seat a write-your-handoff request — the
+seat answers on its bead — then compose the fleet note at
+`wheelhouse/HANDOFF.md` (per-seat status, waiting verdicts, tomorrow's first
+actions), and only then:
+
+```bash
+bun seats/adapter.ts stop-all
+```
+
+Graceful, sessions kept; busy seats are reported and left running. A plain
+machine shutdown loses nothing the graph holds — in-flight work resumes from
+the graph, and `resume` brings a stopped seat back warm — but it skips the
+handoff, and tomorrow's commander starts from raw state instead of a note.

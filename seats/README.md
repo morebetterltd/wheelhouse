@@ -178,6 +178,10 @@ prints one outcome line per rostered local seat, and reports mid-turn seats as
 `BUSY ... NOT stopped` rather than interrupting them. That matters because a
 SIGTERM during a turn lands inside whatever tool tree the seat is currently
 running. Stopped seats keep their recorded session files for next-day resume.
+The end-of-day RITUAL around this command — seats write handoffs on their beads
+first, the commander composes `wheelhouse/HANDOFF.md`, and only then `stop-all`
+— is `wheelhouse/runbooks/RUNNING_THE_LOOP.md`'s "End of day" section; this
+file documents only the command.
 
 `reset` is the commander-owned reset of a seat's context — a seat's session
 is a disposable cache (see `contracts/SEATS.md`'s Lifecycle section for the
