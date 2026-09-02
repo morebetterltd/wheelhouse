@@ -1,0 +1,34 @@
+$ bash wheelhouse/crew/bench.sh --mode install --ref HEAD .wheelhouse-worktrees/wheelhouse-project-rsr <scratch-output>
+bench: wheelhouse cold install + upgrade
+artifact: .wheelhouse-worktrees/wheelhouse-project-rsr at commit f060c1e9bd8149773d873465798387642d0f7ba1 (ref: HEAD)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases: install=1 upgrade=0 interview=0
+evidence: [tmpdir]tmp.SxtxgxogyF
+
+=== install under bash ===
+bash/install: PASS (208 log lines) — [tmpdir]tmp.SxtxgxogyF/install-bash.log
+
+=== install under zsh ===
+zsh/install: PASS (210 log lines) — [tmpdir]tmp.SxtxgxogyF/install-zsh.log
+
+wheelhouse cold-install + upgrade bench verdict
+date: 2026-09-02T19:52:45Z
+artifact: template tree at commit f060c1e9bd8149773d873465798387642d0f7ba1 (repo: .wheelhouse-worktrees/wheelhouse-project-rsr)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases run: install=1 upgrade=0 (bash and zsh each) interview=0
+result: PASS
+evidence: install-{bash,zsh}.log, upgrade-{bash,zsh}.log and/or interview/ in this directory
+
+This verdict cannot distinguish install-phase onboarding mechanics from
+interview quality. The interview mode benches Q7/Q8 conduct mechanics
+on one transcript; FAIL needs retained-capture adjudication and cannot
+distinguish a prose defect from interviewer-model weakness. It also
+cannot distinguish a current specimen-leak list from a stale one.
+The upgrade phase additionally cannot say that an
+install produced by the baseline commit's own BOOTSTRAP would upgrade
+the same way — its fixture has the SHAPE of that install, not its
+history — nor that the v1→Pi migration's operator half (the roster
+interview, per-seat logins, retiring the old roots) produces a working
+fleet; it does not exercise UPGRADE.md step 0's reconstruction of a
+missing .template-source. See the header of bench.sh.
+BENCH PASS
