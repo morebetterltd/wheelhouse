@@ -24,9 +24,9 @@ The main files here:
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi
 REPL or by an operator placing an api_key entry; it never enters git. The
-roster is safe to commit precisely because it records only names, paths, and
-optional non-secret human labels; the moment a credential appears in it, that
-stops being true.
+roster is safe to commit precisely because it records only names, paths,
+optional non-secret human labels, and optional auth-route names; the moment a
+credential appears in it, that stops being true.
 
 ## The roster format
 
@@ -49,6 +49,7 @@ Each seat entry:
 | `model` | The model the seat is pinned to, in the provider's own id format. Pin reasoning effort by appending Pi's thinking-level suffix to this same string, for example `gpt-5.6-sol:high`. |
 | `account.dir` | The seat's agent directory — the value `PI_CODING_AGENT_DIR` is set to. By convention `~/.pi-seats-<namespace>/<seat-name>`, where the namespace is this project's (recorded as `namespace=` in `wheelhouse/.template-source`). This field is the record; the convention just explains where it came from. |
 | `account.label` | Optional free-form, human-meaningful account label (`kk-personal-anthropic`, `work-chatgpt-2`) printed in status/provisioning/error output so an operator can tell which real account backs the seat. It is NEVER a secret: do not put tokens, keys, passwords, emails you would not commit, or other credentials here. Omit it freely; existing rosters without labels stay valid. |
+| `account.authRoute` | Optional durable record of which credential route this seat's identity was given, one of `oauth`, `api_key`, `env` — the same three routes BOOTSTRAP.md's question 8 walks per seat (OAuth `/login` for a subscription seat; a written `auth.json` entry or an exported provider env var for an `api_key` seat). It records the route, never the credential itself. Omit it freely; existing rosters without it stay valid — `seat-env.sh` and `adapter.ts` only validate the value when the field is present, rejecting anything outside those three strings. |
 
 Two gotchas about `provider` + `model`. The set of valid model ids depends on
 the ACCOUNT behind the seat, not just the provider — e.g. Codex via a ChatGPT

@@ -307,6 +307,45 @@ else fail "status did not include account.label when present (exit $RC): $OUT"; 
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
+phase "roster account.authRoute — absent is valid, present-valid passes, present-invalid is a loud STOP"
+# Absent: the default fixture roster (build_proj) never sets authRoute, so a
+# plain spawn against it exercises the absent case for free.
+run spawn worker-1
+if [ $RC -eq 0 ]; then pass "authRoute absent: spawn exits 0 (pre-existing roster stays valid)"
+else fail "authRoute absent: spawn exited $RC: $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+
+AUTHROUTE_OK_PROJ="$FIX/authroute-ok-proj"
+build_proj "$AUTHROUTE_OK_PROJ" authroute-ok
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].account.authRoute = "api_key";
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$AUTHROUTE_OK_PROJ/seats/seats.json"
+RUN_PROJ="$AUTHROUTE_OK_PROJ"; STATE="$AUTHROUTE_OK_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-authroute-ok/worker-1/argv.json"
+run spawn worker-1
+if [ $RC -eq 0 ]; then pass "authRoute present-valid (api_key): spawn exits 0"
+else fail "authRoute present-valid: spawn exited $RC: $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+
+AUTHROUTE_BAD_PROJ="$FIX/authroute-bad-proj"
+build_proj "$AUTHROUTE_BAD_PROJ" authroute-bad
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].account.authRoute = "sudo";
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$AUTHROUTE_BAD_PROJ/seats/seats.json"
+RUN_PROJ="$AUTHROUTE_BAD_PROJ"; STATE="$AUTHROUTE_BAD_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-authroute-bad/worker-1/argv.json"
+run spawn worker-1
+if [ $RC -ne 0 ] && says "invalid account.authRoute" && says "oauth, api_key, env"; then
+  pass "authRoute present-invalid: adapter STOPs naming the offending value and the allowed set"
+else fail "authRoute present-invalid did not STOP as expected (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
 phase "roster model suffix — malformed thinking suffix is pi's validation failure, surfaced at spawn"
 BAD_SUFFIX_PROJ="$FIX/bad-suffix-proj"
 build_proj "$BAD_SUFFIX_PROJ" bad-suffix

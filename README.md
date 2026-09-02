@@ -73,7 +73,7 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 ├── CLAUDE.md                    generated — makes this folder's sessions the commander
 ├── .beads/                      the work graph
 ├── seats/                       the seat machinery, at the root because every path it prints is root-relative
-│   ├── seats.json               generated — the roster: role, provider, model, account dir per seat; never a secret
+│   ├── seats.json               generated — the roster: role, provider, model, auth route, account dir per seat; never a secret
 │   ├── seat-env.sh              provisions one seat's isolated account directory, once
 │   ├── adapter.ts               runs the seats: spawn, dispatch, steer, status, stop, resume
 │   ├── verify.ts                dispatches the ephemeral verifier pass on a finished branch
