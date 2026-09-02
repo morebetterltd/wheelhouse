@@ -1,0 +1,6 @@
+$ WHEELHOUSE_HERALD_ROOT=$TMP bun seats/herald.ts --once
+herald: appended 561 wake event(s)
+$ WHEELHOUSE_HERALD_ROOT=$TMP bun seats/herald.ts --drain > drain.jsonl
+$ python3 summarize drain.jsonl
+class counts: {'sentinel': 451, 'settle': 110}
+distress count: 0

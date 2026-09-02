@@ -34,7 +34,8 @@ const TMUX_SESSION = process.env.WHEELHOUSE_HERALD_TMUX_SESSION || "";
 const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
 const TMUX_SOCKET = process.env.WHEELHOUSE_TMUX_SOCKET || "";
 
-const DISTRESS_RE = /(?:\bSTOP\b|\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|ation)?\b|\b401\b|\bforbidden\b|\btoken\b.*\b(?:expired|invalid|revoked)\b|\blog ?in required\b|\bcredential(?:s)?\b|\bquota\b|\brate.?limit\b|\b429\b|\busage limit\b|\bexhaust(?:ed|ion)?\b|\bout of credits\b|\binsufficient\s+credits?\b)/i;
+const DISTRESS_RE = /(?:\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|ation)?\b|\b401\b|\bforbidden\b|\binvalid_grant\b|\btoken\b.*\b(?:expired|invalid|revoked)\b|\blog ?in required\b|\bcredential(?:s)?\b|\bquota\b|\brate.?limit\b|\b429\b|\busage limit\b|\bexhaust(?:ed|ion)?\b|\bout of credits\b|\binsufficient\s+credits?\b)/i;
+const STOP_DISTRESS_RE = /\bSTOP\b/;
 const SENTINEL_RE = /@commander\s*:/i;
 
 type WakeClass = "settle" | "distress" | "sentinel";
@@ -133,6 +134,41 @@ function firstSentinelLine(text: string): string {
   return text.split(/\r?\n/).find((line) => SENTINEL_RE.test(line))?.trim() ?? text.trim();
 }
 
+function own(obj: any, key: string): boolean {
+  return obj !== null && typeof obj === "object" && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function hasErrorField(obj: any): boolean {
+  return own(obj, "error") || own(obj, "errorMessage") || own(obj, "stderr");
+}
+
+function stderrText(obj: any): string {
+  if (obj === null || obj === undefined) return "";
+  if (Array.isArray(obj)) return obj.map(stderrText).filter(Boolean).join("\n");
+  if (typeof obj !== "object") return "";
+  const direct = own(obj, "stderr") ? textOf(obj.stderr) : "";
+  const nested = Object.values(obj).map(stderrText).filter(Boolean).join("\n");
+  return [direct, nested].filter(Boolean).join("\n");
+}
+
+function errorText(obj: any): string {
+  const type = typeof obj?.type === "string" ? obj.type : undefined;
+  const stderr = stderrText(obj);
+  if (stderr) return stderr;
+  if (type === "response" && obj?.success === false) return textOf([obj.error, obj.errorMessage, obj.message, obj.data]);
+  if (type === "tool_execution_end" && (obj?.isError === true || hasErrorField(obj) || hasErrorField(obj?.result))) {
+    return textOf([obj.error, obj.errorMessage, obj.message, obj.result?.error, obj.result?.errorMessage]);
+  }
+  if ((type === "agent_end" || type === "turn_end") && (hasErrorField(obj) || hasErrorField(obj?.message))) {
+    return textOf([obj.error, obj.errorMessage, obj.message?.error, obj.message?.errorMessage]);
+  }
+  return "";
+}
+
+function distressTextMatches(text: string): boolean {
+  return STOP_DISTRESS_RE.test(text) || DISTRESS_RE.test(text);
+}
+
 function truncate(s: string, n = 700): string {
   const oneLine = s.replace(/\s+$/g, "");
   return oneLine.length > n ? `${oneLine.slice(0, n - 1)}…` : oneLine;
@@ -150,12 +186,13 @@ function classify(obj: any): Candidate | null {
       sourceType: type,
     };
   }
-  if ((type === "response" && obj?.success === false) || DISTRESS_RE.test(text)) {
+  const distressText = errorText(obj);
+  if (distressText && distressTextMatches(distressText)) {
     return {
       eventClass: "distress",
       state: "failed",
       title: "seat distress",
-      detail: truncate(text || JSON.stringify(obj)),
+      detail: truncate(distressText || text || JSON.stringify(obj)),
       sourceType: type,
     };
   }

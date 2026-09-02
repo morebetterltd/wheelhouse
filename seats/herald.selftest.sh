@@ -65,13 +65,17 @@ cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done"],"usage":{"input_tokens":1,"output_tokens":2}}
 {"type":"response","command":"prompt","success":false,"error":"429 usage limit reached: quota exhausted"}
 {"type":"response","command":"prompt","success":false,"error":"Insufficient credits for this account"}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":2,"delta":"stop"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"designing a credentials bench"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"auth considerations belong in prose"}}
+{"type":"tool_execution_end","toolCallId":"provider-400","toolName":"bash","result":{"stderr":"HTTP 400 invalid_grant: token invalid"},"isError":true}
 {"type":"assistant_message","message":"@commander: should I split this bead?"}
 {"type":"assistant_message","message":"the author field is ordinary prose, not a failure"}
 JSONL
 
 OUT="$(run_herald --once 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 4 wake event'; then pass "captures settle, distress, and sentinel events without matching author as auth"
-else fail "herald --once did not capture exactly four events (rc=$RC): $OUT"; fi
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 5 wake event'; then pass "captures settle, distress, and sentinel events without matching author as auth"
+else fail "herald --once did not capture exactly five events (rc=$RC): $OUT"; fi
 
 if [ "$(json_count 'r.class==="settle" && r.state==="terminal" && r.seat==="worker-1"')" = 1 ]; then pass "settle uses A2A terminal state"
 else fail "missing settle/terminal inbox event"; fi
@@ -79,6 +83,10 @@ if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /quota|429/.te
 else fail "missing distress/failed inbox event"; fi
 if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /Insufficient credits/.test(r.detail)')" = 1 ]; then pass "distress matches insufficient credits wording"
 else fail "missing insufficient-credits distress event"; fi
+if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /invalid_grant/.test(r.detail)')" = 1 ]; then pass "real provider 400 invalid_grant stderr becomes one distress"
+else fail "missing provider invalid_grant distress event"; fi
+if [ "$(json_count 'r.class==="distress" && (/toolcall_delta|thinking_delta|credentials bench|auth considerations/.test(r.detail) || r.detail==="stop")')" = 0 ]; then pass "recorded false-positive message_update shapes produce zero distress"
+else fail "message_update stop/thinking false positives reached distress"; fi
 if [ "$(json_count 'r.class==="sentinel" && r.state==="input-required" && /@commander:/.test(r.detail)')" = 1 ]; then pass "sentinel uses A2A input-required state and carries the question"
 else fail "missing sentinel/input-required inbox event"; fi
 
@@ -95,7 +103,7 @@ DRAIN1="$FIX/drain1.out"
 DRAIN2="$FIX/drain2.out"
 run_herald --drain > "$DRAIN1"
 run_herald --drain > "$DRAIN2"
-if [ "$(line_count "$DRAIN1")" = 4 ] && [ ! -s "$DRAIN2" ] && [ "$(cat "$PROJ/seats/inbox.cursor")" = "$(wc -c < "$PROJ/seats/inbox.jsonl" | tr -d ' ')" ]; then
+if [ "$(line_count "$DRAIN1")" = 5 ] && [ ! -s "$DRAIN2" ] && [ "$(cat "$PROJ/seats/inbox.cursor")" = "$(wc -c < "$PROJ/seats/inbox.jsonl" | tr -d ' ')" ]; then
   pass "drain cursor emits unread wake events once, deduping stable ids, then advances to EOF"
 else
   fail "drain cursor/dedup failed: drain1=$(line_count "$DRAIN1") drain2_bytes=$(wc -c < "$DRAIN2" | tr -d ' ') cursor=$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo missing)"
