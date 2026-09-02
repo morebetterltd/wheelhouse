@@ -1,0 +1,37 @@
+$ wheelhouse/crew/bench.sh --mode interview --ref c39e2d2 .wheelhouse-worktrees/wheelhouse-project-bf3 <outdir>
+bench: wheelhouse cold install + upgrade
+artifact: .wheelhouse-worktrees/wheelhouse-project-bf3 at commit c39e2d277f35401ebeae407a1c712e16356e0426 (ref: c39e2d2)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases: install=0 upgrade=0 interview=1
+evidence: [tmpdir]tmp.VOwwndtF9I
+
+=== interview ===
+interview: FAIL (exit 1) — see [tmpdir]tmp.VOwwndtF9I/interview; last lines:
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+artifact=c39e2d277f35401ebeae407a1c712e16356e0426
+interviewer=openai-codex/gpt-5.5
+clause_7_caveat=PASS benches conduct mechanics, not interview quality; FAIL needs capture adjudication.
+FAIL HARNESS_EXCEPTION: Error: timeout after 240000ms
+    at <anonymous> (<home>
+
+wheelhouse cold-install + upgrade bench verdict
+date: 2026-09-02T20:10:12Z
+artifact: template tree at commit c39e2d277f35401ebeae407a1c712e16356e0426 (repo: .wheelhouse-worktrees/wheelhouse-project-bf3)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases run: install=0 upgrade=0 (bash and zsh each) interview=1 (FAIL)
+result: FAIL
+evidence: install-{bash,zsh}.log, upgrade-{bash,zsh}.log and/or interview/ in this directory
+
+This verdict cannot distinguish install-phase onboarding mechanics from
+interview quality. The interview mode benches Q7/Q8 conduct mechanics
+on one transcript; FAIL needs retained-capture adjudication and cannot
+distinguish a prose defect from interviewer-model weakness. It also
+cannot distinguish a current specimen-leak list from a stale one.
+The upgrade phase additionally cannot say that an
+install produced by the baseline commit's own BOOTSTRAP would upgrade
+the same way — its fixture has the SHAPE of that install, not its
+history — nor that the v1→Pi migration's operator half (the roster
+interview, per-seat logins, retiring the old roots) produces a working
+fleet; it does not exercise UPGRADE.md step 0's reconstruction of a
+missing .template-source. See the header of bench.sh.
+run_rc=1

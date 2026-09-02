@@ -1,0 +1,6 @@
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+artifact=c39e2d277f35401ebeae407a1c712e16356e0426
+interviewer=openai-codex/gpt-5.5
+clause_7_caveat=PASS benches conduct mechanics, not interview quality; FAIL needs capture adjudication.
+FAIL HARNESS_EXCEPTION: Error: timeout after 240000ms
+    at <anonymous> (<home>
