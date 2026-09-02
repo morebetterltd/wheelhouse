@@ -12,7 +12,7 @@ Read first: `wheelhouse/ISA.md` (state of record) and `wheelhouse/GRAPH.md` (how
 
 ## Autonomy mandate
 
-Principal said in the install interview at 2026-08-20: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done."
+Principal said in the illustrative install interview at 2026-08-20: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done."
 
 Default: the fleet takes reviewed work all the way through this project's definition of done — merge, push, open and merge PRs, and deploy where deployment is automated — stopping only for the reserved actions below or for a genuine fork in product intent where two readings lead to different work. If either exception applies, ask once with a recommendation and a default, then keep every other bead moving.
 
