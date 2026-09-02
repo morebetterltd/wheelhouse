@@ -135,6 +135,7 @@ symlink is a grant pi never matches.
 
 ```bash
 bun seats/adapter.ts spawn    <seat> [bead-id]          # start it
+bun seats/adapter.ts probe    <seat>                    # one-shot provider/model liveness check
 bun seats/adapter.ts dispatch <seat> <bead-id> <text>   # hand it a bead
 bun seats/adapter.ts steer    <seat> <text>             # redirect mid-turn
 bun seats/adapter.ts status                             # liveness, every seat
@@ -167,6 +168,8 @@ has to exist already (a worker's own claim, or whoever dispatches) — and a
 missing worktree is a loud STOP, never a silent fall-back to the root.
 `dispatch` transparently stops and relaunches the seat, attached to the same
 session, when its cwd does not already match the bead being dispatched.
+
+`probe` runs the rostered account, provider, and model through a one-shot `pi -p --no-session` liveness turn that asks only for `OK`; it does not need or create a bead worktree and writes no bead comment. A successful probe prints `OK`; a provider failure prints pi's stdout/stderr verbatim and exits with pi's status.
 
 `dispatch` prefixes the message with `Bead <bead-id>` and queues behind the
 current turn if the seat is mid-stream; redirecting the CURRENT turn is what

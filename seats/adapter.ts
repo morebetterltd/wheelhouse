@@ -31,6 +31,7 @@
  * Usage: bun seats/adapter.ts <command> [args]
  *
  *   spawn    <seat> [bead-id]          start the seat from seats/seats.json
+ *   probe    <seat>                    one-shot provider/model liveness check
  *   dispatch <seat> <bead-id> <text>   send a prompt (queues if mid-turn)
  *   steer    <seat> <text>             redirect the current turn
  *   status                             liveness + last event, every seat
@@ -48,7 +49,7 @@
  * same session) when the seat's cwd does not already match the bead.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -501,6 +502,40 @@ async function cmdSpawn(name: string, beadId?: string): Promise<void> {
   await launch(name, requireSeat(name), null, beadId ? beadWorktreeDir(beadId) : ROOT);
 }
 
+function cmdProbe(name: string): void {
+  const entry = requireSeat(name);
+  const labelSuffix = accountLabelSuffix(entry);
+  const accountDir = expandTilde(entry.account!.dir);
+  if (!fs.existsSync(accountDir)) {
+    die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n` +
+      `      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`);
+  }
+  if (!entry.provider || !entry.model) {
+    die(`seat "${name}"${labelSuffix} has no provider/model pin in seats/seats.json — probe must test the exact roster pair`);
+  }
+  const args = [
+    "-p",
+    "--no-session",
+    "--provider", entry.provider,
+    "--model", entry.model,
+    "Reply with exactly the word OK. Use no tools.",
+  ];
+  const result = spawnSync("pi", args, {
+    cwd: ROOT,
+    env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) die(`probe failed to start pi for seat "${name}"${labelSuffix}: ${result.error.message}`);
+  if (result.status === 0) {
+    console.log("OK");
+    return;
+  }
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  process.exit(result.status ?? 1);
+}
+
 async function cmdResume(name: string): Promise<void> {
   const rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" in seats/state.json — spawn it instead`);
@@ -757,6 +792,9 @@ async function main(): Promise<void> {
     case "spawn":
       if (rest.length !== 1 && rest.length !== 2) die("usage: adapter.ts spawn <seat> [bead-id]");
       return cmdSpawn(validateSeatName(rest[0]), rest[1] !== undefined ? validateSegment("bead id", rest[1]) : undefined);
+    case "probe":
+      if (rest.length !== 1) die("usage: adapter.ts probe <seat>");
+      return cmdProbe(validateSeatName(rest[0]));
     case "dispatch":
       if (rest.length !== 3) die("usage: adapter.ts dispatch <seat> <bead-id> <text>");
       return cmdDispatch(validateSeatName(rest[0]), validateSegment("bead id", rest[1]), rest[2]);
@@ -778,7 +816,7 @@ async function main(): Promise<void> {
       if (rest.length !== 1) die("usage: adapter.ts reset <seat>");
       return cmdReset(validateSeatName(rest[0]));
     default:
-      die("usage: adapter.ts spawn|dispatch|steer|status|stop|stop-all|resume|reset ...");
+      die("usage: adapter.ts spawn|probe|dispatch|steer|status|stop|stop-all|resume|reset ...");
   }
 }
 
