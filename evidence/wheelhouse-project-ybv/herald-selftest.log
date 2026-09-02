@@ -1,0 +1,18 @@
+$ ./seats/herald.selftest.sh
+ok 1 - captures settle, distress, and sentinel events without matching author as auth
+ok 2 - settle uses A2A terminal state
+ok 3 - distress uses A2A failed state and carries quota detail
+ok 4 - distress matches insufficient credits wording
+ok 5 - real provider 400 invalid_grant stderr becomes one distress
+ok 6 - recorded false-positive message_update shapes produce zero distress
+ok 7 - sentinel uses A2A input-required state and carries the question
+ok 8 - dedup/cursor prevents duplicate inbox appends on a re-scan
+ok 9 - drain cursor emits unread wake events once, deduping stable ids, then advances to EOF
+ok 10 - drain dedup survives a tiny MAX_SEEN eviction horizon
+ok 11 - poke is exactly one constant phrase when commander pane is idle Claude
+ok 12 - seat-authored text never enters send-keys
+ok 13 - pane-state gate prevents poke into a bare shell
+ok 14 - pane-state gate requires idle Claude, not merely a claude process
+ok 15 - cockpit starts the herald daemon
+ok 16 - cockpit verifies and restarts a dead herald on re-run
+herald.selftest: PASS (16 checks)
