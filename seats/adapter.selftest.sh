@@ -105,7 +105,7 @@ FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
+RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
 
 # The stub pi: a long-lived RPC process. It records argv, honours
 # PI_CODING_AGENT_DIR, answers get_state/prompt/steer, appends to a session
@@ -291,7 +291,7 @@ build_installed_proj "$INST_PROJ" installed
 RUN_PROJ="$INST_PROJ"; STATE="$INST_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-installed/worker-1/argv.json"
 run spawn worker-1
 if [ $RC -eq 0 ]; then pass "installed layout: spawn exits 0 with no contracts/ directory"
-else fail "installed layout: spawn exited $RC: $OUT"; fi
+else fail "installed layout: spawn exited ${RC}: $OUT"; fi
 if grep -q "\"--append-system-prompt\",\"$INST_PROJ/wheelhouse/fleet/WORKER.md\"" "$ARGV" 2>/dev/null; then
   pass "installed layout: worker brief resolves to wheelhouse/fleet/WORKER.md"
 else fail "installed layout: worker brief was not the installed path"; fi
@@ -333,7 +333,7 @@ phase "roster account.authRoute — absent is valid, present-valid passes, prese
 # plain spawn against it exercises the absent case for free.
 run spawn worker-1
 if [ $RC -eq 0 ]; then pass "authRoute absent: spawn exits 0 (pre-existing roster stays valid)"
-else fail "authRoute absent: spawn exited $RC: $OUT"; fi
+else fail "authRoute absent: spawn exited ${RC}: $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
 
 AUTHROUTE_OK_PROJ="$FIX/authroute-ok-proj"
@@ -348,7 +348,7 @@ env HOME="$HOME_FIX" bun -e '
 RUN_PROJ="$AUTHROUTE_OK_PROJ"; STATE="$AUTHROUTE_OK_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-authroute-ok/worker-1/argv.json"
 run spawn worker-1
 if [ $RC -eq 0 ]; then pass "authRoute present-valid (api_key): spawn exits 0"
-else fail "authRoute present-valid: spawn exited $RC: $OUT"; fi
+else fail "authRoute present-valid: spawn exited ${RC}: $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
 
 AUTHROUTE_ENV_PROJ="$FIX/authroute-env-proj"
@@ -464,17 +464,17 @@ RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alph
 check_spawn() {   # $1 = label
   local label="$1" pid
   run spawn worker-1
-  if [ $RC -eq 0 ]; then pass "$label: spawn exits 0"
-  else fail "$label: spawn exited $RC: $OUT"; fi
+  if [ $RC -eq 0 ]; then pass "${label}: spawn exits 0"
+  else fail "${label}: spawn exited ${RC}: $OUT"; fi
 
   pid="$(state_get pid)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    pass "$label: state.json records a live pid"
-  else fail "$label: state.json has no live pid for worker-1"; fi
+    pass "${label}: state.json records a live pid"
+  else fail "${label}: state.json has no live pid for worker-1"; fi
 
   if [ -n "$(state_get sessionFile)" ] && [ -f "$(state_get sessionFile)" ]; then
-    pass "$label: state.json records a session file that exists"
-  else fail "$label: no session file recorded, or it does not exist"; fi
+    pass "${label}: state.json records a session file that exists"
+  else fail "${label}: no session file recorded, or it does not exist"; fi
 }
 
 phase "0. seat-name validation — a name is one path segment or it is refused"
@@ -523,7 +523,7 @@ phase "1b. BEADS_ACTOR override — WHEELHOUSE_BEADS_ACTOR_<SEAT> beats the seat
 run stop worker-1
 OUT="$(env -u BEADS_ACTOR WHEELHOUSE_BEADS_ACTOR_WORKER_1=custom-actor HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
 if [ $RC -eq 0 ]; then pass "spawn with the override env var exits 0"
-else fail "spawn with the override env var exited $RC: $OUT"; fi
+else fail "spawn with the override env var exited ${RC}: $OUT"; fi
 if grep -q '"BEADS_ACTOR":"custom-actor"' "${ARGV%argv.json}env.json" 2>/dev/null; then
   pass "WHEELHOUSE_BEADS_ACTOR_WORKER_1 overrides the default seat-name actor"
 else fail "override env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:custom-actor"; fi
@@ -563,7 +563,7 @@ SESS="$(state_get sessionFile)"
 SESS_LINES_BEFORE=$(wc -l < "$SESS" | tr -d ' ')
 run dispatch worker-1 bead-x "hello adapter"
 if [ $RC -eq 0 ]; then pass "dispatch exits 0"
-else fail "dispatch exited $RC: $OUT"; fi
+else fail "dispatch exited ${RC}: $OUT"; fi
 if wait_for "$LOG" '"agent_end"' 5; then pass "agent_end captured in the event log"
 else fail "no agent_end in $LOG"; fi
 if grep -q 'echo: Bead bead-x' "$LOG" 2>/dev/null; then
@@ -591,7 +591,7 @@ mkdir -p "$PROJ/.wheelhouse-worktrees/bead-y"
 run dispatch worker-1 bead-y "SLOW long think"
 run steer worker-1 "change course"
 if [ $RC -eq 0 ]; then pass "steer exits 0"
-else fail "steer exited $RC: $OUT"; fi
+else fail "steer exited ${RC}: $OUT"; fi
 if wait_for "$LOG" 'steered: change course' 5; then
   pass "the steer reached the seat mid-turn"
 else fail "steer text never surfaced in the event log"; fi
@@ -625,14 +625,14 @@ check_resume() {   # $1 = label; expects a stopped seat with a recorded session
   local label="$1" sess
   sess="$(state_get sessionFile)"
   run resume worker-1
-  if [ $RC -eq 0 ]; then pass "$label: resume exits 0"
-  else fail "$label: resume exited $RC: $OUT"; fi
+  if [ $RC -eq 0 ]; then pass "${label}: resume exits 0"
+  else fail "${label}: resume exited ${RC}: $OUT"; fi
   if grep -q "\"--session\",\"$sess\"" "$ARGV" 2>/dev/null; then
-    pass "$label: relaunch attached the recorded session via --session"
-  else fail "$label: --session with the recorded file is not in pi's argv"; fi
+    pass "${label}: relaunch attached the recorded session via --session"
+  else fail "${label}: --session with the recorded file is not in pi's argv"; fi
   if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
-    pass "$label: resume still carries BEADS_ACTOR=worker-1"
-  else fail "$label: resumed seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
+    pass "${label}: resume still carries BEADS_ACTOR=worker-1"
+  else fail "${label}: resumed seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
 }
 SESS_LINES_BEFORE=$(wc -l < "$SESS" | tr -d ' ')
 check_resume "resume"
@@ -644,7 +644,7 @@ if [ "$(state_get lastBead)" = "bead-y" ]; then
 else fail "lastBead was lost across resume"; fi
 run reset worker-1
 if [ $RC -eq 0 ]; then pass "reset exits 0"
-else fail "reset exited $RC: $OUT"; fi
+else fail "reset exited ${RC}: $OUT"; fi
 if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
   pass "reset's cold respawn still carries BEADS_ACTOR=worker-1"
 else fail "reset's respawned seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
@@ -653,13 +653,13 @@ run stop worker-1
 phase "6b. pruned cwd — dispatch falls back visibly; plain resume STOPs"
 run resume worker-1
 if [ $RC -eq 0 ]; then pass "pruned cwd setup: resume exits 0 before pruning"
-else fail "pruned cwd setup: resume exited $RC: $OUT"; fi
+else fail "pruned cwd setup: resume exited ${RC}: $OUT"; fi
 OLD_SESS="$(state_get sessionFile)"
 rm -rf "$PROJ/.wheelhouse-worktrees/bead-y"
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-z"
 run dispatch worker-1 bead-z "hello after prune"
 if [ $RC -eq 0 ]; then pass "pruned cwd dispatch: dispatch exits 0 via fallback"
-else fail "pruned cwd dispatch: exited $RC: $OUT"; fi
+else fail "pruned cwd dispatch: exited ${RC}: $OUT"; fi
 if says "session continuity intentionally dropped" && says "recorded cwd is gone" && says "falling back to fresh spawn"; then
   pass "pruned cwd dispatch: fallback announcement is visible and names why"
 else fail "pruned cwd dispatch: fallback announcement missing (exit $RC): $OUT"; fi
@@ -768,18 +768,18 @@ EOF
   mkdir -p "$RPROJ/.wheelhouse-worktrees/smoke-1" "$RPROJ/.wheelhouse-worktrees/smoke-2"
   rrun spawn worker-1
   if [ $RC -eq 0 ]; then pass "real: spawn exits 0 ($OUT)"
-  else fail "real: spawn exited $RC: $OUT"; fi
+  else fail "real: spawn exited ${RC}: $OUT"; fi
   rrun dispatch worker-1 smoke-1 "Reply with exactly the text WHEELHOUSE-SMOKE-OK and nothing else. Use no tools."
   if [ $RC -eq 0 ]; then pass "real: dispatch accepted"
-  else fail "real: dispatch exited $RC: $OUT"; fi
+  else fail "real: dispatch exited ${RC}: $OUT"; fi
   if wait_for "$RLOG" '"agent_end"' 180; then pass "real: agent_end captured"
   else fail "real: no agent_end within 180s — tail: $(tail -c 400 "$RLOG" 2>/dev/null)"; fi
   RSESS="$(rstate_get sessionFile)"
   RL_BEFORE=$(wc -l < "$RSESS" | tr -d ' ')
   rrun stop worker-1
-  [ $RC -eq 0 ] && pass "real: stop exits 0" || fail "real: stop exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "real: stop exits 0" || fail "real: stop exited ${RC}: $OUT"
   rrun resume worker-1
-  [ $RC -eq 0 ] && pass "real: resume exits 0 ($OUT)" || fail "real: resume exited $RC: $OUT"
+  [ $RC -eq 0 ] && pass "real: resume exits 0 ($OUT)" || fail "real: resume exited ${RC}: $OUT"
   LOG_MARK=$(wc -c < "$RLOG" | tr -d ' ')
   rrun dispatch worker-1 smoke-2 "Reply with exactly the text OK and nothing else. Use no tools."
   if [ $RC -eq 0 ] && wait_for_from "$RLOG" "$LOG_MARK" '"agent_end"' 180; then

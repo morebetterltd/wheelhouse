@@ -59,7 +59,7 @@ ensure_herald() {
     echo "herald dead: pid ${old_pid:-?}; restarting"
     rm -f "$pid_file"
   fi
-  (cd "$ROOT" && WHEELHOUSE_HERALD_TMUX_SESSION="$S" WHEELHOUSE_HERALD_TMUX_PANE="$S:bridge.0" WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" nohup bun "$HERE/herald.ts" >> "$HERE/logs/herald.out.log" 2>> "$HERE/logs/herald.stderr.log" & echo $! > "$pid_file")
+  (cd "$ROOT" && WHEELHOUSE_HERALD_TMUX_SESSION="$S" WHEELHOUSE_HERALD_TMUX_PANE="${S}:bridge.0" WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" nohup bun "$HERE/herald.ts" >> "$HERE/logs/herald.out.log" 2>> "$HERE/logs/herald.stderr.log" & echo $! > "$pid_file")
   new_pid="$(cat "$pid_file" 2>/dev/null || true)"
   sleep 0.2
   if pid_alive "$new_pid"; then
@@ -129,17 +129,17 @@ QSELF="$(printf '%q' "$SELF")"
 spawn_floor_pane() {
   # Right pane, full height: the floor (spotlight + rail in one program).
   # -l N% needs tmux >= 3.1; fall back to an even split if it is refused.
-  tmx split-window -h -l '45%' -t "$S:bridge" -c "$ROOT" "$QSELF --pane-floor" 2>/dev/null ||
-    tmx split-window -h -t "$S:bridge" -c "$ROOT" "$QSELF --pane-floor"
+  tmx split-window -h -l '45%' -t "${S}:bridge" -c "$ROOT" "$QSELF --pane-floor" 2>/dev/null ||
+    tmx split-window -h -t "${S}:bridge" -c "$ROOT" "$QSELF --pane-floor"
 }
 
 if tmx has-session -t "=$S" 2>/dev/null; then
   if tmx list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx 'bridge'; then
-    PANES="$(tmx list-panes -t "$S:bridge" 2>/dev/null | wc -l | tr -d ' ')"
+    PANES="$(tmx list-panes -t "${S}:bridge" 2>/dev/null | wc -l | tr -d ' ')"
     if [ "$PANES" = "1" ]; then
-      echo "bridge floor pane missing in $S:bridge; respawning it"
+      echo "bridge floor pane missing in ${S}:bridge; respawning it"
       spawn_floor_pane
-      tmx select-pane -t "$S:bridge.0"
+      tmx select-pane -t "${S}:bridge.0"
     fi
   fi
   echo "bridge already built: $S (re-run is attach, never a duplicate)"
@@ -160,7 +160,7 @@ tmx set-option -t "$S" status-left "[$S] "
 tmx set-option -t "$S" status-right "1-9 pin  0 status  f follow  o/q overview"
 
 # Land focus on the commander pane.
-tmx select-pane -t "$S:bridge.0"
+tmx select-pane -t "${S}:bridge.0"
 
 echo "bridge built: session $S, window 0:bridge (commander left, floor right)"
 attach

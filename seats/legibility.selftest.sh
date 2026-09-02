@@ -95,7 +95,7 @@ FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin:/usr/sbin"
+RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin:/usr/sbin"
 
 # Stub bd: a couple of ready beads; `bd show` fails so verify.ts takes its
 # read-the-bead-yourself fallback.
@@ -314,7 +314,7 @@ ME=$$   # alive for the whole run
 # =============================================================================
 phase "phase 1: QUOTA — a quota-shaped dispatch failure is amber, never done"
 arun spawn q-seat
-[ $RC -eq 0 ] && pass "q-seat spawns against the stub" || fail "q-seat spawn: rc=$RC: $OUT"
+[ $RC -eq 0 ] && pass "q-seat spawns against the stub" || fail "q-seat spawn: rc=${RC}: $OUT"
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-q"
 arun dispatch q-seat bead-q "QUOTA please"
 if [ $RC -ne 0 ] && says "dispatch failed"; then
@@ -376,7 +376,7 @@ else fail "auth and quota render conflated: $(seatline a-seat)"; fi
 # =============================================================================
 phase "phase 3: DEAD PROCESS — SIGKILL, red PROCESS GONE, recover says DEAD"
 arun spawn d-seat
-[ $RC -eq 0 ] && pass "d-seat spawns" || fail "d-seat spawn: rc=$RC: $OUT"
+[ $RC -eq 0 ] && pass "d-seat spawns" || fail "d-seat spawn: rc=${RC}: $OUT"
 arun dispatch d-seat bead-d "hello"
 DPID="$(state_get d-seat pid)"
 kill -9 "$DPID" 2>/dev/null

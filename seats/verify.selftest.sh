@@ -108,7 +108,7 @@ FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
+RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
 
 # The stub pi: one shot. Records argv and PI_CODING_AGENT_DIR into the agent
 # dir, touches an "invoked" marker, prints the scripted reply named by
@@ -255,7 +255,7 @@ VERDICT: APPROVE
 EOF
 run bead-installed fleet/bead-1 worker-1
 if [ $RC -eq 0 ]; then pass "installed layout: APPROVE exits 0 with no contracts/ directory"
-else fail "installed layout: verify exited $RC: $OUT"; fi
+else fail "installed layout: verify exited ${RC}: $OUT"; fi
 if grep -q "\"--append-system-prompt\",\"$INST_PROJ/wheelhouse/crew/VERIFIER.md\"" "$VARGV" 2>/dev/null; then
   pass "installed layout: verifier brief resolves to wheelhouse/crew/VERIFIER.md"
 else fail "installed layout: verifier brief was not the installed path"; fi
@@ -282,7 +282,7 @@ VERDICT: APPROVE
 EOF
 run bead-umbrella fleet/bead-1 worker-1 --repo product --evidence evidence/bench.log
 if [ $RC -eq 0 ]; then pass "umbrella layout: APPROVE exits 0 when --repo names the product repo"
-else fail "umbrella layout: verify exited $RC: $OUT"; fi
+else fail "umbrella layout: verify exited ${RC}: $OUT"; fi
 if grep -q "branch-repo: $UMB_PROJ/product" "$UMB_PROJ/seats/verdicts/bead-umbrella.md" 2>/dev/null \
    && grep -q "evidence/bench.log — exists, .* bytes, non-empty — OK" "$UMB_PROJ/seats/verdicts/bead-umbrella.md" 2>/dev/null; then
   pass "umbrella layout: verdict records the product repo and product-relative evidence floor check"
@@ -303,7 +303,7 @@ VERDICT: APPROVE
 EOF
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ]; then pass "APPROVE exits 0"
-else fail "APPROVE path exited $RC: $OUT"; fi
+else fail "APPROVE path exited ${RC}: $OUT"; fi
 if says "VERDICT: APPROVE"; then pass "the verdict is printed for the dispatcher"
 else fail "no VERDICT: APPROVE in output: $OUT"; fi
 if [ -f "$VDIR/bead-1.md" ]; then pass "verdict file written to seats/verdicts/bead-1.md"
@@ -336,7 +336,7 @@ else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null)
 # The verifier's process cwd must be A repository the branch's ref resolves
 # from (so its own bare `git diff`/`git show` still work — proven by phase 1
 # itself already succeeding, and by phase 8's evidence reads below, both
-# unchanged from before this bead), but it must NOT be $PROJ: a confused or
+# unchanged from before this bead), but it must NOT be ${PROJ}: a confused or
 # adversarial turn that writes to a relative path must land somewhere that
 # dies with the process, not in the live checkout.
 SCRATCH_CWD="$(cat "$VCWD" 2>/dev/null)"
@@ -361,7 +361,7 @@ VERDICT: APPROVE — NOT BENCHED: the docs deployable
 EOF
 run bead-1nb fleet/bead-1 worker-1
 if [ $RC -eq 0 ]; then pass "APPROVE — NOT BENCHED still exits 0"
-else fail "NOT BENCHED APPROVE exited $RC: $OUT"; fi
+else fail "NOT BENCHED APPROVE exited ${RC}: $OUT"; fi
 if grep -q "verdict: APPROVE — NOT BENCHED: the docs deployable" "$VDIR/bead-1nb.md" 2>/dev/null; then
   pass "the NOT BENCHED qualifier survives into the verdict record"
 else fail "NOT BENCHED qualifier lost from the verdict file"; fi
@@ -415,11 +415,11 @@ check_self_approval() {   # $1 = label
   local label="$1"
   run bead-4 fleet/bead-1 worker-1
   if [ $RC -eq 1 ] && says "SAME account directory"; then
-    pass "$label: identical account dirs refused with a STOP, exit 1"
-  else fail "$label: self-approval not refused (exit $RC): $OUT"; fi
+    pass "${label}: identical account dirs refused with a STOP, exit 1"
+  else fail "${label}: self-approval not refused (exit $RC): $OUT"; fi
   if [ ! -f "$HOME_FIX/.pi-seats-alpha/worker-1/invoked" ] && [ ! -f "$VINVOKED" ]; then
-    pass "$label: nothing was spawned — the stub was never invoked"
-  else fail "$label: the stub pi ran despite the identity collision"; fi
+    pass "${label}: nothing was spawned — the stub was never invoked"
+  else fail "${label}: the stub pi ran despite the identity collision"; fi
 }
 cat > "$REPLY" <<'EOF'
 VERDICT: APPROVE
@@ -571,7 +571,7 @@ VERDICT: APPROVE
 EOF
 run bead-8a fleet/bead-1 worker-1 --evidence evidence/bench.log,evidence/screen.png
 if [ $RC -eq 0 ]; then pass "APPROVE over a satisfied bench log + screenshot exits 0"
-else fail "satisfied heterogeneous evidence exited $RC: $OUT"; fi
+else fail "satisfied heterogeneous evidence exited ${RC}: $OUT"; fi
 if grep -q "## Evidence checks" "$VDIR/bead-8a.md" 2>/dev/null \
    && grep -q "evidence/bench.log — exists, .* bytes, non-empty — OK" "$VDIR/bead-8a.md" 2>/dev/null \
    && grep -q "evidence/screen.png — exists, .* bytes, PNG 1x1 — OK" "$VDIR/bead-8a.md" 2>/dev/null; then
@@ -776,7 +776,7 @@ EOF
     bun "$RPROJ/seats/verify.ts" smoke-1 fleet/bead-1 worker-1 2>&1)"; RC=$?
   if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
     pass "real: one-shot spawn/parse/record round-trips through the real pi"
-  else fail "real: smoke leg exited $RC: $OUT"; fi
+  else fail "real: smoke leg exited ${RC}: $OUT"; fi
   if grep -q "verdict: APPROVE" "$RPROJ/seats/verdicts/smoke-1.md" 2>/dev/null; then
     pass "real: verdict file recorded"
   else fail "real: no verdict file from the real leg"; fi
