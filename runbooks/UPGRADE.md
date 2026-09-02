@@ -70,7 +70,7 @@ sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f whe
 
 ```bash
 BASE=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
-git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/     # skip if BASE is 'unknown'
+git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ || true     # skip if BASE is 'unknown'; diff exits 1 when differences exist
 ```
 
 Read it. If nothing changed in `contracts/`, you are already current and there is nothing to do.
@@ -97,7 +97,12 @@ The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapte
 ```bash
 mkdir -p seats
 for f in "$TEMPLATE"/seats/*; do
-  cp -p "$f" "seats/$(basename "$f")"
+  if [ -d "$f" ]; then
+    rm -rf "seats/$(basename "$f")"
+    cp -pR "$f" "seats/$(basename "$f")"
+  else
+    cp -p "$f" "seats/$(basename "$f")"
+  fi
 done
 if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
 for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
@@ -273,6 +278,12 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 - the intent layer's other paths are covered by the upgrade mechanics above: `GRAPH.md` and `INTEGRATOR.md` contract halves move through the splice list, `RUNNING_THE_LOOP.md` moves through the runbook copy, and `seats/intent-check.sh` moves through the seats copy; verify those three outputs rather than hand-editing them here;
 - every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install;
 - the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
+
+### Adopt the autonomy mandate in existing installs
+
+Ask the principal the same question current `BOOTSTRAP.md` asks: how far does the fleet take work? The default answer is **all the way** — merge, push, open and merge PRs, and deploy wherever the project has an automated deploy path — stopping only for this install's reserved actions or a genuine fork in product intent. Record the answer in `wheelhouse/INTEGRATOR.md`'s project section along with the explicit reserved list and the date. The mandate line must quote the principal directive verbatim: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done."
+
+Then hand-merge the same standing behavior into `CLAUDE.md` from `generated/CLAUDE.md.example`: the `## Autonomy mandate` section, the two-and-only-two reasons to interrupt the principal, and the restart checklist. Add an ISA Decision quoting the directive in `wheelhouse/ISA.md` so a restarted commander cannot lose it. Finally, read `AGENTS.md` if the install has one: keep bd's command reference, but append or update the wheelhouse override so bd's Conservative/default "do not push" text cannot be cited against the authority in `wheelhouse/INTEGRATOR.md`.
 
 ```bash
 git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ | grep -E '^[-+].*`[a-z/.]+`' | sort -u

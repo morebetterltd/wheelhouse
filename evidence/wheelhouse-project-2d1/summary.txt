@@ -1,0 +1,42 @@
+Commands run from umbrella root unless noted.
+
+STATIC CHECKS
+See evidence/wheelhouse-project-2d1/static-grep.log for line-level hits showing:
+- INTEGRATOR.md contract default mandate and Push/PR/deploy authority sections.
+- REVIEWER.md PUSH-line semantics no longer allow HOLD from a generated agent profile.
+- GRAPH.md and RUNNING_THE_LOOP.md commander work creation/dispatch without a permission round.
+- RUNNING_THE_LOOP.md queue-empty ISA mining rule.
+- BOOTSTRAP.md question 4b, AGENTS.md override, ISA Decision, and generated CLAUDE autonomy section instructions.
+- UPGRADE.md existing-install autonomy adoption.
+- generated/CLAUDE.md.example Autonomy mandate and restart checklist.
+- generated/ISA.md.example Decision quote.
+
+DIRECTIVE QUOTE COUNT
+$ python3 directive-count
+contracts/INTEGRATOR.md 1
+BOOTSTRAP.md 2
+runbooks/UPGRADE.md 1
+generated/CLAUDE.md.example 1
+generated/ISA.md.example 1
+
+BOOTSTRAP BENCH
+$ bash wheelhouse/crew/bench.sh --mode both --ref HEAD .wheelhouse-worktrees/wheelhouse-project-2d1 <scratch-output>
+bench: wheelhouse cold install + upgrade
+artifact: .wheelhouse-worktrees/wheelhouse-project-2d1 at commit 527efa497c3c2f8fee167afe7f177bf5f57fa9b9 (ref: HEAD)
+phases: install=1 upgrade=1 interview=0
+=== install under bash ===
+bash/install: PASS (210 log lines)
+=== upgrade under bash ===
+bash/upgrade: PASS (137 log lines)
+  runbook sweep: all 3 runbook file(s) current after a by-the-book upgrade
+=== install under zsh ===
+zsh/install: PASS (210 log lines)
+=== upgrade under zsh ===
+zsh/upgrade: PASS (137 log lines)
+  runbook sweep: all 3 runbook file(s) current after a by-the-book upgrade
+result: PASS
+BENCH PASS
+
+SCRUB CHECK
+$ python3 scrub-check evidence/wheelhouse-project-2d1
+leak_matches []
