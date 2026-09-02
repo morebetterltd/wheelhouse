@@ -36,7 +36,7 @@ const TMUX_SOCKET = process.env.WHEELHOUSE_TMUX_SOCKET || "";
 
 const DISTRESS_RE = /(?:\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|ation)?\b|\b401\b|\bforbidden\b|\binvalid_grant\b|\btoken\b.*\b(?:expired|invalid|revoked)\b|\blog ?in required\b|\bcredential(?:s)?\b|\bquota\b|\brate.?limit\b|\b429\b|\busage limit\b|\bexhaust(?:ed|ion)?\b|\bout of credits\b|\binsufficient\s+credits?\b)/i;
 const STOP_DISTRESS_RE = /\bSTOP\b/;
-const SENTINEL_RE = /@commander\s*:/i;
+const SENTINEL_RE = /^\s*@commander\s*:/im;
 
 type WakeClass = "settle" | "distress" | "sentinel";
 type A2AState = "terminal" | "input-required" | "failed";
@@ -134,6 +134,26 @@ function firstSentinelLine(text: string): string {
   return text.split(/\r?\n/).find((line) => SENTINEL_RE.test(line))?.trim() ?? text.trim();
 }
 
+function assistantTextContent(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map((part: any) => {
+      if (typeof part === "string") return part;
+      if (part?.type === "text" && typeof part.text === "string") return part.text;
+      return "";
+    }).filter(Boolean).join("\n");
+  }
+  return "";
+}
+
+function sentinelText(obj: any): string {
+  // Sentinel wakes are an explicit question from the seat's assistant turn,
+  // not text quoted out of a tool, a file, a prompt, or a thinking block.
+  if (obj?.type !== "turn_end" || obj?.message?.role !== "assistant") return "";
+  return assistantTextContent(obj.message.content);
+}
+
 function own(obj: any, key: string): boolean {
   return obj !== null && typeof obj === "object" && Object.prototype.hasOwnProperty.call(obj, key);
 }
@@ -177,12 +197,13 @@ function truncate(s: string, n = 700): string {
 function classify(obj: any): Candidate | null {
   const text = textOf(obj);
   const type = typeof obj?.type === "string" ? obj.type : undefined;
-  if (SENTINEL_RE.test(text)) {
+  const sentinel = sentinelText(obj);
+  if (sentinel && SENTINEL_RE.test(sentinel)) {
     return {
       eventClass: "sentinel",
       state: "input-required",
       title: "sentinel question for commander",
-      detail: truncate(firstSentinelLine(text)),
+      detail: truncate(firstSentinelLine(sentinel)),
       sourceType: type,
     };
   }
