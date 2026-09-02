@@ -24,9 +24,9 @@ The main files here:
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi
 REPL or by an operator placing an api_key entry; it never enters git. The
-roster is safe to commit precisely because it records only names, paths, and
-optional non-secret human labels; the moment a credential appears in it, that
-stops being true.
+roster is safe to commit precisely because it records only names, paths,
+optional non-secret human labels, and optional auth-route names; the moment a
+credential appears in it, that stops being true.
 
 ## The roster format
 

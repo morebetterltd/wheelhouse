@@ -9,7 +9,7 @@
       "role": "worker",
       "provider": "anthropic",
       "model": "claude-sonnet-5",
-      "account": { "dir": "~/.pi-seats-myproject/worker-1", "label": "kk-personal-anthropic", "authRoute": "oauth" }
+      "account": { "dir": "~/.pi-seats-myproject/worker-1", "label": "kk-personal-anthropic", "authRoute": "api_key" }
     },
     "worker-2": {
       "role": "worker",
