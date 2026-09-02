@@ -473,7 +473,7 @@ The herald is a standalone, non-LLM daemon. It tails every `seats/logs/*.jsonl` 
 | `distress` | `failed` | a seat output or failed response mentions STOP/auth/quota/rate-limit |
 | `sentinel` | `input-required` | a seat output line contains `@commander:` |
 
-Each inbox row carries a stable source identity (`source.log`, `source.offset`, source event type) and a content hash id. The herald persists its log offset and seen set after every processed line, and `--drain` deduplicates by the stable `id`, making an append-before-state crash duplicate harmless before a commander reads it. The inbox is append-only; commander-side draining is a separate cursor, `seats/inbox.cursor`, advanced only by:
+Each inbox row carries a stable source identity (`source.log`, `source.offset`, source event type) and a content hash id. The herald persists its log offset and seen set after every processed line, and `--drain` deduplicates against every stable `id` it has ever drained, making append-before-state and eviction-horizon duplicate rows harmless before a commander reads them. The inbox is append-only; commander-side draining is a separate cursor, `seats/inbox.cursor`, advanced only by:
 
 ```bash
 bun seats/herald.ts --drain

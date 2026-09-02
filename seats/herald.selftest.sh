@@ -64,18 +64,21 @@ cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_start","message":"working"}
 {"type":"agent_end","messages":["done"],"usage":{"input_tokens":1,"output_tokens":2}}
 {"type":"response","command":"prompt","success":false,"error":"429 usage limit reached: quota exhausted"}
+{"type":"response","command":"prompt","success":false,"error":"Insufficient credits for this account"}
 {"type":"assistant_message","message":"@commander: should I split this bead?"}
 {"type":"assistant_message","message":"the author field is ordinary prose, not a failure"}
 JSONL
 
 OUT="$(run_herald --once 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 3 wake event'; then pass "captures settle, distress, and sentinel events without matching author as auth"
-else fail "herald --once did not capture exactly three events (rc=$RC): $OUT"; fi
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 4 wake event'; then pass "captures settle, distress, and sentinel events without matching author as auth"
+else fail "herald --once did not capture exactly four events (rc=$RC): $OUT"; fi
 
 if [ "$(json_count 'r.class==="settle" && r.state==="terminal" && r.seat==="worker-1"')" = 1 ]; then pass "settle uses A2A terminal state"
 else fail "missing settle/terminal inbox event"; fi
 if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /quota|429/.test(r.detail)')" = 1 ]; then pass "distress uses A2A failed state and carries quota detail"
 else fail "missing distress/failed inbox event"; fi
+if [ "$(json_count 'r.class==="distress" && r.state==="failed" && /Insufficient credits/.test(r.detail)')" = 1 ]; then pass "distress matches insufficient credits wording"
+else fail "missing insufficient-credits distress event"; fi
 if [ "$(json_count 'r.class==="sentinel" && r.state==="input-required" && /@commander:/.test(r.detail)')" = 1 ]; then pass "sentinel uses A2A input-required state and carries the question"
 else fail "missing sentinel/input-required inbox event"; fi
 
@@ -92,10 +95,23 @@ DRAIN1="$FIX/drain1.out"
 DRAIN2="$FIX/drain2.out"
 run_herald --drain > "$DRAIN1"
 run_herald --drain > "$DRAIN2"
-if [ "$(line_count "$DRAIN1")" = 3 ] && [ ! -s "$DRAIN2" ] && [ "$(cat "$PROJ/seats/inbox.cursor")" = "$(wc -c < "$PROJ/seats/inbox.jsonl" | tr -d ' ')" ]; then
+if [ "$(line_count "$DRAIN1")" = 4 ] && [ ! -s "$DRAIN2" ] && [ "$(cat "$PROJ/seats/inbox.cursor")" = "$(wc -c < "$PROJ/seats/inbox.jsonl" | tr -d ' ')" ]; then
   pass "drain cursor emits unread wake events once, deduping stable ids, then advances to EOF"
 else
   fail "drain cursor/dedup failed: drain1=$(line_count "$DRAIN1") drain2_bytes=$(wc -c < "$DRAIN2" | tr -d ' ') cursor=$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo missing)"
+fi
+
+OLD_ID="$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1],"utf8").split(/\n/)[0]).id)' "$PROJ/seats/inbox.jsonl")"
+for id in filler-1 filler-2 filler-3; do
+  printf '{"id":"%s","seat":"worker-1","class":"settle","state":"terminal","detail":"filler"}\n' "$id" >> "$PROJ/seats/inbox.jsonl"
+done
+printf '{"id":"%s","seat":"worker-1","class":"settle","state":"terminal","detail":"eviction duplicate"}\n' "$OLD_ID" >> "$PROJ/seats/inbox.jsonl"
+DRAIN3="$FIX/drain3.out"
+WHEELHOUSE_HERALD_MAX_SEEN=2 run_herald --drain > "$DRAIN3"
+if [ "$(line_count "$DRAIN3")" = 3 ] && ! grep -q 'eviction duplicate' "$DRAIN3"; then
+  pass "drain dedup survives a tiny MAX_SEEN eviction horizon"
+else
+  fail "eviction-horizon duplicate reached the commander: lines=$(line_count "$DRAIN3") out=$(cat "$DRAIN3" 2>/dev/null)"
 fi
 
 # Fresh fixture for poke tests so state/inbox cursor from the drain phase does
