@@ -30,7 +30,7 @@ expect_rc() {
   if [ "$got" != "$want" ]; then
     say "--- $name output ---"
     cat "$FIXTURE/$name.out"
-    fail "$name: expected exit $want, got $got"
+    fail "${name}: expected exit $want, got $got"
   fi
 }
 
@@ -40,7 +40,7 @@ expect_output() {
   if ! grep -q "$pattern" "$FIXTURE/$name.out"; then
     say "--- $name output ---"
     cat "$FIXTURE/$name.out"
-    fail "$name: missing output pattern: $pattern"
+    fail "${name}: missing output pattern: $pattern"
   fi
 }
 
@@ -102,7 +102,7 @@ merge_bead=$(new_bead "$merge_fail" 'Merged work' 'Trace: selftest planted merge
   git add product.txt
   git commit -q -m 'Product change'
   git checkout -q main
-  git merge --no-ff -q "fleet/$merge_bead" -m "Merge fleet/$merge_bead: planted merge"
+  git merge --no-ff -q "fleet/$merge_bead" -m "Merge fleet/${merge_bead}: planted merge"
 )
 run_capture merge_fail sh -c "cd '$merge_fail' && '$CHECK' ."
 expect_rc merge_fail 1
@@ -123,7 +123,7 @@ move_bead=$(new_bead "$merge_pass" 'Merged work with claim movement' 'Trace: sel
   git merge --no-ff --no-commit "fleet/$move_bead" >/dev/null
   printf '\n- claim moved with this merge.\n' >>wheelhouse/ISA.md
   git add wheelhouse/ISA.md product.txt
-  git commit -q -m "Merge fleet/$move_bead: claim moved in merge"
+  git commit -q -m "Merge fleet/${move_bead}: claim moved in merge"
 )
 run_capture merge_pass sh -c "cd '$merge_pass' && '$CHECK' ."
 expect_rc merge_pass 0

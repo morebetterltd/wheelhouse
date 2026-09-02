@@ -1,0 +1,18 @@
+$ zsh --version
+zsh 5.9 (arm64-apple-darwin25.0)
+$ bash seats/upgrade-runbook.selftest.sh
+ok 1 - zsh step 0 baseline reconstruction reads commit:path with braces
+ok 2 - zsh step 3 runbook loop reads real baseline for every runbook
+ok 3 - step 8 broad wheelhouse add stages untracked files under wheelhouse
+upgrade-runbook.selftest: PASS (3 checks)
+$ zsh real-baseline loop output
+step0:
+candidate baseline: 843eddc7306db2346bf36412d62efe1efc7b2976
+step3:
+runbook updated: PROMOTION.md
+runbook updated: RUNNING_THE_LOOP.md
+runbook updated: UPGRADE.md
+$ for f in seats/*.sh; do bash -n "$f"; done
+bash_syntax_ok
+$ rg -n unbraced variable-colon
+$ git diff --check

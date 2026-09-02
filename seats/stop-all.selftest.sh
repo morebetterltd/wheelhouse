@@ -25,7 +25,7 @@ trap cleanup EXIT INT TERM
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-stop-all-selftest.$$.XXXXXX")"
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"; BIN="$FIX/bin"; mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
+RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
 
 cat > "$BIN/pi" <<'STUB'
 #!/usr/bin/env node

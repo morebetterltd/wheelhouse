@@ -109,7 +109,7 @@ FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
+RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
 
 # --- the stub pi -------------------------------------------------------------
 # The adapter.selftest stub (RPC over stdin, LF-only), plus two behaviors this
@@ -262,9 +262,9 @@ phase "0. provisioning — the REAL seat-env.sh builds both seats in the temp HO
 PROV_A="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$SEAT_ENV" nsA worker-a "$PROJA" 2>&1)"; RCA=$?
 PROV_B="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$SEAT_ENV" nsB worker-b "$PROJB" 2>&1)"; RCB=$?
 if [ $RCA -eq 0 ] && [ -d "$SEAT_A" ]; then pass "seat-env.sh provisioned A's seat under .pi-seats-nsA"
-else fail "seat-env.sh for A exited $RCA: $PROV_A"; fi
+else fail "seat-env.sh for A exited ${RCA}: $PROV_A"; fi
 if [ $RCB -eq 0 ] && [ -d "$SEAT_B" ]; then pass "seat-env.sh provisioned B's seat under .pi-seats-nsB"
-else fail "seat-env.sh for B exited $RCB: $PROV_B"; fi
+else fail "seat-env.sh for B exited ${RCB}: $PROV_B"; fi
 printf '{"stub":"identity-a"}\n' > "$SEAT_A/auth.json"
 printf '{"stub":"identity-b"}\n' > "$SEAT_B/auth.json"
 
@@ -313,10 +313,10 @@ b_pristine() {   # $1 = label
   d1="$(diff -r "$PROJB" "$FIX/projB.snap" 2>&1)"
   d2="$(diff -r "$SEAT_B" "$FIX/seatB.snap" 2>&1)"
   if [ -z "$d1" ] && [ -z "$d2" ]; then
-    pass "$label: B's project tree and seat root are byte-identical to the snapshot"
+    pass "${label}: B's project tree and seat root are byte-identical to the snapshot"
     return 0
   else
-    fail "$label: B was mutated: ${d1:0:200} ${d2:0:200}"
+    fail "${label}: B was mutated: ${d1:0:200} ${d2:0:200}"
     return 1
   fi
 }
@@ -344,19 +344,19 @@ log_mark() { [ -f "$LOG_A" ] && wc -c < "$LOG_A" | tr -d ' ' || echo 0; }
 
 phase "2. A's machinery runs hard; every write lands inside A's boundaries"
 arun spawn worker-a
-[ $RC -eq 0 ] && pass "A: spawn exits 0" || fail "A: spawn exited $RC: $OUT"
+[ $RC -eq 0 ] && pass "A: spawn exits 0" || fail "A: spawn exited ${RC}: $OUT"
 mkdir -p "$PROJA/.wheelhouse-worktrees/bead-a1"
 MARK=$(log_mark)
 arun dispatch worker-a bead-a1 "ordinary work; B lives at $PROJB and its graph at $PROJB/.beads — mentioning a path is not touching it"
-[ $RC -eq 0 ] && pass "A: dispatch exits 0" || fail "A: dispatch exited $RC: $OUT"
+[ $RC -eq 0 ] && pass "A: dispatch exits 0" || fail "A: dispatch exited ${RC}: $OUT"
 wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 \
   && pass "A: turn completed (agent_end)" || fail "A: no agent_end after dispatch"
 arun status
 [ $RC -eq 0 ] && says "worker-a" && pass "A: status reads A's own state" || fail "A: status failed: $OUT"
 arun stop worker-a
-[ $RC -eq 0 ] && pass "A: stop exits 0" || fail "A: stop exited $RC: $OUT"
+[ $RC -eq 0 ] && pass "A: stop exits 0" || fail "A: stop exited ${RC}: $OUT"
 arun resume worker-a
-[ $RC -eq 0 ] && pass "A: resume exits 0" || fail "A: resume exited $RC: $OUT"
+[ $RC -eq 0 ] && pass "A: resume exits 0" || fail "A: resume exited ${RC}: $OUT"
 
 # the write surfaces exist — and only under A
 WS_OK=1
@@ -375,7 +375,7 @@ b_pristine "after the full benign run"
 HOME_AFTER="$(home_listing)"
 if [ "$HOME_BEFORE" = "$HOME_AFTER" ]; then
   pass "nothing new in \$HOME outside A's own seat namespace"
-else fail "unexpected paths appeared in \$HOME: $(comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_AFTER") | head -5 | tr '\n' ' ')"; fi
+else fail "unexpected paths appeared in \${HOME}: $(comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_AFTER") | head -5 | tr '\n' ' ')"; fi
 
 phase "3. bead-graph isolation — A's bd calls are scoped to A's store, never B's"
 if [ -d "$PROJA/.beads" ] && [ -d "$PROJB/.beads" ] \
@@ -438,7 +438,7 @@ XRUN() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" \
   WH_XPROBE_BGRAPH="$PROJB/.beads/hostile.txt" \
   bun "$PROJA/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
 XRUN spawn worker-a
-[ $RC -eq 0 ] || fail "hostile leg: spawn exited $RC: $OUT"
+[ $RC -eq 0 ] || fail "hostile leg: spawn exited ${RC}: $OUT"
 mkdir -p "$PROJA/.wheelhouse-worktrees/bead-h1"
 MARK=$(log_mark)
 XRUN dispatch worker-a bead-h1 "XPROBE: attempt the cross-project writes"
