@@ -47,6 +47,8 @@ Report to whoever dispatched you, with evidence, BEFORE going idle. Finishing si
 
 The report goes on the bead itself as a comment (for example, `bd comment <bead-id> --file report.md` or `bd comment <bead-id> --stdin`), then the worker adds the review-queue label (`bd update <bead-id> --add-label needs-review`). The report names the branch, the head, what changed, and the command output proving the done holds. A worker NEVER closes the bead: close belongs to the commander/integrator after review and merge, and closing before review hides the gate rather than satisfying it.
 
+If you need commander input before the final report, write a line in your own output beginning exactly `@commander: `. Then either pause at a safe point or continue with the assumptions you name there. Do not rely on a private message to wake the commander; the herald watches seat output for that sentinel and writes the durable wake to the inbox.
+
 ## This project
 
 Generated at install; the fleet accretes here as review earns it.

@@ -55,6 +55,10 @@ Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 - The worker's report is a CLAIM, not evidence. Re-run what is cheap, and say explicitly what you could not re-run.
 - Check the claims as well as the code. A correct change described by a false sentence still ships that sentence, and the next reader believes it.
 
+### Commander sentinel
+
+If you need commander input before a final verdict, write a line in your own output beginning exactly `@commander: `. Then either pause at a safe point or continue with the assumptions you name there. The herald watches seat output for that sentinel and writes the durable wake to the inbox; do not rely on a private message as the record.
+
 ### Reading a branch without disturbing it
 
 - **Default: read, do not check out.** `git diff <base> <sha>` and `git show <sha>:<path>` from the canonical repository answer essentially every review question. A working tree was only ever needed for building and running.

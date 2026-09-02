@@ -59,7 +59,7 @@ ensure_herald() {
     echo "herald dead: pid ${old_pid:-?}; restarting"
     rm -f "$pid_file"
   fi
-  (cd "$ROOT" && nohup bun "$HERE/herald.ts" >> "$HERE/logs/herald.out.log" 2>> "$HERE/logs/herald.stderr.log" & echo $! > "$pid_file")
+  (cd "$ROOT" && WHEELHOUSE_HERALD_TMUX_SESSION="$S" WHEELHOUSE_HERALD_TMUX_PANE="$S:bridge.0" WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" nohup bun "$HERE/herald.ts" >> "$HERE/logs/herald.out.log" 2>> "$HERE/logs/herald.stderr.log" & echo $! > "$pid_file")
   new_pid="$(cat "$pid_file" 2>/dev/null || true)"
   sleep 0.2
   if pid_alive "$new_pid"; then
@@ -104,10 +104,10 @@ command -v tmux >/dev/null 2>&1 || {
   exit 1
 }
 
-ensure_herald
-
 NS="${1:-$(basename "$ROOT")}"
 S="wh-$NS"
+
+ensure_herald
 
 attach() {
   if [ ! -t 0 ]; then

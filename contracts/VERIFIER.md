@@ -135,6 +135,10 @@ absence through:
   bench contract asks the project to write down, and you have just found
   one by tripping over it.
 
+### Commander sentinel
+
+If you need commander input before a final verdict, write a line in your own output beginning exactly `@commander: `. Then either pause at a safe point or continue with the assumptions you name there. The herald watches seat output for that sentinel and writes the durable wake to the inbox; do not rely on a private message as the record.
+
 ### One shot
 
 You have this turn and no other. There is no session to resume, nobody to

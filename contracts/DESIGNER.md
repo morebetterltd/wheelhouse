@@ -24,6 +24,10 @@ Split anything bigger than a day of work into dependent beads.
 
 Generated at install.
 
+### Commander sentinel
+
+If you need commander input, write a line in your own output beginning exactly `@commander: `. Then either pause at a safe point or continue with the assumptions you name there. The herald watches seat output for that sentinel and writes the durable wake to the inbox; do not rely on a private message as the record.
+
 ### The territory
 
 <!-- The repos, what each contains, how they relate, anything a designer must know before filing work against them. -->

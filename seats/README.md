@@ -473,13 +473,13 @@ The herald is a standalone, non-LLM daemon. It tails every `seats/logs/*.jsonl` 
 | `distress` | `failed` | a seat output or failed response mentions STOP/auth/quota/rate-limit |
 | `sentinel` | `input-required` | a seat output line contains `@commander:` |
 
-Each inbox row carries a stable source identity (`source.log`, `source.offset`, source event type) and a content hash id, so daemon restarts and re-scans do not duplicate already-appended wake events. The inbox is append-only; commander-side draining is a separate cursor, `seats/inbox.cursor`, advanced only by:
+Each inbox row carries a stable source identity (`source.log`, `source.offset`, source event type) and a content hash id. The herald persists its log offset and seen set after every processed line, and `--drain` deduplicates by the stable `id`, making an append-before-state crash duplicate harmless before a commander reads it. The inbox is append-only; commander-side draining is a separate cursor, `seats/inbox.cursor`, advanced only by:
 
 ```bash
 bun seats/herald.ts --drain
 ```
 
-`--drain` prints unread inbox JSONL to stdout and moves the cursor to EOF. It never writes seat logs, FIFOs, or `state.json`, and it never delivers prompts; send-keys/poke delivery is deliberately outside this bead.
+`--drain` prints unread inbox JSONL to stdout and moves the cursor to EOF. It never writes seat logs, FIFOs, or `state.json`. When a new inbox event lands, the herald may poke the commander through tmux, but the poke is deliberately only the constant phrase `check the fleet inbox`, never seat-authored text. It sends that phrase only to the bridge commander pane and only when tmux reports the pane's current command is `claude` and the captured pane text looks idle/ready; a bare shell or a busy Claude process gets no keystrokes. Poke delivery is a wake-up hint, not correctness: a commander drains at session start and whenever poked.
 
 ### The floor
 
