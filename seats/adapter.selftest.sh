@@ -402,6 +402,47 @@ if [ $RC -ne 0 ] && says "invalid account.authRoute" && says "oauth, api_key, en
 else fail "authRoute present-invalid did not STOP as expected (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
+phase "roster shadow — absent is false, true is visible in status, non-boolean is a loud STOP"
+# Absent: the default fixture roster (build_proj) never sets shadow, so status
+# must not render worker-1 as a shadow seat.
+run spawn worker-1
+run status
+if [ $RC -eq 0 ] && ! says "worker (shadow)"; then pass "shadow absent: status does not mark the seat as shadow"
+else fail "shadow absent rendered as shadow or status failed (exit $RC): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+
+SHADOW_OK_PROJ="$FIX/shadow-ok-proj"
+build_proj "$SHADOW_OK_PROJ" shadow-ok
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].shadow = true;
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$SHADOW_OK_PROJ/seats/seats.json"
+RUN_PROJ="$SHADOW_OK_PROJ"; STATE="$SHADOW_OK_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-shadow-ok/worker-1/argv.json"
+run spawn worker-1
+run status
+if [ $RC -eq 0 ] && says "worker (shadow)"; then pass "shadow present-true: status marks the seat as shadow"
+else fail "shadow present-true did not render in status (exit $RC): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+
+SHADOW_BAD_PROJ="$FIX/shadow-bad-proj"
+build_proj "$SHADOW_BAD_PROJ" shadow-bad
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].shadow = "yes";
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$SHADOW_BAD_PROJ/seats/seats.json"
+RUN_PROJ="$SHADOW_BAD_PROJ"; STATE="$SHADOW_BAD_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-shadow-bad/worker-1/argv.json"
+run spawn worker-1
+if [ $RC -ne 0 ] && says "invalid shadow" && says "boolean true or false"; then
+  pass "shadow present-invalid: adapter STOPs naming the offending value and boolean requirement"
+else fail "shadow present-invalid did not STOP as expected (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
 phase "roster model suffix — malformed thinking suffix is pi's validation failure, surfaced at spawn"
 BAD_SUFFIX_PROJ="$FIX/bad-suffix-proj"
 build_proj "$BAD_SUFFIX_PROJ" bad-suffix

@@ -1,0 +1,54 @@
+$ rg -n "shadow" seats contracts/SEATS.md
+contracts/SEATS.md:11:A persistent Pi process the commander owns: one long-lived `pi --mode rpc` per seat, started and driven by the adapter (`seats/adapter.ts`), addressable by its roster name. Its identity is fixed before it starts, in two records. The roster (`seats/seats.json`) says what the seat IS — role, provider, model, and the agent directory that holds its account (`account.dir`). It optionally also carries `account.authRoute` — which of the three routes question 8 offers (`oauth`, `api_key`, `env`) gave the seat its identity — and `shadow`, a boolean marker for a mirror seat whose output is recorded but never gates or carries assigned work; both are durable and safe to commit because they are route/behavior names, never credentials, and a roster written before either field existed simply omits them. The runtime record (`seats/state.json`) says what currently embodies it — pid, session, log, FIFO — written by the adapter, never by hand. The role is injected at spawn: the adapter appends the role's crew brief (`contracts/<ROLE>.md`) to the system prompt via `--append-system-prompt`, which is the only moment Pi takes configuration. A running seat has its role already; nothing is pasted into it, and a seat behaving as if it had no brief was spawned wrong, not briefed wrong.
+seats/seat-env.sh:124:# routes BOOTSTRAP.md's question 8 offers. shadow is a boolean marker for a
+seats/seat-env.sh:148:  shadow_value="$($json_runtime -e '
+seats/seat-env.sh:154:      if (!entry || !Object.prototype.hasOwnProperty.call(entry, "shadow")) process.exit(0);
+seats/seat-env.sh:155:      if (typeof entry.shadow === "boolean") process.stdout.write(String(entry.shadow));
+seats/seat-env.sh:156:      else process.stdout.write(`__INVALID_SHADOW__:${JSON.stringify(entry.shadow)}`);
+seats/seat-env.sh:159:  if [ -n "$shadow_value" ]; then
+seats/seat-env.sh:160:    case "$shadow_value" in
+seats/seat-env.sh:162:      __INVALID_SHADOW__:*) die "seat \"$seat\" has an invalid shadow \"${shadow_value#__INVALID_SHADOW__:}\" in $roster_file — must be boolean true or false (or omitted)" ;;
+seats/seat-env.sh:163:      *) die "seat \"$seat\" has an invalid shadow \"$shadow_value\" in $roster_file — must be boolean true or false (or omitted)" ;;
+seats/README.md:48:| `shadow` | Optional boolean; absent means `false`. `"shadow": true` marks a mirror seat whose output is recorded but never gates or carries assigned work. The commander dispatches to a shadow seat only as a mirror of a gating dispatch, and its verdict or review comment is prefixed `SHADOW`; it informs the real reviewer/commander but never gates a merge. `seat-env.sh` and `adapter.ts` reject any present non-boolean value. |
+seats/seat-env.selftest.sh:94:    "worker-shadow-ok": {
+seats/seat-env.selftest.sh:96:      "shadow": true,
+seats/seat-env.selftest.sh:97:      "account": { "dir": "~/.pi-seats-alpha/worker-shadow-ok" }
+seats/seat-env.selftest.sh:99:    "worker-shadow-bad": {
+seats/seat-env.selftest.sh:101:      "shadow": "yes",
+seats/seat-env.selftest.sh:102:      "account": { "dir": "~/.pi-seats-alpha/worker-shadow-bad" }
+seats/seat-env.selftest.sh:205:phase "1d. optional shadow — absent ok, present-true ok, present-invalid is a loud STOP"
+seats/seat-env.selftest.sh:207:if [ $RC -eq 0 ]; then pass "shadow absent: provisioning still exits 0"
+seats/seat-env.selftest.sh:208:else fail "shadow absent: provisioning exited $RC: $OUT"; fi
+seats/seat-env.selftest.sh:209:run alpha worker-shadow-ok "$PROJECT"
+seats/seat-env.selftest.sh:210:if [ $RC -eq 0 ]; then pass "shadow present-true: provisioning exits 0"
+seats/seat-env.selftest.sh:211:else fail "shadow present-true: provisioning exited $RC: $OUT"; fi
+seats/seat-env.selftest.sh:212:run alpha worker-shadow-bad "$PROJECT"
+seats/seat-env.selftest.sh:213:if [ $RC -ne 0 ] && says "invalid shadow" && says "\"yes\"" && says "boolean true or false"; then
+seats/seat-env.selftest.sh:214:  pass "shadow present-invalid: STOPs naming the offending value and boolean requirement"
+seats/seat-env.selftest.sh:215:else fail "shadow present-invalid did not STOP as expected (exit $RC): $OUT"; fi
+seats/seats.json.example:26:    "reviewer-shadow": {
+seats/seats.json.example:28:      "shadow": true,
+seats/seats.json.example:31:      "account": { "dir": "~/.pi-seats-myproject/reviewer-shadow", "authRoute": "oauth" }
+seats/adapter.selftest.sh:370:phase "roster shadow — absent is false, true is visible in status, non-boolean is a loud STOP"
+seats/adapter.selftest.sh:371:# Absent: the default fixture roster (build_proj) never sets shadow, so status
+seats/adapter.selftest.sh:372:# must not render worker-1 as a shadow seat.
+seats/adapter.selftest.sh:375:if [ $RC -eq 0 ] && ! says "worker (shadow)"; then pass "shadow absent: status does not mark the seat as shadow"
+seats/adapter.selftest.sh:376:else fail "shadow absent rendered as shadow or status failed (exit $RC): $OUT"; fi
+seats/adapter.selftest.sh:379:SHADOW_OK_PROJ="$FIX/shadow-ok-proj"
+seats/adapter.selftest.sh:380:build_proj "$SHADOW_OK_PROJ" shadow-ok
+seats/adapter.selftest.sh:385:  j.seats["worker-1"].shadow = true;
+seats/adapter.selftest.sh:388:RUN_PROJ="$SHADOW_OK_PROJ"; STATE="$SHADOW_OK_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-shadow-ok/worker-1/argv.json"
+seats/adapter.selftest.sh:391:if [ $RC -eq 0 ] && says "worker (shadow)"; then pass "shadow present-true: status marks the seat as shadow"
+seats/adapter.selftest.sh:392:else fail "shadow present-true did not render in status (exit $RC): $OUT"; fi
+seats/adapter.selftest.sh:395:SHADOW_BAD_PROJ="$FIX/shadow-bad-proj"
+seats/adapter.selftest.sh:396:build_proj "$SHADOW_BAD_PROJ" shadow-bad
+seats/adapter.selftest.sh:401:  j.seats["worker-1"].shadow = "yes";
+seats/adapter.selftest.sh:404:RUN_PROJ="$SHADOW_BAD_PROJ"; STATE="$SHADOW_BAD_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-shadow-bad/worker-1/argv.json"
+seats/adapter.selftest.sh:406:if [ $RC -ne 0 ] && says "invalid shadow" && says "boolean true or false"; then
+seats/adapter.selftest.sh:407:  pass "shadow present-invalid: adapter STOPs naming the offending value and boolean requirement"
+seats/adapter.selftest.sh:408:else fail "shadow present-invalid did not STOP as expected (exit $RC): $OUT"; fi
+seats/adapter.ts:161:  shadow?: boolean;
+seats/adapter.ts:184:  if (entry.shadow === undefined) return; // absent means false
+seats/adapter.ts:185:  if (typeof entry.shadow !== "boolean") {
+seats/adapter.ts:187:      `seat "${seatName}" has an invalid shadow ${JSON.stringify(entry.shadow)} in seats/seats.json — ` +
+seats/adapter.ts:722:    const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
