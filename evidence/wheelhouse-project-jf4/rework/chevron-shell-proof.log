@@ -1,0 +1,56 @@
+$ tmux display-message -p -t <scratch-session>:0.0 #{pane_current_command}
+bash
+$ tmux capture-pane -p -J -t <scratch-session>:0.0 -S -5  # before
+
+The default interactive shell is now zsh.
+To update your account to use zsh, please run `chsh -s /bin/zsh`.
+For more details, please visit https://support.apple.com/kb/HT208050.
+❯ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+$ WHEELHOUSE_HERALD_ROOT=<scratch-project> WHEELHOUSE_HERALD_TMUX_PANE=<scratch-session>:0.0 bun seats/herald.ts --once
+herald: appended 1 wake event(s)
+$ cat <scratch-project>/seats/logs/herald.out.log
+2026-09-02T13:11:59.655Z poke not-idle pane=herald-jf4-rework-54462:0.0 inbox=289
+$ tmux capture-pane -p -J -t <scratch-session>:0.0 -S -5  # after
+
+The default interactive shell is now zsh.
+To update your account to use zsh, please run `chsh -s /bin/zsh`.
+For more details, please visit https://support.apple.com/kb/HT208050.
+❯ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

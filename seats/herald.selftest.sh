@@ -150,6 +150,15 @@ if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ]; then pass "pane-state 
 else fail "bare shell received a poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null))"; fi
 
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
+{"type":"agent_end","messages":["done chevron shell"]}
+JSONL
+BEFORE_SENDS="$(line_count "$SEND_LOG")"
+OUT="$(FAKE_TMUX_COMMAND=bash FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/bare-shell-chevron.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+AFTER_SENDS="$(line_count "$SEND_LOG")"
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "allowlist gate classifies a ❯-prompt bare shell not-idle and does not poke"
+else fail "❯-prompt bare shell received a poke or was not logged not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
+
+cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done third"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
