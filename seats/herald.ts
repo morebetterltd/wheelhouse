@@ -6,23 +6,35 @@
  * wake events to seats/inbox.jsonl. The event `state` values deliberately use
  * A2A task-update vocabulary (terminal, input-required, failed) so a later
  * transport can swap the file out without renaming the commander's concepts.
+ *
+ * Optional poke delivery is intentionally tiny: after appending wake events,
+ * the herald sends exactly one constant phrase to the commander tmux pane —
+ * "check the fleet inbox" — and only if that pane is verifiably an idle
+ * Claude session. Correctness never depends on this poke; commanders drain
+ * the inbox at start and whenever poked.
  */
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import.meta.dir, ".."));
 const SEATS_DIR = path.join(ROOT, "seats");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
 const INBOX = path.join(SEATS_DIR, "inbox.jsonl");
 const DRAIN_CURSOR = path.join(SEATS_DIR, "inbox.cursor");
+const DRAIN_SEEN = path.join(SEATS_DIR, "inbox.seen.json");
 const STATE_FILE = path.join(SEATS_DIR, "herald.state.json");
 const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
 const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
 const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
+const POKE_PHRASE = "check the fleet inbox";
+const TMUX_SESSION = process.env.WHEELHOUSE_HERALD_TMUX_SESSION || "";
+const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
+const TMUX_SOCKET = process.env.WHEELHOUSE_TMUX_SOCKET || "";
 
-const DISTRESS_RE = /\bSTOP\b|auth|unauthoriz|401|forbidden|token.*(expired|invalid|revoked)|log ?in required|credential|quota|rate.?limit|429|usage limit|exhaust|out of credits|insufficient.credit/i;
+const DISTRESS_RE = /(?:\bSTOP\b|\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|ation)?\b|\b401\b|\bforbidden\b|\btoken\b.*\b(?:expired|invalid|revoked)\b|\blog ?in required\b|\bcredential(?:s)?\b|\bquota\b|\brate.?limit\b|\b429\b|\busage limit\b|\bexhaust(?:ed|ion)?\b|\bout of credits\b|\binsufficient\s+credits?\b)/i;
 const SENTINEL_RE = /@commander\s*:/i;
 
 type WakeClass = "settle" | "distress" | "sentinel";
@@ -31,6 +43,7 @@ type A2AState = "terminal" | "input-required" | "failed";
 interface HeraldState {
   logs: Record<string, { offset: number }>;
   seen: string[];
+  lastPokedInboxSize?: number;
 }
 
 interface Candidate {
@@ -50,7 +63,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, seen: Array.isArray(parsed.seen) ? parsed.seen : [] };
+    return { logs: parsed.logs ?? {}, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize };
   } catch (e: any) {
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
@@ -76,7 +89,7 @@ function logFiles(): string[] {
     .map((name) => path.join(LOG_DIR, name));
 }
 
-function readCompleteLines(file: string, offset: number): { lines: { line: string; offset: number }[]; offset: number } {
+function readCompleteLines(file: string, offset: number): { lines: { line: string; offset: number; endOffset: number }[]; offset: number } {
   const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
   if (size < offset) offset = 0; // log rotation/truncation: reread from start
   if (size === offset) return { lines: [], offset };
@@ -95,8 +108,9 @@ function readCompleteLines(file: string, offset: number): { lines: { line: strin
   let running = offset;
   const lines = complete.split("\n").filter(Boolean).map((line) => {
     const at = running;
-    running += Buffer.byteLength(line + "\n");
-    return { line, offset: at };
+    const len = Buffer.byteLength(line + "\n");
+    running += len;
+    return { line, offset: at, endOffset: running };
   });
   return { lines, offset: offset + Buffer.byteLength(complete) };
 }
@@ -163,6 +177,35 @@ function eventId(relLog: string, offset: number, line: string, candidate: Candid
     .digest("hex");
 }
 
+function tmuxArgs(args: string[]): string[] {
+  return TMUX_SOCKET ? ["-L", TMUX_SOCKET, ...args] : args;
+}
+
+function tmuxOutput(args: string[]): string {
+  return execFileSync("tmux", tmuxArgs(args), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+}
+
+function commanderPaneIdleClaude(): boolean {
+  if (!TMUX_PANE) return false;
+  try {
+    const command = tmuxOutput(["display-message", "-p", "-t", TMUX_PANE, "#{pane_current_command}"]);
+    if (command !== "claude") return false;
+    const paneText = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-20"]);
+    return /(?:^|\n)\s*(?:[>❯]|Human:|You:)\s*$/.test(paneText) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
+  } catch {
+    return false;
+  }
+}
+
+function pokeCommanderIfSafe(state: HeraldState): void {
+  const inboxSize = fs.existsSync(INBOX) ? fs.statSync(INBOX).size : 0;
+  if (inboxSize <= 0 || state.lastPokedInboxSize === inboxSize) return;
+  if (!commanderPaneIdleClaude()) return;
+  execFileSync("tmux", tmuxArgs(["send-keys", "-t", TMUX_PANE, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
+  state.lastPokedInboxSize = inboxSize;
+  writeState(state);
+}
+
 function scanOnce(): number {
   const state = readState();
   const seen = new Set(state.seen);
@@ -171,31 +214,42 @@ function scanOnce(): number {
     const rel = path.relative(ROOT, file);
     const prior = state.logs[rel]?.offset ?? 0;
     const batch = readCompleteLines(file, prior);
-    state.logs[rel] = { offset: batch.offset };
-    const seat = path.basename(file, ".jsonl");
+    if (!state.logs[rel]) state.logs[rel] = { offset: prior };
     for (const rec of batch.lines) {
       let obj: any;
-      try { obj = JSON.parse(rec.line); } catch { continue; }
+      try { obj = JSON.parse(rec.line); } catch {
+        state.logs[rel] = { offset: rec.endOffset };
+        writeState(state);
+        continue;
+      }
       const candidate = classify(obj);
-      if (!candidate) continue;
-      const id = eventId(rel, rec.offset, rec.line, candidate);
-      if (seen.has(id)) continue;
-      seen.add(id);
-      appended++;
-      appendInbox({
-        id,
-        at: new Date().toISOString(),
-        seat,
-        class: candidate.eventClass,
-        state: candidate.state,
-        title: candidate.title,
-        detail: candidate.detail,
-        source: { log: rel, offset: rec.offset, type: candidate.sourceType ?? null },
-      });
+      if (candidate) {
+        const id = eventId(rel, rec.offset, rec.line, candidate);
+        if (!seen.has(id)) {
+          seen.add(id);
+          appendInbox({
+            id,
+            at: new Date().toISOString(),
+            seat: path.basename(file, ".jsonl"),
+            class: candidate.eventClass,
+            state: candidate.state,
+            title: candidate.title,
+            detail: candidate.detail,
+            source: { log: rel, offset: rec.offset, type: candidate.sourceType ?? null },
+          });
+          appended++;
+        }
+      }
+      state.logs[rel] = { offset: rec.endOffset };
+      state.seen = Array.from(seen).slice(-MAX_SEEN);
+      writeState(state); // per-line persistence closes append-before-state crash window
+    }
+    if (batch.lines.length === 0 && batch.offset !== prior) {
+      state.logs[rel] = { offset: batch.offset };
+      writeState(state);
     }
   }
-  state.seen = Array.from(seen).slice(-MAX_SEEN);
-  writeState(state);
+  if (appended > 0) pokeCommanderIfSafe(state);
   return appended;
 }
 
@@ -203,6 +257,22 @@ function readDrainCursor(): number {
   if (!fs.existsSync(DRAIN_CURSOR)) return 0;
   const n = Number(fs.readFileSync(DRAIN_CURSOR, "utf8").trim() || "0");
   return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function readDrainSeen(): Set<string> {
+  if (!fs.existsSync(DRAIN_SEEN)) return new Set();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(DRAIN_SEEN, "utf8"));
+    return new Set(Array.isArray(parsed.ids) ? parsed.ids : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeDrainSeen(seen: Set<string>): void {
+  const tmp = `${DRAIN_SEEN}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ ids: Array.from(seen) }, null, 2) + "\n");
+  fs.renameSync(tmp, DRAIN_SEEN);
 }
 
 function drain(): void {
@@ -221,8 +291,21 @@ function drain(): void {
   } finally {
     fs.closeSync(fd);
   }
-  process.stdout.write(buf.toString("utf8"));
+  const seen = readDrainSeen();
+  for (const line of buf.toString("utf8").split("\n")) {
+    if (!line) continue;
+    try {
+      const obj = JSON.parse(line);
+      const id = String(obj.id ?? "");
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      process.stdout.write(line + "\n");
+    } catch {
+      process.stdout.write(line + "\n");
+    }
+  }
   fs.writeFileSync(DRAIN_CURSOR, `${size}\n`);
+  writeDrainSeen(seen);
 }
 
 function pidAlive(pid: number): boolean {

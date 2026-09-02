@@ -20,6 +20,10 @@ Split anything bigger than a day of work into dependent beads.
 - No speculative work. Every bead traces to a real defect, a stated goal of the principal's, or a verifiable maintenance need.
 - Escalate genuine ambiguities to the principal rather than resolving them by assumption, and say which way you would go and why.
 
+### Commander sentinel
+
+If you need commander input, write a line in your own output beginning exactly `@commander: `. Then either pause at a safe point or continue with the assumptions you name there. The herald watches seat output for that sentinel and writes the durable wake to the inbox; do not rely on a private message as the record.
+
 ## This project
 
 Generated at install.
