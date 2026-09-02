@@ -45,6 +45,7 @@ Each seat entry:
 | Field | What it is |
 |---|---|
 | `role` | What the seat does: `worker`, `reviewer`, `verifier`. Free-form string; the crew briefs define what each role means. Installed fleets read `wheelhouse/fleet/WORKER.md` for workers and `wheelhouse/crew/<ROLE>.md` for other roles, with `contracts/<ROLE>.md` retained as the template-tree fallback. |
+| `shadow` | Optional boolean; absent means `false`. `"shadow": true` marks a mirror seat whose output is recorded but never gates or carries assigned work. The commander dispatches to a shadow seat only as a mirror of a gating dispatch, and its verdict or review comment is prefixed `SHADOW`; it informs the real reviewer/commander but never gates a merge. `seat-env.sh` and `adapter.ts` reject any present non-boolean value. |
 | `provider` | Whose model the seat runs (`anthropic`, `openai`, ...). Recorded so the roster answers "which vendor is this seat" without starting the seat. |
 | `model` | The model the seat is pinned to, in the provider's own id format. Pin reasoning effort by appending Pi's thinking-level suffix to this same string, for example `gpt-5.6-sol:high`. |
 | `account.dir` | The seat's agent directory — the value `PI_CODING_AGENT_DIR` is set to. By convention `~/.pi-seats-<namespace>/<seat-name>`, where the namespace is this project's (recorded as `namespace=` in `wheelhouse/.template-source`). This field is the record; the convention just explains where it came from. |

@@ -90,6 +90,16 @@ cat > "$PROJECT/seats/seats.json" <<'EOF'
     "worker-authroute-nonstring": {
       "role": "worker",
       "account": { "dir": "~/.pi-seats-alpha/worker-authroute-nonstring", "authRoute": 7 }
+    },
+    "worker-shadow-ok": {
+      "role": "worker",
+      "shadow": true,
+      "account": { "dir": "~/.pi-seats-alpha/worker-shadow-ok" }
+    },
+    "worker-shadow-bad": {
+      "role": "worker",
+      "shadow": "yes",
+      "account": { "dir": "~/.pi-seats-alpha/worker-shadow-bad" }
     }
   }
 }
@@ -191,6 +201,18 @@ run alpha worker-authroute-nonstring "$PROJECT"
 if [ $RC -ne 0 ] && says "invalid account.authRoute" && says "\"7\"" && says "oauth, api_key, env"; then
   pass "authRoute present-non-string: STOPs naming the offending value and the allowed set"
 else fail "authRoute present-non-string did not STOP as expected (exit $RC): $OUT"; fi
+
+phase "1d. optional shadow — absent ok, present-true ok, present-invalid is a loud STOP"
+run alpha worker-unlabeled "$PROJECT"
+if [ $RC -eq 0 ]; then pass "shadow absent: provisioning still exits 0"
+else fail "shadow absent: provisioning exited $RC: $OUT"; fi
+run alpha worker-shadow-ok "$PROJECT"
+if [ $RC -eq 0 ]; then pass "shadow present-true: provisioning exits 0"
+else fail "shadow present-true: provisioning exited $RC: $OUT"; fi
+run alpha worker-shadow-bad "$PROJECT"
+if [ $RC -ne 0 ] && says "invalid shadow" && says "\"yes\"" && says "boolean true or false"; then
+  pass "shadow present-invalid: STOPs naming the offending value and boolean requirement"
+else fail "shadow present-invalid did not STOP as expected (exit $RC): $OUT"; fi
 
 phase "2. idempotency"
 cp "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before"
