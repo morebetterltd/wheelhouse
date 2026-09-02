@@ -34,7 +34,7 @@ const TMUX_SESSION = process.env.WHEELHOUSE_HERALD_TMUX_SESSION || "";
 const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
 const TMUX_SOCKET = process.env.WHEELHOUSE_TMUX_SOCKET || "";
 
-const DISTRESS_RE = /(?:\bSTOP\b|\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|ation)?\b|\b401\b|\bforbidden\b|\btoken\b.*\b(?:expired|invalid|revoked)\b|\blog ?in required\b|\bcredential(?:s)?\b|\bquota\b|\brate.?limit\b|\b429\b|\busage limit\b|\bexhaust(?:ed|ion)?\b|\bout of credits\b|\binsufficient\.credit\b)/i;
+const DISTRESS_RE = /(?:\bSTOP\b|\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|ation)?\b|\b401\b|\bforbidden\b|\btoken\b.*\b(?:expired|invalid|revoked)\b|\blog ?in required\b|\bcredential(?:s)?\b|\bquota\b|\brate.?limit\b|\b429\b|\busage limit\b|\bexhaust(?:ed|ion)?\b|\bout of credits\b|\binsufficient\s+credits?\b)/i;
 const SENTINEL_RE = /@commander\s*:/i;
 
 type WakeClass = "settle" | "distress" | "sentinel";
@@ -271,7 +271,7 @@ function readDrainSeen(): Set<string> {
 
 function writeDrainSeen(seen: Set<string>): void {
   const tmp = `${DRAIN_SEEN}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ ids: Array.from(seen).slice(-MAX_SEEN) }, null, 2) + "\n");
+  fs.writeFileSync(tmp, JSON.stringify({ ids: Array.from(seen) }, null, 2) + "\n");
   fs.renameSync(tmp, DRAIN_SEEN);
 }
 
