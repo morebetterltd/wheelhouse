@@ -14,6 +14,7 @@ So when you read a stage below, the question is never "was that passed along cor
 
 - The roles exist. One person may hold several — commander and integrator are commonly the same, and a solo principal can hold all of them at different moments. What must not happen is one person being both author and reviewer of the same change; `wheelhouse/crew/REVIEWER.md` forbids it and it is the one merge that cannot be recovered by care. A solo install, where one human holds every role, closes that gap the way the next section describes.
 - The work graph is initialised and `bd ready` lists something.
+- The commander drains the Dispatch Office inbox at session start with `bun seats/herald.ts --drain`, then drains it again whenever the herald pokes with the constant phrase `check the fleet inbox`. The poke is only a wake-up hint; correctness never depends on it, because the inbox is durable and the commander's start-of-session drain catches anything a poke missed.
 - You know whether `wheelhouse/crew/bench.sh` is the shipped stub or a real bench. If it is the stub, no verdict may claim the software runs, and that is deliberate. See `wheelhouse/crew/BENCH.md`.
 
 ## When one human holds every seat
@@ -94,7 +95,7 @@ The reviewer reads the branch **without disturbing it** — `wheelhouse/crew/REV
 
 If the bead's done is behavioral the bench is mandatory, and its length does not soften that — `wheelhouse/crew/REVIEWER.md` is explicit that a long bench is a scheduling problem rather than grounds for a lower bar. What length changes is the order to run it in: **bench first, reading second.** An ephemeral reviewer exists only while it is taking a turn, so a bench started at the end of the review is a bench started at the end of the reviewer — and the seat that backgrounds one and goes idle is the seat the commander finds hours later, still holding no verdict. Starting it first turns the wait into the static half of the review, which is work the reviewer owes anyway.
 
-A bench that will not fit in one turn splits the review into **two dispatches** rather than one seat promising to return. Dispatch one: static half done, bench started, output aimed at a home the graph can reach, and an interim comment on the bead saying what is running, at which SHA, and that a collecting dispatch is owed — with no verdict line on it, because nothing has been concluded. Dispatch two: a reviewer collects the output, checks it against the SHA and artifact identity the interim comment named, and writes the verdict. The commander owns the second dispatch. That is the point of the shape: the wake has to sit with a party that outlives the seat, and on the bead rather than in anyone's memory. `wheelhouse/crew/REVIEWER.md` carries the obligations, including the two ways a collected bench result can be the wrong result.
+A bench that will not fit in one turn splits the review into **two dispatches** rather than one seat promising to return. Dispatch one: static half done, bench started, output aimed at a home the graph can reach, and an interim comment on the bead saying what is running, at which SHA, and that a collecting dispatch is owed — with no verdict line on it, because nothing has been concluded. Dispatch two: a reviewer collects the output, checks it against the SHA and artifact identity the interim comment named, and writes the verdict. The commander owns the second dispatch. That is the point of the shape: the wake has to sit with a party that outlives the seat, and on the bead rather than in anyone's memory. The Dispatch Office herald can make that wake visible by appending a `settle`, `distress`, or `sentinel` event to `seats/inbox.jsonl` and poking the commander to drain it, but the inbox is the durable record and the poke is not the record. `wheelhouse/crew/REVIEWER.md` carries the obligations, including the two ways a collected bench result can be the wrong result.
 
 **What the receiver does:** executes. Not reads. The difference is the whole review.
 
@@ -150,7 +151,7 @@ It also includes the evidence itself, and there the same reasoning reaches one s
 
 There is no fixed rhythm to prescribe. The shape that worked:
 
-- Start by reading the graph, not the inbox. Deadline beads and anything blocking others first.
+- Start by reading the graph and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`). Deadline beads and anything blocking others first.
 - Dispatch one bead per seat, and let the seat finish before adding another.
 - Review as soon as work lands, so the author still has the context to fix a bounce cheaply.
 - Merge in batches if you like, but confirm each tip against its reported head individually.
