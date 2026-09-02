@@ -1,0 +1,31 @@
+Commands run from .wheelhouse-worktrees/wheelhouse-project-shf.
+
+INTENT CHECK SELFTEST + GREP
+$ ./seats/intent-check.selftest.sh
+intent-check.selftest: PASS (6 legs)
+$ grep -rn "handoff is notes" seats/ || true
+(no output)
+$ grep -n "closed bead still carrying needs-review" -A1 seats/intent-check.selftest.sh
+80:# 2. A closed bead still carrying needs-review fails: worker handoff is a bead
+81-# comment plus the review label, not close; commander/integrator close drops the label.
+
+SEAT ENV SELFTEST
+$ ./seats/seat-env.selftest.sh
+1c. optional account.authRoute — absent ok, present-valid ok, present-invalid is a loud STOP
+  ok    authRoute absent: provisioning still exits 0
+  ok    authRoute present-valid (env): provisioning exits 0
+  ok    authRoute present-invalid: STOPs naming the offending value and the allowed set
+  ok    authRoute present-non-string: STOPs naming the offending value and the allowed set
+seat-env.sh works on this machine.
+
+SCRATCH REPRO SHAPE
+$ cat scratch seats/seats.json
+{"seats":{"worker-1":{"role":"worker","account":{"dir":"~/.pi-seats-alpha/worker-1","authRoute":7}}}}
+$ env HOME=$FIX/home PATH=$FIX/bin:$PATH seats/seat-env.sh alpha worker-1 $FIX/project
+OK      pi — [tmpdir]tmp.PMrpzVOahZ/bin/pi
+STOP: seat "worker-1" has an invalid account.authRoute "7" in [tmpdir]tmp.PMrpzVOahZ/project/seats/seats.json — must be one of oauth, api_key, env (or omitted)
+exit=1
+
+SCRUB CHECK
+$ python3 scrub-check evidence/wheelhouse-project-shf
+leak_matches []

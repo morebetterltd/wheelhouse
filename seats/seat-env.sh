@@ -130,13 +130,17 @@ if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
-      const route = j.seats?.[seat]?.account?.authRoute;
+      const account = j.seats?.[seat]?.account;
+      if (!account || !Object.prototype.hasOwnProperty.call(account, "authRoute")) process.exit(0);
+      const route = account.authRoute;
       if (typeof route === "string" && route.length > 0) process.stdout.write(route);
+      else process.stdout.write(`__INVALID_AUTH_ROUTE__:${JSON.stringify(route)}`);
     } catch {}
   ' "$roster_file" "$seat")"
   if [ -n "$auth_route" ]; then
     case "$auth_route" in
       oauth|api_key|env) : ;;
+      __INVALID_AUTH_ROUTE__:*) die "seat \"$seat\" has an invalid account.authRoute \"${auth_route#__INVALID_AUTH_ROUTE__:}\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
       *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
     esac
   fi

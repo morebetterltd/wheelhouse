@@ -1,0 +1,6 @@
+$ cat scratch seats/seats.json
+{"seats":{"worker-1":{"role":"worker","account":{"dir":"~/.pi-seats-alpha/worker-1","authRoute":7}}}}
+$ env HOME=$FIX/home PATH=$FIX/bin:$PATH seats/seat-env.sh alpha worker-1 $FIX/project
+OK      pi — [tmpdir]tmp.PMrpzVOahZ/bin/pi
+STOP: seat "worker-1" has an invalid account.authRoute "7" in [tmpdir]tmp.PMrpzVOahZ/project/seats/seats.json — must be one of oauth, api_key, env (or omitted)
+exit=1

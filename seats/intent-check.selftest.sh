@@ -77,8 +77,8 @@ expect_output clean_pass 'intent-check: PASS'
 say 'ok 1 - clean state PASSes'
 pass_count=$((pass_count + 1))
 
-# 2. A closed bead still carrying needs-review fails: worker handoff is notes
-# plus the review label, not close; commander/integrator close drops the label.
+# 2. A closed bead still carrying needs-review fails: worker handoff is a bead
+# comment plus the review label, not close; commander/integrator close drops the label.
 closed_review="$FIXTURE/closed-review"
 make_fixture "$closed_review"
 closed_review_bead=$(new_bead "$closed_review" 'Closed but still needs review' 'Trace: selftest closed needs-review bead.')
