@@ -172,6 +172,20 @@ function stderrText(obj: any): string {
   return [direct, nested].filter(Boolean).join("\n");
 }
 
+function lastMessage(obj: any): any {
+  return Array.isArray(obj?.messages) && obj.messages.length > 0 ? obj.messages[obj.messages.length - 1] : undefined;
+}
+
+function agentEndStopReason(obj: any): string {
+  const last = lastMessage(obj);
+  return typeof last?.stopReason === "string" ? last.stopReason : "";
+}
+
+function agentEndErrorMessage(obj: any): string {
+  const last = lastMessage(obj);
+  return textOf([last?.errorMessage, last?.error]);
+}
+
 function errorText(obj: any): string {
   const type = typeof obj?.type === "string" ? obj.type : undefined;
   const stderr = stderrText(obj);
@@ -180,6 +194,7 @@ function errorText(obj: any): string {
   if (type === "tool_execution_end" && (obj?.isError === true || hasErrorField(obj) || hasErrorField(obj?.result))) {
     return textOf([obj.error, obj.errorMessage, obj.message, obj.result?.error, obj.result?.errorMessage]);
   }
+  if (type === "agent_end" && agentEndStopReason(obj) === "error") return agentEndErrorMessage(obj) || textOf([obj.error, obj.errorMessage]);
   if ((type === "agent_end" || type === "turn_end") && (hasErrorField(obj) || hasErrorField(obj?.message))) {
     return textOf([obj.error, obj.errorMessage, obj.message?.error, obj.message?.errorMessage]);
   }
@@ -196,7 +211,6 @@ function truncate(s: string, n = 700): string {
 }
 
 function classify(obj: any): Candidate | null {
-  const text = textOf(obj);
   const type = typeof obj?.type === "string" ? obj.type : undefined;
   const sentinel = sentinelText(obj);
   if (sentinel && SENTINEL_RE.test(sentinel)) {
@@ -208,22 +222,34 @@ function classify(obj: any): Candidate | null {
       sourceType: type,
     };
   }
+  if (type === "agent_end") {
+    const stopReason = agentEndStopReason(obj);
+    if (stopReason === "error") {
+      if (obj?.willRetry === true) return null;
+      return {
+        eventClass: "distress",
+        state: "failed",
+        title: "seat turn failed",
+        detail: truncate(agentEndErrorMessage(obj) || "agent_end stopReason=error"),
+        sourceType: type,
+      };
+    }
+    return {
+      eventClass: "settle",
+      state: "terminal",
+      title: "seat turn settled",
+      detail: truncate(textOf(obj) || "agent_end"),
+      sourceType: type,
+    };
+  }
   const distressText = errorText(obj);
+  const text = distressText ? "" : textOf(obj);
   if (distressText && distressTextMatches(distressText)) {
     return {
       eventClass: "distress",
       state: "failed",
       title: "seat distress",
       detail: truncate(distressText || text || JSON.stringify(obj)),
-      sourceType: type,
-    };
-  }
-  if (type === "agent_end") {
-    return {
-      eventClass: "settle",
-      state: "terminal",
-      title: "seat turn settled",
-      detail: truncate(text || "agent_end"),
       sourceType: type,
     };
   }
