@@ -97,6 +97,7 @@ trust_file="$seat_dir/trust.json"
 auth_file="$seat_dir/auth.json"
 roster_file="$root/seats/seats.json"
 account_label=""
+auth_route=""
 
 # Optional roster hint for humans. Missing seats.json, missing JS runtime,
 # absent account.label, or a non-string label all mean "no label to print";
@@ -238,12 +239,26 @@ note "point a process at this seat:"
 note "  export PI_CODING_AGENT_DIR=\"$seat_dir\""
 if [ "$login_needed" -eq 1 ]; then
   note ""
-  note "one-time OAuth login (writes $auth_file; sign in as the account this seat should BE):"
-  note "  PI_CODING_AGENT_DIR=\"$seat_dir\" pi"
-  note "  # in the Pi REPL: type /login, complete the browser flow, then type /exit"
-  note "api_key alternative: either write $auth_file yourself as"
-  note "  {\"<provider>\": {\"type\": \"api_key\", \"key\": \"<the key>\"}}  (chmod 600)"
-  note "  or export the provider's env var (for example ANTHROPIC_API_KEY) in the shell that spawns the seat."
-  note "  auth.json survives new shells; the env-var route writes nothing to disk."
+  case "$auth_route" in
+    env)
+      note "env credential route (writes no auth.json): export the provider's env var in the shell that spawns the seat."
+      note "  Do not write an auth.json stub for env; pi checks auth.json before the env var, so a provider entry there shadows the exported key."
+      ;;
+    api_key)
+      note "api_key credential route: either write $auth_file yourself as"
+      note "  {\"<provider>\": {\"type\": \"api_key\", \"key\": \"<the key>\"}}  (chmod 600)"
+      note "  or switch account.authRoute to env and export the provider's env var in the shell that spawns the seat."
+      note "  auth.json survives new shells; the env-var route writes nothing to disk."
+      ;;
+    *)
+      note "one-time OAuth login (writes $auth_file; sign in as the account this seat should BE):"
+      note "  PI_CODING_AGENT_DIR=\"$seat_dir\" pi"
+      note "  # in the Pi REPL: type /login, complete the browser flow, then type /exit"
+      note "api_key alternative: either write $auth_file yourself as"
+      note "  {\"<provider>\": {\"type\": \"api_key\", \"key\": \"<the key>\"}}  (chmod 600)"
+      note "  or set account.authRoute to env and export the provider's env var in the shell that spawns the seat."
+      note "  auth.json survives new shells; the env-var route writes nothing to disk."
+      ;;
+  esac
 fi
 exit 0

@@ -183,6 +183,9 @@ else fail "authRoute absent: provisioning exited $RC: $OUT"; fi
 run alpha worker-authroute-ok "$PROJECT"
 if [ $RC -eq 0 ]; then pass "authRoute present-valid (env): provisioning exits 0"
 else fail "authRoute present-valid: provisioning exited $RC: $OUT"; fi
+if says "env credential route" && says "Do not write an auth.json stub" && ! says "type /login"; then
+  pass "authRoute env: provisioning prints env-only instructions and forbids auth.json stubs"
+else fail "authRoute env instructions were not specific enough: $OUT"; fi
 run alpha worker-authroute-bad "$PROJECT"
 if [ $RC -ne 0 ] && says "invalid account.authRoute" && says "oauth, api_key, env"; then
   pass "authRoute present-invalid: STOPs naming the offending value and the allowed set"

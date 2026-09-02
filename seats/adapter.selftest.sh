@@ -351,6 +351,41 @@ if [ $RC -eq 0 ]; then pass "authRoute present-valid (api_key): spawn exits 0"
 else fail "authRoute present-valid: spawn exited $RC: $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
 
+AUTHROUTE_ENV_PROJ="$FIX/authroute-env-proj"
+build_proj "$AUTHROUTE_ENV_PROJ" authroute-env
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].provider = "openai";
+  j.seats["worker-1"].model = "gpt-fixture";
+  j.seats["worker-1"].account.authRoute = "env";
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$AUTHROUTE_ENV_PROJ/seats/seats.json"
+AUTHROUTE_ENV_DIR="$HOME_FIX/.pi-seats-authroute-env/worker-1"
+rm -f "$AUTHROUTE_ENV_DIR/auth.json"
+RUN_PROJ="$AUTHROUTE_ENV_PROJ"; STATE="$AUTHROUTE_ENV_PROJ/seats/state.json"; LOG="$AUTHROUTE_ENV_PROJ/seats/logs/worker-1.jsonl"; ARGV="$AUTHROUTE_ENV_DIR/argv.json"; CWD_FILE="$AUTHROUTE_ENV_DIR/cwd.txt"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" PI_CODING_AGENT_DIR="$AUTHROUTE_ENV_DIR" OPENAI_API_KEY='fixture-openai-key' pi -p --no-session --provider openai --model gpt-fixture 'Reply with exactly OK.' 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && [ "$OUT" = "OK" ]; then pass "authRoute env: direct pi probe succeeds with only OPENAI_API_KEY and no auth.json"
+else fail "authRoute env: direct pi probe failed without auth.json (exit $RC): $OUT"; fi
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" probe worker-1 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && [ "$OUT" = "OK" ]; then pass "authRoute env: adapter probe exits 0 without auth.json"
+else fail "authRoute env: adapter probe failed without auth.json (exit $RC): $OUT"; fi
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+if [ $RC -eq 0 ]; then pass "authRoute env: adapter spawn exits 0 without auth.json"
+else fail "authRoute env: adapter spawn failed without auth.json (exit $RC): $OUT"; fi
+mkdir -p "$AUTHROUTE_ENV_PROJ/.wheelhouse-worktrees/env-bead"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 env-bead 'hello env route' 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && wait_for "$LOG" 'echo: Bead env-bead' 5; then pass "authRoute env: adapter dispatch succeeds without auth.json"
+else fail "authRoute env: adapter dispatch failed without auth.json (exit $RC): $OUT"; fi
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)"; RC=$?
+printf '{"openai":{"type":"env"}}\n' > "$AUTHROUTE_ENV_DIR/auth.json"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && says "authRoute=env" && says "auth.json" && says "shadows"; then
+  pass "authRoute env: an auth.json env stub is forbidden instead of shadowing a valid env key"
+else fail "authRoute env: auth.json env stub was not refused as a shadowing hazard (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
+
 AUTHROUTE_BAD_PROJ="$FIX/authroute-bad-proj"
 build_proj "$AUTHROUTE_BAD_PROJ" authroute-bad
 env HOME="$HOME_FIX" bun -e '
