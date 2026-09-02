@@ -121,10 +121,11 @@ if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   ' "$roster_file" "$seat")"
 fi
 
-# Optional roster field: account.authRoute, one of oauth/api_key/env — the
-# routes BOOTSTRAP.md's question 8 offers. Absent means "not recorded yet",
-# same as a roster written before this field existed; present-but-invalid is
-# a STOP so a typo in the roster is caught here instead of silently ignored.
+# Optional roster fields. account.authRoute is one of oauth/api_key/env — the
+# routes BOOTSTRAP.md's question 8 offers. shadow is a boolean marker for a
+# non-gating mirror seat. Absent means "not recorded yet" / false; present-
+# but-invalid is a STOP so a typo in the roster is caught here instead of
+# silently ignored.
 if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   auth_route="$($json_runtime -e '
     const fs = require("fs");
@@ -143,6 +144,24 @@ if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
       oauth|api_key|env) : ;;
       __INVALID_AUTH_ROUTE__:*) die "seat \"$seat\" has an invalid account.authRoute \"${auth_route#__INVALID_AUTH_ROUTE__:}\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
       *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
+    esac
+  fi
+  shadow_value="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const entry = j.seats?.[seat];
+      if (!entry || !Object.prototype.hasOwnProperty.call(entry, "shadow")) process.exit(0);
+      if (typeof entry.shadow === "boolean") process.stdout.write(String(entry.shadow));
+      else process.stdout.write(`__INVALID_SHADOW__:${JSON.stringify(entry.shadow)}`);
+    } catch {}
+  ' "$roster_file" "$seat")"
+  if [ -n "$shadow_value" ]; then
+    case "$shadow_value" in
+      true|false) : ;;
+      __INVALID_SHADOW__:*) die "seat \"$seat\" has an invalid shadow \"${shadow_value#__INVALID_SHADOW__:}\" in $roster_file — must be boolean true or false (or omitted)" ;;
+      *) die "seat \"$seat\" has an invalid shadow \"$shadow_value\" in $roster_file — must be boolean true or false (or omitted)" ;;
     esac
   fi
 fi
