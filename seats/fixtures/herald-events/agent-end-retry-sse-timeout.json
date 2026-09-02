@@ -1,0 +1,1 @@
+{"type":"agent_end","messages":[{"role":"assistant","content":"<scrubbed live transcript content>","stopReason":"error","errorMessage":"Codex SSE response headers timed out after 300000ms"}],"willRetry":true}
