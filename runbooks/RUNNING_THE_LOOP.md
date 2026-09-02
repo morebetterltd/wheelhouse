@@ -179,11 +179,27 @@ then collect.
 Not a transcript of the seat handoffs — those live on their beads, where
 tomorrow's dispatches will point — but the fleet-level view one screen tall:
 per-seat status (bead, state, whether tomorrow's move is `resume` or a fresh
-`spawn`), every verdict or `needs-review` bead waiting with nobody on it,
+`spawn`), every verdict or `needs-review` bead waiting with nobody on it, and
 anything the principal decided today that has not yet become a bead or an ISA
-entry, and the first two or three actions tomorrow's commander should take, in
-order. Why written, when the graph already holds the work: the graph holds
-WHAT, not WHERE-WE-WERE — a compacted or fresh commander session re-derives
+entry.
+
+Then two separate lists, under separate headings, because collapsing them
+into one "first actions" list is what let a chore get read as the day's
+first move on 2026-09-02 (see "Next morning" above) — the numbering implied
+an order that was never the intended one:
+
+- **"First dispatch" — bead → seat pairs, in the order to send them,** each
+  one nameable as "dispatch bead X to seat Y" without the reader having to
+  infer which is which. This is the only list tomorrow's commander should
+  execute before anything else.
+- **"Chores — after the first dispatch"** — machinery sync, selftests,
+  upgrades, ISA edits, anything commander-owned. State plainly that these
+  wait: they are not ranked against the dispatch list, they come after it,
+  full stop. An empty list here is written as `(none)`, not omitted, so a
+  reader can't mistake silence for "the note is incomplete."
+
+Why written, when the graph already holds the work: the graph holds WHAT,
+not WHERE-WE-WERE — a compacted or fresh commander session re-derives
 yesterday from raw state unless a written handoff exists, and re-deriving is
 both slow and quietly lossy. The note is cheap tonight and expensive to
 reconstruct tomorrow. It gets committed with whatever else the day commits;
@@ -216,7 +232,25 @@ stood at sign-off — which seats to `resume` and which to respawn, which
 verdicts are waiting, what the first dispatch should be. The graph still
 decides what the work IS; the note says where to stand while reading it.
 
-Then archive it — after ingesting, not before:
+**The order, explicitly, because reading it is not the same as doing it in
+this sequence:** recover (`bun seats/recover.ts` if this session followed a
+`/clear` or a compaction), spawn or resume every rostered seat, drain the
+Dispatch Office inbox (`bun seats/herald.ts --drain`), dispatch every ready
+bead to a seat — and only then any commander-owned chore (machinery sync,
+selftests, upgrades, ISA edits). A chore that reads as high-priority in
+yesterday's handoff is still a chore: it waits behind the first dispatch, not
+ahead of it. This is the ordering `seats/fleet-gate.sh` checks on every
+commander turn (wired as a `UserPromptSubmit` hook per
+`generated/CLAUDE.md.example`) — it prints the loud "seats cold with ready
+work" line specifically to catch a commander that has started reading a
+chore instead. A real 2026-09-02 incident on this template's own fleet was
+exactly that: the commander read the handoff's numbered "first actions" as
+its own to-do list, took a machinery-sync item as a chore to do itself, and
+spent roughly 40 tool calls on it before a single seat was spawned — caught
+only because the principal noticed and asked, out loud, whether the fleet
+had even started.
+
+Then archive the handoff — after ingesting, not before:
 
 ```bash
 mkdir -p wheelhouse/handoffs
