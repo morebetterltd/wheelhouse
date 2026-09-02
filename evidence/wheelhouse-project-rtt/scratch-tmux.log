@@ -1,0 +1,6 @@
+$ tmux -L $SOCK new-session -d -s wh-rtt-scratch -n bridge bash
+$ WHEELHOUSE_HERALD_ROOT=$ROOT_TMP WHEELHOUSE_TMUX_SOCKET=$SOCK WHEELHOUSE_HERALD_TMUX_SESSION=wh-rtt-scratch WHEELHOUSE_HERALD_TMUX_PANE=wh-rtt-scratch:bridge.0 bun seats/herald.ts --once
+herald: appended 1 wake event(s)
+$ cat $ROOT_TMP/seats/logs/herald.out.log
+2026-09-02T15:07:14.970Z poke not-idle pane=wh-rtt-scratch:bridge.0 inbox=326
+$ tmux -L $SOCK kill-session -t wh-rtt-scratch

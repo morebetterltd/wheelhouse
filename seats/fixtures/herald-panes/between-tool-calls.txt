@@ -1,0 +1,8 @@
+     ✔ Update installed · Restart to update  
+─────────────────────────────────────────────
+❯                                          
+─────────────────────────────────────────────
+    LIFEOS ◉33%
+  ◈main 3m │ ✿—→                           
+  ◎ 📁0 ✦2 ⊕0                              
+  ⏵⏵ auto mode on (shift+tab to cycle) · ←…

@@ -1,0 +1,27 @@
+$ grep 13:35-13:49Z live herald.out.log poke lines (read-only)
+2026-09-02T13:35:05.578Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6377158
+2026-09-02T13:38:31.669Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6378144
+2026-09-02T13:39:09.444Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6379208
+2026-09-02T13:39:11.191Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6380654
+2026-09-02T13:39:12.262Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6382790
+2026-09-02T13:39:13.349Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6392126
+2026-09-02T13:39:17.582Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6394928
+2026-09-02T13:39:20.032Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6397663
+2026-09-02T13:39:37.568Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6399533
+2026-09-02T13:39:40.905Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6400552
+2026-09-02T13:39:47.780Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6401568
+2026-09-02T13:40:01.252Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6403973
+2026-09-02T13:40:03.287Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6405029
+2026-09-02T13:40:07.416Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6406982
+2026-09-02T13:40:09.737Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6408007
+2026-09-02T13:40:13.987Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6409029
+2026-09-02T13:46:53.639Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6412154
+2026-09-02T13:47:20.916Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6417443
+2026-09-02T13:47:21.991Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6420973
+2026-09-02T13:47:25.071Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6421819
+2026-09-02T13:47:26.116Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6422623
+2026-09-02T13:47:30.609Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6426828
+2026-09-02T13:47:31.874Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6432426
+2026-09-02T13:47:35.139Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6435260
+2026-09-02T13:47:42.233Z poke not-idle pane=wh-wheelhouse-project:bridge.0 inbox=6438851
+2026-09-02T13:49:01.420Z poke sent pane=wh-wheelhouse-project:bridge.0 inbox=6439853

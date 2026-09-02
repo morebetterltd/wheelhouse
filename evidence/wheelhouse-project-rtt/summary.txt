@@ -1,0 +1,45 @@
+Commands run from .wheelhouse-worktrees/wheelhouse-project-rtt.
+
+SELFTEST
+$ ./seats/herald.selftest.sh
+ok 1 - captures settle, distress, and sentinel events without matching author as auth
+ok 2 - settle uses A2A terminal state
+ok 3 - distress uses A2A failed state and carries quota detail
+ok 4 - distress matches insufficient credits wording
+ok 5 - real provider 400 invalid_grant stderr becomes one distress
+ok 6 - recorded false-positive message_update shapes produce zero distress
+ok 7 - turn-end assistant @commander line becomes one sentinel wake
+ok 8 - quoted @commander text in tool output and non-turn events produces zero sentinel wakes
+ok 9 - dedup/cursor prevents duplicate inbox appends on a re-scan
+ok 10 - drain cursor emits unread wake events once, deduping stable ids, then advances to EOF
+ok 11 - drain dedup survives a tiny MAX_SEEN eviction horizon
+ok 12 - fixture idle Claude UI receives exactly one constant-phrase poke
+ok 13 - sent poke attempt is logged with timestamp and pane
+ok 14 - seat-authored text never enters send-keys
+ok 15 - per-pane cooldown suppresses a second immediate poke
+ok 16 - per-pane cooldown allows a later poke after the tunable interval
+ok 17 - pane-state gate prevents poke into a bare shell
+ok 18 - allowlist gate classifies a ❯-prompt bare shell not-idle and does not poke
+ok 19 - between-tool-calls Claude UI is unstable across the idle window and not poked
+ok 20 - fixture mid-turn Claude UI is logged not-idle and not poked
+ok 21 - fixture tool-running Claude UI is not poked
+ok 22 - poke attempt with no configured pane is logged no-pane
+ok 23 - cockpit starts the herald daemon
+ok 24 - cockpit verifies and restarts a dead herald on re-run
+herald.selftest: PASS (24 checks)
+
+SCRATCH TMUX SESSION
+$ tmux -L $SOCK new-session -d -s wh-rtt-scratch -n bridge bash
+$ WHEELHOUSE_HERALD_ROOT=$ROOT_TMP WHEELHOUSE_TMUX_SOCKET=$SOCK WHEELHOUSE_HERALD_TMUX_SESSION=wh-rtt-scratch WHEELHOUSE_HERALD_TMUX_PANE=wh-rtt-scratch:bridge.0 bun seats/herald.ts --once
+herald: appended 1 wake event(s)
+$ cat $ROOT_TMP/seats/logs/herald.out.log
+2026-09-02T15:07:14.970Z poke not-idle pane=wh-rtt-scratch:bridge.0 inbox=326
+$ tmux -L $SOCK kill-session -t wh-rtt-scratch
+
+READ-ONLY LIVE DEFECT EVIDENCE
+$ grep 13:35-13:49Z live herald.out.log poke lines (read-only)
+See evidence/wheelhouse-project-rtt/live-herald-pokes-1335-1349Z.log for the retained 26-line grep showing repeated live `poke sent` lines while the commander was mid-turn before this fix.
+
+SCRUB CHECK
+$ python3 scrub-check evidence/wheelhouse-project-rtt + seats/fixtures/herald-panes/between-tool-calls.txt
+leak_matches []
