@@ -89,7 +89,7 @@ FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
+RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
 
 # The stub pi: same RPC shape as adapter.selftest.sh's stub, plus a real
 # `streaming` flag so get_state's isStreaming answers honestly instead of
@@ -218,22 +218,22 @@ mkdir -p "$PROJ/.wheelhouse-worktrees/bead-x"
 check_reset_midturn_refused() {   # $1 = label
   local label="$1" pid_before sess_before
   run spawn worker-1
-  [ $RC -eq 0 ] || { fail "$label: setup spawn failed (exit $RC): $OUT"; return; }
+  [ $RC -eq 0 ] || { fail "${label}: setup spawn failed (exit $RC): $OUT"; return; }
   run dispatch worker-1 bead-x "SLOW long think"
-  [ $RC -eq 0 ] || { fail "$label: setup dispatch failed (exit $RC): $OUT"; return; }
+  [ $RC -eq 0 ] || { fail "${label}: setup dispatch failed (exit $RC): $OUT"; return; }
   wait_for "$LOG" '"agent_start"' 5 >/dev/null
   pid_before="$(state_get pid)"
   sess_before="$(state_get sessionFile)"
   run reset worker-1
   if [ $RC -ne 0 ] && says "mid-turn"; then
-    pass "$label: reset refuses a seat that is mid-turn"
-  else fail "$label: reset did not refuse a mid-turn seat (exit $RC): $OUT"; fi
+    pass "${label}: reset refuses a seat that is mid-turn"
+  else fail "${label}: reset did not refuse a mid-turn seat (exit $RC): $OUT"; fi
   if [ "$(state_get pid)" = "$pid_before" ] && kill -0 "$pid_before" 2>/dev/null; then
-    pass "$label: the seat is left running untouched by a refused reset"
-  else fail "$label: a refused reset still touched the running seat (pid was $pid_before, now $(state_get pid))"; fi
+    pass "${label}: the seat is left running untouched by a refused reset"
+  else fail "${label}: a refused reset still touched the running seat (pid was $pid_before, now $(state_get pid))"; fi
   if [ "$(state_get sessionFile)" = "$sess_before" ]; then
-    pass "$label: session record is unchanged by a refused reset"
-  else fail "$label: a refused reset still changed the recorded session"; fi
+    pass "${label}: session record is unchanged by a refused reset"
+  else fail "${label}: a refused reset still changed the recorded session"; fi
   wait_for "$LOG" 'echo: Bead bead-x' 5 >/dev/null   # let the slow turn finish
   run stop worker-1
 }
