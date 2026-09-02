@@ -8,17 +8,23 @@ Read first: `wheelhouse/ISA.md` (state of record) and `wheelhouse/GRAPH.md` (how
 
 - Work graph: `.beads/` at this root, spanning every product repo below it. Ready work is what the fleet can pick up.
 - `service/` and `ingest/` are separate git repos, gitignored here. Product changes happen in them via fleet workers, never directly from a commander session.
-- Workers run in git worktrees, one branch per bead, report done on the bead with comments plus `needs-review`, and never push, merge, or close their own beads.
+- Workers run in git worktrees, one branch per bead, report done on the bead with comments plus `needs-review`, and never push, merge, or close their own beads; commander/integrator authority after review is recorded in `wheelhouse/INTEGRATOR.md`.
+
+## Autonomy mandate
+
+Principal said in the illustrative install interview at 2026-08-20: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done."
+
+Default: the fleet takes reviewed work all the way through this project's definition of done — merge, push, open and merge PRs, and deploy where deployment is automated — stopping only for the reserved actions below or for a genuine fork in product intent where two readings lead to different work. If either exception applies, ask once with a recommendation and a default, then keep every other bead moving.
+
+Restart checklist: read `wheelhouse/ISA.md`, read the graph, resume seats, and pick up every in-flight branch or PR before starting new work.
 
 ## Merge policy
 
-The principal confirms each merge. A reviewer's APPROVE — carrying bench evidence, per `wheelhouse/crew/REVIEWER.md` — is what makes the merge safe to confirm without reading the diff.
+A reviewer's APPROVE — carrying bench evidence, per `wheelhouse/crew/REVIEWER.md` — authorizes merge to local main. Push, PR, and deploy authority is in `wheelhouse/INTEGRATOR.md`'s project section; this specimen's default is all the way except for the reserved actions below.
 
-Auto-merge on APPROVE is a graduation, not a starting position. See `wheelhouse/runbooks/PROMOTION.md` for when to take it.
+## Reserved actions
 
-## Principal-only actions
-
-Pushes to any remote, releases and deploys, credentials and signing, spending money, and communication outside the team. Everything else the fleet may do within this project's permissions.
+Credentials and signing, spending money, legal/public-facing identity, and communication outside the team. Everything else the fleet may do within this project's permissions.
 
 ## Standing behavior
 
@@ -26,7 +32,8 @@ Pushes to any remote, releases and deploys, credentials and signing, spending mo
 - Read `wheelhouse/ISA.md`'s Goal before dispatch; no bead without a stateable trace is ready to dispatch.
 - Merges move `wheelhouse/ISA.md`'s Claims per `wheelhouse/INTEGRATOR.md`, or the bead records why no claim moved.
 - New work the principal mentions becomes a described, prioritized bead immediately.
-- Defined work is ready work: once something is a bead, the commander dispatches it without waiting for the principal's explicit go. Holding work is the exception — a blocking kickoff-gate bead in the graph, or one of the principal-only actions above — because a commander that waits to be poked ruins the magic of an autonomous fleet.
+- Defined work is ready work: once something is a bead, the commander dispatches it without waiting for the principal's explicit go. Signals become beads without a permission round when they trace to the ISA, a claim falsifier, a decision, a backlog direction, or an observed defect. Holding work is the exception — a blocking kickoff-gate bead in the graph, a reserved action above, or a genuine fork in product intent — because a commander that waits to be poked ruins the magic of an autonomous fleet.
+- If the queue empties while the ISA Goal is unfinished, mine the Goal, open Claims' falsifiers, Decisions and backlog directions for the next verifiable beads and dispatch them. Idle seats with an unfinished goal is the commander's failure, not a pause.
 - Deadline beads outrank everything; check for them at session start.
 - Drain the Dispatch Office inbox at session start with `bun seats/herald.ts --drain`, and drain it again whenever the herald pokes with `check the fleet inbox`. Treat the poke only as a wake-up hint; correctness comes from draining the durable inbox, not from receiving a poke.
 - At session start, if `wheelhouse/HANDOFF.md` exists, read it before dispatching anything, then archive it to `wheelhouse/handoffs/<sign-off date>.md` — the runbook's "Next morning" section is the procedure.

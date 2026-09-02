@@ -1,8 +1,8 @@
 # Promotion
 
-What to change once the loop has proven itself, and what to leave alone until then.
+What to change once the loop has proven itself, and how to record a project that intentionally narrows the shipped default.
 
-Every graduation here is deliberately NOT the default. A template that ships the endpoint hands a brand-new, untested fleet the authority a working one earned. Each of these is a thing to take when you have evidence, not on installation day.
+The shipped default is now all the way: reviewed work is merged, pushed, PR-opened/merged, and deployed wherever the install records standing authority and automation. This runbook no longer grants autonomy as a ladder a fleet earns after installation. It records two other moves: a project-specific narrowing when the principal deliberately reserves more than the default reserved list, and the graduation back toward the shipped all-the-way line once evidence says the narrowing is no longer buying safety.
 
 ## Persistent seats are the default now, not a graduation
 
@@ -10,37 +10,37 @@ Earlier versions of this template made this section's first rung — ephemeral d
 
 So there is nothing to graduate to here. A persistent seat costs no wiring, no roll call, no reset ritual — the session is a warm cache that survives stop and resume, and spawning fresh is one command. What this section still owes you is the judgment the old graduation encoded: a persistent seat idling is a subscription doing nothing, so take seats for the roles you actually dispatch to, and note that the verifier stays deliberately ephemeral — one shot, no session — because for a review gate, independence is worth more than a warm cache.
 
-## Principal-confirmed merges to auto-merge on APPROVE
+## All-the-way default to principal-confirmed local merges
 
-**Start — and this is the shipped default:** the principal confirms each merge. The reviewer's APPROVE, carrying bench evidence, is what makes that confirmation cheap: read the verdict, not the diff.
+**Start — and this is the shipped default:** a bench-evidenced APPROVE authorizes the integrator to merge to local main. That is the local-merge slice of the all-the-way mandate in `wheelhouse/INTEGRATOR.md`: reviewed work keeps moving unless the install's project section reserves the action or the work has reached a genuine product-intent fork.
 
-**Graduate to:** a bench-evidenced APPROVE authorizes the commander to merge to local main without per-branch confirmation. Pushes to any remote stay principal-only regardless.
+**Narrow to:** principal-confirmed local merges, recorded in `wheelhouse/INTEGRATOR.md`'s project section in the principal's own words and with the date. The reviewer's APPROVE still matters: it is what makes that confirmation a decision on policy rather than a diff review.
 
-**Take it when** all of these are true:
+**Choose the narrowing only when** at least one of these is true:
 
-- the reviewer has been right on real merges, repeatedly, including at least one BOUNCE that caught something the principal would have missed;
-- the bench is implemented and actually gates behavioral APPROVEs — an auto-merge policy on top of a stub bench is an auto-merge policy on top of nothing;
-- a bad merge is cheap to undo, because local main is local.
+- the bench is still the shipped stub, so no behavioral APPROVE can claim the software runs;
+- the reviewer seat or verifier path has not yet been proven on real merges;
+- local main is unusually expensive to repair in this project, and the project section names why.
 
-The precondition is in `wheelhouse/crew/REVIEWER.md`: an APPROVE without bench evidence on a behavioral diff is a defect in the review. That sentence is load-bearing for this graduation and travels with it.
+**Graduate back to the shipped default when** the bench is implemented for behavioral claims, the reviewer/verifier path has caught at least one real defect or passed enough ordinary changes to be trusted, and reverting a bad local merge is understood. The precondition is in `wheelhouse/crew/REVIEWER.md`: an APPROVE without bench evidence on a behavioral diff is a defect in the review. That sentence is load-bearing for any merge authority and travels with it.
 
-## Per-push approval to standing push authority
+## Recorded push authority to narrower push gates
 
-**Start — and this is the shipped default:** every push to a remote is the principal's, asked for and granted one at a time. It is the last gate before work leaves the machine, and it is the only one whose mistakes are visible to people outside the project.
+**Start — and this is the shipped default:** push, PR, and deploy authority is exactly what `wheelhouse/INTEGRATOR.md`'s project section records. A fresh install's question asks how far the fleet takes work; the default answer is all the way, scoped to named remotes, repositories, PR targets, deploy surfaces, and reserved actions. A runbook cannot override that record with a blanket rule.
 
-**Graduate to:** standing authority to push, scoped to named remotes and named repositories.
+**Narrow to:** per-push, per-PR, or per-deploy confirmation only when the project section says so. This is an install-specific reservation, not a template default, and it must name the remote, repository, PR target, deploy surface, or risk class it covers.
 
-**Take it when** all of these are true:
+**Choose the narrowing only when** all of these are true:
 
-- the merge graduation above has already been taken, and has held. Push authority on top of per-merge confirmation is a gate on the wrong step;
-- the reviewer's push line has been carrying its own evidence — the commit range, the tip identifier against what was reviewed, and a scan of added lines for credentials, keys, local paths and internal addresses. A verdict format that asks the push question separately is the precondition here, the same way bench evidence is the precondition for auto-merge;
-- someone has been wrong about a push and the check caught it. A gate that has never fired is not evidence of anything.
+- the action leaves the machine or reaches users/collaborators, and the project has not yet seen the reviewer's PUSH line catch a real publishing risk;
+- the reviewer's push line has not yet built a trustworthy run of evidence — commit range, tip identifier against what was reviewed, and a scan of added lines for credentials, keys, local paths and internal addresses;
+- the project section states the gate in terms a later integrator can execute, not as a memory of one conversation.
 
-**Record it in `wheelhouse/INTEGRATOR.md`'s project section**, in the principal's own words and with the date. Not a paraphrase: the grant's exact scope is what a future reader has to work from, and a summary of it is the first place the scope quietly widens.
+**Graduate back to standing authority when** the scope is named and stable, the PUSH line has carried its own evidence over real branches, and at least one mistaken publish attempt or near-miss was caught by the check. Record the grant in `wheelhouse/INTEGRATOR.md`'s project section, in the principal's own words and with the date. Not a paraphrase: the grant's exact scope is what a future reader has to work from, and a summary of it is the first place the scope quietly widens.
 
-**Scope does not travel.** Authority over one remote is not authority over another, and authority over one repository is not authority over the next one the project adds. If you find yourself reasoning about whether a grant covers something it does not name, that reasoning is an inference — record it AS an inference, route it to the principal, and act on the narrower reading until they answer. An unwritten narrowing of a broad grant and an unwritten broadening of a narrow one are the same defect: both end as "nobody objected, so it must be allowed", and both leave the record showing a decision nobody made.
+**Scope does not travel.** Authority over one remote is not authority over another, authority over one repository is not authority over the next one the project adds, and authority over pushing is not authority over a deploy surface the project section does not name. If you find yourself reasoning about whether a grant covers something it does not name, that reasoning is an inference — record it AS an inference, route it to the principal, and act on the narrower reading until they answer. An unwritten narrowing of a broad grant and an unwritten broadening of a narrow one are the same defect: both end as "nobody objected, so it must be allowed", and both leave the record showing a decision nobody made.
 
-**Return to per-push when** the scope changes, a new remote or repository appears, the principal's instruction is unclear, or anything was pushed that should not have been. Going back is cheap and is not a punishment; the ladder is not one-way.
+**Return to confirmation when** the scope changes, a new remote/repository/PR target/deploy surface appears, the principal's instruction is unclear, or anything was published that should not have been. Going narrower is cheap and is not a punishment; the ladder moves both ways.
 
 ## Cross-vendor seats
 

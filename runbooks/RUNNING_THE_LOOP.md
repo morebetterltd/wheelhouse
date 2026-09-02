@@ -47,7 +47,7 @@ What remains forbidden, in every shape: the session that authored a change writi
 
 The commander reads `wheelhouse/ISA.md`'s Goal before choosing what to send next, because dispatch is a claim about what advances that goal. A bead with no stateable trace under `wheelhouse/GRAPH.md`'s rule is not dispatched; fix the bead first.
 
-Defined work is ready work: once something is described as a bead, the commander dispatches it immediately, never waiting for the principal's explicit go. Holding work is the exception, and it is expressed IN the graph — a blocking kickoff-gate bead — or by the per-action principal-only classes a project names (releases and tags, license, public-facing identity). A commander that waits to be poked ruins the magic of an autonomous fleet.
+Defined work is ready work: once something is described as a bead, the commander dispatches it immediately, never waiting for the principal's explicit go. Signals become defined work the same way: when the principal, the ISA Goal, an open Claim's falsifier, a Decision, or a backlog direction points at a verifiable next step, the commander files the bead and dispatches it without asking whether to create or start it. Holding work is the exception, and it is expressed IN the graph — a blocking kickoff-gate bead — or by the per-action reserved list the project records in `wheelhouse/INTEGRATOR.md`. A commander that waits to be poked ruins the magic of an autonomous fleet.
 
 The commander names the bead, the repository, and — if it points at any existing commit or branch — **a way to read it that changes nothing**. `wheelhouse/crew/REVIEWER.md` carries the rule and why the wording is what it is; the short version is that a dispatch naming a bare identifier makes the receiver find somewhere to open it, and the somewhere they choose may be someone else's working tree.
 
@@ -119,7 +119,7 @@ The same contract carries the claim-move duty: update `wheelhouse/ISA.md`'s Clai
 
 Run the intent-check gate at `seats/intent-check.sh` before integrating when that script is present. If this template has not yet received the sibling bead that ships it, the path is still the agreed gate path and this line is the ordering marker.
 
-Push per your project's recorded authority, in `wheelhouse/INTEGRATOR.md`'s project section. If that section is empty, the answer is that nobody has decided yet, and the decision is the principal's rather than yours.
+Push, open and merge PRs, and run automated deploys per your project's recorded authority, in `wheelhouse/INTEGRATOR.md`'s project section. The shipped default is all the way; an empty section means the install failed to record its authority, not that a generated conservative agent profile owns the answer. Ask once with a recommendation and default, write the answer, then proceed.
 
 ### 7. Close
 
@@ -146,6 +146,8 @@ It also includes the evidence itself, and there the same reasoning reaches one s
 **Two people disagree about a fact.** Neither account settles it — measure. In these rounds, every disagreement between two careful parties was resolved by someone running the thing, and in several cases both prior accounts were wrong. Evidence of a pattern is not evidence of an instance.
 
 **You cannot verify something you are asserting.** Route it to whoever can, name it as unverified, and do not let it pass in silence. Silence is indistinguishable in the record from a check that was made.
+
+**The queue is empty but the ISA goal is not done.** Mine the Goal, open Claims' falsifiers, Decisions, and recorded backlog directions for the next verifiable beads, file them with traces, and dispatch them. Idle seats with an unfinished goal is the commander's failure, not a pause. This does not license convenience work for the fleet's own tooling: a new bead traces to the ISA or a real observed defect, never to a desire to keep seats busy.
 
 **The work is bigger than one bead.** Split it and say so. A bead whose done cannot be stated is not ready to dispatch.
 

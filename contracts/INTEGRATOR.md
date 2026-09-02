@@ -8,6 +8,10 @@ These duties attach to the function and not to a job title, deliberately. An obl
 
 Copied byte-for-byte into every project. Do not edit this section.
 
+### Default mandate: take work all the way
+
+The shipped default is autonomy all the way through the install's definition of done. Principal directive, 2026-09-02: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done." A fleet creates work from signals it is pointed at, starts it, reviews it, merges it, pushes it, opens and merges PRs, and deploys where the project has automated deployment authority. Asking permission to create, start, merge, push, or finish work is a defect unless the action is on this install's reserved list or the work has reached a genuine fork in product intent where two readings lead to different work. In those two cases, interrupt the principal once, with a recommendation and a default, and keep everything else moving.
+
 ### Confirm what you actually integrated
 
 The worker reports a head. Your job is to establish that the head you integrated is that one, by comparing refs rather than by reading output.
@@ -28,10 +32,12 @@ The honest escape hatch is explicit because without it the duty will be ignored 
 - Never point anyone at a working tree they did not create. A reviewer who checks out a commit inside an author's tree leaves that author committing to a detached head with a log that still looks correct, and neither party can see it.
 - Naming a bare identifier and leaving the reader to find somewhere to open it is what produces that. The read path is part of the dispatch, not a courtesy.
 
-### Push authority, written down
+### Push, PR, deploy, and reserved-action authority, written down
 
-- State which remotes and repositories carry standing authorization to push, and which are gated per push. Do it in the project section below, in the principal's words, with the date.
-- Authority granted for one repository does not extend to another. If you infer a narrower or broader scope than was granted, record the inference AS an inference and route it to the principal — an unwritten narrowing of a broad grant and an unwritten broadening of a narrow one are the same defect, and both end as "nobody objected, so it must be allowed".
+- State how far the fleet takes work in this install: merge, push, PR open and merge, deploy, or a narrower line. The shipped default is **all the way**: reviewed work goes through every automated step the project normally uses until the work is done in the place users or collaborators receive it.
+- State which remotes, repositories, PR targets, deployment surfaces, and reserved actions are standing-authorized, and which are gated per action. Do it in the project section below, in the principal's words, with the date.
+- The only default reasons to interrupt the principal are an action on the install's reserved list, or a genuine fork in product intent where two readings lead to different work. The install's reserved list is explicit in the project section; common reserved actions are credentials only the principal holds, spending or payment, legal or public identity, releases/tags, outside-team communication, and production risks the project section names. If it is not reserved and not a product-intent fork, do it rather than asking whether to do it.
+- Authority granted for one repository, remote, PR target, or deploy surface does not extend to another. If you infer a narrower or broader scope than was granted, record the inference AS an inference and route it to the principal — an unwritten narrowing of a broad grant and an unwritten broadening of a narrow one are the same defect, and both end as "nobody objected, so it must be allowed".
 - A gate that is exercised without being recorded stops existing. The record is what makes it a gate.
 
 ### What a verdict authorises
@@ -63,16 +69,18 @@ Generated at install.
 
 <!-- The role, seat or system that merges and pushes here, and who holds the authority if it is not the same party. -->
 
-### Push authority and its scope
+### Push, PR, deploy, and reserved-action authority
 
 <!--
-Which remotes and repositories carry standing authorization, which are gated
-per push, in the principal's words and with the date. Inferences about scope
-recorded as inferences until the principal confirms them.
+How far the fleet takes work here, which remotes/repositories/PR targets/deploy
+surfaces carry standing authorization, and which actions are reserved, in the
+principal's words and with the date. Inferences about scope are recorded as
+inferences until the principal confirms them.
 
-If nothing is written here yet, the answer is per-push and the principal's —
-that is the shipped default, not an omission. `wheelhouse/runbooks/PROMOTION.md`
-describes what earns a standing grant and what returns you to per-push.
+If nothing is written here yet, this install has not recorded its authority;
+ask the principal once, with the all-the-way default and a proposed reserved
+list, then write the answer here. Do not cite a generated agent profile's
+conservative git guidance as a project reservation; this section is the record.
 -->
 
 ### How a shipped record gets corrected here
