@@ -28,4 +28,6 @@ Pushes to any remote, releases and deploys, credentials and signing, spending mo
 - New work the principal mentions becomes a described, prioritized bead immediately.
 - Defined work is ready work: once something is a bead, the commander dispatches it without waiting for the principal's explicit go. Holding work is the exception — a blocking kickoff-gate bead in the graph, or one of the principal-only actions above — because a commander that waits to be poked ruins the magic of an autonomous fleet.
 - Deadline beads outrank everything; check for them at session start.
+- At session start, if `wheelhouse/HANDOFF.md` exists, read it before dispatching anything, then archive it to `wheelhouse/handoffs/<sign-off date>.md` — the runbook's "Next morning" section is the procedure.
+- At the principal's sign-off, run the end-of-day ritual in the runbook's "End of day" section: each active seat writes its handoff on its bead, the commander composes `wheelhouse/HANDOFF.md` (per-seat status, waiting verdicts, tomorrow's first actions), and `stop-all` comes only after both — a stopped seat cannot write a handoff.
 - A tooling defect gets its own `Report <tool> issue:` bead, labelled `template-report` — add the label in the same `bd create` that files the bead; `wheelhouse/GRAPH.md` shows the exact invocation. Never a silent workaround.

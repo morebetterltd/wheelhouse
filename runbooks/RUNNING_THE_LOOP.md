@@ -158,8 +158,37 @@ There is no fixed rhythm to prescribe. The shape that worked:
 
 ### End of day
 
-When the principal says the fleet is done for the day, the commander shuts the
-local Pi seats down with:
+When the principal says the fleet is done for the day, three moves, in this
+order — the handoffs come BEFORE the stop, because a stopped seat can no longer
+write one.
+
+**First, each active seat writes its handoff, on its bead.** The commander
+dispatches every seat holding in-flight work one request: write your handoff.
+The seat answers as a bead comment — the same channel every report uses, for the
+same reason: a note that lives anywhere else is invisible to whoever picks the
+bead up — covering three things: the state of the in-flight work (what is done,
+what is not, the head if there is one), the exact next step as the seat would
+take it, and anything surprising it learned that the bead does not already say.
+A seat with nothing in flight has nothing to write, and says so in its reply
+rather than inventing a summary. This is a dispatch like any other: it queues
+behind a busy seat's current turn and fires when the work drains, so send it,
+then collect.
+
+**Second, the commander composes the fleet handoff at `wheelhouse/HANDOFF.md`.**
+Not a transcript of the seat handoffs — those live on their beads, where
+tomorrow's dispatches will point — but the fleet-level view one screen tall:
+per-seat status (bead, state, whether tomorrow's move is `resume` or a fresh
+`spawn`), every verdict or `needs-review` bead waiting with nobody on it,
+anything the principal decided today that has not yet become a bead or an ISA
+entry, and the first two or three actions tomorrow's commander should take, in
+order. Why written, when the graph already holds the work: the graph holds
+WHAT, not WHERE-WE-WERE — a compacted or fresh commander session re-derives
+yesterday from raw state unless a written handoff exists, and re-deriving is
+both slow and quietly lossy. The note is cheap tonight and expensive to
+reconstruct tomorrow. It gets committed with whatever else the day commits;
+an install kept out of the tree keeps it out too, per its own exclusion.
+
+**Third, stop the seats:**
 
 ```bash
 bun seats/adapter.ts stop-all
@@ -172,7 +201,40 @@ SIGTERM during a turn lands in the running tool's process tree. The stopped
 seats keep their session files, so tomorrow's commander can decide whether the
 right lifecycle move is `resume` (warm cache, same context) or `spawn`/`reset`
 (fresh context). That choice belongs to the commander's morning read of the
-work, not to the shutdown ritual.
+work, not to the shutdown ritual — and the handoff note is where tonight's
+commander records what it would choose, so the morning read starts from a
+recommendation instead of a blank.
+
+### Next morning
+
+Read `wheelhouse/HANDOFF.md` first — before the graph, before the seats. The
+cadence rule above ("start by reading the graph, not the inbox") is about not
+letting messages outrank work; the handoff note is not an inbox, it is
+yesterday's commander writing to today's, and it says where the fleet actually
+stood at sign-off — which seats to `resume` and which to respawn, which
+verdicts are waiting, what the first dispatch should be. The graph still
+decides what the work IS; the note says where to stand while reading it.
+
+Then archive it — after ingesting, not before:
+
+```bash
+mkdir -p wheelhouse/handoffs
+mv wheelhouse/HANDOFF.md "wheelhouse/handoffs/$(date -r wheelhouse/HANDOFF.md +%Y-%m-%d 2>/dev/null \
+  || stat -f %Sm -t %Y-%m-%d wheelhouse/HANDOFF.md).md"
+```
+
+Dated for the day it describes — the sign-off day — not the day it is read,
+because a note read after a weekend still describes Friday. That is why the
+date comes from the note's own modification time rather than from "yesterday":
+the two agree on an ordinary morning and disagree after any gap, and the file
+knows when it was written. (The two commands are the GNU and BSD spellings of
+the same question; the fallback covers whichever your platform lacks.) The move is the
+record that it was ingested: a `HANDOFF.md` still sitting at the root is a
+morning read that has not happened yet, which is exactly what the next session
+needs to be able to see. No `HANDOFF.md` at all is the normal first-morning
+state (and the state after any day that ended without the ritual) — start from
+the graph as the cadence rule says, and say so rather than hunting for a note
+nobody wrote.
 
 If the fleet has no work it can start without the principal, say so out loud. A loop with nothing to do will find something, and what it finds will be its own tooling.
 
