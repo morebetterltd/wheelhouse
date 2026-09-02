@@ -5,6 +5,9 @@ seats/logs/
 
 # seat runtime state and command FIFOs are per-machine, never product
 seats/state.json
+seats/herald.state.json
+seats/inbox.jsonl
+seats/inbox.cursor
 seats/run/
 
 # verdict files are the commander's WORKING COPIES, never product: evidence
