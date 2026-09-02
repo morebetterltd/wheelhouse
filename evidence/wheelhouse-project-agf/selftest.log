@@ -1,0 +1,26 @@
+$ ./seats/herald.selftest.sh
+ok 1 - captures settle, distress, sentinel, and non-retried error events without retry wakes
+ok 2 - settle uses A2A terminal state
+ok 3 - distress uses A2A failed state and carries quota detail
+ok 4 - distress matches insufficient credits wording
+ok 5 - real provider 400 invalid_grant stderr becomes one distress
+ok 6 - agent_end stopReason=error without retry becomes distress with errorMessage detail
+ok 7 - agent_end stopReason=error with willRetry=true produces no wake
+ok 8 - agent_end normal stopReason remains settle
+ok 9 - recorded false-positive message_update shapes produce zero distress
+ok 10 - turn-end assistant @commander line becomes one sentinel wake
+ok 11 - quoted @commander text in tool output and non-turn events produces zero sentinel wakes
+ok 12 - dedup/cursor prevents duplicate inbox appends on a re-scan
+ok 13 - drain cursor emits unread wake events once, deduping stable ids, then advances to EOF
+ok 14 - drain dedup survives a tiny MAX_SEEN eviction horizon
+ok 15 - fixture idle Claude UI receives exactly one constant-phrase poke
+ok 16 - sent poke attempt is logged with timestamp and pane
+ok 17 - seat-authored text never enters send-keys
+ok 18 - pane-state gate prevents poke into a bare shell
+ok 19 - allowlist gate classifies a ❯-prompt bare shell not-idle and does not poke
+ok 20 - fixture mid-turn Claude UI is logged not-idle and not poked
+ok 21 - fixture tool-running Claude UI is not poked
+ok 22 - poke attempt with no configured pane is logged no-pane
+ok 23 - cockpit starts the herald daemon
+ok 24 - cockpit verifies and restarts a dead herald on re-run
+herald.selftest: PASS (24 checks)

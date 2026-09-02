@@ -1,0 +1,1 @@
+{"type":"agent_end","messages":[{"role":"assistant","content":"<scrubbed live transcript content>","stopReason":"error","errorMessage":"The model refused to complete the request"}],"willRetry":false}
