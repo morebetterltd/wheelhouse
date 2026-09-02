@@ -126,7 +126,7 @@ That split is the whole design. It means a project's specifics never get tangled
 
 Your install ships a bench stub that exits non-zero. Until you implement it, no APPROVE may claim your software runs. That is deliberate.
 
-**Merges are yours by default.** The shipped policy is that the principal confirms each merge. Auto-merge on a reviewer's APPROVE is documented in `runbooks/PROMOTION.md` as a graduation, with the conditions that make it safe — chief among them a real bench. Auto-merge over a stub bench is auto-merge over nothing.
+**The default is all the way, bounded by your recorded authority.** The install asks how far the fleet takes reviewed work, writes that answer in `wheelhouse/INTEGRATOR.md`, and defaults to merge, push, PR, and automated deploy where the project grants those surfaces. `runbooks/PROMOTION.md` documents project-specific narrowings — for example principal-confirmed local merges or per-push gates — and the evidence that graduates them back toward the shipped default. A behavioral APPROVE over a stub bench is still an approval over nothing.
 
 ## Seat accounting
 
