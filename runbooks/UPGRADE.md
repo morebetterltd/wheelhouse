@@ -110,7 +110,21 @@ for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
 done
 ```
 
-`seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing. If your install predates `seats/` entirely — every seat a Claude Code session — this copy is the first half of a real migration, and the second half is written out at the end of step 7.
+`seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
+
+If this project already had Pi seats, open `seats/seats.json` now and inspect every carried seat. Current rosters may record two fields older Pi rosters do not: `account.authRoute`, which is the credential route (`oauth`, `api_key`, or `env`) that gave the seat its identity, and `shadow`, which is a boolean only for intentional mirror seats. Back-fill `account.authRoute` for each carried seat from the route you actually use — OAuth `/login` for `openai-codex` subscription accounts, a file-backed provider entry in that seat's `auth.json` for `api_key`, or an exported provider env var for `env` — and do not record any credential material. Then read the JSON and probe every seat so both syntax and route are checked by the copied machinery:
+
+```bash
+bun -e 'console.log(JSON.stringify(require("./seats/seats.json"), null, 2))'
+for seat in $(bun -e 'const j=require("./seats/seats.json"); console.log(Object.keys(j.seats||{}).join("\n"))'); do
+  seats/seat-env.sh "$(sed -n 's/^namespace=//p' wheelhouse/.template-source | tail -1)" "$seat"
+  bun seats/adapter.ts probe "$seat"
+done
+```
+
+There is no safe deterministic conversion from an old roster: the same `provider` can be backed by file credentials or environment credentials, and committed roster data deliberately does not expose the secret source. Do not invent `shadow` while doing this. Absence still means `false`; add `"shadow": true` only when the project is intentionally creating a mirror seat whose output never gates or carries assigned work.
+
+If your install predates `seats/` entirely — every seat a Claude Code session — this copy is the first half of a real migration, and the second half is written out at the end of step 7.
 
 ### The runbooks come too
 
