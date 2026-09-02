@@ -120,6 +120,28 @@ if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   ' "$roster_file" "$seat")"
 fi
 
+# Optional roster field: account.authRoute, one of oauth/api_key/env — the
+# routes BOOTSTRAP.md's question 8 offers. Absent means "not recorded yet",
+# same as a roster written before this field existed; present-but-invalid is
+# a STOP so a typo in the roster is caught here instead of silently ignored.
+if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
+  auth_route="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const route = j.seats?.[seat]?.account?.authRoute;
+      if (typeof route === "string" && route.length > 0) process.stdout.write(route);
+    } catch {}
+  ' "$roster_file" "$seat")"
+  if [ -n "$auth_route" ]; then
+    case "$auth_route" in
+      oauth|api_key|env) : ;;
+      *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
+    esac
+  fi
+fi
+
 # --- the namespace root backlink --------------------------------------------
 # The seat-root namespace is the collision boundary between projects. Record
 # the reverse mapping on disk so a hand-chosen namespace is self-identifying

@@ -78,6 +78,14 @@ cat > "$PROJECT/seats/seats.json" <<'EOF'
     "worker-labeled": {
       "role": "worker",
       "account": { "dir": "~/.pi-seats-alpha/worker-labeled", "label": "fixture-human-account" }
+    },
+    "worker-authroute-ok": {
+      "role": "worker",
+      "account": { "dir": "~/.pi-seats-alpha/worker-authroute-ok", "authRoute": "env" }
+    },
+    "worker-authroute-bad": {
+      "role": "worker",
+      "account": { "dir": "~/.pi-seats-alpha/worker-authroute-bad", "authRoute": "sudo" }
     }
   }
 }
@@ -160,6 +168,21 @@ run alpha worker-unlabeled "$PROJECT"
 if [ $RC -eq 0 ] && ! says "account label:"; then
   pass "provisioning still works when account.label is absent"
 else fail "absent account.label broke provisioning or printed a stale label (exit $RC): $OUT"; fi
+
+phase "1c. optional account.authRoute — absent ok, present-valid ok, present-invalid is a loud STOP"
+# Absent: worker-unlabeled above has no account.authRoute at all and already
+# provisioned cleanly in phase 1b — that IS the absent case, re-asserted here
+# so this phase reads complete on its own.
+run alpha worker-unlabeled "$PROJECT"
+if [ $RC -eq 0 ]; then pass "authRoute absent: provisioning still exits 0"
+else fail "authRoute absent: provisioning exited $RC: $OUT"; fi
+run alpha worker-authroute-ok "$PROJECT"
+if [ $RC -eq 0 ]; then pass "authRoute present-valid (env): provisioning exits 0"
+else fail "authRoute present-valid: provisioning exited $RC: $OUT"; fi
+run alpha worker-authroute-bad "$PROJECT"
+if [ $RC -ne 0 ] && says "invalid account.authRoute" && says "oauth, api_key, env"; then
+  pass "authRoute present-invalid: STOPs naming the offending value and the allowed set"
+else fail "authRoute present-invalid did not STOP as expected (exit $RC): $OUT"; fi
 
 phase "2. idempotency"
 cp "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before"

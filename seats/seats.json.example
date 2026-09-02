@@ -9,19 +9,19 @@
       "role": "worker",
       "provider": "anthropic",
       "model": "claude-sonnet-5",
-      "account": { "dir": "~/.pi-seats-myproject/worker-1", "label": "kk-personal-anthropic" }
+      "account": { "dir": "~/.pi-seats-myproject/worker-1", "label": "kk-personal-anthropic", "authRoute": "oauth" }
     },
     "worker-2": {
       "role": "worker",
       "provider": "openai-codex",
       "model": "gpt-5.5:high",
-      "account": { "dir": "~/.pi-seats-myproject/worker-2", "label": "work-chatgpt-2" }
+      "account": { "dir": "~/.pi-seats-myproject/worker-2", "label": "work-chatgpt-2", "authRoute": "oauth" }
     },
     "reviewer": {
       "role": "reviewer",
       "provider": "anthropic",
       "model": "claude-opus-5",
-      "account": { "dir": "~/.pi-seats-myproject/reviewer" }
+      "account": { "dir": "~/.pi-seats-myproject/reviewer", "authRoute": "api_key" }
     }
   }
 }
