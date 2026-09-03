@@ -131,17 +131,117 @@ expect_output merge_pass 'intent-check: PASS'
 say 'ok 4 - ISA-moving merge PASSes without escape hatch'
 pass_count=$((pass_count + 1))
 
-# 5. A planted open bead without Trace: fails.
+# 5. A consumer-surface claim that cites a verifier walk verdict and evidence home passes.
+walk_pass="$FIXTURE/walk-pass"
+make_fixture "$walk_pass"
+walk_bead=$(new_bead "$walk_pass" 'Merged work with walked claim' 'Trace: selftest walked consumer claim.')
+( cd "$walk_pass"
+  git checkout -q -b "fleet/$walk_bead"
+  printf 'install behavior\n' >installer.txt
+  git add installer.txt
+  git commit -q -m 'Installer behavior change'
+  git checkout -q main
+  git merge --no-ff --no-commit "fleet/$walk_bead" >/dev/null
+  awk -v claim="- 2026-09-03: README install path works for consumers at merge $(git rev-parse --short HEAD). Walk: \`bun seats/walk.ts claim-1 --surface runbook:README.md\` verdict WALKED-DONE; evidence: evidence/$walk_bead/walk.log." '
+    { print }
+    /^## Claims[[:space:]]*$/ { print ""; print claim }
+  ' wheelhouse/ISA.md >wheelhouse/ISA.md.next
+  mv -f wheelhouse/ISA.md.next wheelhouse/ISA.md
+  git add wheelhouse/ISA.md installer.txt
+  git commit -q -m "Merge fleet/${walk_bead}: walked consumer claim"
+)
+run_capture walked_claim sh -c "cd '$walk_pass' && '$CHECK' ."
+expect_rc walked_claim 0
+expect_output walked_claim 'intent-check: PASS'
+say 'ok 5 - consumer-surface claim citing seats/walk.ts verdict and evidence home PASSes'
+pass_count=$((pass_count + 1))
+
+# 6. A consumer-surface claim with the explicit Not walked: statement passes.
+not_walked_pass="$FIXTURE/not-walked-pass"
+make_fixture "$not_walked_pass"
+not_walked_bead=$(new_bead "$not_walked_pass" 'Merged work with not-walked claim' 'Trace: selftest not-walked consumer claim.')
+( cd "$not_walked_pass"
+  git checkout -q -b "fleet/$not_walked_bead"
+  printf 'upgrade behavior\n' >upgrade.txt
+  git add upgrade.txt
+  git commit -q -m 'Upgrade behavior change'
+  git checkout -q main
+  git merge --no-ff --no-commit "fleet/$not_walked_bead" >/dev/null
+  awk -v claim="- 2026-09-03: Upgrade runbook tells consumers the supported baseline. Not walked: verifier surface walk intentionally skipped in this integration; evidence: bead comment." '
+    { print }
+    /^## Claims[[:space:]]*$/ { print ""; print claim }
+  ' wheelhouse/ISA.md >wheelhouse/ISA.md.next
+  mv -f wheelhouse/ISA.md.next wheelhouse/ISA.md
+  git add wheelhouse/ISA.md upgrade.txt
+  git commit -q -m "Merge fleet/${not_walked_bead}: not-walked consumer claim"
+)
+run_capture not_walked_claim sh -c "cd '$not_walked_pass' && '$CHECK' ."
+expect_rc not_walked_claim 0
+expect_output not_walked_claim 'intent-check: PASS'
+say 'ok 6 - consumer-surface claim with Not walked statement PASSes'
+pass_count=$((pass_count + 1))
+
+# 7. A consumer-surface claim without a walk citation or Not walked statement fails.
+silent_claim_fail="$FIXTURE/silent-claim-fail"
+make_fixture "$silent_claim_fail"
+silent_bead=$(new_bead "$silent_claim_fail" 'Merged work with silent claim' 'Trace: selftest silent consumer claim.')
+( cd "$silent_claim_fail"
+  git checkout -q -b "fleet/$silent_bead"
+  printf 'browser behavior\n' >browser.txt
+  git add browser.txt
+  git commit -q -m 'Browser behavior change'
+  git checkout -q main
+  git merge --no-ff --no-commit "fleet/$silent_bead" >/dev/null
+  awk -v claim="- 2026-09-03: Browser app surface now completes the public install flow for consumers; evidence: bead comment." '
+    { print }
+    /^## Claims[[:space:]]*$/ { print ""; print claim }
+  ' wheelhouse/ISA.md >wheelhouse/ISA.md.next
+  mv -f wheelhouse/ISA.md.next wheelhouse/ISA.md
+  git add wheelhouse/ISA.md browser.txt
+  git commit -q -m "Merge fleet/${silent_bead}: silent consumer claim"
+)
+run_capture silent_claim sh -c "cd '$silent_claim_fail' && '$CHECK' ."
+expect_rc silent_claim 1
+expect_output silent_claim 'touches a consumer surface'
+say 'ok 7 - silent consumer-surface claim FAILs'
+pass_count=$((pass_count + 1))
+
+# 8. A non-consumer-surface doctrine claim is exempt from walk citation.
+internal_claim_pass="$FIXTURE/internal-claim-pass"
+make_fixture "$internal_claim_pass"
+internal_bead=$(new_bead "$internal_claim_pass" 'Merged work with internal claim' 'Trace: selftest internal doctrine claim.')
+( cd "$internal_claim_pass"
+  git checkout -q -b "fleet/$internal_bead"
+  printf 'internal invariant\n' >doctrine.txt
+  git add doctrine.txt
+  git commit -q -m 'Internal doctrine change'
+  git checkout -q main
+  git merge --no-ff --no-commit "fleet/$internal_bead" >/dev/null
+  awk -v claim="- 2026-09-03: Seat reset doctrine preserves standing-brief freshness after contract-half edits; evidence: bead comment." '
+    { print }
+    /^## Claims[[:space:]]*$/ { print ""; print claim }
+  ' wheelhouse/ISA.md >wheelhouse/ISA.md.next
+  mv -f wheelhouse/ISA.md.next wheelhouse/ISA.md
+  git add wheelhouse/ISA.md doctrine.txt
+  git commit -q -m "Merge fleet/${internal_bead}: internal doctrine claim"
+)
+run_capture internal_claim sh -c "cd '$internal_claim_pass' && '$CHECK' ."
+expect_rc internal_claim 0
+expect_output internal_claim 'intent-check: PASS'
+say 'ok 8 - non-consumer-surface claim is exempt from walk citation'
+pass_count=$((pass_count + 1))
+
+# 9. A planted open bead without Trace: fails.
 trace_fail="$FIXTURE/trace-fail"
 make_fixture "$trace_fail"
 new_bead "$trace_fail" 'Traceless planted bead' 'No trace line here.' >/dev/null
 run_capture trace_fail sh -c "cd '$trace_fail' && '$CHECK' ."
 expect_rc trace_fail 1
 expect_output trace_fail 'no literal Trace:'
-say 'ok 5 - planted traceless bead FAILs'
+say 'ok 9 - planted traceless bead FAILs'
 pass_count=$((pass_count + 1))
 
-# 6. An install whose ISA is not committed exits with the distinct unrunnable code.
+# 10. An install whose ISA is not committed exits with the distinct unrunnable code.
 unrun="$FIXTURE/uncommitted-isa"
 mkdir -p "$unrun"
 ( cd "$unrun"
@@ -156,7 +256,7 @@ mkdir -p "$unrun"
 run_capture uncommitted sh -c "cd '$unrun' && '$CHECK' ."
 expect_rc uncommitted 2
 expect_output uncommitted 'UNRUNNABLE:'
-say 'ok 6 - uncommitted ISA exits distinct unrunnable code 2'
+say 'ok 10 - uncommitted ISA exits distinct unrunnable code 2'
 pass_count=$((pass_count + 1))
 
 say "intent-check.selftest: PASS ($pass_count legs)"
