@@ -333,13 +333,13 @@ if [ -n "$CAP" ] && printf '%s' "$CAP" | grep -q '429 rate limit'; then
   pass "state.json records lastCapacityEvent with the failure detail: $CAP"
 else fail "no lastCapacityEvent in state.json after quota failure (got: $CAP)"; fi
 run status
-if says "CAPACITY: quota-shaped dispatch failure"; then
+if says "CAPACITY: QUOTA"; then
   pass "adapter status surfaces the capacity event"
 else fail "status does not surface the capacity event: $OUT"; fi
 FLOOR_OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS=220 LINES=50 NO_COLOR=1 bun "$PROJ/seats/floor.ts" --once 2>&1)"
-if printf '%s' "$FLOOR_OUT" | grep -q 'AMBER.*QUOTA EXHAUSTED — dispatch failed at'; then
-  pass "floor --once renders the AMBER QUOTA line from the recorded event"
-else fail "floor --once has no AMBER QUOTA line: $(printf '%s' "$FLOOR_OUT" | grep -i 'worker-a' | head -3)"; fi
+if printf '%s' "$FLOOR_OUT" | grep -q 'AMBER.*PARKED/QUOTA.*bun seats/adapter.ts probe worker-a'; then
+  pass "floor --once renders the AMBER PARKED/QUOTA line with the re-probe command"
+else fail "floor --once has no AMBER PARKED/QUOTA line: $(printf '%s' "$FLOOR_OUT" | grep -i 'worker-a' | head -3)"; fi
 FLOOR_STATUS="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS=220 LINES=60 NO_COLOR=1 bun "$PROJ/seats/floor.ts" --once --pin 0 2>&1)"
 if printf '%s' "$FLOOR_STATUS" | grep -q 'capacity QUOTA '; then
   pass "floor STATUS cell shows per-account capacity state"
