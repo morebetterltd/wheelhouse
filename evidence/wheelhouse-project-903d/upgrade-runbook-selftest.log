@@ -1,0 +1,5 @@
+ok 1 - zsh step 0 baseline reconstruction reads commit:path with braces
+ok 2 - zsh step 3 runbook loop reads real baseline for every runbook
+ok 3 - step 8 broad wheelhouse add stages untracked files under wheelhouse
+ok 4 - installed-layout copied upgrade-runbook selftest resolves baseline through wheelhouse/.template-source path
+upgrade-runbook.selftest: PASS (4 checks)

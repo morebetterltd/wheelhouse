@@ -2,6 +2,18 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
+template_root() {
+  local recorded=""
+  if [ -f "$ROOT/wheelhouse/.template-source" ]; then
+    recorded=$(sed -n 's/^path=//p' "$ROOT/wheelhouse/.template-source" | tail -1)
+  fi
+  if [ -n "$recorded" ] && git -C "$recorded" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf '%s\n' "$recorded"
+    return 0
+  fi
+  printf '%s\n' "$ROOT"
+}
+TEMPLATE=$(template_root)
 BASELINE=${WHEELHOUSE_UPGRADE_SELFTEST_BASELINE:-d8128d4}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
@@ -14,9 +26,9 @@ command -v zsh >/dev/null 2>&1 || fail "zsh is required for this selftest"
 
 PROJ="$TMP/project"
 mkdir -p "$PROJ/wheelhouse/fleet" "$PROJ/wheelhouse/runbooks"
-git -C "$ROOT" show "${BASELINE}:contracts/WORKER.md" > "$PROJ/wheelhouse/fleet/WORKER.md"
+git -C "$TEMPLATE" show "${BASELINE}:contracts/WORKER.md" > "$PROJ/wheelhouse/fleet/WORKER.md"
 for b in PROMOTION.md RUNNING_THE_LOOP.md UPGRADE.md; do
-  git -C "$ROOT" show "${BASELINE}:runbooks/$b" > "$PROJ/wheelhouse/runbooks/$b"
+  git -C "$TEMPLATE" show "${BASELINE}:runbooks/$b" > "$PROJ/wheelhouse/runbooks/$b"
 done
 
 STEP0_OUT=$(zsh -c '
@@ -29,7 +41,7 @@ for c in $(git -C "$TEMPLATE" rev-list HEAD -- contracts/); do
     break
   fi
 done
-' zsh "$ROOT" "$PROJ")
+' zsh "$TEMPLATE" "$PROJ")
 case "$STEP0_OUT" in
   "candidate baseline: "*) pass "zsh step 0 baseline reconstruction reads commit:path with braces" ;;
   *) fail "zsh step 0 did not find a healthy baseline: $STEP0_OUT" ;;
@@ -64,7 +76,7 @@ for f in "$TEMPLATE"/runbooks/*; do
   fi
   rm -f "$baseline"
 done
-' zsh "$ROOT" "$PROJ" "$BASELINE")
+' zsh "$TEMPLATE" "$PROJ" "$BASELINE")
 printf '%s\n' "$STEP3_OUT" | grep -q 'baseline unreadable' && fail "zsh step 3 reported baseline unreadable on a healthy baseline: $STEP3_OUT"
 for b in PROMOTION.md RUNNING_THE_LOOP.md UPGRADE.md; do
   printf '%s\n' "$STEP3_OUT" | grep -Eq "runbook updated: $b" || fail "zsh step 3 did not update ${b}: $STEP3_OUT"
@@ -86,6 +98,24 @@ if git -C "$GITPROJ" diff --cached --name-only | grep -qx 'wheelhouse/evidence-d
   pass "step 8 broad wheelhouse add stages untracked files under wheelhouse"
 else
   fail "step 8 broad wheelhouse add did not demonstrate untracked wheelhouse staging"
+fi
+
+if [ "${WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG:-1}" = 1 ]; then
+  INSTALL="$TMP/install-root"
+  mkdir -p "$INSTALL/seats" "$INSTALL/wheelhouse"
+  git -C "$INSTALL" init -b main >/dev/null
+  cat > "$INSTALL/wheelhouse/.template-source" <<EOF
+source=fixture
+commit=$BASELINE
+path=$TEMPLATE
+namespace=fixture
+EOF
+  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL/seats/upgrade-runbook.selftest.sh"
+  INSTALLED_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL/seats/upgrade-runbook.selftest.sh" 2>&1)
+  case "$INSTALLED_OUT" in
+    *"upgrade-runbook.selftest: PASS"*) pass "installed-layout copied upgrade-runbook selftest resolves baseline through wheelhouse/.template-source path" ;;
+    *) fail "installed-layout copied upgrade-runbook selftest failed: $INSTALLED_OUT" ;;
+  esac
 fi
 
 echo "upgrade-runbook.selftest: PASS ($PASS checks)"
