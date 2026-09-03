@@ -1,0 +1,28 @@
+$ git branch --show-current
+fleet/wheelhouse-project-vxlt
+$ git rev-parse HEAD
+d0584fb5c6d785d7ecd67a33dee027516b89af9b
+$ rg -n "AGENTS.md|\.claude/settings.json|any other step-7 path|for p in AGENTS" runbooks/UPGRADE.md
+287:Then hand-merge the same standing behavior into `CLAUDE.md` from `generated/CLAUDE.md.example`: the `## Autonomy mandate` section, the two-and-only-two reasons to interrupt the principal, and the restart checklist. Add an ISA Decision quoting the directive in `wheelhouse/ISA.md` so a restarted commander cannot lose it. Finally, read `AGENTS.md` if the install has one: keep bd's command reference, but append or update the wheelhouse override so bd's Conservative/default "do not push" text cannot be cited against the authority in `wheelhouse/INTEGRATOR.md`.
+344:Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you either stage it deliberately or replace the broad directory add with explicit paths. Step 7 can also make you edit project-owned surfaces outside `wheelhouse/`, especially `AGENTS.md` and `.claude/settings.json`; stage those exact files when they exist, and stage any other step-7 path you deliberately changed before committing.
+353:for p in AGENTS.md .claude/settings.json; do
+$ scratch documented add stages step-7 surfaces
+before_add:
+ M .beads/issues.jsonl
+ M .claude/settings.json
+ M .gitignore
+ M AGENTS.md
+ M CLAUDE.md
+ M seats/README.md
+ M wheelhouse/STARTUP.md
+after_documented_add:
+M  .beads/issues.jsonl
+M  .claude/settings.json
+M  .gitignore
+M  AGENTS.md
+M  CLAUDE.md
+M  seats/README.md
+M  wheelhouse/STARTUP.md
+unstaged_or_untracked_after_add=0
+after_commit:
+$ git diff --check
