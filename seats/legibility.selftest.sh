@@ -242,6 +242,7 @@ done
 
 copy_fixture_ts
 printf '# Fleet: Worker\n\nfixture brief.\n'   > "$PROJ/contracts/WORKER.md"
+printf '# Crew: Reviewer\n\nfixture brief.\n' > "$PROJ/contracts/REVIEWER.md"
 printf '# Crew: Verifier\n\nfixture brief.\n'  > "$PROJ/contracts/VERIFIER.md"
 
 # Six afflicted-to-be seats plus a verifier. Every account dir is namespaced
@@ -324,13 +325,13 @@ if [ -n "$(state_get q-seat lastCapacityEvent)" ]; then
   pass "state.json carries the capacity stamp"
 else fail "no lastCapacityEvent stamped for q-seat"; fi
 arun status
-if says "CAPACITY: quota-shaped dispatch failure"; then
+if says "CAPACITY: QUOTA"; then
   pass "adapter status surfaces the CAPACITY line"
 else fail "adapter status has no CAPACITY line: $OUT"; fi
 render
-if seatline q-seat | grep -q "QUOTA EXHAUSTED — dispatch failed at"; then
-  pass "floor: amber QUOTA EXHAUSTED names the failed dispatch"
-else fail "floor: no QUOTA EXHAUSTED line for q-seat: $(seatline q-seat)"; fi
+if seatline q-seat | grep -q "PARKED/QUOTA" && seatline q-seat | grep -q "bun seats/adapter.ts probe q-seat"; then
+  pass "floor: amber PARKED/QUOTA names the re-probe command"
+else fail "floor: no PARKED/QUOTA line for q-seat: $(seatline q-seat)"; fi
 if seatline q-seat | grep -q "AMBER"; then pass "floor: quota cue is AMBER"
 else fail "floor: quota cue is not AMBER: $(seatline q-seat)"; fi
 cp "$PROJ/seats/seats.json" "$FIX/seats.before-roster-drop.json"
@@ -485,7 +486,7 @@ else fail "unreadable verdict rendered as success: $(seatline u-seat)"; fi
 phase "cross-check: all five classes staged at once — every state distinct, no success anywhere"
 render   # rail view, all seats
 ALL_OK=1
-for want in "QUOTA EXHAUSTED" "AUTH DEAD" "PROCESS GONE" "REVIEW BLOCKED" "EVIDENCE UNSATISFIED" "VERDICT UNREADABLE"; do
+for want in "PARKED/QUOTA" "AUTH DEAD" "PROCESS GONE" "REVIEW BLOCKED" "EVIDENCE UNSATISFIED" "VERDICT UNREADABLE"; do
   if says "$want"; then pass "rail shows: $want"
   else fail "rail is missing: $want"; ALL_OK=0; fi
 done
@@ -496,7 +497,7 @@ render "$PROJ/seats/floor.ts" --pin 0
 if says "ALERTS (6)"; then
   pass "STATUS leads with ALERTS listing all 6 afflicted seats"
 else fail "STATUS ALERTS roll-up wrong or missing: $(printf '%s\n' "$OUT" | grep ALERTS)"; fi
-for want in "QUOTA EXHAUSTED" "AUTH DEAD" "PROCESS GONE" "REVIEW BLOCKED" "EVIDENCE UNSATISFIED" "VERDICT UNREADABLE"; do
+for want in "PARKED/QUOTA" "AUTH DEAD" "PROCESS GONE" "REVIEW BLOCKED" "EVIDENCE UNSATISFIED" "VERDICT UNREADABLE"; do
   if says "$want"; then pass "STATUS shows: $want"
   else fail "STATUS is missing: $want"; fi
 done
@@ -539,7 +540,7 @@ fi
 # canary 3 (cue conflation): force AUTH to render with the QUOTA wording —
 # two classes collapsing into one line MUST be caught by the distinctness check.
 SAB3="$PROJ/seats/floor-sab3.ts"
-sed 's|AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=${rec?.accountDir ?? "<dir>"} pi, then /login in the REPL; api_key: auth.json or provider env var|QUOTA EXHAUSTED — seat cannot take work until it resets|' "$FLOOR" > "$SAB3"
+sed 's|AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=${rec?.accountDir ?? "<dir>"} pi, then /login in the REPL; api_key: auth.json or provider env var|PARKED/QUOTA — probe with: bun seats/adapter.ts probe ${seat.name}|' "$FLOOR" > "$SAB3"
 if cmp -s "$FLOOR" "$SAB3"; then
   fail "canary 3: sed no longer bites (auth line moved) — fix this test"
 else

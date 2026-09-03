@@ -206,7 +206,7 @@ interface SeatRecord {
   model?: string;
   lastBead?: string;
   lastDispatchAt?: string;
-  lastCapacityEvent?: { at: string; detail: string };
+  lastCapacityEvent?: { at: string; detail: string; accountLabel?: string };
 }
 
 interface State {
@@ -404,6 +404,94 @@ async function rpc(
 // renders from the stamp AND keeps scanning raw streams for what the
 // adapter never saw.
 const QUOTA_RE = /quota|rate.?limit|429|usage limit|exhaust|out of credits|insufficient.credit/i;
+const CAPACITY_EVENT_TYPES = new Set(["message_end", "turn_end", "agent_end"]);
+
+function textOf(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(textOf).filter(Boolean).join("\n");
+  if (typeof value === "object") {
+    const obj: any = value;
+    const parts = [obj.text, obj.content, obj.message, obj.delta, obj.error, obj.errorMessage, obj.stderr, obj.output, obj.result, obj.messages, obj.diagnostics]
+      .map(textOf).filter(Boolean);
+    if (parts.length > 0) return parts.join("\n");
+    try { return JSON.stringify(value); } catch { return String(value); }
+  }
+  return String(value);
+}
+
+function eventTimeIso(ev: any): string {
+  for (const key of ["timestamp", "time", "created_at", "createdAt", "at"]) {
+    const v = ev?.[key] ?? ev?.message?.[key];
+    if (typeof v === "number" && Number.isFinite(v)) return new Date(v < 10_000_000_000 ? v * 1000 : v).toISOString();
+    if (typeof v === "string") {
+      const t = Date.parse(v);
+      if (Number.isFinite(t)) return new Date(t).toISOString();
+    }
+  }
+  return new Date().toISOString();
+}
+
+function lastMessage(obj: any): any {
+  return Array.isArray(obj?.messages) && obj.messages.length > 0 ? obj.messages[obj.messages.length - 1] : undefined;
+}
+
+function stopReasonOf(obj: any): string {
+  return String(obj?.message?.stopReason ?? obj?.stopReason ?? lastMessage(obj)?.stopReason ?? "");
+}
+
+function providerErrorText(obj: any): string {
+  return textOf([
+    obj?.message?.errorMessage,
+    obj?.message?.error,
+    obj?.errorMessage,
+    obj?.error,
+    lastMessage(obj)?.errorMessage,
+    lastMessage(obj)?.error,
+    obj?.diagnostics,
+    obj?.message?.diagnostics,
+    lastMessage(obj)?.diagnostics,
+  ]).trim();
+}
+
+function capacityDetailFromEvent(obj: any): string | null {
+  if (!CAPACITY_EVENT_TYPES.has(String(obj?.type ?? ""))) return null;
+  if (stopReasonOf(obj) !== "error") return null;
+  const detail = providerErrorText(obj);
+  if (!QUOTA_RE.test(detail)) return null;
+  return detail.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0] ?? "quota-shaped provider error";
+}
+
+function eventIsSuccessfulTurnEnd(obj: any): boolean {
+  if (!CAPACITY_EVENT_TYPES.has(String(obj?.type ?? ""))) return false;
+  return stopReasonOf(obj) !== "error";
+}
+
+function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster: Record<string, SeatEntry>): void {
+  const r = logLinesFrom(rec.log, 0);
+  let changed = false;
+  let sawCapacityInThisScan = false;
+  for (const line of r.lines) {
+    let obj: any;
+    try { obj = JSON.parse(line); } catch { continue; }
+    const detail = capacityDetailFromEvent(obj);
+    if (detail) {
+      sawCapacityInThisScan = true;
+      const label = accountLabel(roster[name], rec);
+      rec.lastCapacityEvent = {
+        at: eventTimeIso(obj),
+        detail: label ? `${detail} (account ${label})` : detail,
+        ...(label ? { accountLabel: label } : {}),
+      };
+      changed = true;
+    } else if (sawCapacityInThisScan && rec.lastCapacityEvent && eventIsSuccessfulTurnEnd(obj)) {
+      delete rec.lastCapacityEvent;
+      changed = true;
+    }
+  }
+  if (changed) writeState(state);
+}
+
 
 /** Last few KB of the seat's stderr log — where pi complains about limits. */
 function stderrTail(rec: { log: string }, maxBytes = 8 * 1024): string {
@@ -709,9 +797,11 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     const blob = `${resp.error ?? ""}\n${stderrTail(rec)}`;
     if (QUOTA_RE.test(blob)) {
       const state = readState();
+      const label = accountLabel(undefined, rec);
       state.seats[name].lastCapacityEvent = {
         at: new Date().toISOString(),
-        detail: String(resp.error ?? "quota-shaped stderr"),
+        detail: label ? `${String(resp.error ?? "quota-shaped stderr")} (account ${label})` : String(resp.error ?? "quota-shaped stderr"),
+        ...(label ? { accountLabel: label } : {}),
       }; // capacity-record
       writeState(state);
     }
@@ -755,12 +845,14 @@ function cmdStatus(): void {
   const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   for (const name of names) {
     const rec = state.seats[name];
+    syncCapacityFromLog(name, rec, state, roster);
     const alive = pidAlive(rec.pid);
     // A seat nobody stopped whose pid is gone DIED — that is a failure, and
     // rendering it as the same calm STOPPED a graceful stop earns would be
     // a failure conflated into a normal state. Say which one it is.
     const died = !alive && rec.pid != null && !rec.stoppedAt;
-    const word = alive ? "RUNNING" : died ? "DIED" : "STOPPED";
+    const parkedQuota = Boolean(rec.lastCapacityEvent);
+    const word = parkedQuota ? "PARKED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
     const pid = alive ? `pid ${rec.pid}` : died ? `pid ${rec.pid} gone` : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
@@ -771,7 +863,8 @@ function cmdStatus(): void {
       console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} is gone and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
     if (rec.lastCapacityEvent) {
-      console.log(`${" ".repeat(16)} CAPACITY: quota-shaped dispatch failure at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
+      console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
+      console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
     }
   }
 }
