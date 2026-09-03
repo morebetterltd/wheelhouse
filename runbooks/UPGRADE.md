@@ -341,7 +341,7 @@ That is the shape of what step 7 catches: not damage, but the parts of your proj
 
 ## 8. Commit
 
-Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you either stage it deliberately or replace the broad directory add with explicit paths.
+Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you either stage it deliberately or replace the broad directory add with explicit paths. Step 7 can also make you edit project-owned surfaces outside `wheelhouse/`, especially `AGENTS.md` and `.claude/settings.json`; stage those exact files when they exist, and stage any other step-7 path you deliberately changed before committing.
 
 ```bash
 git status --short
@@ -350,6 +350,11 @@ git status --short
 ```bash
 NEW=$(sed -n 's/^commit=//p' wheelhouse/.template-source | cut -c1-12)
 git add wheelhouse/ seats/ .gitignore CLAUDE.md .beads/
+for p in AGENTS.md .claude/settings.json; do
+  [ ! -e "$p" ] || git add "$p"
+done
+# If step 7 made you edit any other project-owned file, add its exact path now.
+git status --short
 git commit -m "Upgrade wheelhouse contracts to $NEW"
 ```
 
