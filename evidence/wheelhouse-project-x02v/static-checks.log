@@ -1,0 +1,9 @@
+grep pattern in BOOTSTRAP:
+517:  grep -rnwE "Ebb|ebb|Tideline|tideline|cordova|headless emulator|app-review|com\.example\.app|learn what a good one looks like|take it when the reviewer starts waiting" \
+525:  The first eight terms are names from the invented project, so any wholesale copy of a specimen trips them. `headless emulator` is deliberately phrased as the specimen-only example text rather than the bare word `emulator`, because `contracts/VERIFIER.md` legitimately asks projects to name an emulator command as a consumer surface. The last two are the reason texts from the declined-seats rows in `generated/SEATS.md.example`: a copy of just those two rows carries no project name, so the eight would match nothing and a partial leak of that section would walk through. They are phrases rather than words because every WORD in those rows — designer, worker, reviewer, second — is one a correct install writes for itself. For the same reason the roster seat names are deliberately absent: they are plausible real choices, and grepping for them would fail correct installs.
+
+no bare emulator in specimen grep commands:
+OK
+
+git diff --check:
+OK
