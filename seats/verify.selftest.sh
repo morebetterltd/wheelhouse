@@ -22,7 +22,7 @@
 # no longer bites, the canary says so instead of proving nothing.
 #
 # The last phase is ONE real-pi smoke leg (SKIP-able): a fixture project
-# whose VERIFIER.md brief is a scripted-reply instruction, so one trivial
+# whose REVIEWER.md brief is a scripted-reply instruction, so one trivial
 # model turn proves the spawn/parse/record plumbing against the real binary.
 # It borrows your login the way adapter.selftest.sh does; no pi, no login,
 # or WHEELHOUSE_SKIP_REAL_PI=1 each print a SKIP line and the hermetic
@@ -138,7 +138,7 @@ chmod +x "$BIN/pi"
 [ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
 
 # A fixture project: verify.ts expects to live at <root>/seats/verify.ts with
-# the brief at <root>/contracts/VERIFIER.md, and the root to be a git repo
+# the brief at <root>/contracts/REVIEWER.md, and the root to be a git repo
 # holding the branch under review.
 SENTINEL='SENTINEL-TOKEN-9c2e'
 build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
@@ -146,8 +146,8 @@ build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$src" "$proj/seats/verify.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
-  printf '# Crew: Verifier\n\nfixture brief — the stub never reads it, the argv check does.\n' \
-    > "$proj/contracts/VERIFIER.md"
+  printf '# Crew: Reviewer\n\nfixture brief — the stub never reads it, the argv check does.\n' \
+    > "$proj/contracts/REVIEWER.md"
   cat > "$proj/seats/seats.json" <<EOF
 {
   "commander": { "role": "commander", "external": true, "runtime": "claude-code" },
@@ -183,7 +183,7 @@ build_installed_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.
   build_proj "$proj" "$ns" "$src"
   rm -rf "$proj/contracts"
   mkdir -p "$proj/wheelhouse/fleet" "$proj/wheelhouse/crew"
-  printf '# Crew: Verifier\n\ninstalled-layout verifier brief.\n' > "$proj/wheelhouse/crew/VERIFIER.md"
+  printf '# Crew: Reviewer\n\ninstalled-layout reviewer brief.\n' > "$proj/wheelhouse/crew/REVIEWER.md"
 }
 
 build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.ts source
@@ -191,7 +191,7 @@ build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.
   mkdir -p "$umb/seats" "$umb/contracts" "$product"
   cp "$src" "$umb/seats/verify.ts"
   cp "$BRIEFS" "$umb/seats/briefs.ts"
-  printf '# Crew: Verifier\n\numbrella verifier brief.\n' > "$umb/contracts/VERIFIER.md"
+  printf '# Crew: Reviewer\n\numbrella reviewer brief.\n' > "$umb/contracts/REVIEWER.md"
   cat > "$umb/seats/seats.json" <<EOF
 {
   "commander": { "role": "commander", "external": true, "runtime": "claude-code" },
@@ -256,15 +256,15 @@ EOF
 run bead-installed fleet/bead-1 worker-1
 if [ $RC -eq 0 ]; then pass "installed layout: APPROVE exits 0 with no contracts/ directory"
 else fail "installed layout: verify exited ${RC}: $OUT"; fi
-if grep -q "\"--append-system-prompt\",\"$INST_PROJ/wheelhouse/crew/VERIFIER.md\"" "$VARGV" 2>/dev/null; then
-  pass "installed layout: verifier brief resolves to wheelhouse/crew/VERIFIER.md"
+if grep -q "\"--append-system-prompt\",\"$INST_PROJ/wheelhouse/crew/REVIEWER.md\"" "$VARGV" 2>/dev/null; then
+  pass "installed layout: verifier brief resolves to wheelhouse/crew/REVIEWER.md"
 else fail "installed layout: verifier brief was not the installed path"; fi
 MISS_PROJ="$FIX/missing-brief-proj"
 build_proj "$MISS_PROJ" missing "$VERIFY"
 rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"
 RUN_PROJ="$MISS_PROJ"
 run bead-missing fleet/bead-1 worker-1
-if [ $RC -ne 0 ] && says "$MISS_PROJ/wheelhouse/crew/VERIFIER.md" && says "$MISS_PROJ/contracts/VERIFIER.md"; then
+if [ $RC -ne 0 ] && says "$MISS_PROJ/wheelhouse/crew/REVIEWER.md" && says "$MISS_PROJ/contracts/REVIEWER.md"; then
   pass "missing brief: STOP names both installed and template paths tried"
 else fail "missing brief: STOP did not name both paths (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"
@@ -319,8 +319,8 @@ else fail "verdict file does not carry the working-copy warning"; fi
 if [ -f "$VARGV" ] && grep -q '"-p","--no-session"' "$VARGV"; then
   pass "pi was launched one-shot: -p --no-session"
 else fail "argv.json missing or pi not launched with -p --no-session"; fi
-if grep -q "\"--append-system-prompt\",\"$PROJ/contracts/VERIFIER.md\"" "$VARGV" 2>/dev/null; then
-  pass "role brief injected: --append-system-prompt names contracts/VERIFIER.md"
+if grep -q "\"--append-system-prompt\",\"$PROJ/contracts/REVIEWER.md\"" "$VARGV" 2>/dev/null; then
+  pass "role brief injected: --append-system-prompt names contracts/REVIEWER.md"
 else fail "verifier brief not passed"; fi
 if grep -q '"--provider","openai","--model","stub-model-v"' "$VARGV" 2>/dev/null; then
   pass "the VERIFIER seat's provider and model pin the launch (not the author's)"
@@ -749,12 +749,12 @@ else
   HOME_FIX="$HOME_SAVE"
   # The smoke brief scripts the reply, so one trivial model turn exercises
   # spawn -> parse -> record against the real binary without a real review.
-  cat > "$RPROJ/contracts/VERIFIER.md" <<'EOF'
+  cat > "$RPROJ/contracts/REVIEWER.md" <<'EOF'
 SMOKE TEST. Ignore the task in the prompt. Reply with exactly this single
 line and nothing else, using no tools:
 VERDICT: APPROVE
 EOF
-  # Borrow the real login into the VERIFIER seat only; it dies with the fixture.
+  # Borrow the real login into the verifier seat only; it dies with the fixture.
   RSEAT="$RHOME/.pi-seats-real/verifier"
   cp "$REAL_AUTH" "$RSEAT/auth.json" && chmod 600 "$RSEAT/auth.json"
   [ -f "$HOME/.pi/agent/settings.json" ] && cp "$HOME/.pi/agent/settings.json" "$RSEAT/settings.json"
