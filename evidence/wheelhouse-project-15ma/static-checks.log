@@ -1,0 +1,15 @@
+prescribed placeholder grep occurrences:
+seats/placeholder-grep.selftest.sh:2:# placeholder-grep.selftest.sh — prove BOOTSTRAP's placeholder grep is text-only.
+seats/placeholder-grep.selftest.sh:25:  grep -rIn "{{" CLAUDE.md wheelhouse/ 2>&1 | grep -v "^wheelhouse/runbooks/"
+seats/placeholder-grep.selftest.sh:36:printf 'placeholder grep selftest: binary evidence fixture\n'
+seats/placeholder-grep.selftest.sh:47:    fail "binary evidence tripped the placeholder grep (exit $RC)"
+seats/placeholder-grep.selftest.sh:52:printf '\nplaceholder grep selftest: planted text placeholder\n'
+BOOTSTRAP.md:531:  grep -rIn "{{" CLAUDE.md wheelhouse/ | grep -v "^wheelhouse/runbooks/"
+
+raw grep -rn placeholder prescription still present?
+OK
+
+UPGRADE placeholder prescription occurrences (expect none on this base):
+
+git diff --check:
+OK
