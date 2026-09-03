@@ -1,0 +1,27 @@
+old rendered quota assertion grep (expect no output):
+
+new rendered quota assertion grep:
+seats/floor.selftest.sh:222:has "PARKED/QUOTA"        && has "bun seats/adapter.ts probe quota" && pass "quota: PARKED/QUOTA line names the re-probe command" || fail "no PARKED/QUOTA line with re-probe command"
+seats/concurrency.selftest.sh:336:if says "CAPACITY: QUOTA"; then
+seats/concurrency.selftest.sh:340:if printf '%s' "$FLOOR_OUT" | grep -q 'AMBER.*PARKED/QUOTA.*bun seats/adapter.ts probe worker-a'; then
+seats/concurrency.selftest.sh:341:  pass "floor --once renders the AMBER PARKED/QUOTA line with the re-probe command"
+seats/concurrency.selftest.sh:342:else fail "floor --once has no AMBER PARKED/QUOTA line: $(printf '%s' "$FLOOR_OUT" | grep -i 'worker-a' | head -3)"; fi
+seats/adapter.selftest.sh:503:if [ $RC -eq 0 ] && says "PARKED" && says "CAPACITY: QUOTA" && says "usage limit has been reached" && says "fixture-quota-account" && says "RE-PROBE: bun seats/adapter.ts probe worker-1"; then
+seats/adapter.selftest.sh:504:  pass "capacity: adapter status renders PARKED/QUOTA with provider text, account label, and re-probe command"
+seats/adapter.selftest.sh:507:if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
+seats/adapter.selftest.sh:508:  pass "capacity: floor row surfaces PARKED/QUOTA and the re-probe command"
+seats/adapter.selftest.sh:509:else fail "capacity: floor did not surface PARKED/QUOTA (exit $RC): $OUT"; fi
+seats/adapter.selftest.sh:511:if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
+seats/adapter.selftest.sh:512:  pass "capacity: fleet-gate surfaces PARKED/QUOTA and the re-probe command"
+seats/adapter.selftest.sh:513:else fail "capacity: fleet-gate did not surface PARKED/QUOTA (exit $RC): $OUT"; fi
+seats/adapter.selftest.sh:518:if [ $RC -eq 0 ] && says "RUNNING" && ! says "CAPACITY: QUOTA" && ! says "PARKED"; then
+seats/legibility.selftest.sh:328:if says "CAPACITY: QUOTA"; then
+seats/legibility.selftest.sh:332:if seatline q-seat | grep -q "PARKED/QUOTA" && seatline q-seat | grep -q "bun seats/adapter.ts probe q-seat"; then
+seats/legibility.selftest.sh:333:  pass "floor: amber PARKED/QUOTA names the re-probe command"
+seats/legibility.selftest.sh:334:else fail "floor: no PARKED/QUOTA line for q-seat: $(seatline q-seat)"; fi
+seats/legibility.selftest.sh:489:for want in "PARKED/QUOTA" "AUTH DEAD" "PROCESS GONE" "REVIEW BLOCKED" "EVIDENCE UNSATISFIED" "VERDICT UNREADABLE"; do
+seats/legibility.selftest.sh:500:for want in "PARKED/QUOTA" "AUTH DEAD" "PROCESS GONE" "REVIEW BLOCKED" "EVIDENCE UNSATISFIED" "VERDICT UNREADABLE"; do
+seats/legibility.selftest.sh:543:sed 's|AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=${rec?.accountDir ?? "<dir>"} pi, then /login in the REPL; api_key: auth.json or provider env var|PARKED/QUOTA — probe with: bun seats/adapter.ts probe ${seat.name}|' "$FLOOR" > "$SAB3"
+
+git diff --check:
+OK

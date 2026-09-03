@@ -221,8 +221,8 @@ function errorText(obj: any): string {
     return textOf([obj.error, obj.errorMessage, obj.message, obj.result?.error, obj.result?.errorMessage]);
   }
   if (type === "agent_end" && agentEndStopReason(obj) === "error") return agentEndErrorMessage(obj) || textOf([obj.error, obj.errorMessage]);
-  if ((type === "agent_end" || type === "turn_end") && (hasErrorField(obj) || hasErrorField(obj?.message))) {
-    return textOf([obj.error, obj.errorMessage, obj.message?.error, obj.message?.errorMessage]);
+  if ((type === "agent_end" || type === "turn_end" || type === "message_end") && (hasErrorField(obj) || hasErrorField(obj?.message))) {
+    return textOf([obj.error, obj.errorMessage, obj.message?.error, obj.message?.errorMessage, obj.diagnostics, obj.message?.diagnostics]);
   }
   return "";
 }

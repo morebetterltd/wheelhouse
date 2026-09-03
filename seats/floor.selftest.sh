@@ -219,7 +219,7 @@ has 'verifier.*verifier.*anthropic/claude-fable-5.*verify-account.*| .*off.* - |
   || fail "absent verifier row wrong: $(printf '%s\n' "$OUT" | grep verifier | head -1)"
 has "PROCESS GONE"        && pass "gone: PROCESS GONE line (red)"     || fail "no PROCESS GONE line"
 has "AUTH DEAD"           && pass "authless: AUTH DEAD line (red)"    || fail "no AUTH DEAD line"
-has "QUOTA EXHAUSTED"     && pass "quota: QUOTA EXHAUSTED line"       || fail "no QUOTA EXHAUSTED line"
+has "PARKED/QUOTA"        && has "bun seats/adapter.ts probe quota" && pass "quota: PARKED/QUOTA line names the re-probe command" || fail "no PARKED/QUOTA line with re-probe command"
 has "IDLE with ready work.*2 bead" && pass "idle: IDLE-with-ready-work counts bd ready" || fail "no idle-with-ready-work line"
 has "VERDICT LANDED — APPROVE" && pass "reviewer: VERDICT LANDED (green)" || fail "no VERDICT LANDED line"
 has "REVIEW BLOCKED.*BOUNCE"   && pass "bounced: REVIEW BLOCKED line"     || fail "no REVIEW BLOCKED line"

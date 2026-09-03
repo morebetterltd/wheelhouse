@@ -1,0 +1,75 @@
+
+phase 1: spotlight renders the pinned seat's events
+  ok    --once --pin 1 exits 0
+  ok    spotlight header present
+  ok    pin 1 is seat busy
+  ok    [tool] line humanized
+  ok    [think] line humanized
+  ok    [turn_end] carries stats
+  ok    --pin by seat name works
+
+phase 2: rail — all seats, distinct failure lines, never silence
+  ok    rail lists busy
+  ok    rail lists quiet
+  ok    rail lists idle
+  ok    rail lists gone
+  ok    rail lists authless
+  ok    rail lists quota
+  ok    rail lists reviewer
+  ok    rail lists bounced
+  ok    rail lists nolog
+  ok    rail lists verifier
+  ok    row shape includes role, provider/model, account label, active bead, and humanized age
+  ok    missing account.label renders as dash
+  ok    old running seat is flagged QUIET with humanized age
+  ok    rostered verifier absent from state renders as a seat row with state dash
+  ok    gone: PROCESS GONE line (red)
+  ok    authless: AUTH DEAD line (red)
+  ok    quota: PARKED/QUOTA line names the re-probe command
+  ok    idle: IDLE-with-ready-work counts bd ready
+  ok    reviewer: VERDICT LANDED (green)
+  ok    bounced: REVIEW BLOCKED line
+  ok    nolog: missing log is a named line
+  ok    cue words RED/AMBER/GREEN all present
+  ok    rail has the [0] STATUS cell
+  ok    rail exposes humanized ages, not raw epoch/ISO timestamps
+
+phase 3: STATUS cell and overview grid
+  ok    --pin 0 renders STATUS
+  ok    STATUS shows bd ready count
+  ok    STATUS shows per-seat detail
+  ok    STATUS uses humanized last-activity age
+  ok    STATUS exposes humanized ages, not raw epoch/ISO timestamps
+  ok    --overview renders the grid
+  ok    overview shows recent events per seat
+
+phase 4: missing pieces degrade with named lines
+  ok    spotlight on log-less seat exits 0
+  ok    spotlight names the missing log
+  ok    no roster/state degrades to a named line
+
+phase 5: repaint — repeated frames return home and clear to end
+  ok    multi-frame capture produced output before the scripted stop
+  ok    multi-frame capture contains repeated cursor-home + clear-to-end repaint sequences
+  ok    multi-frame capture stays within the terminal height per frame — no scroll drift
+
+phase 6: interactive keys — q keeps the pane alive by returning to overview
+  ok    q changes the live floor to OVERVIEW before Ctrl-C exits
+
+phase 7: canaries — sabotage a copy, checks must notice
+  ok    canary 1: cutting PROCESS GONE detection is caught by phase 2's check
+  ok    canary 2: cutting the missing-log line is caught by phase 4's check
+
+phase 8: cockpit.sh (tmux leg)
+  ok    first run builds the bridge
+  ok    session wh-tfix exists
+  ok    single window named bridge
+  ok    bridge has exactly 2 panes (commander + floor)
+  ok    re-run attaches, never duplicates
+  ok    still exactly 1 session after re-run
+  ok    simulated dead floor leaves only the commander pane
+  ok    re-run notices the missing floor pane
+  ok    re-run respawns the floor pane after pane death
+  ok    still exactly 1 session after pane repair
+
+floor.ts works on this machine.

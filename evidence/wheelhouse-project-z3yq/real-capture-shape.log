@@ -1,0 +1,14 @@
+line 723427 type message_end
+  message.stopReason= error
+  message.errorMessage= WebSocket error
+  diagnostics.type= provider_transport_failure
+line 723428 type turn_end
+  message.stopReason= error
+  message.errorMessage= WebSocket error
+  diagnostics.type= provider_transport_failure
+line 723429 type agent_end
+  message.stopReason= None
+  message.errorMessage= None
+  lastMessage.stopReason= error
+  lastMessage.errorMessage= WebSocket error
+  lastMessage.diagnostics.type= provider_transport_failure
