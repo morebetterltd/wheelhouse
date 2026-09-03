@@ -6,8 +6,9 @@
 # the ISA, or any repository.
 #
 # What it cannot distinguish: a present `Trace: ` line that is false, an ISA
-# Claim appended without real evidence, or a merge whose `no claim moved,
-# because ...` comment is wrong. It checks presence and motion, not truth.
+# Claim appended with a false walk/not-walked citation, or a merge whose `no
+# claim moved, because ...` comment is wrong. It checks presence and citation
+# shape, not truth.
 
 set -eu
 
@@ -16,6 +17,77 @@ failures=0
 
 say() { printf '%s\n' "$*"; }
 fail() { failures=$((failures + 1)); say "FAIL: $*"; }
+
+claim_touches_consumer_surface() {
+  # Conservative shape check for consumer-actionable claims: terms from
+  # VERIFIER.md's surface examples plus public/user-facing wording and shipped
+  # entry-point files. Internal doctrine claims are not failed merely for using
+  # these words; they pass when they carry the explicit `Not walked:` statement.
+  printf '%s\n' "$1" | grep -Eiq 'consumer|user[- ]facing|public entry|readme|bootstrap|install|upgrade|runbook|command|endpoint|browser|emulator|surface|generated/(STARTUP|CLAUDE)|BOOTSTRAP\.md|README\.md|RUNNING_THE_LOOP\.md' ||
+    printf '%s\n' "$1" | grep -Eiq '(^|[^[:alnum:]_-])(cli|api|url|app|apps)([^[:alnum:]_-]|$)'
+}
+
+claim_cites_walk() {
+  printf '%s\n' "$1" | grep -Eiq 'seats/walk\.ts|walk\.ts' &&
+    printf '%s\n' "$1" | grep -Eiq 'WALKED-DONE|WALKED-NOT-DONE|COULD-NOT-WALK' &&
+    printf '%s\n' "$1" | grep -Eiq 'evidence/|bead comment|bd comment|on the bead'
+}
+
+claim_states_not_walked() {
+  printf '%s\n' "$1" | grep -Eiq '(^|[^[:alnum:]_-])Not walked:'
+}
+
+check_claim_walk_gate_for_commit() {
+  commit=$1
+  parent=$(git rev-parse "$commit^1" 2>/dev/null || true)
+  [ -n "$parent" ] || return 0
+  if ! git diff --quiet "$parent" "$commit" -- wheelhouse/ISA.md 2>/dev/null; then
+    :
+  else
+    return 0
+  fi
+
+  new_isa=$(mktemp)
+  added_lines=$(mktemp)
+  claims_line_numbers=$(mktemp)
+  git show "$commit:wheelhouse/ISA.md" >"$new_isa" || {
+    rm -f "$new_isa" "$added_lines" "$claims_line_numbers"
+    return 0
+  }
+  awk '
+    /^## Claims[[:space:]]*$/ { in_claims=1; next }
+    /^## / { in_claims=0 }
+    in_claims { print NR }
+  ' "$new_isa" >"$claims_line_numbers"
+  git diff --unified=0 "$parent" "$commit" -- wheelhouse/ISA.md | awk '
+    /^@@ / {
+      if (match($0, /\+[0-9]+(,[0-9]+)?/)) {
+        h=substr($0, RSTART + 1, RLENGTH - 1)
+        sub(/,.*/, "", h)
+        new_line=h - 1
+        in_hunk=1
+      }
+      next
+    }
+    !in_hunk { next }
+    /^\+\+\+/ { next }
+    /^\+/ { new_line++; print new_line "\t" substr($0, 2); next }
+    /^-/ { next }
+    { new_line++ }
+  ' >"$added_lines"
+
+  while IFS="$(printf '\t')" read -r line_no claim_line; do
+    [ -n "$line_no" ] || continue
+    grep -qx "$line_no" "$claims_line_numbers" || continue
+    printf '%s\n' "$claim_line" | grep -Eq '[^[:space:]]' || continue
+    printf '%s\n' "$claim_line" | grep -Eq '^#|^\(empty\)$' && continue
+    if claim_touches_consumer_surface "$claim_line" && ! claim_cites_walk "$claim_line" && ! claim_states_not_walked "$claim_line"; then
+      fail "ISA claim added by $commit touches a consumer surface but cites no seats/walk.ts verdict/evidence home and has no 'Not walked:' statement: $claim_line"
+    fi
+  done <"$added_lines"
+
+  rm -f "$new_isa" "$added_lines" "$claims_line_numbers"
+}
 
 find_root() {
   dir=${1:-$(pwd)}
@@ -50,6 +122,12 @@ if [ -z "$isa_commit" ]; then
   exit "$UNRUNNABLE"
 fi
 isa_time=$(git show -s --format=%cI "$isa_commit")
+
+# If the latest ISA movement is itself an integration merge, check newly
+# appended Claims in that merge. The older merge-motion check below only asks
+# whether the ISA moved or an escape hatch exists; this is the additional tooth
+# for consumer-surface claims that moved silently without walk/not-walked text.
+check_claim_walk_gate_for_commit "$isa_commit"
 
 repo_list=$(mktemp)
 merge_list=$(mktemp)
@@ -89,6 +167,7 @@ while IFS= read -r repo; do
   git -C "$repo" log --merges --since="$isa_time" --format='%H%x09%s' "$branch" >"$merge_list"
   while IFS="$(printf '\t')" read -r merge subject; do
     [ -n "$merge" ] || continue
+    check_claim_walk_gate_for_commit "$merge"
     case "$merge" in "$isa_commit") continue ;; esac
     bead=$(printf '%s\n' "$subject" | sed -n 's/.*fleet\/\([^: ]*\).*/\1/p' | head -1)
     if [ -z "$bead" ]; then

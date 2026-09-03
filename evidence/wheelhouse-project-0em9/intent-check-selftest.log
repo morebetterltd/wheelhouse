@@ -1,0 +1,76 @@
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 1 - clean state PASSes
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 2 - closed bead still labelled needs-review FAILs
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 3 - planted merge without claim movement FAILs
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+Automatic merge went well; stopped before committing as requested
+ok 4 - ISA-moving merge PASSes without escape hatch
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+Automatic merge went well; stopped before committing as requested
+ok 5 - consumer-surface claim citing seats/walk.ts verdict and evidence home PASSes
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+Automatic merge went well; stopped before committing as requested
+ok 6 - consumer-surface claim with Not walked statement PASSes
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+Automatic merge went well; stopped before committing as requested
+ok 7 - silent consumer-surface claim FAILs
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+Automatic merge went well; stopped before committing as requested
+ok 8 - non-consumer-surface claim is exempt from walk citation
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 9 - planted traceless bead FAILs
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+ok 10 - uncommitted ISA exits distinct unrunnable code 2
+intent-check.selftest: PASS (10 legs)
