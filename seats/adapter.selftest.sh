@@ -32,9 +32,14 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ADAPTER="${1:-$HERE/adapter.ts}"
-BRIEFS="$(cd "$(dirname "$ADAPTER")" && pwd)/briefs.ts"
+ADAPTER_DIR="$(cd "$(dirname "$ADAPTER")" && pwd)"
+BRIEFS="$ADAPTER_DIR/briefs.ts"
+FLOOR="$ADAPTER_DIR/floor.ts"
+FLEET_GATE="$ADAPTER_DIR/fleet-gate.sh"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
+[ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
+[ -f "$FLEET_GATE" ] || { echo "selftest: not found: $FLEET_GATE" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run adapter.ts" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
 REAL_PI="$(command -v pi || true)"
@@ -176,6 +181,13 @@ function handle(cmd) {
       out({ type: "agent_start" });
       const finish = () => {
         fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message }) + "\n");
+        if (/QUOTA/.test(cmd.message)) {
+          const failed = { role: "assistant", content: [{ type: "text", text: "partial before quota" }], stopReason: "error", errorMessage: "Codex error: The usage limit has been reached" };
+          out({ type: "message_end", message: failed });
+          out({ type: "turn_end", message: failed });
+          out({ type: "agent_end", messages: [{ role: "user", content: [{ type: "text", text: cmd.message }] }, failed] });
+          return;
+        }
         out({ type: "message_end", message: { role: "assistant",
               content: [{ type: "text", text: "echo: " + cmd.message }] } });
         out({ type: "agent_end", messages: [] });
@@ -208,6 +220,15 @@ process.on("SIGTERM", () => process.exit(0));
 STUB
 chmod +x "$BIN/pi"
 [ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
+cat > "$BIN/bd" <<'BDSTUB'
+#!/usr/bin/env bash
+case "$1" in
+  ready) printf '[{"id":"fixture-ready"}]\n' ;;
+  list) printf '[{"id":"fixture-in-progress"}]\n' ;;
+  *) printf '[]\n' ;;
+esac
+BDSTUB
+chmod +x "$BIN/bd"
 
 # A fixture project: adapter.ts expects to live at <root>/seats/adapter.ts
 # with crew briefs at <root>/contracts/. build_proj makes one; the canaries
@@ -218,6 +239,8 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
+  cp "$FLOOR" "$proj/seats/floor.ts"
+  cp "$FLEET_GATE" "$proj/seats/fleet-gate.sh"
   printf '# Fleet: Worker\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
@@ -459,6 +482,44 @@ if [ $RC -ne 0 ] && says "unsupported thinking level" && says "stderr tail"; the
   pass "malformed suffix: pi rejects it and adapter surfaces the stderr tail"
 else fail "malformed suffix was not a loud pi validation failure (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
+phase "capacity events — in-turn quota errors park the seat and a later success clears it"
+CAPACITY_PROJ="$FIX/capacity-proj"
+build_proj "$CAPACITY_PROJ" capacity
+RUN_PROJ="$CAPACITY_PROJ"; STATE="$CAPACITY_PROJ/seats/state.json"; LOG="$CAPACITY_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-capacity/worker-1/argv.json"
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].account.label = "fixture-quota-account";
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$CAPACITY_PROJ/seats/seats.json"
+mkdir -p "$CAPACITY_PROJ/.wheelhouse-worktrees/quota-bead"
+run spawn worker-1
+run dispatch worker-1 quota-bead 'QUOTA turn from provider'
+if [ $RC -eq 0 ] && wait_for "$LOG" 'usage limit has been reached' 5; then pass "capacity: quota-shaped agent_end fixture reached the event log"
+else fail "capacity: quota fixture did not land (exit $RC): $OUT"; fi
+run status
+if [ $RC -eq 0 ] && says "PARKED" && says "CAPACITY: QUOTA" && says "usage limit has been reached" && says "fixture-quota-account" && says "RE-PROBE: bun seats/adapter.ts probe worker-1"; then
+  pass "capacity: adapter status renders PARKED/QUOTA with provider text, account label, and re-probe command"
+else fail "capacity: adapter status did not park on in-turn quota event (exit $RC): $OUT"; fi
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" NO_COLOR=1 bun "$RUN_PROJ/seats/floor.ts" --once --pin 0 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
+  pass "capacity: floor row surfaces PARKED/QUOTA and the re-probe command"
+else fail "capacity: floor did not surface PARKED/QUOTA (exit $RC): $OUT"; fi
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$RUN_PROJ/seats/fleet-gate.sh" 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
+  pass "capacity: fleet-gate surfaces PARKED/QUOTA and the re-probe command"
+else fail "capacity: fleet-gate did not surface PARKED/QUOTA (exit $RC): $OUT"; fi
+run dispatch worker-1 quota-bead 'successful turn after quota'
+if [ $RC -eq 0 ] && wait_for "$LOG" 'echo: Bead quota-bead' 5; then pass "capacity: later successful turn reached the event log"
+else fail "capacity: later successful turn did not land (exit $RC): $OUT"; fi
+run status
+if [ $RC -eq 0 ] && says "RUNNING" && ! says "CAPACITY: QUOTA" && ! says "PARKED"; then
+  pass "capacity: later successful turn clears the parked quota state"
+else fail "capacity: later successful turn did not clear quota state (exit $RC): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
 # --- the spawn checks, parameterized so the canary can reuse them ------------
 check_spawn() {   # $1 = label

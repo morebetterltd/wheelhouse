@@ -252,6 +252,37 @@ interface Assessment {
 
 const AUTH_RE = /auth|unauthoriz|401|forbidden|token.*(expired|invalid|revoked)|log ?in required|credential/i;
 const QUOTA_RE = /quota|rate.?limit|429|usage limit|exhaust|out of credits|insufficient.credit/i;
+const CAPACITY_EVENT_TYPES = new Set(["message_end", "turn_end", "agent_end"]);
+
+function lastMessage(obj: any): any {
+  return Array.isArray(obj?.messages) && obj.messages.length > 0 ? obj.messages[obj.messages.length - 1] : undefined;
+}
+
+function stopReasonOf(obj: any): string {
+  return String(obj?.message?.stopReason ?? obj?.stopReason ?? lastMessage(obj)?.stopReason ?? "");
+}
+
+function providerErrorText(obj: any): string {
+  return textOf([
+    obj?.message?.errorMessage,
+    obj?.message?.error,
+    obj?.errorMessage,
+    obj?.error,
+    lastMessage(obj)?.errorMessage,
+    lastMessage(obj)?.error,
+    obj?.diagnostics,
+    obj?.message?.diagnostics,
+    lastMessage(obj)?.diagnostics,
+  ]).trim();
+}
+
+function capacityDetailFromEvent(obj: any): string | null {
+  if (!CAPACITY_EVENT_TYPES.has(String(obj?.type ?? ""))) return null;
+  if (stopReasonOf(obj) !== "error") return null;
+  const detail = providerErrorText(obj);
+  if (!QUOTA_RE.test(detail)) return null;
+  return detail.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0] ?? "quota-shaped provider error";
+}
 
 const VERDICTS_DIR = path.join(SEATS_DIR, "verdicts");
 
@@ -330,6 +361,21 @@ function assess(seat: Seat): Assessment {
     }
   }
   const errBlob = errorTexts.slice(-10).join("\n") + "\n" + errTail;
+  const eventCapacityDetail = (() => {
+    if (!events) return null;
+    let detail: string | null = null;
+    for (const line of events.slice(-200)) {
+      try {
+        const ev = JSON.parse(line);
+        const capacity = capacityDetailFromEvent(ev);
+        if (capacity) detail = capacity;
+        else if (detail && CAPACITY_EVENT_TYPES.has(String(ev?.type ?? "")) && stopReasonOf(ev) !== "error") detail = null;
+      } catch {
+        /* ignore */
+      }
+    }
+    return detail;
+  })();
   const alive = pidAlive(rec?.pid);
 
   if (AUTH_RE.test(errBlob)) {
@@ -340,10 +386,13 @@ function assess(seat: Seat): Assessment {
   }
   if (rec?.lastCapacityEvent) {
     const at = eventTimeMs({ at: rec.lastCapacityEvent.at });
-    return { cue: "amber", line: `QUOTA EXHAUSTED — dispatch failed at ${humanAge(at)}: ${rec.lastCapacityEvent.detail}` };
+    return { cue: "amber", line: `PARKED/QUOTA — probe with: bun seats/adapter.ts probe ${seat.name} — ${humanAge(at)}: ${rec.lastCapacityEvent.detail}` };
+  }
+  if (eventCapacityDetail) {
+    return { cue: "amber", line: `PARKED/QUOTA — probe with: bun seats/adapter.ts probe ${seat.name} — ${eventCapacityDetail}` };
   }
   if (QUOTA_RE.test(errBlob)) {
-    return { cue: "amber", line: "QUOTA EXHAUSTED — seat cannot take work until it resets" };
+    return { cue: "amber", line: `PARKED/QUOTA — probe with: bun seats/adapter.ts probe ${seat.name}` };
   }
   // Verdict-file states (verify.ts's record for this seat's last bead).
   // Failure states only: unreadable beats everything the file could say,
