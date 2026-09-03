@@ -121,7 +121,9 @@ The same contract carries the claim-move duty: update `wheelhouse/ISA.md`'s Clai
 
 Run the intent-check gate at `seats/intent-check.sh` before integrating when that script is present. If this template has not yet received the sibling bead that ships it, the path is still the agreed gate path and this line is the ordering marker.
 
-Push, open and merge PRs, and run automated deploys per your project's recorded authority, in `wheelhouse/INTEGRATOR.md`'s project section. The shipped default is all the way; an empty section means the install failed to record its authority, not that a generated conservative agent profile owns the answer. Ask once with a recommendation and default, write the answer, then proceed.
+If the merge changed a contract half that is injected as a standing seat's role brief, reset every idle standing seat holding that brief after the merge: `bun seats/adapter.ts reset <seat>`. A running seat received its brief at spawn, so `resume` keeps the stale instructions and only a cold respawn makes the new contract effective. Do not reset a mid-turn seat; note it on the bead and reset it when it next goes idle.
+
+Push, open and merge PRs, and run automated deploys per your project's recorded authority, in `wheelhouse/INTEGRATOR.md`'s project section. Before acting on a reviewer verdict file, run `seats/push-authority-lint.sh` so a stale `PUSH: ... principal-only` line cannot contradict a recorded project push grant unnoticed. The shipped default is all the way; an empty section means the install failed to record its authority, not that a generated conservative agent profile owns the answer. Ask once with a recommendation and default, write the answer, then proceed.
 
 ### 7. Close
 
