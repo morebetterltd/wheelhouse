@@ -76,7 +76,8 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 │   ├── seats.json               generated — the roster: role, provider, model, auth route, account dir per seat; never a secret
 │   ├── seat-env.sh              provisions one seat's isolated account directory, once
 │   ├── adapter.ts               runs the seats: spawn, dispatch, steer, status, stop, resume
-│   ├── verify.ts                dispatches the ephemeral verifier pass on a finished branch
+│   ├── verify.ts                dispatches the ephemeral bead-verdict pass on a finished branch
+│   ├── walk.ts                  dispatches the verifier's consumer-surface walk for an ISA claim
 │   ├── cockpit.sh, floor.ts     the bridge: one tmux window — commander pane left, read-only floor right
 │   ├── recover.ts               post-interruption triage: what survived, what to resume
 │   └── README.md                documents every command above; selftests sit beside each piece
@@ -113,7 +114,7 @@ That split is the whole design. It means a project's specifics never get tangled
 | | |
 |---|---|
 | `contracts/` | the briefs, copied verbatim at install |
-| `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the verifier dispatcher, the bridge, recovery, and a selftest for each |
+| `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the bead-verdict dispatcher, the consumer-surface walk dispatcher, the bridge, recovery, and a selftest for each |
 | `generated/` | specimens of what the interview writes — never copied, and drawn from an invented project so they cannot be mistaken for a starting point |
 | `runbooks/` | how to run the loop, the upgrade procedure, and the graduations to take once the loop has proven itself |
 | `examples/` | worked benches, each labelled as one project's implementation: `android-cordova/` from a real project, `http-service/` for a service-and-worker shape |

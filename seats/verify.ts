@@ -3,7 +3,7 @@
  * verify.ts — commander-facing dispatch of the EPHEMERAL verifier pass.
  *
  * One invocation = one verdict. It spawns a one-shot `pi -p --no-session`
- * on the VERIFIER seat's own agent directory, with the VERIFIER crew brief
+ * on the VERIFIER seat's own agent directory, with the REVIEWER crew brief
  * appended to the system prompt, hands it the bead claim and the branch's
  * tip SHA, and parses the single `VERDICT:` line out of what comes back.
  * Nothing persists on the verifier's side — no session, no memory — which
@@ -74,7 +74,7 @@ const TIMEOUT_MS = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || 900000);
 
 /**
  * A throwaway git worktree, used ONLY as the one-shot verifier spawn's
- * process cwd — construction, not contract discipline. VERIFIER.md already
+ * process cwd — construction, not contract discipline. REVIEWER.md already
  * says "read-only on the work," but that is a rule the model can ignore;
  * the same hazard class adapter.ts's per-bead cwd (see seats/README.md,
  * "Running a seat") closes for a confused WORKER applies to a confused or
@@ -83,7 +83,7 @@ const TIMEOUT_MS = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || 900000);
  * the checkout every other seat and the commander depend on.
  *
  * It has to be a real worktree of THIS repository, not an arbitrary empty
- * directory: the verifier's own default reading mechanism (VERIFIER.md,
+ * directory: the verifier's own default reading mechanism (REVIEWER.md,
  * "Reading a branch without disturbing it") is bare `git diff`/`git show`
  * with no `-C` flag, so its cwd must already be a valid working directory
  * sharing this repository's object database and refs, or every git command
@@ -106,7 +106,7 @@ const TIMEOUT_MS = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || 900000);
  * Named `wheelhouse-verify-<owning-pid>-<random>` so a later sweep can
  * tell which process made it without asking anything but the path.
  */
-function makeScratchCwd(repoRoot: string): string {
+export function makeScratchCwd(repoRoot: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-verify-${process.pid}-`));
   try {
     execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, "HEAD"], { stdio: "pipe" });
@@ -161,7 +161,7 @@ function pidAlive(pid: number): boolean {
  * in use" — an alive pid is always treated as still owning its worktree,
  * reused or not.
  */
-function sweepStaleScratchWorktrees(repoRoot: string): void {
+export function sweepStaleScratchWorktrees(repoRoot: string): void {
   let listing: string;
   try {
     listing = execFileSync("git", ["-C", repoRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" });
@@ -186,12 +186,12 @@ function sweepStaleScratchWorktrees(repoRoot: string): void {
   }
 }
 
-function die(msg: string): never {
+export function die(msg: string): never {
   process.stderr.write(`STOP: ${msg}\n`);
   process.exit(1);
 }
 
-function expandTilde(p: string): string {
+export function expandTilde(p: string): string {
   if (p === "~") return os.homedir();
   if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
   return p;
@@ -220,7 +220,7 @@ function beadsActorFor(name: string): string {
  * whose account dirs get spawned on. Anything that is not one plain
  * segment is refused loudly, naming the offending value.
  */
-function validateSegment(kind: string, value: string): string {
+export function validateSegment(kind: string, value: string): string {
   const bad =
     value.length === 0 ? "empty" :
     value === "." || value === ".." ? "a dot segment" :
@@ -462,7 +462,7 @@ function main(): void {
 
   let brief: string;
   try {
-    brief = resolveRoleBrief(ROOT, "verifier");
+    brief = resolveRoleBrief(ROOT, "reviewer");
   } catch (e: any) {
     die(e.message);
   }
@@ -585,8 +585,8 @@ function main(): void {
   if (verdictLines.length > 1) {
     die(`verifier emitted ${verdictLines.length} VERDICT: lines — ambiguous, refusing to pick one`);
   }
-  // The NOT BENCHED qualifier (VERIFIER.md, "When no bench covers the part
-  // you are verifying") belongs to APPROVE and to nothing else.
+  // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
+  // you are reviewing") belongs to APPROVE and to nothing else.
   const m = verdictLines[0]
     .trim()
     .match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)\s*(?:[—-]{1,2}\s*NOT BENCHED:\s*(\S.*))?$/);
@@ -664,4 +664,4 @@ function main(): void {
   process.exit(verdict === "APPROVE" ? 0 : verdict === "BOUNCE" ? 2 : 3);
 }
 
-main();
+if (import.meta.main) main();
