@@ -277,6 +277,30 @@ OUT="$(run_herald --once 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && grep -q 'poke dropped .*reason=no-pane ' "$POKE_LOG" 2>/dev/null; then pass "poke attempt with no configured pane is logged dropped/no-pane"
 else fail "no-pane poke attempt was not logged dropped/no-pane (rc=$RC out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf 'lifeos wrapper ready>\n' > "$FIX/wrapper-idle.txt"
+cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
+{"type":"agent_end","messages":["wrapper idle settle"]}
+JSONL
+seed_log_cursor worker-1.jsonl 0
+OUT="$(WHEELHOUSE_HERALD_IDLE_RE='lifeos wrapper ready>' WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -qx -- '-t wh-demo:bridge.0 check the fleet inbox Enter' "$SEND_LOG"; then pass "wrapper-shaped idle prompt matched by WHEELHOUSE_HERALD_IDLE_RE receives the constant poke"
+else fail "wrapper idle prompt was not accepted by configured regex (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf 'lifeos wrapper prompt never matches\n' > "$FIX/wrapper-never-idle.txt"
+cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
+{"type":"agent_end","messages":["fallback settle"]}
+JSONL
+seed_log_cursor worker-1.jsonl 0
+OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-never-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+POLL_OUT="$(cp "$ROOT/seats/herald.ts" "$PROJ/seats/herald.ts" && WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$ROOT/seats/commander-inbox-poll.sh" --once 2>&1)"; POLL_RC=$?
+if [ $RC -eq 0 ] && [ "$POLL_RC" -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke deferred .*reason=not-idle' "$POKE_LOG" 2>/dev/null && printf '%s\n' "$POLL_OUT" | grep -q 'check the fleet inbox' && printf '%s\n' "$POLL_OUT" | grep -q 'fallback settle' && [ "$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo 0)" = "$(wc -c < "$PROJ/seats/inbox.jsonl" | tr -d ' ')" ]; then
+  pass "fallback poll drains pending inbox without matching the wrapper prompt or sending tmux keys"
+else
+  fail "fallback poll did not drain pending inbox after unmatched prompt (herald_rc=$RC poll_rc=$POLL_RC herald_out=$OUT poll_out=$POLL_OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) cursor=$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo none))"
+fi
+
 # Cockpit supervision: fake tmux is enough because the claim here is that
 # cockpit.sh starts/verifies/restarts the herald before it builds or attaches
 # the bridge. The fake records a session so the second run takes the idempotent
