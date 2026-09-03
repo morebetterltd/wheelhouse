@@ -1,0 +1,56 @@
+
+walk verdict parsing and transcript retention
+  ok    done exit 0
+  ok    done printed VERDICT: WALKED-DONE
+  ok    done retained transcript
+  ok    done scrub applied
+  ok    done walk.json transcript path is root-relative
+  ok    done stdout prints root-relative evidence paths
+  ok    done appended verifier brief
+  ok    done prompt carries claim and surface
+  ok    done prompt avoids fleet internals
+  ok    notdone exit 2
+  ok    notdone printed VERDICT: WALKED-NOT-DONE
+  ok    notdone retained transcript
+  ok    notdone scrub applied
+  ok    notdone walk.json transcript path is root-relative
+  ok    notdone stdout prints root-relative evidence paths
+  ok    notdone appended verifier brief
+  ok    notdone prompt carries claim and surface
+  ok    notdone prompt avoids fleet internals
+  ok    couldnot exit 3
+  ok    couldnot printed VERDICT: COULD-NOT-WALK
+  ok    couldnot retained transcript
+  ok    couldnot scrub applied
+  ok    couldnot walk.json transcript path is root-relative
+  ok    couldnot stdout prints root-relative evidence paths
+  ok    couldnot appended verifier brief
+  ok    couldnot prompt carries claim and surface
+  ok    couldnot prompt avoids fleet internals
+  ok    zero exit 4
+  ok    zero printed expected exactly one
+  ok    zero retained transcript
+  ok    zero scrub applied
+  ok    zero appended verifier brief
+  ok    zero prompt carries claim and surface
+  ok    zero prompt avoids fleet internals
+  ok    two exit 4
+  ok    two printed expected exactly one
+  ok    two retained transcript
+  ok    two scrub applied
+  ok    two appended verifier brief
+  ok    two prompt carries claim and surface
+  ok    two prompt avoids fleet internals
+
+upgrade surface requires baseline
+  ok    upgrade without baseline exits 1
+  ok    upgrade baseline refusal named
+
+credential refusal distinct and no live pi required
+  ok    missing credential exits 5
+  ok    missing credential did not spawn stub pi
+
+interrupt removes scratch worktree
+  ok    interrupt fixture captured scratch cwd
+  ok    interrupt removed scratch cwd
+walk.selftest: PASS
