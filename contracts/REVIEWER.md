@@ -78,6 +78,7 @@ When the commander has promoted this reviewer as a FALLBACK GATE for a gating-re
 - Judge against the bead's stated done, not your taste. Style nits that do not affect the done are comments, not BOUNCE reasons.
 - The worker's report is a CLAIM, not evidence. Re-run what is cheap, and say explicitly what you could not re-run.
 - Check the claims as well as the code. A correct change described by a false sentence still ships that sentence, and the next reader believes it.
+- For a host app, daemon, service, supervisor, launch agent, or machine-local port listener change, verify that the worker's run could not have displaced production: before review, record whether the production port/socket and LaunchAgent/systemd unit/service/plist/login item/supervisor entry exist and are running; after any reviewer-run proof, record the same facts again and compare them. An APPROVE needs the before/after production state unchanged, or an explicit statement that no production service exists on the review machine. If checking that state requires access you do not have, route it as structurally unverifiable rather than approving in silence.
 
 ### Commander sentinel
 
