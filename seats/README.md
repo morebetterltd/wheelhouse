@@ -19,6 +19,7 @@ The main files here:
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
+- `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `floor.ts` — read-only status display for the commander cockpit.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
@@ -427,6 +428,7 @@ bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/walk.selftest.sh
 bash seats/intent-check.selftest.sh
+bash seats/specimen-leak.selftest.sh
 bash seats/push-authority-lint.selftest.sh
 bash seats/cockpit.selftest.sh
 bash seats/herald.selftest.sh
