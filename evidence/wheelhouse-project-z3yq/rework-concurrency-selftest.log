@@ -1,0 +1,35 @@
+
+1. two seats, one roster — spawn, overlap, isolation, clean stop
+  ok    hermetic: worker-a spawns
+  ok    hermetic: worker-b spawns
+  ok    hermetic: each seat has its OWN FIFO (worker-a.stdin, worker-b.stdin)
+  ok    hermetic: bead-a dispatched to worker-a
+  ok    hermetic: bead-b dispatched to worker-b (before bead-a's turn ended)
+  ok    hermetic: overlapping RUNNING — both state.json pids alive at once (86433, 87062)
+  ok    hermetic: both turns in flight at the same moment (agent_start seen, no agent_end yet, both logs)
+  ok    hermetic: status shows both seats RUNNING
+  ok    hermetic: worker-a's turn finished
+  ok    hermetic: worker-b's turn finished
+  ok    hermetic: worker-a's events land ONLY in worker-a's log
+  ok    hermetic: worker-b's events land ONLY in worker-b's log
+  ok    hermetic: each bead's work landed only in its own worktree
+  ok    hermetic: the two worktrees are on distinct fleet/<bead> branches
+  ok    hermetic: worker-a stops cleanly
+  ok    hermetic: worker-b stops cleanly
+
+2. capacity visibility — a quota-shaped failure is stamped and rendered
+  ok    quota-shaped dispatch fails loudly
+  ok    state.json records lastCapacityEvent with the failure detail: {"at":"2026-09-03T23:01:05.789Z","detail":"429 rate limit exceeded — usage limit reached for this account"}
+  ok    adapter status surfaces the capacity event
+  ok    floor --once renders the AMBER PARKED/QUOTA line with the re-probe command
+  ok    floor STATUS cell shows per-account capacity state
+  ok    a dispatch that lands clears the capacity event
+
+3. canary — can these checks detect broken isolation and a lost stamp?
+  ok    canary: an adapter that merges both seats into one log is caught
+  ok    canary: an adapter with the capacity stamp cut is caught (no lastCapacityEvent lands)
+
+4. real pi — two real seats, concurrent dispatch, disjoint logs
+  SKIP  real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1
+
+two-seat concurrency and capacity visibility work on this machine.

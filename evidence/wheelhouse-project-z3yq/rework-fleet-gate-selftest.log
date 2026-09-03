@@ -1,0 +1,17 @@
+
+1. cold + ready — seats cold, work ready: loud nudge fires
+  ok    cold+ready prints counts and the loud nudge
+
+2. cold + empty — seats cold, no ready work: plain line, no nudge
+  ok    cold+empty prints counts with no nudge
+
+3. live — a seat is running, even with ready work: no nudge
+  ok    live seat suppresses the nudge regardless of ready count
+
+4. graceful degrade — bd absent: silent, exit 0
+  ok    no bd on PATH: silent, exit 0
+
+5. graceful degrade — adapter.ts absent: silent, exit 0
+  ok    no adapter.ts: silent, exit 0
+
+fleet-gate.sh works on this machine.

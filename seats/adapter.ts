@@ -470,11 +470,13 @@ function eventIsSuccessfulTurnEnd(obj: any): boolean {
 function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster: Record<string, SeatEntry>): void {
   const r = logLinesFrom(rec.log, 0);
   let changed = false;
+  let sawCapacityInThisScan = false;
   for (const line of r.lines) {
     let obj: any;
     try { obj = JSON.parse(line); } catch { continue; }
     const detail = capacityDetailFromEvent(obj);
     if (detail) {
+      sawCapacityInThisScan = true;
       const label = accountLabel(roster[name], rec);
       rec.lastCapacityEvent = {
         at: eventTimeIso(obj),
@@ -482,7 +484,7 @@ function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster
         ...(label ? { accountLabel: label } : {}),
       };
       changed = true;
-    } else if (rec.lastCapacityEvent && eventIsSuccessfulTurnEnd(obj)) {
+    } else if (sawCapacityInThisScan && rec.lastCapacityEvent && eventIsSuccessfulTurnEnd(obj)) {
       delete rec.lastCapacityEvent;
       changed = true;
     }
