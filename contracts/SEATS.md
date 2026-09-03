@@ -66,11 +66,14 @@ Generated at install.
 ### Roster
 
 <!-- One line per seat this project took, mirroring seats/seats.json: the seat's
-     name, which brief it reads, its provider and model, and its agent directory
-     (account.dir). seats.json is the machine record and decides; this section is
-     the human record and must agree with it. The commander is always here — it
-     is the principal's own session, marked external in the roster, and was never
-     a question at install. -->
+     name, which brief it reads, its provider and model, its auth route, and its
+     agent directory (account.dir). seats.json is the machine record and decides;
+     this section is the human record and must agree with it. The verifier row
+     describes the consumer-surface walker role when the project takes one:
+     it runs via seats/walk.ts, gates ISA claims rather than beads, and can be
+     cheap because the empty context is what matters, not the model's depth. The
+     commander is always here — it is the principal's own session, marked external
+     in the roster, and was never a question at install. -->
 
 ### Declined seats
 
@@ -79,3 +82,10 @@ Generated at install.
      looks exactly like a seat nobody raised once both are simply absent, and this
      is the only section that can tell them apart. Add a line here when a seat is
      dropped later, too. -->
+
+### Walk cadence
+
+<!-- Record the install's walk_cadence_merges value here by pointing at the
+     authoritative home in wheelhouse/INTEGRATOR.md's project half. Do not create
+     a second independent cadence value in this file; this section is the roster
+     reader's pointer that claim-closing walks and every-N drift walks exist. -->
