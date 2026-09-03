@@ -40,7 +40,7 @@ Invariant: the stub names the pending evidence, the condition that will close it
 
 A merge that changes what is true of the project updates the ISA.
 
-Invariant: when a merge establishes or invalidates a project claim, the integration appends or amends the claim in `## Claims`, or records why the merge changes no claim. The code line and the intent line move together.
+Invariant: when a merge establishes or invalidates a project claim, the integration appends or amends the claim in `## Claims`, or records why the merge changes no claim. A claim closes on a verifier walk of the surface it names, or states that it has not been walked. The code line and the intent line move together.
 
 ## Optional frontmatter
 

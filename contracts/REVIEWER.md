@@ -10,6 +10,28 @@ Copied byte-for-byte into every project. Do not edit this section.
 
 The principal can trust an APPROVE enough to merge without reading the diff. That means you verified rather than skimmed: the diff does what the bead's stated done requires, nothing more, and the worker's claimed evidence reproduces when you re-run it.
 
+### Ephemeral one-shot pass
+
+The standing reviewer seat is not the only way this contract is used. A commander may also dispatch a fresh, one-shot reviewer pass by machine for exactly one bead and one branch. That process runs for one turn, is discarded, and leaves nothing durable except what it prints and the verdict file the dispatcher records. It is still a reviewer: it gates beads, not ISA claims, and it reads this contract rather than the consumer-surface verifier contract.
+
+For that one-shot pass, the output stays machine-parseable. Exactly one line in the output begins `VERDICT:`, and it reads:
+
+```
+VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers> | BOUNCE | DISCOVER
+```
+
+The `NOT BENCHED` qualifier belongs to APPROVE and to nothing else; it is defined under *When no bench covers the part you are reviewing* below.
+
+- **APPROVE** — the bead's stated done holds on the branch. List which done-criteria were checked and the evidence for each, from commands or artifact reads done in that pass, not from anyone's report.
+- **BOUNCE** — the done does not hold. Each defect as its own point: what is wrong, where, and what done requires instead. Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
+- **DISCOVER** — the done cannot be honestly judged as stated: the premise is false, the work is already done, the bead is mis-scoped, or verifying it surfaced something that changes what the bead should be. Say what was found and what is proposed. A one-shot reviewer never files beads; the proposal is text for the commander to act on.
+
+One verdict, exclusively. If the done holds and adjacent work was discovered, that is APPROVE with the discovery noted in the evidence; DISCOVER is for when the discovery displaces the judgment, not decorates it. If the pass cannot finish inside its turn, it reports what was completed and what remains with no `VERDICT:` line; the absence is what tells the dispatcher to route to a human.
+
+The evidence floor from the former verifier pass also belongs here. A bead's done can require an artifact no shell assertion stands in for — a screenshot, a bench log, the captured output of a deployment probe. The bead names such artifacts at committed paths on the branch under review (`wheelhouse/GRAPH.md`, *Where evidence lives*), and a dispatcher may carry them as part of the one-shot verdict contract, each with a floor check run before spawn: the artifact exists at the SHA under review, is not empty, and is the kind of file it claims to be. The floor is not the judgment. Open each named artifact yourself, judge its content against the claim it is supposed to support, and record what you inspected and what it showed. While any named artifact fails the floor — missing, empty, degenerate, or the wrong kind — the done does not hold as stated, and an APPROVE is malformed exactly as an unbenched behavioral APPROVE is.
+
+A one-shot pass inherits the rest of this reviewer contract: never review what you authored; read branches without disturbing them; never fix the diff, push, merge, or write to the graph; run the bench for behavioral claims; use the `NOT BENCHED` verdict form only within its limits; and name anything that could not be checked rather than approving it in silence.
+
 ### What a verdict must contain
 
 - APPROVE: which done-criteria you checked, and the evidence for each — from your own re-run, not quoted from the worker's report. Carry that evidence into a home the graph can reach before the verdict cites it; `wheelhouse/GRAPH.md`'s *Where evidence lives* names which homes those are. Your own re-run is the run most likely to have written into a directory that will not outlive the review.
