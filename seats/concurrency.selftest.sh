@@ -444,6 +444,10 @@ EOF
   RLOG_A="$RPROJ/seats/logs/worker-a.jsonl"
   RLOG_B="$RPROJ/seats/logs/worker-b.jsonl"
 
+  # Mirror the hermetic phases: the adapter refuses to dispatch a bead unless
+  # its project-local worktree directory already exists.
+  mkdir -p "$RPROJ/.wheelhouse-worktrees/real-a" "$RPROJ/.wheelhouse-worktrees/real-b"
+
   rrun spawn worker-a
   [ $RC -eq 0 ] && pass "real: worker-a spawns ($OUT)" || fail "real: worker-a spawn exited ${RC}: $OUT"
   rrun spawn worker-b
