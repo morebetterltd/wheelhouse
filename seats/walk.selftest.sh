@@ -91,15 +91,22 @@ EOF
 
 run_case(){
   local name="$1" reply="$2" expect_rc="$3" expect_text="$4"
-  local proj="$FIX/proj-$name" out="$FIX/out-$name" ns="walk-$name" got rc transcript argv prompt
+  local proj="$FIX/proj-$name" out="$FIX/out-$name" ns="walk-$name" got rc transcript metadata argv prompt
   build_proj "$proj" "$ns"
   got=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY="$reply" bun seats/walk.ts 'claim text' --surface product:'echo product' --out "$out" 2>&1)
   rc=$?
   if [ "$rc" -eq "$expect_rc" ]; then pass "$name exit $rc"; else fail "$name exit got $rc expected $expect_rc: $got"; fi
   if printf '%s\n' "$got" | grep -qF "$expect_text"; then pass "$name printed $expect_text"; else fail "$name missing $expect_text: $got"; fi
   transcript="$out/transcript.txt"
+  metadata="$out/walk.json"
   [ -s "$transcript" ] && pass "$name retained transcript" || fail "$name transcript missing"
   if grep -q '\[tmpdir\]' "$transcript" && ! grep -qF "$HOME_FIX" "$transcript" && ! grep -qF "$FIX" "$transcript"; then pass "$name scrub applied"; else fail "$name scrub markers missing in transcript"; fi
+  if [ -f "$metadata" ]; then
+    if ! grep -qF "$FIX" "$metadata" && ! grep -qF "$HOME_FIX" "$metadata" && grep -q '"transcript": "\.\./out-' "$metadata"; then pass "$name walk.json transcript path is root-relative"
+    else fail "$name walk.json contains an absolute fixture path or lacks a root-relative transcript: $(cat "$metadata" 2>/dev/null)"; fi
+    if ! printf '%s\n' "$got" | grep -qF "$FIX" && ! printf '%s\n' "$got" | grep -qF "$HOME_FIX" && printf '%s\n' "$got" | grep -q 'transcript: \.\./out-'; then pass "$name stdout prints root-relative evidence paths"
+    else fail "$name stdout contains an absolute fixture path or lacks root-relative transcript: $got"; fi
+  fi
   argv="$HOME_FIX/.pi-seats-$ns/verifier/argv.json"
   prompt="$HOME_FIX/.pi-seats-$ns/verifier/prompt.txt"
   if grep -q -- '--append-system-prompt' "$argv" && grep -q 'contracts/VERIFIER.md' "$argv"; then pass "$name appended verifier brief"; else fail "$name did not append verifier brief: $(cat "$argv" 2>/dev/null)"; fi
