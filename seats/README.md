@@ -427,6 +427,7 @@ bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/walk.selftest.sh
 bash seats/intent-check.selftest.sh
+bash seats/cockpit.selftest.sh
 bash seats/herald.selftest.sh
 ```
 
