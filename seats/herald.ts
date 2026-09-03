@@ -3,7 +3,9 @@
  * herald.ts — Dispatch Office wake-event daemon.
  *
  * Non-LLM file carrier: tails seats/logs/*.jsonl and appends deduplicated
- * wake events to seats/inbox.jsonl. The event `state` values deliberately use
+ * wake events to seats/inbox.jsonl. On first sight of an existing log with no
+ * persisted cursor, the herald starts at EOF: adopting the herald must not
+ * replay historical seat output. The event `state` values deliberately use
  * A2A task-update vocabulary (terminal, input-required, failed) so a later
  * transport can swap the file out without renaming the commander's concepts.
  *
@@ -18,6 +20,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import.meta.dir, ".."));
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -30,6 +33,7 @@ const STATE_FILE = path.join(SEATS_DIR, "herald.state.json");
 const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
 const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
 const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
+const READ_CHUNK_BYTES = Math.max(1024, Number(process.env.WHEELHOUSE_HERALD_READ_CHUNK_BYTES || 64 * 1024));
 const POKE_PHRASE = "check the fleet inbox";
 const POKE_STABILITY_MS = Math.max(3000, Number(process.env.WHEELHOUSE_HERALD_POKE_STABILITY_MS || 3000));
 const POKE_COOLDOWN_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_COOLDOWN_MS || 120_000));
@@ -94,30 +98,46 @@ function logFiles(): string[] {
     .map((name) => path.join(LOG_DIR, name));
 }
 
-function readCompleteLines(file: string, offset: number): { lines: { line: string; offset: number; endOffset: number }[]; offset: number } {
+function readCompleteLines(file: string, offset: number, onLine: (rec: { line: string; offset: number; endOffset: number }) => void): { offset: number; linesRead: number } {
   const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
   if (size < offset) offset = 0; // log rotation/truncation: reread from start
-  if (size === offset) return { lines: [], offset };
+  if (size === offset) return { offset, linesRead: 0 };
   const fd = fs.openSync(file, "r");
-  let buf: Buffer;
+  const buf = Buffer.alloc(Math.min(READ_CHUNK_BYTES, Math.max(1, size - offset)));
+  const decoder = new StringDecoder("utf8");
+  let pos = offset;
+  let pending = "";
+  let pendingOffset = offset;
+  let linesRead = 0;
   try {
-    buf = Buffer.alloc(size - offset);
-    fs.readSync(fd, buf, 0, buf.length, offset);
+    while (pos < size) {
+      const bytesToRead = Math.min(buf.length, size - pos);
+      const bytesRead = fs.readSync(fd, buf, 0, bytesToRead, pos);
+      if (bytesRead <= 0) break;
+      const chunk = decoder.write(buf.subarray(0, bytesRead));
+      const text = pending + chunk;
+      let lineStart = 0;
+      let running = pendingOffset;
+      for (;;) {
+        const lf = text.indexOf("\n", lineStart);
+        if (lf === -1) break;
+        const endOffset = pendingOffset + Buffer.byteLength(text.slice(0, lf + 1));
+        const line = text.slice(lineStart, lf);
+        if (line) {
+          onLine({ line, offset: running, endOffset });
+          linesRead++;
+        }
+        lineStart = lf + 1;
+        running = endOffset;
+      }
+      pending = text.slice(lineStart);
+      pendingOffset = running;
+      pos += bytesRead;
+    }
   } finally {
     fs.closeSync(fd);
   }
-  const text = buf.toString("utf8");
-  const lastLf = text.lastIndexOf("\n");
-  if (lastLf === -1) return { lines: [], offset };
-  const complete = text.slice(0, lastLf + 1);
-  let running = offset;
-  const lines = complete.split("\n").filter(Boolean).map((line) => {
-    const at = running;
-    const len = Buffer.byteLength(line + "\n");
-    running += len;
-    return { line, offset: at, endOffset: running };
-  });
-  return { lines, offset: offset + Buffer.byteLength(complete) };
+  return { offset: pendingOffset, linesRead };
 }
 
 function textOf(value: unknown): string {
@@ -345,15 +365,20 @@ function scanOnce(): number {
   let appended = 0;
   for (const file of logFiles()) {
     const rel = path.relative(ROOT, file);
-    const prior = state.logs[rel]?.offset ?? 0;
-    const batch = readCompleteLines(file, prior);
-    if (!state.logs[rel]) state.logs[rel] = { offset: prior };
-    for (const rec of batch.lines) {
+    const priorRecord = state.logs[rel];
+    if (!priorRecord) {
+      const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
+      state.logs[rel] = { offset: size };
+      writeState(state);
+      continue;
+    }
+    const prior = priorRecord.offset;
+    const batch = readCompleteLines(file, prior, (rec) => {
       let obj: any;
       try { obj = JSON.parse(rec.line); } catch {
         state.logs[rel] = { offset: rec.endOffset };
         writeState(state);
-        continue;
+        return;
       }
       const candidate = classify(obj);
       if (candidate) {
@@ -376,8 +401,8 @@ function scanOnce(): number {
       state.logs[rel] = { offset: rec.endOffset };
       state.seen = Array.from(seen).slice(-MAX_SEEN);
       writeState(state); // per-line persistence closes append-before-state crash window
-    }
-    if (batch.lines.length === 0 && batch.offset !== prior) {
+    });
+    if (batch.linesRead === 0 && batch.offset !== prior) {
       state.logs[rel] = { offset: batch.offset };
       writeState(state);
     }
