@@ -1,0 +1,41 @@
+$ git branch --show-current
+fleet/wheelhouse-project-02ui
+$ git rev-parse HEAD
+d6cdca25821a7f5faec81ad3778c355af5f05aca
+$ rg -n "already had Pi seats|account.authRoute|Do not invent|safe deterministic" runbooks/UPGRADE.md
+115:If this project already had Pi seats, open `seats/seats.json` now and inspect every carried seat. Current rosters may record two fields older Pi rosters do not: `account.authRoute`, which is the credential route (`oauth`, `api_key`, or `env`) that gave the seat its identity, and `shadow`, which is a boolean only for intentional mirror seats. Back-fill `account.authRoute` for each carried seat from the route you actually use — OAuth `/login` for `openai-codex` subscription accounts, a file-backed provider entry in that seat's `auth.json` for `api_key`, or an exported provider env var for `env` — and do not record any credential material. Then read the JSON and probe every seat so both syntax and route are checked by the copied machinery:
+125:There is no safe deterministic conversion from an old roster: the same `provider` can be backed by file credentials or environment credentials, and committed roster data deliberately does not expose the secret source. Do not invent `shadow` while doing this. Absence still means `false`; add `"shadow": true` only when the project is intentionally creating a mirror seat whose output never gates or carries assigned work.
+$ scratch pre-authRoute roster migration proof
+before_authRoute_count=0
+final_json:
+{
+  "commander": {
+    "role": "commander",
+    "external": true,
+    "runtime": "claude-code"
+  },
+  "seats": {
+    "worker-1": {
+      "role": "worker",
+      "provider": "openai-codex",
+      "model": "gpt-5.5",
+      "account": {
+        "dir": "~/.pi-seats-fixture/worker-1",
+        "label": "work-chatgpt",
+        "authRoute": "oauth"
+      }
+    },
+    "reviewer": {
+      "role": "reviewer",
+      "provider": "anthropic",
+      "model": "claude-opus-5",
+      "account": {
+        "dir": "~/.pi-seats-fixture/reviewer",
+        "authRoute": "api_key"
+      }
+    }
+  }
+}
+missing_or_invalid_authRoute=0
+shadow_field_count=0
+$ git diff --check
