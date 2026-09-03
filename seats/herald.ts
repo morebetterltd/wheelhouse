@@ -42,6 +42,7 @@ const POKE_COOLDOWN_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_C
 const TMUX_SESSION = process.env.WHEELHOUSE_HERALD_TMUX_SESSION || "";
 const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
 const TMUX_SOCKET = process.env.WHEELHOUSE_TMUX_SOCKET || "";
+const HERALD_IDLE_RE = process.env.WHEELHOUSE_HERALD_IDLE_RE || "";
 
 const DISTRESS_RE = /(?:\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|ation)?\b|\b401\b|\bforbidden\b|\binvalid_grant\b|\btoken\b.*\b(?:expired|invalid|revoked)\b|\blog ?in required\b|\bcredential(?:s)?\b|\bquota\b|\brate.?limit\b|\b429\b|\busage limit\b|\bexhaust(?:ed|ion)?\b|\bout of credits\b|\binsufficient\s+credits?\b)/i;
 const STOP_DISTRESS_RE = /\bSTOP\b/;
@@ -307,13 +308,27 @@ function logPoke(outcome: string, detail = ""): void {
   fs.appendFileSync(HERALD_OUT_LOG, `${new Date().toISOString()} poke ${outcome}${suffix}\n`);
 }
 
+function configuredIdleRegex(): RegExp | null {
+  if (!HERALD_IDLE_RE) return null;
+  try {
+    return new RegExp(HERALD_IDLE_RE, "im");
+  } catch (e: any) {
+    logPoke("dropped", `reason=invalid-idle-re error=${e?.message || e}`);
+    return null;
+  }
+}
+
 function paneTextLooksIdleClaude(paneText: string): boolean {
   // Claude Code's current prompt UI is a bordered input box: a standalone
   // `❯` prompt line followed by a status/footer line. During a turn that
   // same box can still be visible below an active status line, so exclude the
-  // measured active markers first.
+  // measured active markers first. Wrapper launches can render their own idle
+  // prompt, so WHEELHOUSE_HERALD_IDLE_RE lets an install add the wrapper's
+  // exact idle signature without changing the safe active-marker exclusions.
   if (/[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(paneText)) return false;
   if (/\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(paneText)) return false;
+  const custom = configuredIdleRegex();
+  if (custom?.test(paneText)) return true;
   return /(?:^|\n)\s*(?:[>❯]|Human:|You:)\s*(?:\n|$)/.test(paneText) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
 }
 

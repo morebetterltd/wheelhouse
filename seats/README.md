@@ -16,6 +16,7 @@ The main files here:
   project root, and prints the export line and the one-time credential flow.
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, stop-all, resume.
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
+- `commander-inbox-poll.sh` — wrapper-independent commander fallback: drains the Dispatch Office inbox from inside the commander pane whenever the cursor lags.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
@@ -472,7 +473,7 @@ run; to clean it by hand, those pid-stamped dirs are the whole footprint.
 ## The bridge
 
 The bridge is how a human looks at the fleet: ONE tmux window per project,
-built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. Before it builds or attaches the tmux session, `cockpit.sh` starts the Dispatch Office herald (`bun seats/herald.ts`), verifies the recorded pid on every re-run, and restarts it if the pid is dead.
+built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. Before it builds or attaches the tmux session, `cockpit.sh` starts the Dispatch Office herald (`bun seats/herald.ts`), verifies the recorded pid on every re-run, and restarts it if the pid is dead. Start `seats/commander-inbox-poll.sh` inside the commander pane as well; it is the wrapper-independent fallback when tmux pokes cannot be delivered.
 
 ```bash
 seats/cockpit.sh [namespace]     # builds (or re-attaches to) session wh-<ns>
@@ -505,7 +506,15 @@ Each inbox row carries a stable source identity (`source.log`, `source.offset`, 
 bun seats/herald.ts --drain
 ```
 
-`--drain` prints unread inbox JSONL to stdout and moves the cursor to EOF. It never writes seat logs, FIFOs, or `state.json`. When a new inbox event lands, the herald may poke the commander through tmux, but the poke is deliberately only the constant phrase `check the fleet inbox`, never seat-authored text. It sends that phrase only to the bridge commander pane after a two-part gate: tmux must report a Claude-Code-shaped process (`claude`, or the `node`/`bun` wrapper states observed while Claude Code runs tools), and the captured pane text must match the measured idle Claude Code prompt UI rather than the measured active/working UI. Shell commands such as `sh`, `bash`, and `zsh` are outside the allowlist, so a bare shell gets no keystrokes even if its prompt is `❯`. A poke withheld because the pane is busy or inside the cooldown is left pending and retried on later herald scans until it can be sent; `seats/logs/herald.out.log` distinguishes `poke deferred` from `poke sent` and `poke dropped` (for no configured pane or send failure). Poke delivery is a wake-up hint, not correctness: a commander drains at session start, after every dispatch, and whenever poked.
+`--drain` prints unread inbox JSONL to stdout and moves the cursor to EOF. It never writes seat logs, FIFOs, or `state.json`. When a new inbox event lands, the herald may poke the commander through tmux, but the poke is deliberately only the constant phrase `check the fleet inbox`, never seat-authored text. It sends that phrase only to the bridge commander pane after a two-part gate: tmux must report a Claude-Code-shaped process (`claude`, or the `node`/`bun` wrapper states observed while Claude Code runs tools), and the captured pane text must match the measured idle Claude Code prompt UI rather than the measured active/working UI. If your commander is launched through a wrapper whose idle prompt is not the stock Claude prompt, set `WHEELHOUSE_HERALD_IDLE_RE` to a JavaScript regular expression matching that wrapper's idle-only pane text; active markers still veto the match first. Shell commands such as `sh`, `bash`, and `zsh` are outside the allowlist, so a bare shell gets no keystrokes even if its prompt is `❯`. A poke withheld because the pane is busy or inside the cooldown is left pending and retried on later herald scans until it can be sent; `seats/logs/herald.out.log` distinguishes `poke deferred` from `poke sent` and `poke dropped` (for no configured pane or send failure). Poke delivery is a wake-up hint, not correctness: a commander drains at session start, after every dispatch, whenever poked, and through the commander-pane self-poll below.
+
+Start the fallback poll inside the commander pane at session startup:
+
+```bash
+WHEELHOUSE_COMMANDER_INBOX_POLL_SECONDS=120 seats/commander-inbox-poll.sh &
+```
+
+The default interval is 120 seconds. The poll never scrapes tmux and never sends keys. It checks whether `seats/inbox.cursor` lags `seats/inbox.jsonl`; while it does, it prints `check the fleet inbox` into the commander pane and runs `bun seats/herald.ts --drain`. That makes wrapper-delivery failures visible even when the wrapper's prompt cannot be recognized or cannot consume tmux `send-keys` input.
 
 ### The floor
 
