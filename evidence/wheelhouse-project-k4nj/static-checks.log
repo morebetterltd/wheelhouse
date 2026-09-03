@@ -1,0 +1,20 @@
+relative path implementation:
+132:function rootRelative(file: string): string {
+193:      die(`could not scrub transcript: ${scrubbed.error?.message ?? scrubbed.stderr}`);
+227:  const transcriptRel = rootRelative(transcriptFile);
+228:  const metaRel = rootRelative(metaFile);
+289:      fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: `timed out after ${TIMEOUT_MS}ms`, transcript: transcriptRel }, null, 2));
+291:      console.log(`transcript: ${transcriptRel}`);
+297:    refuse(`pi exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}" — transcript: ${transcriptRel}`);
+301:  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel }, null, 2));
+304:  console.log(`transcript: ${transcriptRel}`);
+305:  console.log(`metadata: ${metaRel}`);
+
+selftest assertions:
+105:    if ! grep -qF "$FIX" "$metadata" && ! grep -qF "$HOME_FIX" "$metadata" && grep -q '"transcript": "\.\./out-' "$metadata"; then pass "$name walk.json transcript path is root-relative"
+106:    else fail "$name walk.json contains an absolute fixture path or lacks a root-relative transcript: $(cat "$metadata" 2>/dev/null)"; fi
+107:    if ! printf '%s\n' "$got" | grep -qF "$FIX" && ! printf '%s\n' "$got" | grep -qF "$HOME_FIX" && printf '%s\n' "$got" | grep -q 'transcript: \.\./out-'; then pass "$name stdout prints root-relative evidence paths"
+108:    else fail "$name stdout contains an absolute fixture path or lacks root-relative transcript: $got"; fi
+
+git diff --check:
+OK
