@@ -427,8 +427,11 @@ bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/walk.selftest.sh
 bash seats/intent-check.selftest.sh
+bash seats/push-authority-lint.selftest.sh
 bash seats/herald.selftest.sh
 ```
+
+`seats/push-authority-lint.sh [project-root] [verdict-file ...]` is the reviewer-verdict authority lint: when `wheelhouse/INTEGRATOR.md`'s project half grants push, it fails a verdict whose `PUSH:` line says pushing is principal-only. With no verdict files named it scans `seats/verdicts/*.md`; the selftest plants both the bad verdict and the no-grant case.
 
 When retaining a run as committed evidence, write it through the scrubber instead of redirecting raw output:
 
