@@ -34,7 +34,10 @@ command -v bun >/dev/null 2>&1 || exit 0
 
 status="$(bun "$HERE/adapter.ts" status 2>/dev/null)" || exit 0
 live=$(printf '%s\n' "$status" | grep -c ' RUNNING ')
-total=$(printf '%s\n' "$status" | grep -c -E ' (RUNNING|DIED|STOPPED) ')
+parked=$(printf '%s\n' "$status" | grep -c ' PARKED ')
+quota=$(printf '%s\n' "$status" | grep -c ' CAPACITY: QUOTA ')
+reprobe=$(printf '%s\n' "$status" | sed -n 's/^.*RE-PROBE: //p' | head -1)
+total=$(printf '%s\n' "$status" | grep -c -E ' (RUNNING|PARKED|DIED|STOPPED) ')
 
 # Counted from --json rather than the pretty-printed listing: the display is
 # not the data (wheelhouse/fleet/WORKER.md), and bd's rendered glyphs are not
@@ -46,6 +49,9 @@ ready=$(bd ready --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
 inprog=$(bd list --status in_progress --limit 0 --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
 
 line="🚢 FLEET: ${live}/${total} seats live · ${ready} ready · ${inprog} in progress"
+if [ "$parked" -gt 0 ] || [ "$quota" -gt 0 ]; then
+  line="$line — PARKED/QUOTA: ${quota:-0} capacity event(s). Re-probe: ${reprobe:-bun seats/adapter.ts probe <seat>}"
+fi
 if [ "$live" -eq 0 ] && [ "$ready" -gt 0 ]; then
   line="$line — SEATS COLD WITH READY WORK. Spawn/resume seats and dispatch FIRST. No commander chore (machinery sync, selftests, upgrades, ISA edits) before a seat holds a bead."
 fi
