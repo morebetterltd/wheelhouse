@@ -1,0 +1,4 @@
+ok 1 - grant plus authority-citing PUSH line passes
+ok 2 - planted negative: principal-only PUSH line fails when project grants push
+ok 3 - principal-only PUSH line is not flagged when no project grant is recorded
+push-authority-lint.selftest: PASS (3 checks)
