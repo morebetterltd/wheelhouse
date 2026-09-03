@@ -444,7 +444,7 @@ seats/evidence-scrub.sh -o evidence/<bead>/verify-selftest.txt -- bash seats/ver
 ```
 
 Hermetic — the seat-env, adapter, verify, and walk selftests build seats in a temp HOME with a stub `pi`, and your
-real seats are never touched. The adapter and verify selftests have canary phases that break a copy of
+real seats are never touched. Selftests that need template history after being copied into an install read the template clone from `wheelhouse/.template-source`'s `path=`; they must not assume the install repository has template-only commits. The adapter and verify selftests have canary phases that break a copy of
 the thing under test and check the tests notice; if a canary survives, the
 selftest fails even when everything else passed. The adapter and verify
 selftests each add one real-pi smoke leg at the end — the adapter's runs
