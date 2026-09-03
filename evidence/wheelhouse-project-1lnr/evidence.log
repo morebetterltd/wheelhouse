@@ -1,0 +1,24 @@
+$ git branch --show-current
+fleet/wheelhouse-project-1lnr
+$ git rev-parse HEAD
+0c0081b252f861880f6e915a9a4368279e9dc284
+$ rg -n "Dispatch Office herald|herald started|no-cockpit|ensure_herald|poke sent" README.md generated/STARTUP.md.example runbooks/UPGRADE.md seats/README.md
+seats/README.md:460:built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. Before it builds or attaches the tmux session, `cockpit.sh` starts the Dispatch Office herald (`bun seats/herald.ts`), verifies the recorded pid on every re-run, and restarts it if the pid is dead.
+runbooks/UPGRADE.md:277:- if the target template changed `generated/CLAUDE.md.example` or `generated/STARTUP.md.example`, read those specimens and hand-merge the matching standing behaviors into your real `CLAUDE.md` or `wheelhouse/STARTUP.md`; generated examples are not installed by an upgrade, so existing installs do not learn new Decisions-before-beads, Goal-before-dispatch, Claims-move-on-merge, morning handoff archive, end-of-day `stop-all`, or Dispatch Office herald startup rules unless you add them;
+runbooks/UPGRADE.md:278:- the Dispatch Office herald arrives through the `seats/` copy, but copying the file does not start it. Hand-merge the `generated/STARTUP.md.example` cockpit guidance that says `seats/cockpit.sh <namespace>` owns the herald through `ensure_herald`: a first cockpit launch starts it, a later launch verifies or restarts it, and the proof is a `herald started:`/`herald already running:`/`herald dead: ... restarting` line from cockpit plus later `poke sent`/`poke cooldown`/`poke not-idle` lines in `seats/logs/herald.out.log` once inbox traffic exists. A non-cockpit cold start (`bun seats/adapter.ts spawn ...` plus `status`) starts seats but not the herald, so say that if you keep a no-cockpit path.
+generated/STARTUP.md.example:51:The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id> ...`) and each seat's event stream lands in `seats/logs/<seat>.jsonl`. The bridge is the cockpit for watching the fleet: `seats/cockpit.sh ebb` builds (or re-attaches to — never duplicates, and re-runs respawn a missing floor pane) the tmux session `wh-ebb`, commander pane on the left and the floor — `bun seats/floor.ts`, read-only: spotlight one seat, rail of every seat's attention cues — on the right. Cockpit also owns the Dispatch Office herald: every launch verifies it, starts it when missing (`herald started: pid ...`), restarts it when dead (`herald dead: ...; restarting`), and later inbox traffic leaves `poke sent`, `poke cooldown`, or `poke not-idle` proof in `seats/logs/herald.out.log`. Keys and cue meanings are in `seats/README.md`'s "The bridge" section; `bun seats/adapter.ts status` is the no-cockpit fallback that always works, but it does not start the herald.
+README.md:101:The seats are commander-owned processes, not terminals you keep open. `seats/seat-env.sh` gives each seat its own account directory — one seat, one login — and from then on the adapter does everything: `bun seats/adapter.ts spawn` starts a seat with its role brief injected, `dispatch` hands it a bead, and its session survives a stop, so `resume` brings the context back warm. There is nothing to paste into a seat. To watch the fleet, `seats/cockpit.sh` builds one tmux window per project: your commander session in the left pane, and on the right the floor — a read-only view that spotlights one seat's stream and shows every seat's attention cues in a rail. Cockpit also starts/verifies/restarts the Dispatch Office herald, printing `herald started: pid ...` or the already-running/restart line; a no-cockpit `spawn`/`status` path starts seats, not that wake daemon. `seats/README.md` documents all of it.
+$ scratch upgraded install cockpit proof
+before:
+herald_pid_exists=no
+documented cockpit path:
+herald started: pid 62284
+bridge built: session wh-proofns, window 0:bridge (commander left, floor right)
+session wh-proofns is up; attach with: tmux -L wh-1lnr-proof attach -t wh-proofns
+after:
+herald_pid_exists=yes pid=62286
+$ no-cockpit status proof
+no seats recorded in seats/state.json
+adapter_status_rc=0
+herald_pid_exists_after_status=no
+$ git diff --check
