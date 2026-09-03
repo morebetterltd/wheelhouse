@@ -528,10 +528,10 @@ Run each of these and paste what it prints:
 - A grep for unfilled placeholders. Anything you leave for the principal to fill uses `{{DOUBLE_BRACE}}` and nothing else, so this check is exact:
 
   ```bash
-  grep -rn "{{" CLAUDE.md wheelhouse/ | grep -v "^wheelhouse/runbooks/"
+  grep -rIn "{{" CLAUDE.md wheelhouse/ | grep -v "^wheelhouse/runbooks/"
   ```
 
-  Expect zero. The HTML comments in the contracts' `## This project` sections are guidance, not placeholders, and do not count here. `runbooks/` is excluded deliberately: runbooks are copied verbatim, so any brace syntax one ever carries is the template's text, not an unfilled blank the installer left. Before this exclusion the check failed on every correct install, on a file the installer never authored.
+  Expect zero. `-I` makes the search text-only, so committed binary evidence such as PNG screenshots cannot report `Binary file ... matches` just because its bytes contain the brace pair. The HTML comments in the contracts' `## This project` sections are guidance, not placeholders, and do not count here. `runbooks/` is excluded deliberately: runbooks are copied verbatim, so any brace syntax one ever carries is the template's text, not an unfilled blank the installer left. Before this exclusion the check failed on every correct install, on a file the installer never authored.
 
   What to do with them: **when you have content for a section, REPLACE its comment with that content. When you have nothing, leave the comment where it is.** The comment is a prompt for whoever fills the section later, so it stops being useful the moment the section is filled — and a section carrying both guidance and content reads as though the content is an example of what to write.
 - **Confirm the bench stub fails.** It is the one file whose whole job is to exit non-zero:
