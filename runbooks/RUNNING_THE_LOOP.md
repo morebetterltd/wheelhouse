@@ -119,6 +119,16 @@ A BOUNCE lists each defect as its own point: what is wrong, where, and what done
 
 The same contract carries the claim-move duty: update `wheelhouse/ISA.md`'s Claims with the merge, or state on the bead why no claim moved. Do not duplicate that rule here; this stage points at the contract that owns it.
 
+Before closing any ISA claim whose surface a consumer touches, walk the surface the claim names:
+
+```bash
+bun seats/walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--out <dir>] [--verifier <seat>]
+```
+
+The walk command exits `0` for `WALKED-DONE`, `2` for `WALKED-NOT-DONE`, `3` for `COULD-NOT-WALK`, `4` for missing/ambiguous/malformed verdict output, and `5` for preflight or credential refusal. A closing claim cites the walk verdict and transcript evidence home, or it carries the explicit not-walked statement `wheelhouse/ISA.md` permits; silence is the defect. Treat `WALKED-NOT-DONE` like a field report: file the failing step as a bead with a Trace line to the walk, then decide whether the claim stays pending, narrows, or closes not-walked.
+
+At least every N merges, walk the install's primary consumer surface even if no claim demanded it. This is the drift walk: N comes from this runbook's project section (`walk_cadence_merges`, default 5), and the primary surface is one of the surfaces named in `wheelhouse/crew/VERIFIER.md`'s project half. Record the walk on the bead or ISA entry that triggered it; if it returns `WALKED-NOT-DONE`, triage it as the field report above.
+
 Run the intent-check gate at `seats/intent-check.sh` before integrating when that script is present. If this template has not yet received the sibling bead that ships it, the path is still the agreed gate path and this line is the ordering marker.
 
 Push, open and merge PRs, and run automated deploys per your project's recorded authority, in `wheelhouse/INTEGRATOR.md`'s project section. The shipped default is all the way; an empty section means the install failed to record its authority, not that a generated conservative agent profile owns the answer. Ask once with a recommendation and default, write the answer, then proceed.
@@ -278,6 +288,21 @@ the graph as the cadence rule says, and say so rather than hunting for a note
 nobody wrote.
 
 If the fleet has no work it can start without the principal, say so out loud. A loop with nothing to do will find something, and what it finds will be its own tooling.
+
+## This project
+
+Generated at install.
+
+### Walk cadence and surfaces
+
+Default project values, to keep one integer and the surface list in the project record rather than a hidden config file:
+
+```yaml
+walk_cadence_merges: 5
+walk_surfaces: see wheelhouse/crew/VERIFIER.md "Consumer surfaces to walk"
+```
+
+Override `walk_cadence_merges` here if this install needs a tighter or looser drift-walk rhythm. Name the actual install, upgrade, and product surfaces in `wheelhouse/crew/VERIFIER.md`'s project half so both claim-closing walks and every-N drift walks dispatch against the same list.
 
 ## What this document does not restate
 
