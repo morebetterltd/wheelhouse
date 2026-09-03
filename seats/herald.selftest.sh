@@ -192,13 +192,27 @@ if ! grep -q 'malicious\|rm -rf\|please type' "$SEND_LOG" 2>/dev/null; then pass
 else fail "seat text leaked into send-keys: $(cat "$SEND_LOG")"; fi
 
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
+{"type":"response","command":"prompt","success":false,"error":"usage limit reached while commander was busy"}
+JSONL
+BEFORE_SENDS="$(line_count "$SEND_LOG")"
+OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+AFTER_SENDS="$(line_count "$SEND_LOG")"
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "busy commander pane defers a distress poke without sending"
+else fail "busy pane did not defer distress poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
+BEFORE_SENDS="$(line_count "$SEND_LOG")"
+OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+AFTER_SENDS="$(line_count "$SEND_LOG")"
+if [ $RC -eq 0 ] && [ "$AFTER_SENDS" = "$((BEFORE_SENDS+1))" ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "deferred distress poke is delivered once the commander pane is idle"
+else fail "deferred distress poke was not delivered on idle retry (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
+
+cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["cooldown suppressed"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
 OUT="$(FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke cooldown .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "per-pane cooldown suppresses a second immediate poke"
-else fail "cooldown did not suppress second poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=cooldown .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "per-pane cooldown defers a second immediate poke"
+else fail "cooldown did not defer second poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 sleep 0.02
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
@@ -225,8 +239,8 @@ JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
 OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bash FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/bare-shell-chevron.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "allowlist gate classifies a ❯-prompt bare shell not-idle and does not poke"
-else fail "❯-prompt bare shell received a poke or was not logged not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "allowlist gate classifies a ❯-prompt bare shell not-idle and defers without poking"
+else fail "❯-prompt bare shell received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["between tool calls"]}
@@ -235,8 +249,8 @@ BEFORE_SENDS="$(line_count "$SEND_LOG")"
 SEQ_STATE="$FIX/capture-seq.idx"
 OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_SEQUENCE="$ROOT/seats/fixtures/herald-panes/between-tool-calls.txt:$ROOT/seats/fixtures/herald-panes/tool-running.txt" FAKE_TMUX_SEQUENCE_STATE="$SEQ_STATE" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "between-tool-calls Claude UI is unstable across the idle window and not poked"
-else fail "between-tool-calls fixture received a poke or was not logged (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "between-tool-calls Claude UI is unstable across the idle window and deferred without poking"
+else fail "between-tool-calls fixture received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done third"]}
@@ -244,8 +258,8 @@ JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
 OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "fixture mid-turn Claude UI is logged not-idle and not poked"
-else fail "mid-turn Claude received a poke or was not logged (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "fixture mid-turn Claude UI is logged deferred/not-idle and not poked"
+else fail "mid-turn Claude received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done fourth"]}
@@ -260,8 +274,8 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done fifth"]}
 JSONL
 OUT="$(run_herald --once 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && grep -q 'poke no-pane ' "$POKE_LOG" 2>/dev/null; then pass "poke attempt with no configured pane is logged no-pane"
-else fail "no-pane poke attempt was not logged (rc=$RC out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
+if [ $RC -eq 0 ] && grep -q 'poke dropped .*reason=no-pane ' "$POKE_LOG" 2>/dev/null; then pass "poke attempt with no configured pane is logged dropped/no-pane"
+else fail "no-pane poke attempt was not logged dropped/no-pane (rc=$RC out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 # Cockpit supervision: fake tmux is enough because the claim here is that
 # cockpit.sh starts/verifies/restarts the herald before it builds or attaches
