@@ -1,0 +1,21 @@
+trace commits/files present:
+contracts/REVIEWER.md
+contracts/WORKER.md
+runbooks/RUNNING_THE_LOOP.md
+
+worker isolation rule:
+20:- When verifying a host app, daemon, service, supervisor, launch agent, or anything that binds a machine-local port, run only an isolated test instance: give it a scratch state root, choose a non-production port or socket, point the client under test at that test endpoint, and leave the installed app bundle and production service definition untouched. Do not unload, stop, edit, overwrite, or replace the production LaunchAgent, systemd unit, plist, service, installed bundle, login item, or supervisor entry in order to make room for verification; if the only available proof would disturb production, stop and report the missing isolation rather than running it.
+
+runbook dispatch constraint:
+56:If the dispatch asks a worker to launch or verify a host app, daemon, service, supervisor, launch agent, or machine-local port listener, include this constraint verbatim in the dispatch: `Verification must run an isolated test instance: scratch state root, non-production port/socket, client pointed at that test endpoint, installed app bundle untouched, and production LaunchAgent/systemd unit/service/plist/login item/supervisor entry never unloaded, stopped, edited, overwritten, or replaced. If that isolation is unavailable, stop and report the missing isolation instead of running it.`
+
+reviewer before/after check:
+81:- For a host app, daemon, service, supervisor, launch agent, or machine-local port listener change, verify that the worker's run could not have displaced production: before review, record whether the production port/socket and LaunchAgent/systemd unit/service/plist/login item/supervisor entry exist and are running; after any reviewer-run proof, record the same facts again and compare them. An APPROVE needs the before/after production state unchanged, or an explicit statement that no production service exists on the review machine. If checking that state requires access you do not have, route it as structurally unverifiable rather than approving in silence.
+
+production service protected terms count:
+       3
+
+stale permissive patterns (expect no output):
+
+diff check:
+OK

@@ -17,6 +17,7 @@ The bead's stated outcome is verifiably true in your worktree, committed on a br
 - One bead in flight. The graph is the single source of work state.
 - Stay on the bead. Adjacent problems you notice become new bead suggestions in your report, not edits.
 - If the bead's done is unachievable as stated, STOP and report why instead of redefining done.
+- When verifying a host app, daemon, service, supervisor, launch agent, or anything that binds a machine-local port, run only an isolated test instance: give it a scratch state root, choose a non-production port or socket, point the client under test at that test endpoint, and leave the installed app bundle and production service definition untouched. Do not unload, stop, edit, overwrite, or replace the production LaunchAgent, systemd unit, plist, service, installed bundle, login item, or supervisor entry in order to make room for verification; if the only available proof would disturb production, stop and report the missing isolation rather than running it.
 
 ### Evidence
 
