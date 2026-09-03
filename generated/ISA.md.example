@@ -30,6 +30,9 @@ When a claim is pending, keep it visibly pending instead of promoting it:
 - PENDING: <claim under test>. Evidence owed: <artifact or observation>, to land at <bead comment or committed path>. Falsifier: <what would disprove it>.
 -->
 
+- 2026-08-21: Fresh install from the README front door reaches a working smoke dispatch on a scratch product. Evidence: verifier walk `VERDICT: WALKED-DONE`, transcript retained at `evidence/ebb-install-walk/2026-08-21-transcript.txt` (walker transcript dated 2026-08-21). Surface walked: README front door plus BOOTSTRAP install target. Falsifier: a later README-front-door walk reaches `VERDICT: WALKED-NOT-DONE` or `COULD-NOT-WALK` on the same install surface.
+- 2026-08-21: Upgrade from baseline `d8128d4` is not yet claimed walked. Not walked: no verifier walk has run against `wheelhouse/runbooks/UPGRADE.md` from that baseline. Evidence owed: upgrade walker transcript at `evidence/ebb-upgrade-walk/<date>-transcript.txt`. Falsifier: the first upgrade walk cannot complete or reaches a step where the upgraded install is not usable.
+
 ## Anti-claims
 
 What this fleet is explicitly NOT doing, so nobody re-proposes it every month.
