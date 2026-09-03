@@ -217,7 +217,7 @@ bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
 One invocation = one verdict. Unlike the seats above, the verifier is
 EPHEMERAL: `verify.ts` spawns one `pi -p --no-session` on the verifier
 seat's account — no session saved, nothing to resume — with
-the resolved VERIFIER brief appended to the system prompt, hands it the bead
+the resolved REVIEWER brief appended to the system prompt, hands it the bead
 claim (via `bd show` when `bd` is reachable, otherwise the verifier reads
 the bead itself) and the branch's tip SHA, and parses the single
 `VERDICT:` line out of the reply.
@@ -229,7 +229,7 @@ in verify.ts): a real `git worktree add --detach <tmp-path> HEAD` against
 `ROOT`, created right before the spawn and removed on every exit path via
 `process.on("exit", ...)`. This closes the same hazard class adapter.ts's
 per-bead cwd construction (see "Running a seat" above) closes for a
-confused worker: `VERIFIER.md` says "read-only on the work," but that is a
+confused worker: `REVIEWER.md` says "read-only on the work," but that is a
 rule the model can ignore, and a confused or adversarial turn
 that runs a bare `write`/`edit` against a relative path needs somewhere
 harmless to land, not the live checkout every other seat and the commander
@@ -237,7 +237,7 @@ depend on.
 
 It has to be a real worktree of THIS repository, not an arbitrary empty
 directory, because the verifier's own default reading mechanism
-(`VERIFIER.md`, "Reading a branch without disturbing it") is bare
+(`REVIEWER.md`, "Reading a branch without disturbing it") is bare
 `git diff <base> <sha>` and `git show <sha>:<path>` with no `-C`
 flag — those read the object database directly and do not care which
 directory they run in, as long as it is a clone that has the branch's
@@ -353,6 +353,16 @@ tolerates); the commander reads the bead and restates its requirement as
 arguments — the same relationship the bead claim itself has to the
 dispatch.
 
+## Walking a consumer surface
+
+```bash
+bun seats/walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--out <dir>] [--verifier <seat>]
+```
+
+One invocation = one verifier walk of one ISA claim against the surface that claim names. `<claim-ref>` is either the quoted claim text or a file containing it. Surface kinds are `install:<readme-or-repo path/URL>`, `upgrade:<runbook path>` with `--baseline <sha>`, and `product:<url-or-command>`. The command spawns one `pi -p --no-session` on the roster's verifier identity with the resolved `VERIFIER.md` walker brief and a prompt containing only the claim text, the surface spec, and consumer setup for that surface. It does not perform the author-account distinctness check from `verify.ts`, because a walk judges a surface, not a diff.
+
+The transcript is scrubbed through `seats/evidence-scrub.sh` and retained under `--out`; if omitted, `--out` defaults under ignored `seats/verdicts/walks/` for the commander to transcribe into a graph-approved evidence home. Exit codes are `0` for `WALKED-DONE`, `2` for `WALKED-NOT-DONE`, `3` for `COULD-NOT-WALK`, `4` for missing/ambiguous/malformed `VERDICT:` output, and `5` for preflight or credential refusal before any walker spawns.
+
 ### state.json
 
 `seats/state.json` is the seat ↔ process ↔ session record, one entry per
@@ -415,6 +425,7 @@ bash seats/seat-env.selftest.sh
 bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
+bash seats/walk.selftest.sh
 bash seats/intent-check.selftest.sh
 bash seats/herald.selftest.sh
 ```
@@ -425,9 +436,9 @@ When retaining a run as committed evidence, write it through the scrubber instea
 seats/evidence-scrub.sh -o evidence/<bead>/verify-selftest.txt -- bash seats/verify.selftest.sh
 ```
 
-Hermetic — the seat-env, adapter, and verify selftests build seats in a temp HOME with a stub `pi`, and your
-real seats are never touched. Each has a canary phase that breaks a copy of
-the thing under test and checks the tests notice; if a canary survives, the
+Hermetic — the seat-env, adapter, verify, and walk selftests build seats in a temp HOME with a stub `pi`, and your
+real seats are never touched. The adapter and verify selftests have canary phases that break a copy of
+the thing under test and check the tests notice; if a canary survives, the
 selftest fails even when everything else passed. The adapter and verify
 selftests each add one real-pi smoke leg at the end — the adapter's runs
 spawn, dispatch, agent_end, resume, and the session file growing; verify's
