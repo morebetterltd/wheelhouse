@@ -1,0 +1,210 @@
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+shell: zsh 5.9
+artifact: template tree at commit a28516d4ca8ae3e768c5523abaec239a921d970c
+--- BOOTSTRAP step 1, extracted from the artifact and run under this shell ---
+  | OK      git — /usr/bin/git
+  | OK      bd — /opt/homebrew/bin/bd
+  | OK      bash — /bin/bash
+  | OK      awk — /usr/bin/awk
+  | OK      pi — <home>/.nvm/versions/node/v22.21.0/bin/pi
+  | OK      bun — <home>/.bun/bin/bun
+  | OK      claude — <home>/.local/bin/claude
+  | PREFLIGHT OK — every dependency is on PATH
+  | git version 2.50.1 (Apple Git-155)
+  | bd version 1.2.2 (Homebrew)
+step 1: preflight OK — 7 named dependencies, each with its own OK line
+--- BOOTSTRAP step 1, same stanza, bd masked off PATH ---
+  | OK      git — <workdir>/zsh/install/step0-maskbin/git
+  | MISSING bd
+  |         the wheelhouse needs it because it is the work graph -- every unit of work the fleet holds lives in it
+  |         install it: brew install beads   # or see https://github.com/gastownhall/beads
+  | OK      bash — <workdir>/zsh/install/step0-maskbin/bash
+  | OK      awk — <workdir>/zsh/install/step0-maskbin/awk
+  | OK      pi — <workdir>/zsh/install/step0-maskbin/pi
+  | OK      bun — <workdir>/zsh/install/step0-maskbin/bun
+  | OK      claude — <home>/.local/bin/claude
+  | PREFLIGHT FAILED — install what is named above, then re-run this block
+step 1 negative: bd masked — exit 1, MISSING bd named with why and install command, PREFLIGHT FAILED, git still OK; PATH and bd intact afterwards
+fixture repo created at <workdir>/zsh/install/fixture-product on branch main
+preexistence check: no wheelhouse/, no CLAUDE.md before step 2
+step 2: all nine contract files present
+--- wheelhouse/.template-source ---
+source=<template-repo>
+commit=a28516d4ca8ae3e768c5523abaec239a921d970c
+path=<workdir>/zsh/template
+installed=2026-09-03T21:40:05Z
+upgraded=
+namespace=
+step 2: installing into <workdir>/zsh/install/fixture-product; bd version 1.2.2 (Homebrew) (carried forward from step 1)
+step 2: runbooks, bench stub and seats machinery copied verbatim; seat runtime paths gitignored
+step 3: merge target 'main' confirmed against the repository's refs
+step 3: fixture interview answers loaded (onboarding mechanics only)
+step 3: namespace=fixture-product recorded in .template-source; every seat surface below is written from that read-back value
+step 3: seats/seats.json written and read back as JSON (commander external + 2 seats)
+  | OK      pi — <home>/.nvm/versions/node/v22.21.0/bin/pi
+  | wrote   <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/.project (records /private<workdir>/zsh/install/fixture-product)
+  | dir     <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/worker-1
+  | wrote   <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/worker-1/trust.json (pre-grants /private<workdir>/zsh/install/fixture-product)
+  | 
+  | seat ready: <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/worker-1
+  | 
+  | point a process at this seat:
+  |   export PI_CODING_AGENT_DIR="<workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/worker-1"
+  | 
+  | one-time OAuth login (writes <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/worker-1/auth.json; sign in as the account this seat should BE):
+  |   PI_CODING_AGENT_DIR="<workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/worker-1" pi
+  |   # in the Pi REPL: type /login, complete the browser flow, then type /exit
+  | api_key alternative: either write <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/worker-1/auth.json yourself as
+  |   {"<provider>": {"type": "api_key", "key": "<the key>"}}  (chmod 600)
+  |   or set account.authRoute to env and export the provider's env var in the shell that spawns the seat.
+  |   auth.json survives new shells; the env-var route writes nothing to disk.
+  | OK      pi — <home>/.nvm/versions/node/v22.21.0/bin/pi
+  | current <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/.project (already records /private<workdir>/zsh/install/fixture-product)
+  | dir     <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/reviewer-1
+  | wrote   <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/reviewer-1/trust.json (pre-grants /private<workdir>/zsh/install/fixture-product)
+  | 
+  | seat ready: <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/reviewer-1
+  | 
+  | point a process at this seat:
+  |   export PI_CODING_AGENT_DIR="<workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/reviewer-1"
+  | 
+  | one-time OAuth login (writes <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/reviewer-1/auth.json; sign in as the account this seat should BE):
+  |   PI_CODING_AGENT_DIR="<workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/reviewer-1" pi
+  |   # in the Pi REPL: type /login, complete the browser flow, then type /exit
+  | api_key alternative: either write <workdir>/zsh/install/fixture-home/.pi-seats-fixture-product/reviewer-1/auth.json yourself as
+  |   {"<provider>": {"type": "api_key", "key": "<the key>"}}  (chmod 600)
+  |   or set account.authRoute to env and export the provider's env var in the shell that spawns the seat.
+  |   auth.json survives new shells; the env-var route writes nothing to disk.
+step 4: seats provisioned for real against a fixture HOME — directories, canonicalized trust grants and login commands verified, re-runs idempotent
+step 4 probe: SKIP — the per-seat provider probe (pi -p --no-session --provider ... --model ... 'reply OK') needs a real login, and a bench has none; a real install must run it per seat and paste the reply
+step 5: bd init ok (full output retained in the workdir log)
+  Repository ID: 5c4fa823
+  Clone ID: edd009c9b989982e
+  Hooks installed to: .beads/hooks/
+  ✓ Created AGENTS.md with agent instructions
+Installing Claude hooks for this project...
+AGENTS.md reconciled: conservative or absent (override appended without the landing-the-plane strike)
+intent coverage: ISA has Goal + empty Claims; intent-check.sh present/executable; selftest PASSed
+intent coverage negatives: missing intent-check.sh and missing ISA are both DETECTED
+step 5: contract fills, CLAUDE.md, ISA.md, STARTUP.md written
+OK   fleet/WORKER.md
+OK   fleet/SEATS.md
+OK   crew/REVIEWER.md
+OK   crew/DESIGNER.md
+OK   crew/VERIFIER.md
+OK   crew/BENCH.md
+OK   GRAPH.md
+OK   INTEGRATOR.md
+INTEGRITY OK — all contracts verified
+bd status probe (exit 1): Error: invalid status "in_review" (valid: open, in_progress, blocked, deferred, closed, pinned, hooked)
+seeded pre-existing ready bead fixture-product-uuq (so the label selection below is not vacuous)
+look-before-create (pre-create, exit 0): No issues found.
+{
+  "created_at": "2026-09-03T21:43:34.533793Z",
+  "created_by": "worker-1",
+  "description": "The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: the eight clauses in wheelhouse/crew/BENCH.md.",
+  "id": "fixture-product-13w",
+  "issue_type": "task",
+  "labels": [
+    "wheelhouse-bootstrap"
+  ],
+  "owner": "bench@invalid.example",
+  "priority": 1,
+  "schema_version": 1,
+  "status": "open",
+  "title": "Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md",
+  "updated_at": "2026-09-03T21:43:34.533793Z"
+}
+bench bead fixture-product-13w created, stamped wheelhouse-bootstrap
+look-before-create (post-create, exit 0): 1 bead — fixture-product-13w — so a re-run creates nothing
+○ fixture-product-13w ● P1 Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md
+
+--------------------------------------------------------------------------------
+Total: 1 issues (1 open, 0 in progress)
+
+Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred
+--- bd ready ---
+○ fixture-product-13w ● P1 Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md
+○ fixture-product-uuq ● P2 Wire the fixture CLI's greeting into a smoke check
+
+--------------------------------------------------------------------------------
+Ready: 2 issues with no active blockers
+
+Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred
+step 6 selection: bd ready lists 2 ready beads; --label wheelhouse-bootstrap lists exactly fixture-product-13w
+--- bd ready --label wheelhouse-bootstrap ---
+○ fixture-product-13w ● P1 Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md
+
+--------------------------------------------------------------------------------
+Ready: 1 issues with no active blockers
+
+Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred
+
+💡 Tip: Install the beads plugin for automatic workflow context, or run 'bd setup claude' for CLI-only mode
+specimen-leak grep: zero hits (exit 1)
+placeholder grep: zero hits outside runbooks/ (exit 1)
+--- wheelhouse/fleet/SEATS.md '### Roster' ---
+
+One line per seat this project took, from question 7's per-seat walk, mirroring
+`seats/seats.json` — the machine record, which decides; this table is the human
+record and must agree with it. Agent directories land under `$HOME/.pi-seats-fixture-product/`
+(namespace `fixture-product`, recorded as `namespace=` in `wheelhouse/.template-source`,
+the value `seats/seat-env.sh` is invoked with). The commander is always here
+and was never a question.
+
+| Seat | Role brief | Provider | Model | Agent directory |
+|---|---|---|---|---|
+| `worker-1` | `wheelhouse/fleet/WORKER.md` | `openai-codex` | `gpt-5.5` | `~/.pi-seats-fixture-product/worker-1` |
+| `reviewer-1` | `wheelhouse/crew/REVIEWER.md` | `anthropic` | `claude-opus-5` | `~/.pi-seats-fixture-product/reviewer-1` |
+| (commander) | this folder's `CLAUDE.md` | — | — | none: the fixture principal's own session, `"external": true` in the roster |
+--- wheelhouse/fleet/SEATS.md '### Declined seats' ---
+
+Offered individually at install and refused, in the fixture principal's words.
+
+| Seat | Reason | Date |
+|---|---|---|
+| Verifier | "The fixture has no third account, and the verifier must not share the author's; the smoke verdict takes the solo path." | 2026-08-30 |
+| Designer | "I am decomposing the first beads myself for now." | 2026-08-21 |
+| Second worker | One worker is enough until the reviewer sits idle. | 2026-08-21 |
+seats: per-seat walk recorded — taken seats on the roster with provider and pinned model, refused seats with reason and date
+seat records agree: namespace 'fixture-product' in .template-source, all seats.json directories under pi-seats-fixture-product, roster carries the same directories, step 4 provisioned them
+STARTUP.md: per-seat provisioning and spawn lines, status view, cockpit wh-fixture-product named, cd lines all at this root, no pre-Pi machinery
+--- BOOTSTRAP step 5's seat-agreement block, extracted and run under this shell (exit 0) ---
+  | pi-seats-fixture-product
+namespace agreement: the artifact's own BOOTSTRAP block finds the machine record, the human record and the roster in agreement
+bench stub exit=1 (non-zero as shipped): bench.sh is not implemented for this project yet.
+Implement it against crew/BENCH.md before approving any behavioral change.
+runbooks: every template runbook present (3 files)
+citation scan: every wheelhouse/-prefixed citation resolves
+step 5 verify: all created files exist and are non-empty
+--- installed tree ---
+AGENTS.md
+CLAUDE.md
+wheelhouse/.template-source
+wheelhouse/crew/BENCH.md
+wheelhouse/crew/bench.sh
+wheelhouse/crew/DESIGNER.md
+wheelhouse/crew/REVIEWER.md
+wheelhouse/crew/VERIFIER.md
+wheelhouse/fleet/SEATS.md
+wheelhouse/fleet/WORKER.md
+wheelhouse/GRAPH.md
+wheelhouse/INTEGRATOR.md
+wheelhouse/ISA.md
+wheelhouse/runbooks/PROMOTION.md
+wheelhouse/runbooks/RUNNING_THE_LOOP.md
+wheelhouse/runbooks/UPGRADE.md
+wheelhouse/STARTUP.md
+--- git status before staging ---
+ M AGENTS.md
+ M CLAUDE.md
+?? seats/
+?? wheelhouse/
+--- install commits ---
+6440a8b Install the wheelhouse: contracts, briefs, and the work graph
+aaf37cb bd init: initialize beads issue tracking
+9cc4b1b fixture product: trivial CLI
+graph snapshot committed (bd export; a snapshot is stale from the moment it is written)
+step 5 commit: install present in the committed tree at fa8fe82ac882c9fbd1c49ab706c5bd37242a5168
+step 6 smoke: SKIP — no seat passed a step-4 probe (the bench fixture has no real accounts); on a real install the smoke dispatch runs and the loop closing IS the install verification
+INSTALL VERIFIED

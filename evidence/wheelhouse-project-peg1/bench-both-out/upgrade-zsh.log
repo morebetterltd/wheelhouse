@@ -1,0 +1,141 @@
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+shell: zsh 5.9
+artifact: template tree at commit a28516d4ca8ae3e768c5523abaec239a921d970c
+baseline: e39f3760132e98c1dffc7131c3ffee51364085ad (T9 residue: the ignore line, the branch nobody read, and a fixture with no home) — 8 contract file(s) changed since
+  changed: contracts/BENCH.md
+  changed: contracts/DESIGNER.md
+  changed: contracts/GRAPH.md
+  changed: contracts/INTEGRATOR.md
+  changed: contracts/REVIEWER.md
+  changed: contracts/SEATS.md
+  changed: contracts/VERIFIER.md
+  changed: contracts/WORKER.md
+target ref for UPGRADE.md's steps: TARGET=a28516d4ca8ae3e768c5523abaec239a921d970c (the artifact, not a branch name)
+fixture graph: fixture-product-djr is open; fixture-product-6gu is claimed (in_progress) and invisible to 'bd list --status open'
+fixture: install at baseline committed as 195f862dee114d6d0b19564673d0072d2857212b; bead fixture-product-djr carries the old dialect
+pre-upgrade snapshot taken: 7 contract halves, 7 project halves, the implemented bench
+--- UPGRADE step 0: the baseline ---
+source=https://github.com/morebetterltd/wheelhouse.git
+commit=e39f3760132e98c1dffc7131c3ffee51364085ad
+path=<workdir>/zsh/upgrade/template-clone-the-os-deleted
+installed=2026-01-02T03:04:05Z
+upgraded=
+step 0: baseline present, so the procedure skips to step 1 (the reconstruction branch is NOT exercised here)
+step 1: clone has the baseline commit; path= repointed to <workdir>/zsh/template, no .bak left
+step 2: extracted block reads $TARGET
+step 2 probe: the same block at TARGET=e39f3760132e98c1dffc7131c3ffee51364085ad diffs the baseline against itself and prints nothing
+step 2: BASE=e39f3760132e98c1dffc7131c3ffee51364085ad read from .template-source; contracts diff is 601 lines, first 12:
+  | diff --git a/contracts/BENCH.md b/contracts/BENCH.md
+  | index 521f7df..39ac009 100644
+  | --- a/contracts/BENCH.md
+  | +++ b/contracts/BENCH.md
+  | @@ -14,16 +14,22 @@ A bench must satisfy all eight of these. They are stack-agnostic on purpose —
+  |  
+  |     That obliges you to be able to say WHICH artifact you tested, which needs an identifier derived from the artifact's own contents — not a name someone can reassign. Where your toolchain supplies one, use it. Where it does not, a hash of the built file recorded when it is built, carried in whatever the bench receives, and re-computed by the bench before it runs anything, does the same job. The property to preserve is that the identifier changes when the bytes change and cannot be moved to different bytes; a version string, a branch name or a mutable tag has neither half, and a bench that accepts one is testing whatever that label points at today. This is the requirement most likely to have no ready-made answer on your stack — a compiled binary shipped by a deploy script has no registry to borrow one from — and inventing the analogue is part of writing the bench rather than a sign you are off the path.
+  |  
+  | +   The ready-made answer, for a project small enough that nothing else supplies one: hash the built file. At build time, `shasum -a 256 <artifact> > <artifact>.sha256`; ship the two together; have the bench recompute the digest before it runs anything and fail if it differs, or if the digest file is not there at all. Two lines, and they satisfy the property in full — the digest changes when the bytes change and cannot be moved to different bytes. It is written here because the clause reads as heavyweight on a small project and gets skipped on that impression: a one-script tool needs no registry and no provenance system, it needs those two lines, and reaching past them for something grander is how a tiny project ends up with clause 2 unanswered.
+  | +
+  |  3. **It starts from clean state, every run.** No snapshots, no reused state, no data left by the last run. Snapshots and leftover state hide install-state and first-run bugs, and they let one run inherit another's conclusion.
+  |  
+step 3: eight .md.new copies in place
+step 4 prediction: 18 'project section UPSTREAM' line(s) expected, derived from this baseline→artifact delta:
+  expect: project section UPSTREAM, not in yours — wheelhouse/fleet/WORKER.md: ### Repos and where work lands
+  expect: project section UPSTREAM, not in yours — wheelhouse/fleet/WORKER.md: ### Verified gotchas
+  expect: project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Roster
+  expect: project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Declined seats
+  expect: project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Walk cadence
+  expect: project section UPSTREAM, not in yours — wheelhouse/crew/REVIEWER.md: ### Where to look
+  expect: project section UPSTREAM, not in yours — wheelhouse/crew/DESIGNER.md: ### The territory
+  expect: project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### What the artifact is
+  expect: project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### What proves it did its job
+  expect: project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### What is set up and torn down around the assertion
+  expect: project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### What the error scan looks for
+  expect: project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### Prerequisites
+  expect: project section UPSTREAM, not in yours — wheelhouse/GRAPH.md: ### Priorities
+  expect: project section UPSTREAM, not in yours — wheelhouse/GRAPH.md: ### CLI build notes
+  expect: project section UPSTREAM, not in yours — wheelhouse/INTEGRATOR.md: ### Who integrates
+  expect: project section UPSTREAM, not in yours — wheelhouse/INTEGRATOR.md: ### Push, PR, deploy, and reserved-action authority
+  expect: project section UPSTREAM, not in yours — wheelhouse/INTEGRATOR.md: ### Walk cadence
+  expect: project section UPSTREAM, not in yours — wheelhouse/INTEGRATOR.md: ### How a shipped record gets corrected here
+--- step 4 output ---
+  | project section UPSTREAM, not in yours — wheelhouse/fleet/WORKER.md: ### Repos and where work lands
+  | project section UPSTREAM, not in yours — wheelhouse/fleet/WORKER.md: ### Verified gotchas
+  | project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Roster
+  | project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Declined seats
+  | project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Walk cadence
+  | project section UPSTREAM, not in yours — wheelhouse/crew/REVIEWER.md: ### Where to look
+  | project section UPSTREAM, not in yours — wheelhouse/crew/DESIGNER.md: ### The territory
+  | new, copied whole: wheelhouse/crew/VERIFIER.md
+  | project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### What the artifact is
+  | project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### What proves it did its job
+  | project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### What is set up and torn down around the assertion
+  | project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### What the error scan looks for
+  | project section UPSTREAM, not in yours — wheelhouse/crew/BENCH.md: ### Prerequisites
+  | project section UPSTREAM, not in yours — wheelhouse/GRAPH.md: ### Priorities
+  | project section UPSTREAM, not in yours — wheelhouse/GRAPH.md: ### CLI build notes
+  | project section UPSTREAM, not in yours — wheelhouse/INTEGRATOR.md: ### Who integrates
+  | project section UPSTREAM, not in yours — wheelhouse/INTEGRATOR.md: ### Push, PR, deploy, and reserved-action authority
+  | project section UPSTREAM, not in yours — wheelhouse/INTEGRATOR.md: ### Walk cadence
+  | project section UPSTREAM, not in yours — wheelhouse/INTEGRATOR.md: ### How a shipped record gets corrected here
+step 4: splice ran over 8 files; 'new, copied whole' branch taken once, for wheelhouse/crew/VERIFIER.md
+step 4: all 18 predicted 'project section UPSTREAM' line(s) reported, and no others
+step 4: the migration's announcement fired — 'project section UPSTREAM, not in yours — wheelhouse/fleet/SEATS.md: ### Declined seats'
+--- step 5: contract integrity, extracted from BOOTSTRAP.md and run under this shell ---
+  | OK   fleet/WORKER.md
+  | OK   fleet/SEATS.md
+  | OK   crew/REVIEWER.md
+  | OK   crew/DESIGNER.md
+  | OK   crew/VERIFIER.md
+  | OK   crew/BENCH.md
+  | OK   GRAPH.md
+  | OK   INTEGRATOR.md
+  | INTEGRITY OK — all contracts verified
+step 5: all eight contract halves byte-identical to the artifact's contracts/ at a28516d4ca8ae3e768c5523abaec239a921d970c
+step 5: 7 contract half(s) that moved upstream moved here too
+step 5: all seven project halves byte-identical to what the install wrote, each still carrying its own marker
+step 5: the implemented bench is byte-identical and still exits 0 — BENCH PASS (fixture)
+step 5: seats machinery arrived at the root (seat-env.sh executable, no seats.json invented, .gitignore guards in place)
+step 5 negatives: an unspliced contract and a stub-clobbered bench are both DETECTED (probed on copies; the installed project was not touched)
+step 6: extracted block reads $TARGET
+--- wheelhouse/.template-source after step 6 ---
+source=https://github.com/morebetterltd/wheelhouse.git
+commit=a28516d4ca8ae3e768c5523abaec239a921d970c
+path=<workdir>/zsh/template
+installed=2026-01-02T03:04:05Z
+upgraded=2026-09-03T21:44:07Z
+step 6: commit=a28516d4ca8ae3e768c5523abaec239a921d970c, upgraded=2026-09-03T21:44:07Z, installed=2026-01-02T03:04:05Z untouched, no .bak files
+step 7: extracted block reads $TARGET
+--- step 7 sweep output ---
+  | +- **Comment authorship is configured, not inferred.** Every seat's own pi process carries `BEADS_ACTOR=<seat name>` in its environment, so the bead's comment author field says which seat spoke. The adapter sets this for you — unconditionally, on every spawn, resume, reset, and the cwd-changing relaunch inside dispatch — not the operator: one commander pane launches several seats with different actor names, and a later resume/reset/dispatch relaunches a seat from whatever env the adapter process has at that moment, which an operator's earlier export cannot reach. The operator sets nothing. An optional per-seat override exists for the rare case a seat's comments need a different actor name than its seat name: `WHEELHOUSE_BEADS_ACTOR_<SEAT>` (seat name upper-cased, every character outside `[A-Z0-9]` turned into `_`), read by `seats/adapter.ts` and `seats/verify.ts` at spawn time. This mechanism is version-stamped against bd 1.2.2 (measured 2026-08-31: `BEADS_ACTOR=<name> bd comment ...` rendered the comment author as `<name>`); re-verify on your bd build the same way this file asks for every CLI behavior.
+  | +- **Establish that a backgrounded bench survives its seat, on YOUR harness — and know what kills it on this one.** Whether a process started by a session keeps running after that session ends is a fact about the harness and the configuration, not about sessions in general. On pi 0.84.1 (measured 2026-08-30) it survives: the turn's agent_end, the seat's normal exit, and a `stop` (SIGTERM) delivered to an idle seat all leave a backgrounded bench running to completion. What does kill it, measured the same day, is a stop landing while the tool call that started it is still executing — pi's teardown takes the running tool's whole process tree with it, `nohup` included. On pi coding-agent CLI 0.84.4 / openai-codex gpt-5.5 (measured 2026-08-31), the separate tool-call TIMEOUT killer has the same signature for a plain `nohup ... &` start: the child shared the tool shell's process group, stopped logging at timeout, and its pid was dead. The same measurement's macOS-safe `setsid` equivalent — Python `os.setsid()` plus a second fork before starting the chain — survived both killers that were rechecked on 0.84.4: after tool-call timeout its pid was still alive and the log kept ticking, and after SIGTERM was sent to a one-shot `pi -p --no-session` while the starting tool call slept, the child was still alive and logging. So the bench is at its most fragile while it shares the starting tool call's process group; for a split review, start any chain that must outlive that call with `setsid -f ...` where available, or an equivalent double-fork `setsid()` wrapper, and then write the interim record before anyone has a reason to stop anything. If a consumer fleet sees the lazydad-753 signature — a backgrounded bench or lock wait disappearing with no bench-level timeout line — check the seat/tool-call timeout first, then check whether the start recipe isolated the child into its own session. On any other harness, measure before building a review on it. If the bench does not survive there, this shape is unavailable to you, and what remains is the first answer or a party that outlives the seat running the bench itself.
+  | +**If this fleet is not running on the machine that owns the template, the label alone reaches nobody.** It marks the bead in a graph the template's maintainers cannot see, so file the finding as a GitHub issue on the template's repository as well — `github.com/morebetterltd/wheelhouse` for an install from that template, or whatever remote `wheelhouse/.template-source` records if you installed from a fork.
+  | +A committed capture must also be scrubbed before it is committed: no local usernames, home directories, machine-identifying hostnames, or tmp paths — replace them with neutral placeholders (`[user]`, `[home]`, `[tmpdir]`) at capture time. Use root-relative `seats/evidence-scrub.sh` as the standard write-time filter: `cmd 2>&1 | seats/evidence-scrub.sh > evidence/<bead>/capture.txt`, or `seats/evidence-scrub.sh -o evidence/<bead>/capture.txt -- cmd`. This repo is public-destined, and an `ls -l` owner column or a `<tmpdir>` path in evidence outlives every intention to clean it later.
+  | +A persistent Pi process the commander owns: one long-lived `pi --mode rpc` per seat, started and driven by the adapter (`seats/adapter.ts`), addressable by its roster name. Its identity is fixed before it starts, in two records. The roster (`seats/seats.json`) says what the seat IS — role, provider, model, and the agent directory that holds its account (`account.dir`). It optionally also carries `account.authRoute` — which of the three routes question 8 offers (`oauth`, `api_key`, `env`) gave the seat its identity — and `shadow`, a boolean marker for a mirror seat whose output is recorded but never gates or carries assigned work; both are durable and safe to commit because they are route/behavior names, never credentials, and a roster written before either field existed simply omits them. The runtime record (`seats/state.json`) says what currently embodies it — pid, session, log, FIFO — written by the adapter, never by hand. The role is injected at spawn: the adapter appends the role's crew brief (`contracts/<ROLE>.md`) to the system prompt via `--append-system-prompt`, which is the only moment Pi takes configuration. A running seat has its role already; nothing is pasted into it, and a seat behaving as if it had no brief was spawned wrong, not briefed wrong.
+  | +Between turns a seat is quiet, not inert, and the two halves of that are both measured (pi 0.84.1, 2026-08-30): an idle seat initiates nothing on its own — its event log, left alone, does not grow by a byte — but a process a turn put in the background keeps running after the turn ends, and a dispatch queued behind a busy seat fires the moment the current work drains, with nobody present. Two duties follow. A seat says in its report what it has left running or queued, because that part does not wait for anyone's next turn. And the commander stops a seat only when it is idle: a SIGTERM landing mid-turn takes the running tool's whole process tree with it, `nohup` included, while stopping an idle seat spares what earlier turns set in motion. A second killer is distinct from stop: on pi coding-agent CLI 0.84.4 / openai-codex gpt-5.5 (measured 2026-08-31), a tool-call TIMEOUT also killed a background `nohup ... &` chain that shared the tool shell's process group. In that same 0.84.4 measurement, a chain started through a double-fork Python `os.setsid()` wrapper — the portable stand-in for `setsid -f ...` on this macOS host — survived the timeout, and survived SIGTERM to a one-shot `pi -p --no-session` while the starting tool call was still sleeping. If a chain must outlive the tool call that starts it, isolate it into its own session before the long wait (`setsid -f ...` or an equivalent double-fork `setsid()` wrapper); if a consumer fleet sees a background process vanish without its own timeout line, check tool-call timeout/process-group reaping before debugging the bench itself. On any other runtime these are measurements to redo, not assumptions to import.
+  | +One consequence is enforced rather than trusted: **the verifier's account must be distinct from the author's.** A review from the author's own account is not a review, so `seats/verify.ts` compares the author seat's `account.dir` against the verifier's — canonicalized, on disk, before any model runs — and a match is a loud STOP. Keep the reviewer's and verifier's directories different from every worker's, or the fleet has no reviewer it can use.
+  | +Provision once, then run with the adapter; the commands and what each one does live in `seats/README.md`, and this paragraph is deliberately all this contract says about launching. Provisioning is `seats/seat-env.sh <namespace> <seat-name>` — it creates the seat's agent directory, pre-grants trust for the project root, and prints the one-time credential flow for the account that seat should BE: OAuth seats launch `PI_CODING_AGENT_DIR=... pi`, type `/login` inside the REPL, then `/exit`; api_key seats place the key by the recorded file or env-var route. From then on the seat is `bun seats/adapter.ts spawn <seat>` to start, `dispatch` to hand it a bead, `steer` to redirect mid-turn, `status` for liveness, `stop` and `resume` for the graceful stop and the warm reattach. A one-shot verifier pass is `bun seats/verify.ts <bead-id> <branch> <author-seat>`. If any of those refuse to run, the refusal names the provisioning step that was skipped; the refusal is the guard working.
+  | +Resetting a seat's context is a commander decision, not a worker one — a worker cannot see whether its own cache is still earning its keep. Four named triggers call for it: the initiative or hill-climb the seat was serving has closed, so nothing in the cache still applies to what comes next; a contract half that supplies the seat's role brief has changed, because briefs are injected only at spawn and a standing process keeps the old one until a cold respawn; context degradation signals — compaction thrash, or the seat visibly arguing from stale assumptions a fresh read of the graph would correct; or a plain operator call, made without either signal, because the commander judged the cache not worth keeping. `reset` refuses loudly instead of running if the seat is mid-turn — the same rule that governs `stop` above: never interrupt a running turn, only ever reset an idle one.
+  | +That the cache is disposable is what makes the persistent shape cheap to run: the seat idles between dispatches holding its warm cache, and losing that cache is never a loss the fleet has to plan around. The session survives `stop` — the adapter's stop is SIGTERM, Pi's graceful path, and it deliberately never escalates to SIGKILL — and `resume` respawns the seat attached to the same session, context warm. When the cache is worthless — a new line of work, a context gone stale — spawn fresh instead of resuming; that is the whole reset, and it is a command, not a ritual: `seats/adapter.ts reset <seat>` stops the seat, discards its recorded session, and respawns it cold, as one call instead of a stop-then-spawn an operator could get wrong two ways.
+  | +This has a collision consequence worth stating plainly: two seats — or two PROJECTS — pointed at the same agent directory share that directory's login, and the rule above stops being true of your fleet silently. The convention that prevents it is per-project seat roots (`$HOME/.pi-seats-<namespace>/<seat-name>`, the namespace recorded as `namespace=` in `wheelhouse/.template-source`), and the roster's `account.dir` field is the record of which directory each seat actually got.
+  | +This is a licensing-compliance statement, not a preference or a scaling guideline. It does not change with the size of your fleet, and it is the reason each seat needs its own agent directory rather than sharing one: the directory holds the account's `auth.json`, so same directory means same login means one subscription serving more than one seat.
+  | ○ fixture-product-djr ● P1 Implement crew/bench.sh against crew/BENCH.md
+  | ◐ fixture-product-6gu ● P2 Wire the seats named in crew/SEATS.md
+  | 
+  | --------------------------------------------------------------------------------
+  | Total: 2 issues (1 open, 1 in progress)
+  | 
+  | Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred
+  | No issues found.
+step 7: the sweep runs and surfaces both the open old-dialect bead fixture-product-djr and the claimed one fixture-product-6gu (what a reader DOES about them is judgment, not a check)
+step 7 migration: no namespace= line before the block; predicting the append branch and exactly one namespace=fixture-product afterwards
+--- the migration block's own output (exit 0) ---
+  | namespace=fixture-product
+step 7 migration: append branch taken on a pre-namespace .template-source, namespace=fixture-product recorded once, every other field untouched, and a re-run adds none
+step 7 migration: v1 machinery removed — SEAT_DISCOVERY.md deleted, the guarded rm ran clean over the two absent wire-seats files
+step 8: upgrade committed as d446f22bf28e9b9a0ecc53dcbf402322aefd3c36
+--- git log ---
+d446f22 Upgrade wheelhouse contracts to a28516d4ca8a
+195f862 Install the wheelhouse at e39f3760132e98c1dffc7131c3ffee51364085ad (upgrade bench fixture)
+4ec1103 bd init: initialize beads issue tracking
+runbook sweep: all 3 runbook file(s) current after a by-the-book upgrade
+UPGRADE VERIFIED

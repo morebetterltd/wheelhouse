@@ -1,0 +1,42 @@
+bench: wheelhouse cold install + upgrade
+artifact: .wheelhouse-worktrees/wheelhouse-project-peg1 at commit a28516d4ca8ae3e768c5523abaec239a921d970c (ref: fleet/wheelhouse-project-peg1)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases: install=1 upgrade=1 interview=0
+evidence: [tmpdir]/peg1-bench
+
+=== install under bash ===
+bash/install: PASS (210 log lines) — [tmpdir]/peg1-bench/install-bash.log
+
+=== upgrade under bash ===
+bash/upgrade: PASS (141 log lines) — [tmpdir]/peg1-bench/upgrade-bash.log
+  runbook sweep: all 3 runbook file(s) current after a by-the-book upgrade
+
+=== install under zsh ===
+zsh/install: PASS (210 log lines) — [tmpdir]/peg1-bench/install-zsh.log
+
+=== upgrade under zsh ===
+zsh/upgrade: PASS (141 log lines) — [tmpdir]/peg1-bench/upgrade-zsh.log
+  runbook sweep: all 3 runbook file(s) current after a by-the-book upgrade
+
+wheelhouse cold-install + upgrade bench verdict
+date: 2026-09-03T21:44:13Z
+artifact: template tree at commit a28516d4ca8ae3e768c5523abaec239a921d970c (repo: .wheelhouse-worktrees/wheelhouse-project-peg1)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases run: install=1 upgrade=1 (bash and zsh each) interview=0
+result: PASS
+evidence: install-{bash,zsh}.log, upgrade-{bash,zsh}.log and/or interview/ in this directory
+
+This verdict cannot distinguish install-phase onboarding mechanics from
+interview quality. The interview mode benches Q7/Q8 conduct mechanics
+on one transcript; FAIL needs retained-capture adjudication and cannot
+distinguish a prose defect from interviewer-model weakness. It also
+cannot distinguish a current specimen-leak list from a stale one.
+The upgrade phase additionally cannot say that an
+install produced by the baseline commit's own BOOTSTRAP would upgrade
+the same way — its fixture has the SHAPE of that install, not its
+history — nor that the v1→Pi migration's operator half (the roster
+interview, per-seat logins, retiring the old roots) produces a working
+fleet; it does not exercise UPGRADE.md step 0's reconstruction of a
+missing .template-source. See the header of bench.sh.
+BENCH PASS
+BENCH_RC=0

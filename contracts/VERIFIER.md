@@ -71,4 +71,4 @@ Generated at install.
 
 ### Consumer surfaces to walk
 
-<!-- Filled at install. Name each consumer surface this verifier may be dispatched to walk for an ISA claim: README front door and install target; upgrade runbook and supported baseline; product URL, emulator command, CLI command, API endpoint, app install, or other user-facing surface. Include any prerequisites and where transcripts should be retained. -->
+<!-- Filled at install. Name each consumer surface this verifier may be dispatched to walk for an ISA claim: README front door and first-morning/start prompt for a template-style fleet; upgrade runbook and supported baseline from a real consumer install; product URL, emulator or launch command, CLI command, API endpoint, app install, or other user-facing surface. Include prerequisites and where transcripts should be retained. At least one surface is named, or this section states the honest gap exactly: "no consumer surface yet — walks impossible, claims close not-walked". -->
