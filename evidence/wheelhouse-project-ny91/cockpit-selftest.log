@@ -1,0 +1,5 @@
+ok 1 - cockpit builds one bridge window with two panes on a private tmux socket
+ok 2 - client-attached resize keeps commander pane near its ratio on a 152-column attach (commander=83 floor=68)
+ok 3 - fixture floor pane killed for respawn check
+ok 4 - re-running cockpit respawns a missing floor pane
+cockpit.selftest: PASS (4 checks)
