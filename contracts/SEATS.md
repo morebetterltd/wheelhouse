@@ -53,6 +53,12 @@ Provision once, then run with the adapter; the commands and what each one does l
 
 Commander + one worker + one reviewer. That is a working loop. Add seats when a specific role is the bottleneck, not to fill out a roster — see `wheelhouse/runbooks/PROMOTION.md`.
 
+### Reviewer seats cost more than you think
+
+Reviewer seats run on every bead that reaches the gate, and again on every rework. A reviewer model chosen as if it runs only occasionally can become the fleet's largest metered bill. Worked example, measured 2026-09-02 over one 24-hour shadow-reviewer day: 16 beads produced 22 review rounds including re-reviews; a frontier gating reviewer metered at about $120 total, about $5.70 per round, on 40.9M tokens mostly from cache reads; GLM 5.3 flash via OpenRouter cost $0.79 total, about $0.04 per round, for the same window; a flat-subscription reviewer had $0 marginal cost. The shipped default proposal is therefore a mid-tier or cheap strong model for the gate — for example an Opus-class or GLM-class reviewer/verifier, with GLM-class commonly reached through OpenRouter — and a frontier model reserved for explicit second looks when a hard review needs it.
+
+Choose the gate by measurement rather than taste. The method that produced the example above was a one-day shadow run: dispatch the candidate model as a shadow reviewer for the same beads, put its verdicts on the beads, and compare caught gates, missed gates, hallucinated defects, evidence quality and cost against the current gate before changing the roster.
+
 ## This project
 
 Generated at install.
