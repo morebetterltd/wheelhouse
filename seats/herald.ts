@@ -12,8 +12,10 @@
  * Optional poke delivery is intentionally tiny: after appending wake events,
  * the herald sends exactly one constant phrase to the commander tmux pane —
  * "check the fleet inbox" — and only if that pane is verifiably an idle
- * Claude session. Correctness never depends on this poke; commanders drain
- * the inbox at start and whenever poked.
+ * Claude session. A withheld poke stays pending and is retried on later scans
+ * until the pane is idle, honoring the configured cooldown. Correctness never
+ * depends on this poke; commanders drain the inbox at start, after dispatch,
+ * and whenever poked.
  */
 
 import * as crypto from "node:crypto";
@@ -343,14 +345,19 @@ function commanderPaneIdleClaude(): boolean {
 function pokeCommanderIfSafe(state: HeraldState): void {
   const inboxSize = fs.existsSync(INBOX) ? fs.statSync(INBOX).size : 0;
   if (inboxSize <= 0 || state.lastPokedInboxSize === inboxSize) return;
-  if (!TMUX_PANE) { logPoke("no-pane", `inbox=${inboxSize}`); return; }
+  if (!TMUX_PANE) {
+    logPoke("dropped", `reason=no-pane inbox=${inboxSize}`);
+    state.lastPokedInboxSize = inboxSize;
+    writeState(state);
+    return;
+  }
   const lastPoked = state.lastPokedByPane?.[TMUX_PANE] ?? 0;
-  if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("cooldown", `pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
-  if (!commanderPaneIdleClaude()) { logPoke("not-idle", `pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
+  if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
+  if (!commanderPaneIdleClaude()) { logPoke("deferred", `reason=not-idle pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
   try {
     execFileSync("tmux", tmuxArgs(["send-keys", "-t", TMUX_PANE, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
   } catch (e: any) {
-    logPoke("send-failed", `pane=${TMUX_PANE} inbox=${inboxSize} error=${e?.message || e}`);
+    logPoke("dropped", `reason=send-failed pane=${TMUX_PANE} inbox=${inboxSize} error=${e?.message || e}`);
     throw e;
   }
   logPoke("sent", `pane=${TMUX_PANE} inbox=${inboxSize}`);
@@ -407,7 +414,7 @@ function scanOnce(): number {
       writeState(state);
     }
   }
-  if (appended > 0) pokeCommanderIfSafe(state);
+  pokeCommanderIfSafe(state);
   return appended;
 }
 
