@@ -125,6 +125,17 @@ attach() {
 }
 
 QSELF="$(printf '%q' "$SELF")"
+COMMANDER_PANE_PERCENT="${WHEELHOUSE_COCKPIT_COMMANDER_PERCENT:-55}"
+
+install_resize_hook() {
+  # Detached new-session starts at tmux's default 80 columns. Size after a real
+  # client attaches so the floor pane does not inherit every added column.
+  local prefix="tmux"
+  if [ -n "${WHEELHOUSE_TMUX_SOCKET:-}" ]; then
+    prefix="tmux -L $WHEELHOUSE_TMUX_SOCKET"
+  fi
+  tmx set-hook -t "$S" client-attached "run-shell 'sleep 0.1; $prefix resize-pane -t ${S}:bridge.0 -x ${COMMANDER_PANE_PERCENT}%'"
+}
 
 spawn_floor_pane() {
   # Right pane, full height: the floor (spotlight + rail in one program).
@@ -142,6 +153,7 @@ if tmx has-session -t "=$S" 2>/dev/null; then
       tmx select-pane -t "${S}:bridge.0"
     fi
   fi
+  install_resize_hook
   echo "bridge already built: $S (re-run is attach, never a duplicate)"
   attach
   exit 0
@@ -151,6 +163,7 @@ fi
 tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander"
 
 spawn_floor_pane
+install_resize_hook
 
 # Status bar: project on the left, the key hints on the right.
 tmx set-option -t "$S" status on
