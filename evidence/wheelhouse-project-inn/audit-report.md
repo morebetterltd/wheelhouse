@@ -6,16 +6,27 @@ root: a8b857e109690ace951f3bc340b9a233e453fce0
 commit_count: 242
 blob_count: 715
 scope: git rev-list --objects <template-main> plus cat-file --batch-check filtered to type=blob; every unique blob content scanned; every commit message and author/committer metadata scanned
+pattern_classes_scanned:
+- raw-username
+- absolute-home-path
+- temp-path
+- credential-token material: sk-, ghp_/gho_/ghu_/ghs_/ghr_, github_pat_, AKIA/ASIA, xox, JWT, Bearer, and PEM private-key headers
+- credential-assignment shape: api_key/token/secret/password/passwd/credential assignment-like lines
+- account-label
+- machine-hostname
+- email-or-metadata-identity
+zero_hit_pattern_classes: private-key-pem, aws-access-key, github-token, slack-token, jwt-token, bearer-token
 
 ## Top-line summary
 ruled_accepted: 4
-judged_false_positive: 1215
+judged_false_positive: 1238
 unaccepted: 3
 AUDIT RESULT: FAIL — unaccepted findings remain pending principal ruling; no history scrub attempted.
 
 ## Summary by disposition and class
 - JUDGED-FALSE-POSITIVE: absolute-home-path: 7
 - JUDGED-FALSE-POSITIVE: account-label: 69
+- JUDGED-FALSE-POSITIVE: credential-token: 23
 - JUDGED-FALSE-POSITIVE: email-or-metadata-identity: 487
 - JUDGED-FALSE-POSITIVE: machine-hostname: 10
 - JUDGED-FALSE-POSITIVE: temp-path: 642
@@ -1239,6 +1250,29 @@ JUDGED-FALSE-POSITIVE	tree:fee5f6876433:BOOTSTRAP.md:150:temp-path	sha256-16:53d
 JUDGED-FALSE-POSITIVE	tree:fee5f6876433:BOOTSTRAP.md:150:temp-path	sha256-16:f2aea38081b8e05f	public template prose/example or scrubber fixture, not a private identifier
 JUDGED-FALSE-POSITIVE	tree:fee5f6876433:BOOTSTRAP.md:152:temp-path	sha256-16:53df1b29829e1a4e	public template prose/example or scrubber fixture, not a private identifier
 JUDGED-FALSE-POSITIVE	tree:fee5f6876433:BOOTSTRAP.md:152:temp-path	sha256-16:f2aea38081b8e05f	public template prose/example or scrubber fixture, not a private identifier
+JUDGED-FALSE-POSITIVE	tree:35f5c3506f1b:seats/recover.selftest.sh:355:credential-token	sha256-16:ee7b6ef94f0fb476	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:49482e41e9d0:seats/recover.selftest.sh:364:credential-token	sha256-16:ee7b6ef94f0fb476	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:50de21acf341:seats/adapter.selftest.sh:368:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:50de21acf341:seats/adapter.selftest.sh:371:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:50de21acf341:seats/adapter.selftest.sh:374:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:50de21acf341:seats/adapter.selftest.sh:378:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:50de21acf341:seats/adapter.selftest.sh:381:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:50de21acf341:seats/adapter.selftest.sh:383:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:7146d3d1c5e6:seats/adapter.selftest.sh:368:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:7146d3d1c5e6:seats/adapter.selftest.sh:371:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:7146d3d1c5e6:seats/adapter.selftest.sh:374:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:7146d3d1c5e6:seats/adapter.selftest.sh:378:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:7146d3d1c5e6:seats/adapter.selftest.sh:381:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:7146d3d1c5e6:seats/adapter.selftest.sh:383:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:c27b2e068c01:seats/recover.selftest.sh:364:credential-token	sha256-16:ee7b6ef94f0fb476	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:cc3a5ef36bac:seats/recover.selftest.sh:361:credential-token	sha256-16:ee7b6ef94f0fb476	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:d9581c08a590:seats/adapter.selftest.sh:368:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:d9581c08a590:seats/adapter.selftest.sh:371:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:d9581c08a590:seats/adapter.selftest.sh:374:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:d9581c08a590:seats/adapter.selftest.sh:378:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:d9581c08a590:seats/adapter.selftest.sh:381:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:d9581c08a590:seats/adapter.selftest.sh:383:credential-token	sha256-16:c751f34bfefcf59a	fixture dummy credential string in selftest code, not a live credential
+JUDGED-FALSE-POSITIVE	tree:e621c477216f:seats/recover.selftest.sh:349:credential-token	sha256-16:ee7b6ef94f0fb476	fixture dummy credential string in selftest code, not a live credential
 RULED-ACCEPTED	tree:b5a08f42c5da:evidence/wheelhouse-project-y7h/adapter-selftest.txt:2:temp-path	sha256-16:f0face1532f91626	Keenan 2026-09-01 accepted fab4906 temp-path leak; do not scrub history
 RULED-ACCEPTED	tree:b5a08f42c5da:evidence/wheelhouse-project-y7h/adapter-selftest.txt:3:temp-path	sha256-16:f0face1532f91626	Keenan 2026-09-01 accepted fab4906 temp-path leak; do not scrub history
 RULED-ACCEPTED	tree:b5a08f42c5da:evidence/wheelhouse-project-y7h/adapter-selftest.txt:72:temp-path	sha256-16:10fdfd640043a975	Keenan 2026-09-01 accepted fab4906 temp-path leak; do not scrub history
