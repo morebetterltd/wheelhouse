@@ -14,7 +14,7 @@ So when you read a stage below, the question is never "was that passed along cor
 
 - The roles exist. One person may hold several — commander and integrator are commonly the same, and a solo principal can hold all of them at different moments. What must not happen is one person being both author and reviewer of the same change; `wheelhouse/crew/REVIEWER.md` forbids it and it is the one merge that cannot be recovered by care. A solo install, where one human holds every role, closes that gap the way the next section describes.
 - The work graph is initialised and `bd ready` lists something.
-- The commander drains the Dispatch Office inbox at session start with `bun seats/herald.ts --drain`, then drains it again whenever the herald pokes with the constant phrase `check the fleet inbox`. The poke is only a wake-up hint; correctness never depends on it, because the inbox is durable and the commander's start-of-session drain catches anything a poke missed.
+- The commander drains the Dispatch Office inbox at session start with `bun seats/herald.ts --drain`, after every dispatch, and whenever the herald pokes with the constant phrase `check the fleet inbox`. The poke is only a wake-up hint; correctness never depends on it, because the inbox is durable and commander drains catch anything a poke missed or deferred while the commander pane was busy.
 - You know whether `wheelhouse/crew/bench.sh` is the shipped stub or a real bench. If it is the stub, no verdict may claim the software runs, and that is deliberate. See `wheelhouse/crew/BENCH.md`.
 
 ## When one human holds every seat
