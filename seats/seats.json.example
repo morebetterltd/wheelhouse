@@ -19,8 +19,8 @@
     },
     "reviewer": {
       "role": "reviewer",
-      "provider": "anthropic",
-      "model": "claude-opus-5",
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.3-flash",
       "account": { "dir": "~/.pi-seats-myproject/reviewer", "authRoute": "api_key" }
     },
     "reviewer-shadow": {
