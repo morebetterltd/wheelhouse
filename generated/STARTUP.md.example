@@ -34,6 +34,7 @@ Provision each roster seat once (safe to re-run; it changes nothing for a seat t
 cd ~/code/ebb
 seats/seat-env.sh ebb worker-1
 seats/seat-env.sh ebb reviewer
+seats/seat-env.sh ebb verifier
 ```
 
 Then, on any later cold start, just spawn from the roster:
@@ -41,7 +42,8 @@ Then, on any later cold start, just spawn from the roster:
 ```bash
 bun seats/adapter.ts spawn worker-1
 bun seats/adapter.ts spawn reviewer
-bun seats/adapter.ts status          # every seat, liveness
+bun seats/adapter.ts status          # every standing seat, liveness
+# no spawn for verifier: it is an ephemeral consumer-surface walker started by seats/walk.ts
 ```
 
 `resume <seat>` instead of `spawn` reattaches a seat to the session it was stopped with, context warm — use it when a stop or reboot interrupted work in flight.
@@ -52,7 +54,7 @@ The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id
 
 ## 4. Feed it
 
-Speak backlog items to the commander in plain language. It files them as beads, the fleet claims them, workers report done on the bead with comments and the `needs-review` label without closing, the reviewer gates them with bench evidence, and only the commander/integrator closes after merge per this project's merge policy.
+Speak backlog items to the commander in plain language. It files them as beads, the fleet claims them, workers report done on the bead with comments and the `needs-review` label without closing, the reviewer gates them with bench evidence, and only the commander/integrator closes after merge per this project's merge policy. Before the first ISA claim closes on a consumer surface, run the verifier walker with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out evidence/<bead>/<surface-walk> --verifier verifier` and cite the verdict plus transcript, or write `Not walked:` on the claim.
 
 ## Shutdown
 

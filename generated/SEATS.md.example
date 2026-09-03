@@ -16,6 +16,7 @@ One line per seat, mirroring `seats/seats.json` — the machine record, which de
 |---|---|---|---|---|---|
 | `worker-1` | `wheelhouse/fleet/WORKER.md` | `openai-codex` | `gpt-5.5` | `oauth` | `~/.pi-seats-ebb/worker-1` |
 | `reviewer` | `wheelhouse/crew/REVIEWER.md` | `openrouter` | `z-ai/glm-5.3-flash` | `api_key` | `~/.pi-seats-ebb/reviewer` — never authors what it reviews, so its directory differs from every worker's |
+| `verifier` | `wheelhouse/crew/VERIFIER.md` consumer-surface walker | `openrouter` | `z-ai/glm-5.3-flash` | `api_key` | `~/.pi-seats-ebb/verifier` — walks ISA claim surfaces via `seats/walk.ts`; gates claims, not beads |
 | (commander) | this folder's `CLAUDE.md` | — | — | — | none: the principal's own session, `"external": true` in the roster |
 
 ### Declined seats
@@ -26,6 +27,10 @@ One line per seat, mirroring `seats/seats.json` — the machine record, which de
 | Second worker | One reviewer, one worker — take it when the reviewer starts waiting. | 2026-08-14 |
 
 Each of these was offered seat by seat at install and turned down. A second worker goes in when the reviewer is idle waiting for work; the designer goes in when the principal is spending more time decomposing beads than deciding direction.
+
+### Walk cadence
+
+The cadence value lives in `wheelhouse/INTEGRATOR.md`'s project half, not here. This install accepted the template default `walk_cadence_merges: 5`; claim-closing walks use the surface named by the claim, and every-5 drift walks use the primary surface named in `wheelhouse/crew/VERIFIER.md`.
 
 ---
 
