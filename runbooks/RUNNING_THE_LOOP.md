@@ -53,6 +53,8 @@ The commander names the bead, the repository, and — if it points at any existi
 
 Say what "done" is if the bead does not already. If the receiver has to reconstruct it, they will reconstruct a version.
 
+If the dispatch asks a worker to launch or verify a host app, daemon, service, supervisor, launch agent, or machine-local port listener, include this constraint verbatim in the dispatch: `Verification must run an isolated test instance: scratch state root, non-production port/socket, client pointed at that test endpoint, installed app bundle untouched, and production LaunchAgent/systemd unit/service/plist/login item/supervisor entry never unloaded, stopped, edited, overwritten, or replaced. If that isolation is unavailable, stop and report the missing isolation instead of running it.`
+
 **What the receiver does:** reads the bead itself, not the dispatch's summary of it. If the two disagree, the bead wins and the disagreement is worth reporting — a dispatch is one person's reading, and this is the first crossing where a wrong premise can still be cheap.
 
 **What it costs otherwise:** a dispatch that summarised a passage instead of pointing at it produced an escalation argued on the summary's terms. Both parties were careful. Neither had read the file at the moment it mattered.
