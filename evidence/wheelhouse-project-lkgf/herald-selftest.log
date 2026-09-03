@@ -1,0 +1,31 @@
+ok 1 - pre-existing large cursorless log starts at EOF and yields zero stale events
+ok 2 - large log tail is read incrementally with a small chunk bound
+ok 3 - captures settle, distress, sentinel, and non-retried error events without retry wakes
+ok 4 - settle uses A2A terminal state
+ok 5 - distress uses A2A failed state and carries quota detail
+ok 6 - provider-error distress detail names the adapter probe command
+ok 7 - distress matches insufficient credits wording
+ok 8 - real provider 400 invalid_grant stderr becomes one distress
+ok 9 - agent_end stopReason=error without retry becomes distress with errorMessage detail
+ok 10 - agent_end stopReason=error with willRetry=true produces no wake
+ok 11 - agent_end normal stopReason remains settle
+ok 12 - recorded false-positive message_update shapes produce zero distress
+ok 13 - turn-end assistant @commander line becomes one sentinel wake
+ok 14 - quoted @commander text in tool output and non-turn events produces zero sentinel wakes
+ok 15 - dedup/cursor prevents duplicate inbox appends on a re-scan
+ok 16 - drain cursor emits unread wake events once, deduping stable ids, then advances to EOF
+ok 17 - drain dedup survives a tiny MAX_SEEN eviction horizon
+ok 18 - fixture idle Claude UI receives exactly one constant-phrase poke
+ok 19 - sent poke attempt is logged with timestamp and pane
+ok 20 - seat-authored text never enters send-keys
+ok 21 - per-pane cooldown suppresses a second immediate poke
+ok 22 - per-pane cooldown allows a later poke after the tunable interval
+ok 23 - pane-state gate prevents poke into a bare shell
+ok 24 - allowlist gate classifies a ❯-prompt bare shell not-idle and does not poke
+ok 25 - between-tool-calls Claude UI is unstable across the idle window and not poked
+ok 26 - fixture mid-turn Claude UI is logged not-idle and not poked
+ok 27 - fixture tool-running Claude UI is not poked
+ok 28 - poke attempt with no configured pane is logged no-pane
+ok 29 - cockpit starts the herald daemon
+ok 30 - cockpit verifies and restarts a dead herald on re-run
+herald.selftest: PASS (30 checks)
