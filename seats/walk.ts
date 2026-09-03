@@ -129,6 +129,10 @@ function resolveOutDir(outArg: string | undefined): string {
   return out;
 }
 
+function rootRelative(file: string): string {
+  return path.relative(ROOT, file) || ".";
+}
+
 function buildSurfaceInstructions(kind: string, spec: string, baseline: string | undefined, workspaceRel: string): string[] {
   if (kind === "install") {
     return [
@@ -220,6 +224,8 @@ function main(): void {
   const outDir = resolveOutDir(outArg);
   const transcriptFile = path.join(outDir, "transcript.txt");
   const metaFile = path.join(outDir, "walk.json");
+  const transcriptRel = rootRelative(transcriptFile);
+  const metaRel = rootRelative(metaFile);
 
   sweepStaleScratchWorktrees(ROOT);
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
@@ -280,23 +286,23 @@ function main(): void {
 
   if (res.error) {
     if ((res.error as any).code === "ETIMEDOUT") {
-      fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: `timed out after ${TIMEOUT_MS}ms`, transcript: transcriptFile }, null, 2));
+      fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: `timed out after ${TIMEOUT_MS}ms`, transcript: transcriptRel }, null, 2));
       console.log(`VERDICT: COULD-NOT-WALK — timed out after ${TIMEOUT_MS}ms`);
-      console.log(`transcript: ${transcriptFile}`);
+      console.log(`transcript: ${transcriptRel}`);
       process.exit(3);
     }
     die(`could not run pi: ${res.error.message}`);
   }
   if (res.status !== 0) {
-    refuse(`pi exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}" — transcript: ${transcriptFile}`);
+    refuse(`pi exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}" — transcript: ${transcriptRel}`);
   }
 
   const parsed = parseWalkVerdict(stdout);
-  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptFile }, null, 2));
+  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel }, null, 2));
 
   console.log(parsed.line);
-  console.log(`transcript: ${transcriptFile}`);
-  console.log(`metadata: ${metaFile}`);
+  console.log(`transcript: ${transcriptRel}`);
+  console.log(`metadata: ${metaRel}`);
   process.exit(parsed.verdict === "WALKED-DONE" ? 0 : parsed.verdict === "WALKED-NOT-DONE" ? 2 : 3);
 }
 
