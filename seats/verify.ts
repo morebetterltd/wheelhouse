@@ -285,6 +285,7 @@ interface EvidenceCheck {
   bytes: number;
   probe: string;   // what the type probe concluded, human-readable
   ok: boolean;     // the floor: exists, non-empty, right type
+  source: string;  // committed blob, excluded disk + manifest, or why neither satisfied it
 }
 
 /**
@@ -310,7 +311,8 @@ function probeArtifact(p: string, buf: Buffer): { ok: boolean; probe: string } {
 }
 
 /** Read each named artifact from the tip SHA and run its floor check. A path
- * that is not a blob at that SHA (missing, or a directory) reads as absent. */
+ * that is not a blob at that SHA can only be satisfied from disk when Git says
+ * the path is intentionally excluded and a colocated SHA-256 manifest verifies. */
 function checkEvidence(repoRoot: string, tip: string, paths: string[]): EvidenceCheck[] {
   return paths.map((p) => {
     let buf: Buffer;
@@ -319,18 +321,73 @@ function checkEvidence(repoRoot: string, tip: string, paths: string[]): Evidence
         cwd: repoRoot,
         maxBuffer: 256 * 1024 * 1024,
       });
+      const { ok, probe } = probeArtifact(p, buf);
+      return { path: p, exists: true, bytes: buf.length, probe, ok, source: "committed blob at tip" };
     } catch {
-      return { path: p, exists: false, bytes: 0, probe: "MISSING at the tip SHA", ok: false };
+      return checkExcludedDiskEvidence(repoRoot, p);
     }
-    const { ok, probe } = probeArtifact(p, buf);
-    return { path: p, exists: true, bytes: buf.length, probe, ok };
   });
+}
+
+function checkExcludedDiskEvidence(repoRoot: string, p: string): EvidenceCheck {
+  const ignored = spawnSync("git", ["check-ignore", "-q", "--", p], { cwd: repoRoot, stdio: "ignore" });
+  if (ignored.status === 1) return { path: p, exists: false, bytes: 0, probe: "MISSING at the tip SHA; not a git-excluded evidence path", ok: false, source: "none" };
+  if (ignored.status !== 0) return { path: p, exists: false, bytes: 0, probe: `git check-ignore failed with exit ${ignored.status ?? "signal"}`, ok: false, source: "instrument failure" };
+
+  const abs = path.join(repoRoot, p);
+  if (!fs.existsSync(abs)) return { path: p, exists: false, bytes: 0, probe: "git-excluded evidence path is absent on disk", ok: false, source: "excluded disk + SHA-256 manifest" };
+  if (!fs.statSync(abs).isDirectory()) return { path: p, exists: true, bytes: fs.statSync(abs).size, probe: "git-excluded evidence path is not a directory with a SHA-256 manifest", ok: false, source: "excluded disk + SHA-256 manifest" };
+
+  const manifest = "cited-evidence.sha256";
+  if (!fs.existsSync(path.join(abs, manifest))) return { path: p, exists: true, bytes: dirBytes(abs), probe: "git-excluded evidence directory has no cited-evidence.sha256 manifest", ok: false, source: "excluded disk + SHA-256 manifest" };
+  const manifestPath = path.join(abs, manifest);
+  const entries = parseSha256Manifest(fs.readFileSync(manifestPath, "utf8"));
+  if (entries.length === 0) return { path: p, exists: true, bytes: dirBytes(abs), probe: `${path.join(p, manifest)} has no artifact entries`, ok: false, source: "excluded disk + SHA-256 manifest" };
+  for (const entry of entries) {
+    const target = path.resolve(abs, entry);
+    if (!(target === abs || target.startsWith(abs + path.sep))) {
+      return { path: p, exists: true, bytes: dirBytes(abs), probe: `${path.join(p, manifest)} entry escapes evidence directory: ${entry}`, ok: false, source: "excluded disk + SHA-256 manifest" };
+    }
+  }
+  const verified = spawnSync("shasum", ["-a", "256", "-c", manifest], { cwd: abs, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  if (verified.status !== 0) {
+    const detail = (verified.stdout + verified.stderr).trim().split(/\r?\n/).filter(Boolean).slice(-3).join("; ") || `exit ${verified.status ?? "signal"}`;
+    return { path: p, exists: true, bytes: dirBytes(abs), probe: `${path.join(p, manifest)} failed shasum -a 256 -c (${detail})`, ok: false, source: "excluded disk + SHA-256 manifest" };
+  }
+  for (const entry of entries) {
+    const target = path.join(abs, entry);
+    const b = fs.readFileSync(target);
+    const probed = probeArtifact(entry, b);
+    if (!probed.ok) return { path: p, exists: true, bytes: dirBytes(abs), probe: `${entry}: ${probed.probe}`, ok: false, source: "excluded disk + SHA-256 manifest" };
+  }
+  return { path: p, exists: true, bytes: dirBytes(abs), probe: `${path.join(p, manifest)} verified ${entries.length} artifact(s) with shasum -a 256 -c`, ok: true, source: "excluded disk + SHA-256 manifest" };
+}
+
+function parseSha256Manifest(text: string): string[] {
+  const out: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const m = line.match(/^[a-fA-F0-9]{64}\s+[ *]?(.+)$/);
+    if (!m) return [];
+    out.push(m[1]);
+  }
+  return out;
+}
+
+function dirBytes(dir: string): number {
+  let total = 0;
+  for (const name of fs.readdirSync(dir)) {
+    const p = path.join(dir, name);
+    const st = fs.statSync(p);
+    if (st.isFile()) total += st.size;
+  }
+  return total;
 }
 
 function evidenceLines(checks: EvidenceCheck[]): string[] {
   return checks.map(
     (c) =>
-      `- ${c.path} — ${c.exists ? `exists, ${c.bytes} bytes, ${c.probe}` : c.probe} — ${c.ok ? "OK" : "UNSATISFIED"}`
+      `- ${c.path} — ${c.exists ? `exists, ${c.bytes} bytes, ${c.probe}` : c.probe} — ${c.ok ? `OK (SATISFIED via ${c.source})` : `UNSATISFIED (source: ${c.source})`}`
   );
 }
 
