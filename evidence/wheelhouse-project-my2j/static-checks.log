@@ -1,0 +1,103 @@
+changed lines:
+seats/adapter.ts:70:const SPAWN_TERM_GRACE_MS = Number(process.env.WHEELHOUSE_SPAWN_TERM_GRACE_MS || 2000);
+seats/adapter.ts:373:function promptCommand(message: string, streamingBehavior: "followUp" | "steer"): Record<string, unknown> {
+seats/adapter.ts:406:async function terminateSpawnedOnly(pid: number): Promise<string> {
+seats/adapter.ts:409:  const termDeadline = Date.now() + SPAWN_TERM_GRACE_MS;
+seats/adapter.ts:415:  return pidAlive(pid) ? `spawned pid ${pid} survived SIGKILL` : `terminated spawned pid ${pid} with SIGKILL after ${SPAWN_TERM_GRACE_MS}ms grace`;
+seats/adapter.ts:641:    const cleanup = await terminateSpawnedOnly(pid);
+seats/adapter.ts:642:    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+seats/adapter.ts:806:  const resp = await rpc(rec, promptCommand(`Bead ${beadId}\n\n${text}`, "followUp"));
+seats/adapter.ts:839:    await fifoWrite(rec.fifo, promptCommand(text, "steer"));
+seats/adapter.ts:840:    console.log(`queued steer for ${name}: preflight get_state timed out; wrote prompt with streamingBehavior=steer`);
+seats/adapter.ts:850:  const resp = await rpc(rec, promptCommand(text, "steer"));
+seats/adapter.ts:852:  console.log(`steered ${name} idle-started`);
+seats/adapter.ts:930:      console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}`);
+seats/adapter.selftest.sh:171:const commandsFile = path.join(agentDir, "commands.jsonl");
+seats/adapter.selftest.sh:180:      const stallMs = process.env.STUB_GET_STATE_STALL_ONCE || (fs.existsSync(stallFile) ? fs.readFileSync(stallFile, "utf8").trim() : "");
+seats/adapter.selftest.sh:236:process.on("SIGTERM", () => { if (!process.env.STUB_IGNORE_SIGTERM) process.exit(0); });
+seats/adapter.selftest.sh:757:phase "6c. readiness timeout cleanup, orphan status, and queued steer"
+seats/adapter.selftest.sh:763:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_STALL_ONCE=2000 STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)"; RC=$?
+seats/adapter.selftest.sh:765:if [ $RC -ne 0 ] && says "launch-only cleanup" && says "SIGKILL" && [ -n "$CLEAN_PID" ] && ! kill -0 "$CLEAN_PID" 2>/dev/null; then
+seats/adapter.selftest.sh:772:if [ $RC -eq 0 ] && ! says "ORPHAN"; then pass "status reports zero orphans after launch cleanup"
+seats/adapter.selftest.sh:775:ORPHAN_PROJ="$FIX/orphan-proj"
+seats/adapter.selftest.sh:776:build_proj "$ORPHAN_PROJ" orphan
+seats/adapter.selftest.sh:777:RUN_PROJ="$ORPHAN_PROJ"; STATE="$ORPHAN_PROJ/seats/state.json"; LOG="$ORPHAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-orphan/worker-1/argv.json"
+seats/adapter.selftest.sh:780:FIFO="$ORPHAN_PROJ/seats/run/worker-1.stdin"
+seats/adapter.selftest.sh:781:ERR="$ORPHAN_PROJ/seats/logs/worker-1.stderr.log"
+seats/adapter.selftest.sh:782:( env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" PI_CODING_AGENT_DIR="$HOME_FIX/.pi-seats-orphan/worker-1" BEADS_ACTOR=worker-1 bash -c "exec pi --mode rpc --append-system-prompt '$ORPHAN_PROJ/contracts/WORKER.md' 0<> '$FIFO' >> '$LOG' 2>> '$ERR'" ) &
+seats/adapter.selftest.sh:783:ORPHAN_PID=$!
+seats/adapter.selftest.sh:786:if [ $RC -eq 0 ] && says "ORPHAN" && says "pid $ORPHAN_PID" && says "recorded pid $REC_PID" && { says "FIFO" || says "argv/cwd/account match"; }; then
+seats/adapter.selftest.sh:787:  pass "status reports a duplicate pi process as ORPHAN with recorded pid and match reason"
+seats/adapter.selftest.sh:788:else fail "status did not report the duplicate process as ORPHAN (exit $RC orphan=$ORPHAN_PID recorded=$REC_PID): $OUT"; fi
+seats/adapter.selftest.sh:789:kill "$ORPHAN_PID" 2>/dev/null
+seats/adapter.selftest.sh:798:COMMANDS="$HOME_FIX/.pi-seats-steer-slow/worker-1/commands.jsonl"
+seats/adapter.selftest.sh:799:if [ $RC -eq 0 ] && says "queued steer" && grep -q '"streamingBehavior":"steer"' "$COMMANDS" 2>/dev/null && grep -q 'queued from slow state' "$COMMANDS" 2>/dev/null; then
+
+selftest evidence tail:
+
+6. stop, then resume — the session comes back warm
+  ok    stop exits 0 and the process is gone
+  ok    state keeps the session but drops the pid
+  ok    resume: resume exits 0
+  ok    resume: relaunch attached the recorded session via --session
+  ok    resume: resume still carries BEADS_ACTOR=worker-1
+  ok    the same session file grew on resume — warm context survives
+  ok    lastBead survives the stop/resume cycle
+  ok    reset exits 0
+  ok    reset's cold respawn still carries BEADS_ACTOR=worker-1
+
+6b. pruned cwd — dispatch falls back visibly; plain resume STOPs
+  ok    pruned cwd setup: resume exits 0 before pruning
+  ok    pruned cwd dispatch: dispatch exits 0 via fallback
+  ok    pruned cwd dispatch: fallback announcement is visible and names why
+  ok    pruned cwd dispatch: fallback used a fresh session rather than --session
+  ok    pruned cwd dispatch: state records the new dispatched bead
+  ok    pruned cwd resume: no-dispatch-target resume STOPs and names the fallback limitation
+
+6c. readiness timeout cleanup, orphan status, and queued steer
+  ok    launch readiness timeout kills only the newly spawned unready pid before STOP
+  ok    launch cleanup leaves the stopped pre-existing state record intact
+  ok    status reports zero orphans after launch cleanup
+  ok    status reports a duplicate pi process as ORPHAN with recorded pid and match reason
+  ok    slow get_state steer queues prompt with streamingBehavior=steer instead of losing text
+
+7. canary — can these checks detect a broken adapter?
+  ok    canary: an adapter that records no state is caught
+  ok    canary: an adapter that resumes without the session is caught
+
+8. real pi — one smoke leg, spawn/dispatch/agent_end/resume/grow
+  SKIP  real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1
+
+adapter.ts works on this machine.
+
+build exact:
+$ bun build seats/adapter.ts >/dev/null
+exit=0
+
+real pi steer:
+scratch_root=[tmpdir]/wheelhouse-my2j-real.pmafbh
+preflight live fleet reviewer-codex status (read-only):
+reviewer-codex   reviewer (shadow) STOPPED  stopped     last-event response  bead wheelhouse-project-ll4  account codex-chatgpt-oauth-2
+spawn scratch reviewer-codex using reviewer-codex account dir
+seat reviewer-codex (account label: codex-chatgpt-oauth-2): pid 29161, session 01a06e23-a71c-7d64-bf25-21167f9ff756
+  events -> [tmpdir]wheelhouse-my2j-real.pmafbh/seats/logs/reviewer-codex.jsonl
+trial_1 idle_confirmed before_mtime=1788554225
+steered reviewer-codex idle-started
+trial_1 after_mtime=1788554226 advanced=1
+trial_2 idle_confirmed before_mtime=1788554229
+steered reviewer-codex idle-started
+trial_2 after_mtime=1788554230 advanced=1
+trial_3 idle_confirmed before_mtime=1788554232
+steered reviewer-codex idle-started
+trial_3 after_mtime=1788554233 advanced=1
+stop scratch reviewer-codex
+seat reviewer-codex stopped; session 01a06e23-a71c-7d64-bf25-21167f9ff756 kept for resume
+postflight live fleet reviewer-codex status (read-only):
+reviewer-codex   reviewer (shadow) STOPPED  stopped     last-event response  bead wheelhouse-project-ll4  account codex-chatgpt-oauth-2
+REAL_PI_STEER_IDLE PASS 3/3
+
+bash -n:
+OK
+
+git diff --check:
+OK

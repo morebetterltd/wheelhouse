@@ -1,0 +1,20 @@
+scratch_root=[tmpdir]/wheelhouse-my2j-real.pmafbh
+preflight live fleet reviewer-codex status (read-only):
+reviewer-codex   reviewer (shadow) STOPPED  stopped     last-event response  bead wheelhouse-project-ll4  account codex-chatgpt-oauth-2
+spawn scratch reviewer-codex using reviewer-codex account dir
+seat reviewer-codex (account label: codex-chatgpt-oauth-2): pid 29161, session 01a06e23-a71c-7d64-bf25-21167f9ff756
+  events -> [tmpdir]wheelhouse-my2j-real.pmafbh/seats/logs/reviewer-codex.jsonl
+trial_1 idle_confirmed before_mtime=1788554225
+steered reviewer-codex idle-started
+trial_1 after_mtime=1788554226 advanced=1
+trial_2 idle_confirmed before_mtime=1788554229
+steered reviewer-codex idle-started
+trial_2 after_mtime=1788554230 advanced=1
+trial_3 idle_confirmed before_mtime=1788554232
+steered reviewer-codex idle-started
+trial_3 after_mtime=1788554233 advanced=1
+stop scratch reviewer-codex
+seat reviewer-codex stopped; session 01a06e23-a71c-7d64-bf25-21167f9ff756 kept for resume
+postflight live fleet reviewer-codex status (read-only):
+reviewer-codex   reviewer (shadow) STOPPED  stopped     last-event response  bead wheelhouse-project-ll4  account codex-chatgpt-oauth-2
+REAL_PI_STEER_IDLE PASS 3/3
