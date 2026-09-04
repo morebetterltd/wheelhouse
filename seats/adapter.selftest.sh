@@ -664,6 +664,35 @@ if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; t
   pass "the dispatch relaunch still carries BEADS_ACTOR=worker-1, with no operator export in this shell either"
 else fail "relaunched seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
 
+mkdir -p "$PROJ/.wheelhouse-worktrees/bead-mid" "$PROJ/.wheelhouse-worktrees/bead-other" "$PROJ/.wheelhouse-worktrees/bead-force"
+run dispatch worker-1 bead-mid "SLOW in-flight review"
+if [ $RC -eq 0 ]; then pass "mid-turn setup dispatch exits 0"
+else fail "mid-turn setup dispatch exited ${RC}: $OUT"; fi
+PID_MID="$(state_get pid)"
+SESS_MID="$(state_get sessionFile)"
+run dispatch worker-1 bead-other "cross-bead should refuse"
+if [ $RC -ne 0 ] && says "mid-turn on bead-mid" && says "bead-other" && says "agent_end/isStreaming=false"; then
+  pass "mid-turn cross-bead dispatch refuses loudly with both bead ids and the settle it waits on"
+else fail "mid-turn cross-bead dispatch did not refuse as specified (exit $RC): $OUT"; fi
+if [ "$(state_get pid)" = "$PID_MID" ] && kill -0 "$PID_MID" 2>/dev/null; then
+  pass "mid-turn cross-bead refusal leaves the running fake pi process untouched"
+else fail "mid-turn cross-bead refusal killed or replaced pid $PID_MID (now $(state_get pid))"; fi
+if wait_for "$LOG" 'echo: Bead bead-mid' 5 && ! grep -q 'echo: Bead bead-other' "$LOG" 2>/dev/null; then
+  pass "the refused cross-bead dispatch did not kill the in-flight turn or enqueue the other bead"
+else fail "refused dispatch either killed bead-mid or reached bead-other"; fi
+run dispatch worker-1 bead-mid "SLOW deliberately abandoned"
+if [ $RC -eq 0 ]; then pass "force setup dispatch exits 0"
+else fail "force setup dispatch exited ${RC}: $OUT"; fi
+PID_FORCE_BEFORE="$(state_get pid)"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_DISPATCH_FORCE=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-force "forced escape" 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "WHEELHOUSE_DISPATCH_FORCE=1" && says "deliberately abandoning mid-turn bead bead-mid" && says "bead-force"; then
+  pass "force escape announces deliberate abandonment and dispatches the new bead"
+else fail "force escape did not announce and dispatch (exit $RC): $OUT"; fi
+if [ "$(state_get pid)" != "$PID_FORCE_BEFORE" ] && ! kill -0 "$PID_FORCE_BEFORE" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ/.wheelhouse-worktrees/bead-force" ]; then
+  pass "force escape relaunches the seat in the new bead worktree"
+else fail "force escape did not relaunch from pid $PID_FORCE_BEFORE to bead-force (now pid $(state_get pid), cwd $(cat "$CWD_FILE" 2>/dev/null))"; fi
+wait_for "$LOG" 'echo: Bead bead-force' 5 >/dev/null
+
 phase "3. steer — a redirect lands inside a turn still in flight"
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-y"
 run dispatch worker-1 bead-y "SLOW long think"
