@@ -1,0 +1,16 @@
+template history lookup:
+5:template_root() {
+16:TEMPLATE=$(template_root)
+29:git -C "$TEMPLATE" show "${BASELINE}:contracts/WORKER.md" > "$PROJ/wheelhouse/fleet/WORKER.md"
+31:  git -C "$TEMPLATE" show "${BASELINE}:runbooks/$b" > "$PROJ/wheelhouse/runbooks/$b"
+36:TEMPLATE=$1
+39:  if diff -rq <(git -C "$TEMPLATE" show ${c}:contracts/WORKER.md) "$PROJECT/wheelhouse/fleet/WORKER.md" >/dev/null 2>&1; then
+52:TEMPLATE=$1
+66:  if git -C "$TEMPLATE" show "${BASE:-unknown}:runbooks/$b" >"$baseline" 2>/dev/null; then
+
+docs:
+seats/README.md:447:real seats are never touched. Selftests that need template history after being copied into an install read the template clone from `wheelhouse/.template-source`'s `path=`; they must not assume the install repository has template-only commits. The adapter and verify selftests have canary phases that break a copy of
+runbooks/UPGRADE.md:95:The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `verify.ts`, `walk.ts`, `floor.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, their selftests, `seats.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. Some copied selftests need template history as their fixture; they resolve that from `wheelhouse/.template-source`'s `path=` instead of assuming the install repository contains template-only commits. What the copy can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
+
+git diff --check:
+OK
