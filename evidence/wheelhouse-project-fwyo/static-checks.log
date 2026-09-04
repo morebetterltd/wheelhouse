@@ -1,0 +1,69 @@
+git log -S BEADS_ACTOR -- seats/adapter.ts:
+f52bb59 Add seat provider probe cadence
+274f9d6 Fix BEADS_ACTOR: adapter/verifier set it, not the operator
+
+ancestor checks:
+274f9d6 is ancestor of 5e0dd64
+f52bb59 is ancestor of 5e0dd64
+
+adapter env set sites:
+118:// Comment authorship (BEADS_ACTOR)
+123: * which seat wrote it (contracts/GRAPH.md, "Comment authorship is
+147:function beadsActorFor(name: string): string {
+609:    env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
+673:    env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
+
+real pi actor probe:
+
+⚠ No Dolt remote configured
+  Issues are stored in local Dolt. .beads/issues.jsonl is an export,
+  not cross-machine sync or the source of truth.
+  To enable durable sync, add a git origin and then run:
+    bd dolt push
+scratch_root=[tmpdir]/wheelhouse-fwyo-real.mM2hhi
+preflight live fleet reviewer-codex status (read-only):
+reviewer-codex   reviewer (shadow) STOPPED  stopped     last-event response  bead wheelhouse-project-ll4  account codex-chatgpt-oauth-2
+fresh spawn+dispatch
+seat reviewer-codex (account label: codex-chatgpt-oauth-2): pid 83646, session 01a06e27-4b0e-7db3-aa3a-f0c696f65d98
+  events -> [tmpdir]wheelhouse-fwyo-real.mM2hhi/seats/logs/reviewer-codex.jsonl
+dispatched fwyo-fresh to reviewer-codex; watch [tmpdir]wheelhouse-fwyo-real.mM2hhi/seats/logs/reviewer-codex.jsonl
+○ scratch-fwyo-fresh · fresh actor probe   [● P2 · OPEN]
+Owner: worker-1 · Type: task
+Created: 2026-09-04 · Updated: 2026-09-04
+
+DESCRIPTION
+  (none)
+
+COMMENTS
+  2026-09-04 20:41 reviewer-codex
+    
+      actor probe fresh                                                           
+
+stop then resume+dispatch
+seat reviewer-codex stopped; session 01a06e27-4b0e-7db3-aa3a-f0c696f65d98 kept for resume
+seat reviewer-codex (account label: codex-chatgpt-oauth-2): pid 85701, session 01a06e27-4b0e-7db3-aa3a-f0c696f65d98
+  events -> [tmpdir]wheelhouse-fwyo-real.mM2hhi/seats/logs/reviewer-codex.jsonl
+seat reviewer-codex stopped; session 01a06e27-4b0e-7db3-aa3a-f0c696f65d98 kept for resume
+seat reviewer-codex (account label: codex-chatgpt-oauth-2): pid 85997, session 01a06e27-4b0e-7db3-aa3a-f0c696f65d98
+  events -> [tmpdir]wheelhouse-fwyo-real.mM2hhi/seats/logs/reviewer-codex.jsonl
+dispatched fwyo-resume to reviewer-codex; watch [tmpdir]wheelhouse-fwyo-real.mM2hhi/seats/logs/reviewer-codex.jsonl
+○ scratch-fwyo-resume · resume actor probe   [● P2 · OPEN]
+Owner: worker-1 · Type: task
+Created: 2026-09-04 · Updated: 2026-09-04
+
+DESCRIPTION
+  (none)
+
+COMMENTS
+  2026-09-04 20:41 reviewer-codex
+    
+      actor probe resume                                                          
+
+stop scratch reviewer-codex
+seat reviewer-codex stopped; session 01a06e27-4b0e-7db3-aa3a-f0c696f65d98 kept for resume
+postflight live fleet reviewer-codex status (read-only):
+reviewer-codex   reviewer (shadow) STOPPED  stopped     last-event response  bead wheelhouse-project-ll4  account codex-chatgpt-oauth-2
+REAL_PI_BEADS_ACTOR probe complete
+
+git diff --check:
+OK
