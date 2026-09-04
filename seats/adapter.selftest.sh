@@ -168,29 +168,46 @@ if (si !== -1) {
   sessionFile = path.join(sessDir, sessionId + ".jsonl");
   fs.writeFileSync(sessionFile, JSON.stringify({ type: "session-start" }) + "\n");
 }
+const commandsFile = path.join(agentDir, "commands.jsonl");
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+let streaming = false;
 function handle(cmd) {
+  fs.appendFileSync(commandsFile, JSON.stringify(cmd) + "\n");
   const id = cmd.id;
   switch (cmd.type) {
-    case "get_state":
+    case "get_state": {
+      const stallFile = path.join(agentDir, "stall-next-get-state");
+      const stallMs = process.env.STUB_GET_STATE_STALL_ONCE || (fs.existsSync(stallFile) ? fs.readFileSync(stallFile, "utf8").trim() : "");
+      if (stallMs && !fs.existsSync(path.join(agentDir, "get-state-stalled"))) {
+        fs.writeFileSync(path.join(agentDir, "get-state-stalled"), "1");
+        try { fs.rmSync(stallFile, { force: true }); } catch {}
+        setTimeout(() => out({ id, type: "response", command: "get_state", success: true,
+              data: { isStreaming: streaming, sessionFile, sessionId, messageCount: 0 } }), Number(stallMs));
+        break;
+      }
+      try { fs.rmSync(path.join(agentDir, "get-state-stalled"), { force: true }); } catch {}
       out({ id, type: "response", command: "get_state", success: true,
-            data: { isStreaming: false, sessionFile, sessionId, messageCount: 0 } });
+            data: { isStreaming: streaming, sessionFile, sessionId, messageCount: 0 } });
       break;
+    }
     case "prompt": {
       out({ id, type: "response", command: "prompt", success: true });
       out({ type: "agent_start" });
+      streaming = true;
       const finish = () => {
-        fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message }) + "\n");
+        fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message, streamingBehavior: cmd.streamingBehavior }) + "\n");
         if (/QUOTA/.test(cmd.message)) {
           const failed = { role: "assistant", content: [{ type: "text", text: "partial before quota" }], stopReason: "error", errorMessage: "Codex error: The usage limit has been reached" };
           out({ type: "message_end", message: failed });
           out({ type: "turn_end", message: failed });
           out({ type: "agent_end", messages: [{ role: "user", content: [{ type: "text", text: cmd.message }] }, failed] });
+          streaming = false;
           return;
         }
         out({ type: "message_end", message: { role: "assistant",
               content: [{ type: "text", text: "echo: " + cmd.message }] } });
         out({ type: "agent_end", messages: [] });
+        streaming = false;
       };
       if (/SLOW/.test(cmd.message)) setTimeout(finish, 1500); else finish();
       break;
@@ -216,7 +233,7 @@ process.stdin.on("data", (c) => {
   }
 });
 process.stdin.on("end", () => process.exit(0));
-process.on("SIGTERM", () => process.exit(0));
+process.on("SIGTERM", () => { if (!process.env.STUB_IGNORE_SIGTERM) process.exit(0); });
 STUB
 chmod +x "$BIN/pi"
 [ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
@@ -736,6 +753,54 @@ run resume worker-1
 if [ $RC -ne 0 ] && says "recorded seat cwd is gone" && says "fallback" && says "dispatch"; then
   pass "pruned cwd resume: no-dispatch-target resume STOPs and names the fallback limitation"
 else fail "pruned cwd resume: did not STOP with fallback limitation (exit $RC): $OUT"; fi
+
+phase "6c. readiness timeout cleanup, orphan status, and queued steer"
+CLEAN_PROJ="$FIX/cleanup-proj"
+build_proj "$CLEAN_PROJ" cleanup
+RUN_PROJ="$CLEAN_PROJ"; STATE="$CLEAN_PROJ/seats/state.json"; LOG="$CLEAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cleanup/worker-1/argv.json"
+run spawn worker-1
+run stop worker-1 >/dev/null 2>&1
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_STALL_ONCE=2000 STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)"; RC=$?
+CLEAN_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | head -1)"
+if [ $RC -ne 0 ] && says "launch-only cleanup" && says "SIGKILL" && [ -n "$CLEAN_PID" ] && ! kill -0 "$CLEAN_PID" 2>/dev/null; then
+  pass "launch readiness timeout kills only the newly spawned unready pid before STOP"
+else fail "launch readiness timeout did not clean up spawned pid (exit $RC pid=$CLEAN_PID): $OUT"; fi
+if [ -z "$(state_get pid)" ] && [ -n "$(state_get sessionFile)" ]; then
+  pass "launch cleanup leaves the stopped pre-existing state record intact"
+else fail "launch cleanup changed the stopped state record (pid=$(state_get pid), session=$(state_get sessionFile))"; fi
+run status
+if [ $RC -eq 0 ] && ! says "ORPHAN"; then pass "status reports zero orphans after launch cleanup"
+else fail "status found an orphan after cleanup (exit $RC): $OUT"; fi
+
+ORPHAN_PROJ="$FIX/orphan-proj"
+build_proj "$ORPHAN_PROJ" orphan
+RUN_PROJ="$ORPHAN_PROJ"; STATE="$ORPHAN_PROJ/seats/state.json"; LOG="$ORPHAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-orphan/worker-1/argv.json"
+run spawn worker-1
+REC_PID="$(state_get pid)"
+FIFO="$ORPHAN_PROJ/seats/run/worker-1.stdin"
+ERR="$ORPHAN_PROJ/seats/logs/worker-1.stderr.log"
+( env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" PI_CODING_AGENT_DIR="$HOME_FIX/.pi-seats-orphan/worker-1" BEADS_ACTOR=worker-1 bash -c "exec pi --mode rpc --append-system-prompt '$ORPHAN_PROJ/contracts/WORKER.md' 0<> '$FIFO' >> '$LOG' 2>> '$ERR'" ) &
+ORPHAN_PID=$!
+sleep 0.5
+run status
+if [ $RC -eq 0 ] && says "ORPHAN" && says "pid $ORPHAN_PID" && says "recorded pid $REC_PID" && { says "FIFO" || says "argv/cwd/account match"; }; then
+  pass "status reports a duplicate pi process as ORPHAN with recorded pid and match reason"
+else fail "status did not report the duplicate process as ORPHAN (exit $RC orphan=$ORPHAN_PID recorded=$REC_PID): $OUT"; fi
+kill "$ORPHAN_PID" 2>/dev/null
+run stop worker-1 >/dev/null 2>&1
+
+STEER_PROJ="$FIX/steer-slow-proj"
+build_proj "$STEER_PROJ" steer-slow
+RUN_PROJ="$STEER_PROJ"; STATE="$STEER_PROJ/seats/state.json"; LOG="$STEER_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-steer-slow/worker-1/argv.json"
+run spawn worker-1
+printf '2000\n' > "$HOME_FIX/.pi-seats-steer-slow/worker-1/stall-next-get-state"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=300 bun "$RUN_PROJ/seats/adapter.ts" steer worker-1 'queued from slow state' 2>&1)"; RC=$?
+COMMANDS="$HOME_FIX/.pi-seats-steer-slow/worker-1/commands.jsonl"
+if [ $RC -eq 0 ] && says "queued steer" && grep -q '"streamingBehavior":"steer"' "$COMMANDS" 2>/dev/null && grep -q 'queued from slow state' "$COMMANDS" 2>/dev/null; then
+  pass "slow get_state steer queues prompt with streamingBehavior=steer instead of losing text"
+else fail "slow get_state steer was not queued (exit $RC): $OUT commands=$(cat "$COMMANDS" 2>/dev/null)"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
 phase "7. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
