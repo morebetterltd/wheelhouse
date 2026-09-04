@@ -67,6 +67,7 @@ const WORKTREES_DIR = path.join(ROOT, ".wheelhouse-worktrees");
 
 // One knob for every wait in this file; the selftest raises it for real pi.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_RPC_TIMEOUT_MS || 20000);
+const SPAWN_TERM_GRACE_MS = Number(process.env.WHEELHOUSE_SPAWN_TERM_GRACE_MS || 2000);
 
 /** A bead's worktree, by the convention every worker and reviewer already
  * follows (wheelhouse/fleet/WORKER.md): `.wheelhouse-worktrees/<bead-id>`
@@ -369,6 +370,10 @@ function logLinesFrom(log: string, offset: number): { lines: string[]; offset: n
  * Send a command and wait for its response line in the log. The log offset is
  * taken BEFORE the write so the response cannot land in a blind spot.
  */
+function promptCommand(message: string, streamingBehavior: "followUp" | "steer"): Record<string, unknown> {
+  return { type: "prompt", message, streamingBehavior };
+}
+
 async function rpc(
   rec: { fifo: string; log: string; pid: number | null },
   command: Record<string, unknown>,
@@ -396,6 +401,18 @@ async function rpc(
     await sleep(100);
   }
   throw new Error(`timed out after ${timeoutMs}ms waiting for ${command.type} response`);
+}
+
+async function terminateSpawnedOnly(pid: number): Promise<string> {
+  if (!pidAlive(pid)) return `spawned pid ${pid} already gone`;
+  try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
+  const termDeadline = Date.now() + SPAWN_TERM_GRACE_MS;
+  while (pidAlive(pid) && Date.now() < termDeadline) await sleep(100);
+  if (!pidAlive(pid)) return `terminated spawned pid ${pid} with SIGTERM`;
+  try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+  const killDeadline = Date.now() + TIMEOUT_MS;
+  while (pidAlive(pid) && Date.now() < killDeadline) await sleep(100);
+  return pidAlive(pid) ? `spawned pid ${pid} survived SIGKILL` : `terminated spawned pid ${pid} with SIGKILL after ${SPAWN_TERM_GRACE_MS}ms grace`;
 }
 
 // Capacity visibility (visibility ONLY — nothing here meters or brokers
@@ -621,7 +638,8 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   try {
     st = await rpc(probe, { type: "get_state" });
   } catch (e: any) {
-    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. stderr tail:\n${stderrTail(probe)}`);
+    const cleanup = await terminateSpawnedOnly(pid);
+    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
   }
   if (!st.success) die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. stderr tail:\n${stderrTail(probe)}`);
 
@@ -785,11 +803,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   }
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
-  const resp = await rpc(rec, {
-    type: "prompt",
-    message: `Bead ${beadId}\n\n${text}`,
-    streamingBehavior: "followUp",
-  });
+  const resp = await rpc(rec, promptCommand(`Bead ${beadId}\n\n${text}`, "followUp"));
   if (!resp.success) {
     // A failure that looks like an account limit is a CAPACITY fact worth
     // keeping: stamp it so `status` and the floor can surface it after this
@@ -817,9 +831,55 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
 
 async function cmdSteer(name: string, text: string): Promise<void> {
   const rec = requireRunning(name);
-  const resp = await rpc(rec, { type: "steer", message: text });
-  if (!resp.success) die(`steer failed: ${resp.error}`);
-  console.log(`steered ${name}`);
+  let st: any;
+  try {
+    st = await rpc(rec, { type: "get_state" });
+  } catch (e: any) {
+    if (!String(e.message || e).includes("timed out")) die(`steer preflight get_state failed: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
+    await fifoWrite(rec.fifo, promptCommand(text, "steer"));
+    console.log(`queued steer for ${name}: preflight get_state timed out; wrote prompt with streamingBehavior=steer`);
+    return;
+  }
+  if (!st.success) die(`steer preflight get_state failed: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
+  if (st.data?.isStreaming) {
+    const resp = await rpc(rec, { type: "steer", message: text });
+    if (!resp.success) die(`steer failed: ${resp.error}`);
+    console.log(`steered ${name} mid-turn`);
+    return;
+  }
+  const resp = await rpc(rec, promptCommand(text, "steer"));
+  if (!resp.success) die(`steer prompt failed: ${resp.error}`);
+  console.log(`steered ${name} idle-started`);
+}
+
+function orphanMatchesFor(name: string, rec: SeatRecord): { pid: number; reason: string }[] {
+  const seen = new Map<number, string>();
+  function add(pid: number, reason: string) {
+    if (!Number.isFinite(pid) || pid <= 0 || pid === rec.pid || !pidAlive(pid)) return;
+    const prev = seen.get(pid);
+    seen.set(pid, prev ? `${prev},${reason}` : reason);
+  }
+  if (rec.fifo && fs.existsSync(rec.fifo)) {
+    try {
+      const out = spawnSync("lsof", ["-t", rec.fifo], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout || "";
+      for (const s of out.split(/\s+/).filter(Boolean)) add(Number(s), `holding stdin FIFO ${rec.fifo}`);
+    } catch { /* lsof absent or refused: status still prints the recorded row */ }
+  }
+  const needles = [rec.accountDir, rec.cwd].filter((s): s is string => Boolean(s));
+  if (needles.length) {
+    try {
+      const out = spawnSync("ps", ["axo", "pid=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout || "";
+      for (const line of out.split(/\n/)) {
+        const m = line.match(/^\s*(\d+)\s+(.*)$/);
+        if (!m) continue;
+        const pid = Number(m[1]);
+        const cmd = m[2] || "";
+        if (!/(^|[ /])pi( |$)/.test(cmd) || !cmd.includes("--mode rpc")) continue;
+        if (needles.some((n) => cmd.includes(n))) add(pid, "argv/cwd/account match");
+      }
+    } catch { /* ps should exist; absence only removes an extra status hint */ }
+  }
+  return [...seen.entries()].map(([pid, reason]) => ({ pid, reason })).sort((a, b) => a.pid - b.pid);
 }
 
 function lastEvent(log: string): string {
@@ -865,6 +925,9 @@ function cmdStatus(): void {
     if (rec.lastCapacityEvent) {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
       console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
+    }
+    for (const orphan of orphanMatchesFor(name, rec)) {
+      console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}`);
     }
   }
 }
