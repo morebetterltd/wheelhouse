@@ -1,0 +1,44 @@
+brief resolver paths (no root AGENTS):
+4:function installedBriefPath(root: string, role: string): string {
+10:function templateBriefPath(root: string, role: string): string {
+15:  const installed = installedBriefPath(root, role);
+18:  const template = templateBriefPath(root, role);
+
+BOOTSTRAP AGENTS references:
+83:- **If root `AGENTS.md` is already committed, say so and leave it product-owned.** The wheelhouse's install instructions go in `wheelhouse/AGENTS.md`; do not append to or git-exclude the root cross-agent file.
+319:- **Move bd's agent note into the wheelhouse namespace.** `bd init` may write `AGENTS.md` at the root. The root `AGENTS.md` belongs to the product for Codex, Cursor, and other cross-agent tooling, so the wheelhouse never claims it and never git-excludes it. If `bd init` wrote an uncommitted root `AGENTS.md`, move it to `wheelhouse/AGENTS.md`; if the root file was already committed before this install, leave it untouched and create `wheelhouse/AGENTS.md` for the wheelhouse note instead.
+322:  if git ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
+323:    echo "root AGENTS.md is committed and remains product-owned; writing wheelhouse/AGENTS.md"
+324:  elif [ -e AGENTS.md ]; then
+325:    mv -f AGENTS.md wheelhouse/AGENTS.md
+327:  [ -e wheelhouse/AGENTS.md ] || : > wheelhouse/AGENTS.md
+330:  git check-ignore AGENTS.md >/dev/null 2>&1; test $? -eq 1 || echo "FAIL root AGENTS.md is still ignored"
+333:  On some bd builds the session-completion section mandates pushing ("work is NOT complete until `git push` succeeds", "NEVER stop before pushing"); on current builds it is conservative and says the opposite ("Do not commit or push without clear authority"). **Read `wheelhouse/AGENTS.md` before acting**, because one sentence of what you append depends on which one you have.
+335:  Keep bd's useful content — the command reference is genuinely handy — and override the mandate. Append this to `wheelhouse/AGENTS.md` in every case, unchanged except for the project paths if this install is not at the repository root:
+359:  It is a second append rather than a line struck out of the first, because the conditional half is the half installers get wrong: a paste-then-delete leaves two installers on the same branch with different files, and an override quoting "landing the plane" into a conservative `wheelhouse/AGENTS.md` that never says it reads as an error to the next person who checks. Appending nothing is an easier instruction to follow exactly than deleting something.
+361:  Say plainly in your hand-back that you did this and why. A principal or seat who later reads `wheelhouse/AGENTS.md` unaware of the override will be confused by it, and the fleet's behaviour will look like disobedience rather than policy. A seat may not cite bd's generated Conservative/default text as a reason to stop; the installed authority is `CLAUDE.md` plus `wheelhouse/INTEGRATOR.md`.
+538:  **Expect zero hits.** If specimen strings appear in the project's generated wheelhouse files, the install leaked and must be fixed before you report success. Root `AGENTS.md` is deliberately out of scope because it is product-owned; `wheelhouse/AGENTS.md` is covered by `wheelhouse/`.
+680:- what exists — the files, the graph, the shape you installed and where worktrees go, the merge policy, the fleet's push/PR/deploy authority, and the reserved actions in the principal's own words, and anything you corrected on the way through: the `wheelhouse/AGENTS.md` override from step 5, any `GRAPH.md` status correction from its verification, and which `.beads/` durability shape you found at its commit and what was chosen about it;
+
+UPGRADE AGENTS references:
+292:- If this install has an uncommitted, git-excluded root `AGENTS.md` carrying the wheelhouse note, move it to `wheelhouse/AGENTS.md` and drop any `AGENTS.md` or `/AGENTS.md` line from `.git/info/exclude`; then `git check-ignore AGENTS.md` must exit 1. If root `AGENTS.md` is committed, leave it product-owned and put only the wheelhouse note in `wheelhouse/AGENTS.md`.
+304:Then hand-merge the same standing behavior into `CLAUDE.md` from `generated/CLAUDE.md.example`: the `## Autonomy mandate` section, the two-and-only-two reasons to interrupt the principal, and the restart checklist. Add an ISA Decision quoting the directive in `wheelhouse/ISA.md` so a restarted commander cannot lose it. Finally, read `wheelhouse/AGENTS.md` if the install has one: keep bd's command reference, but append or update the wheelhouse override so bd's Conservative/default "do not push" text cannot be cited against the authority in `wheelhouse/INTEGRATOR.md`.
+
+specimen grep scope:
+BOOTSTRAP.md:535:    CLAUDE.md wheelhouse/
+BOOTSTRAP.md:548:  grep -rIn "{{" CLAUDE.md wheelhouse/ | grep -v "^wheelhouse/runbooks/"
+BOOTSTRAP.md:596:for p in CLAUDE.md wheelhouse/ .beads/; do
+seats/specimen-leak.selftest.sh:27:  grep -rnwE "$PATTERN" CLAUDE.md wheelhouse/ 2>&1
+
+umbrella bench still needs twin update (read-only inspection):
+576:  # Reconcile AGENTS.md — read what bd actually wrote before acting.
+577:  if [ -f AGENTS.md ] && grep -qi "landing the plane" AGENTS.md; then
+589:  } >> AGENTS.md
+590:  say "AGENTS.md reconciled: $AGENTS_CASE"
+1057:    CLAUDE.md AGENTS.md wheelhouse/ 2>&1)
+1272:  for cited in $(grep -rhoE 'wheelhouse/[A-Za-z0-9._/-]+' CLAUDE.md AGENTS.md wheelhouse/ 2>/dev/null \
+1280:  for f in CLAUDE.md AGENTS.md wheelhouse/.template-source wheelhouse/ISA.md \
+1291:  find CLAUDE.md AGENTS.md wheelhouse -type f | sort
+
+git diff --check:
+OK

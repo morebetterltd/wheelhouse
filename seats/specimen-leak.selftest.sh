@@ -24,13 +24,14 @@ trap cleanup EXIT INT TERM
 
 PATTERN='Ebb|ebb|Tideline|tideline|cordova|headless emulator|app-review|com\.example\.app|learn what a good one looks like|take it when the reviewer starts waiting'
 run_grep() {
-  grep -rnwE "$PATTERN" CLAUDE.md AGENTS.md wheelhouse/ 2>&1
+  grep -rnwE "$PATTERN" CLAUDE.md wheelhouse/ 2>&1
 }
 
 INSTALL="$FIX/install"
 mkdir -p "$INSTALL/wheelhouse/crew" "$INSTALL/wheelhouse/fleet"
 printf '# Consumer CLAUDE\n\nNo specimen project here.\n' > "$INSTALL/CLAUDE.md"
-printf '# Consumer AGENTS\n\nNo specimen project here.\n' > "$INSTALL/AGENTS.md"
+printf '# Product AGENTS\n\nThe product owns this root file.\n' > "$INSTALL/AGENTS.md"
+printf '# Wheelhouse AGENTS\n\nNo specimen project here.\n' > "$INSTALL/wheelhouse/AGENTS.md"
 cp -R "$ROOT/contracts" "$INSTALL/wheelhouse/contracts"
 cp -R "$ROOT/runbooks" "$INSTALL/wheelhouse/runbooks"
 cp "$ROOT/contracts/VERIFIER.md" "$INSTALL/wheelhouse/crew/VERIFIER.md"
