@@ -1,0 +1,8 @@
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+{"at":"2026-09-04T19:48:47.3NZ","argv":"--list-models"}
+{"at":"2026-09-04T19:49:14.3NZ","argv":"--list-models"}
+{"at":"2026-09-04T19:49:31.3NZ","argv":"--list-models"}
+{"at":"2026-09-04T19:49:44.3NZ","argv":"--list-models"}
+{"at":"2026-09-04T19:50:03.3NZ","argv":"--list-models"}
+{"at":"2026-09-04T19:50:16.3NZ","argv":"--list-models"}
+{"at":"2026-09-04T19:50:32.3NZ","argv":"--list-models"}

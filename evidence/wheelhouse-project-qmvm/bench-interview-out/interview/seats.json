@@ -1,0 +1,40 @@
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+{
+  "commander": {
+    "role": "commander",
+    "external": true,
+    "runtime": "claude-code"
+  },
+  "seats": {
+    "worker-1": {
+      "role": "worker",
+      "provider": "openai-codex",
+      "model": "gpt-5.5",
+      "account": { "dir": "~/.pi-seats-wheelhouse-project/worker-1", "authRoute": "oauth" }
+    },
+    "worker-2": {
+      "role": "worker",
+      "provider": "openai-codex",
+      "model": "gpt-5.5",
+      "account": { "dir": "~/.pi-seats-wheelhouse-project/worker-2", "authRoute": "oauth" }
+    },
+    "reviewer": {
+      "role": "reviewer",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "account": { "dir": "~/.pi-seats-wheelhouse-project/reviewer", "authRoute": "api_key" }
+    },
+    "verifier": {
+      "role": "verifier",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "account": { "dir": "~/.pi-seats-wheelhouse-project/verifier", "authRoute": "api_key" }
+    },
+    "designer": {
+      "role": "designer",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "account": { "dir": "~/.pi-seats-wheelhouse-project/designer", "authRoute": "api_key" }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+artifact=389f4ca99fefdfadecac86fb6e213159f7084ce9
+interviewer=openrouter/z-ai/glm-5.3-flash
+clause_7_caveat=PASS benches conduct mechanics, not interview quality; FAIL needs capture adjudication. Model-option provenance is keyed to the provider settled in seats.json when present, so downstream PROVIDER_* divergence is not double-counted as expected-provider provenance.
+MEASUREMENT fixture_replay_questions=13
+MEASUREMENT fixture_replay_misses=0
+MEASUREMENT askuserquestion_rounds=20
+MEASUREMENT q8_answer_rounds=16
+MEASUREMENT readback_present=true
