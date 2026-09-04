@@ -581,6 +581,33 @@ if grep -q "evidence/screen.png" "$VARGV" 2>/dev/null && grep -q "floor" "$VARGV
   pass "the floor-check results reach the verifier's prompt"
 else fail "evidence floor results not in the prompt argv"; fi
 
+printf 'wheelhouse/evidence/\n' >> "$PROJ/.git/info/exclude"
+mkdir -p "$PROJ/wheelhouse/evidence/disk-ok" "$PROJ/wheelhouse/evidence/disk-bare"
+printf 'disk evidence retained outside git\n' > "$PROJ/wheelhouse/evidence/disk-ok/proof.txt"
+( cd "$PROJ/wheelhouse/evidence/disk-ok" && shasum -a 256 proof.txt > cited-evidence.sha256 )
+cat > "$REPLY" <<'EOF'
+Opened disk evidence manifest; it verifies. Done holds.
+VERDICT: APPROVE
+EOF
+run bead-8disk-ok fleet/bead-1 worker-1 --evidence wheelhouse/evidence/disk-ok
+if [ $RC -eq 0 ]; then pass "APPROVE over git-excluded evidence with a verified SHA-256 manifest exits 0"
+else fail "excluded manifest evidence exited ${RC}: $OUT"; fi
+if grep -q "wheelhouse/evidence/disk-ok — exists, .*cited-evidence.sha256 verified 1 artifact(s).*OK (SATISFIED via excluded disk + SHA-256 manifest)" "$VDIR/bead-8disk-ok.md" 2>/dev/null; then
+  pass "excluded evidence record names disk+manifest as the satisfying source"
+else fail "excluded evidence record did not name disk+manifest satisfaction"; fi
+
+cat > "$REPLY" <<'EOF'
+VERDICT: APPROVE
+EOF
+run bead-8disk-bare fleet/bead-1 worker-1 --evidence wheelhouse/evidence/disk-bare
+if [ $RC -eq 1 ] && says "no cited-evidence.sha256" && says "UNSATISFIED"; then
+  pass "git-excluded evidence without a manifest is UNSATISFIED, not accepted for bare existence"
+else fail "excluded bare directory was not refused (exit $RC): $OUT"; fi
+run bead-8disk-missing fleet/bead-1 worker-1 --evidence wheelhouse/evidence/disk-missing
+if [ $RC -eq 1 ] && says "git-excluded evidence path is absent on disk" && says "UNSATISFIED"; then
+  pass "missing git-excluded evidence is UNSATISFIED with disk source named"
+else fail "missing excluded evidence was not refused (exit $RC): $OUT"; fi
+
 cat > "$REPLY" <<'EOF'
 VERDICT: APPROVE
 EOF
