@@ -289,6 +289,7 @@ rm -f wheelhouse/.template-source.bak
 
 An upgrade re-copies the contracts and the runbooks and reaches nothing else. If the change altered a convention — a path form, a command name, a label — then your generated files and your existing beads still speak the old one:
 
+- If this install has an uncommitted, git-excluded root `AGENTS.md` carrying the wheelhouse note, move it to `wheelhouse/AGENTS.md` and drop any `AGENTS.md` or `/AGENTS.md` line from `.git/info/exclude`; then `git check-ignore AGENTS.md` must exit 1. If root `AGENTS.md` is committed, leave it product-owned and put only the wheelhouse note in `wheelhouse/AGENTS.md`.
 - `CLAUDE.md`, `wheelhouse/ISA.md`, `wheelhouse/STARTUP.md`, and the `## This project` sections you just preserved;
 - if the target template changed `generated/CLAUDE.md.example`, `generated/STARTUP.md.example`, or `generated/SEATS.md.example`, read those specimens and hand-merge the matching standing behaviors into your real `CLAUDE.md`, `wheelhouse/STARTUP.md`, or `wheelhouse/fleet/SEATS.md` project half; generated examples are not installed by an upgrade, so existing installs do not learn new Decisions-before-beads, Goal-before-dispatch, Claims-move-on-merge, verifier walker launch notes, roster cadence pointers, morning handoff archive, end-of-day `stop-all`, or Dispatch Office herald startup rules unless you add them;
 - the Dispatch Office herald arrives through the `seats/` copy, but copying the file does not start it. Hand-merge the `generated/STARTUP.md.example` cockpit guidance that says `seats/cockpit.sh <namespace>` owns the herald through `ensure_herald`: a first cockpit launch starts it, a later launch verifies or restarts it, and the proof is a `herald started:`/`herald already running:`/`herald dead: ... restarting` line from cockpit plus later `poke sent`/`poke cooldown`/`poke not-idle` lines in `seats/logs/herald.out.log` once inbox traffic exists. A non-cockpit cold start (`bun seats/adapter.ts spawn ...` plus `status`) starts seats but not the herald, so say that if you keep a no-cockpit path. When the copied herald first sees pre-existing `seats/logs/*.jsonl` files with no `seats/herald.state.json` cursor, it records their current EOF and does not replay their history; only later appends can create inbox events. This is the intended upgrade/adoption behavior, not lost evidence.
@@ -300,7 +301,7 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 
 Ask the principal the same question current `BOOTSTRAP.md` asks: how far does the fleet take work? The default answer is **all the way** — merge, push, open and merge PRs, and deploy wherever the project has an automated deploy path — stopping only for this install's reserved actions or a genuine fork in product intent. Record the answer in `wheelhouse/INTEGRATOR.md`'s project section along with the explicit reserved list and the date. The mandate line must quote the principal directive verbatim: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done."
 
-Then hand-merge the same standing behavior into `CLAUDE.md` from `generated/CLAUDE.md.example`: the `## Autonomy mandate` section, the two-and-only-two reasons to interrupt the principal, and the restart checklist. Add an ISA Decision quoting the directive in `wheelhouse/ISA.md` so a restarted commander cannot lose it. Finally, read `AGENTS.md` if the install has one: keep bd's command reference, but append or update the wheelhouse override so bd's Conservative/default "do not push" text cannot be cited against the authority in `wheelhouse/INTEGRATOR.md`.
+Then hand-merge the same standing behavior into `CLAUDE.md` from `generated/CLAUDE.md.example`: the `## Autonomy mandate` section, the two-and-only-two reasons to interrupt the principal, and the restart checklist. Add an ISA Decision quoting the directive in `wheelhouse/ISA.md` so a restarted commander cannot lose it. Finally, read `wheelhouse/AGENTS.md` if the install has one: keep bd's command reference, but append or update the wheelhouse override so bd's Conservative/default "do not push" text cannot be cited against the authority in `wheelhouse/INTEGRATOR.md`.
 
 ```bash
 git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ | grep -E '^[-+].*`[a-z/.]+`' | sort -u
@@ -357,7 +358,7 @@ That is the shape of what step 7 catches: not damage, but the parts of your proj
 
 ## 8. Commit
 
-Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you either stage it deliberately or replace the broad directory add with explicit paths. Step 7 can also make you edit project-owned surfaces outside `wheelhouse/`, especially `AGENTS.md` and `.claude/settings.json`; stage those exact files when they exist, and stage any other step-7 path you deliberately changed before committing.
+Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you either stage it deliberately or replace the broad directory add with explicit paths. Step 7 can also make you edit project-owned surfaces outside `wheelhouse/`, especially `.claude/settings.json`; stage those exact files when they exist, and stage any other step-7 path you deliberately changed before committing.
 
 ```bash
 git status --short
@@ -366,7 +367,7 @@ git status --short
 ```bash
 NEW=$(sed -n 's/^commit=//p' wheelhouse/.template-source | cut -c1-12)
 git add wheelhouse/ seats/ .gitignore CLAUDE.md .beads/
-for p in AGENTS.md .claude/settings.json; do
+for p in .claude/settings.json; do
   [ ! -e "$p" ] || git add "$p"
 done
 # If step 7 made you edit any other project-owned file, add its exact path now.

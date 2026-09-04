@@ -80,7 +80,8 @@ bd --version
 Take this from the project directory you are installing into, not from the template clone. If you are not standing in it yet, go there first: a survey of the wrong directory returns a clean answer about a project nobody is installing into.
 
 - **STOP IMMEDIATELY, without writing anything, if `wheelhouse/` or `CLAUDE.md` already exists here.** Say what exists and ask the principal what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable.
-- **If neither exists, say so out loud.** That sentence is the record every later step reads. This procedure creates both names itself — the `wheelhouse/` directory step 2 makes for `.template-source`, and the `CLAUDE.md` that `bd init` writes in step 5 — and neither trips this check, because both appear after this survey. That is the whole reason the survey lives here and not further down: seeing those files at step 3 or step 5 tells you nothing, and seeing them now tells you everything.
+- **If root `AGENTS.md` is already committed, say so and leave it product-owned.** The wheelhouse's install instructions go in `wheelhouse/AGENTS.md`; do not append to or git-exclude the root cross-agent file.
+- **If neither `wheelhouse/` nor `CLAUDE.md` exists, say so out loud.** That sentence is the record every later step reads. This procedure creates both names itself — the `wheelhouse/` directory step 2 makes for `.template-source`, and the `CLAUDE.md` that `bd init` writes in step 5 — and neither trips this check, because both appear after this survey. That is the whole reason the survey lives here and not further down: seeing those files at step 3 or step 5 tells you nothing, and seeing them now tells you everything.
 
 This is the one observation in the procedure that expires. Every other check can be re-run at any point and give the same answer; this one is about a state that step 2 destroys. If you find yourself past step 2 having never taken it, the cheap answer is gone — ask the principal directly, and read `git log --oneline -1 -- CLAUDE.md wheelhouse`, where a path with history predates you. An empty answer proves nothing in the other direction, since an untracked file that was already here has no history either.
 
@@ -315,9 +316,23 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
 
   Current bd builds set this themselves — measured on bd 1.2.2, a fresh `bd init` leaves `git config --get beads.role` printing `maintainer` — but older builds did not, and upstream tracks init and upgrade paths that leave it unset (gastownhall/beads#2950). Left unset, every bd command prints `warning: beads.role not configured (GH#2950)` on stderr, and role detection falls back to a deprecated remote-URL heuristic that reads a plain-HTTPS `origin` as `contributor`. That value is not cosmetic: the role drives bd's multi-repo routing, and `contributor` routes `bd create` — and with it `bd list` and `bd ready` — to a separate planning repository (`~/.beads-planning` by default) instead of this project's graph, which breaks "the graph is the single source of work state" without an error. `maintainer` is the right value here in every case, because a wheelhouse owns its graph at the install root by design; a principal who genuinely wants contributor routing is installing something other than what this procedure installs, and that is a decision to record, not a default to detect. The command is idempotent — if the role was already `maintainer`, setting it again changes nothing, and the read-back is the evidence either way.
 
-- **Reconcile `AGENTS.md` — conditionally.** `bd init` writes an `AGENTS.md` at the root. On some bd builds its session-completion section mandates pushing ("work is NOT complete until `git push` succeeds", "NEVER stop before pushing"); on current builds it is conservative and says the opposite ("Do not commit or push without clear authority"). **Read the file bd actually wrote before acting**, because one sentence of what you append depends on which one you have.
+- **Move bd's agent note into the wheelhouse namespace.** `bd init` may write `AGENTS.md` at the root. The root `AGENTS.md` belongs to the product for Codex, Cursor, and other cross-agent tooling, so the wheelhouse never claims it and never git-excludes it. If `bd init` wrote an uncommitted root `AGENTS.md`, move it to `wheelhouse/AGENTS.md`; if the root file was already committed before this install, leave it untouched and create `wheelhouse/AGENTS.md` for the wheelhouse note instead.
 
-  Keep bd's useful content — the command reference is genuinely handy — and override the mandate. Append this to `AGENTS.md` in every case, unchanged except for the project paths if this install is not at the repository root:
+  ```bash
+  if git ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
+    echo "root AGENTS.md is committed and remains product-owned; writing wheelhouse/AGENTS.md"
+  elif [ -e AGENTS.md ]; then
+    mv -f AGENTS.md wheelhouse/AGENTS.md
+  fi
+  [ -e wheelhouse/AGENTS.md ] || : > wheelhouse/AGENTS.md
+  sed -i.bak '/^AGENTS\.md$/d;/^\/AGENTS\.md$/d' .git/info/exclude 2>/dev/null || true
+  rm -f .git/info/exclude.bak
+  git check-ignore AGENTS.md >/dev/null 2>&1; test $? -eq 1 || echo "FAIL root AGENTS.md is still ignored"
+  ```
+
+  On some bd builds the session-completion section mandates pushing ("work is NOT complete until `git push` succeeds", "NEVER stop before pushing"); on current builds it is conservative and says the opposite ("Do not commit or push without clear authority"). **Read `wheelhouse/AGENTS.md` before acting**, because one sentence of what you append depends on which one you have.
+
+  Keep bd's useful content — the command reference is genuinely handy — and override the mandate. Append this to `wheelhouse/AGENTS.md` in every case, unchanged except for the project paths if this install is not at the repository root:
 
   ```markdown
   ## This project runs a wheelhouse — the rules above are overridden
@@ -341,9 +356,9 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
   Ignore "landing the plane" as written above; land it by reporting.
   ```
 
-  It is a second append rather than a line struck out of the first, because the conditional half is the half installers get wrong: a paste-then-delete leaves two installers on the same branch with different files, and an override quoting "landing the plane" into a conservative `AGENTS.md` that never says it reads as an error to the next person who checks. Appending nothing is an easier instruction to follow exactly than deleting something.
+  It is a second append rather than a line struck out of the first, because the conditional half is the half installers get wrong: a paste-then-delete leaves two installers on the same branch with different files, and an override quoting "landing the plane" into a conservative `wheelhouse/AGENTS.md` that never says it reads as an error to the next person who checks. Appending nothing is an easier instruction to follow exactly than deleting something.
 
-  Say plainly in your hand-back that you did this and why. A principal or seat who later reads `AGENTS.md` unaware of the override will be confused by it, and the fleet's behaviour will look like disobedience rather than policy. A seat may not cite bd's generated Conservative/default text as a reason to stop; the installed authority is `CLAUDE.md` plus `wheelhouse/INTEGRATOR.md`.
+  Say plainly in your hand-back that you did this and why. A principal or seat who later reads `wheelhouse/AGENTS.md` unaware of the override will be confused by it, and the fleet's behaviour will look like disobedience rather than policy. A seat may not cite bd's generated Conservative/default text as a reason to stop; the installed authority is `CLAUDE.md` plus `wheelhouse/INTEGRATOR.md`.
 - The verbatim half — contracts, runbooks, the seats machinery, the bench stub — is already in place from step 2. What this step writes is the interview's half: the `## This project` fills below, plus `CLAUDE.md`, the ISA, and `STARTUP.md`. This includes `wheelhouse/crew/VERIFIER.md`'s project half: the install's named consumer surfaces for claim walks. The rule from step 2 holds while you do it: **not a single line of any `## Contract` section changes**; you append or fill ONLY below the `## This project` heading.
 
 **How to fill a `## This project` section, precisely.** Find the FIRST line in the file that is exactly `## This project` — the whole line, nothing else on it. FIRST, not last: the integrity check below and `runbooks/UPGRADE.md` both stop at the first match, and a last-match rule would absorb project content into the contract half the moment a project section legitimately quotes that heading. Everything above that line is the contract and is not yours to touch; everything below it is yours to write. Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A contract may legitimately discuss its own structure, and a naive match has already destroyed one contract file this way — deleting a licensing-compliance rule while every automated check still passed.
@@ -517,10 +532,10 @@ Run each of these and paste what it prints:
   # Every term in this list must be checked against current contracts/ and runbooks/ before shipping;
   # a term that appears in copied contract prose false-fails every correct install.
   grep -rnwE "Ebb|ebb|Tideline|tideline|cordova|headless emulator|app-review|com\.example\.app|learn what a good one looks like|take it when the reviewer starts waiting" \
-    CLAUDE.md AGENTS.md wheelhouse/
+    CLAUDE.md wheelhouse/
   ```
 
-  **Expect zero hits.** If specimen strings appear in the project's files, the install leaked and must be fixed before you report success. `AGENTS.md` is in scope because you edited it too.
+  **Expect zero hits.** If specimen strings appear in the project's generated wheelhouse files, the install leaked and must be fixed before you report success. Root `AGENTS.md` is deliberately out of scope because it is product-owned; `wheelhouse/AGENTS.md` is covered by `wheelhouse/`.
 
   Those terms come from the template's own `generated/` specimens (the invented project) and `examples/` (the worked benches, which use invented projects of their own). If you are reading this in a template whose specimens have changed, the list is stale — check what `generated/` and `examples/` actually contain and grep for that instead. A hardcoded list that no longer matches the specimens passes everything. Before adding or broadening a term, run it against current `contracts/` and `runbooks/` too; every term must be proved specimen-only on the files a correct install copies.
 
@@ -578,7 +593,7 @@ git status --short          # look first: bd init may have added files AND a com
 # Stage each install path ONLY if that status output actually shows it. bd commits some of
 # them itself (.beads/ routinely, and current builds also .claude/, .codex/, .agents/), and an
 # install kept out of the tree with .git/info/exclude shows none of them.
-for p in CLAUDE.md AGENTS.md wheelhouse/ .beads/; do
+for p in CLAUDE.md wheelhouse/ .beads/; do
   if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
 done
 git status --short          # read what is staged; if nothing is, there is no commit to make
@@ -662,7 +677,7 @@ Five things, in this order.
 
 **Hand back what is now true.** Plainly, and with the two halves kept apart, because a principal who cannot tell them apart will trust the stubs:
 
-- what exists — the files, the graph, the shape you installed and where worktrees go, the merge policy, the fleet's push/PR/deploy authority, and the reserved actions in the principal's own words, and anything you corrected on the way through: the `AGENTS.md` override from step 5, any `GRAPH.md` status correction from its verification, and which `.beads/` durability shape you found at its commit and what was chosen about it;
+- what exists — the files, the graph, the shape you installed and where worktrees go, the merge policy, the fleet's push/PR/deploy authority, and the reserved actions in the principal's own words, and anything you corrected on the way through: the `wheelhouse/AGENTS.md` override from step 5, any `GRAPH.md` status correction from its verification, and which `.beads/` durability shape you found at its commit and what was chosen about it;
 - what is deliberately STUBBED and therefore not yet true — `wheelhouse/crew/bench.sh` exits non-zero on purpose, the worker's gotchas section is empty because gotchas are earned rather than invented, and the ISA's claims are empty for the same reason.
 
 **Read the loop you are about to run.** `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, now, before the dispatch below — you are executing its first stage in the next paragraph, not filing it for someone to read later. The contracts say what each role owes; that runbook says what the sequence looks like and what to do on the days it does not go straight through, and whoever has the contracts and not the runbook has the standards and no procedure. The role contracts are then read at the stage that needs them — `wheelhouse/fleet/WORKER.md` when you dispatch, `wheelhouse/crew/REVIEWER.md` when a branch lands, `wheelhouse/INTEGRATOR.md` when one is approved, `wheelhouse/GRAPH.md` for the review queue — and the runbook's closing table says which is which. That is the reading list, and it is a step inside this action rather than a parting gift.

@@ -1,0 +1,9 @@
+case=uncommitted-bd committed_root=no
+check-ignore AGENTS.md=1
+wheelhouse/AGENTS.md exists
+root AGENTS.md not claimed
+root AGENTS.md is committed and remains product-owned; writing wheelhouse/AGENTS.md
+case=committed-product committed_root=yes
+check-ignore AGENTS.md=1
+wheelhouse/AGENTS.md exists
+root AGENTS.md still tracked

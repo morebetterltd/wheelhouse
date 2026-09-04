@@ -1,0 +1,6 @@
+specimen-leak selftest: current install fixture
+  ok    prescribed grep passes with current VERIFIER.md mentioning an emulator command
+
+specimen-leak selftest: planted whole-file specimen copy
+  ok    prescribed grep bites a planted whole-file generated specimen copy
+specimen-leak.selftest: PASS (2 legs)
