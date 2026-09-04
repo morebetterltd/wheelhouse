@@ -1,0 +1,32 @@
+guard clauses:
+9:  echo "REFUSED template source: $*" >&2
+10:  exit 42
+16:    [ -f "$TEMPLATE_SOURCE" ] || source_refusal "$TEMPLATE_SOURCE missing; expected a path= line naming the template clone that carries baseline $BASELINE"
+20:      || source_refusal "$TEMPLATE_SOURCE path=$recorded is not a git repository carrying baseline $BASELINE"
+22:      || source_refusal "$TEMPLATE_SOURCE path=$recorded is a git repository but baseline object $BASELINE is absent"
+139:  if [ "$MISSING_RC" -eq 42 ] && printf '%s\n' "$MISSING_OUT" | grep -q 'wheelhouse/.template-source missing' && printf '%s\n' "$MISSING_OUT" | grep -q 'expected a path= line'; then
+154:  if [ "$BAD_RC" -eq 42 ] && printf '%s\n' "$BAD_OUT" | grep -q 'wheelhouse/.template-source path=' && printf '%s\n' "$BAD_OUT" | grep -q 'not a git repository'; then
+
+selftest output (template layout):
+ok 1 - zsh step 0 baseline reconstruction reads commit:path with braces
+ok 2 - zsh step 3 runbook loop reads real baseline for every runbook
+ok 3 - step 8 broad wheelhouse add stages untracked files under wheelhouse
+ok 4 - installed-layout copied upgrade-runbook selftest resolves baseline through wheelhouse/.template-source path
+ok 5 - installed-layout missing .template-source fails legibly with path= expectation
+ok 6 - installed-layout bad path= fails legibly before raw git fatal
+upgrade-runbook.selftest: PASS (6 checks)
+
+selftest output (installed layout):
+ok 1 - zsh step 0 baseline reconstruction reads commit:path with braces
+ok 2 - zsh step 3 runbook loop reads real baseline for every runbook
+ok 3 - step 8 broad wheelhouse add stages untracked files under wheelhouse
+ok 4 - installed-layout copied upgrade-runbook selftest resolves baseline through wheelhouse/.template-source path
+ok 5 - installed-layout missing .template-source fails legibly with path= expectation
+ok 6 - installed-layout bad path= fails legibly before raw git fatal
+upgrade-runbook.selftest: PASS (6 checks)
+
+bash -n:
+OK
+
+git diff --check:
+OK
