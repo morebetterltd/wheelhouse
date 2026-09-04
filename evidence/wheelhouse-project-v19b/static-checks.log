@@ -1,0 +1,36 @@
+header contract comment:
+ *   dispatch <seat> <bead-id> <text>   send a prompt (same-bead queues; mid-turn cross-bead refuses unless forced)
+ *   steer    <seat> <text>             redirect the current turn
+ *   status                             liveness + last event, every seat
+ *   stop     <seat>                    graceful SIGTERM; session survives
+ *   stop-all                           SIGTERM every idle rostered seat; report busy seats
+ *   resume   <seat>                    respawn attached to the recorded session
+ *   reset    <seat>                    stop, discard the session, respawn cold
+ *
+ * A seat's process cwd is the bead's worktree, not the project root and not
+ * prompt discipline: spawn with a bead id, or dispatch a bead the running
+ * seat is not already sitting in, resolves to
+ * `.wheelhouse-worktrees/<bead-id>` and STOPs loudly if that directory does
+ * not exist yet — the worktree is a precondition dispatch enforces, not one
+ * it creates. A cross-bead dispatch never interrupts a mid-turn seat: it
+ * STOPs and names the in-flight bead and the agent_end/isStreaming=false
+ * settle it is waiting on, unless WHEELHOUSE_DISPATCH_FORCE=1 deliberately
+ * abandons that turn and allows the stop-and-relaunch escape.
+ */
+
+
+cmdDispatch force/refuse sites:
+seats/adapter.ts:35: *   dispatch <seat> <bead-id> <text>   send a prompt (same-bead queues; mid-turn cross-bead refuses unless forced)
+seats/adapter.ts:49: * STOPs and names the in-flight bead and the agent_end/isStreaming=false
+seats/adapter.ts:50: * settle it is waiting on, unless WHEELHOUSE_DISPATCH_FORCE=1 deliberately
+seats/adapter.ts:797:    const force = process.env.WHEELHOUSE_DISPATCH_FORCE === "1";
+seats/adapter.ts:800:        `seat "${name}" is mid-turn on ${inFlight}; refusing cross-bead dispatch to ${beadId}. ` +
+seats/adapter.ts:801:          `Wait for settle agent_end/isStreaming=false before dispatching another bead, or set WHEELHOUSE_DISPATCH_FORCE=1 to abandon the running turn.`
+seats/adapter.ts:806:        `seat ${name}: WHEELHOUSE_DISPATCH_FORCE=1 — deliberately abandoning mid-turn bead ${inFlight}; ` +
+seats/adapter.selftest.sh:674:if [ $RC -ne 0 ] && says "mid-turn on bead-mid" && says "bead-other" && says "agent_end/isStreaming=false"; then
+seats/adapter.selftest.sh:687:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_DISPATCH_FORCE=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-force "forced escape" 2>&1)"; RC=$?
+seats/adapter.selftest.sh:688:if [ $RC -eq 0 ] && says "WHEELHOUSE_DISPATCH_FORCE=1" && says "deliberately abandoning mid-turn bead bead-mid" && says "bead-force"; then
+runbooks/RUNNING_THE_LOOP.md:50:Defined work is ready work: once something is described as a bead, the commander dispatches it immediately, never waiting for the principal's explicit go. Signals become defined work the same way: when the principal, the ISA Goal, an open Claim's falsifier, a Decision, or a backlog direction points at a verifiable next step, the commander files the bead and dispatches it without asking whether to create or start it. Holding work is the exception, and it is expressed IN the graph — a blocking kickoff-gate bead — or by the per-action reserved list the project records in `wheelhouse/INTEGRATOR.md`. A commander that waits to be poked ruins the magic of an autonomous fleet. One seat carries one bead until the turn settles; adapter dispatch refuses a cross-bead handoff to a mid-turn seat unless the commander sets the explicit force escape for an abandoned turn.
+
+git diff --check:
+OK

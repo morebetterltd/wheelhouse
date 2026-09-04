@@ -32,7 +32,7 @@
  *
  *   spawn    <seat> [bead-id]          start the seat from seats/seats.json
  *   probe    <seat>                    one-shot provider/model liveness check
- *   dispatch <seat> <bead-id> <text>   send a prompt (queues if mid-turn)
+ *   dispatch <seat> <bead-id> <text>   send a prompt (same-bead queues; mid-turn cross-bead refuses unless forced)
  *   steer    <seat> <text>             redirect the current turn
  *   status                             liveness + last event, every seat
  *   stop     <seat>                    graceful SIGTERM; session survives
@@ -45,8 +45,10 @@
  * seat is not already sitting in, resolves to
  * `.wheelhouse-worktrees/<bead-id>` and STOPs loudly if that directory does
  * not exist yet — the worktree is a precondition dispatch enforces, not one
- * it creates. dispatch transparently stops and relaunches (attached to the
- * same session) when the seat's cwd does not already match the bead.
+ * it creates. A cross-bead dispatch never interrupts a mid-turn seat: it
+ * STOPs and names the in-flight bead and the agent_end/isStreaming=false
+ * settle it is waiting on, unless WHEELHOUSE_DISPATCH_FORCE=1 deliberately
+ * abandons that turn and allows the stop-and-relaunch escape.
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -787,6 +789,24 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     // missing worktree must refuse loudly with the seat left exactly as it
     // was, not stopped on the way to discovering the target doesn't exist.
     requireCwdDir(targetCwd);
+    const st = await rpc(rec, { type: "get_state" });
+    if (!st.success) {
+      die(`get_state failed while checking seat "${name}" before cross-bead dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
+    }
+    const inFlight = rec.lastBead ?? "unknown bead";
+    const force = process.env.WHEELHOUSE_DISPATCH_FORCE === "1";
+    if (st.data?.isStreaming && !force) {
+      die(
+        `seat "${name}" is mid-turn on ${inFlight}; refusing cross-bead dispatch to ${beadId}. ` +
+          `Wait for settle agent_end/isStreaming=false before dispatching another bead, or set WHEELHOUSE_DISPATCH_FORCE=1 to abandon the running turn.`
+      );
+    }
+    if (st.data?.isStreaming && force) {
+      console.log(
+        `seat ${name}: WHEELHOUSE_DISPATCH_FORCE=1 — deliberately abandoning mid-turn bead ${inFlight}; ` +
+          `old stop-and-relaunch escape will dispatch ${beadId}`
+      );
+    }
     const recordedCwd = rec.cwd ?? ROOT;
     const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     await cmdStop(name);
