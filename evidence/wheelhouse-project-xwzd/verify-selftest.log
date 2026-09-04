@@ -1,0 +1,100 @@
+
+installed layout — wheelhouse/crew brief is preferred without contracts/
+  ok    installed layout: APPROVE exits 0 with no contracts/ directory
+  ok    installed layout: verifier brief resolves to wheelhouse/crew/REVIEWER.md
+  ok    missing brief: STOP names both installed and template paths tried
+
+multi-repo umbrella layout — --repo selects the product repository
+  ok    umbrella layout: APPROVE exits 0 when --repo names the product repo
+  ok    umbrella layout: verdict records the product repo and product-relative evidence floor check
+  ok    umbrella layout: omitting --repo still measures the umbrella root and refuses the product branch
+
+1. APPROVE — verdict parsed, recorded, exit 0, and what was launched
+  ok    APPROVE exits 0
+  ok    the verdict is printed for the dispatcher
+  ok    verdict file written to seats/verdicts/bead-1.md
+  ok    verdict file carries verdict, tip SHA, and the evidence excerpt
+  ok    verdict file names itself a working copy, not an evidence home
+  ok    pi was launched one-shot: -p --no-session
+  ok    role brief injected: --append-system-prompt names contracts/REVIEWER.md
+  ok    the VERIFIER seat's provider and model pin the launch (not the author's)
+  ok    prompt carries the bead id, the tip SHA, and the bead-claim reference
+  ok    the ephemeral verifier's own env carries BEADS_ACTOR=verifier, with no operator export
+  ok    the verifier's cwd is NOT the project root
+  ok    the verifier's cwd is the scratch worktree makeScratchCwd() creates
+  ok    the scratch worktree is unregistered after verify.ts exited (process-exit cleanup ran)
+  ok    the scratch worktree directory no longer exists on disk
+  ok    APPROVE — NOT BENCHED still exits 0
+  ok    the NOT BENCHED qualifier survives into the verdict record
+
+2. BOUNCE — exit 2
+  ok    BOUNCE exits 2
+  ok    BOUNCE verdict recorded
+
+3. DISCOVER — exit 3, proposal recorded, no beads filed
+  ok    DISCOVER exits 3
+  ok    the dispatcher says out loud that no beads were filed
+  ok    verdict file records the proposal for the commander
+
+4. self-approval — same account dir is a STOP before any spawn
+  ok    self-approval: identical account dirs refused with a STOP, exit 1
+  ok    self-approval: nothing was spawned — the stub was never invoked
+
+5. malformed output — an error, never a judgment
+  ok    missing VERDICT: line exits 1 with a STOP
+  ok    no verdict file written for a non-verdict
+  ok    two conflicting VERDICT: lines exit 1 rather than picking one
+  ok    NOT BENCHED on a non-APPROVE verdict exits 1
+  ok    an unknown verdict value exits 1
+  ok    a failing pi exits 1 even when a VERDICT line is present
+  ok    a verifier roster without account.label still reaches the provider-error path
+  ok    provider-error stderr path includes verifier account.label when present
+
+6. preconditions — the STOPs that guard the spawn
+  ok    a branch that does not resolve is a STOP
+  ok    an unknown author seat is a STOP — distinctness needs a named account
+  ok    naming a non-verifier seat as the verifier is a STOP
+  ok    a verifier seat that was never logged in is a STOP
+  ok    an author seat with a path separator is a STOP
+  ok    an author seat of dot-dot is a STOP
+  ok    an author seat with whitespace is a STOP
+  ok    an author seat with a quote is a STOP
+  ok    an empty author seat is a STOP
+  ok    a bead id with a path separator (it names the verdict file) is a STOP
+  ok    an explicit verifier seat with a path separator is a STOP
+
+7. no tokens — identity never leaks into the verdict record
+  ok    auth.json's content appears nowhere in seats/verdicts/
+
+8. evidence — artifacts the bead names gate the verdict
+  ok    APPROVE over a satisfied bench log + screenshot exits 0
+  ok    verdict file records per-artifact checks: exists, bytes, type probe
+  ok    the floor-check results reach the verifier's prompt
+  ok    APPROVE over git-excluded evidence with a verified SHA-256 manifest exits 0
+  ok    excluded evidence record names disk+manifest as the satisfying source
+  ok    git-excluded evidence without a manifest is UNSATISFIED, not accepted for bare existence
+  ok    missing git-excluded evidence is UNSATISFIED with disk source named
+  ok    APPROVE over a zero-byte screenshot is malformed, exit 1
+  ok    APPROVE over an artifact absent from the tip is malformed, exit 1
+  ok    a text file posing as .png is caught by the magic-byte probe
+  ok    a PNG with a zero dimension is degenerate, refused
+  ok    the gate blocks only APPROVE — BOUNCE over failed evidence still exits 2
+  ok    the failed floor check is still recorded on a BOUNCE
+  ok    an absolute evidence path is a STOP
+  ok    a dot-dot evidence path is a STOP
+
+9. canary — can these checks detect a broken verify.ts?
+  ok    canary: a verify.ts that lets the author verify itself is caught
+  ok    canary: a verify.ts with its verdict write cut is caught by the file check
+  ok    canary: a verify.ts that approves over missing evidence is caught by the exit-1 check
+
+10. sweep — a SIGKILLed run's scratch worktree is reclaimed, a live one is spared
+  ok    both a planted orphan (dead pid) and a planted live (real pid) scratch worktree are registered
+  ok    the orphaned scratch worktree (dead pid) was reclaimed: unregistered and removed from disk
+  ok    the live scratch worktree (real running pid) was spared — still registered and on disk
+  ok    once its owner pid actually exits, a later sweep reclaims that worktree too
+
+11. real pi — one smoke leg through the actual binary (SKIP-able)
+  SKIP  real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1
+
+verify.ts works on this machine.

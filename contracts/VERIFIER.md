@@ -45,7 +45,7 @@ No other verdict vocabulary belongs to this role. One verdict, exclusively. If t
 
 ### Evidence, not adjectives
 
-Paste the transcript excerpts that support the verdict. State what surface you walked, what entry point you started from, what commands or URLs you used, what outputs you saw, and where the full retained transcript lives. A statement that the path was easy or broken is not evidence; the quoted step that made it so is evidence.
+Paste the transcript excerpts that support the verdict. State what surface you walked, what entry point you started from, what commands or URLs you used, what outputs you saw, and where the full retained transcript lives. A statement that the path was easy or broken is not evidence; the quoted step that made it so is evidence. A named evidence path satisfies the floor from one of two sources only: a committed blob at the reviewed tip, or an explicitly git-excluded disk evidence directory with a verified SHA-256 manifest.
 
 If you could not walk, quote the point at which the path stopped. If a credential or private resource was missing, name the kind of resource, not the secret. If a page, command, or service was unreachable, include the observed error and timestamp. If instructions were ambiguous, quote the ambiguous text.
 
