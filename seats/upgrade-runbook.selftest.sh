@@ -2,19 +2,30 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
+BASELINE=${WHEELHOUSE_UPGRADE_SELFTEST_BASELINE:-d8128d4}
+TEMPLATE_SOURCE="$ROOT/wheelhouse/.template-source"
+
+source_refusal() {
+  echo "REFUSED template source: $*" >&2
+  exit 42
+}
+
 template_root() {
   local recorded=""
-  if [ -f "$ROOT/wheelhouse/.template-source" ]; then
-    recorded=$(sed -n 's/^path=//p' "$ROOT/wheelhouse/.template-source" | tail -1)
-  fi
-  if [ -n "$recorded" ] && git -C "$recorded" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [ -d "$ROOT/wheelhouse" ] && [ ! -d "$ROOT/contracts" ]; then
+    [ -f "$TEMPLATE_SOURCE" ] || source_refusal "$TEMPLATE_SOURCE missing; expected a path= line naming the template clone that carries baseline $BASELINE"
+    recorded=$(sed -n 's/^path=//p' "$TEMPLATE_SOURCE" | tail -1)
+    [ -n "$recorded" ] || source_refusal "$TEMPLATE_SOURCE has no path= line; expected path=/path/to/template-clone carrying baseline $BASELINE"
+    git -C "$recorded" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+      || source_refusal "$TEMPLATE_SOURCE path=$recorded is not a git repository carrying baseline $BASELINE"
+    git -C "$recorded" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1 \
+      || source_refusal "$TEMPLATE_SOURCE path=$recorded is a git repository but baseline object $BASELINE is absent"
     printf '%s\n' "$recorded"
     return 0
   fi
   printf '%s\n' "$ROOT"
 }
 TEMPLATE=$(template_root)
-BASELINE=${WHEELHOUSE_UPGRADE_SELFTEST_BASELINE:-d8128d4}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
@@ -116,6 +127,35 @@ EOF
     *"upgrade-runbook.selftest: PASS"*) pass "installed-layout copied upgrade-runbook selftest resolves baseline through wheelhouse/.template-source path" ;;
     *) fail "installed-layout copied upgrade-runbook selftest failed: $INSTALLED_OUT" ;;
   esac
+
+  INSTALL_MISSING="$TMP/install-missing-source"
+  mkdir -p "$INSTALL_MISSING/seats" "$INSTALL_MISSING/wheelhouse"
+  git -C "$INSTALL_MISSING" init -b main >/dev/null
+  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_MISSING/seats/upgrade-runbook.selftest.sh"
+  set +e
+  MISSING_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_MISSING/seats/upgrade-runbook.selftest.sh" 2>&1)
+  MISSING_RC=$?
+  set -e
+  if [ "$MISSING_RC" -eq 42 ] && printf '%s\n' "$MISSING_OUT" | grep -q 'wheelhouse/.template-source missing' && printf '%s\n' "$MISSING_OUT" | grep -q 'expected a path= line'; then
+    pass "installed-layout missing .template-source fails legibly with path= expectation"
+  else
+    fail "installed-layout missing .template-source was not legible (rc=$MISSING_RC): $MISSING_OUT"
+  fi
+
+  INSTALL_BAD="$TMP/install-bad-source"
+  mkdir -p "$INSTALL_BAD/seats" "$INSTALL_BAD/wheelhouse"
+  git -C "$INSTALL_BAD" init -b main >/dev/null
+  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh"
+  printf 'path=%s\n' "$TMP/not-a-template-repo" > "$INSTALL_BAD/wheelhouse/.template-source"
+  set +e
+  BAD_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh" 2>&1)
+  BAD_RC=$?
+  set -e
+  if [ "$BAD_RC" -eq 42 ] && printf '%s\n' "$BAD_OUT" | grep -q 'wheelhouse/.template-source path=' && printf '%s\n' "$BAD_OUT" | grep -q 'not a git repository'; then
+    pass "installed-layout bad path= fails legibly before raw git fatal"
+  else
+    fail "installed-layout bad path= was not legible (rc=$BAD_RC): $BAD_OUT"
+  fi
 fi
 
 echo "upgrade-runbook.selftest: PASS ($PASS checks)"
