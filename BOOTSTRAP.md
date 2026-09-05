@@ -125,7 +125,7 @@ Every later step reads `path=` out of that file rather than trusting `$TEMPLATE`
 TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 ```
 
-**`path=` is the one field that is expected to die, and that is a decision rather than an oversight.** The README has you clone into `mktemp -d`, so the path you just recorded points into a directory the OS reclaims — routinely before the first upgrade wants it. A durable clone kept beside the project was the alternative and was not taken: it is a second copy of the contracts that ages silently, and every reader who finds it then has to work out whether it or `commit=` is the truth. `source=` and `commit=` are the durable half, and step 5's integrity check re-clones from `source=` the moment it finds the path dead — the same recovery `runbooks/UPGRADE.md` needs anyway, so the temporary path costs a clone at the moment of use rather than a stale directory for the life of the project. Record it, and expect it to be gone later.
+**`path=` is the one field that is expected to die, and that is a decision rather than an oversight.** The README has you clone into `mktemp -d`, so the path you just recorded points into a directory the OS reclaims — routinely before the first upgrade wants it. A durable clone kept beside the project was the alternative and was not taken: it is a second copy of the contracts that ages silently, and every reader who finds it then has to work out whether it or `commit=` is the truth. `source=` and `commit=` are the durable half, and step 5's integrity check refreshes an install-local cache from `source=` the moment it finds the path dead — the same recovery `runbooks/UPGRADE.md` needs anyway, so the temporary path costs a clone at the moment of use rather than a stale directory for the life of the project. Record it, and expect it to be gone later.
 
 `installed=` records when this project first installed and is never rewritten afterwards; `upgraded=` is the one an upgrade updates. The `commit=` line is the provenance record. It is what tells a future reader which version of the contracts this project installed, and it is the baseline the upgrade path in the README compares against. Without it, "re-copy the contracts" has nothing to diff from.
 
@@ -404,14 +404,22 @@ Run each of these and paste what it prints:
   # but try to recover first, because path= points at a mktemp directory the OS
   # eventually deletes, and an upgrade months later will always find it gone.
   # NOTE this makes the block more than a pure check: on a dead path it performs a
-  # network clone and rewrites the machine-local path= field. That is the whole of
+  # clone/fetch and rewrites the machine-local path= field. That is the whole of
   # its side effects; the contracts themselves are never written by this block.
   if [ -z "$TEMPLATE" ] || [ ! -s "$TEMPLATE/contracts/WORKER.md" ]; then
     SOURCE=$(sed -n 's/^source=//p' wheelhouse/.template-source 2>/dev/null)
     if [ -n "$SOURCE" ]; then
-      TEMPLATE=$(mktemp -d)
-      echo "template path was dead; re-cloning from $SOURCE"
-      git clone --quiet "$SOURCE" "$TEMPLATE" || true
+      TEMPLATE=$PWD/wheelhouse/.template-cache/source-head
+      mkdir -p wheelhouse/.template-cache
+      grep -qxF 'wheelhouse/.template-cache/' .gitignore 2>/dev/null || printf '%s\n' 'wheelhouse/.template-cache/' >> .gitignore
+      echo "template path was dead; refreshing install-local cache from $SOURCE"
+      if [ -d "$TEMPLATE/.git" ]; then
+        git -C "$TEMPLATE" fetch --quiet --tags origin || true
+        git -C "$TEMPLATE" fetch --quiet origin || true
+      else
+        rm -rf "$TEMPLATE"
+        git clone --quiet "$SOURCE" "$TEMPLATE" || true
+      fi
       sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
     fi
   fi
