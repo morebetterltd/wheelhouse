@@ -1,0 +1,146 @@
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+shell: bash 3.2.57(1)-release
+artifact: template tree at commit 6bb97d3967b5d2355e1bf074cc55d3cbed48328d
+--- BOOTSTRAP step 1, extracted from the artifact and run under this shell ---
+  | OK      git — /usr/bin/git
+  | OK      bd — /opt/homebrew/bin/bd
+  | OK      bash — /bin/bash
+  | OK      awk — /usr/bin/awk
+  | OK      pi — <home>/.nvm/versions/node/v22.21.0/bin/pi
+  | OK      bun — <home>/.bun/bin/bun
+  | OK      claude — <home>/.local/bin/claude
+  | PREFLIGHT OK — every dependency is on PATH
+  | git version 2.50.1 (Apple Git-155)
+  | bd version 1.2.2 (Homebrew)
+step 1: preflight OK — 7 named dependencies, each with its own OK line
+--- BOOTSTRAP step 1, same stanza, bd masked off PATH ---
+  | OK      git — <workdir>/install-negative-wheelhouse-agents-specimen/install/step0-maskbin/git
+  | MISSING bd
+  |         the wheelhouse needs it because it is the work graph -- every unit of work the fleet holds lives in it
+  |         install it: brew install beads   # or see https://github.com/gastownhall/beads
+  | OK      bash — <workdir>/install-negative-wheelhouse-agents-specimen/install/step0-maskbin/bash
+  | OK      awk — <workdir>/install-negative-wheelhouse-agents-specimen/install/step0-maskbin/awk
+  | OK      pi — <workdir>/install-negative-wheelhouse-agents-specimen/install/step0-maskbin/pi
+  | OK      bun — <workdir>/install-negative-wheelhouse-agents-specimen/install/step0-maskbin/bun
+  | OK      claude — <workdir>/install-negative-wheelhouse-agents-specimen/install/step0-maskbin/claude
+  | PREFLIGHT FAILED — install what is named above, then re-run this block
+step 1 negative: bd masked — exit 1, MISSING bd named with why and install command, PREFLIGHT FAILED, git still OK; PATH and bd intact afterwards
+fixture repo created at <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-product on branch main
+preexistence check: root AGENTS.md absent before bd init; wheelhouse install must not create one
+preexistence check: no wheelhouse/, no CLAUDE.md before step 2
+step 2: all nine contract files present
+--- wheelhouse/.template-source ---
+source=<template-repo>/.
+commit=6bb97d3967b5d2355e1bf074cc55d3cbed48328d
+path=<workdir>/install-negative-wheelhouse-agents-specimen/template
+installed=2026-09-06T15:06:05Z
+upgraded=
+namespace=
+step 2: installing into <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-product; bd version 1.2.2 (Homebrew) (carried forward from step 1)
+step 2: runbooks, bench stub and seats machinery copied verbatim; seat runtime paths gitignored
+step 3: merge target 'main' confirmed against the repository's refs
+step 3: fixture interview answers loaded (onboarding mechanics only)
+step 3: namespace=fixture-product recorded in .template-source; every seat surface below is written from that read-back value
+step 3: seats/seats.json written and read back as JSON (commander external + 2 seats)
+  | OK      pi — <home>/.nvm/versions/node/v22.21.0/bin/pi
+  | wrote   <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/.project (records /private<workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-product)
+  | dir     <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/worker-1
+  | wrote   <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/worker-1/trust.json (pre-grants /private<workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-product)
+  | 
+  | seat ready: <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/worker-1
+  | 
+  | point a process at this seat:
+  |   export PI_CODING_AGENT_DIR="<workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/worker-1"
+  | 
+  | one-time OAuth login (writes <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/worker-1/auth.json; sign in as the account this seat should BE):
+  |   PI_CODING_AGENT_DIR="<workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/worker-1" pi
+  |   # in the Pi REPL: type /login, complete the browser flow, then type /exit
+  | api_key alternative: either write <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/worker-1/auth.json yourself as
+  |   {"<provider>": {"type": "api_key", "key": "<the key>"}}  (chmod 600)
+  |   or set account.authRoute to env and export the provider's env var in the shell that spawns the seat.
+  |   auth.json survives new shells; the env-var route writes nothing to disk.
+  | OK      pi — <home>/.nvm/versions/node/v22.21.0/bin/pi
+  | current <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/.project (already records /private<workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-product)
+  | dir     <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/reviewer-1
+  | wrote   <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/reviewer-1/trust.json (pre-grants /private<workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-product)
+  | 
+  | seat ready: <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/reviewer-1
+  | 
+  | point a process at this seat:
+  |   export PI_CODING_AGENT_DIR="<workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/reviewer-1"
+  | 
+  | one-time OAuth login (writes <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/reviewer-1/auth.json; sign in as the account this seat should BE):
+  |   PI_CODING_AGENT_DIR="<workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/reviewer-1" pi
+  |   # in the Pi REPL: type /login, complete the browser flow, then type /exit
+  | api_key alternative: either write <workdir>/install-negative-wheelhouse-agents-specimen/install/fixture-home/.pi-seats-fixture-product/reviewer-1/auth.json yourself as
+  |   {"<provider>": {"type": "api_key", "key": "<the key>"}}  (chmod 600)
+  |   or set account.authRoute to env and export the provider's env var in the shell that spawns the seat.
+  |   auth.json survives new shells; the env-var route writes nothing to disk.
+step 4: seats provisioned for real against a fixture HOME — directories, canonicalized trust grants and login commands verified, re-runs idempotent
+step 4 probe: SKIP — the per-seat provider probe (pi -p --no-session --provider ... --model ... 'reply OK') needs a real login, and a bench has none; a real install must run it per seat and paste the reply
+step 5: bd init --skip-agents ok (full output retained in the workdir log)
+  Repository ID: 163e9652
+  Clone ID: 54d7b5cb6ac10df7
+  Hooks installed to: .beads/hooks/
+  ✓ Committed beads files to git
+
+AGENTS.md reconciled: fresh install wrote no root AGENTS.md; wheelhouse/AGENTS.md created; no .agents/ or .codex/ created; SessionStart hook present; git check-ignore AGENTS.md exited 1; git check-ignore .agents exited 1; wheelhouse/AGENTS.md exists
+intent coverage: ISA has Goal + empty Claims; intent-check.sh present/executable; selftest PASSed
+intent coverage negatives: missing intent-check.sh and missing ISA are both DETECTED
+step 5: contract fills, CLAUDE.md, ISA.md, STARTUP.md written
+OK   fleet/WORKER.md
+OK   fleet/SEATS.md
+OK   crew/REVIEWER.md
+OK   crew/DESIGNER.md
+OK   crew/VERIFIER.md
+OK   crew/BENCH.md
+OK   GRAPH.md
+OK   INTEGRATOR.md
+INTEGRITY OK — all contracts verified
+bd status probe (exit 1): Error: invalid status "in_review" (valid: open, in_progress, blocked, deferred, closed, pinned, hooked)
+seeded pre-existing ready bead fixture-product-fvk (so the label selection below is not vacuous)
+look-before-create (pre-create, exit 0): No issues found.
+{
+  "created_at": "2026-09-06T15:11:26.136917Z",
+  "created_by": "worker-1",
+  "description": "The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: the eight clauses in wheelhouse/crew/BENCH.md.",
+  "id": "fixture-product-v0f",
+  "issue_type": "task",
+  "labels": [
+    "wheelhouse-bootstrap"
+  ],
+  "owner": "bench@invalid.example",
+  "priority": 1,
+  "schema_version": 1,
+  "status": "open",
+  "title": "Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md",
+  "updated_at": "2026-09-06T15:11:26.136917Z"
+}
+bench bead fixture-product-v0f created, stamped wheelhouse-bootstrap
+look-before-create (post-create, exit 0): 1 bead — fixture-product-v0f — so a re-run creates nothing
+○ fixture-product-v0f ● P1 Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md
+
+--------------------------------------------------------------------------------
+Total: 1 issues (1 open, 0 in progress)
+
+Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred
+--- bd ready ---
+○ fixture-product-v0f ● P1 Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md
+○ fixture-product-fvk ● P2 Wire the fixture CLI's greeting into a smoke check
+
+--------------------------------------------------------------------------------
+Ready: 2 issues with no active blockers
+
+Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred
+
+💡 Tip: Install the beads plugin for automatic workflow context, or run 'bd setup claude' for CLI-only mode
+step 6 selection: bd ready lists 2 ready beads; --label wheelhouse-bootstrap lists exactly fixture-product-v0f
+--- bd ready --label wheelhouse-bootstrap ---
+○ fixture-product-v0f ● P1 Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md
+
+--------------------------------------------------------------------------------
+Ready: 1 issues with no active blockers
+
+Status: ○ open  ◐ in_progress  ● blocked  ✓ closed  ❄ deferred
+wheelhouse/AGENTS.md:69:Ebb specimen leak planted in wheelhouse/AGENTS.md
+FAIL specimen-leak grep: expected zero hits, got exit 0
