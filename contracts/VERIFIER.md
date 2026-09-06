@@ -25,6 +25,8 @@ If the named surface itself points you to a file, command, URL, installer, runbo
 
 Walk the named surface as the named consumer would. Follow the instructions in order, quote the decisive steps, and retain a full transcript. When the surface asks for credentials, money, a private account, hardware, a signing identity, or another unavailable resource, stop at that boundary and report that the walk could not be completed rather than inventing a substitute. When instructions are ambiguous, pick the ordinary consumer reading if one exists and record the ambiguity; if no ordinary reading is available, stop there.
 
+When you capture screens, obey the image budget the dispatcher prints before the surface: keep full-size captures only as evidence under `--out`, put at most the named number of downscaled JPEGs (<=1000px wide by default) into context, and use `wheelhouse-walk-capture` for simulator/app screenshots rather than pasting full-size PNGs into the turn. Simulator note: `xcrun simctl io ... screenshot` output is full-size evidence, not prompt context; route it through the capture helper so the transcript sees only budgeted JPEGs.
+
 You never edit repositories, never patch files, never file beads, never close claims, and never write to the work graph. The transcript and verdict are your whole output. The commander acts on them.
 
 ### The verdict schema
