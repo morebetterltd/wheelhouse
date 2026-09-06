@@ -441,14 +441,31 @@ if [ ! -f "$VDIR/bead-5.md" ]; then
   pass "no verdict file written for a non-verdict"
 else fail "a verdict file was written despite there being no verdict"; fi
 cat > "$REPLY" <<'EOF'
+Historical report quoted by the worker:
+```text
+VERDICT: BOUNCE
+```
+Fresh review of this branch passes.
+VERDICT: APPROVE
+EOF
+run bead-5-fenced fleet/bead-1 worker-1
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q "verdict: APPROVE" "$VDIR/bead-5-fenced.md" 2>/dev/null; then
+  pass "fenced VERDICT quote plus one live verdict is accepted"
+else fail "fenced verdict quote was not inert (exit $RC): $OUT"; fi
+cat > "$REPLY" <<'EOF'
 VERDICT: APPROVE
 wait, actually:
 VERDICT: BOUNCE
 EOF
 run bead-5 fleet/bead-1 worker-1
-if [ $RC -eq 1 ] && says "2 VERDICT: lines"; then
-  pass "two conflicting VERDICT: lines exit 1 rather than picking one"
-else fail "ambiguous double verdict not refused (exit $RC): $OUT"; fi
+if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
+  pass "two conflicting live VERDICT: lines exit 1 and print both candidates"
+else fail "ambiguous double verdict not refused with candidates (exit $RC): $OUT"; fi
+if cmp -s "$REPLY" "$VDIR/.raw.md"; then
+  pass "ambiguous double verdict writes byte-exact raw stdout to seats/verdicts/.raw.md before STOP"
+else
+  fail "ambiguous double verdict raw stdout differed; raw was: $(cat "$VDIR/.raw.md" 2>/dev/null)"
+fi
 cat > "$REPLY" <<'EOF'
 VERDICT: BOUNCE — NOT BENCHED: something
 EOF
