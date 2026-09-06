@@ -33,36 +33,45 @@ printf '# copied runbook may mention {{DOUBLE_BRACE}} and is excluded\n' > "$INS
 # file and must not make grep print "Binary file ... matches".
 printf '\211PNG\r\n\032\n\000\000binary {{ bytes inside committed evidence\000\377\n' > "$INSTALL/wheelhouse/evidence/brace-pair.png"
 
-printf 'placeholder grep selftest: binary evidence fixture\n'
-(
-  cd "$INSTALL" || exit 2
+run_binary_leg() {
+  local old rc out
+  printf 'placeholder grep selftest: binary evidence fixture\n'
+  old="$PWD"
+  cd "$INSTALL" || { fail "could not cd to install fixture: $INSTALL"; return; }
   set +e
-  OUT="$(run_placeholder_check)"
-  RC=$?
+  out="$(run_placeholder_check)"
+  rc=$?
   set -e
-  if [ "$RC" -eq 1 ] && [ -z "$OUT" ]; then
+  cd "$old" || exit 2
+  if [ "$rc" -eq 1 ] && [ -z "$out" ]; then
     pass "text-only grep ignores a PNG carrying the {{ byte pair"
   else
-    printf '%s\n' "$OUT"
-    fail "binary evidence tripped the placeholder grep (exit $RC)"
+    printf '%s\n' "$out"
+    fail "binary evidence tripped the placeholder grep (exit $rc)"
   fi
-)
+}
 
-printf 'this is a real {{TEXT_PLACEHOLDER}}\n' > "$INSTALL/wheelhouse/CLAIM.md"
-printf '\nplaceholder grep selftest: planted text placeholder\n'
-(
-  cd "$INSTALL" || exit 2
+run_text_leg() {
+  local old rc out
+  printf 'this is a real {{TEXT_PLACEHOLDER}}\n' > "$INSTALL/wheelhouse/CLAIM.md"
+  printf '\nplaceholder grep selftest: planted text placeholder\n'
+  old="$PWD"
+  cd "$INSTALL" || { fail "could not cd to install fixture: $INSTALL"; return; }
   set +e
-  OUT="$(run_placeholder_check)"
-  RC=$?
+  out="$(run_placeholder_check)"
+  rc=$?
   set -e
-  if [ "$RC" -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'wheelhouse/CLAIM.md:1:this is a real {{TEXT_PLACEHOLDER}}'; then
+  cd "$old" || exit 2
+  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q 'wheelhouse/CLAIM.md:1:this is a real {{TEXT_PLACEHOLDER}}'; then
     pass "text placeholder still fails the prescribed check"
   else
-    printf '%s\n' "$OUT"
-    fail "planted text placeholder did not trip the check (exit $RC)"
+    printf '%s\n' "$out"
+    fail "planted text placeholder did not trip the check (exit $rc)"
   fi
-)
+}
+
+run_binary_leg
+run_text_leg
 
 if [ "$FAILED" -eq 0 ]; then
   echo "placeholder-grep.selftest: PASS (2 legs)"
