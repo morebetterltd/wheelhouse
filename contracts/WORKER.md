@@ -54,6 +54,10 @@ If you need commander input before the final report, write a line in your own ou
 
 Generated at install; the fleet accretes here as review earns it.
 
+### Worktree cleanup
+
+Do not remove a worker worktree by memory or by age. Use `bun seats/prune.ts scan` from the install root and prune only reviewed safe rows with `bun seats/prune.ts prune --from-file <scan> --yes`; the tool keeps seat-anchored, dirty, open-bead, unmerged, and unpushed work as non-prunable review rows.
+
 ### Repos and where work lands
 
 <!--
