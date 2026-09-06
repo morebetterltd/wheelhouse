@@ -38,31 +38,39 @@ Then write the file:
 ```bash
 { echo "source=git@github.com:morebetterltd/wheelhouse.git"
   echo "commit=<the commit you recovered, or 'unknown'>"
-  echo "path=/path/to/your/template-clone"
+  echo "path=<disposable cache path, filled in step 1>"
   echo "installed=<date if you know it, else 'unknown'>"
 } > wheelhouse/.template-source
 ```
 
-`commit=unknown` is honest and still useful — the integrity check runs on it, you just do not get the behind-versus-damaged diagnosis in step 5 until your next upgrade sets a real one.
+`commit=unknown` is honest and still useful — the integrity check runs on it, you just do not get the behind-versus-damaged diagnosis in step 5 until your next upgrade sets a real one. `path=` is the one field expected to die: it is only a cache hint. Existing installs may record a stale path into some other checkout; that is now harmless as long as `source=` and `commit=` are correct.
 
 ## 1. Get a clone you can actually diff
 
-The install clones with `--depth 1`, which is enough to copy files and **not** enough to diff two commits. Either re-clone with history, or unshallow the one you have:
+The install clones with `--depth 1`, which is enough to copy files and **not** enough to diff two commits. Use a clone under this install's git-excluded cache when you need one, so `.template-source` never points at a folder inside another project:
 
 ```bash
-git clone git@github.com:morebetterltd/wheelhouse.git /path/to/template-clone   # full history
-# or, in an existing shallow clone:
-git -C /path/to/template-clone fetch --unshallow
-git -C /path/to/template-clone pull
-```
-
-Then point your baseline at it, because `path=` from install time was a `mktemp -d` directory the operating system has almost certainly deleted, and a durable clone recorded there may be behind the target you are upgrading to. If `git -C "$TEMPLATE" rev-parse "${TARGET:-main}"` cannot see the target, fast-forward that clone or re-clone before you keep going:
-
-```bash
-TEMPLATE=/path/to/template-clone
+SOURCE=$(sed -n 's/^source=//p' wheelhouse/.template-source)
+BASE=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
 TARGET=main     # the template ref you are upgrading TO: a branch, a tag, or a SHA
+CACHE=wheelhouse/.template-cache/${TARGET//[^A-Za-z0-9._-]/_}
+mkdir -p wheelhouse/.template-cache
+grep -qxF 'wheelhouse/.template-cache/' .gitignore 2>/dev/null || printf '%s\n' 'wheelhouse/.template-cache/' >> .gitignore
+
+if [ ! -d "$CACHE/.git" ]; then
+  rm -rf "$CACHE"
+  git clone "$SOURCE" "$CACHE"   # full history, local to this install
+fi
+TEMPLATE=$PWD/$CACHE
+git -C "$TEMPLATE" fetch --tags origin
+git -C "$TEMPLATE" fetch origin
+git -C "$TEMPLATE" rev-parse "${TARGET:-main}" >/dev/null
+git -C "$TEMPLATE" checkout --quiet "${TARGET:-main}"
+[ "$BASE" = unknown ] || git -C "$TEMPLATE" cat-file -e "${BASE}^{commit}"
 sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
 ```
+
+If you prefer a one-off clone, make it with `mktemp -d`; do not record a durable checkout inside another project. `source=` plus `commit=` are the durable provenance. `path=` is disposable in the same sense BOOTSTRAP records it: it may point at a cache that is deleted later, and every copied selftest that needs template history must recover by fetching `commit=` from `source=` rather than depending on that path.
 
 `TARGET` is the second of the two facts every step below needs, and it is separated out for the same reason `TEMPLATE` is: the procedure works just as well upgrading to a tag or to a commit that is not the tip, and a runbook that named `main` in four places was one that only worked for people upgrading to `main`. Every block below reads `${TARGET:-main}` rather than naming a branch (the fourth site, step 0's search for a lost baseline, reads the clone's own `HEAD` — it runs before `TARGET` exists and wants whatever branch you cloned), so each one still runs on its own if you paste it into a fresh shell and never set `TARGET` — you get `main`, which is what you almost always want.
 
@@ -92,7 +100,7 @@ cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 
 ### The seats machinery comes too
 
-The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `verify.ts`, `walk.ts`, `floor.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, their selftests, `seats.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. Some copied selftests need template history as their fixture; they resolve that from `wheelhouse/.template-source`'s `path=` instead of assuming the install repository contains template-only commits. What the copy can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
+The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `verify.ts`, `walk.ts`, `floor.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, their selftests, `seats.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. Some copied selftests need template history as their fixture; they first use `wheelhouse/.template-source`'s `path=` if it is a live repository carrying `commit=`, otherwise they fetch `commit=` from `source=` into `wheelhouse/.template-cache/` under this install. What the copy can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
 
 ```bash
 mkdir -p seats
