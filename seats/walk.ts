@@ -29,6 +29,9 @@ const ROSTER_FILE = path.join(SEATS_DIR, "seats.json");
 const SCRUB = path.join(SEATS_DIR, "evidence-scrub.sh");
 const DEFAULT_WALKS_DIR = path.join(SEATS_DIR, "verdicts", "walks");
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_WALK_TIMEOUT_MS || 1800000);
+const IMAGE_MAX_WIDTH = Number(process.env.WHEELHOUSE_WALK_IMAGE_MAX_WIDTH || 1000);
+const IMAGE_MAX_CONTEXT = Number(process.env.WHEELHOUSE_WALK_IMAGE_MAX_CONTEXT || 3);
+const IMAGE_QUALITY = Number(process.env.WHEELHOUSE_WALK_IMAGE_JPEG_QUALITY || 75);
 
 interface SeatEntry {
   role: string;
@@ -198,6 +201,86 @@ function scrubToFile(raw: string, outFile: string): void {
   }
 }
 
+function imageBudget(outDir: string): { fullDir: string; contextDir: string; manifest: string } {
+  return {
+    fullDir: path.join(outDir, "screen-captures", "full-size"),
+    contextDir: path.join(outDir, "screen-captures", "context"),
+    manifest: path.join(outDir, "image-budget.json"),
+  };
+}
+
+function isImage(file: string): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(file);
+}
+
+function jpegName(file: string, index: number): string {
+  const base = path.basename(file).replace(/\.[^.]*$/, "").replace(/[^A-Za-z0-9._-]/g, "_") || `capture-${index + 1}`;
+  return `${String(index + 1).padStart(2, "0")}-${base}.jpg`;
+}
+
+function convertToContextJpeg(src: string, dest: string): void {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const sips = spawnSync("sips", ["-s", "format", "jpeg", "-s", "formatOptions", String(IMAGE_QUALITY), "-Z", String(IMAGE_MAX_WIDTH), src, "--out", dest], {
+    encoding: "utf8",
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (sips.status !== 0 || sips.error) die(`could not make budgeted JPEG for ${rootRelative(src)}: ${sips.error?.message ?? sips.stderr}`);
+}
+
+function reduceImageSetForContext(sourceDir: string | undefined, outDir: string): string[] {
+  const budget = imageBudget(outDir);
+  fs.mkdirSync(budget.fullDir, { recursive: true });
+  fs.mkdirSync(budget.contextDir, { recursive: true });
+  const images = sourceDir && fs.existsSync(sourceDir)
+    ? fs.readdirSync(sourceDir).filter(isImage).sort().map((f) => path.join(sourceDir, f))
+    : [];
+  const kept: string[] = [];
+  for (let i = 0; i < images.length; i++) {
+    const src = images[i];
+    const full = path.join(budget.fullDir, path.basename(src));
+    fs.copyFileSync(src, full);
+    if (kept.length < IMAGE_MAX_CONTEXT) {
+      const context = path.join(budget.contextDir, jpegName(src, i));
+      convertToContextJpeg(src, context);
+      kept.push(context);
+    }
+  }
+  fs.writeFileSync(budget.manifest, JSON.stringify({ maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, sourceImages: images.length, contextImages: kept.map(rootRelative), fullSizeDir: rootRelative(budget.fullDir) }, null, 2));
+  return kept;
+}
+
+function writeCaptureHelper(binDir: string, outDir: string): string {
+  fs.mkdirSync(binDir, { recursive: true });
+  const helper = path.join(binDir, "wheelhouse-walk-capture");
+  const budget = imageBudget(outDir);
+  const script = `#!/usr/bin/env bash
+set -euo pipefail
+label=\${1:-capture}
+if [ "\${1:-}" = "" ]; then echo "usage: wheelhouse-walk-capture <label> -- <capture-command...>" >&2; exit 64; fi
+shift
+[ "\${1:-}" = "--" ] || { echo "usage: wheelhouse-walk-capture <label> -- <capture-command...>" >&2; exit 64; }
+shift
+safe=$(printf '%s' "$label" | tr -c 'A-Za-z0-9._-' '_')
+full_dir=${JSON.stringify(budget.fullDir)}
+context_dir=${JSON.stringify(budget.contextDir)}
+manifest=${JSON.stringify(budget.manifest)}
+mkdir -p "$full_dir" "$context_dir"
+full="$full_dir/$safe.png"
+context="$context_dir/$safe.jpg"
+"$@" "$full"
+count=$(find "$context_dir" -maxdepth 1 -type f -name '*.jpg' | wc -l | tr -d ' ')
+if [ "$count" -lt ${IMAGE_MAX_CONTEXT} ]; then
+  sips -s format jpeg -s formatOptions ${IMAGE_QUALITY} -Z ${IMAGE_MAX_WIDTH} "$full" --out "$context" >/dev/null
+  printf 'context image: %s\\n' "$context"
+else
+  printf 'image budget full; retained full-size only: %s\\n' "$full"
+fi
+printf '{"maxWidth":${IMAGE_MAX_WIDTH},"maxContextImages":${IMAGE_MAX_CONTEXT},"fullSizeDir":"%s","contextDir":"%s"}\\n' "$full_dir" "$context_dir" > "$manifest"
+`;
+  fs.writeFileSync(helper, script, { mode: 0o755 });
+  return helper;
+}
+
 function main(): void {
   const argv = process.argv.slice(2);
   const positional: string[] = [];
@@ -224,6 +307,8 @@ function main(): void {
   const outDir = resolveOutDir(outArg);
   const transcriptFile = path.join(outDir, "transcript.txt");
   const metaFile = path.join(outDir, "walk.json");
+  const seededContextImages = reduceImageSetForContext(process.env.WHEELHOUSE_WALK_IMAGE_SOURCE_DIR, outDir);
+  const imageBudgetInfo = imageBudget(outDir);
   const transcriptRel = rootRelative(transcriptFile);
   const metaRel = rootRelative(metaFile);
 
@@ -238,6 +323,8 @@ function main(): void {
   }
 
   const scratchCwd = makeScratchCwd(ROOT);
+  const helperBin = path.join(scratchCwd, ".wheelhouse-walk-bin");
+  const captureHelper = writeCaptureHelper(helperBin, outDir);
   let workspaceRel = ".";
   if (surface.kind === "install") {
     workspaceRel = "consumer-product";
@@ -256,6 +343,8 @@ function main(): void {
     ...buildSurfaceInstructions(surface.kind, surface.spec, baseline, workspaceRel),
     ``,
     `Walk only the surface named above. Do not read fleet internals, bead history, ISA files, seat logs, author transcripts, or implementation notes unless the named surface itself sends you there.`,
+    `Image budget for screen captures: full-size captures are evidence on disk under ${rootRelative(imageBudgetInfo.fullDir)}; in-context images must be JPEG, downscaled to <=${IMAGE_MAX_WIDTH}px wide, and limited to the first ${IMAGE_MAX_CONTEXT}. Use the PATH helper \`wheelhouse-walk-capture <label> -- <capture-command...>\` for simulator/app screenshots; it keeps full-size output under --out and only emits budgeted context JPEGs under ${rootRelative(imageBudgetInfo.contextDir)}. Do not paste full-size PNG/screenshots into the transcript or prompt context.`,
+    seededContextImages.length > 0 ? `Already-budgeted context image(s), max ${IMAGE_MAX_CONTEXT}: ${seededContextImages.map(rootRelative).join(", ")}` : `Already-budgeted context image(s): none.`,
     `Retain a full transcript. End with exactly one line: VERDICT: WALKED-DONE | WALKED-NOT-DONE — <failing step quoted from the transcript> | COULD-NOT-WALK — <why>.`,
   ].join("\n");
 
@@ -266,7 +355,7 @@ function main(): void {
 
   const res = spawnSync("pi", args, {
     cwd: scratchCwd,
-    env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir },
+    env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir, PATH: `${helperBin}${path.delimiter}${process.env.PATH ?? ""}`, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper },
     encoding: "utf8",
     timeout: TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,
@@ -298,7 +387,7 @@ function main(): void {
   }
 
   const parsed = parseWalkVerdict(stdout);
-  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel }, null, 2));
+  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
 
   console.log(parsed.line);
   console.log(`transcript: ${transcriptRel}`);

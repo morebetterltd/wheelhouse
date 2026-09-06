@@ -121,6 +121,22 @@ run_case couldnot $'blocked __HOME__ __TMP__\nVERDICT: COULD-NOT-WALK — missin
 run_case zero $'no verdict here __HOME__ __TMP__\n' 4 'expected exactly one'
 run_case two $'VERDICT: WALKED-DONE\nVERDICT: COULD-NOT-WALK — duplicate\n__HOME__ __TMP__\n' 4 'expected exactly one'
 
+phase 'image budget reduces over-budget capture set before spawn'
+imgdir="$FIX/images-overbudget"
+mkdir -p "$imgdir"
+"$NODE_BIN" -e 'const fs=require("fs"), b=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lJxvVgAAAABJRU5ErkJggg==","base64"); for (let i=1;i<=5;i++) fs.writeFileSync(process.argv[1]+`/shot-${i}.png`, b);' "$imgdir"
+proj="$FIX/proj-images"; ns="walk-images"; build_proj "$proj" "$ns"
+out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_IMAGE_SOURCE_DIR="$imgdir" WHEELHOUSE_WALK_IMAGE_MAX_CONTEXT=2 STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-images" 2>&1)
+rc=$?
+[ "$rc" -eq 0 ] && pass 'image-budget walk exits 0' || fail "image-budget rc=$rc output=$out"
+full_count=$(find "$FIX/out-images/screen-captures/full-size" -type f -name '*.png' | wc -l | tr -d ' ')
+context_count=$(find "$FIX/out-images/screen-captures/context" -type f -name '*.jpg' | wc -l | tr -d ' ')
+[ "$full_count" -eq 5 ] && pass 'image budget retained all full-size captures under --out' || fail "image budget full-size count=$full_count"
+[ "$context_count" -eq 2 ] && pass 'image budget kept only max context JPEGs' || fail "image budget context count=$context_count"
+if grep -q '"maxContextImages": 2' "$FIX/out-images/image-budget.json" && grep -q '"sourceImages": 5' "$FIX/out-images/image-budget.json"; then pass 'image budget manifest names reduction'; else fail "image budget manifest wrong: $(cat "$FIX/out-images/image-budget.json" 2>/dev/null)"; fi
+prompt="$HOME_FIX/.pi-seats-$ns/verifier/prompt.txt"
+if grep -q 'Image budget for screen captures' "$prompt" && grep -q 'downscaled to <=1000px wide' "$prompt" && grep -q 'wheelhouse-walk-capture' "$prompt" && grep -q 'Already-budgeted context image(s), max 2:' "$prompt"; then pass 'walker prompt names image budget before first capture'; else fail "walker prompt missing image budget: $(cat "$prompt" 2>/dev/null)"; fi
+
 phase 'upgrade surface requires baseline'
 proj="$FIX/proj-upgrade"; ns="walk-upgrade"; build_proj "$proj" "$ns"
 out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface upgrade:runbooks/UPGRADE.md --out "$FIX/out-upgrade" 2>&1)
