@@ -80,10 +80,10 @@ bd --version
 Take this from the project directory you are installing into, not from the template clone. If you are not standing in it yet, go there first: a survey of the wrong directory returns a clean answer about a project nobody is installing into.
 
 - **STOP IMMEDIATELY, without writing anything, if `wheelhouse/` or `CLAUDE.md` already exists here.** Say what exists and ask the principal what to do. Overwriting a principal's `CLAUDE.md` is unrecoverable.
-- **If root `AGENTS.md` is already committed, say so and leave it product-owned.** The wheelhouse's install instructions go in `wheelhouse/AGENTS.md`; do not append to or git-exclude the root cross-agent file.
-- **If neither `wheelhouse/` nor `CLAUDE.md` exists, say so out loud.** That sentence is the record every later step reads. This procedure creates both names itself — the `wheelhouse/` directory step 2 makes for `.template-source`, and the `CLAUDE.md` that `bd init` writes in step 5 — and neither trips this check, because both appear after this survey. That is the whole reason the survey lives here and not further down: seeing those files at step 3 or step 5 tells you nothing, and seeing them now tells you everything.
+- **Survey root `AGENTS.md` before anything writes.** If it is already committed, say so and leave it product-owned. If it exists but is not committed, ownership is ambiguous: STOP before writing and ask the principal whether it is product guidance to commit/preserve or local debris to move/remove. The wheelhouse's install instructions go in `wheelhouse/AGENTS.md`; do not append to or git-exclude the root cross-agent file.
+- **If none of `wheelhouse/`, `CLAUDE.md`, or root `AGENTS.md` exists, say so out loud.** That sentence is the record every later step reads. This procedure creates `wheelhouse/` itself in step 2 and creates `CLAUDE.md` in step 5 after `bd init --skip-agents`; neither trips this check, because both appear after this survey. That is the whole reason the survey lives here and not further down: seeing those files at step 3 or step 5 tells you nothing, and seeing them now tells you everything.
 
-This is the one observation in the procedure that expires. Every other check can be re-run at any point and give the same answer; this one is about a state that step 2 destroys. If you find yourself past step 2 having never taken it, the cheap answer is gone — ask the principal directly, and read `git log --oneline -1 -- CLAUDE.md wheelhouse`, where a path with history predates you. An empty answer proves nothing in the other direction, since an untracked file that was already here has no history either.
+This is the one observation in the procedure that expires. Every other check can be re-run at any point and give the same answer; this one is about a state that step 2 destroys. If you find yourself past step 2 having never taken it, the cheap answer is gone — ask the principal directly, and read `git log --oneline -1 -- CLAUDE.md AGENTS.md wheelhouse`, where a path with history predates you. An empty answer proves nothing in the other direction, since an untracked file that was already here has no history either.
 
 ## 2. Get the template in, verbatim
 
@@ -136,7 +136,7 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 - Confirm the current directory is a git repository, and say which directory you are about to install into. Let the principal correct you before you continue. A correction here means step 1b surveyed the wrong directory and this step wrote into it — say so, and take the survey again in the directory you have just been given.
 - Step 1 established that every named tool is on PATH and printed the versions. Carry `bd`'s version forward rather than re-deriving it; if you skipped step 1, go and run it now instead of checking `bd` alone here, because it is not the only tool that has to be there.
 - Report uncommitted changes if there are any. Do not block on them; the principal may be mid-work.
-- **Report what step 1b's survey found** — whether `wheelhouse/` or `CLAUDE.md` was here before this install, which is the check that guards an unrecoverable overwrite. Carry the answer forward; do not re-derive it from what you can see now. This step created `wheelhouse/` for `.template-source` and `bd init` will create `CLAUDE.md` in step 5, so the directory in front of you cannot answer the question any more. If you skipped step 1b, do not guess: go back and read its last paragraph, which says what to do once the cheap answer is gone.
+- **Report what step 1b's survey found** — whether `wheelhouse/`, `CLAUDE.md`, or root `AGENTS.md` was here before this install, which is the check that guards an unrecoverable overwrite and preserves product-owned agent guidance. Carry the answer forward; do not re-derive it from what you can see now. This step created `wheelhouse/` for `.template-source`, and step 5 creates `CLAUDE.md`, so the directory in front of you cannot answer the question any more. If you skipped step 1b, do not guess: go back and read its last paragraph, which says what to do once the cheap answer is gone.
 
 ### Copy the verbatim half of the install
 
@@ -303,9 +303,26 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
 
 ## 5. Initialize the graph and write the install
 
-- `bd init` in the project root; confirm the graph exists. Its output is verbose and mentions daemons, migrations and sync; that is normal and not an error. **Expect two side effects it does not ask about:** it creates config files well beyond `.beads/` (a `CLAUDE.md` at the root if none exists, `.claude/settings.json` with a SessionStart hook, `.codex/`, `.agents/`), and on recent builds it **commits them itself**, authored as the signed-in git user. Neither is an error. The `CLAUDE.md` it creates is a scaffold; the next steps write the commander content into that same file, keeping bd's managed block. Review its auto-commit rather than being surprised by it in `git log` later.
+- `bd init --skip-agents` in the project root; confirm the graph exists. Its output is verbose and mentions daemons, migrations and sync; that is normal and not an error. `--skip-agents` is load-bearing: a wheelhouse install never asks bd to write root `AGENTS.md`, `.agents/`, `.codex/`, or Claude/Codex setup into the product namespace. The integrations the wheelhouse actually needs are installed explicitly in the next block, at the paths this procedure owns. Review any bd auto-commit rather than being surprised by it in `git log` later.
+
+  ```bash
+  bd init --skip-agents
+  test -d .beads || echo "FAIL bd init did not create .beads/"
+  ```
 
   What IS worth stopping for: a non-zero exit, a refusal to create `.beads/`, or a message naming a conflicting existing database. Anything else, run `bd doctor`, paste the output, and continue — but know that on bd builds using the embedded backend (the current default) `bd doctor` prints "not yet supported in embedded mode" and diagnoses nothing; that message is itself a normal result, not a failure. Treat any upgrade suggestions as advisory.
+
+- **Reinstall only the Beads integrations this install owns.** The commander needs bd's Claude `SessionStart` hook and a CLAUDE scaffold for the managed Beads block; the wheelhouse note belongs under `wheelhouse/AGENTS.md`, not at root.
+
+  ```bash
+  bd setup claude
+  bd setup codex -o wheelhouse/AGENTS.md
+  test -f .claude/settings.json || echo "FAIL bd setup claude did not write .claude/settings.json"
+  test -f CLAUDE.md || echo "FAIL bd setup claude did not write CLAUDE.md"
+  test -f wheelhouse/AGENTS.md || echo "FAIL bd setup codex did not write wheelhouse/AGENTS.md"
+  ```
+
+  `bd setup claude` is the explicit replacement for the SessionStart hook that `bd init --skip-agents` deliberately skipped. It may create or update `CLAUDE.md`; the next steps write the commander content into that same file, keeping bd's managed block. Do not run a setup command that writes root `AGENTS.md`, and do not let `bd init` claim `.agents/` wholesale.
 
 - **Set the graph's role explicitly, immediately after `bd init`:**
 
@@ -316,18 +333,21 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
 
   Current bd builds set this themselves — measured on bd 1.2.2, a fresh `bd init` leaves `git config --get beads.role` printing `maintainer` — but older builds did not, and upstream tracks init and upgrade paths that leave it unset (gastownhall/beads#2950). Left unset, every bd command prints `warning: beads.role not configured (GH#2950)` on stderr, and role detection falls back to a deprecated remote-URL heuristic that reads a plain-HTTPS `origin` as `contributor`. That value is not cosmetic: the role drives bd's multi-repo routing, and `contributor` routes `bd create` — and with it `bd list` and `bd ready` — to a separate planning repository (`~/.beads-planning` by default) instead of this project's graph, which breaks "the graph is the single source of work state" without an error. `maintainer` is the right value here in every case, because a wheelhouse owns its graph at the install root by design; a principal who genuinely wants contributor routing is installing something other than what this procedure installs, and that is a decision to record, not a default to detect. The command is idempotent — if the role was already `maintainer`, setting it again changes nothing, and the read-back is the evidence either way.
 
-- **Move bd's agent note into the wheelhouse namespace.** `bd init` may write `AGENTS.md` at the root. The root `AGENTS.md` belongs to the product for Codex, Cursor, and other cross-agent tooling, so the wheelhouse never claims it and never git-excludes it. If `bd init` wrote an uncommitted root `AGENTS.md`, move it to `wheelhouse/AGENTS.md`; if the root file was already committed before this install, leave it untouched and create `wheelhouse/AGENTS.md` for the wheelhouse note instead.
+- **Confirm the root agent namespace stayed product-owned.** Because step 1b stopped on ambiguous root `AGENTS.md` and step 5 ran `bd init --skip-agents`, the only healthy outcomes are: no root `AGENTS.md`, or the same product-owned committed root `AGENTS.md` step 1b reported. The wheelhouse note is `wheelhouse/AGENTS.md`.
 
   ```bash
   if git ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
-    echo "root AGENTS.md is committed and remains product-owned; writing wheelhouse/AGENTS.md"
+    echo "root AGENTS.md is committed and remains product-owned"
   elif [ -e AGENTS.md ]; then
-    mv -f AGENTS.md wheelhouse/AGENTS.md
+    echo "FAIL root AGENTS.md exists but is not committed; ownership is ambiguous"
+  else
+    echo "root AGENTS.md absent; wheelhouse did not create one"
   fi
-  [ -e wheelhouse/AGENTS.md ] || : > wheelhouse/AGENTS.md
-  sed -i.bak '/^AGENTS\.md$/d;/^\/AGENTS\.md$/d' .git/info/exclude 2>/dev/null || true
+  sed -i.bak '/^AGENTS\.md$/d;/^\/AGENTS\.md$/d;/^\.agents\/$/d;/^\/\.agents\/$/d' .git/info/exclude 2>/dev/null || true
   rm -f .git/info/exclude.bak
   git check-ignore AGENTS.md >/dev/null 2>&1; test $? -eq 1 || echo "FAIL root AGENTS.md is still ignored"
+  git check-ignore .agents >/dev/null 2>&1; test $? -eq 1 || echo "FAIL .agents/ is still blanket-ignored"
+  test -f wheelhouse/AGENTS.md || echo "FAIL wheelhouse/AGENTS.md missing"
   ```
 
   On some bd builds the session-completion section mandates pushing ("work is NOT complete until `git push` succeeds", "NEVER stop before pushing"); on current builds it is conservative and says the opposite ("Do not commit or push without clear authority"). **Read `wheelhouse/AGENTS.md` before acting**, because one sentence of what you append depends on which one you have.
@@ -590,10 +610,11 @@ Commit the install so the principal can see exactly what was added and revert it
 
 ```bash
 git status --short          # look first: bd init may have added files AND a commit you did not expect
-# Stage each install path ONLY if that status output actually shows it. bd commits some of
-# them itself (.beads/ routinely, and current builds also .claude/, .codex/, .agents/), and an
-# install kept out of the tree with .git/info/exclude shows none of them.
-for p in CLAUDE.md wheelhouse/ .beads/; do
+# Stage each install path ONLY if that status output actually shows it. bd may commit some of
+# them itself (.beads/ routinely); because init used --skip-agents, root AGENTS.md, .agents/
+# and .codex/ are not wheelhouse install paths. An install kept out of the tree with
+# .git/info/exclude shows none of the wheelhouse paths.
+for p in CLAUDE.md .claude/ wheelhouse/ .beads/; do
   if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
 done
 git status --short          # read what is staged; if nothing is, there is no commit to make
@@ -617,7 +638,7 @@ The first line is not decoration. `>>` appends at the byte the file ends on, and
 
 Measured: before, `git status --short` at the container root reports `?? .wheelhouse-worktrees/`; after, it reports nothing for it. In the SINGLE-REPO shape there is nothing to do here — the worktree location is a sibling OUTSIDE this repo, so this repo never sees it. If that sibling location happens to sit inside some other repository, that repository is not this install's to edit; say so to the principal rather than leaving dirt they will find later and attribute to their own working copy.
 
-Stage what `git status` actually shows, not a remembered list. What bd writes varies by build: some versions add `.gitattributes` (graph merge behaviour — include it if present, or the next clone loses that behaviour silently), current ones add `.claude/`, `.codex/` and `.agents/` and commit them unasked, so those may already be in history before you stage anything. Never `git add` a path you have not seen in the status output — `git add` is atomic, and one nonexistent pathspec fails the whole command having staged **nothing**, which leaves you believing the commit is prepared when it is empty.
+Stage what `git status` actually shows, not a remembered list. What bd writes varies by build: some versions add `.gitattributes` (graph merge behaviour — include it if present, or the next clone loses that behaviour silently), and the explicit Claude setup adds `.claude/`; include those when status shows them. Root `AGENTS.md`, `.agents/`, and `.codex/` are product/tool namespaces, not wheelhouse install paths: do not stage them unless the principal explicitly identified a product-owned file. Never `git add` a path you have not seen in the status output — `git add` is atomic, and one nonexistent pathspec fails the whole command having staged **nothing**, which leaves you believing the commit is prepared when it is empty.
 
 One file inside `.beads/` is worth naming rather than leaving to that sweep, because it reads as runtime debris and is not: `.beads/interactions.jsonl`, an append-only log of what agents did to the graph and why. **Commit it.** Measured on bd 1.2.2: the `.beads/.gitignore` that bd writes itself does not exclude it — `git check-ignore .beads/interactions.jsonl` exits 1 — and `bd audit --help` says in as many words that the file "is intended to be versioned in git", for auditing why an agent did something and for dataset generation. It is only ever appended to, so it grows slowly and nothing rewrites what is already in it.
 
