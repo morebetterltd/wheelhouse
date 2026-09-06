@@ -191,6 +191,37 @@ export function die(msg: string): never {
   process.exit(1);
 }
 
+interface VerdictCandidate {
+  line: string;
+  normalized: string;
+  lineNumber: number;
+}
+
+function liveVerdictCandidates(stdout: string): VerdictCandidate[] {
+  const out: VerdictCandidate[] = [];
+  let inFence = false;
+  const lines = stdout.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const normalized = trimmed.replace(/^(>\s*)+/, "").trim();
+    if (/^VERDICT:/.test(normalized)) out.push({ line, normalized, lineNumber: i + 1 });
+  }
+  return out;
+}
+
+function writeRawVerifierOutput(stdout: string): string {
+  fs.mkdirSync(VERDICTS_DIR, { recursive: true });
+  const rawFile = path.join(VERDICTS_DIR, ".raw.md");
+  fs.writeFileSync(rawFile, stdout);
+  return rawFile;
+}
+
 export function expandTilde(p: string): string {
   if (p === "~") return os.homedir();
   if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
@@ -633,27 +664,34 @@ function main(): void {
     );
   }
 
-  // --- parse: exactly one VERDICT line, exactly one known value -------------
-  const verdictLines = stdout.split("\n").filter((l) => /^VERDICT:/.test(l.trim()));
+  // --- parse: exactly one live VERDICT line, exactly one known value --------
+  // A VERDICT quoted inside a triple-backtick Markdown fence is evidence text,
+  // not the verifier's machine verdict. Ordinary blockquotes are still live:
+  // only fences classify a line inert.
+  const rawFile = writeRawVerifierOutput(stdout);
+  const verdictLines = liveVerdictCandidates(stdout);
   if (verdictLines.length === 0) {
     process.stderr.write(`--- verifier output tail ---\n${stdout.slice(-2000)}\n`);
-    die(`verifier emitted no VERDICT: line — per the brief that routes to a human, not to a verdict`);
+    die(`verifier emitted no VERDICT: line outside fenced code blocks — per the brief that routes to a human, not to a verdict (raw output: ${rawFile})`);
   }
   if (verdictLines.length > 1) {
-    die(`verifier emitted ${verdictLines.length} VERDICT: lines — ambiguous, refusing to pick one`);
+    die(
+      `verifier emitted ${verdictLines.length} live VERDICT: lines outside fenced code blocks — ambiguous, refusing to pick one (raw output: ${rawFile}). Candidates:\n` +
+        verdictLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
+    );
   }
   // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
   // you are reviewing") belongs to APPROVE and to nothing else.
   const m = verdictLines[0]
-    .trim()
+    .normalized
     .match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)\s*(?:[—-]{1,2}\s*NOT BENCHED:\s*(\S.*))?$/);
   if (!m) {
-    die(`malformed verdict line: "${verdictLines[0].trim()}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] | BOUNCE | DISCOVER`);
+    die(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] | BOUNCE | DISCOVER`);
   }
   const verdict = m[1];
   const notBenched = m[2]?.trim();
   if (notBenched && verdict !== "APPROVE") {
-    die(`malformed verdict line: NOT BENCHED qualifies APPROVE and nothing else, got: "${verdictLines[0].trim()}"`);
+    die(`malformed verdict line: NOT BENCHED qualifies APPROVE and nothing else, got: "${verdictLines[0].normalized}"`);
   }
   const verdictShown = notBenched ? `${verdict} — NOT BENCHED: ${notBenched}` : verdict;
 
