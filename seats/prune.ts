@@ -9,6 +9,9 @@
  *
  * Dry-run is the default. `prune` only acts from a reviewed scan file and only
  * with --yes. Rows marked needs-review or seat-anchor are never acted on.
+ * Limit, stated: the template tool scans only the roots named on the command
+ * line/default install root and never reads $HOME, so Xcode DerivedData is out
+ * of scope.
  */
 
 import * as fs from "node:fs";
@@ -39,6 +42,7 @@ const CATEGORIES: Record<string, string> = {
   "orphaned-worktree": "directory under a worktree container that git no longer registers",
   "stale-branch": "local fleet branch with no worktree, closed bead, tip merged to an integration ref and present on a remote ref",
   "build-cache": "regenerable build output such as .wheelhouse-build, target, bin/obj, .build, dist/build/.next/out",
+  "bench-junk": "stale .wheelhouse-bench.lock.stale.* bench lock directories",
   "seat-anchor": "worktree currently recorded in seats/state.json; never pruned",
   "needs-review": "dirty tree, open bead, unmerged/unpushed work, occupied seat, or unverifiable state; never pruned",
   "node-modules": "opt-in regenerable dependency install tree",
@@ -159,15 +163,27 @@ function scanBranches(repo: string, root: string, beads: Map<string, string>, re
   return rows;
 }
 
-function scanCaches(root: string, includeOptional: boolean): Row[] {
-  const names = [".wheelhouse-build", "target", ".build", "dist", "build", ".next", "out"];
+function benchInProgress(root: string): boolean { return isDir(path.join(root, ".wheelhouse-bench.lock")); }
+
+function scanBenchJunk(root: string): Row[] {
+  return subdirs(root)
+    .filter((d) => path.basename(d).startsWith(".wheelhouse-bench.lock.stale."))
+    .map((d) => row("bench-junk", true, root, d, "", "rm", "stale bench lock directory"));
+}
+
+function scanCaches(root: string, includeOptional: boolean, activeBench: boolean): Row[] {
+  const names = [".wheelhouse-build", "target", "bin", "obj", ".build", "dist", "build", ".next", "out"];
   const rows: Row[] = [];
+  const cacheRow = (child: string, category: "build-cache" | "node-modules", reason: string) => {
+    if (activeBench) rows.push(row("needs-review", false, root, child, "", "none", `bench lock present at ${path.join(root, ".wheelhouse-bench.lock")}; ${reason}`));
+    else rows.push(row(category, true, root, child, "", "rm", reason));
+  };
   const walk = (d: string, depth: number) => {
     if (depth > 3) return;
     for (const child of subdirs(d)) {
       const base = path.basename(child);
-      if (names.includes(base)) rows.push(row("build-cache", true, root, child, "", "rm", `${base} is regenerable build output`));
-      else if (includeOptional && base === "node_modules") rows.push(row("node-modules", true, root, child, "", "rm", "opt-in dependency install tree"));
+      if (names.includes(base)) cacheRow(child, "build-cache", `${base} is regenerable build output`);
+      else if (includeOptional && base === "node_modules") cacheRow(child, "node-modules", "opt-in dependency install tree");
       else if (![".git", ".beads", "seats"].includes(base)) walk(child, depth + 1);
     }
   };
@@ -187,8 +203,10 @@ function scan(roots: string[], includeOptional: boolean): Row[] {
       rows.push(...scanWorktrees(root, repo, seats, beads));
       rows.push(...scanBranches(repo, root, beads, new Set(wts.map((w) => w.branch).filter(Boolean))));
     }
+    const activeBench = benchInProgress(root);
     rows.push(...scanOrphans(root, registeredPaths));
-    rows.push(...scanCaches(root, includeOptional));
+    rows.push(...scanBenchJunk(root));
+    rows.push(...scanCaches(root, includeOptional, activeBench));
   }
   return rows.sort((a, b) => `${a.category}\t${a.path}`.localeCompare(`${b.category}\t${b.path}`));
 }

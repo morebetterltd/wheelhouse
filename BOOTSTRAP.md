@@ -561,7 +561,7 @@ Run each of these and paste what it prints:
   bash seats/prune.selftest.sh    # expect: prune.selftest: PASS
   ```
 
-  The selftest plants a closed merged worktree, a seat-anchored worktree, an orphaned checkout, and a build cache, then proves only the safe rows are touched by `prune --yes`.
+  The selftest plants a closed merged worktree, a seat-anchored worktree, an orphaned checkout, build caches, a stale bench lock, and an active bench lock guard, then proves only the safe rows are touched by `prune --yes`.
 - A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
 
   ```bash
