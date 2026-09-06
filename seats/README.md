@@ -19,6 +19,7 @@ The main files here:
 - `commander-inbox-poll.sh` — wrapper-independent commander fallback: drains the Dispatch Office inbox from inside the commander pane whenever the cursor lags.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code.
+- `prune.ts` — scans/prunes safe worktrees and regenerable caches from a reviewed scan file; dry-run by default.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
@@ -420,6 +421,16 @@ never writes to the graph, the ISA, or any repository. If `wheelhouse/ISA.md` is
 not committed in this install, the command exits 2 with `UNRUNNABLE` rather than
 passing silently.
 
+## Pruning worktrees and caches
+
+```bash
+bun seats/prune.ts scan [--root <container>]... [--format tsv|json] > prune.tsv
+bun seats/prune.ts prune --from-file prune.tsv --categories merged-worktree,orphaned-worktree,build-cache --yes
+bun seats/prune.ts categories
+```
+
+`scan` is read-only and defaults to the install/container root. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, and regenerable build caches. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed.
+
 ## Proving it still works
 
 ```bash
@@ -429,6 +440,7 @@ bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/walk.selftest.sh
+bash seats/prune.selftest.sh
 bash seats/intent-check.selftest.sh
 bash seats/specimen-leak.selftest.sh
 bash seats/placeholder-grep.selftest.sh
