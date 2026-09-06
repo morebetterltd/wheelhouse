@@ -10,17 +10,50 @@ source_refusal() {
   exit 42
 }
 
+read_template_source_field() {
+  local field=$1
+  sed -n "s/^${field}=//p" "$TEMPLATE_SOURCE" 2>/dev/null | tail -1
+}
+
+ensure_template_cache_ignored() {
+  local ignore="$ROOT/.gitignore"
+  if [ -e "$ignore" ] && [ -n "$(tail -c1 "$ignore")" ]; then printf '\n' >> "$ignore"; fi
+  grep -qxF 'wheelhouse/.template-cache/' "$ignore" 2>/dev/null || printf '%s\n' 'wheelhouse/.template-cache/' >> "$ignore"
+}
+
 template_root() {
-  local recorded=""
+  local recorded="" source="" commit="" cache="" short=""
   if [ -d "$ROOT/wheelhouse" ] && [ ! -d "$ROOT/contracts" ]; then
-    [ -f "$TEMPLATE_SOURCE" ] || source_refusal "$TEMPLATE_SOURCE missing; expected a path= line naming the template clone that carries baseline $BASELINE"
-    recorded=$(sed -n 's/^path=//p' "$TEMPLATE_SOURCE" | tail -1)
-    [ -n "$recorded" ] || source_refusal "$TEMPLATE_SOURCE has no path= line; expected path=/path/to/template-clone carrying baseline $BASELINE"
-    git -C "$recorded" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-      || source_refusal "$TEMPLATE_SOURCE path=$recorded is not a git repository carrying baseline $BASELINE"
-    git -C "$recorded" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1 \
-      || source_refusal "$TEMPLATE_SOURCE path=$recorded is a git repository but baseline object $BASELINE is absent"
-    printf '%s\n' "$recorded"
+    [ -f "$TEMPLATE_SOURCE" ] || source_refusal "$TEMPLATE_SOURCE missing; expected source= and commit= lines (path= is only a disposable cache hint)"
+    recorded=$(read_template_source_field path)
+    source=$(read_template_source_field source)
+    commit=$(read_template_source_field commit)
+    [ -n "$commit" ] || commit=$BASELINE
+
+    if [ -n "$recorded" ] \
+      && git -C "$recorded" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+      && git -C "$recorded" cat-file -e "${commit}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$recorded"
+      return 0
+    fi
+
+    [ -n "$source" ] || source_refusal "$TEMPLATE_SOURCE has no source= line; cannot fetch commit=$commit (path=${recorded:-<empty>} is not usable)"
+    short=$(printf '%s' "$commit" | cut -c1-12)
+    cache="$ROOT/wheelhouse/.template-cache/$short"
+    if [ -d "$cache/.git" ] && git -C "$cache" cat-file -e "${commit}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$cache"
+      return 0
+    fi
+
+    ensure_template_cache_ignored
+    mkdir -p "$ROOT/wheelhouse/.template-cache"
+    rm -rf "$cache"
+    if ! git clone --quiet "$source" "$cache" >/dev/null 2>&1; then
+      source_refusal "source=$source unreachable; cannot fetch commit=$commit after path=${recorded:-<empty>} was unusable"
+    fi
+    git -C "$cache" cat-file -e "${commit}^{commit}" >/dev/null 2>&1 \
+      || source_refusal "source=$source did not provide commit=$commit after path=${recorded:-<empty>} was unusable"
+    printf '%s\n' "$cache"
     return 0
   fi
   printf '%s\n' "$ROOT"
@@ -112,11 +145,14 @@ else
 fi
 
 if [ "${WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG:-1}" = 1 ]; then
+  BARE_SOURCE="$TMP/template-source.git"
+  git clone --quiet --bare "$TEMPLATE" "$BARE_SOURCE"
+
   INSTALL="$TMP/install-root"
   mkdir -p "$INSTALL/seats" "$INSTALL/wheelhouse"
   git -C "$INSTALL" init -b main >/dev/null
   cat > "$INSTALL/wheelhouse/.template-source" <<EOF
-source=fixture
+source=$BARE_SOURCE
 commit=$BASELINE
 path=$TEMPLATE
 namespace=fixture
@@ -124,9 +160,52 @@ EOF
   cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL/seats/upgrade-runbook.selftest.sh"
   INSTALLED_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL/seats/upgrade-runbook.selftest.sh" 2>&1)
   case "$INSTALLED_OUT" in
-    *"upgrade-runbook.selftest: PASS"*) pass "installed-layout copied upgrade-runbook selftest resolves baseline through wheelhouse/.template-source path" ;;
+    *"upgrade-runbook.selftest: PASS"*) pass "installed-layout copied upgrade-runbook selftest uses live path= when it carries commit=" ;;
     *) fail "installed-layout copied upgrade-runbook selftest failed: $INSTALLED_OUT" ;;
   esac
+
+  INSTALL_DEAD_REACHABLE="$TMP/install-dead-reachable"
+  mkdir -p "$INSTALL_DEAD_REACHABLE/seats" "$INSTALL_DEAD_REACHABLE/wheelhouse"
+  git -C "$INSTALL_DEAD_REACHABLE" init -b main >/dev/null
+  cat > "$INSTALL_DEAD_REACHABLE/wheelhouse/.template-source" <<EOF
+source=$BARE_SOURCE
+commit=$BASELINE
+path=$TMP/dead-template-path
+namespace=fixture
+EOF
+  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_DEAD_REACHABLE/seats/upgrade-runbook.selftest.sh"
+  DEAD_REACHABLE_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_DEAD_REACHABLE/seats/upgrade-runbook.selftest.sh" 2>&1)
+  case "$DEAD_REACHABLE_OUT" in
+    *"upgrade-runbook.selftest: PASS"*)
+      if [ -d "$INSTALL_DEAD_REACHABLE/wheelhouse/.template-cache/$(printf '%s' "$BASELINE" | cut -c1-12)/.git" ] \
+        && grep -qxF 'wheelhouse/.template-cache/' "$INSTALL_DEAD_REACHABLE/.gitignore"; then
+        pass "installed-layout dead path= fetches commit= from reachable source= into git-excluded install-local cache"
+      else
+        fail "installed-layout dead path= passed but did not create a git-excluded install-local template cache"
+      fi
+      ;;
+    *) fail "installed-layout dead path= with reachable source= failed: $DEAD_REACHABLE_OUT" ;;
+  esac
+
+  INSTALL_DEAD_UNREACHABLE="$TMP/install-dead-unreachable"
+  mkdir -p "$INSTALL_DEAD_UNREACHABLE/seats" "$INSTALL_DEAD_UNREACHABLE/wheelhouse"
+  git -C "$INSTALL_DEAD_UNREACHABLE" init -b main >/dev/null
+  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_DEAD_UNREACHABLE/seats/upgrade-runbook.selftest.sh"
+  cat > "$INSTALL_DEAD_UNREACHABLE/wheelhouse/.template-source" <<EOF
+source=$TMP/not-a-source.git
+commit=$BASELINE
+path=$TMP/dead-template-path
+namespace=fixture
+EOF
+  set +e
+  DEAD_UNREACHABLE_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_DEAD_UNREACHABLE/seats/upgrade-runbook.selftest.sh" 2>&1)
+  DEAD_UNREACHABLE_RC=$?
+  set -e
+  if [ "$DEAD_UNREACHABLE_RC" -eq 42 ] && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep -q 'REFUSED template source: source=' && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep -q 'unreachable'; then
+    pass "installed-layout dead path= with unreachable source= refuses by named source reason"
+  else
+    fail "installed-layout dead path= with unreachable source= was not legible (rc=$DEAD_UNREACHABLE_RC): $DEAD_UNREACHABLE_OUT"
+  fi
 
   INSTALL_MISSING="$TMP/install-missing-source"
   mkdir -p "$INSTALL_MISSING/seats" "$INSTALL_MISSING/wheelhouse"
@@ -136,8 +215,8 @@ EOF
   MISSING_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_MISSING/seats/upgrade-runbook.selftest.sh" 2>&1)
   MISSING_RC=$?
   set -e
-  if [ "$MISSING_RC" -eq 42 ] && printf '%s\n' "$MISSING_OUT" | grep -q 'wheelhouse/.template-source missing' && printf '%s\n' "$MISSING_OUT" | grep -q 'expected a path= line'; then
-    pass "installed-layout missing .template-source fails legibly with path= expectation"
+  if [ "$MISSING_RC" -eq 42 ] && printf '%s\n' "$MISSING_OUT" | grep -q 'wheelhouse/.template-source missing' && printf '%s\n' "$MISSING_OUT" | grep -q 'source= and commit='; then
+    pass "installed-layout missing .template-source fails legibly with source= and commit= expectation"
   else
     fail "installed-layout missing .template-source was not legible (rc=$MISSING_RC): $MISSING_OUT"
   fi
@@ -146,15 +225,15 @@ EOF
   mkdir -p "$INSTALL_BAD/seats" "$INSTALL_BAD/wheelhouse"
   git -C "$INSTALL_BAD" init -b main >/dev/null
   cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh"
-  printf 'path=%s\n' "$TMP/not-a-template-repo" > "$INSTALL_BAD/wheelhouse/.template-source"
+  printf 'path=%s\ncommit=%s\n' "$TMP/not-a-template-repo" "$BASELINE" > "$INSTALL_BAD/wheelhouse/.template-source"
   set +e
   BAD_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh" 2>&1)
   BAD_RC=$?
   set -e
-  if [ "$BAD_RC" -eq 42 ] && printf '%s\n' "$BAD_OUT" | grep -q 'wheelhouse/.template-source path=' && printf '%s\n' "$BAD_OUT" | grep -q 'not a git repository'; then
-    pass "installed-layout bad path= fails legibly before raw git fatal"
+  if [ "$BAD_RC" -eq 42 ] && printf '%s\n' "$BAD_OUT" | grep -q 'has no source= line' && printf '%s\n' "$BAD_OUT" | grep -q 'path='; then
+    pass "installed-layout bad path= without source= fails legibly before raw git fatal"
   else
-    fail "installed-layout bad path= was not legible (rc=$BAD_RC): $BAD_OUT"
+    fail "installed-layout bad path= without source= was not legible (rc=$BAD_RC): $BAD_OUT"
   fi
 fi
 
