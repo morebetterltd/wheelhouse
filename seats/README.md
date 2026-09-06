@@ -429,7 +429,7 @@ bun seats/prune.ts prune --from-file prune.tsv --categories merged-worktree,orph
 bun seats/prune.ts categories
 ```
 
-`scan` is read-only and defaults to the install/container root. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, and regenerable build caches. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed.
+`scan` is read-only and defaults to the install/container root. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, stale `.wheelhouse-bench.lock.stale.*` bench lock directories, and regenerable build caches; caches under a root with an active `.wheelhouse-bench.lock` are `needs-review`. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed. Limit, stated: the template tool never reads `$HOME`, so Xcode DerivedData is out of scope.
 
 ## Proving it still works
 

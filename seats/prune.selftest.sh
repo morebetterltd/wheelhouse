@@ -60,13 +60,22 @@ git -C "$PROD" push -q origin main
 git -C "$PROD" worktree add -q -b "fleet/$OPEN_ID" "$WTS/$OPEN_ID" main
 printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"}}}\n' "$WTS/$OPEN_ID" > "$ROOT/seats/state.json"
 
-mkdir -p "$WTS/orphaned-checkout" "$PROD/.wheelhouse-build"
+mkdir -p "$WTS/orphaned-checkout" "$PROD/.wheelhouse-build" "$PROD/obj" "$ROOT/.wheelhouse-bench.lock.stale.12345"
 printf 'orphan\n' > "$WTS/orphaned-checkout/file.txt"
 printf 'cache\n' > "$PROD/.wheelhouse-build/cache.txt"
+printf 'obj-cache\n' > "$PROD/obj/cache.txt"
+printf 'stale-lock\n' > "$ROOT/.wheelhouse-bench.lock.stale.12345/pid"
+
+BUSY="$FIX/busy-container"
+mkdir -p "$BUSY/seats" "$BUSY/.wheelhouse-bench.lock" "$BUSY/product/.wheelhouse-build"
+cp "$PRUNE" "$BUSY/seats/prune.ts"
+chmod +x "$BUSY/seats/prune.ts"
+printf 'active-lock\n' > "$BUSY/.wheelhouse-bench.lock/pid"
+printf 'busy-cache\n' > "$BUSY/product/.wheelhouse-build/cache.txt"
 
 phase 'categories verb'
 CATS=$(cd "$ROOT" && bun seats/prune.ts categories 2>&1)
-if printf '%s\n' "$CATS" | grep -q 'merged-worktree' && printf '%s\n' "$CATS" | grep -q 'seat-anchor'; then pass 'categories names worktree and seat safety categories'; else fail "categories output missing expected categories: $CATS"; fi
+if printf '%s\n' "$CATS" | grep -q 'merged-worktree' && printf '%s\n' "$CATS" | grep -q 'seat-anchor' && printf '%s\n' "$CATS" | grep -q 'bench-junk'; then pass 'categories names worktree, bench-junk, and seat safety categories'; else fail "categories output missing expected categories: $CATS"; fi
 
 phase 'scan classifies fixture rows'
 SCAN="$FIX/scan.tsv"
@@ -75,18 +84,29 @@ if awk -F '\t' -v p="$WTS/$CLOSED_ID" '$1=="merged-worktree" && $2=="1" && $4==p
 if awk -F '\t' -v p="$WTS/$OPEN_ID" '$1=="seat-anchor" && $2=="0" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'seat cwd is classified as non-prunable seat-anchor'; else fail "seat-anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/orphaned-checkout" '$1=="orphaned-worktree" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'orphaned checkout is safe orphaned-worktree'; else fail "orphaned row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$PROD/.wheelhouse-build" '$1=="build-cache" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'build cache is safe build-cache'; else fail "build-cache row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$PROD/obj" '$1=="build-cache" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass '.NET obj cache is safe build-cache'; else fail "obj build-cache row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$ROOT/.wheelhouse-bench.lock.stale.12345" '$1=="bench-junk" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'stale bench lock is safe bench-junk'; else fail "bench-junk row missing:\n$(cat "$SCAN")"; fi
+
+phase 'active bench lock makes caches review-only'
+BUSY_SCAN="$FIX/busy-scan.tsv"
+( cd "$BUSY" && bun seats/prune.ts scan > "$BUSY_SCAN" ) || { echo "selftest: busy scan failed" >&2; exit 2; }
+if awk -F '\t' -v p="$BUSY/product/.wheelhouse-build" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /bench lock present/ {found=1} END{exit found?0:1}' "$BUSY_SCAN"; then pass 'active bench lock reclassifies cache as needs-review'; else fail "busy cache was not guarded:\n$(cat "$BUSY_SCAN")"; fi
+( cd "$BUSY" && bun seats/prune.ts prune --from-file "$BUSY_SCAN" --yes --categories build-cache,needs-review > "$FIX/busy-prune.out" )
+[ -d "$BUSY/product/.wheelhouse-build" ] && pass 'active-bench cache remains after prune --yes' || fail 'active-bench cache was removed'
 
 phase 'dry-run does not touch rows'
-( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --categories merged-worktree,orphaned-worktree,build-cache >/tmp/prune-dry.out )
-if [ -d "$WTS/$CLOSED_ID" ] && [ -d "$WTS/orphaned-checkout" ] && [ -d "$PROD/.wheelhouse-build" ]; then pass 'prune without --yes is dry-run only'; else fail 'dry-run removed a fixture path'; fi
+( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --categories merged-worktree,orphaned-worktree,build-cache,bench-junk >/tmp/prune-dry.out )
+if [ -d "$WTS/$CLOSED_ID" ] && [ -d "$WTS/orphaned-checkout" ] && [ -d "$PROD/.wheelhouse-build" ] && [ -d "$ROOT/.wheelhouse-bench.lock.stale.12345" ]; then pass 'prune without --yes is dry-run only'; else fail 'dry-run removed a fixture path'; fi
 
 phase 'prune acts only on safe selected rows'
-( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache > "$FIX/prune.out" )
+( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache,bench-junk > "$FIX/prune.out" )
 if [ ! -e "$WTS/$CLOSED_ID" ] && ! git -C "$PROD" worktree list --porcelain | grep -qF "$WTS/$CLOSED_ID"; then pass 'safe merged worktree removed by git worktree remove'; else fail 'safe merged worktree still exists or is registered'; fi
 [ ! -e "$WTS/orphaned-checkout" ] && pass 'safe orphaned checkout removed' || fail 'orphaned checkout still exists'
 [ ! -e "$PROD/.wheelhouse-build" ] && pass 'safe build cache removed' || fail 'build cache still exists'
+[ ! -e "$PROD/obj" ] && pass 'safe .NET obj cache removed' || fail 'obj cache still exists'
+[ ! -e "$ROOT/.wheelhouse-bench.lock.stale.12345" ] && pass 'safe stale bench lock removed' || fail 'stale bench lock still exists'
 [ -d "$WTS/$OPEN_ID" ] && pass 'seat-anchor worktree remains' || fail 'seat-anchor worktree was removed'
-if grep -q 'prune summary: touched=3' "$FIX/prune.out"; then pass 'prune summary reports three touched rows'; else fail "unexpected prune summary: $(cat "$FIX/prune.out")"; fi
+if grep -q 'prune summary: touched=5' "$FIX/prune.out"; then pass 'prune summary reports five touched rows'; else fail "unexpected prune summary: $(cat "$FIX/prune.out")"; fi
 
 if [ "$FAILED" -eq 0 ]; then
   echo 'prune.selftest: PASS'

@@ -167,7 +167,7 @@ for f in "$TEMPLATE"/runbooks/*; do
 done
 ```
 
-`cp -p`, not `cp`: it preserves the file mode, so a runbook that ships executable arrives executable. Today's three runbooks are all prose and the habit costs nothing — the era when this directory carried scripts is why it is written down. If your `commit=` is `unknown`, or the baseline read fails for any other reason, the comparison cannot run — there is no trusted baseline to compare against — and the runbook is reported as `baseline unreadable` rather than `YOURS`. That is the conservative direction on purpose: the cost is re-running before a possible hand-merge, against either a silently clobbered procedure or a spurious hand-merge queue you would not have noticed.
+`cp -p`, not `cp`: it preserves the file mode, so a runbook that ships executable arrives executable. This is load-bearing: some shipped runbooks are executable pointers, and the era when this directory carried more scripts is why it is written down. If your `commit=` is `unknown`, or the baseline read fails for any other reason, the comparison cannot run — there is no trusted baseline to compare against — and the runbook is reported as `baseline unreadable` rather than `YOURS`. That is the conservative direction on purpose: the cost is re-running before a possible hand-merge, against either a silently clobbered procedure or a spurious hand-merge queue you would not have noticed.
 
 ## 4. Splice: new contract, your project section
 
