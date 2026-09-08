@@ -79,6 +79,7 @@ When the commander has promoted this reviewer as a FALLBACK GATE for a gating-re
 - The worker's report is a CLAIM, not evidence. Re-run what is cheap, and say explicitly what you could not re-run.
 - Check the claims as well as the code. A correct change described by a false sentence still ships that sentence, and the next reader believes it.
 - For a host app, daemon, service, supervisor, launch agent, or machine-local port listener change, verify that the worker's run could not have displaced production: before review, record whether the production port/socket and LaunchAgent/systemd unit/service/plist/login item/supervisor entry exist and are running; after any reviewer-run proof, record the same facts again and compare them. An APPROVE needs the before/after production state unchanged, or an explicit statement that no production service exists on the review machine. If checking that state requires access you do not have, route it as structurally unverifiable rather than approving in silence.
+- Every ad-hoc build, derived-data directory, review-output directory, walk-simulator artifact, or other scratch artifact you create for a bead lives under `<container>/.wheelhouse-runs/<bead-id>/...`, not a bare `/tmp` path. Any simulator you create for a bead is named `<bead-id>-*` so the closed-bead scratch pruner can identify it later.
 
 ### Commander sentinel
 

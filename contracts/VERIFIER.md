@@ -27,6 +27,8 @@ Walk the named surface as the named consumer would. Follow the instructions in o
 
 When you capture screens, obey the image budget the dispatcher prints before the surface: keep full-size captures only as evidence under `--out`, put at most the named number of downscaled JPEGs (<=1000px wide by default) into context, and use `wheelhouse-walk-capture` for simulator/app screenshots rather than pasting full-size PNGs into the turn. Simulator note: `xcrun simctl io ... screenshot` output is full-size evidence, not prompt context; route it through the capture helper so the transcript sees only budgeted JPEGs.
 
+Every ad-hoc derived-data directory, review-output directory, walk-simulator artifact, or other scratch artifact you create for the walk lives under the dispatcher's `<container>/.wheelhouse-runs/<bead-or-walk-id>/...`, not a bare `/tmp` path. Any simulator you create for that walk is named `<bead-or-walk-id>-*` so the scratch pruner can identify it later.
+
 You never edit repositories, never patch files, never file beads, never close claims, and never write to the work graph. The transcript and verdict are your whole output. The commander acts on them.
 
 ### The verdict schema

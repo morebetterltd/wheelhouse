@@ -1,0 +1,43 @@
+$ bash seats/prune.selftest.sh
+
+categories verb
+  ok    categories names worktree, bench-junk, scratch, simulator, xctest, and seat safety categories
+
+scan classifies fixture rows
+  ok    closed merged clean worktree is safe merged-worktree
+  ok    seat cwd is classified as non-prunable seat-anchor
+  ok    orphaned checkout is safe orphaned-worktree
+  ok    build cache is safe build-cache
+  ok    .NET obj cache is safe build-cache
+  ok    stale bench lock is safe bench-junk
+  ok    closed bead .wheelhouse-runs scratch is safe bead-runs
+  ok    open bead .wheelhouse-runs scratch is needs-review
+  ok    closed bead /private/tmp scratch is safe bead-tmp
+  ok    open bead /private/tmp scratch is needs-review
+  ok    closed bead simctl device is safe bead-simulator
+  ok    open bead simctl device is needs-review
+  ok    idle XCTestDevices set is safe xctest-devices
+
+active bench lock makes caches review-only
+  ok    active bench lock reclassifies cache as needs-review
+  ok    active-bench cache remains after prune --yes
+
+dry-run does not touch rows
+  ok    prune without --yes is dry-run only
+
+prune acts only on safe selected rows
+  ok    safe merged worktree removed by git worktree remove
+  ok    safe orphaned checkout removed
+  ok    safe build cache removed
+  ok    safe .NET obj cache removed
+  ok    safe stale bench lock removed
+  ok    safe closed bead runs scratch removed
+  ok    safe closed bead tmp scratch removed
+  ok    safe closed bead simulator deleted by simctl
+  ok    idle XCTestDevices set deleted with simctl --set
+  ok    seat-anchor worktree remains
+  ok    open bead runs scratch remains byte-identical
+  ok    open bead tmp scratch remains byte-identical
+  ok    open bead simulator is not deleted
+  ok    prune summary reports nine touched rows and reclaimed bytes
+prune.selftest: PASS

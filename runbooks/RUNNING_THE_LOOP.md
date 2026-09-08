@@ -141,6 +141,8 @@ Push, open and merge PRs, and run automated deploys per your project's recorded 
 
 Close the bead and drop the review-queue label in the same breath, after the integrator has satisfied `wheelhouse/INTEGRATOR.md`'s claim-move duty or its explicit no-claim-moved escape hatch. A closed bead still carrying it reads as in-flight to everyone else. `wheelhouse/GRAPH.md` says so; it is listed here because it is the step most often forgotten at the end of a long round.
 
+Then prune the closed bead's scratch, using the canonical tool rather than hand-removing paths: run `bun seats/prune.ts scan > <reviewed-scan>` from the install root, inspect rows for the bead, and act only on safe rows with `bun seats/prune.ts prune --from-file <reviewed-scan> --yes --categories bead-runs,bead-tmp,bead-simulator,xctest-devices`. This is also a weekly commander tick fleet-wide: run a scan, review it, and prune safe closed-bead scratch plus any other reviewed safe categories. Open or in-progress bead scratch must remain `needs-review`, not removed by age or by name.
+
 ## Where things are recorded
 
 On the bead. The graph is the loop's memory, and a decision that lives anywhere else survives exactly as long as the people who were present.
