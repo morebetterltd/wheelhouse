@@ -9,9 +9,8 @@
  *
  * Dry-run is the default. `prune` only acts from a reviewed scan file and only
  * with --yes. Rows marked needs-review or seat-anchor are never acted on.
- * Limit, stated: the template tool scans only the roots named on the command
- * line/default install root and never reads $HOME, so Xcode DerivedData is out
- * of scope.
+ * Scratch cleanup is closed-bead-only: bead-named scratch for open or
+ * in-progress beads is emitted as needs-review and never pruned.
  */
 
 import * as fs from "node:fs";
@@ -32,7 +31,7 @@ interface Row {
   branch: string;
   size_bytes: number;
   size_human: string;
-  action: "rm" | "worktree" | "branch" | "none";
+  action: "rm" | "worktree" | "branch" | "simctl" | "xctest-devices" | "none";
   reason: string;
 }
 
@@ -43,6 +42,10 @@ const CATEGORIES: Record<string, string> = {
   "stale-branch": "local fleet branch with no worktree, closed bead, tip merged to an integration ref and present on a remote ref",
   "build-cache": "regenerable build output such as .wheelhouse-build, target, bin/obj, .build, dist/build/.next/out",
   "bench-junk": "stale .wheelhouse-bench.lock.stale.* bench lock directories",
+  "bead-runs": "closed bead scratch under .wheelhouse-runs/<bead>*",
+  "bead-tmp": "closed bead scratch under /private/tmp/<bead>-*",
+  "bead-simulator": "simctl device named <closed-bead>-*",
+  "xctest-devices": "idle XCTestDevices simctl set; pruned with simctl --set ... delete all",
   "seat-anchor": "worktree currently recorded in seats/state.json; never pruned",
   "needs-review": "dirty tree, open bead, unmerged/unpushed work, occupied seat, or unverifiable state; never pruned",
   "node-modules": "opt-in regenerable dependency install tree",
@@ -57,8 +60,8 @@ function subdirs(p: string): string[] { try { return fs.readdirSync(p, { withFil
 function bytes(p: string): number { const r = run("du", ["-sk", p]); const n = Number((r.out.split(/\s+/)[0] ?? "0")); return Number.isFinite(n) ? n * 1024 : 0; }
 function human(n: number): string { const u = ["B", "K", "M", "G", "T"]; let v = n, i = 0; while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; } return `${v.toFixed(1)}${u[i]}`; }
 function rel(root: string, p: string): string { const r = path.relative(root, p); return r && !r.startsWith("..") ? r : p; }
-function row(category: string, safe: boolean, repo: string, p: string, branch: string, action: Row["action"], reason: string): Row {
-  const b = fs.existsSync(p) ? bytes(p) : 0;
+function row(category: string, safe: boolean, repo: string, p: string, branch: string, action: Row["action"], reason: string, sizeOverride?: number): Row {
+  const b = sizeOverride ?? (fs.existsSync(p) ? bytes(p) : 0);
   return { category, safe: safe ? 1 : 0, repo, path: p, branch, size_bytes: b, size_human: human(b), action, reason };
 }
 
@@ -105,6 +108,11 @@ function beadStatuses(root: string): Map<string, string> {
 function beadFor(name: string, beads: Map<string, string>): [string, string] | null {
   let best: [string, string] | null = null;
   for (const [id, st] of beads) if (name.includes(id) && (!best || id.length > best[0].length)) best = [id, st];
+  return best;
+}
+function beadPrefix(name: string, beads: Map<string, string>, sep = ""): [string, string] | null {
+  let best: [string, string] | null = null;
+  for (const [id, st] of beads) if (name.startsWith(`${id}${sep}`) && (!best || id.length > best[0].length)) best = [id, st];
   return best;
 }
 function seatCwds(root: string): Map<string, string> {
@@ -163,6 +171,75 @@ function scanBranches(repo: string, root: string, beads: Map<string, string>, re
   return rows;
 }
 
+
+function scanBeadRuns(root: string, beads: Map<string, string>): Row[] {
+  const runs = path.join(root, ".wheelhouse-runs");
+  if (!isDir(runs)) return [];
+  const rows: Row[] = [];
+  for (const d of subdirs(runs)) {
+    const b = beadPrefix(path.basename(d), beads);
+    if (!b) continue;
+    const safe = b[1] === "closed";
+    rows.push(row(safe ? "bead-runs" : "needs-review", safe, root, d, "", safe ? "rm" : "none", safe ? `scratch belongs to closed bead ${b[0]}` : `scratch belongs to bead ${b[0]} which is ${b[1]}`));
+  }
+  return rows;
+}
+
+function scanPrivateTmp(root: string, beads: Map<string, string>): Row[] {
+  const tmpRoots = [...new Set(["/private/tmp", path.resolve(os.tmpdir())])].filter(isDir);
+  const rows: Row[] = [];
+  for (const tmpRoot of tmpRoots) {
+    for (const d of subdirs(tmpRoot)) {
+      const base = path.basename(d);
+      const b = beadPrefix(base, beads, "-");
+      if (!b) continue;
+      const safe = b[1] === "closed";
+      rows.push(row(safe ? "bead-tmp" : "needs-review", safe, root, d, "", safe ? "rm" : "none", safe ? `tmp scratch belongs to closed bead ${b[0]}` : `tmp scratch belongs to bead ${b[0]} which is ${b[1]}`));
+    }
+  }
+  return rows;
+}
+
+function simctlJson(args: string[]): any | null {
+  const r = run("xcrun", ["simctl", ...args]);
+  if (!r.ok || !r.out) return null;
+  try { return JSON.parse(r.out); } catch { return null; }
+}
+
+function scanSimulators(root: string, beads: Map<string, string>): Row[] {
+  if (beads.size === 0 || !run("xcrun", ["simctl", "help"]).ok) return [];
+  const j = simctlJson(["list", "devices", "--json", "all"]);
+  const rows: Row[] = [];
+  for (const devs of Object.values<any>(j?.devices ?? {})) {
+    if (!Array.isArray(devs)) continue;
+    for (const d of devs) {
+      const name = String(d?.name ?? "");
+      const udid = String(d?.udid ?? "");
+      const b = beadPrefix(name, beads, "-");
+      if (!b || !udid) continue;
+      const size = d?.dataPath && fs.existsSync(String(d.dataPath)) ? bytes(String(d.dataPath)) : 0;
+      const safe = b[1] === "closed";
+      rows.push(row(safe ? "bead-simulator" : "needs-review", safe, root, `simctl:${udid}`, name, safe ? "simctl" : "none", safe ? `simulator belongs to closed bead ${b[0]}` : `simulator belongs to bead ${b[0]} which is ${b[1]}`, size));
+    }
+  }
+  return rows;
+}
+
+function xcodebuildRunning(): boolean {
+  const r = run("pgrep", ["-x", "xcodebuild"]);
+  return r.ok && r.out.trim() !== "";
+}
+
+function scanXCTestDevices(root: string): Row[] {
+  const set = path.join(os.homedir(), "Library", "Developer", "XCTestDevices");
+  if (!isDir(set)) return [];
+  if (xcodebuildRunning()) return [row("needs-review", false, root, set, "", "none", "xcodebuild is running; XCTestDevices set is not idle")];
+  if (!run("xcrun", ["simctl", "help"]).ok) return [row("needs-review", false, root, set, "", "none", "xcrun simctl is unavailable")];
+  const j = simctlJson(["--set", set, "list", "devices", "--json"]);
+  const booted = Object.values<any>(j?.devices ?? {}).some((devs) => Array.isArray(devs) && devs.some((d) => String(d?.state ?? "") === "Booted"));
+  return [row(booted ? "needs-review" : "xctest-devices", !booted, root, set, "", booted ? "none" : "xctest-devices", booted ? "XCTestDevices set has a booted simulator" : "XCTestDevices set is idle: no xcodebuild process and no booted simulator")];
+}
+
 function benchInProgress(root: string): boolean { return isDir(path.join(root, ".wheelhouse-bench.lock")); }
 
 function scanBenchJunk(root: string): Row[] {
@@ -205,6 +282,10 @@ function scan(roots: string[], includeOptional: boolean): Row[] {
     }
     const activeBench = benchInProgress(root);
     rows.push(...scanOrphans(root, registeredPaths));
+    rows.push(...scanBeadRuns(root, beads));
+    rows.push(...scanPrivateTmp(root, beads));
+    rows.push(...scanSimulators(root, beads));
+    rows.push(...scanXCTestDevices(root));
     rows.push(...scanBenchJunk(root));
     rows.push(...scanCaches(root, includeOptional, activeBench));
   }
@@ -226,18 +307,21 @@ function parseScan(file: string): Row[] {
   });
 }
 function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
-  let touched = 0, skipped = 0;
+  let touched = 0, skipped = 0, reclaimed = 0;
   for (const r of rows) {
     if (cats && !cats.has(r.category)) { skipped++; continue; }
     if (!r.safe || NEVER.has(r.category)) { skipped++; continue; }
-    if (!yes) { console.log(`DRY-RUN ${r.action} ${r.category} ${r.path}`); continue; }
+    if (!yes) { reclaimed += r.size_bytes; console.log(`DRY-RUN ${r.action} ${r.category} ${r.path}`); continue; }
     if (r.action === "rm") fs.rmSync(r.path, { recursive: true, force: true });
     else if (r.action === "worktree") run("git", ["worktree", "remove", "--force", r.path], r.repo);
     else if (r.action === "branch") run("git", ["branch", "-d", r.branch], r.repo);
+    else if (r.action === "simctl") run("xcrun", ["simctl", "delete", r.path.replace(/^simctl:/, "")]);
+    else if (r.action === "xctest-devices") run("xcrun", ["simctl", "--set", r.path, "delete", "all"]);
+    reclaimed += r.size_bytes;
     touched++;
     console.log(`PRUNED ${r.action} ${r.category} ${r.path}`);
   }
-  console.log(`prune summary: touched=${touched} skipped=${skipped} dry_run=${yes ? 0 : 1}`);
+  console.log(`prune summary: touched=${touched} skipped=${skipped} dry_run=${yes ? 0 : 1} reclaimed_bytes=${reclaimed} reclaimed_human=${human(reclaimed)}`);
 }
 
 function main() {

@@ -5,7 +5,7 @@ cat >&2 <<'EOF'
 runbooks/prune-worktrees.sh is retired.
 Use the canonical tool from the install root:
   bun seats/prune.ts scan > prune.tsv
-  bun seats/prune.ts prune --from-file prune.tsv --yes --categories merged-worktree,orphaned-worktree,build-cache
+  bun seats/prune.ts prune --from-file prune.tsv --yes --categories merged-worktree,orphaned-worktree,build-cache,bead-runs,bead-tmp,bead-simulator,xctest-devices
 Review the scan before adding --yes; prune is dry-run by default.
 EOF
 exit 64
