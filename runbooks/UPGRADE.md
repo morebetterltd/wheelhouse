@@ -83,7 +83,7 @@ git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ || true     # sk
 
 Read it. If nothing changed in `contracts/`, you are already current and there is nothing to do.
 
-## 3. Copy what the template owns — the eight contracts by name, the runbooks, and the seats machinery
+## 3. Copy what the template owns — the nine contracts by name, the runbooks, and the seats machinery
 
 ```bash
 cp "$TEMPLATE/contracts/WORKER.md"   wheelhouse/fleet/WORKER.md.new
@@ -91,12 +91,13 @@ cp "$TEMPLATE/contracts/SEATS.md"    wheelhouse/fleet/SEATS.md.new
 cp "$TEMPLATE/contracts/REVIEWER.md" wheelhouse/crew/REVIEWER.md.new
 cp "$TEMPLATE/contracts/DESIGNER.md" wheelhouse/crew/DESIGNER.md.new
 cp "$TEMPLATE/contracts/VERIFIER.md" wheelhouse/crew/VERIFIER.md.new
+cp "$TEMPLATE/contracts/RESEARCHER.md" wheelhouse/crew/RESEARCHER.md.new
 cp "$TEMPLATE/contracts/BENCH.md"    wheelhouse/crew/BENCH.md.new
 cp "$TEMPLATE/contracts/GRAPH.md"    wheelhouse/GRAPH.md.new
 cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 ```
 
-**Eight `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade. This list matches `BOOTSTRAP.md` step 2's — eight briefs plus the stub it alone copies — and step 5's integrity check is what catches the two drifting apart.
+**Nine `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade. `RESEARCHER.md` is new in template upgrades that carry researcher seats; copy it whole, then fill only its `## This project` half if this install takes a researcher. Existing `seats/seats.json` rosters do not need a `skills` field; when present it is an optional array of skill directories that the adapter tilde-expands and passes as Pi `--skill`, stopping on a missing path. This list matches `BOOTSTRAP.md` step 2's — nine briefs plus the stub it alone copies — and step 5's integrity check is what catches the two drifting apart.
 
 ### The seats machinery comes too
 
@@ -234,6 +235,7 @@ splice wheelhouse/fleet/SEATS.md.new    wheelhouse/fleet/SEATS.md
 splice wheelhouse/crew/REVIEWER.md.new  wheelhouse/crew/REVIEWER.md
 splice wheelhouse/crew/DESIGNER.md.new  wheelhouse/crew/DESIGNER.md
 splice wheelhouse/crew/VERIFIER.md.new  wheelhouse/crew/VERIFIER.md
+splice wheelhouse/crew/RESEARCHER.md.new wheelhouse/crew/RESEARCHER.md
 splice wheelhouse/crew/BENCH.md.new     wheelhouse/crew/BENCH.md
 splice wheelhouse/GRAPH.md.new          wheelhouse/GRAPH.md
 splice wheelhouse/INTEGRATOR.md.new     wheelhouse/INTEGRATOR.md
@@ -250,8 +252,8 @@ Do not split on the first occurrence of the words "this project", and do not spl
 
 ## 5. Re-verify — the same checks the install runs
 
-- **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all eight, and no `FAIL` lines after them. That check is also this runbook's backstop: a contract missing from the copy list above never installs, and the check says so rather than passing quietly. Do not skip it on the grounds that the copies looked right. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
-- **Your bench is the file you had before, whichever file that was.** Step 3 copies eight named `.md` files, the contents of `runbooks/`, and the template's `seats/` files, and none of those lists can reach `wheelhouse/crew/bench.sh` — so the check is that nothing reached it, and it reads the same in both states:
+- **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all nine contract `.md` files, and no `FAIL` lines after them. That check is also this runbook's backstop: a contract missing from the copy list above never installs, and the check says so rather than passing quietly. Do not skip it on the grounds that the copies looked right. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
+- **Your bench is the file you had before, whichever file that was.** Step 3 copies nine named `.md` files, the contents of `runbooks/`, and the template's `seats/` files, and none of those lists can reach `wheelhouse/crew/bench.sh` — so the check is that nothing reached it, and it reads the same in both states:
 
   ```bash
   git diff --stat -- wheelhouse/crew/bench.sh          # expect: nothing. The upgrade is not committed until step 8.
