@@ -442,6 +442,42 @@ if [ $RC -ne 0 ] && says "invalid account.authRoute" && says "oauth, api_key, en
 else fail "authRoute present-invalid did not STOP as expected (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
+phase "roster skills — valid entries become --skill args; missing paths STOP before spawn"
+SKILL_OK_PROJ="$FIX/skill-ok-proj"
+build_proj "$SKILL_OK_PROJ" skill-ok
+mkdir -p "$HOME_FIX/skills/research-skill"
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].skills = ["~/skills/research-skill"];
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$SKILL_OK_PROJ/seats/seats.json"
+RUN_PROJ="$SKILL_OK_PROJ"; STATE="$SKILL_OK_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-skill-ok/worker-1/argv.json"
+run spawn worker-1
+if [ $RC -eq 0 ]; then pass "skills present-valid: spawn exits 0"
+else fail "skills present-valid: spawn exited ${RC}: $OUT"; fi
+if grep -q '"--skill","'$HOME_FIX'/skills/research-skill"' "$ARGV" 2>/dev/null; then
+  pass "skills present-valid: expanded --skill path reaches pi argv"
+else fail "skills present-valid: --skill arg missing from argv: $(cat "$ARGV" 2>/dev/null)"; fi
+run stop worker-1 >/dev/null 2>&1
+
+SKILL_BAD_PROJ="$FIX/skill-bad-proj"
+build_proj "$SKILL_BAD_PROJ" skill-bad
+env HOME="$HOME_FIX" bun -e '
+  const fs = require("fs");
+  const f = process.argv[1];
+  const j = JSON.parse(fs.readFileSync(f, "utf8"));
+  j.seats["worker-1"].skills = ["~/skills/missing-skill"];
+  fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$SKILL_BAD_PROJ/seats/seats.json"
+RUN_PROJ="$SKILL_BAD_PROJ"; STATE="$SKILL_BAD_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-skill-bad/worker-1/argv.json"
+run spawn worker-1
+if [ $RC -ne 0 ] && says 'seat "worker-1" lists skill ~/skills/missing-skill' && says "$HOME_FIX/skills/missing-skill" && says 'does not exist' && [ ! -e "$ARGV" ]; then
+  pass "skills missing path: adapter STOPs at roster read before spawning pi"
+else fail "skills missing path did not STOP before spawn (exit $RC): $OUT; argv=$(cat "$ARGV" 2>/dev/null)"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
 phase "roster shadow — absent is false, true is visible in status, non-boolean is a loud STOP"
 # Absent: the default fixture roster (build_proj) never sets shadow, so status
 # must not render worker-1 as a shadow seat.

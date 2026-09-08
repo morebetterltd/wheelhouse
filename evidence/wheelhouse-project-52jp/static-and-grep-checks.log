@@ -1,0 +1,25 @@
+$ git diff --check
+
+$ bash seats/specimen-leak.selftest.sh
+specimen-leak selftest: current install fixture
+  ok    prescribed grep passes with current VERIFIER.md mentioning an emulator command
+
+specimen-leak selftest: planted whole-file specimen copy
+  ok    prescribed grep bites a planted whole-file generated specimen copy
+
+specimen-leak selftest: negative control — planted specimen with forced miss
+  ok    forced-miss planted specimen exits non-zero and prints FAIL
+specimen-leak.selftest: PASS (3 legs)
+
+$ bash seats/placeholder-grep.selftest.sh
+
+$ rg -n "lazydad|Keenan|Cloudflare|Apple|last30days|interceptor|Brave|DuckDuckGo|anthropic-key|tun8|x2e4|rrh8" contracts/RESEARCHER.md contracts/SEATS.md seats/adapter.ts seats/README.md runbooks/UPGRADE.md BOOTSTRAP.md README.md seats/seats.json.example || true
+placeholder grep selftest: binary evidence fixture
+  ok    text-only grep ignores a PNG carrying the {{ byte pair
+
+placeholder grep selftest: planted text placeholder
+  ok    text placeholder still fails the prescribed check
+placeholder-grep.selftest: PASS (2 legs)
+
+$ bun -e import { resolveRoleBrief } from "./seats/briefs"; console.log(resolveRoleBrief(process.cwd(), "researcher"))
+[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-52jp/contracts/RESEARCHER.md

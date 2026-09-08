@@ -162,6 +162,7 @@ interface SeatEntry {
   model?: string;
   external?: boolean;
   shadow?: boolean;
+  skills?: string[];
   account?: { dir: string; label?: string; authRoute?: string };
 }
 
@@ -191,6 +192,32 @@ function validateShadow(seatName: string, entry: SeatEntry): void {
         `must be boolean true or false (or omitted)`
     );
   }
+}
+
+// Optional per-seat skill directories, passed to pi as `--skill <path>` at
+// spawn (and at the relaunches inside resume/reset/dispatch, which all come
+// through launch). Tilde-expanded like account.dir. A path that does not
+// exist is a STOP while reading the roster, not a silent omission: a seat
+// spawned without the skill its brief assumes would run the brief wrong and
+// nobody would see why.
+function validateSkills(seatName: string, entry: SeatEntry): void {
+  if (entry.skills === undefined) return; // absent means none
+  if (!Array.isArray(entry.skills) || entry.skills.some((s) => typeof s !== "string" || s.length === 0)) {
+    die(
+      `seat "${seatName}" has an invalid skills ${JSON.stringify(entry.skills)} in seats/seats.json — ` +
+        `must be an array of non-empty path strings (or omitted)`
+    );
+  }
+  for (const raw of entry.skills) {
+    const p = expandTilde(raw);
+    if (!fs.existsSync(p)) die(`seat "${seatName}" lists skill ${raw} in seats/seats.json, but ${p} does not exist`);
+  }
+}
+
+function skillArgs(_seatName: string, entry: SeatEntry): string[] {
+  const args: string[] = [];
+  for (const raw of entry.skills ?? []) args.push("--skill", expandTilde(raw));
+  return args;
 }
 
 interface SeatRecord {
@@ -225,6 +252,7 @@ function readRoster(): Record<string, SeatEntry> {
   for (const [name, entry] of Object.entries(seats)) {
     validateAuthRoute(name, entry);
     validateShadow(name, entry);
+    validateSkills(name, entry);
   }
   return seats;
 }
@@ -613,6 +641,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   const args = ["--mode", "rpc", "--append-system-prompt", brief];
   if (entry.provider) args.push("--provider", entry.provider);
   if (entry.model) args.push("--model", entry.model);
+  args.push(...skillArgs(name, entry));
   if (sessionFile) {
     args.push("--session", sessionFile); // resume-attach
   }
