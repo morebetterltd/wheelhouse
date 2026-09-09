@@ -69,7 +69,7 @@ Generated at install.
 
 ### Research tools
 
-<!-- Which web/search/research tools are available to this install's researcher seats, how to initialize any source ledger under the bead worktree, and any required context/profile flags. -->
+<!-- Which web/search/research tools are available to this install's researcher seats, how to initialize any source ledger under the bead worktree, any required context/profile flags, and which alternate surfaces to try when one search surface fails mid-run; a search-surface failure is not a research dead end, so switch surfaces and record the switch. -->
 
 ### Cost
 

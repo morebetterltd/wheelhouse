@@ -142,7 +142,7 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 
 Everything in this list is copied whole and unedited. The interview-derived content — every `## This project` fill, `CLAUDE.md`, the ISA, `STARTUP.md`, `seats/seats.json` — is written in steps 3 and 5, not here; what this step lands is the half that is byte-identical in every project.
 
-- Create `wheelhouse/crew/` and `wheelhouse/fleet/`.
+- Create `wheelhouse/crew/`, `wheelhouse/fleet/`, and `wheelhouse/research/`.
 - Copy **verbatim** from the template's `contracts/`:
   - `WORKER.md` and `SEATS.md` into `wheelhouse/fleet/`
   - `REVIEWER.md`, `DESIGNER.md`, `VERIFIER.md`, `RESEARCHER.md`, `BENCH.md` into `wheelhouse/crew/`
