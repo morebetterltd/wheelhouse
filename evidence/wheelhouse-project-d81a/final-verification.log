@@ -1,0 +1,97 @@
+$ git diff --check HEAD
+
+$ bash seats/prune.selftest.sh
+
+$ test -d "$JSROOT/node_modules" && find "$JSROOT/node_modules" -mindepth 1 -maxdepth 3 \( -name dist -o -name .bin -o -name bin \) -type d | head
+
+categories verb
+  ok    categories names worktree, bench-junk, scratch, simulator, xctest, and seat safety categories
+
+scan classifies fixture rows
+  ok    closed merged clean worktree is safe merged-worktree
+  ok    seat cwd is classified as non-prunable seat-anchor
+  ok    orphaned checkout is safe orphaned-worktree
+  ok    build cache is safe build-cache
+  ok    .NET obj cache is safe build-cache
+  ok    root dist is safe build-cache
+  ok    node_modules package dist is needs-review, not safe build-cache
+  ok    node_modules .bin is needs-review, not safe build-cache
+  ok    no safe scan rows appear under node_modules
+  ok    stale bench lock is safe bench-junk
+  ok    closed bead .wheelhouse-runs scratch is safe bead-runs
+  ok    open bead .wheelhouse-runs scratch is needs-review
+  ok    closed bead /private/tmp scratch is safe bead-tmp
+  ok    open bead /private/tmp scratch is needs-review
+  ok    closed bead simctl device is safe bead-simulator
+  ok    open bead simctl device is needs-review
+  ok    idle XCTestDevices set is safe xctest-devices
+
+active bench lock makes caches review-only
+  ok    active bench lock reclassifies cache as needs-review
+  ok    active-bench cache remains after prune --yes
+
+dry-run does not touch rows
+  ok    prune without --yes is dry-run only
+
+prune acts only on safe selected rows
+  ok    safe merged worktree removed by git worktree remove
+  ok    safe orphaned checkout removed
+  ok    safe build cache removed
+  ok    safe .NET obj cache removed
+  ok    safe root dist cache removed
+  ok    safe stale bench lock removed
+  ok    safe closed bead runs scratch removed
+  ok    safe closed bead tmp scratch removed
+  ok    safe closed bead simulator deleted by simctl
+  ok    idle XCTestDevices set deleted with simctl --set
+  ok    node_modules package dist remains after prune --yes
+  ok    node_modules .bin remains after prune --yes
+  ok    seat-anchor worktree remains
+  ok    open bead runs scratch remains byte-identical
+  ok    open bead tmp scratch remains byte-identical
+  ok    open bead simulator is not deleted
+  ok    prune summary reports ten touched rows and reclaimed bytes
+prune.selftest: PASS
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/tinyglobby/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/obug/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/.bin
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/core/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/runtime/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/wasi-threads/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@rolldown/pluginutils/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/std-env/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/miniflare/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/workerd/bin
+
+$ bun seats/prune.ts scan --root "$JSROOT" > evidence/wheelhouse-project-d81a/real-js-scan.tsv
+scan rows: 94
+
+$ awk -F "\\t" '$4 ~ /\/node_modules\// && $2=="1" {bad++} END{print "safe_node_modules_rows=" (bad+0); exit bad?1:0}' evidence/wheelhouse-project-d81a/real-js-scan.tsv
+safe_node_modules_rows=0
+
+$ awk -F "\\t" '$4 ~ /\/node_modules\// {print; if(++n==10) exit}' evidence/wheelhouse-project-d81a/real-js-scan.tsv
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/.bin		0	0.0B	none	.bin is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@cloudflare/kv-asset-handler/dist		163840	160.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@cloudflare/unenv-preset/dist		57344	56.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@cloudflare/vitest-pool-workers/dist		7323648	7.0M	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@cloudflare/workerd-darwin-arm64/bin		114569216	109.3M	none	bin is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/core/dist		901120	880.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/runtime/dist		471040	460.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/wasi-threads/dist		40960	40.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@esbuild/darwin-arm64/bin		10575872	10.1M	none	bin is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@jridgewell/resolve-uri/dist		61440	60.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+
+$ bun seats/prune.ts categories | grep build-cache
+build-cache	regenerable build output at a project/package root: .wheelhouse-build, dist, build, .next, out, .build, target, .NET bin/obj, DerivedData; never below dependency dirs
+
+$ rg -n "Build-cache|dependency tree|node_modules|DerivedData|project/package root|never safe build-cache" seats/prune.ts seats/README.md
+seats/prune.ts:14: * Build-cache rows are only directories a clean build regenerates at a project
+seats/prune.ts:16: * target, .NET bin/obj, and Xcode DerivedData when explicitly under a scanned
+seats/prune.ts:17: * root. A directory below a dependency tree (node_modules, vendor, .venv,
+seats/prune.ts:29:const DEPENDENCY_SEGMENTS = new Set(["node_modules", "vendor", ".venv", "venv", "Pods"]);
+seats/prune.ts:49:  "build-cache": "regenerable build output at a project/package root: .wheelhouse-build, dist, build, .next, out, .build, target, .NET bin/obj, DerivedData; never below dependency dirs",
+seats/prune.ts:258:  const names = [".wheelhouse-build", "DerivedData", "target", "bin", "obj", ".build", "dist", "build", ".next", "out"];
+seats/prune.ts:267:    rows.push(row("needs-review", false, root, child, "", "none", `${base} is below dependency directory ${dependencySegment}; dependency package contents are never safe build-cache`));
+seats/prune.ts:275:      else if (names.includes(base)) cacheRow(child, "build-cache", `${base} is regenerable build output at a project/package root`);
+seats/prune.ts:276:      else if (includeOptional && base === "node_modules") cacheRow(child, "node-modules", "opt-in dependency install tree");
+seats/README.md:432:`scan` is read-only and defaults to the install/container root. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, stale `.wheelhouse-bench.lock.stale.*` bench lock directories, closed-bead scratch under `.wheelhouse-runs/<bead>*` and `/private/tmp/<bead>-*`, simctl devices named `<closed-bead>-*`, an idle `~/Library/Developer/XCTestDevices` simctl set, and regenerable build caches. Build-cache means only directories a clean build regenerates at a project/package root: `.wheelhouse-build`, `dist`, `build`, `.next`, `out`, `.build`, `target`, .NET `bin`/`obj`, and Xcode `DerivedData` when explicitly under a scanned root; a directory below a dependency tree (`node_modules`, `vendor`, `.venv`, `venv`, `Pods`, or a dependency-like path segment) is never safe build-cache and is emitted as `needs-review` when matched. Caches under a root with an active `.wheelhouse-bench.lock` are `needs-review`. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, bead-named scratch or simulators for open/in-progress beads, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed. The XCTestDevices row is safe only when no `xcodebuild` process is running and no device in that set is booted.

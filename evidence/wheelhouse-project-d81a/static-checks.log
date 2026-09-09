@@ -1,0 +1,16 @@
+$ git diff --check
+
+$ bun seats/prune.ts categories | grep build-cache
+build-cache	regenerable build output at a project/package root: .wheelhouse-build, dist, build, .next, out, .build, target, .NET bin/obj, DerivedData; never below dependency dirs
+
+$ rg -n "Build-cache|dependency tree|node_modules|DerivedData|project/package root|never safe build-cache" seats/prune.ts seats/README.md
+seats/prune.ts:12: * Build-cache rows are only directories a clean build regenerates at a project
+seats/prune.ts:14: * target, .NET bin/obj, and Xcode DerivedData when explicitly under a scanned
+seats/prune.ts:15: * root. A directory below a dependency tree (node_modules, vendor, .venv,
+seats/prune.ts:27:const DEPENDENCY_SEGMENTS = new Set(["node_modules", "vendor", ".venv", "venv", "Pods"]);
+seats/prune.ts:47:  "build-cache": "regenerable build output at a project/package root: .wheelhouse-build, dist, build, .next, out, .build, target, .NET bin/obj, DerivedData; never below dependency dirs",
+seats/prune.ts:178:  const names = [".wheelhouse-build", "DerivedData", "target", "bin", "obj", ".build", "dist", "build", ".next", "out"];
+seats/prune.ts:187:    rows.push(row("needs-review", false, root, child, "", "none", `${base} is below dependency directory ${dependencySegment}; dependency package contents are never safe build-cache`));
+seats/prune.ts:195:      else if (names.includes(base)) cacheRow(child, "build-cache", `${base} is regenerable build output at a project/package root`);
+seats/prune.ts:196:      else if (includeOptional && base === "node_modules") cacheRow(child, "node-modules", "opt-in dependency install tree");
+seats/README.md:432:`scan` is read-only and defaults to the install/container root. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, stale `.wheelhouse-bench.lock.stale.*` bench lock directories, and regenerable build caches. Build-cache means only directories a clean build regenerates at a project/package root: `.wheelhouse-build`, `dist`, `build`, `.next`, `out`, `.build`, `target`, .NET `bin`/`obj`, and Xcode `DerivedData` when explicitly under a scanned root; a directory below a dependency tree (`node_modules`, `vendor`, `.venv`, `venv`, `Pods`, or a dependency-like path segment) is never safe build-cache and is emitted as `needs-review` when matched. Caches under a root with an active `.wheelhouse-bench.lock` are `needs-review`. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed.

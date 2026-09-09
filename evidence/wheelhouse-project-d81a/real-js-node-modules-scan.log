@@ -1,0 +1,29 @@
+$ test -d "$JSROOT/node_modules" && find "$JSROOT/node_modules" -mindepth 2 -maxdepth 2 \( -name dist -o -name .bin \) -type d | head
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/tinyglobby/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/obug/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/.bin
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/core/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/runtime/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/wasi-threads/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@rolldown/pluginutils/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/std-env/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/miniflare/dist
+[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/workerd/bin
+
+$ bun seats/prune.ts scan --root "$JSROOT" > evidence/wheelhouse-project-d81a/real-js-scan.tsv
+scan rows: 93
+
+$ awk -F "\\t" '$4 ~ /\/node_modules\// && $2=="1" {bad++} END{print "safe_node_modules_rows=" (bad+0); exit bad?1:0}' evidence/wheelhouse-project-d81a/real-js-scan.tsv
+safe_node_modules_rows=0
+
+$ awk -F "\\t" '$4 ~ /\/node_modules\// {print; if(++n==10) exit}' evidence/wheelhouse-project-d81a/real-js-scan.tsv
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/.bin		0	0.0B	none	.bin is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@cloudflare/kv-asset-handler/dist		163840	160.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@cloudflare/unenv-preset/dist		57344	56.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@cloudflare/vitest-pool-workers/dist		7323648	7.0M	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@cloudflare/workerd-darwin-arm64/bin		114569216	109.3M	none	bin is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/core/dist		901120	880.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/runtime/dist		471040	460.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@emnapi/wasi-threads/dist		40960	40.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@esbuild/darwin-arm64/bin		10575872	10.1M	none	bin is below dependency directory node_modules; dependency package contents are never safe build-cache
+needs-review	0	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware	[home]/Documents/_projects/lazydad-partners/lazydadgourmet/middleware/node_modules/@jridgewell/resolve-uri/dist		61440	60.0K	none	dist is below dependency directory node_modules; dependency package contents are never safe build-cache

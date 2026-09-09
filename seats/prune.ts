@@ -11,6 +11,11 @@
  * with --yes. Rows marked needs-review or seat-anchor are never acted on.
  * Scratch cleanup is closed-bead-only: bead-named scratch for open or
  * in-progress beads is emitted as needs-review and never pruned.
+ * Build-cache rows are only directories a clean build regenerates at a project
+ * root or package root: .wheelhouse-build, dist, build, .next, out, .build,
+ * target, .NET bin/obj, and Xcode DerivedData when explicitly under a scanned
+ * root. A directory below a dependency tree (node_modules, vendor, .venv,
+ * venv, Pods, or a dependency-like path segment) is never a safe build-cache.
  */
 
 import * as fs from "node:fs";
@@ -21,6 +26,7 @@ import { spawnSync } from "node:child_process";
 const ROOT = path.resolve(import.meta.dir, "..");
 const DEFAULT_CONTAINERS = [".wheelhouse-worktrees", ".worktrees"];
 const INTEGRATION_REFS = ["main", "master", "develop", "staging", "production", "release/"];
+const DEPENDENCY_SEGMENTS = new Set(["node_modules", "vendor", ".venv", "venv", "Pods"]);
 const NEVER = new Set(["needs-review", "seat-anchor"]);
 
 interface Row {
@@ -40,7 +46,7 @@ const CATEGORIES: Record<string, string> = {
   "detached-snapshot": "registered detached worktree: clean and tip present on a remote ref",
   "orphaned-worktree": "directory under a worktree container that git no longer registers",
   "stale-branch": "local fleet branch with no worktree, closed bead, tip merged to an integration ref and present on a remote ref",
-  "build-cache": "regenerable build output such as .wheelhouse-build, target, bin/obj, .build, dist/build/.next/out",
+  "build-cache": "regenerable build output at a project/package root: .wheelhouse-build, dist, build, .next, out, .build, target, .NET bin/obj, DerivedData; never below dependency dirs",
   "bench-junk": "stale .wheelhouse-bench.lock.stale.* bench lock directories",
   "bead-runs": "closed bead scratch under .wheelhouse-runs/<bead>*",
   "bead-tmp": "closed bead scratch under /private/tmp/<bead>-*",
@@ -249,22 +255,29 @@ function scanBenchJunk(root: string): Row[] {
 }
 
 function scanCaches(root: string, includeOptional: boolean, activeBench: boolean): Row[] {
-  const names = [".wheelhouse-build", "target", "bin", "obj", ".build", "dist", "build", ".next", "out"];
+  const names = [".wheelhouse-build", "DerivedData", "target", "bin", "obj", ".build", "dist", "build", ".next", "out"];
+  const dependencyBins = new Set([".bin"]);
   const rows: Row[] = [];
+  const isDependencySegment = (segment: string): boolean => DEPENDENCY_SEGMENTS.has(segment) || /^node[-_]?modules$/i.test(segment);
   const cacheRow = (child: string, category: "build-cache" | "node-modules", reason: string) => {
     if (activeBench) rows.push(row("needs-review", false, root, child, "", "none", `bench lock present at ${path.join(root, ".wheelhouse-bench.lock")}; ${reason}`));
     else rows.push(row(category, true, root, child, "", "rm", reason));
   };
-  const walk = (d: string, depth: number) => {
+  const dependencyReviewRow = (child: string, dependencySegment: string, base: string) => {
+    rows.push(row("needs-review", false, root, child, "", "none", `${base} is below dependency directory ${dependencySegment}; dependency package contents are never safe build-cache`));
+  };
+  const walk = (d: string, depth: number, dependencySegment: string | null) => {
     if (depth > 3) return;
     for (const child of subdirs(d)) {
       const base = path.basename(child);
-      if (names.includes(base)) cacheRow(child, "build-cache", `${base} is regenerable build output`);
+      const childDependency = dependencySegment ?? (isDependencySegment(base) ? base : null);
+      if (childDependency && (names.includes(base) || dependencyBins.has(base))) dependencyReviewRow(child, childDependency, base);
+      else if (names.includes(base)) cacheRow(child, "build-cache", `${base} is regenerable build output at a project/package root`);
       else if (includeOptional && base === "node_modules") cacheRow(child, "node-modules", "opt-in dependency install tree");
-      else if (![".git", ".beads", "seats"].includes(base)) walk(child, depth + 1);
+      if (![".git", ".beads", "seats"].includes(base)) walk(child, depth + 1, childDependency);
     }
   };
-  walk(root, 0);
+  walk(root, 0, null);
   return rows;
 }
 

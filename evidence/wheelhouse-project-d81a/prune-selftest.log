@@ -1,0 +1,60 @@
+$ git status --short --branch
+## HEAD (no branch)
+AM evidence/wheelhouse-project-d81a/prune-selftest.log
+A  evidence/wheelhouse-project-d81a/real-js-node-modules-scan.log
+A  evidence/wheelhouse-project-d81a/real-js-scan.tsv
+A  evidence/wheelhouse-project-d81a/static-checks.log
+UU seats/README.md
+UU seats/prune.selftest.sh
+UU seats/prune.ts
+
+$ bash seats/prune.selftest.sh
+
+categories verb
+  ok    categories names worktree, bench-junk, scratch, simulator, xctest, and seat safety categories
+
+scan classifies fixture rows
+  ok    closed merged clean worktree is safe merged-worktree
+  ok    seat cwd is classified as non-prunable seat-anchor
+  ok    orphaned checkout is safe orphaned-worktree
+  ok    build cache is safe build-cache
+  ok    .NET obj cache is safe build-cache
+  ok    root dist is safe build-cache
+  ok    node_modules package dist is needs-review, not safe build-cache
+  ok    node_modules .bin is needs-review, not safe build-cache
+  ok    no safe scan rows appear under node_modules
+  ok    stale bench lock is safe bench-junk
+  ok    closed bead .wheelhouse-runs scratch is safe bead-runs
+  ok    open bead .wheelhouse-runs scratch is needs-review
+  ok    closed bead /private/tmp scratch is safe bead-tmp
+  ok    open bead /private/tmp scratch is needs-review
+  ok    closed bead simctl device is safe bead-simulator
+  ok    open bead simctl device is needs-review
+  ok    idle XCTestDevices set is safe xctest-devices
+
+active bench lock makes caches review-only
+  ok    active bench lock reclassifies cache as needs-review
+  ok    active-bench cache remains after prune --yes
+
+dry-run does not touch rows
+  ok    prune without --yes is dry-run only
+
+prune acts only on safe selected rows
+  ok    safe merged worktree removed by git worktree remove
+  ok    safe orphaned checkout removed
+  ok    safe build cache removed
+  ok    safe .NET obj cache removed
+  ok    safe root dist cache removed
+  ok    safe stale bench lock removed
+  ok    safe closed bead runs scratch removed
+  ok    safe closed bead tmp scratch removed
+  ok    safe closed bead simulator deleted by simctl
+  ok    idle XCTestDevices set deleted with simctl --set
+  ok    node_modules package dist remains after prune --yes
+  ok    node_modules .bin remains after prune --yes
+  ok    seat-anchor worktree remains
+  ok    open bead runs scratch remains byte-identical
+  ok    open bead tmp scratch remains byte-identical
+  ok    open bead simulator is not deleted
+  ok    prune summary reports ten touched rows and reclaimed bytes
+prune.selftest: PASS
