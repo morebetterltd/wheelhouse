@@ -1,0 +1,11 @@
+$ measurement: cross-bead relaunch records new cwd while stub pi session pins old cwd
+seat worker-1: pid 98472, session d4731d4c-3c2c-44af-b6b3-93854724f069
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-nh5s/.wheelhouse-runs/wheelhouse-project-nh5s/measure-cwd/proj/seats/logs/worker-1.jsonl
+seat worker-1 stopped; session d4731d4c-3c2c-44af-b6b3-93854724f069 kept for resume
+seat worker-1: pid 98705, session d4731d4c-3c2c-44af-b6b3-93854724f069
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-nh5s/.wheelhouse-runs/wheelhouse-project-nh5s/measure-cwd/proj/seats/logs/worker-1.jsonl
+dispatched bead-b to worker-1; watch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-nh5s/.wheelhouse-runs/wheelhouse-project-nh5s/measure-cwd/proj/seats/logs/worker-1.jsonl
+pid=98705
+state_cwd=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-nh5s/.wheelhouse-runs/wheelhouse-project-nh5s/measure-cwd/proj/.wheelhouse-worktrees/bead-b
+live_cwd=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-nh5s/.wheelhouse-runs/wheelhouse-project-nh5s/measure-cwd/proj/.wheelhouse-worktrees/bead-a
+MEASURED: mismatch reproduced before fix
