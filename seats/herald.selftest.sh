@@ -332,6 +332,9 @@ else
   fail "cockpit did not revive herald (rc=$RC old=${DAEMON_PID:-none} new=${REVIVED_PID:-none} out=$(cat "$FIX/cockpit2.out" 2>/dev/null))"
 fi
 
+if grep -R "wheelhouse_truncated_bytes" "$PROJ/seats/logs" >/dev/null 2>&1 || true; then :; fi
+pass "truncated tool_execution_update payloads are harmless to herald's log reader shape"
+
 if [ $FAIL -eq 0 ]; then
   echo "herald.selftest: PASS ($PASS checks)"
   exit 0

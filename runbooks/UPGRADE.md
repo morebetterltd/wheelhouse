@@ -45,6 +45,10 @@ Then write the file:
 
 `commit=unknown` is honest and still useful — the integrity check runs on it, you just do not get the behind-versus-damaged diagnosis in step 5 until your next upgrade sets a real one. `path=` is the one field expected to die: it is only a cache hint. Existing installs may record a stale path into some other checkout; that is now harmless as long as `source=` and `commit=` are correct.
 
+### One-time rotation for existing oversize seat logs
+
+If an install already has very large `seats/logs/*.jsonl` files, rotate them once before relying on the copied adapter's automatic cap. Do this only with settled seats: confirm every rostered seat has reached `agent_end`/`agent_settled` or is stopped, stop/restart the herald around the move so its cursor sees the rotation boundary, then move each oversize log to `.jsonl.1` and recreate the current log file. The automatic cap is configurable with `WHEELHOUSE_LOG_ROTATE_BYTES` (default 256 MiB) and keeps `WHEELHOUSE_LOG_ROTATE_KEEP` archives (default 3). The runtime rotation relies on `herald.ts`'s documented offset reset: when a log shrinks below the saved offset after rotation, herald resets the offset to zero and continues from the new file.
+
 ## 1. Get a clone you can actually diff
 
 The install clones with `--depth 1`, which is enough to copy files and **not** enough to diff two commits. Use a clone under this install's git-excluded cache when you need one, so `.template-source` never points at a folder inside another project:

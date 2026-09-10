@@ -1,0 +1,26 @@
+$ git diff --check HEAD
+$ rg -n "LOG_TAIL_BYTES|LOG_ROTATE_BYTES|logFilterShell|log too large to parse|rotateLogIfSafe|tool_execution_update|WHEELHOUSE_LOG_ROTATE" seats/adapter.ts seats/adapter.selftest.sh seats/floor.selftest.sh seats/herald.selftest.sh runbooks/UPGRADE.md
+seats/adapter.selftest.sh:212:        if (/TOOLBIG/.test(cmd.message)) out({ type: "tool_execution_update", output: "X".repeat(200000) });
+seats/adapter.selftest.sh:732:  pass "tool_execution_update payload is trimmed in the seat log with byte count noted"
+seats/adapter.selftest.sh:733:else fail "tool_execution_update payload was not trimmed (exit $RC): $OUT"; fi
+seats/adapter.selftest.sh:808:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+seats/adapter.selftest.sh:820:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+seats/adapter.selftest.sh:821:if [ $RC -eq 0 ] && says "worker-badlog" && says "RUNNING" && says "log too large to parse"; then pass "oversize unparsable log keeps live seat visible with log-too-large marker"
+seats/adapter.selftest.sh:826:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=1 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+seats/adapter.selftest.sh:830:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=1 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+seats/floor.selftest.sh:89:{"type":"tool_execution_update","output":"short prefix\n[wheelhouse log truncated 12345 bytes; full output remains in the pi session file]","wheelhouse_truncated_bytes":12345,"timestamp":"$RECENT_ISO"}
+seats/floor.selftest.sh:198:[ $RC -eq 0 ] && pass "truncated tool_execution_update payload shape does not break floor rendering" || fail "truncated tool update shape broke floor output"
+seats/herald.selftest.sh:336:pass "truncated tool_execution_update payloads are harmless to herald's log reader shape"
+runbooks/UPGRADE.md:50:If an install already has very large `seats/logs/*.jsonl` files, rotate them once before relying on the copied adapter's automatic cap. Do this only with settled seats: confirm every rostered seat has reached `agent_end`/`agent_settled` or is stopped, stop/restart the herald around the move so its cursor sees the rotation boundary, then move each oversize log to `.jsonl.1` and recreate the current log file. The automatic cap is configurable with `WHEELHOUSE_LOG_ROTATE_BYTES` (default 256 MiB) and keeps `WHEELHOUSE_LOG_ROTATE_KEEP` archives (default 3). The runtime rotation relies on `herald.ts`'s documented offset reset: when a log shrinks below the saved offset after rotation, herald resets the offset to zero and continues from the new file.
+seats/adapter.ts:73:const LOG_TAIL_BYTES = Number(process.env.WHEELHOUSE_LOG_TAIL_BYTES || 1024 * 1024);
+seats/adapter.ts:74:const LOG_ROTATE_BYTES = Number(process.env.WHEELHOUSE_LOG_ROTATE_BYTES || 256 * 1024 * 1024);
+seats/adapter.ts:75:const LOG_ROTATE_KEEP = Number(process.env.WHEELHOUSE_LOG_ROTATE_KEEP || 3);
+seats/adapter.ts:382:function logLinesFrom(log: string, offset: number, maxBytes = LOG_TAIL_BYTES): { lines: string[]; offset: number; truncated: boolean } {
+seats/adapter.ts:636:function logFilterShell(): string {
+seats/adapter.ts:637:  const script = `const readline=require('readline'); const limit=Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES||65536); function trim(v){ if(typeof v==='string' && Buffer.byteLength(v)>limit){ const b=Buffer.from(v); return b.subarray(0,limit).toString('utf8')+'\\n[wheelhouse log truncated '+(b.length-limit)+' bytes; full output remains in the pi session file]'; } if(Array.isArray(v)) return v.map(trim); if(v&&typeof v==='object'){ for(const k of Object.keys(v)) v[k]=trim(v[k]); } return v;} const rl=readline.createInterface({input:process.stdin}); rl.on('line',l=>{try{const o=JSON.parse(l); if(o.type==='tool_execution_update'){const before=Buffer.byteLength(l); const t=trim(o); const after=Buffer.byteLength(JSON.stringify(t)); if(after<before) t.wheelhouse_truncated_bytes=before-after; process.stdout.write(JSON.stringify(t)+'\\n');} else process.stdout.write(l+'\\n');}catch{process.stdout.write(l+'\\n')}});`;
+seats/adapter.ts:686:    `0<> '${fifo}' > >(${logFilterShell()} >> '${log}') 2>> '${errLog}'`;
+seats/adapter.ts:990:    return r.truncated ? "log too large to parse" : "-";
+seats/adapter.ts:992:    return "log too large to parse";
+seats/adapter.ts:998:function rotateLogIfSafe(log: string, last: string): void {
+seats/adapter.ts:1000:  const cap = LOG_ROTATE_BYTES;
+seats/adapter.ts:1039:    rotateLogIfSafe(rec.log, last);

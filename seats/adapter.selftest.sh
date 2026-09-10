@@ -209,6 +209,7 @@ function handle(cmd) {
           streaming = false;
           return;
         }
+        if (/TOOLBIG/.test(cmd.message)) out({ type: "tool_execution_update", output: "X".repeat(200000) });
         out({ type: "message_end", message: { role: "assistant",
               content: [{ type: "text", text: "echo: " + cmd.message }] } });
         out({ type: "agent_end", messages: [] });
@@ -725,6 +726,11 @@ else fail "relaunch did not carry --session with the prior session file"; fi
 if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
   pass "the dispatch relaunch still carries BEADS_ACTOR=worker-1, with no operator export in this shell either"
 else fail "relaunched seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
+LOG_MARK=$(wc -c < "$LOG" | tr -d ' ')
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_EVENT_STRING_BYTES=1024 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "TOOLBIG payload" 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes' 5 && grep -q 'wheelhouse log truncated' "$LOG"; then
+  pass "tool_execution_update payload is trimmed in the seat log with byte count noted"
+else fail "tool_execution_update payload was not trimmed (exit $RC): $OUT"; fi
 
 phase "2b. dispatch — pinned session cwd starts fresh instead of recording a lie"
 SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
@@ -789,6 +795,42 @@ else fail "steer text never surfaced in the event log"; fi
 wait_for "$LOG" 'echo: Bead bead-y' 5 >/dev/null   # let the slow turn finish
 
 phase "4. state survives the adapter — every invocation is a fresh process"
+BIGLOG="$PROJ/seats/logs/worker-big.jsonl"
+cp "$STATE" "$FIX/state-before-big.json"
+python3 - <<PY
+from pathlib import Path
+p=Path('$BIGLOG'); p.parent.mkdir(parents=True, exist_ok=True)
+with p.open('wb') as f:
+    f.truncate(2*1024*1024*1024 + 1024)
+    f.write(b'{"type":"agent_end"}\n')
+PY
+bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-big']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BIGLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "worker-big" && says "last-event agent_end"; then pass "status reads last event from a synthetic >2GB sparse log without full-file parsing"
+else fail "status did not survive synthetic >2GB log (exit $RC): $OUT"; fi
+BADLOG="$PROJ/seats/logs/worker-badlog.jsonl"
+python3 - <<PY
+from pathlib import Path
+p=Path('$BADLOG'); p.parent.mkdir(parents=True, exist_ok=True)
+with p.open('wb') as f:
+    f.truncate(2*1024*1024*1024 + 1024)
+    f.write(b'not json at tail but process is alive\n')
+PY
+bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-badlog']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BADLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "worker-badlog" && says "RUNNING" && says "log too large to parse"; then pass "oversize unparsable log keeps live seat visible with log-too-large marker"
+else fail "oversize unparsable log aborted or hid live seat (exit $RC): $OUT"; fi
+ROTLOG="$PROJ/seats/logs/worker-rotate.jsonl"
+printf '{"type":"agent_start"}\n' > "$ROTLOG"
+bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-rotate']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$ROTLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=1 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && [ -f "$ROTLOG" ] && [ ! -f "$ROTLOG.1" ]; then pass "rotation refuses mid-turn logs whose last event is not agent_settled/agent_end"
+else fail "rotation moved an unsettled log (exit $RC): $OUT"; fi
+printf '{"type":"agent_end"}\n' >> "$ROTLOG"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=1 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && [ -f "$ROTLOG.1" ] && [ -f "$ROTLOG" ]; then pass "rotation runs after agent_settled/agent_end and keeps current log present"
+else fail "rotation did not archive settled oversize log (exit $RC): $OUT"; fi
+mv "$FIX/state-before-big.json" "$STATE"
 run status
 if [ $RC -eq 0 ] && says "worker-1" && says "RUNNING"; then
   pass "a fresh status invocation reads worker-1 as RUNNING from state.json"

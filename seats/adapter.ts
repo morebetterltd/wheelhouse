@@ -70,6 +70,10 @@ const WORKTREES_DIR = path.join(ROOT, ".wheelhouse-worktrees");
 // One knob for every wait in this file; the selftest raises it for real pi.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_RPC_TIMEOUT_MS || 20000);
 const SPAWN_TERM_GRACE_MS = Number(process.env.WHEELHOUSE_SPAWN_TERM_GRACE_MS || 2000);
+const LOG_TAIL_BYTES = Number(process.env.WHEELHOUSE_LOG_TAIL_BYTES || 1024 * 1024);
+const LOG_ROTATE_BYTES = Number(process.env.WHEELHOUSE_LOG_ROTATE_BYTES || 256 * 1024 * 1024);
+const LOG_ROTATE_KEEP = Number(process.env.WHEELHOUSE_LOG_ROTATE_KEEP || 3);
+const LOG_EVENT_STRING_BYTES = Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES || 64 * 1024);
 
 /** A bead's worktree, by the convention every worker and reviewer already
  * follows (wheelhouse/fleet/WORKER.md): `.wheelhouse-worktrees/<bead-id>`
@@ -374,25 +378,33 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Read the log from a byte offset; return complete new lines + new offset. */
-function logLinesFrom(log: string, offset: number): { lines: string[]; offset: number } {
-  if (!fs.existsSync(log)) return { lines: [], offset };
+/** Read complete log lines from a byte offset; for old offset=0 callers, tail only. */
+function logLinesFrom(log: string, offset: number, maxBytes = LOG_TAIL_BYTES): { lines: string[]; offset: number; truncated: boolean } {
+  if (!fs.existsSync(log)) return { lines: [], offset, truncated: false };
   const size = fs.statSync(log).size;
-  if (size <= offset) return { lines: [], offset };
+  if (size <= offset) return { lines: [], offset, truncated: false };
+  const start = offset === 0 && size > maxBytes ? size - maxBytes : offset;
+  const truncated = start > offset;
   const fd = fs.openSync(log, "r");
   let chunk: Buffer;
   try {
-    chunk = Buffer.alloc(size - offset);
-    fs.readSync(fd, chunk, 0, chunk.length, offset);
+    chunk = Buffer.alloc(size - start);
+    fs.readSync(fd, chunk, 0, chunk.length, start);
   } finally {
     fs.closeSync(fd);
   }
-  const text = chunk.toString("utf8");
+  let text = chunk.toString("utf8");
+  let base = start;
+  if (truncated) {
+    const firstLf = text.indexOf("\n");
+    if (firstLf !== -1) { base += Buffer.byteLength(text.slice(0, firstLf + 1)); text = text.slice(firstLf + 1); }
+  }
   const lastLf = text.lastIndexOf("\n");
-  if (lastLf === -1) return { lines: [], offset }; // partial line; come back
+  if (lastLf === -1) return { lines: [], offset: start, truncated }; // partial line; come back
   return {
     lines: text.slice(0, lastLf).split("\n").filter((l) => l.length > 0),
-    offset: offset + Buffer.byteLength(text.slice(0, lastLf + 1)),
+    offset: base + Buffer.byteLength(text.slice(0, lastLf + 1)),
+    truncated,
   };
 }
 
@@ -621,6 +633,11 @@ function processCwd(pid: number): string | null {
   return null;
 }
 
+function logFilterShell(): string {
+  const script = `const readline=require('readline'); const limit=Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES||65536); function trim(v){ if(typeof v==='string' && Buffer.byteLength(v)>limit){ const b=Buffer.from(v); return b.subarray(0,limit).toString('utf8')+'\\n[wheelhouse log truncated '+(b.length-limit)+' bytes; full output remains in the pi session file]'; } if(Array.isArray(v)) return v.map(trim); if(v&&typeof v==='object'){ for(const k of Object.keys(v)) v[k]=trim(v[k]); } return v;} const rl=readline.createInterface({input:process.stdin}); rl.on('line',l=>{try{const o=JSON.parse(l); if(o.type==='tool_execution_update'){const before=Buffer.byteLength(l); const t=trim(o); const after=Buffer.byteLength(JSON.stringify(t)); if(after<before) t.wheelhouse_truncated_bytes=before-after; process.stdout.write(JSON.stringify(t)+'\\n');} else process.stdout.write(l+'\\n');}catch{process.stdout.write(l+'\\n')}});`;
+  return `'${process.execPath.replace(/'/g, `'\\''`)}' -e '${script.replace(/'/g, `'\\''`)}'`;
+}
+
 async function launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
@@ -666,7 +683,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   // ties pi's lifetime to ours. `exec` makes the child's pid pi's pid.
   const shellCmd =
     `exec pi ${args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ")} ` +
-    `0<> '${fifo}' >> '${log}' 2>> '${errLog}'`;
+    `0<> '${fifo}' > >(${logFilterShell()} >> '${log}') 2>> '${errLog}'`;
   const child = spawn("bash", ["-c", shellCmd], {
     cwd,
     env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
@@ -962,16 +979,36 @@ function orphanMatchesFor(name: string, rec: SeatRecord): { pid: number; reason:
 }
 
 function lastEvent(log: string): string {
-  const r = logLinesFrom(log, 0);
-  for (let i = r.lines.length - 1; i >= 0; i--) {
-    try {
-      const obj = JSON.parse(r.lines[i]);
-      if (obj.type) return obj.type;
-    } catch {
-      /* skip */
+  try {
+    const r = logLinesFrom(log, 0);
+    for (let i = r.lines.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(r.lines[i]);
+        if (obj.type) return obj.type;
+      } catch { /* skip */ }
     }
+    return r.truncated ? "log too large to parse" : "-";
+  } catch {
+    return "log too large to parse";
   }
-  return "-";
+}
+
+function agentSettledEvent(ev: string): boolean { return ev === "agent_end" || ev === "turn_end" || ev === "agent_settled"; }
+
+function rotateLogIfSafe(log: string, last: string): void {
+  if (!fs.existsSync(log) || !agentSettledEvent(last)) return;
+  const cap = LOG_ROTATE_BYTES;
+  if (cap <= 0 || fs.statSync(log).size < cap) return;
+  // Safe only after agent_settled/agent_end. Herald is rotation-aware: when a
+  // log shrinks below its saved offset, readCompleteLines resets that offset.
+  for (let i = LOG_ROTATE_KEEP; i >= 1; i--) {
+    const src = `${log}.${i}`;
+    const dst = `${log}.${i + 1}`;
+    if (i >= LOG_ROTATE_KEEP) fs.rmSync(src, { force: true });
+    else if (fs.existsSync(src)) fs.renameSync(src, dst);
+  }
+  fs.renameSync(log, `${log}.1`);
+  fs.writeFileSync(log, "");
 }
 
 function cmdStatus(): void {
@@ -997,7 +1034,9 @@ function cmdStatus(): void {
     const label = accountLabel(roster[name], rec);
     const labelText = label ? `  account ${label}` : "";
     const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
-    console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${lastEvent(rec.log)}${bead}${labelText}`);
+    const last = lastEvent(rec.log);
+    console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${last}${bead}${labelText}`);
+    rotateLogIfSafe(rec.log, last);
     if (died) {
       console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} is gone and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
