@@ -93,7 +93,19 @@ else
   fail "live phase did not match (rc=$RC): $OUT"
 fi
 
-phase "4. graceful degrade — bd absent: silent, exit 0"
+phase "4. stale herald pid — every gate names the dead herald and last stderr"
+mkdir -p "$PROJ/seats/run" "$PROJ/seats/logs"
+printf '%s\n' 3999999 > "$PROJ/seats/run/herald.pid"
+printf '%s\n' 'STOP: ENOENT rename herald.state.json.tmp -> herald.state.json' > "$PROJ/seats/logs/herald.stderr.log"
+run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && has "HERALD DEAD pid 3999999" && has "last stderr: STOP: ENOENT rename"; then
+  pass "stale herald.pid is visible with the last stderr line"
+else
+  fail "stale herald.pid was not reported (rc=$RC): $OUT"
+fi
+rm -f "$PROJ/seats/run/herald.pid" "$PROJ/seats/logs/herald.stderr.log"
+
+phase "5. graceful degrade — bd absent: silent, exit 0"
 run "$FIX/status-stopped" "$FIX/ready-2" ""
 NOBD_OUT="$(cd "$PROJ" && env PATH="/usr/bin:/bin" \
   FIXTURE_STATUS_FILE="$FIX/status-stopped" bash seats/fleet-gate.sh 2>&1)"
@@ -104,7 +116,7 @@ else
   fail "no bd on PATH should be silent+0 (rc=$NOBD_RC): $NOBD_OUT"
 fi
 
-phase "5. graceful degrade — adapter.ts absent: silent, exit 0"
+phase "6. graceful degrade — adapter.ts absent: silent, exit 0"
 rm "$PROJ/seats/adapter.ts"
 run "" "$FIX/ready-2" ""
 if [ $RC -eq 0 ] && [ -z "$OUT" ]; then

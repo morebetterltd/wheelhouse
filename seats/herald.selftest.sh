@@ -73,6 +73,16 @@ EOF
 chmod +x "$FIX/bin/tmux"
 SEND_LOG="$FIX/send-keys.log"
 
+printf '%s\n' '{"type":"agent_end","messages":["rename retry settle"],"timestamp":"2026-09-10T00:00:00Z"}' > "$PROJ/seats/logs/rename-retry.jsonl"
+seed_log_cursor rename-retry.jsonl 0
+OUT="$(WHEELHOUSE_TEST_DELETE_HERALD_TMP=1 run_herald --once 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'herald state rename ENOENT; retrying once' && [ "$(json_count 'r.class==="settle" && /rename retry settle/.test(r.detail)')" = 1 ]; then
+  pass "state tmp rename ENOENT is retried once and the herald survives"
+else
+  fail "state tmp rename ENOENT killed herald or missed retry (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
+fi
+rm -f "$PROJ/seats/logs/rename-retry.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/inbox.jsonl"
+
 node -e 'const fs=require("fs"); const file=process.argv[1]; const line=JSON.stringify({type:"agent_end",messages:["historical settle"]})+"\n"; let out=""; while (Buffer.byteLength(out)<3*1024*1024) out+=line; fs.writeFileSync(file,out)' "$PROJ/seats/logs/preexisting-large.jsonl"
 PREEXISTING_SIZE="$(wc -c < "$PROJ/seats/logs/preexisting-large.jsonl" | tr -d ' ')"
 OUT="$(run_herald --once 2>&1)"; RC=$?
