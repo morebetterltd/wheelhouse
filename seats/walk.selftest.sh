@@ -137,6 +137,21 @@ if grep -q '"maxContextImages": 2' "$FIX/out-images/image-budget.json" && grep -
 prompt="$HOME_FIX/.pi-seats-$ns/verifier/prompt.txt"
 if grep -q 'Image budget for screen captures' "$prompt" && grep -q 'downscaled to <=1000px wide' "$prompt" && grep -q 'wheelhouse-walk-capture' "$prompt" && grep -q 'Already-budgeted context image(s), max 2:' "$prompt"; then pass 'walker prompt names image budget before first capture'; else fail "walker prompt missing image budget: $(cat "$prompt" 2>/dev/null)"; fi
 
+phase 'GUI window-list guard refuses an obscured target before spawn'
+proj="$FIX/proj-gui"; ns="walk-gui"; build_proj "$proj" "$ns"
+out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_JSON='[{"title":"Fixture Device","frontmost":true,"obscuredBy":"Bench Simulator Clone"}]' STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:gui:Fixture --out "$FIX/out-gui" 2>&1)
+rc=$?
+[ "$rc" -eq 3 ] && pass 'obscured GUI target exits COULD-NOT-WALK (3)' || fail "obscured GUI target rc=$rc output=$out"
+printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep -q 'obscured by Bench Simulator Clone' && pass 'obscured GUI target names the obscuring window' || fail "obscured GUI target did not name the blocker: $out"
+[ ! -f "$HOME_FIX/.pi-seats-$ns/verifier/cwd.txt" ] && pass 'obscured GUI target does not spawn the verifier seat' || fail 'obscured GUI target spawned stub pi before the guard'
+if grep -q '"mode": "window-list"' "$FIX/out-gui/walk.json" && grep -q 'Bench Simulator Clone' "$FIX/out-gui/walk.json"; then pass 'walk.json records the window-list guard mode and blocker'; else fail "walk.json missing guard mode/blocker: $(cat "$FIX/out-gui/walk.json" 2>/dev/null)"; fi
+
+proj="$FIX/proj-nongui"; ns="walk-nongui"; build_proj "$proj" "$ns"
+out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_JSON='not-json-if-read' STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface install:README.md --out "$FIX/out-nongui" 2>&1)
+rc=$?
+[ "$rc" -eq 0 ] && pass 'non-GUI install surface does not consult the injected window list' || fail "non-GUI install consulted the window list or otherwise failed (rc=$rc): $out"
+if grep -q '"mode": "not-gui"' "$FIX/out-nongui/walk.json"; then pass 'walk.json records not-gui mode for non-GUI surfaces'; else fail "non-GUI walk.json missing not-gui mode: $(cat "$FIX/out-nongui/walk.json" 2>/dev/null)"; fi
+
 phase 'upgrade surface requires baseline'
 proj="$FIX/proj-upgrade"; ns="walk-upgrade"; build_proj "$proj" "$ns"
 out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface upgrade:runbooks/UPGRADE.md --out "$FIX/out-upgrade" 2>&1)

@@ -1,0 +1,33 @@
+$ git diff --check HEAD
+$ rg -n "guiGuard|window-list|not-gui|COULD-NOT-WALK|never share the host display|obscured by" seats/walk.ts seats/walk.selftest.sh contracts/VERIFIER.md runbooks/RUNNING_THE_LOOP.md
+seats/walk.ts:15: * Exit: 0 WALKED-DONE | 2 WALKED-NOT-DONE | 3 COULD-NOT-WALK |
+seats/walk.ts:44:type WalkVerdict = "WALKED-DONE" | "WALKED-NOT-DONE" | "COULD-NOT-WALK";
+seats/walk.ts:140:  mode: "not-gui" | "window-list";
+seats/walk.ts:162:  if (!target) return { mode: "not-gui", ok: true };
+seats/walk.ts:165:  if (!hit) return { mode: "window-list", target, ok: false, reason: `target window ${target} not found in window list` };
+seats/walk.ts:168:  if (!frontmost) return { mode: "window-list", target, ok: false, reason: `target window ${target} is not frontmost` };
+seats/walk.ts:169:  if (obscuredBy) return { mode: "window-list", target, ok: false, reason: `target window ${target} is obscured by ${obscuredBy}` };
+seats/walk.ts:170:  return { mode: "window-list", target, ok: true };
+seats/walk.ts:194:    `Consumer setup: open the URL or run the command exactly as a consumer/operator would, without reading implementation internals unless the surface itself instructs you to. For product:gui:<target> surfaces, the dispatcher preflights the target window with a window-list guard before the walk begins; if it is not frontmost and unobscured the walk records COULD-NOT-WALK instead of sending host GUI input into the wrong window.`,
+seats/walk.ts:206:  const m = line.match(/^VERDICT:\s*(WALKED-DONE|WALKED-NOT-DONE|COULD-NOT-WALK)(?:\s*[—-]{1,2}\s*(\S.*))?$/);
+seats/walk.ts:213:  if ((verdict === "WALKED-NOT-DONE" || verdict === "COULD-NOT-WALK") && detail.length === 0) {
+seats/walk.ts:348:  const guiGuard = checkGuiGuard(surface);
+seats/walk.ts:349:  if (!guiGuard.ok) {
+seats/walk.ts:350:    fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: guiGuard.reason, surface: surfaceRaw, baseline, transcript: transcriptRel, guiGuard }, null, 2));
+seats/walk.ts:351:    fs.writeFileSync(transcriptFile, `COULD-NOT-WALK before GUI input: ${guiGuard.reason}\n`);
+seats/walk.ts:352:    console.log(`VERDICT: COULD-NOT-WALK — ${guiGuard.reason}`);
+seats/walk.ts:391:    `Retain a full transcript. End with exactly one line: VERDICT: WALKED-DONE | WALKED-NOT-DONE — <failing step quoted from the transcript> | COULD-NOT-WALK — <why>.`,
+seats/walk.ts:421:      fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: `timed out after ${TIMEOUT_MS}ms`, transcript: transcriptRel }, null, 2));
+seats/walk.ts:422:      console.log(`VERDICT: COULD-NOT-WALK — timed out after ${TIMEOUT_MS}ms`);
+seats/walk.ts:433:  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel, guiGuard, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
+seats/walk.selftest.sh:120:run_case couldnot $'blocked __HOME__ __TMP__\nVERDICT: COULD-NOT-WALK — missing fixture credential\n' 3 'VERDICT: COULD-NOT-WALK'
+seats/walk.selftest.sh:122:run_case two $'VERDICT: WALKED-DONE\nVERDICT: COULD-NOT-WALK — duplicate\n__HOME__ __TMP__\n' 4 'expected exactly one'
+seats/walk.selftest.sh:140:phase 'GUI window-list guard refuses an obscured target before spawn'
+seats/walk.selftest.sh:144:[ "$rc" -eq 3 ] && pass 'obscured GUI target exits COULD-NOT-WALK (3)' || fail "obscured GUI target rc=$rc output=$out"
+seats/walk.selftest.sh:145:printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep -q 'obscured by Bench Simulator Clone' && pass 'obscured GUI target names the obscuring window' || fail "obscured GUI target did not name the blocker: $out"
+seats/walk.selftest.sh:147:if grep -q '"mode": "window-list"' "$FIX/out-gui/walk.json" && grep -q 'Bench Simulator Clone' "$FIX/out-gui/walk.json"; then pass 'walk.json records the window-list guard mode and blocker'; else fail "walk.json missing guard mode/blocker: $(cat "$FIX/out-gui/walk.json" 2>/dev/null)"; fi
+seats/walk.selftest.sh:153:if grep -q '"mode": "not-gui"' "$FIX/out-nongui/walk.json"; then pass 'walk.json records not-gui mode for non-GUI surfaces'; else fail "non-GUI walk.json missing not-gui mode: $(cat "$FIX/out-nongui/walk.json" 2>/dev/null)"; fi
+runbooks/RUNNING_THE_LOOP.md:130:The walk command exits `0` for `WALKED-DONE`, `2` for `WALKED-NOT-DONE`, `3` for `COULD-NOT-WALK`, `4` for missing/ambiguous/malformed verdict output, and `5` for preflight or credential refusal. Rule of thumb for GUI surfaces: a walk and a bench never share the host display; put the walk on a second display or headless path, or serialize them from the commander. A closing claim cites the walk verdict and transcript evidence home, or it carries the explicit not-walked statement `INTENT.md` permits; silence is the defect. Treat `WALKED-NOT-DONE` like a field report: file the failing step as a bead with a Trace line to the walk, then decide whether the claim stays pending, narrows, or closes not-walked.
+contracts/VERIFIER.md:28:When you capture screens, obey the image budget the dispatcher prints before the surface: keep full-size captures only as evidence under `--out`, put at most the named number of downscaled JPEGs (<=1000px wide by default) into context, and use `wheelhouse-walk-capture` for simulator/app screenshots rather than pasting full-size PNGs into the turn. For GUI product walks, `walk.ts` records the driving mode in `walk.json`; when it says `window-list`, the target device/app window must be frontmost and unobscured before host GUI input is sent, otherwise the walk is `COULD-NOT-WALK` naming the obscuring window. Simulator note: `xcrun simctl io ... screenshot` output is full-size evidence, not prompt context; route it through the capture helper so the transcript sees only budgeted JPEGs.
+contracts/VERIFIER.md:41:VERDICT: COULD-NOT-WALK — <why: missing credential, unreachable surface, ambiguous instructions>
+contracts/VERIFIER.md:46:- **COULD-NOT-WALK** — you could not honestly reach the judgment because a precondition outside the surface was missing, the surface was unreachable, or the instructions did not identify a consumer-actionable next step. Name the first blocker on the verdict line.

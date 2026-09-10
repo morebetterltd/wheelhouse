@@ -136,6 +136,40 @@ function rootRelative(file: string): string {
   return path.relative(ROOT, file) || ".";
 }
 
+interface GuiGuardResult {
+  mode: "not-gui" | "window-list";
+  target?: string;
+  ok: boolean;
+  reason?: string;
+}
+
+function guiTarget(surface: { kind: string; spec: string }): string | null {
+  if (surface.kind !== "product") return null;
+  const m = surface.spec.match(/^gui:([^:]+)(?::.*)?$/);
+  return m ? m[1].trim() : null;
+}
+
+function readWindowList(): any[] {
+  const raw = process.env.WHEELHOUSE_WALK_WINDOW_LIST_JSON;
+  if (raw) return JSON.parse(raw);
+  const cmd = process.env.WHEELHOUSE_WALK_WINDOW_LIST_COMMAND;
+  if (cmd) return JSON.parse(execFileSync("bash", ["-lc", cmd], { encoding: "utf8", maxBuffer: 1024 * 1024 }));
+  return [];
+}
+
+function checkGuiGuard(surface: { kind: string; spec: string }): GuiGuardResult {
+  const target = guiTarget(surface);
+  if (!target) return { mode: "not-gui", ok: true };
+  const windows = readWindowList();
+  const hit = windows.find((w) => String(w.title ?? w.name ?? "").includes(target));
+  if (!hit) return { mode: "window-list", target, ok: false, reason: `target window ${target} not found in window list` };
+  const frontmost = hit.frontmost === true || hit.isFrontmost === true;
+  const obscuredBy = hit.obscuredBy ?? hit.obscured_by ?? (hit.obscured ? "unknown window" : "");
+  if (!frontmost) return { mode: "window-list", target, ok: false, reason: `target window ${target} is not frontmost` };
+  if (obscuredBy) return { mode: "window-list", target, ok: false, reason: `target window ${target} is obscured by ${obscuredBy}` };
+  return { mode: "window-list", target, ok: true };
+}
+
 function buildSurfaceInstructions(kind: string, spec: string, baseline: string | undefined, workspaceRel: string): string[] {
   if (kind === "install") {
     return [
@@ -157,7 +191,7 @@ function buildSurfaceInstructions(kind: string, spec: string, baseline: string |
   return [
     `Surface kind: product`,
     `Product surface: ${spec}`,
-    `Consumer setup: open the URL or run the command exactly as a consumer/operator would, without reading implementation internals unless the surface itself instructs you to.`,
+    `Consumer setup: open the URL or run the command exactly as a consumer/operator would, without reading implementation internals unless the surface itself instructs you to. For product:gui:<target> surfaces, the dispatcher preflights the target window with a window-list guard before the walk begins; if it is not frontmost and unobscured the walk records COULD-NOT-WALK instead of sending host GUI input into the wrong window.`,
   ];
 }
 
@@ -311,6 +345,15 @@ function main(): void {
   const imageBudgetInfo = imageBudget(outDir);
   const transcriptRel = rootRelative(transcriptFile);
   const metaRel = rootRelative(metaFile);
+  const guiGuard = checkGuiGuard(surface);
+  if (!guiGuard.ok) {
+    fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: guiGuard.reason, surface: surfaceRaw, baseline, transcript: transcriptRel, guiGuard }, null, 2));
+    fs.writeFileSync(transcriptFile, `COULD-NOT-WALK before GUI input: ${guiGuard.reason}\n`);
+    console.log(`VERDICT: COULD-NOT-WALK — ${guiGuard.reason}`);
+    console.log(`transcript: ${transcriptRel}`);
+    console.log(`metadata: ${metaRel}`);
+    process.exit(3);
+  }
 
   sweepStaleScratchWorktrees(ROOT);
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
@@ -387,7 +430,7 @@ function main(): void {
   }
 
   const parsed = parseWalkVerdict(stdout);
-  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
+  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel, guiGuard, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
 
   console.log(parsed.line);
   console.log(`transcript: ${transcriptRel}`);
