@@ -1,0 +1,33 @@
+$ git diff --check HEAD
+$ rg -n "Copy-truncate|copy-truncate|live settled log|after live rotation|cp seats/logs|truncate" seats/adapter.ts seats/adapter.selftest.sh seats/herald.selftest.sh runbooks/UPGRADE.md
+seats/adapter.ts:382:function logLinesFrom(log: string, offset: number, maxBytes = LOG_TAIL_BYTES): { lines: string[]; offset: number; truncated: boolean } {
+seats/adapter.ts:383:  if (!fs.existsSync(log)) return { lines: [], offset, truncated: false };
+seats/adapter.ts:385:  if (size <= offset) return { lines: [], offset, truncated: false };
+seats/adapter.ts:387:  const truncated = start > offset;
+seats/adapter.ts:398:  if (truncated) {
+seats/adapter.ts:403:  if (lastLf === -1) return { lines: [], offset: start, truncated }; // partial line; come back
+seats/adapter.ts:407:    truncated,
+seats/adapter.ts:637:  const script = `const readline=require('readline'); const limit=Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES||65536); function trim(v){ if(typeof v==='string' && Buffer.byteLength(v)>limit){ const b=Buffer.from(v); return b.subarray(0,limit).toString('utf8')+'\\n[wheelhouse log truncated '+(b.length-limit)+' bytes; full output remains in the pi session file]'; } if(Array.isArray(v)) return v.map(trim); if(v&&typeof v==='object'){ for(const k of Object.keys(v)) v[k]=trim(v[k]); } return v;} const rl=readline.createInterface({input:process.stdin}); rl.on('line',l=>{try{const o=JSON.parse(l); if(o.type==='tool_execution_update'){const before=Buffer.byteLength(l); const t=trim(o); const after=Buffer.byteLength(JSON.stringify(t)); if(after<before) t.wheelhouse_truncated_bytes=before-after; process.stdout.write(JSON.stringify(t)+'\\n');} else process.stdout.write(l+'\\n');}catch{process.stdout.write(l+'\\n')}});`;
+seats/adapter.ts:990:    return r.truncated ? "log too large to parse" : "-";
+seats/adapter.ts:1002:  // Copy-truncate, not rename: a settled seat can still be alive with stdout
+seats/adapter.ts:1004:  // log with O_APPEND, so after truncate the live writer's next append lands in
+seats/adapter.ts:1015:  fs.truncateSync(log, 0);
+seats/adapter.selftest.sh:731:if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes' 5 && grep -q 'wheelhouse log truncated' "$LOG"; then
+seats/adapter.selftest.sh:738:  pass "live settled log past cap is copy-truncated without renaming the writer away"
+seats/adapter.selftest.sh:739:else fail "live settled log was not copy-truncated as expected (exit $RC): $OUT current=$(wc -c < "$LOG" 2>/dev/null || echo missing) archive=$(wc -c < "$LOG.1" 2>/dev/null || echo missing)"; fi
+seats/adapter.selftest.sh:741:run dispatch worker-1 bead-x "after live rotation"
+seats/adapter.selftest.sh:742:if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'echo: Bead bead-x' 5 && grep -q 'after live rotation' "$LOG"; then
+seats/adapter.selftest.sh:743:  pass "after live rotation, get_state answers and the writer's next event lands in the current log"
+seats/adapter.selftest.sh:744:else fail "dispatch after live rotation did not read responses from the current log (exit $RC): $OUT current=$(cat "$LOG" 2>/dev/null) archive_tail=$(tail -5 "$LOG.1" 2>/dev/null)"; fi
+seats/adapter.selftest.sh:815:    f.truncate(2*1024*1024*1024 + 1024)
+seats/adapter.selftest.sh:827:    f.truncate(2*1024*1024*1024 + 1024)
+runbooks/UPGRADE.md:50:If an install already has very large `seats/logs/*.jsonl` files, rotate them once before relying on the copied adapter's automatic cap. Do not rename a live seat's log: either stop the seat first, or use the same copy-truncate form the adapter uses (`cp seats/logs/worker.jsonl seats/logs/worker.jsonl.1 && : > seats/logs/worker.jsonl`) so a live writer holding the log open keeps appending to the current path. Stop/restart the herald around a manual rotation so its cursor sees the rotation boundary. The automatic cap is configurable with `WHEELHOUSE_LOG_ROTATE_BYTES` (default 256 MiB) and keeps `WHEELHOUSE_LOG_ROTATE_KEEP` archives (default 3). The runtime rotation relies on `herald.ts`'s documented offset reset: when a log shrinks below the saved offset after rotation, herald resets the offset to zero and continues from the new file.
+seats/herald.selftest.sh:93:COPYTRUNC_LOG="$PROJ/seats/logs/copytruncate.jsonl"
+seats/herald.selftest.sh:95:printf '%s\n' '{"type":"agent_start"}' '{"type":"agent_end","messages":["before copytruncate"]}' > "$COPYTRUNC_LOG"
+seats/herald.selftest.sh:97:seed_log_cursor copytruncate.jsonl "$COPYTRUNC_OLD_SIZE"
+seats/herald.selftest.sh:100:printf '%s\n' '{"type":"agent_end","messages":["after copytruncate"]}' > "$COPYTRUNC_LOG"
+seats/herald.selftest.sh:102:if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="settle" && /after copytruncate/.test(r.detail)')" = 1 ]; then
+seats/herald.selftest.sh:103:  pass "copy-truncate shrink resets the saved offset and herald reads the new current log"
+seats/herald.selftest.sh:105:  fail "copy-truncate shrink did not reset herald offset (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
+seats/herald.selftest.sh:350:if grep -R "wheelhouse_truncated_bytes" "$PROJ/seats/logs" >/dev/null 2>&1 || true; then :; fi
+seats/herald.selftest.sh:351:pass "truncated tool_execution_update payloads are harmless to herald's log reader shape"
