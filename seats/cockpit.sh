@@ -72,6 +72,10 @@ ensure_herald() {
 
 # --- internal pane commands (tmux runs this script back) ---------------------
 case "${1:-}" in
+  --herald)
+    S="wh-${2:-$(basename "$ROOT")}" ensure_herald
+    exit 0
+    ;;
   --pane-commander)
     cat <<EOF
 

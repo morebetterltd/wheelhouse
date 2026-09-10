@@ -1,0 +1,13 @@
+$ git diff --check HEAD
+$ rg -n "stateWriteCounter|WHEELHOUSE_TEST_DELETE_HERALD_TMP|HERALD DEAD|--herald|cockpit.sh --herald" seats/herald.ts seats/herald.selftest.sh seats/fleet-gate.sh seats/fleet-gate.selftest.sh seats/cockpit.sh seats/cockpit.selftest.sh runbooks/RUNNING_THE_LOOP.md
+seats/fleet-gate.selftest.sh:101:if [ $RC -eq 0 ] && has "HERALD DEAD pid 3999999" && has "last stderr: STOP: ENOENT rename"; then
+seats/fleet-gate.sh:41:    herald_dead=" — HERALD DEAD pid $hpid${last_err:+; last stderr: $last_err}"
+seats/herald.ts:84:let stateWriteCounter = 0;
+seats/herald.ts:90:    const tmp = `${STATE_FILE}.${process.pid}.${stateWriteCounter++}.tmp`;
+seats/herald.ts:92:    if (process.env.WHEELHOUSE_TEST_DELETE_HERALD_TMP === "1" && attempt === 0) fs.rmSync(tmp, { force: true });
+seats/herald.selftest.sh:78:OUT="$(WHEELHOUSE_TEST_DELETE_HERALD_TMP=1 run_herald --once 2>&1)"; RC=$?
+seats/cockpit.sh:75:  --herald)
+seats/cockpit.selftest.sh:54:PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" "$PROJ/seats/cockpit.sh" --herald > "$FIX/herald-only.out" 2>&1
+seats/cockpit.selftest.sh:58:  pass "cockpit --herald starts only the herald without building or attaching tmux"
+seats/cockpit.selftest.sh:60:  fail "cockpit --herald did not run standalone (rc=$HERALD_ONLY_RC pid=${HERALD_ONLY_PID:-none} out=$(cat "$FIX/herald-only.out" 2>/dev/null))"
+runbooks/RUNNING_THE_LOOP.md:176:- Start by reading the graph and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the herald is running (`seats/cockpit.sh --herald`) and the commander-pane fallback poll is running (`WHEELHOUSE_COMMANDER_INBOX_POLL_SECONDS=120 seats/commander-inbox-poll.sh &`). Deadline beads and anything blocking others first.

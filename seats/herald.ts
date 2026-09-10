@@ -81,11 +81,28 @@ function readState(): HeraldState {
   }
 }
 
+let stateWriteCounter = 0;
+
 function writeState(state: HeraldState): void {
   fs.mkdirSync(SEATS_DIR, { recursive: true });
-  const tmp = `${STATE_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\n");
-  fs.renameSync(tmp, STATE_FILE);
+  const body = JSON.stringify(state, null, 2) + "\n";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const tmp = `${STATE_FILE}.${process.pid}.${stateWriteCounter++}.tmp`;
+    fs.writeFileSync(tmp, body);
+    if (process.env.WHEELHOUSE_TEST_DELETE_HERALD_TMP === "1" && attempt === 0) fs.rmSync(tmp, { force: true });
+    try {
+      fs.renameSync(tmp, STATE_FILE);
+      return;
+    } catch (e: any) {
+      if ((e?.code === "ENOENT" || e?.code === "EEXIST") && attempt === 0) {
+        process.stderr.write(`herald state rename ${e.code}; retrying once: ${tmp} -> ${STATE_FILE}\n`);
+        continue;
+      }
+      process.stderr.write(`herald state rename ${e?.code ?? "ERROR"}; state not persisted this tick: ${tmp} -> ${STATE_FILE}: ${e?.message ?? e}\n`);
+      try { fs.rmSync(tmp, { force: true }); } catch {}
+      return;
+    }
+  }
 }
 
 function appendInbox(obj: unknown): void {
