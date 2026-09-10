@@ -70,6 +70,8 @@ EOF
 chmod +x "$FIX/bin/bd"
 
 LOGS="$PROJ/seats/logs"
+VDIR="$PROJ/seats/verdicts"
+mkdir -p "$VDIR"
 ME=$$   # a pid that is definitely alive while this test runs
 GONE=3999999   # far above macOS/Linux pid ranges: definitely not alive
 
@@ -134,6 +136,21 @@ cat > "$LOGS/bounced.jsonl" <<EOF
 {"type":"agent_end","messages":[1]}
 EOF
 
+# Seat "unsat": a BOUNCE verdict whose evidence floor failed must not be
+# collapsed into a generic REVIEW BLOCKED line.
+cat > "$LOGS/unsat.jsonl" <<EOF
+{"type":"agent_start"}
+{"type":"agent_end","messages":[]}
+EOF
+cat > "$VDIR/wh-unsat-1.md" <<EOF
+# Verdict — bead wh-unsat-1
+
+- verdict: BOUNCE
+
+## Evidence checks
+- proof/shot.png — missing — UNSATISFIED (source: branch)
+EOF
+
 # Seat "nolog": in the roster and state, but no event log exists at all.
 
 cat > "$PROJ/seats/seats.json" <<EOF
@@ -148,6 +165,7 @@ cat > "$PROJ/seats/seats.json" <<EOF
     "quota":    { "role": "worker",   "provider": "openai-codex", "model": "gpt-5.5", "account": { "dir": "$FIX/acct/quota" } },
     "reviewer": { "role": "reviewer", "provider": "anthropic", "model": "claude-fable-5", "account": { "dir": "$FIX/acct/reviewer", "label": "review-account" } },
     "bounced":  { "role": "reviewer", "provider": "anthropic", "model": "claude-fable-5", "account": { "dir": "$FIX/acct/bounced" } },
+    "unsat":    { "role": "reviewer", "provider": "anthropic", "model": "claude-fable-5", "account": { "dir": "$FIX/acct/unsat" } },
     "nolog":    { "role": "worker",   "provider": "openai-codex", "model": "gpt-5.5", "account": { "dir": "$FIX/acct/nolog" } },
     "verifier": { "role": "verifier", "provider": "anthropic", "model": "claude-fable-5", "account": { "dir": "$FIX/acct/verifier", "label": "verify-account" } }
   }
@@ -175,6 +193,8 @@ seat_rec() { # name pid extra-json
   seat_rec reviewer "$ME"   ',"lastBead":"wh-rev-9"'
   printf ','
   seat_rec bounced  "$ME"   ',"lastBead":"wh-rev-8"'
+  printf ','
+  seat_rec unsat    "$ME"   ',"lastBead":"wh-unsat-1"'
   printf ','
   seat_rec nolog    "$ME"
   printf '}}\n'
@@ -204,7 +224,7 @@ render "$PROJ/seats/floor.ts" --pin busy
 # --- phase 2: the rail shows every seat with the right cue -------------------
 phase "phase 2: rail — all seats, distinct failure lines, never silence"
 render "$PROJ/seats/floor.ts" --pin 1
-for s in busy quiet idle gone authless quota reviewer bounced nolog verifier; do
+for s in busy quiet idle gone authless quota reviewer bounced unsat nolog verifier; do
   has "$s" && pass "rail lists $s" || fail "rail is missing seat $s"
 done
 has 'busy.*worker.*openai-codex/gpt-5.5.*busy@example.*wh-busy-1.*12s ago' \
@@ -225,6 +245,7 @@ has "PARKED/QUOTA"        && has "bun seats/adapter.ts probe quota" && pass "quo
 has "IDLE with ready work.*2 bead" && pass "idle: IDLE-with-ready-work counts bd ready" || fail "no idle-with-ready-work line"
 has "VERDICT LANDED — APPROVE" && pass "reviewer: VERDICT LANDED (green)" || fail "no VERDICT LANDED line"
 has "REVIEW BLOCKED.*BOUNCE"   && pass "bounced: REVIEW BLOCKED line"     || fail "no REVIEW BLOCKED line"
+has "EVIDENCE UNSATISFIED.*wh-unsat-1" && pass "unsat: BOUNCE with failed evidence-floor renders EVIDENCE UNSATISFIED" || fail "no EVIDENCE UNSATISFIED line"
 has "no event log yet"    && pass "nolog: missing log is a named line"    || fail "missing log line absent"
 has " RED"   && has " AMBER" && has " GREEN" \
   && pass "cue words RED/AMBER/GREEN all present" || fail "cue words missing"
