@@ -51,6 +51,17 @@ attach_at_152() {
   sleep 0.2
 }
 
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" "$PROJ/seats/cockpit.sh" --herald > "$FIX/herald-only.out" 2>&1
+HERALD_ONLY_RC=$?
+HERALD_ONLY_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
+if [ $HERALD_ONLY_RC -eq 0 ] && [ -n "$HERALD_ONLY_PID" ] && kill -0 "$HERALD_ONLY_PID" 2>/dev/null && grep -q 'herald started' "$FIX/herald-only.out" && ! grep -q 'bridge built\|session .* is up' "$FIX/herald-only.out"; then
+  pass "cockpit --herald starts only the herald without building or attaching tmux"
+else
+  fail "cockpit --herald did not run standalone (rc=$HERALD_ONLY_RC pid=${HERALD_ONLY_PID:-none} out=$(cat "$FIX/herald-only.out" 2>/dev/null))"
+fi
+kill "$HERALD_ONLY_PID" 2>/dev/null || true
+rm -f "$PROJ/seats/run/herald.pid"
+
 run_cockpit
 if grep -q 'bridge built: session wh-ratio' "$FIX/cockpit.out" && [ "$(pane_count)" = 2 ]; then
   pass "cockpit builds one bridge window with two panes on a private tmux socket"
