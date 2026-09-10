@@ -39,6 +39,7 @@ Then write the file:
 { echo "source=git@github.com:morebetterltd/wheelhouse.git"
   echo "commit=<the commit you recovered, or 'unknown'>"
   echo "path=<disposable cache path, filled in step 1>"
+  echo "product-repo=$(pwd -P)"
   echo "installed=<date if you know it, else 'unknown'>"
 } > wheelhouse/.template-source
 ```
@@ -68,6 +69,10 @@ git -C "$TEMPLATE" rev-parse "${TARGET:-main}" >/dev/null
 git -C "$TEMPLATE" checkout --quiet "${TARGET:-main}"
 [ "$BASE" = unknown ] || git -C "$TEMPLATE" cat-file -e "${BASE}^{commit}"
 sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+grep -q '^product-repo=' wheelhouse/.template-source \
+  && sed -i.bak "s|^product-repo=.*|product-repo=$(pwd -P)|" wheelhouse/.template-source \
+  || echo "product-repo=$(pwd -P)" >> wheelhouse/.template-source
+rm -f wheelhouse/.template-source.bak
 ```
 
 If you prefer a one-off clone, make it with `mktemp -d`; do not record a durable checkout inside another project. `source=` plus `commit=` are the durable provenance. `path=` is disposable in the same sense BOOTSTRAP records it: it may point at a cache that is deleted later, and every copied selftest that needs template history must recover by fetching `commit=` from `source=` rather than depending on that path.

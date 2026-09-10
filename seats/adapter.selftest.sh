@@ -46,9 +46,7 @@ REAL_PI="$(command -v pi || true)"
 
 SCRUB="$HERE/evidence-scrub.sh"
 [ -x "$SCRUB" ] || { echo "selftest: not executable: $SCRUB" >&2; exit 2; }
-# Selftest output is commonly redirected into committed evidence; scrub it as
-# it is written so temp dirs, home dirs, and usernames never enter captures.
-exec > >("$SCRUB") 2> >("$SCRUB" >&2)
+# Evidence captures should pipe this script through seats/evidence-scrub.sh.
 
 FAILED=0
 FIX=""
@@ -181,6 +179,11 @@ function handle(cmd) {
   const id = cmd.id;
   switch (cmd.type) {
     case "get_state": {
+      if (process.env.STUB_GET_STATE_FAIL_ONCE && !fs.existsSync(path.join(agentDir, "get-state-failed-once"))) {
+        fs.writeFileSync(path.join(agentDir, "get-state-failed-once"), "1");
+        out({ id, type: "response", command: "get_state", success: false, error: process.env.STUB_GET_STATE_FAIL_ONCE });
+        break;
+      }
       const stallFile = path.join(agentDir, "stall-next-get-state");
       const stallMs = process.env.STUB_GET_STATE_STALL_ONCE || (fs.existsSync(stallFile) ? fs.readFileSync(stallFile, "utf8").trim() : "");
       if (stallMs && !fs.existsSync(path.join(agentDir, "get-state-stalled"))) {
@@ -313,6 +316,7 @@ CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
 live_cwd_for_pid() {
   local pid="$1"
+  [ -n "$pid" ] || return 0
   if command -v lsof >/dev/null 2>&1; then
     lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
   elif [ -e "/proc/$pid/cwd" ]; then
@@ -882,10 +886,21 @@ else fail "launch readiness timeout did not clean up spawned pid (exit $RC pid=$
 if [ -z "$(state_get pid)" ] && [ -n "$(state_get sessionFile)" ]; then
   pass "launch cleanup leaves the stopped pre-existing state record intact"
 else fail "launch cleanup changed the stopped state record (pid=$(state_get pid), session=$(state_get sessionFile))"; fi
+FAIL_PROJ="$FIX/getstate-fail-proj"
+build_proj "$FAIL_PROJ" getstatefail
+RUN_PROJ="$FAIL_PROJ"; STATE="$FAIL_PROJ/seats/state.json"; LOG="$FAIL_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-getstatefail/worker-1/argv.json"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_FAIL_ONCE='fixture get_state failure' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+FAIL_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | head -1)"
+if [ $RC -ne 0 ] && says "get_state failed on fresh seat" && says "launch-only cleanup" && [ -n "$FAIL_PID" ] && ! kill -0 "$FAIL_PID" 2>/dev/null; then
+  pass "launch get_state success:false kills the spawned child before STOP"
+else fail "get_state success:false did not clean up spawned pid (exit $RC pid=$FAIL_PID): $OUT"; fi
+if state_get lastLaunchFailure | grep -q 'fixture get_state failure'; then
+  pass "launch get_state success:false records lastLaunchFailure in state.json"
+else fail "get_state success:false did not record lastLaunchFailure: $(cat "$STATE" 2>/dev/null)"; fi
+RUN_PROJ="$CLEAN_PROJ"; STATE="$CLEAN_PROJ/seats/state.json"; LOG="$CLEAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cleanup/worker-1/argv.json"
 run status
 if [ $RC -eq 0 ] && ! says "ORPHAN"; then pass "status reports zero orphans after launch cleanup"
 else fail "status found an orphan after cleanup (exit $RC): $OUT"; fi
-
 ORPHAN_PROJ="$FIX/orphan-proj"
 build_proj "$ORPHAN_PROJ" orphan
 RUN_PROJ="$ORPHAN_PROJ"; STATE="$ORPHAN_PROJ/seats/state.json"; LOG="$ORPHAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-orphan/worker-1/argv.json"
