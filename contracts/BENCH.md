@@ -8,7 +8,7 @@ Copied byte-for-byte into every project. Do not edit this section.
 
 A bench must satisfy all eight of these. They are stack-agnostic on purpose — every one of them was learned from an artifact that passed a weaker check.
 
-1. **One command, artifact in, exit code out.** `wheelhouse/crew/bench.sh <artifact> <output-dir>`, exit 0 for pass and non-zero for fail. A reviewer must be able to run it without reading it.
+1. **One command, artifact in, exit code out.** `wheelhouse/crew/bench.sh <artifact> <output-dir>`, exit 0 for pass and non-zero for fail. A reviewer must be able to run it without reading it. If the bench serializes concurrent runs with a lock, a queued run that stops waiting must print why: `TIMED OUT after Ns`, `KILLED by signal N`, or `lock holder pid P exited`; a lock wait that dies silently is not a bench result.
 
 2. **It exercises the BUILT ARTIFACT.** Not the source, not a dev server, not a debug harness that reassembles the pieces differently. What ships is what gets tested.
 
