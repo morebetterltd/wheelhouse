@@ -78,7 +78,23 @@ ensure_herald() {
     echo "herald dead: pid ${old_pid:-?}; restarting"
     rm -f "$pid_file"
   fi
-  (cd "$ROOT" && WHEELHOUSE_HERALD_TMUX_SESSION="$S" WHEELHOUSE_HERALD_TMUX_PANE="${S}:bridge.0" WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" nohup bun "$HERE/herald.ts" >> "$HERE/logs/herald.out.log" 2>> "$HERE/logs/herald.stderr.log" & echo $! > "$pid_file")
+  tmp_pid_file="$pid_file.$$"
+  rm -f "$tmp_pid_file"
+  (
+    cd "$ROOT" || exit 1
+    exec </dev/null >> "$HERE/logs/herald.out.log" 2>> "$HERE/logs/herald.stderr.log"
+    WHEELHOUSE_HERALD_TMUX_SESSION="$S" WHEELHOUSE_HERALD_TMUX_PANE="${S}:bridge.0" WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" nohup bun "$HERE/herald.ts" &
+    herald_pid=$!
+    printf '%s\n' "$herald_pid" > "$tmp_pid_file"
+    disown "$herald_pid" 2>/dev/null || true
+  ) </dev/null >/dev/null 2>/dev/null &
+  launcher_pid=$!
+  disown "$launcher_pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "$tmp_pid_file" ] && break
+    sleep 0.05
+  done
+  if [ -s "$tmp_pid_file" ]; then mv -f "$tmp_pid_file" "$pid_file"; fi
   new_pid="$(cat "$pid_file" 2>/dev/null || true)"
   sleep 0.2
   if pid_alive "$new_pid"; then

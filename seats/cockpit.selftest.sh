@@ -101,6 +101,18 @@ tmux -L "$SOCK" kill-session -t wh-pane >/dev/null 2>&1 || true
 kill "$POLL_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/commander-inbox-poll.pid"
 
+( cd "$PROJ" && timeout 5 bash -c 'bash seats/cockpit.sh --herald piped | cat' ) > "$FIX/herald-piped.out" 2>&1
+PIPED_RC=$?
+PIPED_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
+PIPED_LINES="$(wc -l < "$FIX/herald-piped.out" | tr -d ' ')"
+if [ $PIPED_RC -eq 0 ] && [ -n "$PIPED_PID" ] && kill -0 "$PIPED_PID" 2>/dev/null && [ "$PIPED_LINES" = 1 ] && grep -Eq '^herald started: pid [0-9]+$' "$FIX/herald-piped.out"; then
+  pass "cockpit --herald exits under a stdout pipe and leaves a live herald pid"
+else
+  fail "cockpit --herald pipe run failed (rc=$PIPED_RC pid=${PIPED_PID:-none} lines=$PIPED_LINES out=$(cat "$FIX/herald-piped.out" 2>/dev/null))"
+fi
+kill "$PIPED_PID" 2>/dev/null || true
+rm -f "$PROJ/seats/run/herald.pid"
+
 run_cockpit
 if grep -q 'bridge built: session wh-ratio' "$FIX/cockpit.out" && [ "$(pane_count)" = 2 ]; then
   pass "cockpit builds one bridge window with two panes on a private tmux socket"
