@@ -1,0 +1,7 @@
+$ ls -lh seats/logs/worker-1.jsonl || true
+ls: seats/logs/worker-1.jsonl: No such file or directory
+$ /usr/bin/time -p bun seats/adapter.ts status
+no seats recorded in seats/state.json
+real 0.04
+user 0.02
+sys 0.01
