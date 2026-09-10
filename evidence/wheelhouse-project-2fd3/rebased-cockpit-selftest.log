@@ -1,0 +1,11 @@
+$ WHEELHOUSE_SKIP_REAL_PI=1 bash seats/cockpit.selftest.sh
+ok 1 - cockpit --herald starts only the herald without building or attaching tmux
+ok 2 - cockpit builds one bridge window with two panes on a private tmux socket
+ok 3 - fresh cockpit session enables mouse and sets history-limit 50000
+ok 4 - client-attached resize keeps commander pane near its ratio on a 152-column attach (commander=83 floor=68)
+ok 5 - fixture floor pane killed for respawn check
+ok 6 - re-running cockpit respawns a missing floor pane
+ok 7 - cockpit re-run leaves mouse/history options idempotently set
+ok 8 - WHEELHOUSE_COCKPIT_MOUSE=0 leaves mouse off while preserving history-limit
+cockpit.selftest: PASS (8 checks)
+$ pgrep -fl '[w]heelhouse-cockpit-selftest|[2]fd3' || true
