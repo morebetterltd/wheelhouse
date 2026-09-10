@@ -173,7 +173,7 @@ It also includes the evidence itself, and there the same reasoning reaches one s
 
 There is no fixed rhythm to prescribe. The shape that worked:
 
-- Start by reading the graph and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the commander-pane fallback poll is running (`WHEELHOUSE_COMMANDER_INBOX_POLL_SECONDS=120 seats/commander-inbox-poll.sh &`). Deadline beads and anything blocking others first.
+- Start by reading the graph and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the herald is running (`seats/cockpit.sh --herald`) and the commander-pane fallback poll is running (`WHEELHOUSE_COMMANDER_INBOX_POLL_SECONDS=120 seats/commander-inbox-poll.sh &`). Deadline beads and anything blocking others first.
 - Dispatch one bead per seat, and let the seat finish before adding another.
 - Review as soon as work lands, so the author still has the context to fix a bounce cheaply.
 - Merge in batches if you like, but confirm each tip against its reported head individually.

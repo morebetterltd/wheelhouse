@@ -32,6 +32,16 @@ command -v bd >/dev/null 2>&1 || exit 0
 command -v bun >/dev/null 2>&1 || exit 0
 [ -f "$HERE/adapter.ts" ] || exit 0
 
+herald_dead=""
+pid_file="$HERE/run/herald.pid"
+if [ -f "$pid_file" ]; then
+  hpid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [ -n "$hpid" ] && ! kill -0 "$hpid" 2>/dev/null; then
+    last_err="$(tail -n 1 "$HERE/logs/herald.stderr.log" 2>/dev/null || true)"
+    herald_dead=" — HERALD DEAD pid $hpid${last_err:+; last stderr: $last_err}"
+  fi
+fi
+
 status="$(bun "$HERE/adapter.ts" status 2>/dev/null)" || exit 0
 live=$(printf '%s\n' "$status" | grep -c ' RUNNING ')
 parked=$(printf '%s\n' "$status" | grep -c ' PARKED ')
@@ -48,7 +58,7 @@ total=$(printf '%s\n' "$status" | grep -c -E ' (RUNNING|PARKED|DIED|STOPPED) ')
 ready=$(bd ready --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
 inprog=$(bd list --status in_progress --limit 0 --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
 
-line="🚢 FLEET: ${live}/${total} seats live · ${ready} ready · ${inprog} in progress"
+line="🚢 FLEET: ${live}/${total} seats live · ${ready} ready · ${inprog} in progress${herald_dead}"
 if [ "$parked" -gt 0 ] || [ "$quota" -gt 0 ]; then
   line="$line — PARKED/QUOTA: ${quota:-0} capacity event(s). Re-probe: ${reprobe:-bun seats/adapter.ts probe <seat>}"
 fi
