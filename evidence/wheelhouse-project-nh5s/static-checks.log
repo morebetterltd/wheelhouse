@@ -1,0 +1,34 @@
+$ git diff --check HEAD
+$ git merge-base --is-ancestor dc8e986466a200ff95634494c319c1a969e62718 HEAD && echo requested-base-is-ancestor
+requested-base-is-ancestor
+$ git merge-base --is-ancestor main HEAD && echo current-main-is-ancestor
+current-main-is-ancestor
+$ rg -n processCwd seats/adapter.ts seats/prune.ts
+seats/adapter.ts:609:function processCwd(pid: number): string | null {
+seats/adapter.ts:693:  const liveCwd = processCwd(pid);
+seats/prune.ts:130:function processCwd(pid: number): string | null {
+seats/prune.ts:171:      const live = pidAlive(Number(s?.pid ?? 0)) ? processCwd(Number(s.pid)) : null;
+$ rg -n seatAnchors seats/prune.ts
+163:function seatAnchors(root: string): Map<string, string> {
+178:function seatCwds(root: string): Map<string, string> { return seatAnchors(root); }
+425:  for (const root of rootsWithSeatState(rows)) for (const [p, reason] of seatAnchors(root)) anchors.set(path.resolve(p), reason);
+$ rg -n assertNoMidTurnSeats seats/prune.ts
+412:function assertNoMidTurnSeats(rows: Row[]): void {
+434:  if (yes) { assertNoMidTurnSeats(rows); assertNoSelectedSeatAnchors(rows, cats); }
+$ rg -n assertNoSelectedSeatAnchors seats/prune.ts
+423:function assertNoSelectedSeatAnchors(rows: Row[], cats: Set<string> | null): void {
+434:  if (yes) { assertNoMidTurnSeats(rows); assertNoSelectedSeatAnchors(rows, cats); }
+$ rg -n pinned-cwd seats/adapter.selftest.sh
+736:if [ $RC -eq 0 ]; then pass "pinned-cwd setup spawn exits 0"
+737:else fail "pinned-cwd setup spawn exited ${RC}: $OUT"; fi
+740:if [ $RC -eq 0 ] && says "starting a fresh session"; then pass "pinned-cwd cross-bead dispatch drops session continuity and says so"
+741:else fail "pinned-cwd dispatch did not fresh-start as specified (exit $RC): $OUT"; fi
+743:  pass "pinned-cwd fallback records a new session, not the immovable old one"
+744:else fail "pinned-cwd fallback kept the old session file or argv: before=$PIN_SESS_BEFORE after=$(state_get sessionFile) argv=$(cat "$ARGV" 2>/dev/null)"; fi
+745:if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PINPROJ/.wheelhouse-worktrees/bead-b" ]; then pass "pinned-cwd fresh session starts in the target worktree"
+746:else fail "pinned-cwd fresh session cwd was $(cat "$CWD_FILE" 2>/dev/null)"; fi
+747:assert_state_cwd_is_live_cwd "pinned-cwd fallback"
+$ rg -n live.lsof.cwd seats/prune.selftest.sh
+160:if awk -F '\t' -v p="$WTS/$LIVE_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /live cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'live lsof cwd beats stale state.json cwd and is a seat-anchor'; else fail "live cwd seat-anchor row missing:\n$(cat "$SCAN")"; fi
+$ rg -n settle.seats contracts/INTEGRATOR.md
+55:- When closing a bead after review and merge, settle seats before pruning, then prune that closed bead's scratch before reporting the close: run `bun seats/prune.ts scan > <reviewed-scan>` from the install root, review rows for that bead, confirm no rostered seat is mid-turn, then run `bun seats/prune.ts prune --from-file <reviewed-scan> --yes --categories bead-runs,bead-tmp,bead-simulator,xctest-devices` for the safe closed-bead rows. The tool refuses `--yes` while a rostered seat is mid-turn. The tool's safety rule is closed-bead-only for bead-named scratch: open or in-progress bead scratch is emitted as `needs-review` and is never acted on. `xctest-devices` is safe only when its simulator set is idle and no `xcodebuild` process is running.
