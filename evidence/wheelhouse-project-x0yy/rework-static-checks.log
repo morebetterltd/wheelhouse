@@ -1,0 +1,14 @@
+$ git diff --check HEAD
+$ rg -n "state.lock|acquireStateLock|releaseStateLock|WHEELHOUSE_STATE_WRITE_DELAY_MS|race delay-300ms summary" seats/adapter.ts seats/concurrency.selftest.sh
+seats/concurrency.selftest.sh:330:  env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_STATE_WRITE_DELAY_MS="$delay" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-a >"$OUT_A" 2>&1 & PA=$!
+seats/concurrency.selftest.sh:331:  env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_STATE_WRITE_DELAY_MS="$delay" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-b >"$OUT_B" 2>&1 & PB=$!
+seats/concurrency.selftest.sh:337:    pass "$label: state lock preserves both seat records in state.json"
+seats/concurrency.selftest.sh:351:  pass "race delay-300ms summary: 10/10 preserved both seat records"
+seats/concurrency.selftest.sh:353:  fail "race delay-300ms summary: only $race_passes/10 preserved both seat records"
+seats/adapter.ts:270:function acquireStateLock(): number {
+seats/adapter.ts:271:  const lock = path.join(SEATS_DIR, "state.lock");
+seats/adapter.ts:295:function releaseStateLock(fd: number): void {
+seats/adapter.ts:297:  try { fs.rmSync(path.join(SEATS_DIR, "state.lock"), { force: true }); } catch {}
+seats/adapter.ts:301:  const testDelay = Number(process.env.WHEELHOUSE_STATE_WRITE_DELAY_MS || 0);
+seats/adapter.ts:302:  const fd = acquireStateLock();
+seats/adapter.ts:319:    releaseStateLock(fd);

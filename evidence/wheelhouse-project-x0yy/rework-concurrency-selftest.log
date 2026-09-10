@@ -1,0 +1,71 @@
+$ WHEELHOUSE_REAL_PI_PROVIDER=openai-codex WHEELHOUSE_REAL_PI_MODEL=gpt-5.5 bash seats/concurrency.selftest.sh
+
+1. two seats, one roster — spawn, overlap, isolation, clean stop
+  ok    hermetic: worker-a spawns
+  ok    hermetic: worker-b spawns
+  ok    hermetic: each seat has its OWN FIFO (worker-a.stdin, worker-b.stdin)
+  ok    hermetic: bead-a dispatched to worker-a
+  ok    hermetic: bead-b dispatched to worker-b (before bead-a's turn ended)
+  ok    hermetic: overlapping RUNNING — both state.json pids alive at once (57932, 58871)
+  ok    hermetic: both turns in flight at the same moment (agent_start seen, no agent_end yet, both logs)
+  ok    hermetic: status shows both seats RUNNING
+  ok    hermetic: worker-a's turn finished
+  ok    hermetic: worker-b's turn finished
+  ok    hermetic: worker-a's events land ONLY in worker-a's log
+  ok    hermetic: worker-b's events land ONLY in worker-b's log
+  ok    hermetic: each bead's work landed only in its own worktree
+  ok    hermetic: the two worktrees are on distinct fleet/<bead> branches
+  ok    hermetic: worker-a stops cleanly
+  ok    hermetic: worker-b stops cleanly
+
+1b. state.json concurrent writers preserve both seat records
+  ok    race no-delay: concurrent spawns both exit 0
+  ok    race no-delay: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 1/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 1/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 2/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 2/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 3/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 3/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 4/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 4/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 5/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 5/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 6/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 6/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 7/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 7/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 8/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 8/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 9/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 9/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms run 10/10: concurrent spawns both exit 0
+  ok    race delay-300ms run 10/10: state lock preserves both seat records in state.json
+  ok    race delay-300ms summary: 10/10 preserved both seat records
+
+2. capacity visibility — a quota-shaped failure is stamped and rendered
+  ok    quota-shaped dispatch fails loudly
+  ok    state.json records lastCapacityEvent with the failure detail: {"at":"2026-09-10T17:37:29.452Z","detail":"429 rate limit exceeded — usage limit reached for this account"}
+  ok    adapter status surfaces the capacity event
+  ok    floor --once renders the AMBER PARKED/QUOTA line with the re-probe command
+  ok    floor STATUS cell shows per-account capacity state
+  ok    a dispatch that lands clears the capacity event
+
+3. canary — can these checks detect broken isolation and a lost stamp?
+  ok    canary: an adapter that merges both seats into one log is caught
+  ok    canary: an adapter with the capacity stamp cut is caught (no lastCapacityEvent lands)
+
+4. real pi — two real seats, concurrent dispatch, disjoint logs
+  ok    real: worker-a spawns (seat worker-a: pid 16760, session 01a08c65-fdab-7bdf-b569-4d87a1d7bc90
+  events -> [tmpdir]wheelhouse-concurrency-selftest.56850.RE99WC/realproj/seats/logs/worker-a.jsonl)
+  ok    real: worker-b spawns (seat worker-b: pid 17401, session 01a08c66-0055-7613-af62-983d2df7b924
+  events -> [tmpdir]wheelhouse-concurrency-selftest.56850.RE99WC/realproj/seats/logs/worker-b.jsonl)
+  ok    real: bead real-a dispatched
+  ok    real: bead real-b dispatched (worker-a's turn already ended at that moment: no)
+  ok    real: worker-a agent_end captured
+  ok    real: worker-b agent_end captured
+  ok    real: logs are disjoint — each seat's turn landed only in its own log
+  ok    real: worker-a stops cleanly
+  ok    real: worker-b stops cleanly
+
+two-seat concurrency and capacity visibility work on this machine.

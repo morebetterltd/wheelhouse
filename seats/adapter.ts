@@ -263,22 +263,61 @@ function readState(): State {
   return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
 }
 
+function sleepMs(ms: number): void {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireStateLock(): number {
+  const lock = path.join(SEATS_DIR, "state.lock");
+  const deadline = Date.now() + Number(process.env.WHEELHOUSE_STATE_LOCK_TIMEOUT_MS || 5000);
+  while (true) {
+    fs.mkdirSync(SEATS_DIR, { recursive: true });
+    try {
+      const fd = fs.openSync(lock, "wx", 0o600);
+      fs.writeFileSync(fd, `${process.pid}\n`);
+      return fd;
+    } catch (e: any) {
+      if (e?.code !== "EEXIST") throw e;
+      let owner: number | null = null;
+      try {
+        const raw = fs.readFileSync(lock, "utf8").trim();
+        owner = raw ? Number(raw) : null;
+      } catch {}
+      if (owner && !barePidAlive(owner)) {
+        try { fs.rmSync(lock, { force: true }); continue; } catch {}
+      }
+      if (Date.now() >= deadline) die(`timed out waiting for ${lock}`);
+      sleepMs(25);
+    }
+  }
+}
+
+function releaseStateLock(fd: number): void {
+  try { fs.closeSync(fd); } catch {}
+  try { fs.rmSync(path.join(SEATS_DIR, "state.lock"), { force: true }); } catch {}
+}
+
 function writeState(state: State): void {
   const testDelay = Number(process.env.WHEELHOUSE_STATE_WRITE_DELAY_MS || 0);
-  if (testDelay > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, testDelay);
-  // Re-read-before-merge plus a per-writer tmp file: two adapter invocations
-  // updating different seats must not let the later rename erase the earlier
-  // writer's record.
-  let merged = state;
-  if (fs.existsSync(STATE_FILE)) {
-    try {
-      const current = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) as State;
-      merged = { seats: { ...(current.seats ?? {}), ...(state.seats ?? {}) } };
-    } catch {}
+  const fd = acquireStateLock();
+  try {
+    if (testDelay > 0) sleepMs(testDelay);
+    // Re-read-before-merge under the lock plus a per-writer tmp file: two
+    // adapter invocations updating different seats must not let the later
+    // rename erase the earlier writer's record.
+    let merged = state;
+    if (fs.existsSync(STATE_FILE)) {
+      try {
+        const current = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) as State;
+        merged = { seats: { ...(current.seats ?? {}), ...(state.seats ?? {}) } };
+      } catch {}
+    }
+    const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + "\n");
+    fs.renameSync(tmp, STATE_FILE);
+  } finally {
+    releaseStateLock(fd);
   }
-  const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + "\n");
-  fs.renameSync(tmp, STATE_FILE);
 }
 
 function barePidAlive(pid: number | null): boolean {
