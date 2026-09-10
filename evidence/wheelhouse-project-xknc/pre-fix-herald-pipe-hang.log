@@ -1,0 +1,8 @@
+$ timeout 25 bash -c 'timeout 20 bash seats/cockpit.sh --herald x | cat'
+herald started: pid 7332
+rc=124
+$ lsof -p 7332 -a -d 0,1,2
+COMMAND  PID          USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+bash    7332 [user]    0r   CHR                3,2      0t0  336 /dev/null
+bash    7332 [user]    1   PIPE 0x555bb9c8da3c9a05    16384      
+bash    7332 [user]    2   PIPE 0x446ff6d81e9d0f42    16384      ->0x7bf68c136666a3b1
