@@ -1,0 +1,9 @@
+$ bash seats/cockpit.selftest.sh
+ok 1 - cockpit builds one bridge window with two panes on a private tmux socket
+ok 2 - fresh cockpit session enables mouse and sets history-limit 50000
+ok 3 - client-attached resize keeps commander pane near its ratio on a 152-column attach (commander=83 floor=68)
+ok 4 - fixture floor pane killed for respawn check
+ok 5 - re-running cockpit respawns a missing floor pane
+ok 6 - cockpit re-run leaves mouse/history options idempotently set
+ok 7 - WHEELHOUSE_COCKPIT_MOUSE=0 leaves mouse off while preserving history-limit
+cockpit.selftest: PASS (7 checks)

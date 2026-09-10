@@ -18,6 +18,7 @@ PASS=0
 FAIL=0
 cleanup() {
   tmux -L "$SOCK" kill-server >/dev/null 2>&1 || true
+  [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true
   rm -rf "$FIX"
 }
 trap cleanup EXIT INT TERM
@@ -38,10 +39,14 @@ EOF
 run_cockpit() {
   WHEELHOUSE_TMUX_SOCKET="$SOCK" WHEELHOUSE_COCKPIT_COMMANDER_PERCENT=55 "$PROJ/seats/cockpit.sh" ratio > "$FIX/cockpit.out" 2>&1
 }
+run_cockpit_no_mouse() {
+  WHEELHOUSE_TMUX_SOCKET="$SOCK" WHEELHOUSE_COCKPIT_COMMANDER_PERCENT=55 WHEELHOUSE_COCKPIT_MOUSE=0 "$PROJ/seats/cockpit.sh" nomouse > "$FIX/cockpit-nomouse.out" 2>&1
+}
 
 pane_width() { tmux -L "$SOCK" display-message -p -t "wh-ratio:bridge.$1" '#{pane_width}'; }
 window_width() { tmux -L "$SOCK" display-message -p -t 'wh-ratio:bridge' '#{window_width}'; }
 pane_count() { tmux -L "$SOCK" list-panes -t 'wh-ratio:bridge' 2>/dev/null | wc -l | tr -d ' '; }
+opt_value() { tmux -L "$SOCK" show-options -v -t "$1" "$2"; }
 
 attach_at_152() {
   # Attach through a pseudo-terminal whose size is explicitly wider than tmux's
@@ -68,6 +73,11 @@ if grep -q 'bridge built: session wh-ratio' "$FIX/cockpit.out" && [ "$(pane_coun
 else
   fail "cockpit did not build the bridge: $(cat "$FIX/cockpit.out" 2>/dev/null) panes=$(pane_count)"
 fi
+if [ "$(opt_value wh-ratio mouse)" = "on" ] && [ "$(opt_value wh-ratio history-limit)" = "50000" ]; then
+  pass "fresh cockpit session enables mouse and sets history-limit 50000"
+else
+  fail "fresh cockpit options wrong: mouse=$(opt_value wh-ratio mouse) history=$(opt_value wh-ratio history-limit)"
+fi
 
 attach_at_152
 CW="$(pane_width 0)"; FW="$(pane_width 1)"; WW="$(window_width)"
@@ -87,6 +97,18 @@ if grep -q 'bridge floor pane missing in wh-ratio:bridge; respawning it' "$FIX/c
   pass "re-running cockpit respawns a missing floor pane"
 else
   fail "cockpit did not respawn missing floor pane: $(cat "$FIX/cockpit.out" 2>/dev/null) panes=$(pane_count)"
+fi
+if [ "$(opt_value wh-ratio mouse)" = "on" ] && [ "$(opt_value wh-ratio history-limit)" = "50000" ]; then
+  pass "cockpit re-run leaves mouse/history options idempotently set"
+else
+  fail "re-run cockpit options wrong: mouse=$(opt_value wh-ratio mouse) history=$(opt_value wh-ratio history-limit)"
+fi
+
+run_cockpit_no_mouse
+if grep -q 'bridge built: session wh-nomouse' "$FIX/cockpit-nomouse.out" && [ "$(opt_value wh-nomouse mouse)" = "off" ] && [ "$(opt_value wh-nomouse history-limit)" = "50000" ]; then
+  pass "WHEELHOUSE_COCKPIT_MOUSE=0 leaves mouse off while preserving history-limit"
+else
+  fail "mouse opt-out options wrong: out=$(cat "$FIX/cockpit-nomouse.out" 2>/dev/null) mouse=$(opt_value wh-nomouse mouse 2>/dev/null || true) history=$(opt_value wh-nomouse history-limit 2>/dev/null || true)"
 fi
 
 if [ $FAIL -eq 0 ]; then
