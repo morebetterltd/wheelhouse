@@ -32,6 +32,41 @@ command -v bd >/dev/null 2>&1 || exit 0
 command -v bun >/dev/null 2>&1 || exit 0
 [ -f "$HERE/adapter.ts" ] || exit 0
 
+inbox_lag=""
+if [ -f "$HERE/inbox.jsonl" ]; then
+  inbox_size="$(wc -c < "$HERE/inbox.jsonl" 2>/dev/null | tr -d ' ' || echo 0)"
+  inbox_cursor="$(cat "$HERE/inbox.cursor" 2>/dev/null || echo 0)"
+  case "$inbox_cursor" in (*[!0-9]*|'') inbox_cursor=0;; esac
+  if [ "${inbox_size:-0}" -gt "$inbox_cursor" ] 2>/dev/null; then
+    lag_stats="$(node - "$HERE/inbox.jsonl" "$inbox_cursor" "$HERE/logs/herald.out.log" <<'NODE' 2>/dev/null || true
+const fs = require('fs');
+const [file, cursorArg, log] = process.argv.slice(2);
+const cursor = Math.max(0, Number(cursorArg) || 0);
+const body = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').slice(cursor) : '';
+const rows = body.split(/\n/).filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+let oldest = '-';
+if (rows.length) {
+  const t = Date.parse(rows.map((r) => r.at).filter(Boolean).sort()[0]);
+  if (Number.isFinite(t)) oldest = `${Math.max(0, Math.floor((Date.now() - t) / 1000))}s`;
+}
+let streak = 0;
+if (fs.existsSync(log)) {
+  const lines = fs.readFileSync(log, 'utf8').trimEnd().split(/\n/).filter(Boolean).slice(-200).reverse();
+  for (const line of lines) {
+    if (/poke deferred /.test(line)) streak++;
+    else if (/poke (?:sent|escalated|dropped) /.test(line)) break;
+  }
+}
+console.log(`${rows.length}|${oldest}|${streak}`);
+NODE
+)"
+    IFS='|' read -r lag_rows lag_oldest lag_streak <<EOF
+$lag_stats
+EOF
+    inbox_lag=" — INBOX LAG ${lag_rows:-0} undrained row(s), oldest ${lag_oldest:--}, herald deferral streak ${lag_streak:-0}"
+  fi
+fi
+
 herald_dead=""
 pid_file="$HERE/run/herald.pid"
 if [ -f "$pid_file" ]; then
@@ -58,7 +93,7 @@ total=$(printf '%s\n' "$status" | grep -c -E ' (RUNNING|PARKED|DIED|STOPPED) ')
 ready=$(bd ready --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
 inprog=$(bd list --status in_progress --limit 0 --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
 
-line="🚢 FLEET: ${live}/${total} seats live · ${ready} ready · ${inprog} in progress${herald_dead}"
+line="🚢 FLEET: ${live}/${total} seats live · ${ready} ready · ${inprog} in progress${herald_dead}${inbox_lag}"
 if [ "$parked" -gt 0 ] || [ "$quota" -gt 0 ]; then
   line="$line — PARKED/QUOTA: ${quota:-0} capacity event(s). Re-probe: ${reprobe:-bun seats/adapter.ts probe <seat>}"
 fi
