@@ -307,7 +307,9 @@ The exit code IS the verdict, so the commander's scripts can branch on it:
 | `0` | APPROVE — the bead's done holds, evidence in the output. May carry the brief's `— NOT BENCHED: <gap>` qualifier, preserved in the verdict file: read it before merging on a partial-coverage approval. |
 | `2` | BOUNCE — defects listed; redispatch to the author |
 | `3` | DISCOVER — the bead itself needs the commander's judgment |
-| `1` | error — no verdict exists: a STOP, a dead pi, or output with no (or an ambiguous) `VERDICT:` line. Never treat as a verdict. |
+| `1` | error — no verdict exists: a STOP, a dead pi, a timeout, or output with no (or an ambiguous) `VERDICT:` line. Never treat as a verdict. |
+
+The default one-shot verifier budget is 900000 ms (15 minutes). Override it for one invocation/repository with `--timeout-ms <ms>` when a repository is known to have a long cold build, or set `WHEELHOUSE_VERIFY_TIMEOUT_MS=<ms>` in the environment; the environment wins over the flag so commander wrappers can impose a fleet-local ceiling. On timeout, `verify.ts` writes `seats/verdicts/<bead-id>.partial.md`, prints elapsed time and the last tool/phase it saw, and exits 1. A timeout is not a provider/auth failure and does not start the probe cadence.
 
 DISCOVER files no beads. The verifier's proposal is recorded for the
 commander, who decides what the graph should say about it — a verifier

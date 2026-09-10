@@ -130,9 +130,14 @@ fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: 
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
 let text = reply ? fs.readFileSync(reply, "utf8") : "";
-if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
-process.stdout.write(text);
-process.exit(Number(process.env.STUB_EXIT || 0));
+if (process.env.STUB_STALL === "1") {
+  process.stdout.write(JSON.stringify({type:"tool_execution_start",toolName:"bash",args:{cmd:"cargo test"}})+"\n");
+  setTimeout(() => {}, 10000);
+} else {
+  if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
+  process.stdout.write(text);
+  process.exit(Number(process.env.STUB_EXIT || 0));
+}
 STUB
 chmod +x "$BIN/pi"
 [ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
@@ -298,6 +303,17 @@ if [ $RC -eq 1 ] && says "does not resolve" && says "$UMB_PROJ"; then
 else fail "umbrella layout: missing --repo did not fail against the umbrella root (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"
 VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
+
+phase "0b. timeout — last phase and partial verifier output are retained"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 300 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && says "timed out after 300ms" && says "elapsed" && says "last phase: tool bash started" && says "partial output:"; then
+  pass "timeout STOP names elapsed time, last tool/phase, and partial output path"
+else fail "timeout STOP missing phase/elapsed/partial detail (exit $RC): $OUT"; fi
+PARTIAL="$VDIR/bead-1.partial.md"
+if [ -s "$PARTIAL" ] && grep -q 'tool_execution_start' "$PARTIAL" && grep -q 'cargo test' "$PARTIAL"; then
+  pass "timeout keeps partial pi output at seats/verdicts/<bead>.partial.md"
+else fail "timeout partial file missing or lacks streamed tool output: $(cat "$PARTIAL" 2>/dev/null)"; fi
+rm -f "$PARTIAL"
 
 phase "1. APPROVE — verdict parsed, recorded, exit 0, and what was launched"
 cat > "$REPLY" <<EOF

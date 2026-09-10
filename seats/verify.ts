@@ -46,7 +46,7 @@
  * bead claim itself already has to the dispatch.
  *
  * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
- *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]
+ *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>]
  *
  * Single-repo installs need no configuration: --repo defaults to ROOT. Umbrella
  * installs pass --repo for the product repository that owns <branch>; evidence
@@ -70,7 +70,7 @@ const STATE_FILE = path.join(SEATS_DIR, "state.json");
 const VERDICTS_DIR = path.join(SEATS_DIR, "verdicts");
 
 // One-shot verification reads a diff and maybe runs a bench; give it room.
-const TIMEOUT_MS = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || 900000);
+const DEFAULT_TIMEOUT_MS = 900000;
 
 /**
  * A throwaway git worktree, used ONLY as the one-shot verifier spawn's
@@ -254,6 +254,41 @@ function writeRawVerifierOutput(stdout: string): string {
   const rawFile = path.join(VERDICTS_DIR, ".raw.md");
   fs.writeFileSync(rawFile, stdout);
   return rawFile;
+}
+
+function lastVerifierPhase(stdout: string): string {
+  let phase = "spawned verifier; waiting for output";
+  for (const line of stdout.split(/\r?\n/)) {
+    let obj: any;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (obj?.type === "tool_execution_start") phase = `tool ${obj.toolName ?? "unknown"} started${obj.args ? ` ${JSON.stringify(obj.args).slice(0, 300)}` : ""}`;
+    else if (obj?.type) phase = String(obj.type);
+  }
+  return phase;
+}
+
+function writePartialVerifierOutput(beadId: string, stdout: string, stderr: string, phase: string, elapsedMs: number, timeoutMs: number): string {
+  fs.mkdirSync(VERDICTS_DIR, { recursive: true });
+  const partialFile = path.join(VERDICTS_DIR, `${beadId}.partial.md`);
+  fs.writeFileSync(partialFile, [
+    `# Partial verifier output — ${beadId}`,
+    ``,
+    `- elapsed_ms: ${elapsedMs}`,
+    `- timeout_ms: ${timeoutMs}`,
+    `- last_phase: ${phase}`,
+    ``,
+    `## stdout`,
+    "```",
+    stdout,
+    "```",
+    ``,
+    `## stderr`,
+    "```",
+    stderr,
+    "```",
+    ``,
+  ].join("\n"));
+  return partialFile;
 }
 
 export function expandTilde(p: string): string {
@@ -577,6 +612,7 @@ function main(): void {
   const argv = process.argv.slice(2);
   const evidencePaths: string[] = [];
   let repoArg: string | undefined;
+  let timeoutArg: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--evidence") {
@@ -586,6 +622,9 @@ function main(): void {
     } else if (argv[i] === "--repo") {
       repoArg = argv[++i];
       if (!repoArg) die("--repo requires <path-to-branch-repo>");
+    } else if (argv[i] === "--timeout-ms") {
+      timeoutArg = argv[++i];
+      if (!timeoutArg || !/^\d+$/.test(timeoutArg)) die("--timeout-ms requires a positive integer millisecond budget");
     } else {
       positional.push(argv[i]);
     }
@@ -594,8 +633,9 @@ function main(): void {
   sweepStaleScratchWorktrees(repoRoot);
   const [beadId, branch, authorSeat, verifierArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>]");
   }
+  const timeoutMs = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || timeoutArg || DEFAULT_TIMEOUT_MS);
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
   if (verifierArg) validateSegment("seat name", verifierArg);
@@ -699,19 +739,26 @@ function main(): void {
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
   const scratchCwd = makeScratchCwd(repoRoot);
+  const startedAt = Date.now();
   const res = spawnSync("pi", args, {
     cwd: scratchCwd,
     env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir, BEADS_ACTOR: beadsActorFor(verifierSeat) },
     encoding: "utf8",
-    timeout: TIMEOUT_MS,
+    timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
   });
-
-  if (res.error) {
-    die(`could not run pi: ${(res.error as any).code === "ETIMEDOUT" ? `timed out after ${TIMEOUT_MS}ms` : res.error.message}`);
-  }
+  const elapsedMs = Date.now() - startedAt;
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
+
+  if (res.error) {
+    if ((res.error as any).code === "ETIMEDOUT") {
+      const phase = lastVerifierPhase(stdout);
+      const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, timeoutMs);
+      die(`could not run pi: timed out after ${timeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial})`);
+    }
+    die(`could not run pi: ${res.error.message}`);
+  }
   if (res.status !== 0) {
     die(
       `pi exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}"${accountLabelSuffix(entry)} — no verdict. stderr tail:\n` +
