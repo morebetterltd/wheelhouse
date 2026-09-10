@@ -100,6 +100,21 @@ else
   fail "small-chunk large-log tail did not produce exactly one new settle (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
 fi
 
+COPYTRUNC_LOG="$PROJ/seats/logs/copytruncate.jsonl"
+mkdir -p "$(dirname "$COPYTRUNC_LOG")"
+printf '%s\n' '{"type":"agent_start"}' '{"type":"agent_end","messages":["before copytruncate"]}' > "$COPYTRUNC_LOG"
+COPYTRUNC_OLD_SIZE="$(wc -c < "$COPYTRUNC_LOG" | tr -d ' ')"
+seed_log_cursor copytruncate.jsonl "$COPYTRUNC_OLD_SIZE"
+cp "$COPYTRUNC_LOG" "$COPYTRUNC_LOG.1"
+: > "$COPYTRUNC_LOG"
+printf '%s\n' '{"type":"agent_end","messages":["after copytruncate"]}' > "$COPYTRUNC_LOG"
+OUT="$(run_herald --once 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="settle" && /after copytruncate/.test(r.detail)')" = 1 ]; then
+  pass "copy-truncate shrink resets the saved offset and herald reads the new current log"
+else
+  fail "copy-truncate shrink did not reset herald offset (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
+fi
+
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json"
 {
 cat <<'JSONL'
