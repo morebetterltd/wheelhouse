@@ -881,14 +881,18 @@ async function cmdResume(name: string): Promise<void> {
   // Resuming keeps the seat where it was working, not the project root: the
   // cwd it was launched into last time, falling back to ROOT only for a
   // state.json record from before this field existed. If that cwd was pruned,
-  // a plain resume has no new dispatch target to fall back to, so STOP rather
-  // than guessing a replacement and silently changing identity.
+  // resume uses the same fresh-session mechanics as dispatch: prefer the
+  // current bead's worktree when it still exists, else recover at ROOT.
   const resumeCwd = rec.cwd ?? ROOT;
   if (!fs.existsSync(resumeCwd) || !fs.statSync(resumeCwd).isDirectory()) {
-    die(
-      `recorded seat cwd is gone: ${resumeCwd} — cannot resume recorded session. ` +
-        `The pruned-cwd fallback intentionally drops session continuity only during dispatch, where the new bead worktree is the fallback target; spawn a fresh seat or dispatch to a bead with an existing worktree instead.`
+    const beadCwd = rec.lastBead ? beadWorktreeDir(rec.lastBead) : "";
+    const fallbackCwd = beadCwd && fs.existsSync(beadCwd) && fs.statSync(beadCwd).isDirectory() ? beadCwd : ROOT;
+    console.log(
+      `seat ${name}: recorded seat cwd is gone: ${resumeCwd}; ` +
+        `session continuity intentionally dropped; resuming fresh in ${fallbackCwd}`
     );
+    await launch(name, requireSeat(name), null, fallbackCwd);
+    return;
   }
   await launch(name, requireSeat(name), rec.sessionFile, resumeCwd);
 }
