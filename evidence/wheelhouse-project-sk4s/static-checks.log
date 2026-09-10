@@ -1,0 +1,27 @@
+$ git diff --check HEAD
+$ rg -n "UNSATISFIED|EVIDENCE UNSATISFIED|wh-unsat" seats/floor.ts seats/floor.selftest.sh seats/legibility.selftest.sh
+seats/floor.ts:291:  unsatisfied: number; // evidence floor checks that read UNSATISFIED
+seats/floor.ts:298: * that read UNSATISFIED (verify.ts records them under "## Evidence checks"),
+seats/floor.ts:314:  const unsatisfied = (text.match(/^-\s+.*—\s*UNSATISFIED\b/gm) ?? []).length;
+seats/floor.ts:400:  // the file must never render green while a floor check reads UNSATISFIED.
+seats/floor.ts:408:      return { cue: "amber", line: `EVIDENCE UNSATISFIED — ${vf.unsatisfied} floor check(s) failed on ${rec!.lastBead}; see ${rel}` };
+seats/floor.selftest.sh:145:cat > "$VDIR/wh-unsat-1.md" <<EOF
+seats/floor.selftest.sh:146:# Verdict — bead wh-unsat-1
+seats/floor.selftest.sh:151:- proof/shot.png — missing — UNSATISFIED (source: branch)
+seats/floor.selftest.sh:197:  seat_rec unsat    "$ME"   ',"lastBead":"wh-unsat-1"'
+seats/floor.selftest.sh:248:has "EVIDENCE UNSATISFIED.*wh-unsat-1" && pass "unsat: BOUNCE with failed evidence-floor renders EVIDENCE UNSATISFIED" || fail "no EVIDENCE UNSATISFIED line"
+seats/legibility.selftest.sh:22:# EVIDENCE UNSATISFIED state, cutting the VERDICT UNREADABLE state, cutting
+seats/legibility.selftest.sh:433:phase "phase 5: UNSATISFIED EVIDENCE — refusal, distinct rendering, unreadable routes to human"
+seats/legibility.selftest.sh:454:if [ $RC -eq 2 ] && grep -q "UNSATISFIED" "$VDIR/bead-ev.md" 2>/dev/null; then
+seats/legibility.selftest.sh:456:else fail "BOUNCE-with-unsatisfied run: rc=$RC (want 2), or no UNSATISFIED in the record"; fi
+seats/legibility.selftest.sh:463:if seatline e-seat | grep -q "EVIDENCE UNSATISFIED" && seatline e-seat | grep -q "bead-ev"; then
+seats/legibility.selftest.sh:464:  pass "floor: EVIDENCE UNSATISFIED is its own state, naming the bead"
+seats/legibility.selftest.sh:465:else fail "floor: no EVIDENCE UNSATISFIED line for e-seat: $(seatline e-seat)"; fi
+seats/legibility.selftest.sh:489:for want in "PARKED/QUOTA" "AUTH DEAD" "PROCESS GONE" "REVIEW BLOCKED" "EVIDENCE UNSATISFIED" "VERDICT UNREADABLE"; do
+seats/legibility.selftest.sh:500:for want in "PARKED/QUOTA" "AUTH DEAD" "PROCESS GONE" "REVIEW BLOCKED" "EVIDENCE UNSATISFIED" "VERDICT UNREADABLE"; do
+seats/legibility.selftest.sh:516:# canary 1: cut the EVIDENCE UNSATISFIED state
+seats/legibility.selftest.sh:518:sed '/EVIDENCE UNSATISFIED — /d' "$FLOOR" > "$SAB1"
+seats/legibility.selftest.sh:520:  fail "canary 1: sed no longer bites (no EVIDENCE UNSATISFIED line) — fix this test"
+seats/legibility.selftest.sh:523:  if seatline e-seat | grep -q "EVIDENCE UNSATISFIED"; then
+seats/legibility.selftest.sh:524:    fail "canary 1: EVIDENCE UNSATISFIED survived its removal — these checks prove nothing"
+seats/legibility.selftest.sh:525:  else pass "canary 1: cutting the EVIDENCE UNSATISFIED state is caught by phase 5's check"; fi
