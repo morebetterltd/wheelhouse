@@ -86,6 +86,7 @@ cat > "$LOGS/busy.jsonl" <<EOF
 {"type":"agent_end","messages":[1,2,3],"timestamp":"$RECENT_ISO"}
 {"type":"agent_start","timestamp":"$RECENT_ISO"}
 {"type":"tool_execution_start","toolName":"read","args":{"path":"README.md"},"timestamp":"$RECENT_ISO"}
+{"type":"tool_execution_update","output":"short prefix\n[wheelhouse log truncated 12345 bytes; full output remains in the pi session file]","wheelhouse_truncated_bytes":12345,"timestamp":"$RECENT_ISO"}
 EOF
 
 # Seat "quiet": alive and mid-turn, but the newest event is older than the
@@ -194,6 +195,7 @@ render "$PROJ/seats/floor.ts" --pin 1
 has "SPOTLIGHT"            && pass "spotlight header present"        || fail "no SPOTLIGHT header"
 has "busy"                 && pass "pin 1 is seat busy"              || fail "busy not in frame"
 has '\[tool\] bash'        && pass "[tool] line humanized"           || fail "no [tool] bash line"
+[ $RC -eq 0 ] && pass "truncated tool_execution_update payload shape does not break floor rendering" || fail "truncated tool update shape broke floor output"
 has '\[think\]'            && pass "[think] line humanized"          || fail "no [think] line"
 has '\[turn_end\].*3 message' && pass "[turn_end] carries stats"     || fail "no [turn_end] with stats"
 render "$PROJ/seats/floor.ts" --pin busy
