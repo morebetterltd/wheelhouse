@@ -48,9 +48,7 @@ REAL_PI="$(command -v pi || true)"
 
 SCRUB="$HERE/evidence-scrub.sh"
 [ -x "$SCRUB" ] || { echo "selftest: not executable: $SCRUB" >&2; exit 2; }
-# Selftest output is commonly redirected into committed evidence; scrub it as
-# it is written so temp dirs, home dirs, and usernames never enter captures.
-exec > >("$SCRUB") 2> >("$SCRUB" >&2)
+# Evidence captures should pipe this script through seats/evidence-scrub.sh.
 
 FAILED=0
 FIX=""
@@ -131,7 +129,9 @@ fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: 
 // lets the selftest see what the OS-level cwd actually was.
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
-if (reply) process.stdout.write(fs.readFileSync(reply, "utf8"));
+let text = reply ? fs.readFileSync(reply, "utf8") : "";
+if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
+process.stdout.write(text);
 process.exit(Number(process.env.STUB_EXIT || 0));
 STUB
 chmod +x "$BIN/pi"
@@ -233,6 +233,11 @@ run() {   # runs verify.ts in the fixture; args pass through
   # BEADS_ACTOR unset on purpose: the dispatcher must set it in the spawned
   # verifier's own env by construction, not forward whatever this shell has.
   OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" \
+    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+  RC=$?
+}
+run_without_default_push() {
+  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SUPPRESS_DEFAULT_PUSH=1 \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
@@ -366,6 +371,20 @@ if grep -q "verdict: APPROVE — NOT BENCHED: the docs deployable" "$VDIR/bead-1
   pass "the NOT BENCHED qualifier survives into the verdict record"
 else fail "NOT BENCHED qualifier lost from the verdict file"; fi
 
+phase "1b. verifier account.authRoute=env — exported provider key is identity"
+ENV_PROJ="$FIX/env-proj"
+build_proj "$ENV_PROJ" env "$VERIFY"
+bun -e "const fs=require('fs'); const p='$ENV_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.account.authRoute='env'; fs.rmSync('$HOME_FIX/.pi-seats-env/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
+RUN_PROJ="$ENV_PROJ"; VARGV="$HOME_FIX/.pi-seats-env/verifier/argv.json"; VDIR="$ENV_PROJ/seats/verdicts"
+cat > "$REPLY" <<'EOF'
+Env-route verifier checked.
+VERDICT: APPROVE
+EOF
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" OPENAI_API_KEY=fixture-key bun "$RUN_PROJ/seats/verify.ts" bead-env fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then pass "account.authRoute=env verifier runs with exported provider env var and no auth.json"
+else fail "account.authRoute=env verifier was refused (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
+
 phase "2. BOUNCE — exit 2"
 rm -f "$VDIR/bead-2.md"
 cat > "$REPLY" <<'EOF'
@@ -441,6 +460,14 @@ if [ ! -f "$VDIR/bead-5.md" ]; then
   pass "no verdict file written for a non-verdict"
 else fail "a verdict file was written despite there being no verdict"; fi
 cat > "$REPLY" <<'EOF'
+Checked but omitted push authority.
+VERDICT: APPROVE
+EOF
+run_without_default_push bead-5-missing-push fleet/bead-1 worker-1
+if [ $RC -eq 1 ] && says "no PUSH"; then
+  pass "missing PUSH: line exits 1 with a named STOP"
+else fail "missing PUSH did not exit 1 (exit $RC): $OUT"; fi
+cat > "$REPLY" <<'EOF'
 Historical report quoted by the worker:
 ```text
 VERDICT: BOUNCE
@@ -457,7 +484,7 @@ VERDICT: APPROVE
 wait, actually:
 VERDICT: BOUNCE
 EOF
-run bead-5 fleet/bead-1 worker-1
+run_without_default_push bead-5 fleet/bead-1 worker-1
 if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
   pass "two conflicting live VERDICT: lines exit 1 and print both candidates"
 else fail "ambiguous double verdict not refused with candidates (exit $RC): $OUT"; fi
@@ -750,10 +777,18 @@ phase "10. sweep — a SIGKILLed run's scratch worktree is reclaimed, a live one
 ORPHAN_DIR="$FIX/wheelhouse-verify-999999999-orphan"
 mkdir -p "$ORPHAN_DIR"
 git -C "$PROJ" worktree add --detach "$ORPHAN_DIR" HEAD >/dev/null 2>&1
-sleep 5 & LIVE_OWNER_PID=$!
-LIVE_DIR="$FIX/wheelhouse-verify-${LIVE_OWNER_PID}-live"
-mkdir -p "$LIVE_DIR"
-git -C "$PROJ" worktree add --detach "$LIVE_DIR" HEAD >/dev/null 2>&1
+bash -c '
+  pid=$$
+  dir="$1/wheelhouse-verify-${pid}-live"
+  mkdir -p "$dir"
+  git -C "$2" worktree add --detach "$dir" HEAD >/dev/null 2>&1
+  cd "$dir"
+  printf "%s\n%s\n" "$pid" "$dir" > "$1/live-owner.txt"
+  sleep 5
+' _ "$FIX" "$PROJ" &
+while [ ! -f "$FIX/live-owner.txt" ]; do sleep 0.05; done
+LIVE_OWNER_PID=$(sed -n '1p' "$FIX/live-owner.txt")
+LIVE_DIR=$(sed -n '2p' "$FIX/live-owner.txt")
 if git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" && git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR"; then
   pass "both a planted orphan (dead pid) and a planted live (real pid) scratch worktree are registered"
 else fail "could not plant both test scratch worktrees before sweeping"; fi
@@ -794,9 +829,10 @@ else
   # The smoke brief scripts the reply, so one trivial model turn exercises
   # spawn -> parse -> record against the real binary without a real review.
   cat > "$RPROJ/contracts/REVIEWER.md" <<'EOF'
-SMOKE TEST. Ignore the task in the prompt. Reply with exactly this single
-line and nothing else, using no tools:
+SMOKE TEST. Ignore the task in the prompt. Reply with exactly these two
+lines and nothing else, using no tools:
 VERDICT: APPROVE
+PUSH:    NOT CONSIDERED
 EOF
   # Borrow the real login into the verifier seat only; it dies with the fixture.
   RSEAT="$RHOME/.pi-seats-real/verifier"

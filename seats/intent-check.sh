@@ -92,6 +92,13 @@ check_claim_walk_gate_for_commit() {
 find_root() {
   dir=${1:-$(pwd)}
   while :; do
+    if [ -f "$dir/wheelhouse/.template-source" ] && grep -Eq '^(product_repo|product_repos|product-repo|product-repos)=' "$dir/wheelhouse/.template-source"; then
+      product=$(sed -n 's/^product_repo=//p; s/^product_repos=//p; s/^product-repo=//p; s/^product-repos=//p' "$dir/wheelhouse/.template-source" | tr ',:' '\n\n' | sed '/^[[:space:]]*$/d' | head -1)
+      if [ -n "$product" ] && [ -f "$product/wheelhouse/ISA.md" ] && [ -d "$product/.beads" ]; then
+        printf '%s\n' "$product"
+        return 0
+      fi
+    fi
     if [ -f "$dir/wheelhouse/ISA.md" ] && [ -d "$dir/.beads" ]; then
       printf '%s\n' "$dir"
       return 0
@@ -102,8 +109,14 @@ find_root() {
   done
 }
 
-root=$(find_root "$(pwd)") || {
-  say "UNRUNNABLE: cannot find install root containing wheelhouse/ISA.md and .beads from $(pwd)"
+start_dir=$(pwd)
+root=$(find_root "$start_dir") || {
+  if [ -f "$start_dir/wheelhouse/.template-source" ]; then
+    source_root=$(sed -n 's/^path=//p' "$start_dir/wheelhouse/.template-source" | tail -1)
+    say "STOP: wheelhouse/.template-source has no product-repo= key; refusing to guess whether to scan install root $start_dir or template root ${source_root:-unknown}. Add product-repo=<product repo path> (UPGRADE.md step 0) or pass repo arguments explicitly."
+  else
+    say "UNRUNNABLE: cannot find install root containing wheelhouse/ISA.md and .beads from $start_dir"
+  fi
   exit "$UNRUNNABLE"
 }
 cd "$root"
@@ -142,10 +155,16 @@ if [ "$#" -gt 0 ]; then
   for repo in "$@"; do
     printf '%s\n' "$repo" >>"$repo_list"
   done
-elif [ -f wheelhouse/.template-source ] && grep -Eq '^(repo|repos|product_repo|product_repos)=' wheelhouse/.template-source; then
-  sed -n 's/^repo=//p; s/^repos=//p; s/^product_repo=//p; s/^product_repos=//p' wheelhouse/.template-source |
-    tr ',:' '\n\n' |
-    sed '/^[[:space:]]*$/d' >"$repo_list"
+elif [ -f wheelhouse/.template-source ]; then
+  if grep -Eq '^(repo|repos|product_repo|product_repos|product-repo|product-repos)=' wheelhouse/.template-source; then
+    sed -n 's/^repo=//p; s/^repos=//p; s/^product_repo=//p; s/^product_repos=//p; s/^product-repo=//p; s/^product-repos=//p' wheelhouse/.template-source |
+      tr ',:' '\n\n' |
+      sed '/^[[:space:]]*$/d' >"$repo_list"
+  else
+    source_root=$(sed -n 's/^path=//p' wheelhouse/.template-source | tail -1)
+    say "STOP: wheelhouse/.template-source has no product-repo= key; refusing to guess whether to scan install root $(pwd -P) or template root ${source_root:-unknown}. Add product-repo=<product repo path> (UPGRADE.md step 0) or pass repo arguments explicitly."
+    exit "$UNRUNNABLE"
+  fi
 elif git rev-parse --show-toplevel >/dev/null 2>&1; then
   git rev-parse --show-toplevel >"$repo_list"
 else
