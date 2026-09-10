@@ -108,7 +108,9 @@ FIX="$(mktemp -d "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")"
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
-mkdir -p "$HOME_FIX" "$BIN"
+BUN_TRANSPILE_CACHE="$FIX/bun-transpiler-cache"
+mkdir -p "$HOME_FIX" "$BIN" "$BUN_TRANSPILE_CACHE"
+export BUN_RUNTIME_TRANSPILER_CACHE_PATH="$BUN_TRANSPILE_CACHE"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
 
 # --- the stub pi -------------------------------------------------------------
@@ -372,6 +374,15 @@ if ! grep -qF "$PROJB" "$STATE_A" && ! grep -q "nsB" "$STATE_A"; then
 else fail "a B path or namespace appears in A's state.json"; fi
 
 b_pristine "after the full benign run"
+mkdir -p "$HOME_FIX/foreign-planted"
+printf 'foreign\n' > "$HOME_FIX/foreign-planted/path.txt"
+HOME_WITH_FOREIGN="$(home_listing)"
+if [ "$HOME_BEFORE" != "$HOME_WITH_FOREIGN" ] && comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_WITH_FOREIGN") | grep -q 'foreign-planted/path.txt'; then
+  pass "negative control: a planted foreign path under \$HOME still trips the strict HOME assertion"
+else
+  fail "negative control: planted foreign path was not detected by the HOME assertion"
+fi
+rm -rf "$HOME_FIX/foreign-planted"
 HOME_AFTER="$(home_listing)"
 if [ "$HOME_BEFORE" = "$HOME_AFTER" ]; then
   pass "nothing new in \$HOME outside A's own seat namespace"
