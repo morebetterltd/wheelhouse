@@ -92,6 +92,7 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
     │   ├── DESIGNER.md          contract + your project's territory
     │   ├── REVIEWER.md          contract + your branch conventions
     │   ├── VERIFIER.md          contract — the one-shot verdict pass, never on the author's account
+    │   ├── RESEARCHER.md        contract — sourced decision-grade research reports, no product edits
     │   ├── BENCH.md             contract + what proves YOUR build works
     │   └── bench.sh             stub — exits non-zero until you implement it
     ├── fleet/
@@ -185,13 +186,13 @@ Three things before you start:
   STOP and tell me. Do not work around it.
 ```
 
-When these contracts improve, you re-copy the eight contract files and the `seats/` machinery, and keep your `## This project` sections. The two-section split is what makes that safe, and there is no tooling for it deliberately — a file copy you understand beats a migration you do not.
+When these contracts improve, you re-copy the nine contract files and the `seats/` machinery, and keep your `## This project` sections. The two-section split is what makes that safe, and there is no tooling for it deliberately — a file copy you understand beats a migration you do not.
 
 The full procedure is [`runbooks/UPGRADE.md`](runbooks/UPGRADE.md), which installs into your project along with the other runbooks. It covers the parts that are not obvious:
 
 - how to reconstruct your baseline if you installed before `.template-source` existed, which every early install did;
 - getting a clone with enough history to diff against (the install clone is `--depth 1` and cannot);
-- copying the eight `.md` files by name, because `cp -r contracts/` would drop the bench stub over your implemented bench;
+- copying the nine `.md` files by name, because `cp -r contracts/` would drop the bench stub over your implemented bench;
 - replacing the `seats/` machinery file-by-file, a copy shaped so it can never reach your roster or your seats' runtime state;
 - splicing with the same exact-heading rule the install uses, since that is the operation people get wrong;
 - sweeping the things a contract copy cannot reach — your generated files and the beads already in your graph — when a convention changes;

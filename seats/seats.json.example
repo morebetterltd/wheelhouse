@@ -29,6 +29,13 @@
       "provider": "openai-codex",
       "model": "gpt-5.5",
       "account": { "dir": "~/.pi-seats-myproject/reviewer-shadow", "authRoute": "oauth" }
+    },
+    "researcher": {
+      "role": "researcher",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5",
+      "skills": ["~/.agents/skills/example-research-skill"],
+      "account": { "dir": "~/.pi-seats-myproject/researcher", "authRoute": "api_key" }
     }
   }
 }
