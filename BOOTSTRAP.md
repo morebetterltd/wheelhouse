@@ -93,10 +93,10 @@ You are already following instructions from this clone, so verify it before trus
 You were told to clone this repo into a temporary directory. Before you read another word of it, confirm the clone produced something:
 
 - `$TEMPLATE/BOOTSTRAP.md`, `$TEMPLATE/contracts/` and `$TEMPLATE/contracts/WORKER.md` all exist and are non-empty.
-- All nine contract files are present — eight briefs plus the bench stub:
+- All ten contract files are present — nine briefs plus the bench stub:
 
   ```bash
-  for f in WORKER.md SEATS.md REVIEWER.md DESIGNER.md VERIFIER.md BENCH.md GRAPH.md INTEGRATOR.md bench.sh.stub; do
+  for f in WORKER.md SEATS.md REVIEWER.md DESIGNER.md VERIFIER.md RESEARCHER.md BENCH.md GRAPH.md INTEGRATOR.md bench.sh.stub; do
     test -s "$TEMPLATE/contracts/$f" || echo "MISSING: contracts/$f"
   done
   ```
@@ -142,10 +142,10 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 
 Everything in this list is copied whole and unedited. The interview-derived content — every `## This project` fill, `CLAUDE.md`, the ISA, `STARTUP.md`, `seats/seats.json` — is written in steps 3 and 5, not here; what this step lands is the half that is byte-identical in every project.
 
-- Create `wheelhouse/crew/` and `wheelhouse/fleet/`.
+- Create `wheelhouse/crew/`, `wheelhouse/fleet/`, and `wheelhouse/research/`.
 - Copy **verbatim** from the template's `contracts/`:
   - `WORKER.md` and `SEATS.md` into `wheelhouse/fleet/`
-  - `REVIEWER.md`, `DESIGNER.md`, `VERIFIER.md`, `BENCH.md` into `wheelhouse/crew/`
+  - `REVIEWER.md`, `DESIGNER.md`, `VERIFIER.md`, `RESEARCHER.md`, `BENCH.md` into `wheelhouse/crew/`
   - `GRAPH.md` and `INTEGRATOR.md` into `wheelhouse/`
   - the whole `runbooks/` directory into `wheelhouse/runbooks/`. `SEATS.md` and `STARTUP.md` both point at these by path, and a runbook that is only in the template is a broken link in the project.
   - `bench.sh.stub` to `wheelhouse/crew/bench.sh`, executable, unchanged — **it exits non-zero on purpose.** A stub that exits 0 lets the first APPROVE through on nothing.
@@ -222,11 +222,12 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
    - **Worker** — implements beads on branches, per `wheelhouse/fleet/WORKER.md`. "How many worker seats? One is the working minimum; a second opens another implementation lane when work is queued." If the answer is two or more, that answer names concrete seats, not capacity in the abstract: write `worker-1` and `worker-2` (and `worker-3` for three), derive each account directory, and walk question 8 for each worker by name. A roster with only `worker-1` after a `2 workers` answer is a failed interview, not a smaller valid roster.
    - **Reviewer** — gates every diff before it merges and never reviews what it authored, per `wheelhouse/crew/REVIEWER.md`. Ask with those words in the question: "How many reviewer seats? One, until a single reviewer is the thing everything waits on."
    - **Verifier** — the consumer-surface walker, per `wheelhouse/crew/VERIFIER.md`. It runs as an ephemeral `seats/walk.ts` pass for one ISA claim and one named surface, walks that surface as a stranger, and gates claims rather than beads. It is a roster entry and an account, not a standing process: nothing spawns until a claim needs a walk. Its `account.dir` must differ from every worker's so the empty-context surface walk is not the author's own account.
+   - **Researcher** — produces sourced decision-grade research reports, per `wheelhouse/crew/RESEARCHER.md`. Ask with those words in the question: "Do you want a researcher seat? It earns its place when the fleet needs best-practice research before building, landscape maps, or hard-debug source searches." If it needs skills, record them in the optional `skills` array in `seats/seats.json`; paths must already exist when the adapter reads the roster.
    - **Designer** — decomposes goals into implementation-ready beads, per `wheelhouse/crew/DESIGNER.md`. Ask with those words in the question even when you expect a no: "Do you want a designer seat? It earns its place when you are spending more time decomposing work than deciding direction — otherwise you hold that yourself."
 
    **For each seat taken, collect the two facts this round owns — `seats/seats.json`'s other two columns are question 8's:**
 
-   - **Name**: the `seats.json` key the seat answers to (`worker-1`, `reviewer`, `verifier`). Short, role-shaped, no namespace prefix.
+   - **Name**: the `seats.json` key the seat answers to (`worker-1`, `reviewer`, `verifier`, `researcher`). Short, role-shaped, no namespace prefix.
    - **Account directory**: `~/.pi-seats-<namespace>/<seat-name>` — derived, not asked; offer it for correction only if the principal keeps accounts somewhere unusual. The reviewer's and verifier's directories must differ from every worker's, per the seat-accounting rule.
 
    **Write down the no's as well as the yes's.** A refused seat goes into `wheelhouse/fleet/SEATS.md` under `### Declined seats` with the principal's reason and the date. An absence on the page is the same absence whether the seat was refused or never raised, so only the recorded no answers "why is there no designer?" when it is asked six weeks from now.
@@ -452,12 +453,12 @@ Run each of these and paste what it prints:
   # The pair list is positional parameters, not a whitespace-split string:
   # zsh (the macOS default shell) does not word-split an unquoted variable, so a
   # `for pair in $PAIRS` loop there runs ONCE over the whole list, diffs the wrong
-  # files, and leaves seven of eight contracts unchecked while exiting 0. "$@" iterates
+  # files, and leaves all but the first named contract unchecked while exiting 0. "$@" iterates
   # identically in bash and zsh. Found by a cold install run in zsh, 2026-08-20.
   set -- \
     fleet/WORKER.md:WORKER.md fleet/SEATS.md:SEATS.md \
     crew/REVIEWER.md:REVIEWER.md crew/DESIGNER.md:DESIGNER.md \
-    crew/VERIFIER.md:VERIFIER.md \
+    crew/VERIFIER.md:VERIFIER.md crew/RESEARCHER.md:RESEARCHER.md \
     crew/BENCH.md:BENCH.md GRAPH.md:GRAPH.md INTEGRATOR.md:INTEGRATOR.md
   FAILED=0
 
