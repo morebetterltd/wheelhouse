@@ -736,6 +736,17 @@ if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes
   pass "tool_execution_update payload is trimmed in the seat log with byte count noted"
 else fail "tool_execution_update payload was not trimmed (exit $RC): $OUT"; fi
 
+printf '%s\n' '{"type":"filler","text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}' '{"type":"agent_end","messages":[]}' >> "$LOG"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "last-event agent_end" && [ -s "$LOG.1" ] && [ ! -s "$LOG" ]; then
+  pass "live settled log past cap is copy-truncated without renaming the writer away"
+else fail "live settled log was not copy-truncated as expected (exit $RC): $OUT current=$(wc -c < "$LOG" 2>/dev/null || echo missing) archive=$(wc -c < "$LOG.1" 2>/dev/null || echo missing)"; fi
+LOG_MARK=0
+run dispatch worker-1 bead-x "after live rotation"
+if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'echo: Bead bead-x' 5 && grep -q 'after live rotation' "$LOG"; then
+  pass "after live rotation, get_state answers and the writer's next event lands in the current log"
+else fail "dispatch after live rotation did not read responses from the current log (exit $RC): $OUT current=$(cat "$LOG" 2>/dev/null) archive_tail=$(tail -5 "$LOG.1" 2>/dev/null)"; fi
+
 phase "2b. dispatch — pinned session cwd starts fresh instead of recording a lie"
 SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
 PINPROJ="$FIX/pinproj"
