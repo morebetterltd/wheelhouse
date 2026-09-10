@@ -1,0 +1,16 @@
+$ git diff --check HEAD
+$ rg -n -- "tmp_pid_file|exec </dev/null|disown|stdout pipe|herald-piped|herald started: pid" seats/cockpit.sh seats/cockpit.selftest.sh
+seats/cockpit.sh:62:  tmp_pid_file="$pid_file.$$"
+seats/cockpit.sh:63:  rm -f "$tmp_pid_file"
+seats/cockpit.sh:66:    exec </dev/null >> "$HERE/logs/herald.out.log" 2>> "$HERE/logs/herald.stderr.log"
+seats/cockpit.sh:69:    printf '%s\n' "$herald_pid" > "$tmp_pid_file"
+seats/cockpit.sh:70:    disown "$herald_pid" 2>/dev/null || true
+seats/cockpit.sh:73:  disown "$launcher_pid" 2>/dev/null || true
+seats/cockpit.sh:75:    [ -s "$tmp_pid_file" ] && break
+seats/cockpit.sh:78:  if [ -s "$tmp_pid_file" ]; then mv -f "$tmp_pid_file" "$pid_file"; fi
+seats/cockpit.sh:82:    echo "herald started: pid $new_pid"
+seats/cockpit.selftest.sh:73:( cd "$PROJ" && timeout 5 bash -c 'bash seats/cockpit.sh --herald piped | cat' ) > "$FIX/herald-piped.out" 2>&1
+seats/cockpit.selftest.sh:76:PIPED_LINES="$(wc -l < "$FIX/herald-piped.out" | tr -d ' ')"
+seats/cockpit.selftest.sh:77:if [ $PIPED_RC -eq 0 ] && [ -n "$PIPED_PID" ] && kill -0 "$PIPED_PID" 2>/dev/null && [ "$PIPED_LINES" = 1 ] && grep -Eq '^herald started: pid [0-9]+$' "$FIX/herald-piped.out"; then
+seats/cockpit.selftest.sh:78:  pass "cockpit --herald exits under a stdout pipe and leaves a live herald pid"
+seats/cockpit.selftest.sh:80:  fail "cockpit --herald pipe run failed (rc=$PIPED_RC pid=${PIPED_PID:-none} lines=$PIPED_LINES out=$(cat "$FIX/herald-piped.out" 2>/dev/null))"
