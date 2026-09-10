@@ -1,0 +1,9 @@
+$ git diff --check HEAD
+$ rg -n "BUN_RUNTIME_TRANSPILER_CACHE_PATH|foreign-planted|negative control" seats/isolation.selftest.sh
+113:export BUN_RUNTIME_TRANSPILER_CACHE_PATH="$BUN_TRANSPILE_CACHE"
+377:mkdir -p "$HOME_FIX/foreign-planted"
+378:printf 'foreign\n' > "$HOME_FIX/foreign-planted/path.txt"
+380:if [ "$HOME_BEFORE" != "$HOME_WITH_FOREIGN" ] && comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_WITH_FOREIGN") | grep -q 'foreign-planted/path.txt'; then
+381:  pass "negative control: a planted foreign path under \$HOME still trips the strict HOME assertion"
+383:  fail "negative control: planted foreign path was not detected by the HOME assertion"
+385:rm -rf "$HOME_FIX/foreign-planted"
