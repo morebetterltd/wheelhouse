@@ -1,0 +1,9 @@
+$ reproduce current cockpit session mouse option
+herald started: pid 14180
+bridge built: session wh-repro, window 0:bridge (commander left, floor right)
+session wh-repro is up; attach with: tmux -L wheelhouse-project-2fd3-repro attach -t wh-repro
+cockpit_rc=0
+$ tmux -L wheelhouse-project-2fd3-repro show-options -gv mouse
+off
+$ tmux -L wheelhouse-project-2fd3-repro show-options -gv history-limit
+2000
