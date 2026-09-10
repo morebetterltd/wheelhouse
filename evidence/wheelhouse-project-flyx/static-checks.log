@@ -1,0 +1,13 @@
+$ git diff --check HEAD
+$ rg -n -- "PUSH: HOLD|canary 5|legibility.selftest|adapter.selftest|verify.selftest|A merge whose shared files touch" seats/legibility.selftest.sh contracts/INTEGRATOR.md
+seats/legibility.selftest.sh:3:# legibility.selftest.sh — is every failure class its own VISIBLE state, on
+seats/legibility.selftest.sh:28:# Usage: legibility.selftest.sh [path-to-seats-dir]
+seats/legibility.selftest.sh:67:# --- stale-fixture sweep (same rule as the adapter selftest's) ---------------
+seats/legibility.selftest.sh:68:FIX_PREFIX="wheelhouse-legibility-selftest"
+seats/legibility.selftest.sh:413:PUSH: HOLD — review blocked until the author fixes the mismatch
+seats/legibility.selftest.sh:440:PUSH: HOLD — evidence floor failed, so nothing is pushable
+seats/legibility.selftest.sh:454:PUSH: HOLD — proof/shot.png is absent from the branch
+seats/legibility.selftest.sh:573:# canary 5: a stub verifier that emits VERDICT without PUSH is still refused
+seats/legibility.selftest.sh:580:  pass "canary 5: verify.ts still refuses a stub verdict without PUSH"
+seats/legibility.selftest.sh:581:else fail "canary 5: PUSH-less verdict was not refused (rc=$RC): $OUT"; fi
+contracts/INTEGRATOR.md:54:- After a merge, run the merged-tip selftests before push when they apply: `adapter.selftest.sh`, `concurrency.selftest.sh`, `herald.selftest.sh`, `floor.selftest.sh`, `legibility.selftest.sh`, `fleet-gate.selftest.sh`, `recover.selftest.sh`, `cockpit.selftest.sh`, `isolation.selftest.sh`, `intent-check.selftest.sh`, `push-authority-lint.selftest.sh`, `pid-ownership.selftest.sh`, and `verify.selftest.sh`. A merge whose shared files touch one of these tools runs that tool's selftest at the merged tip before anything is pushed.
