@@ -311,7 +311,7 @@ function readVerdictFile(bead: string | null | undefined): VerdictFile | null {
     return null;
   }
   const m = text.match(/^- verdict:\s*(APPROVE|BOUNCE|DISCOVER)\b/m);
-  const unsatisfied = (text.match(/—\s*UNSATISFIED\s*$/gm) ?? []).length;
+  const unsatisfied = (text.match(/^-\s+.*—\s*UNSATISFIED\b/gm) ?? []).length;
   return { verdict: (m?.[1] as VerdictFile["verdict"]) ?? null, unsatisfied, file };
 }
 
