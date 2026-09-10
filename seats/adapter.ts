@@ -1093,16 +1093,20 @@ function rotateLogIfSafe(log: string, last: string): void {
   if (!fs.existsSync(log) || !agentSettledEvent(last)) return;
   const cap = LOG_ROTATE_BYTES;
   if (cap <= 0 || fs.statSync(log).size < cap) return;
-  // Safe only after agent_settled/agent_end. Herald is rotation-aware: when a
-  // log shrinks below its saved offset, readCompleteLines resets that offset.
+  // Copy-truncate, not rename: a settled seat can still be alive with stdout
+  // holding this inode open. The launch redirection is `>>`, which opens the
+  // log with O_APPEND, so after truncate the live writer's next append lands in
+  // the current log path. A rename would strand stdout on .jsonl.1 and blind
+  // rpc(), status, and dispatch. Herald is rotation-aware: when a log shrinks
+  // below its saved offset, readCompleteLines resets that offset.
   for (let i = LOG_ROTATE_KEEP; i >= 1; i--) {
     const src = `${log}.${i}`;
     const dst = `${log}.${i + 1}`;
     if (i >= LOG_ROTATE_KEEP) fs.rmSync(src, { force: true });
     else if (fs.existsSync(src)) fs.renameSync(src, dst);
   }
-  fs.renameSync(log, `${log}.1`);
-  fs.writeFileSync(log, "");
+  fs.copyFileSync(log, `${log}.1`);
+  fs.truncateSync(log, 0);
 }
 
 function cmdStatus(): void {
