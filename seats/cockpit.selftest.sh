@@ -13,12 +13,28 @@ COCKPIT="$HERE/cockpit.sh"
 [ -x "$COCKPIT" ] || { echo "selftest: not executable: $COCKPIT" >&2; exit 2; }
 
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")"
+FIX="$(cd "$FIX" && pwd -P)"
 SOCK="wheelhouse-cockpit-selftest.$$"
 PASS=0
 FAIL=0
 cleanup() {
   tmux -L "$SOCK" kill-server >/dev/null 2>&1 || true
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true
+  pids=""
+  for pid_file in "$FIX"/project/seats/run/*.pid; do
+    [ -f "$pid_file" ] || continue
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    [ -n "$pid" ] && pids="$pids $pid"
+  done
+  [ -n "$pids" ] && kill $pids >/dev/null 2>&1 || true
+  pkill -f "$FIX/project/seats/herald.ts" >/dev/null 2>&1 || true
+  pkill -f "$FIX/project/seats/commander-inbox-poll.sh" >/dev/null 2>&1 || true
+  sleep 0.2
+  for pid in $pids; do
+    kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" >/dev/null 2>&1 || true
+  done
+  pkill -9 -f "$FIX/project/seats/herald.ts" >/dev/null 2>&1 || true
+  pkill -9 -f "$FIX/project/seats/commander-inbox-poll.sh" >/dev/null 2>&1 || true
   rm -rf "$FIX"
 }
 trap cleanup EXIT INT TERM
@@ -35,6 +51,12 @@ EOF
 cat > "$PROJ/seats/herald.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
+cat > "$PROJ/seats/commander-inbox-poll.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "poll-root=${WHEELHOUSE_COMMANDER_POLL_ROOT:-}" >> "$(dirname "$0")/logs/poll.fixture.log"
+while :; do sleep 1; done
+EOF
+chmod +x "$PROJ/seats/commander-inbox-poll.sh"
 
 run_cockpit() {
   WHEELHOUSE_TMUX_SOCKET="$SOCK" WHEELHOUSE_COCKPIT_COMMANDER_PERCENT=55 "$PROJ/seats/cockpit.sh" ratio > "$FIX/cockpit.out" 2>&1
@@ -66,6 +88,18 @@ else
 fi
 kill "$HERALD_ONLY_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/herald.pid"
+
+WHEELHOUSE_TMUX_SOCKET="$SOCK" tmux -L "$SOCK" new-session -d -s wh-pane -n bridge -c "$PROJ" "$PROJ/seats/cockpit.sh --pane-commander"
+sleep 0.5
+POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
+if [ -n "$POLL_PID" ] && kill -0 "$POLL_PID" 2>/dev/null && grep -q "poll-root=$PROJ" "$PROJ/seats/logs/poll.fixture.log" 2>/dev/null; then
+  pass "cockpit --pane-commander starts commander-inbox-poll.sh bound to the pane"
+else
+  fail "cockpit --pane-commander did not start poll (pid=${POLL_PID:-none} log=$(cat "$PROJ/seats/logs/poll.fixture.log" 2>/dev/null || echo none))"
+fi
+tmux -L "$SOCK" kill-session -t wh-pane >/dev/null 2>&1 || true
+kill "$POLL_PID" 2>/dev/null || true
+rm -f "$PROJ/seats/run/commander-inbox-poll.pid"
 
 run_cockpit
 if grep -q 'bridge built: session wh-ratio' "$FIX/cockpit.out" && [ "$(pane_count)" = 2 ]; then

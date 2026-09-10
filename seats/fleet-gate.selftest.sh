@@ -105,7 +105,26 @@ else
 fi
 rm -f "$PROJ/seats/run/herald.pid" "$PROJ/seats/logs/herald.stderr.log"
 
-phase "5. graceful degrade — bd absent: silent, exit 0"
+phase "5. inbox lag — undrained rows are visible with oldest age and herald deferral streak"
+cat > "$PROJ/seats/inbox.jsonl" <<'JSONL'
+{"id":"one","at":"2000-01-01T00:00:00.000Z","seat":"worker-1","class":"settle"}
+{"id":"two","at":"2000-01-01T00:00:05.000Z","seat":"worker-2","class":"distress"}
+JSONL
+printf '%s\n' 0 > "$PROJ/seats/inbox.cursor"
+cat > "$PROJ/seats/logs/herald.out.log" <<'LOG'
+2026-09-10T00:00:00.000Z poke sent pane=wh-demo:bridge.0 inbox=1
+2026-09-10T00:00:04.000Z poke deferred reason=not-idle pane=wh-demo:bridge.0 inbox=2
+2026-09-10T00:00:08.000Z poke deferred reason=not-idle pane=wh-demo:bridge.0 inbox=2
+LOG
+run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && has "INBOX LAG 2 undrained row(s)" && has "oldest" && has "herald deferral streak 2"; then
+  pass "inbox cursor lag is printed with row count, oldest age, and deferral streak"
+else
+  fail "inbox lag was not reported (rc=$RC): $OUT"
+fi
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/logs/herald.out.log"
+
+phase "6. graceful degrade — bd absent: silent, exit 0"
 run "$FIX/status-stopped" "$FIX/ready-2" ""
 NOBD_OUT="$(cd "$PROJ" && env PATH="/usr/bin:/bin" \
   FIXTURE_STATUS_FILE="$FIX/status-stopped" bash seats/fleet-gate.sh 2>&1)"
@@ -116,7 +135,7 @@ else
   fail "no bd on PATH should be silent+0 (rc=$NOBD_RC): $NOBD_OUT"
 fi
 
-phase "6. graceful degrade — adapter.ts absent: silent, exit 0"
+phase "7. graceful degrade — adapter.ts absent: silent, exit 0"
 rm "$PROJ/seats/adapter.ts"
 run "" "$FIX/ready-2" ""
 if [ $RC -eq 0 ] && [ -z "$OUT" ]; then

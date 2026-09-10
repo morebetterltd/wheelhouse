@@ -39,6 +39,7 @@ const READ_CHUNK_BYTES = Math.max(1024, Number(process.env.WHEELHOUSE_HERALD_REA
 const POKE_PHRASE = "check the fleet inbox";
 const POKE_STABILITY_MS = Math.max(3000, Number(process.env.WHEELHOUSE_HERALD_POKE_STABILITY_MS || 3000));
 const POKE_COOLDOWN_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_COOLDOWN_MS || 120_000));
+const POKE_ESCALATE_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_ESCALATE_MS || 300_000));
 const TMUX_SESSION = process.env.WHEELHOUSE_HERALD_TMUX_SESSION || "";
 const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
 const TMUX_SOCKET = process.env.WHEELHOUSE_TMUX_SOCKET || "";
@@ -56,6 +57,7 @@ interface HeraldState {
   seen: string[];
   lastPokedInboxSize?: number;
   lastPokedByPane?: Record<string, number>;
+  firstDeferredAtByPane?: Record<string, number>;
 }
 
 interface Candidate {
@@ -75,7 +77,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {} };
+    return { logs: parsed.logs ?? {}, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {} };
   } catch (e: any) {
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
@@ -335,6 +337,12 @@ function configuredIdleRegex(): RegExp | null {
   }
 }
 
+function paneTextHasActiveMarkers(paneText: string): boolean {
+  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(paneText)
+    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(paneText)
+    || /\b(esc to interrupt|running tool|tool running|thinking|working)\b/i.test(paneText);
+}
+
 function paneTextLooksIdleClaude(paneText: string): boolean {
   // Claude Code's current prompt UI is a bordered input box: a standalone
   // `❯` prompt line followed by a status/footer line. During a turn that
@@ -342,8 +350,7 @@ function paneTextLooksIdleClaude(paneText: string): boolean {
   // measured active markers first. Wrapper launches can render their own idle
   // prompt, so WHEELHOUSE_HERALD_IDLE_RE lets an install add the wrapper's
   // exact idle signature without changing the safe active-marker exclusions.
-  if (/[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(paneText)) return false;
-  if (/\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(paneText)) return false;
+  if (paneTextHasActiveMarkers(paneText)) return false;
   const custom = configuredIdleRegex();
   if (custom?.test(paneText)) return true;
   return /(?:^|\n)\s*(?:[>❯]|Human:|You:)\s*(?:\n|$)/.test(paneText) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
@@ -353,10 +360,17 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, Math.floor(ms)));
 }
 
-function captureCommanderPane(): { command: string; text: string } | null {
+function stablePaneText(paneText: string): string {
+  const lines = paneText.split(/\r?\n/);
+  const prompt = lines.findIndex((l) => /^\s*(?:[>❯]|Human:|You:)\s*$/.test(l));
+  if (prompt >= 0) return lines.slice(0, prompt + 1).join("\n");
+  return lines.filter((l) => !/\b(?:tokens|ctx|context|model|cost|elapsed|status|lifeos)\b/i.test(l)).join("\n");
+}
+
+function captureCommanderPane(): { command: string; text: string; stableText: string } | null {
   const command = tmuxOutput(["display-message", "-p", "-t", TMUX_PANE, "#{pane_current_command}"]);
-  const text = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-30"]);
-  return { command, text };
+  const text = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-200"]);
+  return { command, text, stableText: stablePaneText(text) };
 }
 
 function commanderPaneIdleClaude(): boolean {
@@ -368,9 +382,19 @@ function commanderPaneIdleClaude(): boolean {
     sleepSync(POKE_STABILITY_MS);
     const second = captureCommanderPane();
     if (!second || second.command !== first.command) return false;
-    return second.text === first.text && paneTextLooksIdleClaude(second.text);
+    return second.stableText === first.stableText && paneTextLooksIdleClaude(second.text);
   } catch {
     return false;
+  }
+}
+
+function commanderPaneHasActiveMarkers(): boolean {
+  if (!TMUX_PANE) return true;
+  try {
+    const pane = captureCommanderPane();
+    return !pane || paneTextHasActiveMarkers(pane.text);
+  } catch {
+    return true;
   }
 }
 
@@ -385,16 +409,26 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   }
   const lastPoked = state.lastPokedByPane?.[TMUX_PANE] ?? 0;
   if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
-  if (!commanderPaneIdleClaude()) { logPoke("deferred", `reason=not-idle pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
+  const idle = commanderPaneIdleClaude();
+  const firstDeferred = state.firstDeferredAtByPane?.[TMUX_PANE] ?? 0;
+  const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && !commanderPaneHasActiveMarkers();
+  if (!idle && !escalated) {
+    const first = firstDeferred || Date.now();
+    state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [TMUX_PANE]: first };
+    writeState(state);
+    logPoke("deferred", `reason=not-idle pane=${TMUX_PANE} inbox=${inboxSize}`);
+    return;
+  }
   try {
     execFileSync("tmux", tmuxArgs(["send-keys", "-t", TMUX_PANE, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
   } catch (e: any) {
     logPoke("dropped", `reason=send-failed pane=${TMUX_PANE} inbox=${inboxSize} error=${e?.message || e}`);
     throw e;
   }
-  logPoke("sent", `pane=${TMUX_PANE} inbox=${inboxSize}`);
+  logPoke(escalated ? "escalated" : "sent", `pane=${TMUX_PANE} inbox=${inboxSize}`);
   state.lastPokedInboxSize = inboxSize;
   state.lastPokedByPane = { ...(state.lastPokedByPane ?? {}), [TMUX_PANE]: Date.now() };
+  state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [TMUX_PANE]: 0 };
   writeState(state);
 }
 

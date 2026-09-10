@@ -39,6 +39,25 @@ pid_alive() {
   kill -0 "$1" 2>/dev/null
 }
 
+ensure_commander_poll() {
+  if [ ! -x "$HERE/commander-inbox-poll.sh" ]; then
+    echo "commander inbox poll not installed beside cockpit; skipping pane poll"
+    return 0
+  fi
+  mkdir -p "$HERE/run" "$HERE/logs"
+  poll_pid_file="$HERE/run/commander-inbox-poll.pid"
+  if [ -f "$poll_pid_file" ]; then
+    poll_pid="$(cat "$poll_pid_file" 2>/dev/null || true)"
+    if pid_alive "$poll_pid"; then
+      echo "commander inbox poll already running: pid $poll_pid"
+      return 0
+    fi
+    rm -f "$poll_pid_file"
+  fi
+  (cd "$ROOT" && WHEELHOUSE_COMMANDER_POLL_ROOT="$ROOT" "$HERE/commander-inbox-poll.sh" >> "$HERE/logs/commander-inbox-poll.out.log" 2>> "$HERE/logs/commander-inbox-poll.stderr.log" & echo $! > "$poll_pid_file")
+  echo "commander inbox poll started: pid $(cat "$poll_pid_file" 2>/dev/null || echo '?')"
+}
+
 ensure_herald() {
   if [ ! -f "$HERE/herald.ts" ]; then
     echo "herald not installed beside cockpit; skipping dispatch herald"
@@ -77,11 +96,13 @@ case "${1:-}" in
     exit 0
     ;;
   --pane-commander)
+    ensure_commander_poll
     cat <<EOF
 
   ┌─ COMMANDER PANE ──────────────────────────────────────────────┐
   │ This is the commander's seat. Launch your interactive         │
-  │ commander here yourself — the cockpit never does it for you:  │
+  │ commander here yourself — the cockpit never does it for you.  │
+  │ cockpit has started commander-inbox-poll.sh for this pane.    │
   │                                                               │
   │     cd $ROOT
   │     claude                                                    │
