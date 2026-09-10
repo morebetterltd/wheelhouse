@@ -410,6 +410,7 @@ phase "phase 4: BLOCKED REVIEW — a BOUNCE verdict file renders amber, never do
 cat > "$REPLY" <<'EOF'
 The done requires X; the diff does Y.
 VERDICT: BOUNCE
+PUSH: HOLD — review blocked until the author fixes the mismatch
 EOF
 vrun bead-rev fleet/bead-rev r-seat verifier
 if [ $RC -eq 2 ] && grep -q "verdict: BOUNCE" "$VDIR/bead-rev.md" 2>/dev/null; then
@@ -436,6 +437,7 @@ rm -f "$VDIR/bead-ev.md"
 cat > "$REPLY" <<'EOF'
 Looks fine to me.
 VERDICT: APPROVE
+PUSH: HOLD — evidence floor failed, so nothing is pushable
 EOF
 vrun bead-ev fleet/bead-ev e-seat verifier --evidence proof/shot.png
 if [ $RC -eq 1 ] && says "unsatisfied evidence"; then
@@ -449,6 +451,7 @@ else fail "a verdict file exists for the refused APPROVE"; fi
 cat > "$REPLY" <<'EOF'
 The bead names proof/shot.png; it is not on the branch.
 VERDICT: BOUNCE
+PUSH: HOLD — proof/shot.png is absent from the branch
 EOF
 vrun bead-ev fleet/bead-ev e-seat verifier --evidence proof/shot.png
 if [ $RC -eq 2 ] && grep -q "UNSATISFIED" "$VDIR/bead-ev.md" 2>/dev/null; then
@@ -566,6 +569,16 @@ else
     fail "canary 4: DIED survived its removal — these checks prove nothing"
   else pass "canary 4: cutting DIED is caught by phase 3's adapter-status check"; fi
 fi
+
+# canary 5: a stub verifier that emits VERDICT without PUSH is still refused
+cat > "$REPLY" <<'EOF'
+The old fixture shape must stay invalid.
+VERDICT: BOUNCE
+EOF
+vrun bead-no-push fleet/bead-rev r-seat verifier
+if [ $RC -eq 1 ] && says "verifier emitted no PUSH: line"; then
+  pass "canary 5: verify.ts still refuses a stub verdict without PUSH"
+else fail "canary 5: PUSH-less verdict was not refused (rc=$RC): $OUT"; fi
 
 # --- teardown of live stub seats ---------------------------------------------
 arun stop q-seat >/dev/null 2>&1
