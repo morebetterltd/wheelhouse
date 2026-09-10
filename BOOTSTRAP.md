@@ -110,6 +110,7 @@ mkdir -p wheelhouse
 { echo "source=$(git -C "$TEMPLATE" remote get-url origin 2>/dev/null || echo "$TEMPLATE")"
   echo "commit=$(git -C "$TEMPLATE" rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "path=$TEMPLATE"
+  echo "product-repo=$(pwd -P)"
   echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "upgraded="
   echo "namespace="

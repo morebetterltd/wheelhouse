@@ -5,7 +5,7 @@
  * One invocation = one verdict. It spawns a one-shot `pi -p --no-session`
  * on the VERIFIER seat's own agent directory, with the REVIEWER crew brief
  * appended to the system prompt, hands it the bead claim and the branch's
- * tip SHA, and parses the single `VERDICT:` line out of what comes back.
+ * tip SHA, and parses the single `VERDICT:` and `PUSH:` lines out of what comes back.
  * Nothing persists on the verifier's side — no session, no memory — which
  * is the point: the verdict plus its printed evidence IS the whole output.
  *
@@ -124,13 +124,38 @@ export function makeScratchCwd(repoRoot: string): string {
   return dir;
 }
 
-function pidAlive(pid: number): boolean {
+function barePidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
   } catch (e: any) {
     return e.code === "EPERM"; // exists, not ours to signal — still alive
   }
+}
+
+function openPaths(pid: number): string[] {
+  for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
+    try {
+      return execFileSync(lsof, ["-Fn", "-p", String(pid)], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+        .split("\n")
+        .filter((l) => l.startsWith("n"))
+        .map((l) => l.slice(1));
+    } catch (e: any) {
+      if (e.code === "ENOENT") continue;
+      return [];
+    }
+  }
+  die("lsof is not on PATH — verify cannot establish scratch worktree ownership without it");
+}
+
+function pidHoldsPath(pid: number, p: string): boolean {
+  const wanted = new Set([p]);
+  try { wanted.add(fs.realpathSync(p)); } catch {}
+  return openPaths(pid).some((n) => wanted.has(n));
+}
+
+function pidAlive(pid: number, ownedPath: string): boolean {
+  return barePidAlive(pid) && pidHoldsPath(pid, ownedPath);
 }
 
 /**
@@ -175,7 +200,7 @@ export function sweepStaleScratchWorktrees(repoRoot: string): void {
   for (const p of worktreePaths) {
     const m = path.basename(p).match(/^wheelhouse-verify-(\d+)-/);
     if (!m) continue; // not one of ours
-    if (pidAlive(Number(m[1]))) continue; // owner still running — not stale
+    if (pidAlive(Number(m[1]), p)) continue; // owner still running and holds this scratch worktree — not stale
     try {
       execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", p], { stdio: "ignore" });
     } catch {
@@ -197,10 +222,11 @@ interface VerdictCandidate {
   lineNumber: number;
 }
 
-function liveVerdictCandidates(stdout: string): VerdictCandidate[] {
+function liveLineCandidates(stdout: string, tag: "VERDICT" | "PUSH"): VerdictCandidate[] {
   const out: VerdictCandidate[] = [];
   let inFence = false;
   const lines = stdout.split("\n");
+  const re = new RegExp(`^${tag}:`);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
@@ -210,9 +236,17 @@ function liveVerdictCandidates(stdout: string): VerdictCandidate[] {
     }
     if (inFence) continue;
     const normalized = trimmed.replace(/^(>\s*)+/, "").trim();
-    if (/^VERDICT:/.test(normalized)) out.push({ line, normalized, lineNumber: i + 1 });
+    if (re.test(normalized)) out.push({ line, normalized, lineNumber: i + 1 });
   }
   return out;
+}
+
+function liveVerdictCandidates(stdout: string): VerdictCandidate[] {
+  return liveLineCandidates(stdout, "VERDICT");
+}
+
+function livePushCandidates(stdout: string): VerdictCandidate[] {
+  return liveLineCandidates(stdout, "PUSH");
 }
 
 function writeRawVerifierOutput(stdout: string): string {
@@ -439,7 +473,7 @@ interface SeatEntry {
   provider?: string;
   model?: string;
   external?: boolean;
-  account?: { dir: string; label?: string };
+  account?: { dir: string; label?: string; authRoute?: string };
 }
 
 function readRoster(): Record<string, SeatEntry> {
@@ -481,12 +515,30 @@ function accountDirFor(name: string): string {
   die(`no seat named "${name}" in seats/seats.json or seats/state.json — cannot establish whose account authored this`);
 }
 
+const PROVIDER_ENV_VARS: Record<string, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  google: "GEMINI_API_KEY",
+  gemini: "GEMINI_API_KEY",
+};
+function providerEnvVar(provider: string): string | undefined { return PROVIDER_ENV_VARS[provider]; }
+
 // Same rule as adapter.ts: pi auto-creates an empty {} auth.json on a first
 // headless run, and a seat with only that has never been logged in.
 function authIsIdentity(authFile: string): boolean {
   if (!fs.existsSync(authFile)) return false;
   const body = fs.readFileSync(authFile, "utf8").replace(/[{}\s]/g, "");
   return body.length > 0;
+}
+function authRouteIdentity(name: string, entry: SeatEntry, authFile: string): boolean {
+  const route = entry.account?.authRoute;
+  if (route === "env") {
+    if (!entry.provider) die(`verifier seat "${name}" uses account.authRoute=env but has no provider in seats/seats.json`);
+    const envVar = providerEnvVar(entry.provider);
+    if (!envVar) die(`verifier seat "${name}" uses account.authRoute=env for provider ${JSON.stringify(entry.provider)}, but this verifier does not know that provider's env var`);
+    return !!process.env[envVar];
+  }
+  return authIsIdentity(authFile);
 }
 
 function requireVerifierSeat(explicit: string | undefined): { name: string; entry: SeatEntry } {
@@ -577,11 +629,13 @@ function main(): void {
     );
   }
   const verifierAuthFile = path.join(verifierDir, "auth.json");
-  if (!authIsIdentity(verifierAuthFile)) {
+  if (!authRouteIdentity(verifierSeat, entry, verifierAuthFile)) {
+    const envVar = entry.account?.authRoute === "env" && entry.provider ? providerEnvVar(entry.provider) : undefined;
     die(
       `verifier seat "${verifierSeat}" has no identity — give it credentials once:\n` +
         `      OAuth: PI_CODING_AGENT_DIR="${verifierDir}" pi, then type /login in the REPL and /exit after the browser flow\n` +
-        `      api_key: write ${verifierAuthFile} or export the provider env var in the shell that spawns this verifier`
+        `      api_key: write ${verifierAuthFile}\n` +
+        `      env: set account.authRoute=env and export ${envVar ?? "the provider env var"} in the shell that spawns this verifier`
     );
   }
 
@@ -627,8 +681,9 @@ function main(): void {
     ``,
     `Verify whether the bead's stated done holds at that SHA, per your brief.`,
     `Confirm the branch still resolves to the SHA above before relying on your reading.`,
-    `End with exactly one line: VERDICT: APPROVE | BOUNCE | DISCOVER, with your`,
-    `evidence above it. If you cannot deliver a verdict, emit no VERDICT: line at all.`,
+    `End with exactly one line: VERDICT: APPROVE | BOUNCE | DISCOVER and exactly`,
+    `one PUSH: line in the format REVIEWER.md specifies. Evidence goes above them.`,
+    `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
   ].join("\n");
 
   const args = ["-p", "--no-session", "--append-system-prompt", brief];
@@ -680,6 +735,19 @@ function main(): void {
         verdictLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
     );
   }
+  const pushLines = livePushCandidates(stdout);
+  if (pushLines.length === 0) {
+    die(`verifier emitted no PUSH: line outside fenced code blocks — REVIEWER.md requires exactly one PUSH line beside the verdict (raw output: ${rawFile})`);
+  }
+  if (pushLines.length > 1) {
+    die(
+      `verifier emitted ${pushLines.length} live PUSH: lines outside fenced code blocks — ambiguous, refusing to pick one (raw output: ${rawFile}). Candidates:\n` +
+        pushLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
+    );
+  }
+  if (!/^PUSH:\s*(APPROVE\s+\S+\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED)\s*$/.test(pushLines[0].normalized)) {
+    die(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED`);
+  }
   // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
   // you are reviewing") belongs to APPROVE and to nothing else.
   const m = verdictLines[0]
@@ -722,6 +790,7 @@ function main(): void {
     `- verifier-seat: ${verifierSeat} (${verifierDir})`,
     `- at: ${new Date().toISOString()}`,
     `- verdict: ${verdictShown}`,
+    `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
     ``,
     `> Working copy only. Evidence the graph can cite lives on the bead —`,
     `> transcribe the decisive extract there before citing this verdict.`,

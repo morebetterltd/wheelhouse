@@ -259,4 +259,26 @@ expect_output uncommitted 'UNRUNNABLE:'
 say 'ok 10 - uncommitted ISA exits distinct unrunnable code 2'
 pass_count=$((pass_count + 1))
 
+# 11. At an umbrella root with no argv, .template-source must name the product repo.
+umb="$FIXTURE/umbrella"
+prod="$umb/product"
+make_fixture "$prod"
+mkdir -p "$umb/wheelhouse" "$umb/seats"
+printf 'path=%s/template\nproduct-repo=%s\ncommit=fixture\n' "$umb" "$prod" >"$umb/wheelhouse/.template-source"
+run_capture umbrella_product sh -c "cd '$umb' && '$CHECK'"
+expect_rc umbrella_product 0
+expect_output umbrella_product 'intent-check: PASS'
+say 'ok 11 - umbrella no-argv scan resolves product-repo from .template-source'
+pass_count=$((pass_count + 1))
+
+umb_missing="$FIXTURE/umbrella-missing-key"
+mkdir -p "$umb_missing/wheelhouse"
+printf 'path=%s/template\ncommit=fixture\n' "$umb_missing" >"$umb_missing/wheelhouse/.template-source"
+run_capture umbrella_missing sh -c "cd '$umb_missing' && '$CHECK'"
+expect_rc umbrella_missing 2
+expect_output umbrella_missing 'no product-repo= key'
+expect_output umbrella_missing 'refusing to guess'
+say 'ok 12 - .template-source without product-repo STOPs instead of scanning umbrella'
+pass_count=$((pass_count + 1))
+
 say "intent-check.selftest: PASS ($pass_count legs)"

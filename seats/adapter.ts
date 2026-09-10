@@ -241,6 +241,7 @@ interface SeatRecord {
   lastBead?: string;
   lastDispatchAt?: string;
   lastCapacityEvent?: { at: string; detail: string; accountLabel?: string };
+  lastLaunchFailure?: { at: string; detail: string };
 }
 
 interface State {
@@ -266,14 +267,64 @@ function readState(): State {
   return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
 }
 
-function writeState(state: State): void {
-  // Write-then-rename so a crash mid-write cannot leave half a state file.
-  const tmp = STATE_FILE + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\n");
-  fs.renameSync(tmp, STATE_FILE);
+function sleepMs(ms: number): void {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function pidAlive(pid: number | null): boolean {
+function acquireStateLock(): number {
+  const lock = path.join(SEATS_DIR, "state.lock");
+  const deadline = Date.now() + Number(process.env.WHEELHOUSE_STATE_LOCK_TIMEOUT_MS || 5000);
+  while (true) {
+    fs.mkdirSync(SEATS_DIR, { recursive: true });
+    try {
+      const fd = fs.openSync(lock, "wx", 0o600);
+      fs.writeFileSync(fd, `${process.pid}\n`);
+      return fd;
+    } catch (e: any) {
+      if (e?.code !== "EEXIST") throw e;
+      let owner: number | null = null;
+      try {
+        const raw = fs.readFileSync(lock, "utf8").trim();
+        owner = raw ? Number(raw) : null;
+      } catch {}
+      if (owner && !barePidAlive(owner)) {
+        try { fs.rmSync(lock, { force: true }); continue; } catch {}
+      }
+      if (Date.now() >= deadline) die(`timed out waiting for ${lock}`);
+      sleepMs(25);
+    }
+  }
+}
+
+function releaseStateLock(fd: number): void {
+  try { fs.closeSync(fd); } catch {}
+  try { fs.rmSync(path.join(SEATS_DIR, "state.lock"), { force: true }); } catch {}
+}
+
+function writeState(state: State): void {
+  const testDelay = Number(process.env.WHEELHOUSE_STATE_WRITE_DELAY_MS || 0);
+  const fd = acquireStateLock();
+  try {
+    if (testDelay > 0) sleepMs(testDelay);
+    // Re-read-before-merge under the lock plus a per-writer tmp file: two
+    // adapter invocations updating different seats must not let the later
+    // rename erase the earlier writer's record.
+    let merged = state;
+    if (fs.existsSync(STATE_FILE)) {
+      try {
+        const current = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) as State;
+        merged = { seats: { ...(current.seats ?? {}), ...(state.seats ?? {}) } };
+      } catch {}
+    }
+    const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + "\n");
+    fs.renameSync(tmp, STATE_FILE);
+  } finally {
+    releaseStateLock(fd);
+  }
+}
+
+function barePidAlive(pid: number | null): boolean {
   if (!pid) return false;
   try {
     process.kill(pid, 0);
@@ -281,6 +332,30 @@ function pidAlive(pid: number | null): boolean {
   } catch (e: any) {
     return e.code === "EPERM"; // exists, not ours to signal — still alive
   }
+}
+
+function openPaths(pid: number): string[] {
+  for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
+    try {
+      return execFileSync(lsof, ["-Fn", "-p", String(pid)], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+        .split("\n")
+        .filter((l) => l.startsWith("n"))
+        .map((l) => l.slice(1));
+    } catch (e: any) {
+      if (e.code === "ENOENT") continue;
+      return [];
+    }
+  }
+  return [];
+}
+function pidHoldsPath(pid: number, p: string): boolean {
+  const wanted = new Set([p]);
+  try { wanted.add(fs.realpathSync(p)); } catch {}
+  return openPaths(pid).some((n) => wanted.has(n));
+}
+function pidAlive(pid: number | null, fifo?: string): boolean {
+  if (!barePidAlive(pid)) return false;
+  return fifo ? pidHoldsPath(pid!, fifo) : true;
 }
 
 // Same rule as seat-env.sh: pi auto-creates an empty {} auth.json on a first
@@ -437,7 +512,7 @@ async function rpc(
       }
       if (obj.type === "response" && obj.id === id) return obj;
     }
-    if (!pidAlive(rec.pid)) {
+    if (!pidAlive(rec.pid, rec.fifo)) {
       throw new Error(`seat process died while waiting for ${command.type} response — check the .stderr.log beside its event log`);
     }
     await sleep(100);
@@ -553,6 +628,16 @@ function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster
 
 
 /** Last few KB of the seat's stderr log — where pi complains about limits. */
+function recordLaunchFailure(name: string, existing: SeatRecord | undefined, detail: string): void {
+  const state = readState();
+  state.seats[name] = {
+    ...(existing ?? state.seats[name] ?? {}),
+    pid: null,
+    lastLaunchFailure: { at: new Date().toISOString(), detail } as any,
+  } as SeatRecord;
+  writeState(state);
+}
+
 function stderrTail(rec: { log: string }, maxBytes = 8 * 1024): string {
   const errLog = rec.log.replace(/\.jsonl$/, ".stderr.log");
   try {
@@ -643,7 +728,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   const labelSuffix = accountLabelSuffix(entry);
   const state = readState();
   const existing = state.seats[name];
-  if (existing && pidAlive(existing.pid)) {
+  if (existing && pidAlive(existing.pid, existing.fifo)) {
     die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
   }
 
@@ -702,9 +787,14 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
     st = await rpc(probe, { type: "get_state" });
   } catch (e: any) {
     const cleanup = await terminateSpawnedOnly(pid);
+    recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
   }
-  if (!st.success) die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. stderr tail:\n${stderrTail(probe)}`);
+  if (!st.success) {
+    const cleanup = await terminateSpawnedOnly(pid);
+    recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
+    die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+  }
 
   const requestedCwd = path.resolve(cwd);
   const liveCwd = processCwd(pid);
@@ -783,7 +873,7 @@ function cmdProbe(name: string): void {
 async function cmdResume(name: string): Promise<void> {
   const rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" in seats/state.json — spawn it instead`);
-  if (pidAlive(rec.pid)) die(`seat "${name}" is already running (pid ${rec.pid})`);
+  if (pidAlive(rec.pid, rec.fifo)) die(`seat "${name}" is already running (pid ${rec.pid})`);
   if (!rec.sessionFile) die(`seat "${name}" has no recorded session file — spawn it instead`);
   if (!fs.existsSync(rec.sessionFile)) {
     die(`recorded session file is gone: ${rec.sessionFile} — spawn a fresh seat instead`);
@@ -850,7 +940,7 @@ async function cmdReset(name: string): Promise<void> {
 function requireRunning(name: string): SeatRecord {
   const rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
-  if (!pidAlive(rec.pid)) die(`seat "${name}" is not running — resume or spawn it first`);
+  if (!pidAlive(rec.pid, rec.fifo)) die(`seat "${name}" is not running — resume or spawn it first`);
   return rec;
 }
 
@@ -957,7 +1047,11 @@ function orphanMatchesFor(name: string, rec: SeatRecord): { pid: number; reason:
   }
   if (rec.fifo && fs.existsSync(rec.fifo)) {
     try {
-      const out = spawnSync("lsof", ["-t", rec.fifo], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout || "";
+      let out = "";
+      for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
+        const r = spawnSync(lsof, ["-t", rec.fifo], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        if (!r.error) { out = r.stdout || ""; break; }
+      }
       for (const s of out.split(/\s+/).filter(Boolean)) add(Number(s), `holding stdin FIFO ${rec.fifo}`);
     } catch { /* lsof absent or refused: status still prints the recorded row */ }
   }
@@ -1022,7 +1116,7 @@ function cmdStatus(): void {
   for (const name of names) {
     const rec = state.seats[name];
     syncCapacityFromLog(name, rec, state, roster);
-    const alive = pidAlive(rec.pid);
+    const alive = pidAlive(rec.pid, rec.fifo);
     // A seat nobody stopped whose pid is gone DIED — that is a failure, and
     // rendering it as the same calm STOPPED a graceful stop earns would be
     // a failure conflated into a normal state. Say which one it is.
@@ -1056,8 +1150,8 @@ async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<
   // not shooting.
   process.kill(rec.pid!, "SIGTERM");
   const deadline = Date.now() + TIMEOUT_MS;
-  while (pidAlive(rec.pid) && Date.now() < deadline) await sleep(100);
-  if (pidAlive(rec.pid)) {
+  while (pidAlive(rec.pid, rec.fifo) && Date.now() < deadline) await sleep(100);
+  if (pidAlive(rec.pid, rec.fifo)) {
     throw new Error(`pid ${rec.pid} is still alive after SIGTERM and ${TIMEOUT_MS}ms — look at it before escalating`);
   }
   rec.pid = null;
@@ -1070,7 +1164,7 @@ async function cmdStop(name: string): Promise<void> {
   const state = readState();
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
-  if (!pidAlive(rec.pid)) {
+  if (!pidAlive(rec.pid, rec.fifo)) {
     console.log(`seat ${name} is not running`);
     return;
   }
@@ -1091,7 +1185,7 @@ async function cmdStopAll(): Promise<void> {
       console.log(`seat ${name}: no state record — not running`);
       continue;
     }
-    if (!pidAlive(rec.pid)) {
+    if (!pidAlive(rec.pid, rec.fifo)) {
       console.log(`seat ${name}: not running; session ${rec.sessionId ?? "-"} kept for resume`);
       continue;
     }

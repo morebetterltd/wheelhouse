@@ -1,0 +1,19 @@
+Reproductions against starting main acd15cb before fixes
+$ git rev-parse HEAD
+acd15cbd11caa9b3ae26f9959aa8764f42638420
+
+Finding 1a: verify.ts accepts VERDICT without PUSH (expected current bug exit 0)
+rc=0
+      Prefer to opt out?     bd metrics off    (one command, no restart needed)
+
+Error fetching bead: no issue found matching "bead"
+VERDICT: APPROVE  (bead bead, tip 0e0990f338ba, verifier verifier)
+  full output -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-x0yy/.wheelhouse-runs/wheelhouse-project-x0yy/repro1/proj/seats/verdicts/bead.md
+
+Finding 1b: push-authority lint accepts missing PUSH line (expected current bug exit 0)
+rc=2
+UNRUNNABLE: no wheelhouse/INTEGRATOR.md or contracts/INTEGRATOR.md under .wheelhouse-runs/wheelhouse-project-x0yy/repro1/push.md
+
+Finding 6: umbrella intent-check with no product key scans umbrella/root or exits generically
+rc=0
+intent-check: PASS
