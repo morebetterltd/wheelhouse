@@ -606,7 +606,22 @@ function requireCwdDir(cwd: string): string {
   return cwd;
 }
 
-async function launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
+function processCwd(pid: number): string | null {
+  for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
+    try {
+      const out = execFileSync(lsof, ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      const line = out.split("\n").find((l) => l.startsWith("n"));
+      if (line) return path.resolve(line.slice(1));
+    } catch {}
+  }
+  try {
+    const procCwd = `/proc/${pid}/cwd`;
+    if (fs.existsSync(procCwd)) return path.resolve(fs.realpathSync(procCwd));
+  } catch {}
+  return null;
+}
+
+async function launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
   const state = readState();
@@ -674,6 +689,21 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   }
   if (!st.success) die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. stderr tail:\n${stderrTail(probe)}`);
 
+  const requestedCwd = path.resolve(cwd);
+  const liveCwd = processCwd(pid);
+  if (liveCwd && liveCwd !== requestedCwd) {
+    const cleanup = await terminateSpawnedOnly(pid);
+    if (sessionFile && !retriedFresh) {
+      console.log(
+        `seat ${name}: recorded session could not move cwd from ${liveCwd} to ${requestedCwd}; ${cleanup}; ` +
+          `starting a fresh session in the requested cwd`
+      );
+      await launch(name, entry, null, cwd, true);
+      return;
+    }
+    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} has live cwd ${liveCwd}, not requested cwd ${requestedCwd}. launch-only cleanup: ${cleanup}`);
+  }
+
   state.seats[name] = {
     pid,
     startedAt: new Date().toISOString(),
@@ -681,7 +711,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
     ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
     roleBrief: brief,
-    cwd,
+    cwd: liveCwd ?? requestedCwd,
     fifo,
     log,
     sessionId: st.data?.sessionId ?? null,

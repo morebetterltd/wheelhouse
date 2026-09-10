@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import * as crypto from "node:crypto";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const DEFAULT_CONTAINERS = [".wheelhouse-worktrees", ".worktrees"];
@@ -70,6 +71,7 @@ function row(category: string, safe: boolean, repo: string, p: string, branch: s
   const b = sizeOverride ?? (fs.existsSync(p) ? bytes(p) : 0);
   return { category, safe: safe ? 1 : 0, repo, path: p, branch, size_bytes: b, size_human: human(b), action, reason };
 }
+function stop(message: string): never { console.error(`STOP: ${message}`); process.exit(1); }
 
 function repositories(root: string): string[] {
   const out = new Set<string>();
@@ -121,16 +123,59 @@ function beadPrefix(name: string, beads: Map<string, string>, sep = ""): [string
   for (const [id, st] of beads) if (name.startsWith(`${id}${sep}`) && (!best || id.length > best[0].length)) best = [id, st];
   return best;
 }
-function seatCwds(root: string): Map<string, string> {
+function pidAlive(pid: number | null): boolean {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e: any) { return e.code === "EPERM"; }
+}
+function processCwd(pid: number): string | null {
+  for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
+    try {
+      const out = run(lsof, ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]);
+      const line = out.out.split("\n").find((l) => l.startsWith("n"));
+      if (line) return path.resolve(line.slice(1));
+    } catch {}
+  }
+  try {
+    const procCwd = `/proc/${pid}/cwd`;
+    if (fs.existsSync(procCwd)) return path.resolve(fs.realpathSync(procCwd));
+  } catch {}
+  return null;
+}
+function sessionCwds(sessionFile: string): string[] {
+  const out = new Set<string>();
+  if (!fs.existsSync(sessionFile)) return [];
+  const visit = (v: any) => {
+    if (typeof v === "string") return;
+    if (!v || typeof v !== "object") return;
+    for (const [k, child] of Object.entries<any>(v)) {
+      if ((k === "cwd" || k === "workingDirectory") && typeof child === "string" && path.isAbsolute(child)) out.add(path.resolve(child));
+      else visit(child);
+    }
+  };
+  try {
+    for (const line of fs.readFileSync(sessionFile, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try { visit(JSON.parse(line)); } catch {}
+    }
+  } catch {}
+  return [...out];
+}
+function seatAnchors(root: string): Map<string, string> {
   const out = new Map<string, string>();
   const f = path.join(root, "seats", "state.json");
   if (!fs.existsSync(f)) return out;
   try {
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
-    for (const [name, s] of Object.entries<any>(j.seats ?? {})) if (s?.cwd) out.set(path.resolve(String(s.cwd)), String(name));
+    for (const [name, s] of Object.entries<any>(j.seats ?? {})) {
+      if (s?.cwd) out.set(path.resolve(String(s.cwd)), `recorded cwd for seat ${name}`);
+      const live = pidAlive(Number(s?.pid ?? 0)) ? processCwd(Number(s.pid)) : null;
+      if (live) out.set(live, `live cwd for seat ${name} pid ${s.pid}`);
+      if (s?.sessionFile) for (const cwd of sessionCwds(String(s.sessionFile))) out.set(cwd, `session history cwd for seat ${name}`);
+    }
   } catch {}
   return out;
 }
+function seatCwds(root: string): Map<string, string> { return seatAnchors(root); }
 
 function scanWorktrees(root: string, repo: string, seats: Map<string, string>, beads: Map<string, string>): Row[] {
   const rows: Row[] = [];
@@ -153,12 +198,15 @@ function scanWorktrees(root: string, repo: string, seats: Map<string, string>, b
   return rows;
 }
 
-function scanOrphans(root: string, registered: Set<string>): Row[] {
+function scanOrphans(root: string, registered: Set<string>, seats: Map<string, string>): Row[] {
   const rows: Row[] = [];
   for (const c of DEFAULT_CONTAINERS.map((n) => path.join(root, n)).filter(isDir)) {
     for (const d of subdirs(c)) {
       const p = path.resolve(d);
-      if (!registered.has(p) && !fs.existsSync(path.join(p, ".git"))) rows.push(row("orphaned-worktree", true, root, p, "", "rm", "directory under worktree container is not registered and has no .git"));
+      if (registered.has(p) || fs.existsSync(path.join(p, ".git"))) continue;
+      const seat = seats.get(p);
+      if (seat) rows.push(row("seat-anchor", false, root, p, "", "none", seat));
+      else rows.push(row("orphaned-worktree", true, root, p, "", "rm", "directory under worktree container is not registered and has no .git"));
     }
   }
   return rows;
@@ -294,7 +342,7 @@ function scan(roots: string[], includeOptional: boolean): Row[] {
       rows.push(...scanBranches(repo, root, beads, new Set(wts.map((w) => w.branch).filter(Boolean))));
     }
     const activeBench = benchInProgress(root);
-    rows.push(...scanOrphans(root, registeredPaths));
+    rows.push(...scanOrphans(root, registeredPaths, seats));
     rows.push(...scanBeadRuns(root, beads));
     rows.push(...scanPrivateTmp(root, beads));
     rows.push(...scanSimulators(root, beads));
@@ -319,7 +367,71 @@ function parseScan(file: string): Row[] {
     o.safe = Number(o.safe) as 0 | 1; o.size_bytes = Number(o.size_bytes); return o as Row;
   });
 }
+function readJsonlResponse(log: string, id: string, start: number, deadlineMs: number): any | null {
+  while (Date.now() < deadlineMs) {
+    try {
+      const fd = fs.openSync(log, "r");
+      try {
+        const size = fs.fstatSync(fd).size;
+        if (size > start) {
+          const buf = Buffer.alloc(size - start);
+          fs.readSync(fd, buf, 0, buf.length, start);
+          for (const line of buf.toString("utf8").split("\n")) {
+            if (!line.trim()) continue;
+            try { const j = JSON.parse(line); if (j?.id === id && j?.type === "response") return j; } catch {}
+          }
+        }
+      } finally { fs.closeSync(fd); }
+    } catch {}
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  return null;
+}
+function getState(rec: any): any | null {
+  if (!rec?.fifo || !rec?.log || !fs.existsSync(String(rec.fifo)) || !fs.existsSync(String(rec.log))) return null;
+  const id = crypto.randomUUID();
+  const start = fs.existsSync(String(rec.log)) ? fs.statSync(String(rec.log)).size : 0;
+  try { fs.appendFileSync(String(rec.fifo), JSON.stringify({ id, type: "get_state" }) + "\n"); } catch { return null; }
+  return readJsonlResponse(String(rec.log), id, start, Date.now() + 2000);
+}
+function rootsWithSeatState(rows: Row[]): string[] {
+  const out = new Set<string>();
+  const candidates = new Set<string>();
+  for (const r of rows) { candidates.add(path.resolve(r.repo)); candidates.add(path.resolve(r.path)); }
+  for (const c of candidates) {
+    let cur = fs.existsSync(c) && fs.statSync(c).isDirectory() ? c : path.dirname(c);
+    while (true) {
+      if (fs.existsSync(path.join(cur, "seats", "state.json"))) { out.add(cur); break; }
+      const next = path.dirname(cur);
+      if (next === cur) break;
+      cur = next;
+    }
+  }
+  return [...out];
+}
+function assertNoMidTurnSeats(rows: Row[]): void {
+  for (const root of rootsWithSeatState(rows)) {
+    let state: any;
+    try { state = JSON.parse(fs.readFileSync(path.join(root, "seats", "state.json"), "utf8")); } catch { continue; }
+    for (const [name, rec] of Object.entries<any>(state.seats ?? {})) {
+      if (!pidAlive(Number(rec?.pid ?? 0))) continue;
+      const st = getState(rec);
+      if (st?.success && st?.data?.isStreaming) stop(`seat "${name}" is mid-turn per get_state; settle seats before prune --yes`);
+    }
+  }
+}
+function assertNoSelectedSeatAnchors(rows: Row[], cats: Set<string> | null): void {
+  const anchors = new Map<string, string>();
+  for (const root of rootsWithSeatState(rows)) for (const [p, reason] of seatAnchors(root)) anchors.set(path.resolve(p), reason);
+  for (const r of rows) {
+    if (cats && !cats.has(r.category)) continue;
+    if (!r.safe || NEVER.has(r.category)) continue;
+    const reason = anchors.get(path.resolve(r.path));
+    if (reason) stop(`refusing to prune ${r.path}: ${reason}`);
+  }
+}
 function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
+  if (yes) { assertNoMidTurnSeats(rows); assertNoSelectedSeatAnchors(rows, cats); }
   let touched = 0, skipped = 0, reclaimed = 0;
   for (const r of rows) {
     if (cats && !cats.has(r.category)) { skipped++; continue; }

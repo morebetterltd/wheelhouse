@@ -15,8 +15,8 @@ command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2
 command -v git >/dev/null 2>&1 || { echo "selftest: git is required" >&2; exit 2; }
 command -v bd >/dev/null 2>&1 || { echo "selftest: bd is required" >&2; exit 2; }
 
-exec > >("$SCRUB") 2> >("$SCRUB" >&2)
-
+# Evidence captures should pipe this script through seats/evidence-scrub.sh;
+# self-scrubbing here leaves process-substitution readers behind on some shells.
 FAILED=0
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
@@ -51,18 +51,36 @@ git -C "$PROD" push -q -u origin main
 ( cd "$ROOT" && bd init --non-interactive --skip-agents -p prune >/dev/null 2>&1 ) || { echo "selftest: bd init failed" >&2; exit 2; }
 CLOSED_ID=$(cd "$ROOT" && bd create 'closed merged worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 OPEN_ID=$(cd "$ROOT" && bd create 'seat anchored worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
+LIVE_ID=$(cd "$ROOT" && bd create 'closed live cwd anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
+HIST_ID=$(cd "$ROOT" && bd create 'closed session history anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 cd "$ROOT" && bd close "$CLOSED_ID" >/dev/null 2>&1
+cd "$ROOT" && bd close "$LIVE_ID" >/dev/null 2>&1
+cd "$ROOT" && bd close "$HIST_ID" >/dev/null 2>&1
 
-git -C "$PROD" worktree add -q -b "fleet/$CLOSED_ID" "$WTS/$CLOSED_ID" main
-printf 'closed work\n' >> "$WTS/$CLOSED_ID/app.txt"
-git -C "$WTS/$CLOSED_ID" add app.txt
-git -C "$WTS/$CLOSED_ID" commit -q -m "closed work"
-git -C "$PROD" checkout -q main
-git -C "$PROD" merge -q --no-ff "fleet/$CLOSED_ID" -m "merge closed work"
-git -C "$PROD" push -q origin main
+make_closed_worktree(){
+  local id="$1" msg="$2"
+  git -C "$PROD" worktree add -q -b "fleet/$id" "$WTS/$id" main
+  printf '%s\n' "$msg" >> "$WTS/$id/app.txt"
+  git -C "$WTS/$id" add app.txt
+  git -C "$WTS/$id" commit -q -m "$msg"
+  git -C "$PROD" checkout -q main
+  git -C "$PROD" merge -q --no-ff "fleet/$id" -m "merge $msg"
+  git -C "$PROD" push -q origin main
+}
+make_closed_worktree "$CLOSED_ID" "closed work"
+make_closed_worktree "$LIVE_ID" "live cwd work"
+make_closed_worktree "$HIST_ID" "history cwd work"
 
 git -C "$PROD" worktree add -q -b "fleet/$OPEN_ID" "$WTS/$OPEN_ID" main
-printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"}}}\n' "$WTS/$OPEN_ID" > "$ROOT/seats/state.json"
+mkdir -p "$ROOT/seats/logs" "$ROOT/seats/sessions"
+SESSION_HISTORY="$ROOT/seats/sessions/history.jsonl"
+printf '{"type":"session-start","cwd":"%s"}\n' "$WTS/$HIST_ID" > "$SESSION_HISTORY"
+( cd "$WTS/$LIVE_ID" && sleep 1000 ) >/dev/null 2>&1 &
+LIVE_PID=$!
+TMP_SCRATCH+=()
+cleanup_live(){ kill "$LIVE_PID" >/dev/null 2>&1 || true; }
+trap 'cleanup_live; cleanup' EXIT INT TERM
+printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"},"worker-live":{"pid":%s,"cwd":"%s"},"worker-history":{"pid":999998,"cwd":"%s","sessionFile":"%s"}}}\n' "$WTS/$OPEN_ID" "$LIVE_PID" "$WTS/$OPEN_ID" "$WTS/$OPEN_ID" "$SESSION_HISTORY" > "$ROOT/seats/state.json"
 
 mkdir -p "$WTS/orphaned-checkout" "$PROD/.wheelhouse-build" "$PROD/obj" "$PROD/dist" "$PROD/node_modules/pkg/dist" "$PROD/node_modules/.bin" "$ROOT/.wheelhouse-bench.lock.stale.12345"
 printf 'orphan\n' > "$WTS/orphaned-checkout/file.txt"
@@ -139,6 +157,8 @@ SCAN="$FIX/scan.tsv"
 ( cd "$ROOT" && bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan failed" >&2; exit 2; }
 if awk -F '\t' -v p="$WTS/$CLOSED_ID" '$1=="merged-worktree" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed merged clean worktree is safe merged-worktree'; else fail "closed merged worktree row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$OPEN_ID" '$1=="seat-anchor" && $2=="0" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'seat cwd is classified as non-prunable seat-anchor'; else fail "seat-anchor row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$LIVE_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /live cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'live lsof cwd beats stale state.json cwd and is a seat-anchor'; else fail "live cwd seat-anchor row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$HIST_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /session history cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'session history cwd is a non-prunable seat-anchor'; else fail "session history seat-anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/orphaned-checkout" '$1=="orphaned-worktree" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'orphaned checkout is safe orphaned-worktree'; else fail "orphaned row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$PROD/.wheelhouse-build" '$1=="build-cache" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'build cache is safe build-cache'; else fail "build-cache row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$PROD/obj" '$1=="build-cache" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass '.NET obj cache is safe build-cache'; else fail "obj build-cache row missing:\n$(cat "$SCAN")"; fi
@@ -163,8 +183,45 @@ if awk -F '\t' -v p="$BUSY/product/.wheelhouse-build" '$1=="needs-review" && $2=
 [ -d "$BUSY/product/.wheelhouse-build" ] && pass 'active-bench cache remains after prune --yes' || fail 'active-bench cache was removed'
 
 phase 'dry-run does not touch rows'
-( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices >/tmp/prune-dry.out )
+( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune-dry.out" )
 if [ -d "$WTS/$CLOSED_ID" ] && [ -d "$WTS/orphaned-checkout" ] && [ -d "$PROD/.wheelhouse-build" ] && [ -d "$PROD/dist" ] && [ -d "$PROD/node_modules/pkg/dist" ] && [ -d "$PROD/node_modules/.bin" ] && [ -d "$ROOT/.wheelhouse-bench.lock.stale.12345" ] && [ -d "$ROOT/.wheelhouse-runs/$CLOSED_ID-build" ] && [ -d "$CLOSED_TMP" ] && [ -d "$HOME/Library/Developer/XCTestDevices" ]; then pass 'prune without --yes is dry-run only'; else fail 'dry-run removed a fixture path'; fi
+
+phase 'prune --yes refuses while a rostered seat is mid-turn'
+MID="$FIX/midturn"
+mkdir -p "$MID/seats" "$MID/product/.wheelhouse-build"
+cp "$PRUNE" "$MID/seats/prune.ts"
+chmod +x "$MID/seats/prune.ts"
+MID_FIFO="$MID/seats/mid.stdin"
+MID_LOG="$MID/seats/mid.jsonl"
+mkfifo "$MID_FIFO"
+touch "$MID_LOG"
+(
+  while IFS= read -r line; do
+    id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+    [ -n "$id" ] && printf '{"id":"%s","type":"response","success":true,"data":{"isStreaming":true}}\n' "$id" >> "$MID_LOG"
+  done <>"$MID_FIFO"
+) >/dev/null 2>&1 &
+MID_PID=$!
+printf '{"seats":{"worker-busy":{"pid":%s,"cwd":"%s","fifo":"%s","log":"%s"}}}\n' "$MID_PID" "$MID/product" "$MID_FIFO" "$MID_LOG" > "$MID/seats/state.json"
+printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\nbuild-cache\t1\t%s\t%s\t\t1\t1.0B\trm\tfixture\n' "$MID" "$MID/product/.wheelhouse-build" > "$FIX/mid-scan.tsv"
+( cd "$MID" && bun seats/prune.ts prune --from-file "$FIX/mid-scan.tsv" > "$FIX/mid-dry.out" )
+[ -d "$MID/product/.wheelhouse-build" ] && pass 'mid-turn seat still allows dry-run scan/prune preview' || fail 'mid-turn dry-run removed cache'
+set +e
+MID_OUT=$(cd "$MID" && bun seats/prune.ts prune --from-file "$FIX/mid-scan.tsv" --yes 2>&1)
+MID_RC=$?
+set +e
+if [ $MID_RC -ne 0 ] && printf '%s\n' "$MID_OUT" | grep -q 'worker-busy' && printf '%s\n' "$MID_OUT" | grep -q 'mid-turn'; then pass 'prune --yes STOPs naming the mid-turn seat'; else fail "mid-turn prune did not STOP as specified (exit $MID_RC): $MID_OUT"; fi
+[ -d "$MID/product/.wheelhouse-build" ] && pass 'mid-turn guarded cache remains after refused prune --yes' || fail 'mid-turn guarded cache was removed'
+kill "$MID_PID" >/dev/null 2>&1 || true
+
+phase 'prune --yes rechecks live seat anchors from reviewed scan files'
+printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\norphaned-worktree\t1\t%s\t%s\t\t1\t1.0B\trm\tstale reviewed scan fixture\n' "$ROOT" "$WTS/$LIVE_ID" > "$FIX/stale-live-scan.tsv"
+set +e
+STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-live-scan.tsv" --yes --categories orphaned-worktree 2>&1)
+STALE_RC=$?
+set +e
+if [ $STALE_RC -ne 0 ] && printf '%s\n' "$STALE_OUT" | grep -q 'worker-live' && printf '%s\n' "$STALE_OUT" | grep -q 'refusing to prune'; then pass 'prune --yes refuses a stale safe row that is now a live seat cwd'; else fail "stale live-cwd row was not refused (exit $STALE_RC): $STALE_OUT"; fi
+[ -d "$WTS/$LIVE_ID" ] && pass 'stale-scan live seat cwd remains after refused prune --yes' || fail 'stale-scan live seat cwd was removed'
 
 phase 'prune acts only on safe selected rows'
 ( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune.out" )
@@ -181,6 +238,8 @@ grep -q "set-delete $HOME/Library/Developer/XCTestDevices all" "$FIX/xcrun.log" 
 [ -d "$PROD/node_modules/pkg/dist" ] && pass 'node_modules package dist remains after prune --yes' || fail 'node_modules package dist was removed'
 [ -d "$PROD/node_modules/.bin" ] && pass 'node_modules .bin remains after prune --yes' || fail 'node_modules .bin was removed'
 [ -d "$WTS/$OPEN_ID" ] && pass 'seat-anchor worktree remains' || fail 'seat-anchor worktree was removed'
+[ -d "$WTS/$LIVE_ID" ] && pass 'live-cwd seat-anchor worktree remains' || fail 'live-cwd seat-anchor worktree was removed'
+[ -d "$WTS/$HIST_ID" ] && pass 'session-history seat-anchor worktree remains' || fail 'session-history seat-anchor worktree was removed'
 OPEN_RUNS_AFTER=$(shasum -a 256 "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt" | awk '{print $1}')
 OPEN_TMP_AFTER=$(shasum -a 256 "$OPEN_TMP/file.txt" | awk '{print $1}')
 [ "$OPEN_RUNS_BEFORE" = "$OPEN_RUNS_AFTER" ] && pass 'open bead runs scratch remains byte-identical' || fail 'open bead runs scratch changed'

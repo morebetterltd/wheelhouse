@@ -162,11 +162,16 @@ const si = args.indexOf("--session");
 if (si !== -1) {
   sessionFile = args[si + 1];
   sessionId = path.basename(sessionFile, ".jsonl");
-  fs.appendFileSync(sessionFile, JSON.stringify({ type: "resumed" }) + "\n");
+  if (process.env.STUB_PIN_SESSION_CWD) {
+    const meta = JSON.parse(fs.readFileSync(sessionFile + ".cwd.json", "utf8"));
+    process.chdir(meta.cwd);
+  }
+  fs.appendFileSync(sessionFile, JSON.stringify({ type: "resumed", cwd: process.cwd() }) + "\n");
 } else {
   sessionId = crypto.randomUUID();
   sessionFile = path.join(sessDir, sessionId + ".jsonl");
-  fs.writeFileSync(sessionFile, JSON.stringify({ type: "session-start" }) + "\n");
+  fs.writeFileSync(sessionFile, JSON.stringify({ type: "session-start", cwd: process.cwd() }) + "\n");
+  if (process.env.STUB_PIN_SESSION_CWD) fs.writeFileSync(sessionFile + ".cwd.json", JSON.stringify({ cwd: process.cwd() }));
 }
 const commandsFile = path.join(agentDir, "commands.jsonl");
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
@@ -195,7 +200,7 @@ function handle(cmd) {
       out({ type: "agent_start" });
       streaming = true;
       const finish = () => {
-        fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message, streamingBehavior: cmd.streamingBehavior }) + "\n");
+        fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message, streamingBehavior: cmd.streamingBehavior, cwd: process.cwd() }) + "\n");
         if (/QUOTA/.test(cmd.message)) {
           const failed = { role: "assistant", content: [{ type: "text", text: "partial before quota" }], stopReason: "error", errorMessage: "Codex error: The usage limit has been reached" };
           out({ type: "message_end", message: failed });
@@ -306,6 +311,25 @@ LOG="$PROJ/seats/logs/worker-1.jsonl"
 ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
+live_cwd_for_pid() {
+  local pid="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
+  elif [ -e "/proc/$pid/cwd" ]; then
+    readlink "/proc/$pid/cwd"
+  fi
+}
+assert_state_cwd_is_live_cwd() {
+  local label="$1" pid live recorded
+  pid="$(state_get pid)"
+  recorded="$(state_get cwd)"
+  live="$(live_cwd_for_pid "$pid")"
+  if [ -n "$pid" ] && [ -n "$live" ] && [ "$recorded" = "$live" ]; then
+    pass "$label: state.json cwd equals process live cwd"
+  else
+    fail "$label: state cwd '$recorded' did not equal live cwd '$live' for pid $pid"
+  fi
+}
 
 wait_for() {   # $1 = file, $2 = substring, $3 = seconds
   local i=0 max=$((${3:-10} * 10))
@@ -625,6 +649,7 @@ else fail "state.json model was $(state_get model) — expected stub-model-1:hig
 if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ" ]; then
   pass "spawn with no bead id roots the seat at the project root"
 else fail "spawn's cwd was $(cat "$CWD_FILE" 2>/dev/null) — expected $PROJ"; fi
+assert_state_cwd_is_live_cwd "spawn"
 if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
   pass "the spawned seat's own env carries BEADS_ACTOR=worker-1, with no operator export"
 else fail "spawned seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1 set by the adapter itself"; fi
@@ -693,12 +718,35 @@ else fail "lastBead not recorded"; fi
 if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ/.wheelhouse-worktrees/bead-x" ]; then
   pass "dispatch relaunched the seat rooted in the bead's worktree, by construction"
 else fail "seat cwd after dispatch was $(cat "$CWD_FILE" 2>/dev/null) — expected the bead-x worktree"; fi
+assert_state_cwd_is_live_cwd "dispatch relaunch"
 if grep -q "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null; then
   pass "the cwd-changing relaunch reattached the SAME session (--session), not a cold start"
 else fail "relaunch did not carry --session with the prior session file"; fi
 if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
   pass "the dispatch relaunch still carries BEADS_ACTOR=worker-1, with no operator export in this shell either"
 else fail "relaunched seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
+
+phase "2b. dispatch — pinned session cwd starts fresh instead of recording a lie"
+SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
+PINPROJ="$FIX/pinproj"
+build_proj "$PINPROJ" pin
+mkdir -p "$PINPROJ/.wheelhouse-worktrees/bead-a" "$PINPROJ/.wheelhouse-worktrees/bead-b"
+RUN_PROJ="$PINPROJ"; STATE="$PINPROJ/seats/state.json"; LOG="$PINPROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-pin/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-pin/worker-1/cwd.txt"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 bead-a 2>&1)"; RC=$?
+if [ $RC -eq 0 ]; then pass "pinned-cwd setup spawn exits 0"
+else fail "pinned-cwd setup spawn exited ${RC}: $OUT"; fi
+PIN_SESS_BEFORE="$(state_get sessionFile)"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-b "hello pinned" 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "starting a fresh session"; then pass "pinned-cwd cross-bead dispatch drops session continuity and says so"
+else fail "pinned-cwd dispatch did not fresh-start as specified (exit $RC): $OUT"; fi
+if [ "$(state_get sessionFile)" != "$PIN_SESS_BEFORE" ] && ! grep -q "\"--session\",\"$PIN_SESS_BEFORE\"" "$ARGV" 2>/dev/null; then
+  pass "pinned-cwd fallback records a new session, not the immovable old one"
+else fail "pinned-cwd fallback kept the old session file or argv: before=$PIN_SESS_BEFORE after=$(state_get sessionFile) argv=$(cat "$ARGV" 2>/dev/null)"; fi
+if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PINPROJ/.wheelhouse-worktrees/bead-b" ]; then pass "pinned-cwd fresh session starts in the target worktree"
+else fail "pinned-cwd fresh session cwd was $(cat "$CWD_FILE" 2>/dev/null)"; fi
+assert_state_cwd_is_live_cwd "pinned-cwd fallback"
+run stop worker-1
+RUN_PROJ="$SAVE_RUN_PROJ"; STATE="$SAVE_STATE"; LOG="$SAVE_LOG"; ARGV="$SAVE_ARGV"; CWD_FILE="$SAVE_CWD_FILE"
 
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-mid" "$PROJ/.wheelhouse-worktrees/bead-other" "$PROJ/.wheelhouse-worktrees/bead-force"
 run dispatch worker-1 bead-mid "SLOW in-flight review"
@@ -782,6 +830,7 @@ check_resume "resume"
 if grep -q '"resumed"' "$SESS" && [ "$(wc -l < "$SESS" | tr -d ' ')" -gt "$SESS_LINES_BEFORE" ]; then
   pass "the same session file grew on resume — warm context survives"
 else fail "session file unchanged after resume"; fi
+assert_state_cwd_is_live_cwd "resume"
 if [ "$(state_get lastBead)" = "bead-y" ]; then
   pass "lastBead survives the stop/resume cycle"
 else fail "lastBead was lost across resume"; fi
@@ -955,22 +1004,36 @@ EOF
   RSTATE="$RPROJ/seats/state.json"
   RLOG="$RPROJ/seats/logs/worker-1.jsonl"
   rstate_get() { bun -e "const s=require('$RSTATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
+  rassert_state_cwd_is_live_cwd() {
+    local label="$1" pid live recorded
+    pid="$(rstate_get pid)"
+    recorded="$(rstate_get cwd)"
+    live="$(live_cwd_for_pid "$pid")"
+    if [ -n "$pid" ] && [ -n "$live" ] && [ "$recorded" = "$live" ]; then
+      pass "real: $label state.json cwd equals process live cwd"
+    else
+      fail "real: $label state cwd '$recorded' did not equal live cwd '$live' for pid $pid"
+    fi
+  }
 
   mkdir -p "$RPROJ/.wheelhouse-worktrees/smoke-1" "$RPROJ/.wheelhouse-worktrees/smoke-2"
   rrun spawn worker-1
   if [ $RC -eq 0 ]; then pass "real: spawn exits 0 ($OUT)"
   else fail "real: spawn exited ${RC}: $OUT"; fi
+  rassert_state_cwd_is_live_cwd "spawn"
   rrun dispatch worker-1 smoke-1 "Reply with exactly the text WHEELHOUSE-SMOKE-OK and nothing else. Use no tools."
   if [ $RC -eq 0 ]; then pass "real: dispatch accepted"
   else fail "real: dispatch exited ${RC}: $OUT"; fi
   if wait_for "$RLOG" '"agent_end"' 180; then pass "real: agent_end captured"
   else fail "real: no agent_end within 180s — tail: $(tail -c 400 "$RLOG" 2>/dev/null)"; fi
+  rassert_state_cwd_is_live_cwd "cross-bead dispatch"
   RSESS="$(rstate_get sessionFile)"
   RL_BEFORE=$(wc -l < "$RSESS" | tr -d ' ')
   rrun stop worker-1
   [ $RC -eq 0 ] && pass "real: stop exits 0" || fail "real: stop exited ${RC}: $OUT"
   rrun resume worker-1
   [ $RC -eq 0 ] && pass "real: resume exits 0 ($OUT)" || fail "real: resume exited ${RC}: $OUT"
+  rassert_state_cwd_is_live_cwd "resume"
   LOG_MARK=$(wc -c < "$RLOG" | tr -d ' ')
   rrun dispatch worker-1 smoke-2 "Reply with exactly the text OK and nothing else. Use no tools."
   if [ $RC -eq 0 ] && wait_for_from "$RLOG" "$LOG_MARK" '"agent_end"' 180; then
