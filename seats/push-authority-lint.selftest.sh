@@ -66,6 +66,14 @@ OUT="$($LINT "$BAD" 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'FAIL push-authority: .*contradicts INTEGRATOR.md project push grant'; then pass "planted negative: principal-only PUSH line fails when project grants push"
 else fail "planted principal-only verdict was not caught (rc=$RC): $OUT"; fi
 
+MISSING="$FIX/missing"; mkproj "$MISSING" grant
+cat > "$MISSING/seats/verdicts/missing.md" <<'MD'
+VERDICT: APPROVE
+MD
+OUT="$($LINT "$MISSING" 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'requires exactly one'; then pass "missing PUSH line fails lint"
+else fail "missing PUSH line was not caught (rc=$RC): $OUT"; fi
+
 NOGRANT="$FIX/nogrant"; mkproj "$NOGRANT" nogrant
 cat > "$NOGRANT/seats/verdicts/hold.md" <<'MD'
 VERDICT: APPROVE

@@ -1,0 +1,9 @@
+$ bash seats/pid-ownership.selftest.sh
+  ok    adapter pid liveness is gated by the seat FIFO ownership proof, not bare kill -0 for recorded seats
+pid-ownership.selftest: PASS
+$ bash seats/push-authority-lint.selftest.sh
+ok 1 - grant plus authority-citing PUSH line passes
+ok 2 - planted negative: principal-only PUSH line fails when project grants push
+ok 3 - missing PUSH line fails lint
+ok 4 - principal-only PUSH line is not flagged when no project grant is recorded
+push-authority-lint.selftest: PASS (4 checks)

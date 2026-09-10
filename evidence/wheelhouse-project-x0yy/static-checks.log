@@ -1,0 +1,69 @@
+$ git diff --check HEAD
+$ git merge-base --is-ancestor main HEAD && echo main-is-ancestor
+main-is-ancestor
+$ rg -n "PUSH|authRoute|product-repo|writeState|pidHoldsPath|lastLaunchFailure" seats/verify.ts seats/push-authority-lint.sh seats/adapter.ts seats/intent-check.sh BOOTSTRAP.md runbooks/UPGRADE.md
+seats/intent-check.sh:95:    if [ -f "$dir/wheelhouse/.template-source" ] && grep -Eq '^(product_repo|product_repos|product-repo|product-repos)=' "$dir/wheelhouse/.template-source"; then
+seats/intent-check.sh:96:      product=$(sed -n 's/^product_repo=//p; s/^product_repos=//p; s/^product-repo=//p; s/^product-repos=//p' "$dir/wheelhouse/.template-source" | tr ',:' '\n\n' | sed '/^[[:space:]]*$/d' | head -1)
+seats/intent-check.sh:116:    say "STOP: wheelhouse/.template-source has no product-repo= key; refusing to guess whether to scan install root $start_dir or template root ${source_root:-unknown}. Add product-repo=<product repo path> (UPGRADE.md step 0) or pass repo arguments explicitly."
+seats/intent-check.sh:159:  if grep -Eq '^(repo|repos|product_repo|product_repos|product-repo|product-repos)=' wheelhouse/.template-source; then
+seats/intent-check.sh:160:    sed -n 's/^repo=//p; s/^repos=//p; s/^product_repo=//p; s/^product_repos=//p; s/^product-repo=//p; s/^product-repos=//p' wheelhouse/.template-source |
+seats/intent-check.sh:165:    say "STOP: wheelhouse/.template-source has no product-repo= key; refusing to guess whether to scan install root $(pwd -P) or template root ${source_root:-unknown}. Add product-repo=<product repo path> (UPGRADE.md step 0) or pass repo arguments explicitly."
+seats/verify.ts:8: * tip SHA, and parses the single `VERDICT:` and `PUSH:` lines out of what comes back.
+seats/verify.ts:151:function pidHoldsPath(pid: number, p: string): boolean {
+seats/verify.ts:158:  return barePidAlive(pid) && pidHoldsPath(pid, ownedPath);
+seats/verify.ts:225:function liveLineCandidates(stdout: string, tag: "VERDICT" | "PUSH"): VerdictCandidate[] {
+seats/verify.ts:249:  return liveLineCandidates(stdout, "PUSH");
+seats/verify.ts:476:  account?: { dir: string; label?: string; authRoute?: string };
+seats/verify.ts:533:function authRouteIdentity(name: string, entry: SeatEntry, authFile: string): boolean {
+seats/verify.ts:534:  const route = entry.account?.authRoute;
+seats/verify.ts:536:    if (!entry.provider) die(`verifier seat "${name}" uses account.authRoute=env but has no provider in seats/seats.json`);
+seats/verify.ts:538:    if (!envVar) die(`verifier seat "${name}" uses account.authRoute=env for provider ${JSON.stringify(entry.provider)}, but this verifier does not know that provider's env var`);
+seats/verify.ts:632:  if (!authRouteIdentity(verifierSeat, entry, verifierAuthFile)) {
+seats/verify.ts:633:    const envVar = entry.account?.authRoute === "env" && entry.provider ? providerEnvVar(entry.provider) : undefined;
+seats/verify.ts:638:        `      env: set account.authRoute=env and export ${envVar ?? "the provider env var"} in the shell that spawns this verifier`
+seats/verify.ts:685:    `one PUSH: line in the format REVIEWER.md specifies. Evidence goes above them.`,
+seats/verify.ts:686:    `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
+seats/verify.ts:740:    die(`verifier emitted no PUSH: line outside fenced code blocks — REVIEWER.md requires exactly one PUSH line beside the verdict (raw output: ${rawFile})`);
+seats/verify.ts:744:      `verifier emitted ${pushLines.length} live PUSH: lines outside fenced code blocks — ambiguous, refusing to pick one (raw output: ${rawFile}). Candidates:\n` +
+seats/verify.ts:748:  if (!/^PUSH:\s*(APPROVE\s+\S+\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED)\s*$/.test(pushLines[0].normalized)) {
+seats/verify.ts:749:    die(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED`);
+seats/verify.ts:793:    `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
+runbooks/UPGRADE.md:42:  echo "product-repo=$(pwd -P)"
+runbooks/UPGRADE.md:72:grep -q '^product-repo=' wheelhouse/.template-source \
+runbooks/UPGRADE.md:73:  && sed -i.bak "s|^product-repo=.*|product-repo=$(pwd -P)|" wheelhouse/.template-source \
+runbooks/UPGRADE.md:74:  || echo "product-repo=$(pwd -P)" >> wheelhouse/.template-source
+runbooks/UPGRADE.md:129:If this project already had Pi seats, open `seats/seats.json` now and inspect every carried seat. Current rosters may record two fields older Pi rosters do not: `account.authRoute`, which is the credential route (`oauth`, `api_key`, or `env`) that gave the seat its identity, and `shadow`, which is a boolean only for intentional mirror seats. Back-fill `account.authRoute` for each carried seat from the route you actually use — OAuth `/login` for `openai-codex` subscription accounts, a file-backed provider entry in that seat's `auth.json` for `api_key`, or an exported provider env var for `env` — and do not record any credential material. Then read the JSON and probe every seat so both syntax and route are checked by the copied machinery:
+seats/adapter.ts:166:  account?: { dir: string; label?: string; authRoute?: string };
+seats/adapter.ts:173:// `account.authRoute` at all, and that stays a valid roster.
+seats/adapter.ts:177:  const route = entry.account?.authRoute;
+seats/adapter.ts:181:      `seat "${seatName}" has an invalid account.authRoute ${JSON.stringify(route)} in seats/seats.json — ` +
+seats/adapter.ts:240:  lastLaunchFailure?: { at: string; detail: string };
+seats/adapter.ts:266:function writeState(state: State): void {
+seats/adapter.ts:308:function pidHoldsPath(pid: number, p: string): boolean {
+seats/adapter.ts:315:  return fifo ? pidHoldsPath(pid!, fifo) : true;
+seats/adapter.ts:351:  if (entry.account?.authRoute === "env") {
+seats/adapter.ts:352:    if (!entry.provider) die(`seat "${name}"${labelSuffix} uses account.authRoute=env but has no provider in seats/seats.json`);
+seats/adapter.ts:355:      die(`seat "${name}"${labelSuffix} uses account.authRoute=env for provider ${JSON.stringify(entry.provider)}, but this adapter does not know that provider's env var`);
+seats/adapter.ts:358:      die(`seat "${name}"${labelSuffix} uses account.authRoute=env but ${envVar} is not set in the shell spawning this seat`);
+seats/adapter.ts:362:        `seat "${name}"${labelSuffix} uses account.authRoute=env, but ${authFile} contains a ${entry.provider} entry that pi checks before ${envVar}. ` +
+seats/adapter.ts:363:          `Remove that provider entry (do not replace it with an env stub) or switch the roster to account.authRoute=api_key; leaving it in place shadows the exported key.`
+seats/adapter.ts:372:        `      api_key: write ${authFile} or set account.authRoute=env and export the provider env var in the shell that spawns this seat`
+seats/adapter.ts:575:  if (changed) writeState(state);
+seats/adapter.ts:585:    lastLaunchFailure: { at: new Date().toISOString(), detail } as any,
+seats/adapter.ts:587:  writeState(state);
+seats/adapter.ts:773:  writeState(state); // spawn-record
+seats/adapter.ts:878:    writeState(state); // reset-record
+seats/adapter.ts:950:      writeState(state);
+seats/adapter.ts:958:  writeState(state);
+seats/adapter.ts:1081:  writeState(state);
+seats/push-authority-lint.sh:2:# push-authority-lint.sh — flag reviewer PUSH lines that contradict recorded authority.
+seats/push-authority-lint.sh:16:  GRANTS_PUSH=1
+seats/push-authority-lint.sh:18:  GRANTS_PUSH=0
+seats/push-authority-lint.sh:35:  PUSH_COUNT=$(grep -nE '^PUSH:' "$f" | wc -l | tr -d ' ')
+seats/push-authority-lint.sh:36:  if [ "$PUSH_COUNT" -ne 1 ]; then
+seats/push-authority-lint.sh:37:    printf 'FAIL push-authority: %s has %s PUSH lines; REVIEWER.md requires exactly one\n' "$f" "$PUSH_COUNT"
+seats/push-authority-lint.sh:40:  if [ "$GRANTS_PUSH" -eq 1 ] && grep -nEi '^PUSH:[[:space:]]*HOLD.*principal[ -]?only|^PUSH:.*principal[ -]?only' "$f" >"${TMPDIR:-/tmp}/push-authority-hit.$$"; then
+seats/push-authority-lint.sh:54:printf 'push-authority-lint: PASS (grant=%s, verdicts=%s)\n' "$GRANTS_PUSH" "$COUNT"
+BOOTSTRAP.md:113:  echo "product-repo=$(pwd -P)"
+BOOTSTRAP.md:274:**Then `seats/seats.json`, from the read-back value** — the roster's machine record, in the format `seats/README.md` documents and `seats/seats.json.example` shows: the `commander` entry marked external, then one entry per taken seat carrying exactly the five roster columns the interview collected — name and agent directory from question 7, provider, pinned model, and auth route from question 8's read-back table — `account.dir` spelled under `~/.pi-seats-<namespace>/` and the auth route written as `account.authRoute`, one of `oauth`, `api_key`, `env` matching whichever route the seat's read-back row recorded. If every seat was declined, write the file anyway with the commander entry and an empty `seats` map — a roster that says "nobody" is a record; an absent file is a question. Read it back with `bun -e 'console.log(JSON.stringify(require("./seats/seats.json"), null, 2))'` or equivalent so a syntax error surfaces now, at the moment of writing, not at the first spawn.
+BOOTSTRAP.md:766:- **Seats are on the roster.** Command them. The worker's report arrives on the bead as a comment plus the `needs-review` label — that is where you read it, not in a message, and the worker does not close the bead. When it lands, dispatch the reviewer seat the same stage-1 way: the bead id, the branch, a way to read it that changes nothing, `wheelhouse/crew/REVIEWER.md` as its brief. When the verdict lands, integrate per `wheelhouse/INTEGRATOR.md` — confirm the tip you merge equals the head that was reviewed, act on the PUSH line rather than the VERDICT line for anything leaving the machine, and carry merge/push/PR/deploy as far as question 4b recorded — then close the bead per the runbook's last stage, dropping the review-queue label in the same breath. If the action is on the reserved list from question 4, or if two product-intent readings lead to different work, ask once with a recommendation and default; otherwise the install interview's standing authority is the record.

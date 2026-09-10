@@ -32,13 +32,18 @@ while IFS= read -r f; do
   [ -n "$f" ] || continue
   [ -f "$f" ] || { echo "UNRUNNABLE: verdict file not found: $f" >&2; exit 2; }
   COUNT=$((COUNT+1))
-  if [ "$GRANTS_PUSH" -eq 1 ] && grep -nEi '^PUSH:[[:space:]]*HOLD.*principal[ -]?only|^PUSH:.*principal[ -]?only' "$f" >/tmp/push-authority-hit.$$; then
-    while IFS= read -r hit; do
-      printf 'FAIL push-authority: %s:%s contradicts INTEGRATOR.md project push grant\n' "$f" "$hit"
-    done < /tmp/push-authority-hit.$$
+  PUSH_COUNT=$(grep -nE '^PUSH:' "$f" | wc -l | tr -d ' ')
+  if [ "$PUSH_COUNT" -ne 1 ]; then
+    printf 'FAIL push-authority: %s has %s PUSH lines; REVIEWER.md requires exactly one\n' "$f" "$PUSH_COUNT"
     FAIL=1
   fi
-  rm -f /tmp/push-authority-hit.$$
+  if [ "$GRANTS_PUSH" -eq 1 ] && grep -nEi '^PUSH:[[:space:]]*HOLD.*principal[ -]?only|^PUSH:.*principal[ -]?only' "$f" >"${TMPDIR:-/tmp}/push-authority-hit.$$"; then
+    while IFS= read -r hit; do
+      printf 'FAIL push-authority: %s:%s contradicts INTEGRATOR.md project push grant\n' "$f" "$hit"
+    done < "${TMPDIR:-/tmp}/push-authority-hit.$$"
+    FAIL=1
+  fi
+  rm -f "${TMPDIR:-/tmp}/push-authority-hit.$$"
 done <<EOF_FILES
 $FILES
 EOF_FILES

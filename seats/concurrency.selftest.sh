@@ -63,9 +63,7 @@ REAL_PI="$(command -v pi || true)"
 
 SCRUB="$HERE/evidence-scrub.sh"
 [ -x "$SCRUB" ] || { echo "selftest: not executable: $SCRUB" >&2; exit 2; }
-# Selftest output is commonly redirected into committed evidence; scrub it as
-# it is written so temp dirs, home dirs, and usernames never enter captures.
-exec > >("$SCRUB") 2> >("$SCRUB" >&2)
+# Evidence captures should pipe this script through seats/evidence-scrub.sh.
 
 FAILED=0
 FIX=""
@@ -320,6 +318,24 @@ run_two_seat_exercise() {
 
 phase "1. two seats, one roster — spawn, overlap, isolation, clean stop"
 run_two_seat_exercise "hermetic" "$FIX/wt-bead-a" "$FIX/wt-bead-b"
+
+phase "1b. state.json concurrent writers preserve both seat records"
+RACE_PROJ="$FIX/race-proj"
+build_proj "$RACE_PROJ" race
+RUN_PROJ="$RACE_PROJ"
+OUT_A="$FIX/race-a.out"; OUT_B="$FIX/race-b.out"
+env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_STATE_WRITE_DELAY_MS=300 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-a >"$OUT_A" 2>&1 & PA=$!
+env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_STATE_WRITE_DELAY_MS=300 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-b >"$OUT_B" 2>&1 & PB=$!
+wait "$PA"; RCA=$?
+wait "$PB"; RCB=$?
+if [ $RCA -eq 0 ] && [ $RCB -eq 0 ]; then pass "race: concurrent spawns both exit 0"
+else fail "race: concurrent spawns failed (a=$RCA $(cat "$OUT_A") / b=$RCB $(cat "$OUT_B"))"; fi
+if [ -n "$(state_get worker-a pid)" ] && [ -n "$(state_get worker-b pid)" ]; then
+  pass "race: re-read-before-merge preserves both seat records in state.json"
+else fail "race: one seat record was erased from state.json: $(cat "$RUN_PROJ/seats/state.json" 2>/dev/null)"; fi
+run stop worker-a >/dev/null 2>&1
+run stop worker-b >/dev/null 2>&1
+RUN_PROJ="$PROJ"
 
 phase "2. capacity visibility — a quota-shaped failure is stamped and rendered"
 run spawn worker-a
