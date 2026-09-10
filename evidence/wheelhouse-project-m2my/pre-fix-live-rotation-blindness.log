@@ -1,0 +1,10 @@
+$ reproduce live-writer rename rotation blindness
+worker-1         worker            RUNNING  pid 27084   last-event agent_end  bead bead-a
+current-size=       0 archive-size=     263
+n[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-m2my/.wheelhouse-runs/wheelhouse-project-m2my/repro/proj/seats/logs/worker-1.jsonl.1
+STOP: timed out after 800ms waiting for prompt response
+dispatch_rc=1
+current after dispatch:
+archive tail after dispatch:
+{"type":"filler","text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+{"type":"agent_end","messages":[]}
