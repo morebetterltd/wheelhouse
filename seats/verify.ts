@@ -256,6 +256,24 @@ function writeRawVerifierOutput(stdout: string): string {
   return rawFile;
 }
 
+function currentBranchTip(repoRoot: string, branch: string): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", `${branch}^{commit}`], { cwd: repoRoot, encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function appendedCommitCount(repoRoot: string, fromTip: string, toTip: string): number | null {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", fromTip, toTip], { cwd: repoRoot, stdio: "ignore" });
+    const out = execFileSync("git", ["rev-list", "--count", `${fromTip}..${toTip}`], { cwd: repoRoot, encoding: "utf8" }).trim();
+    return Number(out);
+  } catch {
+    return null;
+  }
+}
+
 function lastVerifierPhase(stdout: string): string {
   let phase = "spawned verifier; waiting for output";
   for (const line of stdout.split(/\r?\n/)) {
@@ -721,6 +739,10 @@ function main(): void {
     ``,
     `Verify whether the bead's stated done holds at that SHA, per your brief.`,
     `Confirm the branch still resolves to the SHA above before relying on your reading.`,
+    `If the branch moves while you are reviewing but the pinned SHA remains an ancestor, render the verdict on the pinned SHA and name the move, for example:`,
+    `VERDICT: APPROVE — at pinned tip ${tip}; branch has since moved to <new-tip> (<N> commits appended, history unrewritten)`,
+    `PUSH: NOT CONSIDERED — branch moved; re-verify at <new-tip> before publish`,
+    `DISCOVER is reserved for a discovery that displaces the judgment, not for an appended branch tip; the integrator/publisher refuses any tip other than the verdict's pinned SHA until the new tip is re-verified.`,
     `End with exactly one line: VERDICT: APPROVE | BOUNCE | DISCOVER and exactly`,
     `one PUSH: line in the format REVIEWER.md specifies. Evidence goes above them.`,
     `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
@@ -792,23 +814,41 @@ function main(): void {
         pushLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
     );
   }
-  if (!/^PUSH:\s*(APPROVE\s+\S+\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED)\s*$/.test(pushLines[0].normalized)) {
-    die(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED`);
+  if (!/^PUSH:\s*(APPROVE\s+\S+\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+[—-]\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
+    die(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED [— why]`);
   }
   // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
   // you are reviewing") belongs to APPROVE and to nothing else.
-  const m = verdictLines[0]
-    .normalized
-    .match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)\s*(?:[—-]{1,2}\s*NOT BENCHED:\s*(\S.*))?$/);
+  const branchTipAfter = currentBranchTip(repoRoot, branch);
+  const movedTo = branchTipAfter && branchTipAfter !== tip ? branchTipAfter : "";
+  const appendedCount = movedTo ? appendedCommitCount(repoRoot, tip, movedTo) : null;
+  const movedShape = movedTo && appendedCount !== null
+    ? new RegExp(`^VERDICT:\\s*(APPROVE|BOUNCE)\\s+[—-]\\s+at pinned tip ${tip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; branch has since moved to ${movedTo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(${appendedCount} commits appended, history unrewritten\\)$`)
+    : null;
+  const m = movedShape?.exec(verdictLines[0].normalized)
+    ?? verdictLines[0].normalized.match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)\s*(?:[—-]{1,2}\s*NOT BENCHED:\s*(\S.*))?$/);
   if (!m) {
-    die(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] | BOUNCE | DISCOVER`);
+    die(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] | BOUNCE | DISCOVER${movedTo && appendedCount !== null ? ` | APPROVE/BOUNCE — at pinned tip ${tip}; branch has since moved to ${movedTo} (${appendedCount} commits appended, history unrewritten)` : ""}`);
   }
   const verdict = m[1];
+  const movedVerdictShown = movedShape && movedShape.test(verdictLines[0].normalized) ? verdictLines[0].normalized.replace(/^VERDICT:\s*/, "") : "";
   const notBenched = m[2]?.trim();
   if (notBenched && verdict !== "APPROVE") {
     die(`malformed verdict line: NOT BENCHED qualifies APPROVE and nothing else, got: "${verdictLines[0].normalized}"`);
   }
-  const verdictShown = notBenched ? `${verdict} — NOT BENCHED: ${notBenched}` : verdict;
+  if (movedTo) {
+    if (appendedCount === null) {
+      die(`branch "${branch}" moved during verification from ${tip} to ${movedTo}, but the pinned tip is no longer an ancestor — no verdict can be rendered without a fresh review`);
+    }
+    const expectedPush = `PUSH: NOT CONSIDERED — branch moved; re-verify at ${movedTo} before publish`;
+    if (!movedVerdictShown) {
+      die(`branch "${branch}" moved during verification from ${tip} to ${movedTo} (${appendedCount} commits appended, history unrewritten); verdict must judge the pinned tip and name the move, not switch to DISCOVER or omit the move note`);
+    }
+    if (pushLines[0].normalized !== expectedPush) {
+      die(`branch "${branch}" moved during verification; PUSH must be exactly "${expectedPush}" so publish waits for re-verification at the moved tip`);
+    }
+  }
+  const verdictShown = movedVerdictShown || (notBenched ? `${verdict} — NOT BENCHED: ${notBenched}` : verdict);
 
   // An APPROVE over a missing, empty, or mistyped artifact the bead requires
   // is a defect in the verdict, not a judgment — same family as the NOT

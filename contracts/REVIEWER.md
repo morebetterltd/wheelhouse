@@ -26,7 +26,7 @@ The `NOT BENCHED` qualifier belongs to APPROVE and to nothing else; it is define
 - **BOUNCE** — the done does not hold. Each defect as its own point: what is wrong, where, and what done requires instead. Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 - **DISCOVER** — the done cannot be honestly judged as stated: the premise is false, the work is already done, the bead is mis-scoped, or verifying it surfaced something that changes what the bead should be. Say what was found and what is proposed. A one-shot reviewer never files beads; the proposal is text for the commander to act on.
 
-One verdict, exclusively. If the done holds and adjacent work was discovered, that is APPROVE with the discovery noted in the evidence; DISCOVER is for when the discovery displaces the judgment, not decorates it. If the pass cannot finish inside its turn, it reports what was completed and what remains with no `VERDICT:` line; the absence is what tells the dispatcher to route to a human.
+One verdict, exclusively. If the done holds and adjacent work was discovered, that is APPROVE with the discovery noted in the evidence; DISCOVER is for when the discovery displaces the judgment, not decorates it. A branch that moves while you are reviewing is not by itself a displacing discovery: judge the pinned SHA you were dispatched, name the move on the verdict line, and make push not considered until the new tip is verified, e.g. `VERDICT: APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)` and `PUSH: NOT CONSIDERED — branch moved; re-verify at Y before publish`. This is safe because the integrator/publisher refuses any tip other than the verdict's pinned SHA; X..Y can be reviewed as a follow-up delta. If the pass cannot finish inside its turn, it reports what was completed and what remains with no `VERDICT:` line; the absence is what tells the dispatcher to route to a human.
 
 The evidence floor from the former verifier pass also belongs here. A bead's done can require an artifact no shell assertion stands in for — a screenshot, a bench log, the captured output of a deployment probe. The bead names such artifacts at committed paths on the branch under review (`wheelhouse/GRAPH.md`, *Where evidence lives*), and a dispatcher may carry them as part of the one-shot verdict contract, each with a floor check run before spawn: the artifact exists at the SHA under review, is not empty, and is the kind of file it claims to be. The floor is not the judgment. Open each named artifact yourself, judge its content against the claim it is supposed to support, and record what you inspected and what it showed. While any named artifact fails the floor — missing, empty, degenerate, or the wrong kind — the done does not hold as stated, and an APPROVE is malformed exactly as an unbenched behavioral APPROVE is.
 
@@ -39,8 +39,8 @@ A one-shot pass inherits the rest of this reviewer contract: never review what y
 - **A merge answer and a push answer, as two labelled lines.** The second is required on every verdict, including the ones where you have no answer to give:
 
   ```
-  VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers> | BOUNCE
-  PUSH:    APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED
+  VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers> | BOUNCE | APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten) | BOUNCE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)
+  PUSH:    APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED | NOT CONSIDERED — branch moved; re-verify at Y before publish
   ```
 
   Filled in, so that the schema's shape is not something the next reviewer has to infer — `— verified:` belongs to APPROVE and to nothing else:

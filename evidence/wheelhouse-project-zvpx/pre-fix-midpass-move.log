@@ -1,0 +1,16 @@
+$ env STUB_MOVE_REPO=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zvpx/.wheelhouse-runs/wheelhouse-project-zvpx/repro/proj STUB_MOVE_BRANCH=fleet/bead-1 HOME=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zvpx/.wheelhouse-runs/wheelhouse-project-zvpx/repro/home PATH=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zvpx/.wheelhouse-runs/wheelhouse-project-zvpx/repro/bin:$PATH bun [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zvpx/.wheelhouse-runs/wheelhouse-project-zvpx/repro/proj/seats/verify.ts bead-move fleet/bead-1 worker-1 verifier
+Thanks for using bd! Quick heads-up: bd shares anonymous usage metrics —
+   just which commands get run (plus the bd version and OS platform), never your
+   issues, paths, remotes, identity, or anything you type. Seeing how people use
+   bd is how we decide what to improve next, so it genuinely makes bd better for
+   everyone.
+      Curious what's sent?   bd metrics example
+      Prefer to opt out?     bd metrics off    (one command, no restart needed)
+
+Error fetching bead-move: no issue found matching "bead-move"
+VERDICT: DISCOVER  (bead bead-move, tip edc7080bce28, verifier verifier)
+  full output -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zvpx/.wheelhouse-runs/wheelhouse-project-zvpx/repro/proj/seats/verdicts/bead-move.md
+  DISCOVER files no beads — the proposal waits in the verdict file for the commander.
+rc=3
+$ git -C [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zvpx/.wheelhouse-runs/wheelhouse-project-zvpx/repro/proj rev-list --count HEAD..fleet/bead-1
+0
