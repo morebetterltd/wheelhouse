@@ -58,6 +58,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
+import { hostBudgetPath } from "./host-budget";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -795,7 +796,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
     `0<> '${fifo}' > >(${logFilterShell()} >> '${log}') 2>> '${errLog}'`;
   const child = spawn("bash", ["-c", shellCmd], {
     cwd,
-    env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
+    env: { ...process.env, PATH: hostBudgetPath(ROOT), PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
     detached: true,
     stdio: "ignore",
   });
@@ -880,7 +881,7 @@ function cmdProbe(name: string): void {
   ];
   const result = spawnSync("pi", args, {
     cwd: ROOT,
-    env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
+    env: { ...process.env, PATH: hostBudgetPath(ROOT), PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
