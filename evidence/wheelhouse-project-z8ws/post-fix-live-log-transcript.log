@@ -1,0 +1,26 @@
+$ tail -400 live worker-1 log copied into scratch; LINES=420 COLUMNS=120 bun .wheelhouse-runs/wheelhouse-project-z8ws/repro-post/project/seats/floor.ts --once --pin worker-1
+empty_say_rows=0
+total_say_rows=0
+streaming_delta_rows=0
+tool_rows=1
+tail:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] worker-1 | worker | fixture/fixture | fixture | ● RED PROCESS GONE — no live pid; check seats/logs/worker-1.stderr.log | - | 0s ago
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -
