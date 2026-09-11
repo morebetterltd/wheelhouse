@@ -1,0 +1,20 @@
+$ git diff --check HEAD
+$ timeout 30 bun build seats/herald.ts --target bun --outfile /dev/null
+Bundled 1 module in 3ms
+
+  null  21.69 KB  (entry point)
+
+$ rg -n "lastPrompt|settleForInbox|log-derived|thinkingSignature|settle rows use state" seats/herald.ts seats/herald.selftest.sh
+seats/herald.selftest.sh:98:if [ "$(json_count 'r.class==="settle" && /log-derived \(state.json has no recorded prompt/.test(r.detail)')" = 1 ]; then
+seats/herald.selftest.sh:101:  fail "settle fallback did not say it was log-derived: $(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true)"
+seats/herald.selftest.sh:139:{"seats":{"worker-1":{"lastBead":"wheelhouse-project-xtyh","lastPrompt":"Bead wheelhouse-project-xtyh\n\nYou hold bead wheelhouse-project-xtyh. Fix herald settle detail."},"worker-2":{"lastBead":"wheelhouse-project-xtyh-fresh","lastPrompt":"Bead wheelhouse-project-xtyh-fresh\n\nFresh log prompt head must survive thinking frames."}}}
+seats/herald.selftest.sh:142:printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"**Updating verify and static checks**","thinkingSignature":"rotated-signature"}]}]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seats/herald.selftest.sh:143:printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"**Planning**","thinkingSignature":"fresh-signature"}]}]}' > "$PROJ/seats/logs/worker-2.jsonl"
+seats/herald.selftest.sh:148:  pass "settle rows use state.json prompt head for rotated and fresh current logs"
+seats/herald.selftest.sh:152:if [ "$(json_count '/thinkingSignature|^\\{\"type\":\"thinking\"/.test(r.detail)')" = 0 ]; then
+seats/herald.selftest.sh:153:  pass "thinking/thinkingSignature frames never appear in settle row detail"
+seats/herald.ts:72:interface AdapterSeatState { lastBead?: string; lastPrompt?: string }
+seats/herald.ts:338:function settleForInbox(candidate: Candidate, seat: string): { title: string; detail: string } {
+seats/herald.ts:342:  const prompt = typeof rec?.lastPrompt === "string" ? rec.lastPrompt : "";
+seats/herald.ts:345:  return { title: `${candidate.title} — log-derived`, detail: truncate(`log-derived (state.json has no recorded prompt for ${seat}): ${candidate.detail}`) };
+seats/herald.ts:500:          const rendered = settleForInbox(candidate, seat);
