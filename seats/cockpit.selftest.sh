@@ -6,7 +6,6 @@ set -u
 
 command -v tmux >/dev/null 2>&1 || { echo "selftest: tmux is required" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
-command -v script >/dev/null 2>&1 || { echo "selftest: script is required" >&2; exit 2; }
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 COCKPIT="$HERE/cockpit.sh"
@@ -71,11 +70,18 @@ pane_count() { tmux -L "$SOCK" list-panes -t 'wh-ratio:bridge' 2>/dev/null | wc 
 opt_value() { tmux -L "$SOCK" show-options -v -t "$1" "$2"; }
 
 attach_at_152() {
-  # Attach through a pseudo-terminal whose size is explicitly wider than tmux's
-  # detached default; the client-attached hook should then resize pane 0.
-  ( sleep 0.5; tmux -L "$SOCK" detach-client -s wh-ratio >/dev/null 2>&1 || true ) &
-  script -q /dev/null sh -c "stty cols 152 rows 40; tmux -L '$SOCK' attach-session -t wh-ratio" > "$FIX/script.out" 2> "$FIX/script.err" || true
-  sleep 0.2
+  # Drive a real tmux client of a known size instead of relying on the tool
+  # shell's pseudo-terminal timing. The inner cockpit session still sees a
+  # client attach; the outer fixture session pins that client's TTY to 152x40.
+  local client_sock="${SOCK}-client"
+  tmux -L "$client_sock" kill-server >/dev/null 2>&1 || true
+  tmux -L "$client_sock" new-session -d -x 152 -y 40 -s wh-client -c "$PROJ" "tmux -L '$SOCK' attach-session -t wh-ratio" > "$FIX/client.out" 2> "$FIX/client.err" || return 1
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ "$(pane_count)" = 2 ] && [ "$(window_width)" = 152 ] && break
+    sleep 0.1
+  done
+  tmux -L "$client_sock" kill-server >/dev/null 2>&1 || true
+  sleep 0.1
 }
 
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" "$PROJ/seats/cockpit.sh" --herald > "$FIX/herald-only.out" 2>&1
@@ -90,7 +96,11 @@ kill "$HERALD_ONLY_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/herald.pid"
 
 WHEELHOUSE_TMUX_SOCKET="$SOCK" tmux -L "$SOCK" new-session -d -s wh-pane -n bridge -c "$PROJ" "$PROJ/seats/cockpit.sh --pane-commander"
-sleep 0.5
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
+  [ -n "$POLL_PID" ] && kill -0 "$POLL_PID" 2>/dev/null && grep -q "poll-root=$PROJ" "$PROJ/seats/logs/poll.fixture.log" 2>/dev/null && break
+  sleep 0.1
+done
 POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
 if [ -n "$POLL_PID" ] && kill -0 "$POLL_PID" 2>/dev/null && grep -q "poll-root=$PROJ" "$PROJ/seats/logs/poll.fixture.log" 2>/dev/null; then
   pass "cockpit --pane-commander starts commander-inbox-poll.sh bound to the pane"
@@ -125,12 +135,15 @@ else
   fail "fresh cockpit options wrong: mouse=$(opt_value wh-ratio mouse) history=$(opt_value wh-ratio history-limit)"
 fi
 
-attach_at_152
-CW="$(pane_width 0)"; FW="$(pane_width 1)"; WW="$(window_width)"
-if [ "$WW" -gt 80 ] && [ "$CW" -ge 75 ] && [ "$CW" -le 90 ] && [ "$CW" -gt "$FW" ]; then
-  pass "client-attached resize keeps commander pane near its ratio on a ${WW}-column attach (commander=$CW floor=$FW)"
+if attach_at_152; then
+  CW="$(pane_width 0 2>/dev/null || echo missing)"; FW="$(pane_width 1 2>/dev/null || echo missing)"; WW="$(window_width 2>/dev/null || echo missing)"; PC="$(pane_count)"
+  if [ "$PC" = 2 ] && [ "$WW" = 152 ] && [ "$CW" -ge 75 ] && [ "$CW" -le 90 ] && [ "$FW" -ge 60 ] && [ "$FW" -le 75 ] && [ "$CW" -gt "$FW" ]; then
+    pass "known-size attached tmux client creates a split bridge and keeps commander pane near its ratio (window=$WW commander=$CW floor=$FW)"
+  else
+    fail "known-size attached tmux client did not produce the expected split ratio (panes=$PC window=$WW commander=$CW floor=$FW client_err=$(cat "$FIX/client.err" 2>/dev/null))"
+  fi
 else
-  fail "commander pane did not hold ratio after attach (window=$WW commander=$CW floor=$FW)"
+  fail "could not create known-size attached tmux client: $(cat "$FIX/client.err" 2>/dev/null)"
 fi
 
 # c8m regression guard: re-running cockpit after the floor pane dies rebuilds

@@ -1,0 +1,32 @@
+$ git diff --check HEAD
+$ rg -n 'known-size attached tmux client|floor-pane.err|could not create bridge floor pane|spawn_floor_pane|pane_count|window_width|commander-inbox-poll' seats/cockpit.selftest.sh seats/cockpit.sh
+seats/cockpit.sh:43:  if [ ! -x "$HERE/commander-inbox-poll.sh" ]; then
+seats/cockpit.sh:48:  poll_pid_file="$HERE/run/commander-inbox-poll.pid"
+seats/cockpit.sh:57:  (cd "$ROOT" && WHEELHOUSE_COMMANDER_POLL_ROOT="$ROOT" "$HERE/commander-inbox-poll.sh" >> "$HERE/logs/commander-inbox-poll.out.log" 2>> "$HERE/logs/commander-inbox-poll.stderr.log" & echo $! > "$poll_pid_file")
+seats/cockpit.sh:121:  │ cockpit has started commander-inbox-poll.sh for this pane.    │
+seats/cockpit.sh:192:spawn_floor_pane() {
+seats/cockpit.sh:195:  local err="$HERE/run/floor-pane.err"
+seats/cockpit.sh:203:  echo "STOP: could not create bridge floor pane in ${S}:bridge; $(tail -n 1 "$err" 2>/dev/null || echo 'tmux split-window failed')" >&2
+seats/cockpit.sh:212:      spawn_floor_pane || exit 1
+seats/cockpit.sh:226:spawn_floor_pane || exit 1
+seats/cockpit.selftest.sh:30:  pkill -f "$FIX/project/seats/commander-inbox-poll.sh" >/dev/null 2>&1 || true
+seats/cockpit.selftest.sh:36:  pkill -9 -f "$FIX/project/seats/commander-inbox-poll.sh" >/dev/null 2>&1 || true
+seats/cockpit.selftest.sh:53:cat > "$PROJ/seats/commander-inbox-poll.sh" <<'EOF'
+seats/cockpit.selftest.sh:58:chmod +x "$PROJ/seats/commander-inbox-poll.sh"
+seats/cockpit.selftest.sh:68:window_width() { tmux -L "$SOCK" display-message -p -t 'wh-ratio:bridge' '#{window_width}'; }
+seats/cockpit.selftest.sh:69:pane_count() { tmux -L "$SOCK" list-panes -t 'wh-ratio:bridge' 2>/dev/null | wc -l | tr -d ' '; }
+seats/cockpit.selftest.sh:80:    [ "$(pane_count)" = 2 ] && [ "$(window_width)" = 152 ] && break
+seats/cockpit.selftest.sh:100:  POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
+seats/cockpit.selftest.sh:104:POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
+seats/cockpit.selftest.sh:106:  pass "cockpit --pane-commander starts commander-inbox-poll.sh bound to the pane"
+seats/cockpit.selftest.sh:112:rm -f "$PROJ/seats/run/commander-inbox-poll.pid"
+seats/cockpit.selftest.sh:127:if grep -q 'bridge built: session wh-ratio' "$FIX/cockpit.out" && [ "$(pane_count)" = 2 ]; then
+seats/cockpit.selftest.sh:130:  fail "cockpit did not build the bridge: $(cat "$FIX/cockpit.out" 2>/dev/null) panes=$(pane_count)"
+seats/cockpit.selftest.sh:139:  CW="$(pane_width 0 2>/dev/null || echo missing)"; FW="$(pane_width 1 2>/dev/null || echo missing)"; WW="$(window_width 2>/dev/null || echo missing)"; PC="$(pane_count)"
+seats/cockpit.selftest.sh:141:    pass "known-size attached tmux client creates a split bridge and keeps commander pane near its ratio (window=$WW commander=$CW floor=$FW)"
+seats/cockpit.selftest.sh:143:    fail "known-size attached tmux client did not produce the expected split ratio (panes=$PC window=$WW commander=$CW floor=$FW client_err=$(cat "$FIX/client.err" 2>/dev/null))"
+seats/cockpit.selftest.sh:146:  fail "could not create known-size attached tmux client: $(cat "$FIX/client.err" 2>/dev/null)"
+seats/cockpit.selftest.sh:152:if [ "$(pane_count)" = 1 ]; then pass "fixture floor pane killed for respawn check"
+seats/cockpit.selftest.sh:155:if grep -q 'bridge floor pane missing in wh-ratio:bridge; respawning it' "$FIX/cockpit.out" && [ "$(pane_count)" = 2 ]; then
+seats/cockpit.selftest.sh:158:  fail "cockpit did not respawn missing floor pane: $(cat "$FIX/cockpit.out" 2>/dev/null) panes=$(pane_count)"
+$ pgrep -fl '[w]heelhouse-cockpit-selftest|[c]ommander-inbox-poll|[g]uca/.wheelhouse-runs' || true
