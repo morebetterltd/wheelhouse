@@ -88,6 +88,8 @@ case "${1:-}" in
   │                                                               │
   │ The pane to the right is the floor viewer (spotlight + rail): │
   │   1-9 pin a seat   0 pin STATUS   f follow   o/q overview     │
+  │ Scroll with the wheel, or prefix [ then arrows/PageUp, q out. │
+  │ With mouse on, hold Option/Shift to select text on macOS.      │
   └───────────────────────────────────────────────────────────────┘
 
 EOF
@@ -131,6 +133,15 @@ attach() {
 QSELF="$(printf '%q' "$SELF")"
 COMMANDER_PANE_PERCENT="${WHEELHOUSE_COCKPIT_COMMANDER_PERCENT:-55}"
 
+install_session_options() {
+  tmx set-option -t "$S" history-limit 50000
+  if [ "${WHEELHOUSE_COCKPIT_MOUSE:-1}" = "0" ]; then
+    tmx set-option -t "$S" mouse off
+  else
+    tmx set-option -t "$S" mouse on
+  fi
+}
+
 install_resize_hook() {
   # Detached new-session starts at tmux's default 80 columns. Size after a real
   # client attaches so the floor pane does not inherit every added column.
@@ -158,6 +169,7 @@ if tmx has-session -t "=$S" 2>/dev/null; then
     fi
   fi
   install_resize_hook
+  install_session_options
   echo "bridge already built: $S (re-run is attach, never a duplicate)"
   attach
   exit 0
@@ -175,6 +187,7 @@ tmx set-option -t "$S" status-left-length 30
 tmx set-option -t "$S" status-right-length 60
 tmx set-option -t "$S" status-left "[$S] "
 tmx set-option -t "$S" status-right "1-9 pin  0 status  f follow  o/q overview"
+install_session_options
 
 # Land focus on the commander pane.
 tmx select-pane -t "${S}:bridge.0"
