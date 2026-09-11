@@ -149,11 +149,36 @@ function guiTarget(surface: { kind: string; spec: string }): string | null {
   return m ? m[1].trim() : null;
 }
 
-function readWindowList(): any[] {
+function normalizeWindowList(source: string, parsed: any): any[] | string {
+  const windows = Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.windows) ? parsed.windows : null;
+  if (!windows) return `${source} returned wrong shape: expected JSON array or object with windows array`;
+  const bad = windows.find((w: any) => !w || typeof w !== "object" || (w.title == null && w.name == null));
+  if (bad) return `${source} returned wrong shape: each window needs title or name`;
+  return windows;
+}
+
+function readWindowList(): any[] | string {
   const raw = process.env.WHEELHOUSE_WALK_WINDOW_LIST_JSON;
-  if (raw) return JSON.parse(raw);
+  if (raw) {
+    try {
+      return normalizeWindowList("window-list JSON", JSON.parse(raw));
+    } catch (e: any) {
+      return `window-list JSON malformed: ${e?.message ?? e}`;
+    }
+  }
   const cmd = process.env.WHEELHOUSE_WALK_WINDOW_LIST_COMMAND;
-  if (cmd) return JSON.parse(execFileSync("bash", ["-lc", cmd], { encoding: "utf8", maxBuffer: 1024 * 1024 }));
+  if (cmd) {
+    const res = spawnSync("bash", ["-lc", cmd], { encoding: "utf8", timeout: Number(process.env.WHEELHOUSE_WALK_WINDOW_LIST_TIMEOUT_MS || 5000), maxBuffer: 1024 * 1024 });
+    if (res.error) return `window-list command failed (${cmd}): ${res.error.message}`;
+    if (res.status !== 0) return `window-list command failed (${cmd}): exit ${res.status}${res.stderr ? `: ${String(res.stderr).trim()}` : ""}`;
+    const out = String(res.stdout ?? "").trim();
+    if (!out) return `window-list command failed (${cmd}): empty output`;
+    try {
+      return normalizeWindowList(`window-list command (${cmd})`, JSON.parse(out));
+    } catch (e: any) {
+      return `window-list command malformed JSON (${cmd}): ${e?.message ?? e}`;
+    }
+  }
   return [];
 }
 
@@ -161,6 +186,7 @@ function checkGuiGuard(surface: { kind: string; spec: string }): GuiGuardResult 
   const target = guiTarget(surface);
   if (!target) return { mode: "not-gui", ok: true };
   const windows = readWindowList();
+  if (typeof windows === "string") return { mode: "window-list", target, ok: false, reason: windows };
   const hit = windows.find((w) => String(w.title ?? w.name ?? "").includes(target));
   if (!hit) return { mode: "window-list", target, ok: false, reason: `target window ${target} not found in window list` };
   const frontmost = hit.frontmost === true || hit.isFrontmost === true;
