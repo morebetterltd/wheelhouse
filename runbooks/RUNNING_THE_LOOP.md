@@ -112,7 +112,7 @@ A bench that will not fit in one turn splits the review into **two dispatches** 
 
 The verdict goes on the bead in the format `wheelhouse/crew/REVIEWER.md` prescribes: a merge answer and a push answer, as two labelled lines, with the push line required even when the answer is that no view was formed. Do not compress it to one word. The format exists because a single word answered one question when two were being asked, and an absence of thought arrived looking like a considered judgement.
 
-A BOUNCE lists each defect as its own point: what is wrong, where, and what done requires instead. The author fixes, reports the new head, and the reviewer re-checks the delta — not the whole branch again.
+A BOUNCE lists each defect as its own point: what is wrong, where, and what done requires instead. The author fixes, reports the new head, and the reviewer re-checks the delta — not the whole branch again. If a prior review judged pinned tip X and the branch later moved to Y by appending commits, the re-check may be scoped to X..Y before any publish decision at Y.
 
 ### 6. Integrate
 

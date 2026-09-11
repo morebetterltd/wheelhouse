@@ -1,0 +1,29 @@
+$ git diff --check HEAD
+$ rg -n -- "branch has since moved|branch moved; re-verify|DISCOVER is reserved|pinned tip|currentBranchTip|appendedCommitCount|mid-pass branch move|X..Y" seats/verify.ts seats/verify.selftest.sh contracts/REVIEWER.md contracts/VERIFIER.md runbooks/RUNNING_THE_LOOP.md
+runbooks/RUNNING_THE_LOOP.md:115:A BOUNCE lists each defect as its own point: what is wrong, where, and what done requires instead. The author fixes, reports the new head, and the reviewer re-checks the delta — not the whole branch again. If a prior review judged pinned tip X and the branch later moved to Y by appending commits, the re-check may be scoped to X..Y before any publish decision at Y.
+seats/verify.selftest.sh:410:Checked the pinned tip before considering the branch move.
+seats/verify.selftest.sh:411:VERDICT: APPROVE — at pinned tip __PINNED__; branch has since moved to __MOVED__ (1 commits appended, history unrewritten)
+seats/verify.selftest.sh:412:PUSH: NOT CONSIDERED — branch moved; re-verify at __MOVED__ before publish
+seats/verify.selftest.sh:417:if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && says "at pinned tip $MOVE_PIN" && says "branch has since moved to $MOVE_TIP"; then
+seats/verify.selftest.sh:418:  pass "mid-pass branch move exits as the underlying APPROVE and names pinned/moved tips"
+seats/verify.selftest.sh:419:else fail "mid-pass branch move did not produce moved APPROVE (exit $RC): $OUT"; fi
+seats/verify.selftest.sh:420:if grep -q "tip: $MOVE_PIN" "$VDIR/bead-move.md" 2>/dev/null && grep -q "branch has since moved to $MOVE_TIP" "$VDIR/bead-move.md" && grep -q "push: NOT CONSIDERED — branch moved; re-verify at $MOVE_TIP before publish" "$VDIR/bead-move.md"; then
+seats/verify.selftest.sh:421:  pass "mid-pass branch move verdict file records pinned tip, move note, and NOT CONSIDERED push"
+seats/verify.selftest.sh:422:else fail "mid-pass branch move verdict file missing pinned/moved/push detail: $(cat "$VDIR/bead-move.md" 2>/dev/null)"; fi
+seats/verify.selftest.sh:424:  pass "mid-pass branch move is never rendered as DISCOVER"
+seats/verify.selftest.sh:425:else fail "mid-pass branch move leaked DISCOVER: $OUT $(cat "$VDIR/bead-move.md" 2>/dev/null)"; fi
+seats/verify.ts:259:function currentBranchTip(repoRoot: string, branch: string): string | null {
+seats/verify.ts:267:function appendedCommitCount(repoRoot: string, fromTip: string, toTip: string): number | null {
+seats/verify.ts:743:    `VERDICT: APPROVE — at pinned tip ${tip}; branch has since moved to <new-tip> (<N> commits appended, history unrewritten)`,
+seats/verify.ts:744:    `PUSH: NOT CONSIDERED — branch moved; re-verify at <new-tip> before publish`,
+seats/verify.ts:745:    `DISCOVER is reserved for a discovery that displaces the judgment, not for an appended branch tip; the integrator/publisher refuses any tip other than the verdict's pinned SHA until the new tip is re-verified.`,
+seats/verify.ts:822:  const branchTipAfter = currentBranchTip(repoRoot, branch);
+seats/verify.ts:824:  const appendedCount = movedTo ? appendedCommitCount(repoRoot, tip, movedTo) : null;
+seats/verify.ts:826:    ? new RegExp(`^VERDICT:\\s*(APPROVE|BOUNCE)\\s+[—-]\\s+at pinned tip ${tip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; branch has since moved to ${movedTo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(${appendedCount} commits appended, history unrewritten\\)$`)
+seats/verify.ts:831:    die(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] | BOUNCE | DISCOVER${movedTo && appendedCount !== null ? ` | APPROVE/BOUNCE — at pinned tip ${tip}; branch has since moved to ${movedTo} (${appendedCount} commits appended, history unrewritten)` : ""}`);
+seats/verify.ts:841:      die(`branch "${branch}" moved during verification from ${tip} to ${movedTo}, but the pinned tip is no longer an ancestor — no verdict can be rendered without a fresh review`);
+seats/verify.ts:843:    const expectedPush = `PUSH: NOT CONSIDERED — branch moved; re-verify at ${movedTo} before publish`;
+seats/verify.ts:845:      die(`branch "${branch}" moved during verification from ${tip} to ${movedTo} (${appendedCount} commits appended, history unrewritten); verdict must judge the pinned tip and name the move, not switch to DISCOVER or omit the move note`);
+contracts/REVIEWER.md:29:One verdict, exclusively. If the done holds and adjacent work was discovered, that is APPROVE with the discovery noted in the evidence; DISCOVER is for when the discovery displaces the judgment, not decorates it. A branch that moves while you are reviewing is not by itself a displacing discovery: judge the pinned SHA you were dispatched, name the move on the verdict line, and make push not considered until the new tip is verified, e.g. `VERDICT: APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)` and `PUSH: NOT CONSIDERED — branch moved; re-verify at Y before publish`. This is safe because the integrator/publisher refuses any tip other than the verdict's pinned SHA; X..Y can be reviewed as a follow-up delta. If the pass cannot finish inside its turn, it reports what was completed and what remains with no `VERDICT:` line; the absence is what tells the dispatcher to route to a human.
+contracts/REVIEWER.md:42:  VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers> | BOUNCE | APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten) | BOUNCE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)
+contracts/REVIEWER.md:43:  PUSH:    APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED | NOT CONSIDERED — branch moved; re-verify at Y before publish

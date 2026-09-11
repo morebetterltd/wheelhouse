@@ -130,6 +130,18 @@ fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: 
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
 let text = reply ? fs.readFileSync(reply, "utf8") : "";
+if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
+  const cp = require("child_process");
+  const repo = process.env.STUB_MOVE_BRANCH_REPO;
+  const branch = process.env.STUB_MOVE_BRANCH;
+  const pinned = cp.execFileSync("git", ["-C", repo, "rev-parse", `${branch}^{commit}`], { encoding: "utf8" }).trim();
+  cp.execFileSync("git", ["-C", repo, "checkout", "-q", branch]);
+  fs.writeFileSync(path.join(repo, "midpass-move.txt"), `moved ${Date.now()}\n`);
+  cp.execFileSync("git", ["-C", repo, "add", "midpass-move.txt"]);
+  cp.execFileSync("git", ["-C", repo, "-c", "user.email=selftest@local", "-c", "user.name=selftest", "commit", "-q", "-m", "mid-pass move"]);
+  const moved = cp.execFileSync("git", ["-C", repo, "rev-parse", `${branch}^{commit}`], { encoding: "utf8" }).trim();
+  text = text.replaceAll("__PINNED__", pinned).replaceAll("__MOVED__", moved);
+}
 if (process.env.STUB_STALL === "1") {
   process.stdout.write(JSON.stringify({type:"tool_execution_start",toolName:"bash",args:{cmd:"cargo test"}})+"\n");
   setTimeout(() => {}, 10000);
@@ -387,7 +399,35 @@ if grep -q "verdict: APPROVE — NOT BENCHED: the docs deployable" "$VDIR/bead-1
   pass "the NOT BENCHED qualifier survives into the verdict record"
 else fail "NOT BENCHED qualifier lost from the verdict file"; fi
 
-phase "1b. verifier account.authRoute=env — exported provider key is identity"
+phase "1b. branch moves mid-pass — verdict stays pinned, publish waits"
+MOVE_PROJ="$FIX/proj-move"
+build_proj "$MOVE_PROJ" move "$VERIFY"
+RUN_PROJ="$MOVE_PROJ"
+VDIR="$MOVE_PROJ/seats/verdicts"
+VARGV="$HOME_FIX/.pi-seats-move/verifier/argv.json"
+MOVE_PIN="$(git -C "$MOVE_PROJ" rev-parse fleet/bead-1)"
+cat > "$REPLY" <<'EOF'
+Checked the pinned tip before considering the branch move.
+VERDICT: APPROVE — at pinned tip __PINNED__; branch has since moved to __MOVED__ (1 commits appended, history unrewritten)
+PUSH: NOT CONSIDERED — branch moved; re-verify at __MOVED__ before publish
+EOF
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_MOVE_BRANCH_REPO="$MOVE_PROJ" STUB_MOVE_BRANCH=fleet/bead-1 \
+  bun "$RUN_PROJ/seats/verify.ts" bead-move fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
+MOVE_TIP="$(git -C "$MOVE_PROJ" rev-parse fleet/bead-1)"
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && says "at pinned tip $MOVE_PIN" && says "branch has since moved to $MOVE_TIP"; then
+  pass "mid-pass branch move exits as the underlying APPROVE and names pinned/moved tips"
+else fail "mid-pass branch move did not produce moved APPROVE (exit $RC): $OUT"; fi
+if grep -q "tip: $MOVE_PIN" "$VDIR/bead-move.md" 2>/dev/null && grep -q "branch has since moved to $MOVE_TIP" "$VDIR/bead-move.md" && grep -q "push: NOT CONSIDERED — branch moved; re-verify at $MOVE_TIP before publish" "$VDIR/bead-move.md"; then
+  pass "mid-pass branch move verdict file records pinned tip, move note, and NOT CONSIDERED push"
+else fail "mid-pass branch move verdict file missing pinned/moved/push detail: $(cat "$VDIR/bead-move.md" 2>/dev/null)"; fi
+if ! grep -q "DISCOVER" "$VDIR/bead-move.md" 2>/dev/null && ! says "DISCOVER"; then
+  pass "mid-pass branch move is never rendered as DISCOVER"
+else fail "mid-pass branch move leaked DISCOVER: $OUT $(cat "$VDIR/bead-move.md" 2>/dev/null)"; fi
+RUN_PROJ="$PROJ"
+VDIR="$PROJ/seats/verdicts"
+VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
+
+phase "1c. verifier account.authRoute=env — exported provider key is identity"
 ENV_PROJ="$FIX/env-proj"
 build_proj "$ENV_PROJ" env "$VERIFY"
 bun -e "const fs=require('fs'); const p='$ENV_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.account.authRoute='env'; fs.rmSync('$HOME_FIX/.pi-seats-env/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
