@@ -1,0 +1,50 @@
+$ mkdir -p .wheelhouse-runs/wheelhouse-project-xtyh/tmp
+$ /usr/bin/time -p bash -c 'TMPDIR="[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-xtyh/.wheelhouse-runs/wheelhouse-project-xtyh/tmp" bash seats/herald.selftest.sh'
+ok 1 - state tmp rename ENOENT is retried once and the herald survives
+ok 2 - settle fallback detail says when state.json has no recorded prompt
+ok 3 - pre-existing large cursorless log starts at EOF and yields zero stale events
+ok 4 - large log tail is read incrementally with a small chunk bound
+ok 5 - copy-truncate shrink resets the saved offset and herald reads the new current log
+ok 6 - settle rows use state.json prompt head for rotated and fresh current logs
+ok 7 - thinking/thinkingSignature frames never appear in settle row detail
+ok 8 - captures settle, distress, sentinel, and non-retried error events without retry wakes
+ok 9 - settle uses A2A terminal state
+ok 10 - distress uses A2A failed state and carries quota detail
+ok 11 - provider-error distress detail names the adapter probe command
+ok 12 - distress matches insufficient credits wording
+ok 13 - real provider 400 invalid_grant stderr becomes one distress
+ok 14 - agent_end stopReason=error without retry becomes distress with errorMessage detail
+ok 15 - agent_end stopReason=error with willRetry=true produces no wake
+ok 16 - agent_end normal stopReason remains settle
+ok 17 - recorded false-positive message_update shapes produce zero distress
+ok 18 - turn-end assistant @commander line becomes one sentinel wake
+ok 19 - quoted @commander text in tool output and non-turn events produces zero sentinel wakes
+ok 20 - dedup/cursor prevents duplicate inbox appends on a re-scan
+ok 21 - drain cursor emits unread wake events once, deduping stable ids, then advances to EOF
+ok 22 - drain dedup survives a tiny MAX_SEEN eviction horizon
+ok 23 - fixture idle Claude UI receives exactly one constant-phrase poke
+ok 24 - sent poke attempt is logged with timestamp and pane
+ok 25 - seat-authored text never enters send-keys
+ok 26 - deferred poke escalates after bounded window once active markers are clear
+ok 27 - repainting trailing status line is stripped for stability and idle poke lands
+ok 28 - wide capture sees spinner above prompt and classifies mid-turn pane not idle
+ok 29 - busy commander pane defers a distress poke without sending
+ok 30 - deferred distress poke is delivered once the commander pane is idle
+ok 31 - per-pane cooldown defers a second immediate poke
+ok 32 - per-pane cooldown allows a later poke after the tunable interval
+ok 33 - pane-state gate prevents poke into a bare shell
+ok 34 - allowlist gate classifies a ❯-prompt bare shell not-idle and defers without poking
+ok 35 - between-tool-calls Claude UI is unstable across the idle window and deferred without poking
+ok 36 - fixture mid-turn Claude UI is logged deferred/not-idle and not poked
+ok 37 - fixture tool-running Claude UI is not poked
+ok 38 - poke attempt with no configured pane is logged dropped/no-pane
+ok 39 - wrapper-shaped idle prompt matched by WHEELHOUSE_HERALD_IDLE_RE receives the constant poke
+ok 40 - fallback poll drains pending inbox without matching the wrapper prompt or sending tmux keys
+ok 41 - cockpit starts the herald daemon
+ok 42 - cockpit verifies and restarts a dead herald on re-run
+ok 43 - truncated tool_execution_update payloads are harmless to herald's log reader shape
+ok 44 - herald exits within one scan when its project root disappears
+herald.selftest: PASS (44 checks)
+real 25.60
+user 12.52
+sys 10.14
