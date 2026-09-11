@@ -4,6 +4,9 @@
 
 set -u
 
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
+
 command -v tmux >/dev/null 2>&1 || { echo "selftest: tmux is required" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
 
@@ -18,6 +21,7 @@ PASS=0
 FAIL=0
 cleanup() {
   tmux -L "$SOCK" kill-server >/dev/null 2>&1 || true
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true
   pids=""
   for pid_file in "$FIX"/project/seats/run/*.pid; do

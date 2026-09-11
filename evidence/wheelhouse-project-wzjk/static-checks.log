@@ -1,0 +1,61 @@
+$ bash -n seats/*.selftest.sh seats/selftest-lib.sh seats/herald.ts
+$ every seats/*.selftest.sh sources selftest-lib, installs EXIT trap, and calls selftest_cleanup_fixture_processes
+seats/adapter.selftest.sh OK
+seats/cockpit.selftest.sh OK
+seats/concurrency.selftest.sh OK
+seats/evidence-scrub.selftest.sh OK
+seats/fleet-gate.selftest.sh OK
+seats/floor.selftest.sh OK
+seats/herald.selftest.sh OK
+seats/intent-check.selftest.sh OK
+seats/isolation.selftest.sh OK
+seats/legibility.selftest.sh OK
+seats/pid-ownership.selftest.sh OK
+seats/placeholder-grep.selftest.sh OK
+seats/prune.selftest.sh OK
+seats/push-authority-lint.selftest.sh OK
+seats/recover.selftest.sh OK
+seats/reset.selftest.sh OK
+seats/seat-env.selftest.sh OK
+seats/specimen-leak.selftest.sh OK
+seats/stop-all.selftest.sh OK
+seats/upgrade-runbook.selftest.sh OK
+seats/verify.selftest.sh OK
+seats/walk.selftest.sh OK
+$ rg -n "projectRootExists|project root disappeared|herald exits within one scan|selftest_cleanup_fixture_processes|known-size attached tmux client|floor-pane.err" seats/herald.ts seats/herald.selftest.sh seats/selftest-lib.sh seats/*.selftest.sh seats/cockpit.selftest.sh seats/cockpit.sh
+seats/stop-all.selftest.sh:25:cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null; [ -n "$FIX" ] && rm -rf "$FIX"; }
+seats/cockpit.selftest.sh:25:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/pid-ownership.selftest.sh:9:cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; }
+seats/reset.selftest.sh:51:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/recover.selftest.sh:81:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/concurrency.selftest.sh:80:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/intent-check.selftest.sh:11:cleanup(){ selftest_cleanup_fixture_processes "${FIXTURE:-}" "${SOCK:-}"; rm -rf "$FIXTURE"; }
+seats/herald.selftest.sh:21:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/herald.selftest.sh:418:if ! kill -0 "$ROOT_GONE_PID" 2>/dev/null && grep -q 'project root disappeared' "$FIX/root-gone.err" 2>/dev/null; then
+seats/herald.selftest.sh:419:  pass "herald exits within one scan when its project root disappears"
+seats/herald.selftest.sh:421:  fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
+seats/upgrade-runbook.selftest.sh:66:cleanup(){ selftest_cleanup_fixture_processes "${TMP:-}" "${SOCK:-}"; rm -rf "$TMP"; }
+seats/verify.selftest.sh:64:cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && rm -rf "$FIX"; return 0; }
+seats/seat-env.selftest.sh:53:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/selftest-lib.sh:3:# Source this file, then call selftest_cleanup_fixture_processes "$FIX" [tmux-socket...]
+seats/selftest-lib.sh:12:selftest_cleanup_fixture_processes() {
+seats/herald.selftest.sh:21:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/herald.selftest.sh:418:if ! kill -0 "$ROOT_GONE_PID" 2>/dev/null && grep -q 'project root disappeared' "$FIX/root-gone.err" 2>/dev/null; then
+seats/herald.selftest.sh:419:  pass "herald exits within one scan when its project root disappears"
+seats/herald.selftest.sh:421:  fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
+seats/adapter.selftest.sh:63:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/cockpit.selftest.sh:25:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/walk.selftest.sh:30:cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && rm -rf "$FIX"; }
+seats/placeholder-grep.selftest.sh:24:cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+seats/prune.selftest.sh:31:cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX" ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
+seats/isolation.selftest.sh:78:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/legibility.selftest.sh:64:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/evidence-scrub.selftest.sh:19:cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+seats/fleet-gate.selftest.sh:24:cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+seats/specimen-leak.selftest.sh:28:cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+seats/push-authority-lint.selftest.sh:14:cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+seats/floor.selftest.sh:52:  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+seats/herald.ts:76:function projectRootExists(): boolean {
+seats/herald.ts:582:    if (!projectRootExists()) {
+seats/herald.ts:583:      console.error(`herald: project root disappeared (${ROOT}); exiting`);
+$ git diff --check HEAD

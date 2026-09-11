@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 #
 # recover.selftest.sh — after a forced interruption, does recover.ts still
 # tell the truth about every seat, on THIS machine?
@@ -75,6 +78,7 @@ skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
 cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   # The stub retitles itself to `pi`, so pkill -f on the fixture path cannot
   # find it — kill every pid any fixture state.json ever recorded instead.
   local f

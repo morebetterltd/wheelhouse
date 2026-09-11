@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 #
 # adapter.selftest.sh — does adapter.ts still do what seats/README.md claims,
 # on THIS machine?
@@ -57,6 +60,7 @@ skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
 cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   # Seats spawned from the fixture carry the fixture path in their argv
   # (their role brief lives there); kill any that outlived their phase.
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null

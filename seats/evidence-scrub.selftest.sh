@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 # evidence-scrub.selftest.sh — proves the evidence scrubber redacts planted
 # machine-shaped paths before a capture is written.
 
@@ -13,7 +16,8 @@ pass() { printf '  ok    %s\n' "$*"; }
 fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-evidence-scrub-selftest.$$.XXXXXX")"
-trap 'rm -rf "$FIX"' EXIT INT TERM
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+trap cleanup EXIT INT TERM
 OUT="$FIX/capture.txt"
 
 USER_RAW="$(id -un 2>/dev/null || true)"

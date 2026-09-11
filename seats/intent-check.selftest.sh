@@ -1,11 +1,15 @@
 #!/bin/sh
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 CHECK="$SCRIPT_DIR/intent-check.sh"
 TMPBASE=${TMPDIR:-/tmp}
 FIXTURE=$(mktemp -d "$TMPBASE/wheelhouse-intent-check-selftest.$$.XXXXXX")
-trap 'rm -rf "$FIXTURE"' EXIT HUP INT TERM
+cleanup(){ selftest_cleanup_fixture_processes "${FIXTURE:-}" "${SOCK:-}"; rm -rf "$FIXTURE"; }
+trap cleanup EXIT HUP INT TERM
 
 pass_count=0
 
