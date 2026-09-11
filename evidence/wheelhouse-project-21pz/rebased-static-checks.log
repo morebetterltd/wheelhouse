@@ -1,0 +1,10 @@
+$ git diff --check HEAD
+$ timeout 30 bun build seats/prune.ts --target bun --outfile /dev/null
+Bundled 1 module in 3ms
+
+  null  24.14 KB  (entry point)
+
+$ git status --short --branch
+## fleet/wheelhouse-project-21pz
+?? evidence/wheelhouse-project-21pz/rebased-prune-selftest.log
+?? evidence/wheelhouse-project-21pz/rebased-static-checks.log
