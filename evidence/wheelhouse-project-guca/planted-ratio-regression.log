@@ -1,0 +1,13 @@
+$ planted regression: cockpit resize hook forced to 95%; TMPDIR=$PWD/.wheelhouse-runs/wheelhouse-project-guca/tmp WHEELHOUSE_SKIP_REAL_PI=1 bash .wheelhouse-runs/wheelhouse-project-guca/planted-ratio/seats/cockpit.selftest.sh
+ok 1 - cockpit --herald starts only the herald without building or attaching tmux
+ok 2 - cockpit --pane-commander starts commander-inbox-poll.sh bound to the pane
+ok 3 - cockpit --herald exits under a stdout pipe and leaves a live herald pid
+ok 4 - cockpit builds one bridge window with two panes on a private tmux socket
+ok 5 - fresh cockpit session enables mouse and sets history-limit 50000
+not ok 6 - known-size attached tmux client did not produce the expected split ratio (panes=2 window=152 commander=144 floor=7 client_err=)
+ok 6 - fixture floor pane killed for respawn check
+ok 7 - re-running cockpit respawns a missing floor pane
+ok 8 - cockpit re-run leaves mouse/history options idempotently set
+ok 9 - WHEELHOUSE_COCKPIT_MOUSE=0 leaves mouse off while preserving history-limit
+cockpit.selftest: FAIL (1 failure(s), 9 pass(es))
+rc=1
