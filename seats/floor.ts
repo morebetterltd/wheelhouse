@@ -196,51 +196,132 @@ function listSeats(): Seat[] {
   }));
 }
 
-function textOf(content: any): string {
+function textOf(content: any, includeThinking = false): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
-      .map((c) => (typeof c?.text === "string" ? c.text : typeof c?.thinking === "string" ? c.thinking : ""))
-      .join(" ");
+      .map((c) => {
+        if (typeof c?.text === "string") return c.text;
+        if (includeThinking && typeof c?.thinking === "string") return c.thinking;
+        return "";
+      })
+      .filter((s) => s.trim().length > 0)
+      .join("\n");
   }
   return "";
 }
 
-/** One event object -> one humanized line. Unknown types stay visible. */
+function thinkingOf(content: any): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((c) => (typeof c?.thinking === "string" ? c.thinking : ""))
+    .filter((s) => s.trim().length > 0)
+    .join(" ");
+}
+
+function firstResultLine(result: any): string {
+  const text = textOf(result?.content) || textOf(result) || String(result?.output ?? result?.stdout ?? result?.stderr ?? "");
+  return text.split(/\r?\n/).map((s) => s.trim()).find(Boolean) ?? "";
+}
+
+function toolResultStatus(result: any): string {
+  if (typeof result?.exitCode === "number") return `rc=${result.exitCode}`;
+  if (typeof result?.status === "number") return `rc=${result.status}`;
+  if (typeof result?.isError === "boolean") return result.isError ? "error" : "ok";
+  return "done";
+}
+
+function toolArgSummary(args: any): string {
+  if (args === undefined || args === null || args === "") return "";
+  if (typeof args === "string") return truncate(args, 70);
+  if (typeof args?.command === "string") return truncate(args.command, 70);
+  if (typeof args?.path === "string") return truncate(args.path, 70);
+  return truncate(JSON.stringify(args), 70);
+}
+
+function wrapLine(text: string, width: number): string[] {
+  const max = Math.max(20, width);
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (!flat) return [];
+  const out: string[] = [];
+  let rest = flat;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf(" ", max);
+    if (cut < 10) cut = max;
+    out.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
+function toolCallsOf(content: any): any[] {
+  if (!Array.isArray(content)) return [];
+  return content.filter((c) => c?.type === "toolCall" || c?.toolCallId || c?.name || c?.toolName);
+}
+
+interface TranscriptRow {
+  kind: "user" | "think" | "tool" | "assistant" | "raw";
+  id?: string;
+  text: string;
+}
+
+function renderTranscript(lines: string[], width: number): string[] {
+  const rows: TranscriptRow[] = [];
+  const toolRows = new Map<string, number>();
+  const addTool = (id: string, name: string, args: any) => {
+    if (toolRows.has(id)) return;
+    toolRows.set(id, rows.length);
+    const summary = toolArgSummary(args);
+    rows.push({ kind: "tool", id, text: `[tool] ${name}${summary ? ` ${summary}` : ""}` });
+  };
+
+  for (const line of lines) {
+    let ev: any;
+    try { ev = JSON.parse(line); } catch { rows.push({ kind: "raw", text: `[raw] ${line}` }); continue; }
+    const t = String(ev.type ?? "?");
+    if (t === "message_update" || t === "tool_execution_update" || t === "message_start") continue;
+    if (t === "message_end") {
+      const msg = ev.message ?? {};
+      const role = msg.role ?? "?";
+      const content = msg.content;
+      if (role === "user") {
+        const text = textOf(content);
+        if (text.trim()) rows.push({ kind: "user", text: `[user] ${truncate(text, 140)}` });
+      } else if (role === "assistant") {
+        const think = thinkingOf(content);
+        if (think.trim()) rows.push({ kind: "think", text: `[think] ${truncate(think, Math.max(20, width - 8))}` });
+        for (const c of toolCallsOf(content)) addTool(c.id ?? c.toolCallId ?? `${rows.length}`, c.name ?? c.toolName ?? "?", c.arguments ?? c.args ?? c.input);
+        const text = textOf(content);
+        for (const para of text.split(/\n{2,}/)) for (const wrapped of wrapLine(para, width)) rows.push({ kind: "assistant", text: wrapped });
+      }
+      continue;
+    }
+    if (t === "tool_execution_start") addTool(ev.toolCallId ?? `${rows.length}`, ev.toolName ?? ev.tool?.name ?? ev.name ?? "?", ev.args ?? ev.tool?.args ?? ev.input);
+    else if (t === "tool_execution_end") {
+      const id = ev.toolCallId ?? `${rows.length}`;
+      addTool(id, ev.toolName ?? ev.tool?.name ?? ev.name ?? "?", ev.args ?? ev.tool?.args ?? ev.input);
+      const idx = toolRows.get(id)!;
+      const first = firstResultLine(ev.result);
+      rows[idx].text = `${rows[idx].text} → ${toolResultStatus(ev.result)}${first ? `: ${truncate(first, 90)}` : ""}`;
+    } else if (t.includes("thinking") || t === "think") {
+      const text = textOf(ev.content, true) || ev.text || "(thinking)";
+      rows.push({ kind: "think", text: `[think] ${truncate(text, Math.max(20, width - 8))}` });
+    } else if (t === "response") {
+      const ok = ev.success ? "ok" : `FAIL: ${ev.error ?? "?"}`;
+      rows.push({ kind: "raw", text: truncate(`[rpc] ${ev.command ?? "?"} ${ok}`, width) });
+    }
+  }
+  return rows.flatMap((r) => {
+    const line = r.kind === "think" || r.kind === "tool" ? `${C.dim}${r.text}${C.reset}` : r.text;
+    return wrapLine(line, width);
+  }).filter((l) => l.trim().length > 0);
+}
+
+/** One event object -> one humanized line for compact overview/status snippets. */
 function humanize(line: string, width: number): string {
-  let ev: any;
-  try {
-    ev = JSON.parse(line);
-  } catch {
-    return truncate(`[raw] ${line}`, width);
-  }
-  const t = String(ev.type ?? "?");
-  if (t === "agent_start") return "[turn] agent started";
-  if (t === "agent_end") {
-    const n = Array.isArray(ev.messages) ? ev.messages.length : null;
-    const usage = ev.usage ? ` ${ev.usage.input_tokens ?? "?"}in/${ev.usage.output_tokens ?? "?"}out tok` : "";
-    return `[turn_end] turn finished${n === null ? "" : ` — ${n} message(s)`}${usage}`;
-  }
-  if (t === "message_start" || t === "message_end" || t === "message_update") {
-    const role = ev.message?.role ?? "?";
-    const text = textOf(ev.message?.content);
-    const hasThink = Array.isArray(ev.message?.content) && ev.message.content.some((c: any) => c?.type === "thinking" || typeof c?.thinking === "string");
-    if (hasThink && !text.trim()) return truncate(`[think] (thinking)`, width);
-    const tag = role === "user" ? "[user]" : role === "toolResult" ? "[tool] result:" : "[say]";
-    return truncate(`${tag} ${text}`, width);
-  }
-  if (t.includes("thinking") || t === "think") return truncate(`[think] ${textOf(ev.content) || ev.text || ""}`, width);
-  if (t.includes("tool")) {
-    const name = ev.toolName ?? ev.tool?.name ?? ev.name ?? "?";
-    const args = ev.args ?? ev.tool?.args ?? ev.input ?? "";
-    const phase = t.includes("end") || t.includes("result") ? "done" : "";
-    return truncate(`[tool] ${name} ${phase || JSON.stringify(args) || ""}`, width);
-  }
-  if (t === "response") {
-    const ok = ev.success ? "ok" : `FAIL: ${ev.error ?? "?"}`;
-    return truncate(`[rpc] ${ev.command ?? "?"} ${ok}`, width);
-  }
-  return truncate(`[${t}]`, width);
+  const rendered = renderTranscript([line], width);
+  return rendered[0] ?? "";
 }
 
 type Cue = "red" | "amber" | "green" | "ok" | "off";
@@ -504,7 +585,8 @@ function spotlightLines(seat: Seat, height: number, width: number): string[] {
     return out;
   }
   const room = Math.max(1, height - 1);
-  for (const line of events.slice(-room)) out.push(humanize(line, width));
+  const transcript = renderTranscript(events, width);
+  for (const line of transcript.slice(-room)) out.push(line);
   return out;
 }
 
@@ -549,7 +631,8 @@ function overviewLines(seats: Seat[], width: number): string[] {
     if (events === null) {
       out.push(`     ${C.dim}no event log yet — ${path.relative(ROOT, s.log)} missing${C.reset}`);
     } else {
-      for (const line of events.slice(-2)) out.push(`     ${humanize(line, width - 5)}`);
+      const recent = renderTranscript(events, width - 5).slice(-2);
+      for (const line of recent) out.push(`     ${line}`);
     }
   });
   return out;
