@@ -184,7 +184,14 @@ session, when its cwd does not already match the bead being dispatched.
 
 `dispatch` prefixes the message with `Bead <bead-id>` and queues behind the
 current turn if the seat is mid-stream; redirecting the CURRENT turn is what
-`steer` is for. `stop` is SIGTERM — Pi's graceful path — and deliberately
+`steer` is for. Before waiting for Pi's prompt acknowledgement, the adapter
+records the target bead and prompt in `state.json`, so a slow resumed session
+never leaves `status` naming the previous bead after the prompt has been sent.
+The prompt acknowledgement deadline is `WHEELHOUSE_PROMPT_ACK_MS` (default
+60000 ms, deliberately longer than the generic RPC wait for warm resumed
+sessions). If the acknowledgement times out but the log shows the prompt frame
+or a turn start after the send, dispatch exits 0 with `WARNING: prompt
+delivered, ack late`; it STOPs only when the log shows no delivery. `stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
 attached to it (`--session`), rooted back in the same cwd it was running in,
