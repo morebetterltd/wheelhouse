@@ -101,6 +101,7 @@ cp "$TEMPLATE/contracts/REVIEWER.md" wheelhouse/crew/REVIEWER.md.new
 cp "$TEMPLATE/contracts/DESIGNER.md" wheelhouse/crew/DESIGNER.md.new
 cp "$TEMPLATE/contracts/VERIFIER.md" wheelhouse/crew/VERIFIER.md.new
 cp "$TEMPLATE/contracts/RESEARCHER.md" wheelhouse/crew/RESEARCHER.md.new
+mkdir -p wheelhouse/research/ # RESEARCHER.md cites this as the durable report destination.
 cp "$TEMPLATE/contracts/BENCH.md"    wheelhouse/crew/BENCH.md.new
 cp "$TEMPLATE/contracts/GRAPH.md"    wheelhouse/GRAPH.md.new
 cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
