@@ -1,0 +1,94 @@
+$ TMPDIR=$PWD/.wheelhouse-runs/wheelhouse-project-udsn/tmp bash seats/walk.selftest.sh
+
+walk verdict parsing and transcript retention
+  ok    done exit 0
+  ok    done printed VERDICT: WALKED-DONE
+  ok    done retained transcript
+  ok    done scrub applied
+  ok    done walk.json transcript path is root-relative
+  ok    done stdout prints root-relative evidence paths
+  ok    done appended verifier brief
+  ok    done prompt carries claim and surface
+  ok    done prompt avoids fleet internals
+  ok    notdone exit 2
+  ok    notdone printed VERDICT: WALKED-NOT-DONE
+  ok    notdone retained transcript
+  ok    notdone scrub applied
+  ok    notdone walk.json transcript path is root-relative
+  ok    notdone stdout prints root-relative evidence paths
+  ok    notdone appended verifier brief
+  ok    notdone prompt carries claim and surface
+  ok    notdone prompt avoids fleet internals
+  ok    couldnot exit 3
+  ok    couldnot printed VERDICT: COULD-NOT-WALK
+  ok    couldnot retained transcript
+  ok    couldnot scrub applied
+  ok    couldnot walk.json transcript path is root-relative
+  ok    couldnot stdout prints root-relative evidence paths
+  ok    couldnot appended verifier brief
+  ok    couldnot prompt carries claim and surface
+  ok    couldnot prompt avoids fleet internals
+  ok    zero exit 4
+  ok    zero printed expected exactly one
+  ok    zero retained transcript
+  ok    zero scrub applied
+  ok    zero appended verifier brief
+  ok    zero prompt carries claim and surface
+  ok    zero prompt avoids fleet internals
+  ok    two exit 4
+  ok    two printed expected exactly one
+  ok    two retained transcript
+  ok    two scrub applied
+  ok    two appended verifier brief
+  ok    two prompt carries claim and surface
+  ok    two prompt avoids fleet internals
+
+image budget reduces over-budget capture set before spawn
+  ok    image-budget walk exits 0
+  ok    image budget retained all full-size captures under --out
+  ok    image budget kept only max context JPEGs
+  ok    image budget manifest names reduction
+  ok    walker prompt names image budget before first capture
+
+GUI window-list guard refuses an obscured target before spawn
+  ok    obscured GUI target exits COULD-NOT-WALK (3)
+  ok    obscured GUI target names the obscuring window
+  ok    obscured GUI target does not spawn the verifier seat
+  ok    walk.json records the window-list guard mode and blocker
+  ok    GUI command failcmd exits COULD-NOT-WALK (3)
+  ok    GUI command failcmd names the window-list failure
+  ok    GUI command failcmd writes walk.json with reason
+  ok    GUI command failcmd does not spawn the verifier seat
+  ok    GUI command malformed exits COULD-NOT-WALK (3)
+  ok    GUI command malformed names the window-list failure
+  ok    GUI command malformed writes walk.json with reason
+  ok    GUI command malformed does not spawn the verifier seat
+  ok    GUI command wrongshape exits COULD-NOT-WALK (3)
+  ok    GUI command wrongshape names the window-list failure
+  ok    GUI command wrongshape writes walk.json with reason
+  ok    GUI command wrongshape does not spawn the verifier seat
+  ok    non-GUI install surface does not consult the injected window list
+  ok    walk.json records not-gui mode for non-GUI surfaces
+
+stdin-reading verifier receives EOF immediately
+  ok    stdin-reading verifier exits 0
+  ok    stdin-reading verifier walk completes with a verdict
+  ok    stdin-reading verifier completed under 5s (132ms)
+
+timeout names phase and honors per-walk budget env
+  ok    timeout exits as COULD-NOT-WALK (3)
+  ok    timeout verdict names budget and phase
+  ok    timeout metadata records phase
+
+upgrade surface requires baseline
+  ok    upgrade without baseline exits 1
+  ok    upgrade baseline refusal named
+
+credential refusal distinct and no live pi required
+  ok    missing credential exits 5
+  ok    missing credential did not spawn stub pi
+
+interrupt removes scratch worktree
+  ok    interrupt fixture captured scratch cwd
+  ok    interrupt removed scratch cwd
+walk.selftest: PASS
