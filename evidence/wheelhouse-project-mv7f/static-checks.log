@@ -1,0 +1,3 @@
+$ git diff --check HEAD
+$ rg -n "wheelhouse/research|RESEARCHER.md cites" runbooks/UPGRADE.md
+99:mkdir -p wheelhouse/research/ # RESEARCHER.md cites this as the durable report destination.
