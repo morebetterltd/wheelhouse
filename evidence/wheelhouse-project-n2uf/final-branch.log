@@ -1,0 +1,10 @@
+$ git status --short --branch
+## fleet/wheelhouse-project-n2uf
+ M evidence/wheelhouse-project-n2uf/final-branch.log
+$ git symbolic-ref --short HEAD
+fleet/wheelhouse-project-n2uf
+$ git rev-parse HEAD
+50ec703d80cab7d0d9832ed7760411b35483dc50
+$ git rev-parse fleet/wheelhouse-project-n2uf
+50ec703d80cab7d0d9832ed7760411b35483dc50
+$ git merge-base --is-ancestor main HEAD && echo main-is-ancestor
