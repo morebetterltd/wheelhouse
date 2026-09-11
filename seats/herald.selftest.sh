@@ -95,6 +95,11 @@ if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'herald state rename ENOENT; retrying 
 else
   fail "state tmp rename ENOENT killed herald or missed retry (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
 fi
+if [ "$(json_count 'r.class==="settle" && /log-derived \(state.json has no recorded prompt/.test(r.detail)')" = 1 ]; then
+  pass "settle fallback detail says when state.json has no recorded prompt"
+else
+  fail "settle fallback did not say it was log-derived: $(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true)"
+fi
 rm -f "$PROJ/seats/logs/rename-retry.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/inbox.jsonl"
 
 node -e 'const fs=require("fs"); const file=process.argv[1]; const line=JSON.stringify({type:"agent_end",messages:["historical settle"]})+"\n"; let out=""; while (Buffer.byteLength(out)<3*1024*1024) out+=line; fs.writeFileSync(file,out)' "$PROJ/seats/logs/preexisting-large.jsonl"
@@ -129,7 +134,28 @@ else
   fail "copy-truncate shrink did not reset herald offset (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
 fi
 
-rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json"
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/logs"/*.jsonl "$PROJ/seats/logs"/*.jsonl.1 2>/dev/null || true
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"worker-1":{"lastBead":"wheelhouse-project-xtyh","lastPrompt":"Bead wheelhouse-project-xtyh\n\nYou hold bead wheelhouse-project-xtyh. Fix herald settle detail."},"worker-2":{"lastBead":"wheelhouse-project-xtyh-fresh","lastPrompt":"Bead wheelhouse-project-xtyh-fresh\n\nFresh log prompt head must survive thinking frames."}}}
+JSON
+printf '%s\n' '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"old prompt frame now rotated away"}]}}' > "$PROJ/seats/logs/worker-1.jsonl.1"
+printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"**Updating verify and static checks**","thinkingSignature":"rotated-signature"}]}]}' > "$PROJ/seats/logs/worker-1.jsonl"
+printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"**Planning**","thinkingSignature":"fresh-signature"}]}]}' > "$PROJ/seats/logs/worker-2.jsonl"
+seed_log_cursor worker-1.jsonl 0
+seed_log_cursor worker-2.jsonl 0
+OUT="$(run_herald --once 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 2 wake event' && [ "$(json_count 'r.class==="settle" && r.seat==="worker-1" && /wheelhouse-project-xtyh/.test(r.title) && /You hold bead wheelhouse-project-xtyh/.test(r.detail)')" = 1 ] && [ "$(json_count 'r.class==="settle" && r.seat==="worker-2" && /wheelhouse-project-xtyh-fresh/.test(r.title) && /Fresh log prompt head/.test(r.detail)')" = 1 ]; then
+  pass "settle rows use state.json prompt head for rotated and fresh current logs"
+else
+  fail "settle rows did not use state.json prompt head (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
+fi
+if [ "$(json_count '/thinkingSignature|^\\{\"type\":\"thinking\"/.test(r.detail)')" = 0 ]; then
+  pass "thinking/thinkingSignature frames never appear in settle row detail"
+else
+  fail "thinking frame leaked into inbox detail: $(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true)"
+fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/state.json" "$PROJ/seats/logs"/*.jsonl "$PROJ/seats/logs"/*.jsonl.1 2>/dev/null || true
 {
 cat <<'JSONL'
 {"type":"agent_start","message":"working"}
