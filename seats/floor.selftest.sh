@@ -204,6 +204,19 @@ seat_rec() { # name pid extra-json
   printf '}}\n'
 } > "$PROJ/seats/state.json"
 
+cat > "$LOGS/transcript.jsonl" <<'EOF'
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"The"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","delta":"{\"path\""}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"please inspect the fixture"}]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"checking the fixture"},{"type":"toolCall","id":"tc-1","name":"read","arguments":{"path":"README.md"}},{"type":"text","text":"The fix is complete and ready for review."}]}}
+{"type":"tool_execution_start","toolCallId":"tc-1","toolName":"read","args":{"path":"README.md"}}
+{"type":"tool_execution_update","toolCallId":"tc-1","toolName":"read","partialResult":{"content":[{"type":"text","text":"streaming chunk that must not render"}]}}
+{"type":"tool_execution_end","toolCallId":"tc-1","toolName":"read","result":{"content":[{"type":"text","text":"# Fixture title\nbody"}],"isError":false}}
+{"type":"agent_end","messages":[1]}
+EOF
+node -e 'const fs=require("fs"); const [rosterFile,stateFile,fix,log]=process.argv.slice(1); const roster=JSON.parse(fs.readFileSync(rosterFile,"utf8")); roster.seats.transcript={role:"worker",provider:"openai-codex",model:"gpt-5.5",account:{dir:`${fix}/acct/transcript`}}; fs.writeFileSync(rosterFile, JSON.stringify(roster,null,2)+"\n"); const state=JSON.parse(fs.readFileSync(stateFile,"utf8")); state.seats.transcript={pid:Number(process.pid),startedAt:"2026-08-29T00:00:00Z",accountDir:`${fix}/acct/transcript`,role:"worker",roleBrief:"x",fifo:`${fix}/proj/seats/run/transcript.stdin`,log,sessionId:"s-transcript",sessionFile:null}; fs.writeFileSync(stateFile, JSON.stringify(state,null,2)+"\n");' "$PROJ/seats/seats.json" "$PROJ/seats/state.json" "$FIX" "$LOGS/transcript.jsonl"
+
 RUN_PATH="$FIX/bin:$(dirname "$(command -v bun)"):/usr/bin:/bin"
 render() { # floor-file args...
   local f="$1"; shift
@@ -221,9 +234,28 @@ has "busy"                 && pass "pin 1 is seat busy"              || fail "bu
 has '\[tool\] bash'        && pass "[tool] line humanized"           || fail "no [tool] bash line"
 [ $RC -eq 0 ] && pass "truncated tool_execution_update payload shape does not break floor rendering" || fail "truncated tool update shape broke floor output"
 has '\[think\]'            && pass "[think] line humanized"          || fail "no [think] line"
-has '\[turn_end\].*3 message' && pass "[turn_end] carries stats"     || fail "no [turn_end] with stats"
+if has '\[turn_end\]' || has '\[turn\] agent started'; then
+  fail "spotlight rendered raw turn event rows: $OUT"
+else
+  pass "spotlight omits raw turn start/end event rows"
+fi
 render "$PROJ/seats/floor.ts" --pin busy
 [ $RC -eq 0 ] && has '\[tool\] bash' && pass "--pin by seat name works" || fail "--pin busy failed: $OUT"
+
+phase "phase 1b: follow pane renders transcript, not streaming event rows"
+render "$PROJ/seats/floor.ts" --pin transcript
+EMPTY_SAY_ROWS="$(printf '%s\n' "$OUT" | grep -Ec '^\[say\][[:space:]]*$' || true)"
+TOOL_ROWS="$(printf '%s\n' "$OUT" | grep -Ec '^\[tool\]' || true)"
+if [ "$EMPTY_SAY_ROWS" = 0 ]; then pass "transcript has zero empty [say] rows"
+else fail "transcript rendered empty [say] rows: $EMPTY_SAY_ROWS"; fi
+if [ "$TOOL_ROWS" = 1 ] && has '\[tool\] read README.md.*# Fixture title'; then pass "transcript has one updated row for the tool call"
+else fail "transcript tool rows wrong (count=$TOOL_ROWS): $(printf '%s\n' "$OUT" | grep '\[tool\]' || true)"; fi
+has 'The fix is complete and ready for review\.' && pass "assistant prose appears verbatim" || fail "assistant prose missing from transcript: $OUT"
+if printf '%s\n' "$OUT" | grep -q 'streaming chunk that must not render\|text_delta\|toolcall_delta\|message_update'; then
+  fail "streaming/delta frame rendered as its own row: $OUT"
+else
+  pass "streaming/delta frames do not render rows"
+fi
 
 # --- phase 2: the rail shows every seat with the right cue -------------------
 phase "phase 2: rail — all seats, distinct failure lines, never silence"

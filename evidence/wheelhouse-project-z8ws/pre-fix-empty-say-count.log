@@ -1,0 +1,15 @@
+$ tail -400 live worker-1 log copied into scratch; LINES=420 COLUMNS=120 bun .wheelhouse-runs/wheelhouse-project-z8ws/repro/project/seats/floor.ts --once --pin worker-1
+empty_say_rows=211
+total_say_rows=212
+tool_rows=2
+first_empty_say_rows:
+2:[say]
+3:[say]
+4:[say]
+5:[say]
+6:[say]
+7:[say]
+8:[say]
+9:[say]
+10:[say]
+11:[say]
