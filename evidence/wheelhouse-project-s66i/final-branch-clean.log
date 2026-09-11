@@ -1,0 +1,9 @@
+$ git symbolic-ref --short HEAD
+fleet/wheelhouse-project-s66i
+$ git rev-parse HEAD
+3cf1d2b35b60ea3720f5ba8a35d9c65c2028b39c
+$ git rev-parse fleet/wheelhouse-project-s66i
+3cf1d2b35b60ea3720f5ba8a35d9c65c2028b39c
+$ git merge-base --is-ancestor main HEAD && echo main-is-ancestor
+main-is-ancestor
+$ pgrep -fl "[w]heelhouse-(herald|walk)-selftest|[w]heelhouse-project-s66i/.wheelhouse-runs" || true
