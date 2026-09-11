@@ -37,7 +37,7 @@ const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
 const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
 const READ_CHUNK_BYTES = Math.max(1024, Number(process.env.WHEELHOUSE_HERALD_READ_CHUNK_BYTES || 64 * 1024));
 const POKE_PHRASE = "check the fleet inbox";
-const POKE_STABILITY_MS = Math.max(3000, Number(process.env.WHEELHOUSE_HERALD_POKE_STABILITY_MS || 3000));
+const POKE_STABILITY_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_STABILITY_MS || 3000));
 const POKE_COOLDOWN_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_COOLDOWN_MS || 120_000));
 const POKE_ESCALATE_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_ESCALATE_MS || 300_000));
 const TMUX_SESSION = process.env.WHEELHOUSE_HERALD_TMUX_SESSION || "";
@@ -71,6 +71,16 @@ interface Candidate {
 function die(msg: string): never {
   process.stderr.write(`STOP: ${msg}\n`);
   process.exit(1);
+}
+
+function projectRootExists(): boolean {
+  try {
+    fs.statSync(ROOT);
+    return true;
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return false;
+    throw e;
+  }
 }
 
 function readState(): HeraldState {
@@ -569,6 +579,10 @@ async function daemon(): Promise<void> {
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
   process.on("SIGINT", () => { cleanup(); process.exit(130); });
   for (;;) {
+    if (!projectRootExists()) {
+      console.error(`herald: project root disappeared (${ROOT}); exiting`);
+      return;
+    }
     scanOnce();
     await new Promise((r) => setTimeout(r, INTERVAL_MS));
   }

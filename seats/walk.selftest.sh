@@ -137,6 +137,14 @@ if grep -q '"maxContextImages": 2' "$FIX/out-images/image-budget.json" && grep -
 prompt="$HOME_FIX/.pi-seats-$ns/verifier/prompt.txt"
 if grep -q 'Image budget for screen captures' "$prompt" && grep -q 'downscaled to <=1000px wide' "$prompt" && grep -q 'wheelhouse-walk-capture' "$prompt" && grep -q 'Already-budgeted context image(s), max 2:' "$prompt"; then pass 'walker prompt names image budget before first capture'; else fail "walker prompt missing image budget: $(cat "$prompt" 2>/dev/null)"; fi
 
+phase 'timeout names phase and honors per-walk budget env'
+proj="$FIX/proj-timeout"; ns="walk-timeout"; build_proj "$proj" "$ns"
+out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=200 STUB_SLEEP_MS=1000 STUB_REPLY=$'working before timeout\nVERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-timeout" 2>&1)
+rc=$?
+[ "$rc" -eq 3 ] && pass 'timeout exits as COULD-NOT-WALK (3)' || fail "timeout rc=$rc output=$out"
+printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK — timed out after 200ms during run verifier walk' && pass 'timeout verdict names budget and phase' || fail "timeout did not name budget/phase: $out"
+if grep -q '"phase": "run verifier walk"' "$FIX/out-timeout/walk.json" && grep -q 'timed out after 200ms during run verifier walk' "$FIX/out-timeout/walk.json"; then pass 'timeout metadata records phase'; else fail "timeout metadata missing phase: $(cat "$FIX/out-timeout/walk.json" 2>/dev/null)"; fi
+
 phase 'upgrade surface requires baseline'
 proj="$FIX/proj-upgrade"; ns="walk-upgrade"; build_proj "$proj" "$ns"
 out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface upgrade:runbooks/UPGRADE.md --out "$FIX/out-upgrade" 2>&1)
