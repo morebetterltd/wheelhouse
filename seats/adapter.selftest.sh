@@ -899,7 +899,7 @@ if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; t
 else fail "reset's respawned seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
 run stop worker-1
 
-phase "6b. pruned cwd — dispatch falls back visibly; plain resume STOPs"
+phase "6b. pruned cwd — dispatch and plain resume fall back visibly"
 run resume worker-1
 if [ $RC -eq 0 ]; then pass "pruned cwd setup: resume exits 0 before pruning"
 else fail "pruned cwd setup: resume exited ${RC}: $OUT"; fi
@@ -919,11 +919,28 @@ if [ "$(state_get lastBead)" = "bead-z" ]; then
   pass "pruned cwd dispatch: state records the new dispatched bead"
 else fail "pruned cwd dispatch: lastBead was not updated"; fi
 run stop worker-1
-rm -rf "$PROJ/.wheelhouse-worktrees/bead-z"
+MISSING_CWD="$PROJ/.wheelhouse-worktrees/pruned-resume-cwd"
+OLD_SESS="$(state_get sessionFile)"
+env HOME="$HOME_FIX" MISSING_CWD="$MISSING_CWD" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 run resume worker-1
-if [ $RC -ne 0 ] && says "recorded seat cwd is gone" && says "fallback" && says "dispatch"; then
-  pass "pruned cwd resume: no-dispatch-target resume STOPs and names the fallback limitation"
-else fail "pruned cwd resume: did not STOP with fallback limitation (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "session continuity intentionally dropped" && says "resuming fresh in $PROJ/.wheelhouse-worktrees/bead-z"; then
+  pass "pruned cwd resume: existing bead worktree fallback line names missing cwd and chosen cwd"
+else fail "pruned cwd resume: missing fallback line for bead worktree (exit $RC): $OUT"; fi
+if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ/.wheelhouse-worktrees/bead-z" ]; then
+  pass "pruned cwd resume: falls back with a fresh session in the current bead worktree"
+else fail "pruned cwd resume: did not fresh-start in bead-z (session before=$OLD_SESS after=$(state_get sessionFile) cwd=$(cat "$CWD_FILE" 2>/dev/null) argv=$(cat "$ARGV" 2>/dev/null))"; fi
+run stop worker-1
+rm -rf "$PROJ/.wheelhouse-worktrees/bead-z"
+OLD_SESS="$(state_get sessionFile)"
+env HOME="$HOME_FIX" MISSING_CWD="$MISSING_CWD" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+run resume worker-1
+if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "resuming fresh in $PROJ"; then
+  pass "pruned cwd resume: missing bead worktree falls back to the project root"
+else fail "pruned cwd resume: did not fall back to project root (exit $RC): $OUT"; fi
+if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ" ]; then
+  pass "pruned cwd resume: root fallback is also a fresh session"
+else fail "pruned cwd resume: root fallback did not fresh-start (session before=$OLD_SESS after=$(state_get sessionFile) cwd=$(cat "$CWD_FILE" 2>/dev/null) argv=$(cat "$ARGV" 2>/dev/null))"; fi
+run stop worker-1
 
 phase "6c. readiness timeout cleanup, orphan status, and queued steer"
 CLEAN_PROJ="$FIX/cleanup-proj"
