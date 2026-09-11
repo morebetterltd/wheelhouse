@@ -342,6 +342,7 @@ printf '{"maxWidth":${IMAGE_MAX_WIDTH},"maxContextImages":${IMAGE_MAX_CONTEXT},"
 }
 
 function main(): void {
+  let phase = "parse arguments";
   const argv = process.argv.slice(2);
   const positional: string[] = [];
   let surfaceRaw: string | undefined;
@@ -361,6 +362,7 @@ function main(): void {
   if (!claimRef || positional.length !== 1) {
     die("usage: walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--out <dir>] [--verifier <seat>]");
   }
+  phase = "read claim and surface";
   const claim = readClaim(claimRef);
   if (!claim) die("claim text is empty");
   const surface = parseSurface(surfaceRaw, baseline);
@@ -381,6 +383,7 @@ function main(): void {
     process.exit(3);
   }
 
+  phase = "prepare verifier seat";
   sweepStaleScratchWorktrees(ROOT);
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
   const verifierDir = requireCredential(entry, verifierSeat);
@@ -391,6 +394,7 @@ function main(): void {
     die(e.message);
   }
 
+  phase = "prepare scratch workspace";
   const scratchCwd = makeScratchCwd(ROOT);
   const helperBin = path.join(scratchCwd, ".wheelhouse-walk-bin");
   const captureHelper = writeCaptureHelper(helperBin, outDir);
@@ -422,6 +426,7 @@ function main(): void {
   if (entry.model) args.push("--model", entry.model);
   args.push(prompt);
 
+  phase = "run verifier walk";
   const res = spawnSync("pi", args, {
     cwd: scratchCwd,
     env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir, PATH: `${helperBin}${path.delimiter}${process.env.PATH ?? ""}`, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper },
@@ -444,8 +449,8 @@ function main(): void {
 
   if (res.error) {
     if ((res.error as any).code === "ETIMEDOUT") {
-      fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: `timed out after ${TIMEOUT_MS}ms`, transcript: transcriptRel }, null, 2));
-      console.log(`VERDICT: COULD-NOT-WALK — timed out after ${TIMEOUT_MS}ms`);
+      fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: `timed out after ${TIMEOUT_MS}ms during ${phase}`, phase, transcript: transcriptRel }, null, 2));
+      console.log(`VERDICT: COULD-NOT-WALK — timed out after ${TIMEOUT_MS}ms during ${phase}`);
       console.log(`transcript: ${transcriptRel}`);
       process.exit(3);
     }
