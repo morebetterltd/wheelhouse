@@ -1,0 +1,12 @@
+$ first scan merged-worktree row
+merged-worktree	1	[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-21pz/.wheelhouse-runs/wheelhouse-project-21pz/repro/container/product	[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-21pz/.wheelhouse-runs/wheelhouse-project-21pz/repro/container/.wheelhouse-worktrees/prune21-hx2	fleet/prune21-hx2	8192	8.0K	worktree	clean, closed bead, merged to integration ref and present on remote ref
+$ prune --yes --categories merged-worktree
+PRUNED worktree merged-worktree [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-21pz/.wheelhouse-runs/wheelhouse-project-21pz/repro/container/.wheelhouse-worktrees/prune21-hx2
+prune summary: touched=1 skipped=1 dry_run=0 reclaimed_bytes=8192 reclaimed_human=8.0K
+$ branch after merged-worktree prune
+  fleet/prune21-hx2
+$ second scan stale-branch row
+stale-branch	1	[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-21pz/.wheelhouse-runs/wheelhouse-project-21pz/repro/container/product	[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-21pz/.wheelhouse-runs/wheelhouse-project-21pz/repro/container/product	fleet/prune21-hx2	163840	160.0K	branch	local fleet branch has no worktree, closed bead, merged and present on remote ref
+$ second prune dry-run stale-branch summary
+DRY-RUN branch stale-branch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-21pz/.wheelhouse-runs/wheelhouse-project-21pz/repro/container/product
+prune summary: touched=0 skipped=1 dry_run=1 reclaimed_bytes=163840 reclaimed_human=160.0K

@@ -40,6 +40,10 @@ mkdir -p "$PROD" "$WTS" "$ROOT/seats"
 cp "$PRUNE" "$ROOT/seats/prune.ts"
 chmod +x "$ROOT/seats/prune.ts"
 
+git -C "$ROOT" init -q -b main
+git -C "$ROOT" config user.email selftest@example.invalid
+git -C "$ROOT" config user.name selftest
+
 git -C "$PROD" init -q -b main
 git -C "$PROD" config user.email selftest@example.invalid
 git -C "$PROD" config user.name selftest
@@ -56,9 +60,13 @@ CLOSED_ID=$(cd "$ROOT" && bd create 'closed merged worktree' --json | bun -e 'le
 OPEN_ID=$(cd "$ROOT" && bd create 'seat anchored worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 LIVE_ID=$(cd "$ROOT" && bd create 'closed live cwd anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 HIST_ID=$(cd "$ROOT" && bd create 'closed session history anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
+STALE_ID=$(cd "$ROOT" && bd create 'closed stale branch no worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
+UNMERGED_ID=$(cd "$ROOT" && bd create 'closed unmerged branch must survive' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 cd "$ROOT" && bd close "$CLOSED_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$LIVE_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$HIST_ID" >/dev/null 2>&1
+cd "$ROOT" && bd close "$STALE_ID" >/dev/null 2>&1
+cd "$ROOT" && bd close "$UNMERGED_ID" >/dev/null 2>&1
 
 make_closed_worktree(){
   local id="$1" msg="$2"
@@ -71,8 +79,18 @@ make_closed_worktree(){
   git -C "$PROD" push -q origin main
 }
 make_closed_worktree "$CLOSED_ID" "closed work"
+git -C "$PROD" push -q origin "fleet/$CLOSED_ID"
 make_closed_worktree "$LIVE_ID" "live cwd work"
 make_closed_worktree "$HIST_ID" "history cwd work"
+make_closed_worktree "$STALE_ID" "stale branch work"
+git -C "$PROD" worktree remove --force "$WTS/$STALE_ID"
+git -C "$PROD" push -q origin "fleet/$STALE_ID"
+
+git -C "$PROD" worktree add -q -b "fleet/$UNMERGED_ID" "$WTS/$UNMERGED_ID" main
+printf 'unmerged work\n' >> "$WTS/$UNMERGED_ID/app.txt"
+git -C "$WTS/$UNMERGED_ID" add app.txt
+git -C "$WTS/$UNMERGED_ID" commit -q -m 'unmerged work'
+git -C "$PROD" push -q origin "fleet/$UNMERGED_ID"
 
 git -C "$PROD" worktree add -q -b "fleet/$OPEN_ID" "$WTS/$OPEN_ID" main
 mkdir -p "$ROOT/seats/logs" "$ROOT/seats/sessions"
@@ -147,6 +165,7 @@ export PATH="$FAKEBIN:$PATH"
 
 BUSY="$FIX/busy-container"
 mkdir -p "$BUSY/seats" "$BUSY/.wheelhouse-bench.lock" "$BUSY/product/.wheelhouse-build"
+printf '{"seats":{}}\n' > "$BUSY/seats/state.json"
 cp "$PRUNE" "$BUSY/seats/prune.ts"
 chmod +x "$BUSY/seats/prune.ts"
 printf 'active-lock\n' > "$BUSY/.wheelhouse-bench.lock/pid"
@@ -160,6 +179,8 @@ phase 'scan classifies fixture rows'
 SCAN="$FIX/scan.tsv"
 ( cd "$ROOT" && bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan failed" >&2; exit 2; }
 if awk -F '\t' -v p="$WTS/$CLOSED_ID" '$1=="merged-worktree" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed merged clean worktree is safe merged-worktree'; else fail "closed merged worktree row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v b="fleet/$STALE_ID" '$1=="stale-branch" && $2=="1" && $5==b && $6=="0" && $7=="0.0B" {found=1} END{exit found?0:1}' "$SCAN"; then pass 'safe stale-branch reports zero reclaimed size'; else fail "stale-branch zero-size row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $5 ~ /^fleet\// && $9 ~ /not both merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed but unmerged fleet worktree is needs-review'; else fail "unmerged branch guard row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$OPEN_ID" '$1=="seat-anchor" && $2=="0" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'seat cwd is classified as non-prunable seat-anchor'; else fail "seat-anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$LIVE_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /live cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'live lsof cwd beats stale state.json cwd and is a seat-anchor'; else fail "live cwd seat-anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$HIST_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /session history cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'session history cwd is a non-prunable seat-anchor'; else fail "session history seat-anchor row missing:\n$(cat "$SCAN")"; fi
@@ -189,6 +210,8 @@ if awk -F '\t' -v p="$BUSY/product/.wheelhouse-build" '$1=="needs-review" && $2=
 phase 'dry-run does not touch rows'
 ( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune-dry.out" )
 if [ -d "$WTS/$CLOSED_ID" ] && [ -d "$WTS/orphaned-checkout" ] && [ -d "$PROD/.wheelhouse-build" ] && [ -d "$PROD/dist" ] && [ -d "$PROD/node_modules/pkg/dist" ] && [ -d "$PROD/node_modules/.bin" ] && [ -d "$ROOT/.wheelhouse-bench.lock.stale.12345" ] && [ -d "$ROOT/.wheelhouse-runs/$CLOSED_ID-build" ] && [ -d "$CLOSED_TMP" ] && [ -d "$HOME/Library/Developer/XCTestDevices" ]; then pass 'prune without --yes is dry-run only'; else fail 'dry-run removed a fixture path'; fi
+( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --categories stale-branch > "$FIX/stale-branch-dry.out" )
+if grep -q 'DRY-RUN branch stale-branch' "$FIX/stale-branch-dry.out" && grep -q 'reclaimed_bytes=0 reclaimed_human=0.0B' "$FIX/stale-branch-dry.out"; then pass 'stale-branch dry-run contributes zero reclaimed bytes'; else fail "stale-branch dry-run reclaimed bytes unexpectedly: $(cat "$FIX/stale-branch-dry.out")"; fi
 
 phase 'prune --yes refuses while a rostered seat is mid-turn'
 MID="$FIX/midturn"
@@ -230,6 +253,8 @@ if [ $STALE_RC -ne 0 ] && printf '%s\n' "$STALE_OUT" | grep -q 'worker-live' && 
 phase 'prune acts only on safe selected rows'
 ( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune.out" )
 if [ ! -e "$WTS/$CLOSED_ID" ] && ! git -C "$PROD" worktree list --porcelain | grep -qF "$WTS/$CLOSED_ID"; then pass 'safe merged worktree removed by git worktree remove'; else fail 'safe merged worktree still exists or is registered'; fi
+if ! git -C "$PROD" branch --list "fleet/$CLOSED_ID" | grep -q . && grep -q "PRUNED branch merged-worktree fleet/$CLOSED_ID" "$FIX/prune.out"; then pass 'safe merged worktree prune also deletes its merged branch in the same pass'; else fail "merged worktree branch survived same-pass prune: $(git -C "$PROD" branch --list "fleet/$CLOSED_ID") output=$(cat "$FIX/prune.out")"; fi
+if git -C "$PROD" branch --list "fleet/$UNMERGED_ID" | grep -q .; then pass 'unmerged fleet branch is not deleted by merged-worktree prune path'; else fail 'unmerged fleet branch was deleted'; fi
 [ ! -e "$WTS/orphaned-checkout" ] && pass 'safe orphaned checkout removed' || fail 'orphaned checkout still exists'
 [ ! -e "$PROD/.wheelhouse-build" ] && pass 'safe build cache removed' || fail 'build cache still exists'
 [ ! -e "$PROD/obj" ] && pass 'safe .NET obj cache removed' || fail 'obj cache still exists'

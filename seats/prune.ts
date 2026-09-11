@@ -220,7 +220,7 @@ function scanBranches(repo: string, root: string, beads: Map<string, string>, re
     if (!branch || registeredBranches.has(branch)) continue;
     const b = beadFor(branch, beads);
     const safe = integrated(repo, sha) && onRemote(repo, sha) && !!b && b[1] === "closed";
-    rows.push(row(safe ? "stale-branch" : "needs-review", safe, repo, repo, branch, safe ? "branch" : "none", safe ? "local fleet branch has no worktree, closed bead, merged and present on remote ref" : !b ? "no closed bead record found for this fleet branch" : b[1] !== "closed" ? `bead ${b[0]} is ${b[1]}` : "branch is not both merged and present on a remote ref"));
+    rows.push(row(safe ? "stale-branch" : "needs-review", safe, repo, repo, branch, safe ? "branch" : "none", safe ? "local fleet branch has no worktree, closed bead, merged and present on remote ref" : !b ? "no closed bead record found for this fleet branch" : b[1] !== "closed" ? `bead ${b[0]} is ${b[1]}` : "branch is not both merged and present on a remote ref", safe ? 0 : undefined));
   }
   return rows;
 }
@@ -397,8 +397,11 @@ function getState(rec: any): any | null {
 function rootsWithSeatState(rows: Row[]): string[] {
   const out = new Set<string>();
   const candidates = new Set<string>();
-  for (const r of rows) { candidates.add(path.resolve(r.repo)); candidates.add(path.resolve(r.path)); }
+  for (const r of rows) {
+    if (path.isAbsolute(r.repo)) candidates.add(path.resolve(r.repo));
+  }
   for (const c of candidates) {
+    if (!path.isAbsolute(c)) continue;
     let cur = fs.existsSync(c) && fs.statSync(c).isDirectory() ? c : path.dirname(c);
     while (true) {
       if (fs.existsSync(path.join(cur, "seats", "state.json"))) { out.add(cur); break; }
@@ -430,6 +433,16 @@ function assertNoSelectedSeatAnchors(rows: Row[], cats: Set<string> | null): voi
     if (reason) stop(`refusing to prune ${r.path}: ${reason}`);
   }
 }
+function localBranchSha(repo: string, branch: string): string {
+  return run("git", ["rev-parse", "--verify", branch], repo).out.trim();
+}
+function deleteMergedBranchIfStillSafe(repo: string, branch: string): boolean {
+  if (!branch || !isFleetBranch(branch)) return false;
+  const sha = localBranchSha(repo, branch);
+  if (!sha || !integrated(repo, sha) || !onRemote(repo, sha)) return false;
+  const r = run("git", ["branch", "-d", branch], repo);
+  return r.ok;
+}
 function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
   if (yes) { assertNoMidTurnSeats(rows); assertNoSelectedSeatAnchors(rows, cats); }
   let touched = 0, skipped = 0, reclaimed = 0;
@@ -438,7 +451,11 @@ function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
     if (!r.safe || NEVER.has(r.category)) { skipped++; continue; }
     if (!yes) { reclaimed += r.size_bytes; console.log(`DRY-RUN ${r.action} ${r.category} ${r.path}`); continue; }
     if (r.action === "rm") fs.rmSync(r.path, { recursive: true, force: true });
-    else if (r.action === "worktree") run("git", ["worktree", "remove", "--force", r.path], r.repo);
+    else if (r.action === "worktree") {
+      const branch = r.branch;
+      run("git", ["worktree", "remove", "--force", r.path], r.repo);
+      if (r.category === "merged-worktree" && branch && deleteMergedBranchIfStillSafe(r.repo, branch)) console.log(`PRUNED branch merged-worktree ${branch}`);
+    }
     else if (r.action === "branch") run("git", ["branch", "-d", r.branch], r.repo);
     else if (r.action === "simctl") run("xcrun", ["simctl", "delete", r.path.replace(/^simctl:/, "")]);
     else if (r.action === "xctest-devices") run("xcrun", ["simctl", "--set", r.path, "delete", "all"]);
