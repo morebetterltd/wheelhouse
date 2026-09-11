@@ -1,10 +1,10 @@
-$ git status --short --branch
+$ git status --short --branch -- . :!evidence/wheelhouse-project-udsn/final-branch.log
 ## fleet/wheelhouse-project-udsn
-?? evidence/wheelhouse-project-udsn/final-branch.log
 $ git symbolic-ref --short HEAD
 fleet/wheelhouse-project-udsn
 $ git rev-parse HEAD
-8d6320c60371b87a98d4c9f23e6a938f0a79e3a2
+31fbca06de5cc3b91a03f0088c7fc90c149c2f19
 $ git rev-parse fleet/wheelhouse-project-udsn
-8d6320c60371b87a98d4c9f23e6a938f0a79e3a2
+31fbca06de5cc3b91a03f0088c7fc90c149c2f19
 $ git merge-base --is-ancestor main HEAD && echo main-is-ancestor
+main-is-ancestor
