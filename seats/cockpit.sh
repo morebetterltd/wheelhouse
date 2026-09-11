@@ -192,6 +192,7 @@ install_resize_hook() {
 spawn_floor_pane() {
   # Right pane, full height: the floor (spotlight + rail in one program).
   # -l N% needs tmux >= 3.1; fall back to an even split if it is refused.
+  mkdir -p "$HERE/run"
   local err="$HERE/run/floor-pane.err"
   rm -f "$err"
   if tmx split-window -h -l '45%' -t "${S}:bridge" -c "$ROOT" "$QSELF --pane-floor" 2>"$err"; then
