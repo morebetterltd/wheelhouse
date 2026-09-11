@@ -1,0 +1,32 @@
+$ git diff --check HEAD
+$ timeout 30 bun build seats/walk.ts --target bun --outfile /dev/null
+Bundled 3 modules in 6ms
+
+  null  24.75 KB  (entry point)
+
+$ timeout 30 bun build seats/verify.ts --target bun --outfile /dev/null
+Bundled 2 modules in 2ms
+
+  null  30.35 KB  (entry point)
+
+$ rg -n "stdio: \\[\"ignore\", \"pipe\", \"pipe\"\\]|STUB_READ_STDIN_TO_EOF|stdin-reading verifier" seats/walk.ts seats/verify.ts seats/adapter.ts seats/walk.selftest.sh
+seats/verify.ts:470:  const verified = spawnSync("shasum", ["-a", "256", "-c", manifest], { cwd: abs, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+seats/verify.ts:771:    stdio: ["ignore", "pipe", "pipe"],
+seats/walk.ts:436:    stdio: ["ignore", "pipe", "pipe"],
+seats/adapter.ts:884:    stdio: ["ignore", "pipe", "pipe"],
+seats/walk.selftest.sh:58:if (process.env.STUB_READ_STDIN_TO_EOF) {
+seats/walk.selftest.sh:181:phase 'stdin-reading verifier receives EOF immediately'
+seats/walk.selftest.sh:187:out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=3000 STUB_READ_STDIN_TO_EOF=1 STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-stdin" < "$STDIN_FIFO" 2>&1)
+seats/walk.selftest.sh:192:[ "$rc" -eq 0 ] && pass 'stdin-reading verifier exits 0' || fail "stdin-reading verifier rc=$rc output=$out"
+seats/walk.selftest.sh:193:printf '%s\n' "$out" | grep -q 'VERDICT: WALKED-DONE' && pass 'stdin-reading verifier walk completes with a verdict' || fail "stdin-reading verifier missing verdict: $out"
+seats/walk.selftest.sh:194:[ "$elapsed_ms" -lt 5000 ] && pass "stdin-reading verifier completed under 5s (${elapsed_ms}ms)" || fail "stdin-reading verifier exceeded 5s (${elapsed_ms}ms): $out"
+$ git status --short --branch
+## fleet/wheelhouse-project-udsn
+ M seats/verify.ts
+ M seats/walk.selftest.sh
+ M seats/walk.ts
+?? evidence/wheelhouse-project-udsn/adapter-selftest.log
+?? evidence/wheelhouse-project-udsn/drift-walk/
+?? evidence/wheelhouse-project-udsn/static-checks.log
+?? evidence/wheelhouse-project-udsn/verify-selftest.log
+?? evidence/wheelhouse-project-udsn/walk-selftest.log

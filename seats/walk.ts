@@ -433,6 +433,7 @@ function main(): void {
     encoding: "utf8",
     timeout: TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
   });
 
   const stdout = res.stdout ?? "";

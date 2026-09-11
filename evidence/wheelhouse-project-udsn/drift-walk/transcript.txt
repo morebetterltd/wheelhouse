@@ -1,0 +1,12 @@
+$ pi -p --no-session --append-system-prompt [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-udsn/contracts/VERIFIER.md --provider openrouter --model z-ai/glm-5.3-flash <prompt>
+$ cwd [tmpdir]wheelhouse-verify-2037-cuB0kK
+--- stdout ---
+The walk is complete. Final summary for the commander:
+
+**Surface walked:** the README install front door (https://github.com/morebetterltd/wheelhouse/blob/main/README.md → Install section), followed by a new consumer into the scratch product repository `consumer-product`. The paste block's clone guard passed; the authoritative `BOOTSTRAP.md` (cloned at commit `c5035e9`) was followed in order through all six steps. The full verification suite passed with zero FAIL lines: preflight OK (all 7 tools), integrity OK (9 contracts byte-identical), bd 1.2.2 matched every version-stamped claim, both selftests PASS, zero specimen leaks, zero placeholders, bench stub exits non-zero as designed, namespace consistent, install committed (`ccf2c7e`), graph durability handled (embedded-Dolt second shape → JSONL snapshot committed, `57fe09a`). Step 6 ran the loop's first solo revolution: the bootstrap bead `consumer-product-1sm` was claimed, worked in a worktree on `fleet/consumer-product-1sm`, and reported ON the bead — honestly blocked on the principal's unanswered BENCH.md sections, which is the surface's own documented outcome for a no-seat install into an empty repo (the smoke loop skip and solo path are both explicitly legitimate per README/BOOTSTRAP). No seat credentials were consumed; no fabricated reviews; no product code invented.
+
+Full retained transcript: `evidence/wheelhouse-project-udsn/drift-walk/transcript.md` (no screen captures needed — terminal walk; image budget unused).
+
+VERDICT: WALKED-DONE
+
+--- stderr ---

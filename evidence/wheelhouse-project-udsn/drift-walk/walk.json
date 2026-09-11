@@ -1,0 +1,17 @@
+{
+  "verdict": "WALKED-DONE",
+  "detail": "",
+  "line": "VERDICT: WALKED-DONE",
+  "surface": "install:https://github.com/morebetterltd/wheelhouse/blob/main/README.md",
+  "transcript": "evidence/wheelhouse-project-udsn/drift-walk/transcript.txt",
+  "guiGuard": {
+    "mode": "not-gui",
+    "ok": true
+  },
+  "imageBudget": {
+    "maxWidth": 1000,
+    "maxContextImages": 3,
+    "fullSizeDir": "evidence/wheelhouse-project-udsn/drift-walk/screen-captures/full-size",
+    "contextDir": "evidence/wheelhouse-project-udsn/drift-walk/screen-captures/context"
+  }
+}

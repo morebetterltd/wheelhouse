@@ -1,0 +1,17 @@
+$ git diff --check HEAD
+$ timeout 30 bun build seats/walk.ts --target bun --outfile /dev/null
+Bundled 3 modules in 6ms
+
+  null  24.75 KB  (entry point)
+
+$ timeout 30 bun build seats/verify.ts --target bun --outfile /dev/null
+Bundled 2 modules in 2ms
+
+  null  30.35 KB  (entry point)
+
+$ git status --short --branch
+## fleet/wheelhouse-project-udsn
+?? evidence/wheelhouse-project-udsn/rebased-adapter-selftest.log
+?? evidence/wheelhouse-project-udsn/rebased-static-checks.log
+?? evidence/wheelhouse-project-udsn/rebased-verify-selftest.log
+?? evidence/wheelhouse-project-udsn/rebased-walk-selftest.log

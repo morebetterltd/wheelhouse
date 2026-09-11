@@ -1,0 +1,12 @@
+$ timeout 8 bash -c "tail -f /dev/null | WHEELHOUSE_WALK_TIMEOUT_MS=3000 HOME=... PATH=... bun seats/walk.ts claim --surface product:fixture --out ../out-stdin"
+VERDICT: WALKED-DONE
+transcript: ../out-stdin/transcript.txt
+metadata: ../out-stdin/walk.json
+rc=124
+$ transcript
+$ pi -p --no-session --append-system-prompt /Users/[user]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-udsn/.wheelhouse-runs/wheelhouse-project-udsn/repro/proj/contracts/VERIFIER.md --provider openai --model stub <prompt>
+$ cwd [tmpdir]wheelhouse-verify-22461-DC8AOh
+--- stdout ---
+VERDICT: WALKED-DONE
+
+--- stderr ---
