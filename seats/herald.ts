@@ -32,6 +32,7 @@ const HERALD_OUT_LOG = path.join(LOG_DIR, "herald.out.log");
 const DRAIN_CURSOR = path.join(SEATS_DIR, "inbox.cursor");
 const DRAIN_SEEN = path.join(SEATS_DIR, "inbox.seen.json");
 const STATE_FILE = path.join(SEATS_DIR, "herald.state.json");
+const ADAPTER_STATE_FILE = path.join(SEATS_DIR, "state.json");
 const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
 const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
 const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
@@ -67,6 +68,8 @@ interface Candidate {
   detail: string;
   sourceType?: string;
 }
+
+interface AdapterSeatState { lastBead?: string; lastPrompt?: string }
 
 function die(msg: string): never {
   process.stderr.write(`STOP: ${msg}\n`);
@@ -317,6 +320,31 @@ function distressDetailForInbox(candidate: Candidate, seat: string): string {
   return truncate(`${candidate.detail}\nProbe command: bun seats/adapter.ts probe ${seat}`);
 }
 
+function adapterSeatState(seat: string): AdapterSeatState | null {
+  if (!fs.existsSync(ADAPTER_STATE_FILE)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(ADAPTER_STATE_FILE, "utf8"));
+    const rec = parsed?.seats?.[seat];
+    return rec && typeof rec === "object" ? rec : null;
+  } catch {
+    return null;
+  }
+}
+
+function promptHead(prompt: string): string {
+  return prompt.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 3).join("\n");
+}
+
+function settleForInbox(candidate: Candidate, seat: string): { title: string; detail: string } {
+  if (candidate.eventClass !== "settle") return { title: candidate.title, detail: distressDetailForInbox(candidate, seat) };
+  const rec = adapterSeatState(seat);
+  const bead = typeof rec?.lastBead === "string" && rec.lastBead.trim() ? rec.lastBead.trim() : "unknown bead";
+  const prompt = typeof rec?.lastPrompt === "string" ? rec.lastPrompt : "";
+  const head = promptHead(prompt);
+  if (head) return { title: `seat turn settled — ${bead}`, detail: truncate(`${bead}\n${head}`) };
+  return { title: `${candidate.title} — log-derived`, detail: truncate(`log-derived (state.json has no recorded prompt for ${seat}): ${candidate.detail}`) };
+}
+
 function eventId(relLog: string, offset: number, line: string, candidate: Candidate): string {
   return crypto.createHash("sha256")
     .update(`${relLog}\0${offset}\0${candidate.eventClass}\0${candidate.state}\0${line}`)
@@ -468,14 +496,16 @@ function scanOnce(): number {
         const id = eventId(rel, rec.offset, rec.line, candidate);
         if (!seen.has(id)) {
           seen.add(id);
+          const seat = path.basename(file, ".jsonl");
+          const rendered = settleForInbox(candidate, seat);
           appendInbox({
             id,
             at: new Date().toISOString(),
-            seat: path.basename(file, ".jsonl"),
+            seat,
             class: candidate.eventClass,
             state: candidate.state,
-            title: candidate.title,
-            detail: distressDetailForInbox(candidate, path.basename(file, ".jsonl")),
+            title: rendered.title,
+            detail: rendered.detail,
             source: { log: rel, offset: rec.offset, type: candidate.sourceType ?? null },
           });
           appended++;
