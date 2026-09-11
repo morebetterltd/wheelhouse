@@ -142,7 +142,7 @@ Push, open and merge PRs, and run automated deploys per your project's recorded 
 
 Close the bead and drop the review-queue label in the same breath, after the integrator has satisfied `wheelhouse/INTEGRATOR.md`'s claim-move duty or its explicit no-claim-moved escape hatch. A closed bead still carrying it reads as in-flight to everyone else. `wheelhouse/GRAPH.md` says so; it is listed here because it is the step most often forgotten at the end of a long round.
 
-Then prune the closed bead's scratch, using the canonical tool rather than hand-removing paths: run `bun seats/prune.ts scan > <reviewed-scan>` from the install root, inspect rows for the bead, and act only on safe rows with `bun seats/prune.ts prune --from-file <reviewed-scan> --yes --categories bead-runs,bead-tmp,bead-simulator,xctest-devices`. This is also a weekly commander tick fleet-wide: run a scan, review it, and prune safe closed-bead scratch plus any other reviewed safe categories. Open or in-progress bead scratch must remain `needs-review`, not removed by age or by name.
+Then prune the closed bead's scratch, using the canonical tool rather than hand-removing paths: run `bun seats/prune.ts scan > <reviewed-scan>` from the install root, inspect rows for the bead, reset or stop any idle seat sessions still rooted in worktrees you intend to remove (or let the adapter-owned prune safety from the seat-cwd-truth fix mark live seat cwd rows unsafe), and act only on safe rows with `bun seats/prune.ts prune --from-file <reviewed-scan> --yes --categories bead-runs,bead-tmp,bead-simulator,xctest-devices`. This is also a weekly commander tick fleet-wide: run a scan, review it, and prune safe closed-bead scratch plus any other reviewed safe categories. Open or in-progress bead scratch must remain `needs-review`, not removed by age or by name.
 
 ## Where things are recorded
 
@@ -216,10 +216,12 @@ an order that was never the intended one:
   infer which is which. This is the only list tomorrow's commander should
   execute before anything else.
 - **"Chores — after the first dispatch"** — machinery sync, selftests,
-  upgrades, ISA edits, anything commander-owned. State plainly that these
-  wait: they are not ranked against the dispatch list, they come after it,
-  full stop. An empty list here is written as `(none)`, not omitted, so a
-  reader can't mistake silence for "the note is incomplete."
+  upgrades, ISA edits, pruning. If pruning worktrees appears here, say which
+  idle seats should be reset or stopped first, or say that the adapter-owned
+  prune step will decide from live cwd safety before removing anything. State
+  plainly that these wait: they are not ranked against the dispatch list, they
+  come after it, full stop. An empty list here is written as `(none)`, not
+  omitted, so a reader can't mistake silence for "the note is incomplete."
 
 Why written, when the graph already holds the work: the graph holds WHAT,
 not WHERE-WE-WERE — a compacted or fresh commander session re-derives

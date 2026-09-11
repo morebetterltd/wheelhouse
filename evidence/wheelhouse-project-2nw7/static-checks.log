@@ -1,0 +1,27 @@
+$ git diff --check HEAD
+$ rg -n -- "recorded seat cwd is gone|resuming fresh|pruned cwd|pruning worktrees|adapter-owned prune" seats/adapter.ts seats/adapter.selftest.sh runbooks/RUNNING_THE_LOOP.md
+seats/adapter.ts:891:      `seat ${name}: recorded seat cwd is gone: ${resumeCwd}; ` +
+seats/adapter.ts:892:        `session continuity intentionally dropped; resuming fresh in ${fallbackCwd}`
+seats/adapter.selftest.sh:891:phase "6b. pruned cwd — dispatch and plain resume fall back visibly"
+seats/adapter.selftest.sh:893:if [ $RC -eq 0 ]; then pass "pruned cwd setup: resume exits 0 before pruning"
+seats/adapter.selftest.sh:894:else fail "pruned cwd setup: resume exited ${RC}: $OUT"; fi
+seats/adapter.selftest.sh:899:if [ $RC -eq 0 ]; then pass "pruned cwd dispatch: dispatch exits 0 via fallback"
+seats/adapter.selftest.sh:900:else fail "pruned cwd dispatch: exited ${RC}: $OUT"; fi
+seats/adapter.selftest.sh:902:  pass "pruned cwd dispatch: fallback announcement is visible and names why"
+seats/adapter.selftest.sh:903:else fail "pruned cwd dispatch: fallback announcement missing (exit $RC): $OUT"; fi
+seats/adapter.selftest.sh:905:  pass "pruned cwd dispatch: fallback used a fresh session rather than --session"
+seats/adapter.selftest.sh:906:else fail "pruned cwd dispatch: fallback still attached the pruned-cwd session"; fi
+seats/adapter.selftest.sh:908:  pass "pruned cwd dispatch: state records the new dispatched bead"
+seats/adapter.selftest.sh:909:else fail "pruned cwd dispatch: lastBead was not updated"; fi
+seats/adapter.selftest.sh:915:if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "session continuity intentionally dropped" && says "resuming fresh in $PROJ/.wheelhouse-worktrees/bead-z"; then
+seats/adapter.selftest.sh:916:  pass "pruned cwd resume: existing bead worktree fallback line names missing cwd and chosen cwd"
+seats/adapter.selftest.sh:917:else fail "pruned cwd resume: missing fallback line for bead worktree (exit $RC): $OUT"; fi
+seats/adapter.selftest.sh:919:  pass "pruned cwd resume: falls back with a fresh session in the current bead worktree"
+seats/adapter.selftest.sh:920:else fail "pruned cwd resume: did not fresh-start in bead-z (session before=$OLD_SESS after=$(state_get sessionFile) cwd=$(cat "$CWD_FILE" 2>/dev/null) argv=$(cat "$ARGV" 2>/dev/null))"; fi
+seats/adapter.selftest.sh:926:if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "resuming fresh in $PROJ"; then
+seats/adapter.selftest.sh:927:  pass "pruned cwd resume: missing bead worktree falls back to the project root"
+seats/adapter.selftest.sh:928:else fail "pruned cwd resume: did not fall back to project root (exit $RC): $OUT"; fi
+seats/adapter.selftest.sh:930:  pass "pruned cwd resume: root fallback is also a fresh session"
+seats/adapter.selftest.sh:931:else fail "pruned cwd resume: root fallback did not fresh-start (session before=$OLD_SESS after=$(state_get sessionFile) cwd=$(cat "$CWD_FILE" 2>/dev/null) argv=$(cat "$ARGV" 2>/dev/null))"; fi
+runbooks/RUNNING_THE_LOOP.md:144:Then prune the closed bead's scratch, using the canonical tool rather than hand-removing paths: run `bun seats/prune.ts scan > <reviewed-scan>` from the install root, inspect rows for the bead, reset or stop any idle seat sessions still rooted in worktrees you intend to remove (or let the adapter-owned prune safety from the seat-cwd-truth fix mark live seat cwd rows unsafe), and act only on safe rows with `bun seats/prune.ts prune --from-file <reviewed-scan> --yes --categories bead-runs,bead-tmp,bead-simulator,xctest-devices`. This is also a weekly commander tick fleet-wide: run a scan, review it, and prune safe closed-bead scratch plus any other reviewed safe categories. Open or in-progress bead scratch must remain `needs-review`, not removed by age or by name.
+runbooks/RUNNING_THE_LOOP.md:218:  upgrades, ISA edits, pruning. If pruning worktrees appears here, say which
