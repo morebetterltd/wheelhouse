@@ -182,6 +182,8 @@ session, when its cwd does not already match the bead being dispatched.
 
 `probe` runs the rostered account, provider, and model through a one-shot `pi -p --no-session` liveness turn that asks only for `OK`; it does not need or create a bead worktree and writes no bead comment. A successful probe prints `OK`; a provider failure prints pi's stdout/stderr verbatim and exits with pi's status.
 
+`status` prints an `ORPHAN:` line only for a confirmed duplicate seat process: a candidate must not be a descendant of the recorded seat pid, must either hold the seat FIFO or predate the recorded pid, and must still be present on a second scan a few seconds later. The line includes the remedy (`inspect pid ..., then stop it or run bun seats/recover.ts`) so transient child tools are not reported as duplicate seats and genuine duplicates say what to do next.
+
 `dispatch` prefixes the message with `Bead <bead-id>` and queues behind the
 current turn if the seat is mid-stream; redirecting the CURRENT turn is what
 `steer` is for. `stop` is SIGTERM — Pi's graceful path — and deliberately

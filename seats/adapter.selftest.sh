@@ -120,7 +120,7 @@ RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:
 # containing SLOW finishes its turn late, so steer has a mid-turn to land in.
 cat > "$BIN/pi" <<STUB
 #!/usr/bin/env node
-const fs = require("fs"), path = require("path"), crypto = require("crypto");
+const fs = require("fs"), path = require("path"), crypto = require("crypto"), cp = require("child_process");
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
 const args = process.argv.slice(2);
@@ -174,6 +174,11 @@ if (si !== -1) {
   sessionFile = path.join(sessDir, sessionId + ".jsonl");
   fs.writeFileSync(sessionFile, JSON.stringify({ type: "session-start", cwd: process.cwd() }) + "\n");
   if (process.env.STUB_PIN_SESSION_CWD) fs.writeFileSync(sessionFile + ".cwd.json", JSON.stringify({ cwd: process.cwd() }));
+}
+let matchingChild;
+if (process.env.STUB_SPAWN_MATCHING_CHILD) {
+  matchingChild = cp.spawn("sleep", ["1000"], { argv0: "pi --mode rpc child " + agentDir + " " + process.cwd(), stdio: "ignore" });
+  fs.writeFileSync(path.join(agentDir, "matching-child.pid"), String(matchingChild.pid));
 }
 const commandsFile = path.join(agentDir, "commands.jsonl");
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
@@ -246,6 +251,7 @@ process.stdin.on("data", (c) => {
   }
 });
 process.stdin.on("end", () => process.exit(0));
+process.on("exit", () => { if (matchingChild?.pid) { try { process.kill(matchingChild.pid, "SIGTERM"); } catch {} } });
 process.on("SIGTERM", () => { if (!process.env.STUB_IGNORE_SIGTERM) process.exit(0); });
 STUB
 chmod +x "$BIN/pi"
@@ -972,9 +978,21 @@ if state_get lastLaunchFailure | grep -q 'fixture get_state failure'; then
   pass "launch get_state success:false records lastLaunchFailure in state.json"
 else fail "get_state success:false did not record lastLaunchFailure: $(cat "$STATE" 2>/dev/null)"; fi
 RUN_PROJ="$CLEAN_PROJ"; STATE="$CLEAN_PROJ/seats/state.json"; LOG="$CLEAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cleanup/worker-1/argv.json"
-run status
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && ! says "ORPHAN"; then pass "status reports zero orphans after launch cleanup"
 else fail "status found an orphan after cleanup (exit $RC): $OUT"; fi
+
+CHILD_PROJ="$FIX/child-proj"
+build_proj "$CHILD_PROJ" child
+RUN_PROJ="$CHILD_PROJ"; STATE="$CHILD_PROJ/seats/state.json"; LOG="$CHILD_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-child/worker-1/argv.json"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SPAWN_MATCHING_CHILD=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+CHILD_PID="$(cat "$HOME_FIX/.pi-seats-child/worker-1/matching-child.pid" 2>/dev/null || true)"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null && ! says "ORPHAN"; then
+  pass "status does not flag a live child of the recorded seat as ORPHAN"
+else fail "status flagged a recorded seat child as orphan or child missing (exit $RC child=${CHILD_PID:-none}): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+
 ORPHAN_PROJ="$FIX/orphan-proj"
 build_proj "$ORPHAN_PROJ" orphan
 RUN_PROJ="$ORPHAN_PROJ"; STATE="$ORPHAN_PROJ/seats/state.json"; LOG="$ORPHAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-orphan/worker-1/argv.json"
@@ -982,12 +1000,12 @@ run spawn worker-1
 REC_PID="$(state_get pid)"
 FIFO="$ORPHAN_PROJ/seats/run/worker-1.stdin"
 ERR="$ORPHAN_PROJ/seats/logs/worker-1.stderr.log"
-( env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" PI_CODING_AGENT_DIR="$HOME_FIX/.pi-seats-orphan/worker-1" BEADS_ACTOR=worker-1 bash -c "exec pi --mode rpc --append-system-prompt '$ORPHAN_PROJ/contracts/WORKER.md' 0<> '$FIFO' >> '$LOG' 2>> '$ERR'" ) &
+( env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" PI_CODING_AGENT_DIR="$HOME_FIX/.pi-seats-orphan/worker-1" BEADS_ACTOR=worker-1 bash -c "cd '$ORPHAN_PROJ' && exec -a 'pi --mode rpc duplicate $HOME_FIX/.pi-seats-orphan/worker-1 $ORPHAN_PROJ' sleep 1000" 0<> "$FIFO" >> "$LOG" 2>> "$ERR" ) &
 ORPHAN_PID=$!
 sleep 0.5
-run status
-if [ $RC -eq 0 ] && says "ORPHAN" && says "pid $ORPHAN_PID" && says "recorded pid $REC_PID" && { says "FIFO" || says "argv/cwd/account match"; }; then
-  pass "status reports a duplicate pi process as ORPHAN with recorded pid and match reason"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "ORPHAN" && says "pid $ORPHAN_PID" && says "recorded pid $REC_PID" && says "remedy:" && { says "FIFO" || says "argv/cwd/account match"; }; then
+  pass "status reports a duplicate pi process as ORPHAN with recorded pid, match reason, and remedy"
 else fail "status did not report the duplicate process as ORPHAN (exit $RC orphan=$ORPHAN_PID recorded=$REC_PID): $OUT"; fi
 kill "$ORPHAN_PID" 2>/dev/null
 run stop worker-1 >/dev/null 2>&1
