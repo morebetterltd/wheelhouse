@@ -62,6 +62,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
+import { hostBudgetPath } from "./host-budget";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -764,7 +765,7 @@ function main(): void {
   const startedAt = Date.now();
   const res = spawnSync("pi", args, {
     cwd: scratchCwd,
-    env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir, BEADS_ACTOR: beadsActorFor(verifierSeat) },
+    env: { ...process.env, PATH: hostBudgetPath(ROOT), PI_CODING_AGENT_DIR: verifierDir, BEADS_ACTOR: beadsActorFor(verifierSeat) },
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
