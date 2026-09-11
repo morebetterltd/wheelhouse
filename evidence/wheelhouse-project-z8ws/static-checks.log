@@ -1,15 +1,10 @@
 $ git diff --check HEAD
 $ timeout 30 bun build seats/floor.ts --target bun --outfile /dev/null
-Bundled 1 module in 10ms
+Bundled 1 module in 4ms
 
   null  23.78 KB  (entry point)
 
 $ rg -n "renderTranscript|tool_execution_update|message_update|transcript has zero empty|assistant prose appears verbatim" seats/floor.ts seats/floor.selftest.sh
-seats/floor.ts:269:function renderTranscript(lines: string[], width: number): string[] {
-seats/floor.ts:283:    if (t === "message_update" || t === "tool_execution_update" || t === "message_start") continue;
-seats/floor.ts:323:  const rendered = renderTranscript([line], width);
-seats/floor.ts:588:  const transcript = renderTranscript(events, width);
-seats/floor.ts:634:      const recent = renderTranscript(events, width - 5).slice(-2);
 seats/floor.selftest.sh:91:{"type":"tool_execution_update","output":"short prefix\n[wheelhouse log truncated 12345 bytes; full output remains in the pi session file]","wheelhouse_truncated_bytes":12345,"timestamp":"$RECENT_ISO"}
 seats/floor.selftest.sh:205:{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"The"}}
 seats/floor.selftest.sh:206:{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","delta":"{\"path\""}}
@@ -18,3 +13,8 @@ seats/floor.selftest.sh:231:[ $RC -eq 0 ] && pass "truncated tool_execution_upda
 seats/floor.selftest.sh:245:if [ "$EMPTY_SAY_ROWS" = 0 ]; then pass "transcript has zero empty [say] rows"
 seats/floor.selftest.sh:249:has 'The fix is complete and ready for review\.' && pass "assistant prose appears verbatim" || fail "assistant prose missing from transcript: $OUT"
 seats/floor.selftest.sh:250:if printf '%s\n' "$OUT" | grep -q 'streaming chunk that must not render\|text_delta\|toolcall_delta\|message_update'; then
+seats/floor.ts:269:function renderTranscript(lines: string[], width: number): string[] {
+seats/floor.ts:283:    if (t === "message_update" || t === "tool_execution_update" || t === "message_start") continue;
+seats/floor.ts:323:  const rendered = renderTranscript([line], width);
+seats/floor.ts:588:  const transcript = renderTranscript(events, width);
+seats/floor.ts:634:      const recent = renderTranscript(events, width - 5).slice(-2);
