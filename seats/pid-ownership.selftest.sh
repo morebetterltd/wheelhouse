@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -u
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ADAPTER="${1:-$HERE/adapter.ts}"
+FIX=""
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; }
+trap cleanup EXIT INT TERM
 FAILED=0
 pass(){ echo "  ok    $*"; }
 fail(){ echo "  FAIL  $*"; FAILED=$((FAILED+1)); }

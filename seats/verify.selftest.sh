@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 #
 # verify.selftest.sh — does verify.ts still do what seats/README.md claims,
 # on THIS machine?
@@ -58,7 +61,7 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
-cleanup() { [ -n "$FIX" ] && rm -rf "$FIX"; return 0; }
+cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && rm -rf "$FIX"; return 0; }
 trap cleanup EXIT INT TERM
 
 # --- fixture -----------------------------------------------------------------
