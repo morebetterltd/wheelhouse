@@ -79,7 +79,6 @@ cap_cargo_args() {
 }
 
 cap_dotnet_args() {
-  export MSBUILDDISABLENODEREUSE=1
   local out=() a saw=0
   for a in "$@"; do
     case "$a" in
@@ -103,6 +102,21 @@ if [ "${!REENTRY_VAR:-}" = "1" ]; then
   exec "$REAL" "$@"
 fi
 mkdir -p "$(dirname "$LOCK_PATH")"
+lock_exec() {
+  if command -v perl >/dev/null 2>&1 && perl -MFcntl=:flock,F_GETFD,F_SETFD,FD_CLOEXEC -e 'exit 0' >/dev/null 2>&1; then
+    exec perl -MFcntl=:flock,F_GETFD,F_SETFD,FD_CLOEXEC -e '
+      my ($lock, $guard, @cmd) = @ARGV;
+      open(my $fh, ">>", $lock) or die "STOP: host-build-shim could not open lock $lock: $!\n";
+      flock($fh, LOCK_EX) or die "STOP: host-build-shim could not lock $lock: $!\n";
+      my $flags = fcntl($fh, F_GETFD, 0);
+      defined($flags) and fcntl($fh, F_SETFD, $flags & ~FD_CLOEXEC);
+      $ENV{$guard} = 1;
+      exec { $cmd[0] } @cmd or die "STOP: host-build-shim could not exec $cmd[0]: $!\n";
+    ' "$LOCK_PATH" "$REENTRY_VAR" "$@"
+  fi
+  printf 'STOP: host-build-shim needs a crash-safe flock(2) primitive; install perl with Fcntl (standard on macOS and Linux) or disable seats/host-budget.json. Refusing mkdir locks because they survive a killed holder.\n' >&2
+  exit 127
+}
 ARGS=()
 case "$TOOL" in
   cargo)
@@ -110,8 +124,10 @@ case "$TOOL" in
       export CARGO_BUILD_JOBS="$CARGO_JOBS_CAP"
     fi
     while IFS= read -r -d '' arg; do ARGS+=("$arg"); done < <(cap_cargo_args "$@") ;;
-  dotnet) while IFS= read -r -d '' arg; do ARGS+=("$arg"); done < <(cap_dotnet_args "$@") ;;
+  dotnet)
+    export MSBUILDDISABLENODEREUSE=1
+    while IFS= read -r -d '' arg; do ARGS+=("$arg"); done < <(cap_dotnet_args "$@") ;;
   *) ARGS=("$@") ;;
 esac
 export "$REENTRY_VAR=1"
-exec flock "$LOCK_PATH" "$REAL" "${ARGS[@]}"
+lock_exec "$REAL" "${ARGS[@]}"

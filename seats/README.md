@@ -43,9 +43,10 @@ it was, so the template does not throttle light projects by default.
 The template ships `seats/bin/cargo` and `seats/bin/dotnet` as symlinks to one
 plain-bash shim. The frozen host contract is:
 
-- blocking `flock` on `~/.cache/wheelhouse-build.lock` by default, held for the
-  whole tool invocation (car fleets that predate this template change used the
-  same contract with `~/.cache/car-build.lock`);
+- blocking `flock(2)` on `~/.cache/wheelhouse-build.lock` by default, held for the
+  whole tool invocation by Perl's standard `Fcntl` binding (car fleets that
+  predate this template change used the same contract with
+  `~/.cache/car-build.lock`);
 - re-entrancy guard `WHEELHOUSE_BUILD_LOCK_HELD=1`, exported while the lock is
   held, so a child build invoking the same tool execs the real tool directly;
 - caps: `CARGO_BUILD_JOBS<=8`, `cargo nextest ... --test-threads<=4`, dotnet

@@ -1,4 +1,4 @@
-tool=cargo lock=/home/fixture/.cache/wheelhouse-build.lock jobs=8 test_threads=4 reentry=WHEELHOUSE_BUILD_LOCK_HELD
-parity=ok scanned=/home/fixture/.config/wheelhouse/host-build-shims (missing)
-tool=dotnet lock=/home/fixture/.cache/wheelhouse-build.lock jobs=8 test_threads= reentry=WHEELHOUSE_BUILD_LOCK_HELD maxcpucount=8 node_reuse=disabled
-parity=ok scanned=/home/fixture/.config/wheelhouse/host-build-shims (missing)
+tool=cargo lock=[home]/.cache/wheelhouse-build.lock jobs=8 test_threads=4 reentry=WHEELHOUSE_BUILD_LOCK_HELD
+parity=ok scanned=[home]/.config/wheelhouse/host-build-shims (missing)
+tool=dotnet lock=[home]/.cache/wheelhouse-build.lock jobs=8 test_threads= reentry=WHEELHOUSE_BUILD_LOCK_HELD maxcpucount=8 node_reuse=disabled
+parity=ok scanned=[home]/.config/wheelhouse/host-build-shims (missing)
