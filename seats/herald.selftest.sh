@@ -28,10 +28,20 @@ PROJ="$FIX/project"
 mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$FIX/bin"
 
 run_herald() {
-  WHEELHOUSE_HERALD_ROOT="$PROJ" bun "$ROOT/seats/herald.ts" "$@"
+  WHEELHOUSE_HERALD_ROOT="$PROJ" \
+  WHEELHOUSE_HERALD_INTERVAL_MS="${WHEELHOUSE_HERALD_INTERVAL_MS:-50}" \
+  WHEELHOUSE_HERALD_POKE_STABILITY_MS="${WHEELHOUSE_HERALD_POKE_STABILITY_MS:-20}" \
+  WHEELHOUSE_HERALD_POKE_COOLDOWN_MS="${WHEELHOUSE_HERALD_POKE_COOLDOWN_MS:-500}" \
+  WHEELHOUSE_HERALD_POKE_ESCALATE_MS="${WHEELHOUSE_HERALD_POKE_ESCALATE_MS:-500}" \
+  bun "$ROOT/seats/herald.ts" "$@"
 }
 run_herald_with_tmux() {
-  WHEELHOUSE_HERALD_ROOT="$PROJ" WHEELHOUSE_HERALD_TMUX_SESSION=wh-demo WHEELHOUSE_HERALD_TMUX_PANE=wh-demo:bridge.0 PATH="$FIX/bin:$PATH" bun "$ROOT/seats/herald.ts" --once
+  WHEELHOUSE_HERALD_ROOT="$PROJ" \
+  WHEELHOUSE_HERALD_INTERVAL_MS="${WHEELHOUSE_HERALD_INTERVAL_MS:-50}" \
+  WHEELHOUSE_HERALD_POKE_STABILITY_MS="${WHEELHOUSE_HERALD_POKE_STABILITY_MS:-20}" \
+  WHEELHOUSE_HERALD_POKE_COOLDOWN_MS="${WHEELHOUSE_HERALD_POKE_COOLDOWN_MS:-500}" \
+  WHEELHOUSE_HERALD_POKE_ESCALATE_MS="${WHEELHOUSE_HERALD_POKE_ESCALATE_MS:-500}" \
+  WHEELHOUSE_HERALD_TMUX_SESSION=wh-demo WHEELHOUSE_HERALD_TMUX_PANE=wh-demo:bridge.0 PATH="$FIX/bin:$PATH" bun "$ROOT/seats/herald.ts" --once
 }
 
 line_count() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
@@ -375,7 +385,7 @@ cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
 
-FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit1.out" 2>&1
+WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit1.out" 2>&1
 RC=$?
 DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null && grep -q 'herald started' "$FIX/cockpit1.out"; then
@@ -386,7 +396,7 @@ fi
 
 kill -9 "$DAEMON_PID" 2>/dev/null || true
 sleep 0.4
-FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit2.out" 2>&1
+WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit2.out" 2>&1
 RC=$?
 REVIVED_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && [ -n "$REVIVED_PID" ] && [ "$REVIVED_PID" != "$DAEMON_PID" ] && kill -0 "$REVIVED_PID" 2>/dev/null && grep -q 'herald dead:' "$FIX/cockpit2.out" && grep -q 'herald started' "$FIX/cockpit2.out"; then
@@ -397,6 +407,26 @@ fi
 
 if grep -R "wheelhouse_truncated_bytes" "$PROJ/seats/logs" >/dev/null 2>&1 || true; then :; fi
 pass "truncated tool_execution_update payloads are harmless to herald's log reader shape"
+
+ROOT_GONE="$FIX/root-gone"
+mkdir -p "$ROOT_GONE/seats/logs" "$ROOT_GONE/seats/run"
+WHEELHOUSE_HERALD_ROOT="$ROOT_GONE" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=20 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=20 bun "$ROOT/seats/herald.ts" > "$FIX/root-gone.out" 2> "$FIX/root-gone.err" &
+ROOT_GONE_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$ROOT_GONE/seats/run/herald.pid" ] && break
+  sleep 0.05
+done
+rm -rf "$ROOT_GONE"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 "$ROOT_GONE_PID" 2>/dev/null || break
+  sleep 0.1
+done
+if ! kill -0 "$ROOT_GONE_PID" 2>/dev/null && grep -q 'project root disappeared' "$FIX/root-gone.err" 2>/dev/null; then
+  pass "herald exits within one scan when its project root disappears"
+else
+  fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
+  kill "$ROOT_GONE_PID" 2>/dev/null || true
+fi
 
 if [ $FAIL -eq 0 ]; then
   echo "herald.selftest: PASS ($PASS checks)"
