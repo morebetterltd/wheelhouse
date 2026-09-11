@@ -1,0 +1,12 @@
+$ git status --short --branch
+## fleet/wheelhouse-project-wzjk
+ M evidence/wheelhouse-project-wzjk/final-branch-clean.log
+$ git symbolic-ref --short HEAD
+fleet/wheelhouse-project-wzjk
+$ git rev-parse HEAD
+e20b0397e90ba5bad7345f29d0e62725af028162
+$ git rev-parse fleet/wheelhouse-project-wzjk
+e20b0397e90ba5bad7345f29d0e62725af028162
+$ git merge-base --is-ancestor main HEAD && echo main-is-ancestor
+main-is-ancestor
+$ pgrep -fl [w]heelhouse-(cockpit|adapter|herald|verify|legibility)-selftest|[w]heelhouse-project-wzjk/.wheelhouse-runs || true
