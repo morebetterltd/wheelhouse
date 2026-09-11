@@ -1,0 +1,13 @@
+$ git diff --check HEAD
+$ bash -n seats/cockpit.sh seats/cockpit.selftest.sh seats/floor.selftest.sh
+$ rg -n "cockpit.selftest|floor.selftest|floor-pane split failure|mkdir -p \"\/run\"" seats/cockpit.sh seats/cockpit.selftest.sh runbooks/RUNNING_THE_LOOP.md contracts/REVIEWER.md
+runbooks/RUNNING_THE_LOOP.md:139:If a change touches `seats/cockpit.sh`, re-run both cockpit surfaces before review/integration: `bash seats/cockpit.selftest.sh` and `WHEELHOUSE_SKIP_REAL_PI=1 bash seats/floor.selftest.sh`. The floor selftest drives cockpit pane creation and repair, so cockpit-only evidence is incomplete for that file.
+contracts/REVIEWER.md:122:For any diff that touches `seats/cockpit.sh`, reviewer bench evidence includes both `bash seats/cockpit.selftest.sh` and `WHEELHOUSE_SKIP_REAL_PI=1 bash seats/floor.selftest.sh`. The floor suite exercises the cockpit bridge floor pane and its respawn path; a cockpit-only run is not enough evidence for that file.
+seats/cockpit.selftest.sh:2:# cockpit.selftest.sh — hermetic checks for cockpit tmux sizing and respawn.
+seats/cockpit.selftest.sh:17:FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")"
+seats/cockpit.selftest.sh:19:SOCK="wheelhouse-cockpit-selftest.$$"
+seats/cockpit.selftest.sh:146:  pass "planted floor-pane split failure STOPs loudly"
+seats/cockpit.selftest.sh:148:  fail "planted floor-pane split failure did not STOP loudly (rc=$PLANTED_RC out=$(cat "$FIX/planted-floor-fail.out" 2>/dev/null))"
+seats/cockpit.selftest.sh:199:  echo "cockpit.selftest: PASS ($PASS checks)"
+seats/cockpit.selftest.sh:203:echo "cockpit.selftest: FAIL ($FAIL failure(s), $PASS pass(es))" >&2
+$ pgrep -fl "[w]heelhouse-project-8rp3/.wheelhouse-runs|[w]heelhouse-cockpit-selftest|[w]heelhouse-floor-selftest" || true

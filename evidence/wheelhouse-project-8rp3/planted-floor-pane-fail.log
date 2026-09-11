@@ -1,0 +1,4 @@
+$ PATH=... seats/cockpit.sh planted
+herald started: pid 14523
+STOP: could not create bridge floor pane in wh-planted:bridge; fixture split-window failed
+rc=1
