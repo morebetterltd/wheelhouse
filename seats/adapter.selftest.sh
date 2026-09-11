@@ -203,8 +203,12 @@ function handle(cmd) {
       break;
     }
     case "prompt": {
-      out({ id, type: "response", command: "prompt", success: true });
-      out({ type: "agent_start" });
+      const ack = () => out({ id, type: "response", command: "prompt", success: true });
+      if (process.env.STUB_PROMPT_ACK_DELAY_MS) setTimeout(ack, Number(process.env.STUB_PROMPT_ACK_DELAY_MS)); else ack();
+      if (!process.env.STUB_PROMPT_ACK_NO_DELIVERY) {
+        out({ type: "agent_start" });
+        out({ type: "message_start", message: { role: "user", content: [{ type: "text", text: cmd.message }] } });
+      }
       streaming = true;
       const finish = () => {
         fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message, streamingBehavior: cmd.streamingBehavior, cwd: process.cwd() }) + "\n");
@@ -750,6 +754,32 @@ run dispatch worker-1 bead-x "after live rotation"
 if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'echo: Bead bead-x' 5 && grep -q 'after live rotation' "$LOG"; then
   pass "after live rotation, get_state answers and the writer's next event lands in the current log"
 else fail "dispatch after live rotation did not read responses from the current log (exit $RC): $OUT current=$(cat "$LOG" 2>/dev/null) archive_tail=$(tail -5 "$LOG.1" 2>/dev/null)"; fi
+
+phase "2a. dispatch — late prompt ack after delivery is a warning, not stale state"
+SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
+LATE_PROJ="$FIX/late-ack-proj"
+build_proj "$LATE_PROJ" late-ack
+mkdir -p "$LATE_PROJ/.wheelhouse-worktrees/old-bead" "$LATE_PROJ/.wheelhouse-worktrees/new-bead"
+RUN_PROJ="$LATE_PROJ"; STATE="$LATE_PROJ/seats/state.json"; LOG="$LATE_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-late-ack/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-late-ack/worker-1/cwd.txt"
+run spawn worker-1 old-bead
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack fixture" 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "prompt delivered, ack late" && says "new-bead"; then pass "late prompt ack after delivery exits 0 with warning"
+else fail "late prompt ack dispatch did not warn/succeed (exit $RC): $OUT"; fi
+if [ "$(state_get lastBead)" = "new-bead" ] && grep -q 'Bead new-bead' "$LOG" 2>/dev/null; then
+  pass "late prompt ack leaves state.json on the new bead after log delivery"
+else fail "late prompt ack left stale state/log: lastBead=$(state_get lastBead) log=$(tail -5 "$LOG" 2>/dev/null)"; fi
+run stop worker-1 >/dev/null 2>&1
+
+NO_DELIVERY_PROJ="$FIX/no-delivery-proj"
+build_proj "$NO_DELIVERY_PROJ" no-delivery
+mkdir -p "$NO_DELIVERY_PROJ/.wheelhouse-worktrees/old-bead" "$NO_DELIVERY_PROJ/.wheelhouse-worktrees/new-bead"
+RUN_PROJ="$NO_DELIVERY_PROJ"; STATE="$NO_DELIVERY_PROJ/seats/state.json"; LOG="$NO_DELIVERY_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-no-delivery/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-no-delivery/worker-1/cwd.txt"
+run spawn worker-1 old-bead
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && says "timed out after 200ms waiting for prompt response" && ! says "prompt delivered, ack late"; then pass "late prompt ack without delivery remains a STOP"
+else fail "late prompt ack without delivery did not STOP (exit $RC): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$SAVE_RUN_PROJ"; STATE="$SAVE_STATE"; LOG="$SAVE_LOG"; ARGV="$SAVE_ARGV"; CWD_FILE="$SAVE_CWD_FILE"
 
 phase "2b. dispatch — pinned session cwd starts fresh instead of recording a lie"
 SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
