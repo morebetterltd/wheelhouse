@@ -73,6 +73,16 @@ function die(msg: string): never {
   process.exit(1);
 }
 
+function projectRootExists(): boolean {
+  try {
+    fs.statSync(ROOT);
+    return true;
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return false;
+    throw e;
+  }
+}
+
 function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
@@ -569,6 +579,10 @@ async function daemon(): Promise<void> {
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
   process.on("SIGINT", () => { cleanup(); process.exit(130); });
   for (;;) {
+    if (!projectRootExists()) {
+      console.error(`herald: project root disappeared (${ROOT}); exiting`);
+      return;
+    }
     scanOnce();
     await new Promise((r) => setTimeout(r, INTERVAL_MS));
   }

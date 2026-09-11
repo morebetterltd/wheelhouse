@@ -3,12 +3,16 @@
 
 set -u
 
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 LINT="$SCRIPT_DIR/push-authority-lint.sh"
 [ -x "$LINT" ] || { echo "selftest: not executable: $LINT" >&2; exit 2; }
 
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-push-authority-lint-selftest.XXXXXX")"
-trap 'rm -rf "$FIX"' EXIT INT TERM
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+trap cleanup EXIT INT TERM
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }

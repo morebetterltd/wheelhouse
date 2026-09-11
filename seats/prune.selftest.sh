@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 # Hermetic selftest for seats/prune.ts. It builds a scratch wheelhouse
 # container with a product repo, a closed merged worktree, a seat-anchored
 # worktree, an orphaned checkout directory, bead-named scratch, fake simctl
@@ -25,7 +28,7 @@ phase(){ printf '\n%s\n' "$*"; }
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-prune-selftest.XXXXXX")"
 FIX="$(cd "$FIX" && pwd -P)"
 TMP_SCRATCH=()
-cleanup(){ rm -rf "$FIX" "${TMP_SCRATCH[@]}"; }
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX" ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
 trap cleanup EXIT INT TERM
 export HOME="$FIX/home"
 mkdir -p "$HOME"
@@ -79,7 +82,8 @@ printf '{"type":"session-start","cwd":"%s"}\n' "$WTS/$HIST_ID" > "$SESSION_HISTO
 LIVE_PID=$!
 TMP_SCRATCH+=()
 cleanup_live(){ kill "$LIVE_PID" >/dev/null 2>&1 || true; }
-trap 'cleanup_live; cleanup' EXIT INT TERM
+cleanup_prune(){ cleanup_live; cleanup; }
+trap cleanup_prune EXIT INT TERM
 printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"},"worker-live":{"pid":%s,"cwd":"%s"},"worker-history":{"pid":999998,"cwd":"%s","sessionFile":"%s"}}}\n' "$WTS/$OPEN_ID" "$LIVE_PID" "$WTS/$OPEN_ID" "$WTS/$OPEN_ID" "$SESSION_HISTORY" > "$ROOT/seats/state.json"
 
 mkdir -p "$WTS/orphaned-checkout" "$PROD/.wheelhouse-build" "$PROD/obj" "$PROD/dist" "$PROD/node_modules/pkg/dist" "$PROD/node_modules/.bin" "$ROOT/.wheelhouse-bench.lock.stale.12345"

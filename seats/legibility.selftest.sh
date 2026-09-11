@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 #
 # legibility.selftest.sh — is every failure class its own VISIBLE state, on
 # THIS machine?
@@ -58,6 +61,7 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 phase(){ printf '\n%s\n' "$*"; }
 
 cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null
   [ -n "$FIX" ] && rm -rf "$FIX"
   return 0

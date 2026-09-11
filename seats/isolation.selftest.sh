@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 #
 # isolation.selftest.sh — can one project's seat machinery reach another
 # project's beads, worktree, or evidence? (It must not — and this test says
@@ -72,6 +75,7 @@ note() { printf '  note  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
 cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null
   [ -n "$FIX" ] && rm -rf "$FIX"
   return 0

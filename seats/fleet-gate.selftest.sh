@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 # fleet-gate.selftest.sh — hermetic checks for fleet-gate.sh's three states
 # (cold+ready, cold+empty, live) plus its graceful-degrade paths. Never runs
 # against live seats — everything is a fixture: a stub `bd` on PATH and a
@@ -18,7 +21,8 @@ phase() { printf '\n%s\n' "$*"; }
 
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-fleet-gate-selftest.$$.XXXXXX")"
 FIX="$(cd "$FIX" && pwd -P)"
-trap 'rm -rf "$FIX"' EXIT INT TERM
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+trap cleanup EXIT INT TERM
 
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats" "$PROJ/bin"

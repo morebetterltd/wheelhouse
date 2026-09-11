@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -60,7 +63,8 @@ template_root() {
 }
 TEMPLATE=$(template_root)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+cleanup(){ selftest_cleanup_fixture_processes "${TMP:-}" "${SOCK:-}"; rm -rf "$TMP"; }
+trap cleanup EXIT
 
 PASS=0
 fail() { echo "not ok $((PASS+1)) - $*"; exit 1; }

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 #
 # concurrency.selftest.sh — can TWO seats from one roster work distinct beads
 # at the same time without touching each other, and does a capacity failure
@@ -74,6 +77,7 @@ skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
 cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null
   [ -n "$FIX" ] && rm -rf "$FIX"
   return 0

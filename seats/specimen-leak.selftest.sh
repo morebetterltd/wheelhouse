@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 # specimen-leak.selftest.sh — prove BOOTSTRAP's specimen grep rejects only specimen leaks.
 #
 # The specimen-leak list in BOOTSTRAP.md is hand-maintained. Every term in it
@@ -22,7 +25,7 @@ fail() { printf '  FAIL  %s\n' "$*" | scrub; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*" | scrub; SKIPPED=$((SKIPPED + 1)); }
 
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-specimen-leak.XXXXXX")"
-cleanup() { rm -rf "$FIX"; }
+cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
 trap cleanup EXIT INT TERM
 
 PATTERN='Ebb|ebb|Tideline|tideline|cordova|headless emulator|app-review|com\.example\.app|learn what a good one looks like|take it when the reviewer starts waiting'

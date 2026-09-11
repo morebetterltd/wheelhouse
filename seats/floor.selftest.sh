@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 #
 # floor.selftest.sh — does floor.ts still render what seats/README.md's
 # "The bridge" section claims, on THIS machine?
@@ -46,6 +49,7 @@ skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
 cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   if [ -n "$SOCK" ]; then tmux -L "$SOCK" kill-server 2>/dev/null; fi
   [ -n "$FIX" ] && rm -rf "$FIX"
   return 0

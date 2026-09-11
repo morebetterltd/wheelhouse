@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 # Hermetic selftest for seats/walk.ts. It uses a stub pi in a temp HOME/PATH;
 # no live verifier seat and no live credentials are required or touched.
 
@@ -24,7 +27,7 @@ FIX=""
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
-cleanup(){ [ -n "$FIX" ] && rm -rf "$FIX"; }
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && rm -rf "$FIX"; }
 trap cleanup EXIT INT TERM
 
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-walk-selftest.$$.XXXXXX")"
