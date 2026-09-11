@@ -1,0 +1,21 @@
+$ git diff --check HEAD
+$ timeout 30 bun build seats/adapter.ts --target bun --outfile /dev/null
+Bundled 2 modules in 8ms
+
+  null  41.67 KB  (entry point)
+
+$ rg -n "ORPHAN_CONFIRM_MS|isDescendantOf|orphanCandidatesFor|status does not flag a live child|remedy:" seats/adapter.ts seats/adapter.selftest.sh seats/README.md
+seats/adapter.selftest.sh:977:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+seats/adapter.selftest.sh:986:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+seats/adapter.selftest.sh:988:  pass "status does not flag a live child of the recorded seat as ORPHAN"
+seats/adapter.selftest.sh:1002:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+seats/adapter.selftest.sh:1003:if [ $RC -eq 0 ] && says "ORPHAN" && says "pid $ORPHAN_PID" && says "recorded pid $REC_PID" && says "remedy:" && { says "FIFO" || says "argv/cwd/account match"; }; then
+seats/adapter.ts:77:const ORPHAN_CONFIRM_MS = Number(process.env.WHEELHOUSE_ORPHAN_CONFIRM_MS || 3000);
+seats/adapter.ts:1062:function isDescendantOf(pid: number, ancestor: number | null | undefined, rows: Map<number, ProcessRow>): boolean {
+seats/adapter.ts:1091:function orphanCandidatesFor(name: string, rec: SeatRecord): Map<number, string> {
+seats/adapter.ts:1098:    if (isDescendantOf(pid, rec.pid, rows)) return;
+seats/adapter.ts:1120:  const first = orphanCandidatesFor(name, rec);
+seats/adapter.ts:1122:  if (ORPHAN_CONFIRM_MS > 0) sleepMs(ORPHAN_CONFIRM_MS);
+seats/adapter.ts:1123:  const second = orphanCandidatesFor(name, rec);
+seats/adapter.ts:1203:      console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}; remedy: inspect pid ${orphan.pid}, then stop it or run bun seats/recover.ts`);
+$ pgrep -fl "[w]heelhouse-project-n2uf/.wheelhouse-runs|[w]heelhouse-adapter-selftest" | grep -v evidence-scrub || true

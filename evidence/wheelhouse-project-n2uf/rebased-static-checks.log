@@ -1,0 +1,7 @@
+$ git diff --check HEAD
+$ timeout 30 bun build seats/adapter.ts --target bun --outfile /dev/null
+Bundled 2 modules in 8ms
+
+  null  41.67 KB  (entry point)
+
+$ pgrep -fl "[w]heelhouse-project-n2uf/.wheelhouse-runs|[w]heelhouse-adapter-selftest" | grep -v evidence-scrub || true
