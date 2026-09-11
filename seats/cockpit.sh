@@ -192,8 +192,16 @@ install_resize_hook() {
 spawn_floor_pane() {
   # Right pane, full height: the floor (spotlight + rail in one program).
   # -l N% needs tmux >= 3.1; fall back to an even split if it is refused.
-  tmx split-window -h -l '45%' -t "${S}:bridge" -c "$ROOT" "$QSELF --pane-floor" 2>/dev/null ||
-    tmx split-window -h -t "${S}:bridge" -c "$ROOT" "$QSELF --pane-floor"
+  local err="$HERE/run/floor-pane.err"
+  rm -f "$err"
+  if tmx split-window -h -l '45%' -t "${S}:bridge" -c "$ROOT" "$QSELF --pane-floor" 2>"$err"; then
+    return 0
+  fi
+  if tmx split-window -h -t "${S}:bridge" -c "$ROOT" "$QSELF --pane-floor" 2>>"$err"; then
+    return 0
+  fi
+  echo "STOP: could not create bridge floor pane in ${S}:bridge; $(tail -n 1 "$err" 2>/dev/null || echo 'tmux split-window failed')" >&2
+  return 1
 }
 
 if tmx has-session -t "=$S" 2>/dev/null; then
@@ -201,7 +209,7 @@ if tmx has-session -t "=$S" 2>/dev/null; then
     PANES="$(tmx list-panes -t "${S}:bridge" 2>/dev/null | wc -l | tr -d ' ')"
     if [ "$PANES" = "1" ]; then
       echo "bridge floor pane missing in ${S}:bridge; respawning it"
-      spawn_floor_pane
+      spawn_floor_pane || exit 1
       tmx select-pane -t "${S}:bridge.0"
     fi
   fi
@@ -215,7 +223,7 @@ fi
 # Window 0:bridge — left pane is the commander seat.
 tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander"
 
-spawn_floor_pane
+spawn_floor_pane || exit 1
 install_resize_hook
 
 # Status bar: project on the left, the key hints on the right.
