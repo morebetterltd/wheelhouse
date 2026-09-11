@@ -69,6 +69,7 @@ const WORKTREES_DIR = path.join(ROOT, ".wheelhouse-worktrees");
 
 // One knob for every wait in this file; the selftest raises it for real pi.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_RPC_TIMEOUT_MS || 20000);
+const PROMPT_ACK_MS = Number(process.env.WHEELHOUSE_PROMPT_ACK_MS || 60000);
 const SPAWN_TERM_GRACE_MS = Number(process.env.WHEELHOUSE_SPAWN_TERM_GRACE_MS || 2000);
 const LOG_TAIL_BYTES = Number(process.env.WHEELHOUSE_LOG_TAIL_BYTES || 1024 * 1024);
 const LOG_ROTATE_BYTES = Number(process.env.WHEELHOUSE_LOG_ROTATE_BYTES || 256 * 1024 * 1024);
@@ -240,6 +241,7 @@ interface SeatRecord {
   model?: string;
   lastBead?: string;
   lastDispatchAt?: string;
+  lastPrompt?: string;
   lastCapacityEvent?: { at: string; detail: string; accountLabel?: string };
   lastLaunchFailure?: { at: string; detail: string };
 }
@@ -498,6 +500,7 @@ async function rpc(
 ): Promise<any> {
   const id = crypto.randomUUID();
   let offset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
+  const sentOffset = offset;
   await fifoWrite(rec.fifo, { ...command, id });
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -517,7 +520,27 @@ async function rpc(
     }
     await sleep(100);
   }
-  throw new Error(`timed out after ${timeoutMs}ms waiting for ${command.type} response`);
+  const err: any = new Error(`timed out after ${timeoutMs}ms waiting for ${command.type} response`);
+  err.code = "WHEELHOUSE_RPC_TIMEOUT";
+  err.logOffset = sentOffset;
+  err.commandType = command.type;
+  err.commandId = id;
+  throw err;
+}
+
+function promptDeliveredAfter(rec: { log: string }, offset: number, prompt: string): boolean {
+  const r = logLinesFrom(rec.log, offset);
+  for (const line of r.lines) {
+    let obj: any;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (obj.type === "agent_start" || obj.type === "turn_start") return true;
+    if (obj.type === "message_start" || obj.type === "message_end") {
+      const role = obj.message?.role;
+      const text = textOf(obj.message?.content);
+      if (role === "user" && text.includes(prompt)) return true;
+    }
+  }
+  return false;
 }
 
 async function terminateSpawnedOnly(pid: number): Promise<string> {
@@ -993,7 +1016,23 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   }
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
-  const resp = await rpc(rec, promptCommand(`Bead ${beadId}\n\n${text}`, "followUp"));
+  const promptText = `Bead ${beadId}\n\n${text}`;
+  const state = readState();
+  state.seats[name].lastBead = beadId;
+  state.seats[name].lastDispatchAt = new Date().toISOString();
+  state.seats[name].lastPrompt = promptText;
+  delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
+  writeState(state);
+  let resp: any;
+  try {
+    resp = await rpc(rec, promptCommand(promptText, "followUp"), PROMPT_ACK_MS);
+  } catch (e: any) {
+    if (e?.code === "WHEELHOUSE_RPC_TIMEOUT" && promptDeliveredAfter(rec, Number(e.logOffset ?? 0), promptText)) {
+      console.log(`WARNING: prompt delivered, ack late for ${beadId} to ${name}; watch ${rec.log}`);
+      return;
+    }
+    die(`dispatch prompt failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
+  }
   if (!resp.success) {
     // A failure that looks like an account limit is a CAPACITY fact worth
     // keeping: stamp it so `status` and the floor can surface it after this
@@ -1011,11 +1050,12 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     }
     die(`dispatch failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
   }
-  const state = readState();
-  state.seats[name].lastBead = beadId;
-  state.seats[name].lastDispatchAt = new Date().toISOString();
-  delete state.seats[name].lastCapacityEvent; // a dispatch that lands clears it
-  writeState(state);
+  const landedState = readState();
+  landedState.seats[name].lastBead = beadId;
+  landedState.seats[name].lastDispatchAt = new Date().toISOString();
+  landedState.seats[name].lastPrompt = promptText;
+  delete landedState.seats[name].lastCapacityEvent; // a dispatch that lands clears it
+  writeState(landedState);
   console.log(`dispatched ${beadId} to ${name}; watch ${rec.log}`);
 }
 
