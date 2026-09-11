@@ -1,0 +1,26 @@
+$ git diff --check HEAD
+$ timeout 30 bun build seats/adapter.ts --target bun --outfile /dev/null
+Bundled 2 modules in 6ms
+
+  null  41.28 KB  (entry point)
+
+$ rg -n "WHEELHOUSE_PROMPT_ACK_MS|prompt delivered, ack late|lastPrompt|promptDeliveredAfter|late prompt ack" seats/adapter.ts seats/adapter.selftest.sh seats/README.md contracts/SEATS.md
+contracts/SEATS.md:25:Nothing here supervises a seat. The adapter runs seats — spawn, dispatch, steer, status, stop, resume — and refuses to be more: it does not restart a dead seat, meter quota, or retry. Dispatch records the target bead and prompt before it waits for Pi's acknowledgement; the acknowledgement deadline is `WHEELHOUSE_PROMPT_ACK_MS` (default 60000 ms, longer than the generic RPC wait because a warm resumed session may be slow to answer). If the ack is late but the log shows the prompt frame or a new turn, dispatch reports `prompt delivered, ack late` and leaves the new bead in state; if there is no delivery evidence, it STOPs. Noticing seats is the commander's job, and seat health stays what the rules below say: probe once, nudge once — a dead seat and an idle seat look identical, which is why the probe exists. If both go unanswered, declare the seat dead, respawn it with the adapter (resume, if the session is worth keeping), and re-dispatch the in-flight bead. That is the entire recovery, because the cache was the only thing lost.
+seats/adapter.selftest.sh:754:phase "2a. dispatch — late prompt ack after delivery is a warning, not stale state"
+seats/adapter.selftest.sh:761:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack fixture" 2>&1)"; RC=$?
+seats/adapter.selftest.sh:762:if [ $RC -eq 0 ] && says "prompt delivered, ack late" && says "new-bead"; then pass "late prompt ack after delivery exits 0 with warning"
+seats/adapter.selftest.sh:763:else fail "late prompt ack dispatch did not warn/succeed (exit $RC): $OUT"; fi
+seats/adapter.selftest.sh:765:  pass "late prompt ack leaves state.json on the new bead after log delivery"
+seats/adapter.selftest.sh:766:else fail "late prompt ack left stale state/log: lastBead=$(state_get lastBead) log=$(tail -5 "$LOG" 2>/dev/null)"; fi
+seats/adapter.selftest.sh:774:OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)"; RC=$?
+seats/adapter.selftest.sh:775:if [ $RC -ne 0 ] && says "timed out after 200ms waiting for prompt response" && ! says "prompt delivered, ack late"; then pass "late prompt ack without delivery remains a STOP"
+seats/adapter.selftest.sh:776:else fail "late prompt ack without delivery did not STOP (exit $RC): $OUT"; fi
+seats/adapter.ts:72:const PROMPT_ACK_MS = Number(process.env.WHEELHOUSE_PROMPT_ACK_MS || 60000);
+seats/adapter.ts:244:  lastPrompt?: string;
+seats/adapter.ts:531:function promptDeliveredAfter(rec: { log: string }, offset: number, prompt: string): boolean {
+seats/adapter.ts:1023:  state.seats[name].lastPrompt = promptText;
+seats/adapter.ts:1030:    if (e?.code === "WHEELHOUSE_RPC_TIMEOUT" && promptDeliveredAfter(rec, Number(e.logOffset ?? 0), promptText)) {
+seats/adapter.ts:1031:      console.log(`WARNING: prompt delivered, ack late for ${beadId} to ${name}; watch ${rec.log}`);
+seats/adapter.ts:1056:  landedState.seats[name].lastPrompt = promptText;
+seats/README.md:190:The prompt acknowledgement deadline is `WHEELHOUSE_PROMPT_ACK_MS` (default
+$ pgrep -fl "[w]heelhouse-adapter-selftest|[w]heelhouse-project-ax3q/.wheelhouse-runs" || true

@@ -1,0 +1,19 @@
+$ WHEELHOUSE_RPC_TIMEOUT_MS=2000 PATH=../bin:[home]/.pi-seats-wheelhouse-project/worker-1/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:[home]/.local/bin:[home]/.npm-global/bin:[home]/.bun/bin:/opt/homebrew/opt/imagemagick/bin:[home]/miniconda3/bin:/Applications/Postgres.app/Contents/Versions/latest/bin:/opt/homebrew/Cellar/pyenv-virtualenv/1.2.4/shims:/opt/homebrew/bin:/opt/homebrew/sbin:[home]/.pyenv/shims:[home]/.pyenv/bin:[home]/.pyenv/versions/miniconda3-latest/bin:[home]/.pyenv/versions/miniconda3-latest/condabin:[home]/.nvm/versions/node/v22.21.0/bin:[home]/.cargo/bin:[home]/Library/Android/sdk/emulator:[home]/Library/Android/sdk/platform-tools:/Applications/Warp.app/Contents/Resources/bin:[home]/.local/bin bun seats/adapter.ts spawn worker-1 old-bead
+seat worker-1: pid 94515, session s
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-ax3q/.wheelhouse-runs/wheelhouse-project-ax3q/repro/proj/seats/logs/worker-1.jsonl
+$ WHEELHOUSE_RPC_TIMEOUT_MS=300 PATH=../bin:[home]/.pi-seats-wheelhouse-project/worker-1/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:[home]/.local/bin:[home]/.npm-global/bin:[home]/.bun/bin:/opt/homebrew/opt/imagemagick/bin:[home]/miniconda3/bin:/Applications/Postgres.app/Contents/Versions/latest/bin:/opt/homebrew/Cellar/pyenv-virtualenv/1.2.4/shims:/opt/homebrew/bin:/opt/homebrew/sbin:[home]/.pyenv/shims:[home]/.pyenv/bin:[home]/.pyenv/versions/miniconda3-latest/bin:[home]/.pyenv/versions/miniconda3-latest/condabin:[home]/.nvm/versions/node/v22.21.0/bin:[home]/.cargo/bin:[home]/Library/Android/sdk/emulator:[home]/Library/Android/sdk/platform-tools:/Applications/Warp.app/Contents/Resources/bin:[home]/.local/bin bun seats/adapter.ts dispatch worker-1 new-bead late-ack-fixture
+seat worker-1 stopped; session s kept for resume
+seat worker-1: pid 94987, session s
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-ax3q/.wheelhouse-runs/wheelhouse-project-ax3q/repro/proj/seats/logs/worker-1.jsonl
+STOP: timed out after 300ms waiting for prompt response
+dispatch_rc=1
+$ state lastBead
+undefined
+$ log delivery count
+1
+$ log tail
+{"id":"adff3389-77a9-4dd8-89db-cb92e7181cd0","type":"response","command":"get_state","success":true,"data":{"isStreaming":false,"sessionFile":"acct/session.jsonl","sessionId":"s"}}
+{"id":"ae56191f-11c1-43fc-af73-ffd143e863e1","type":"response","command":"get_state","success":true,"data":{"isStreaming":false,"sessionFile":"acct/session.jsonl","sessionId":"s"}}
+{"type":"agent_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Bead new-bead\n\nlate-ack-fixture"}]}}
+{"id":"31ead77b-8917-43bd-ac84-a8ee67b694d7","type":"response","command":"prompt","success":true}
