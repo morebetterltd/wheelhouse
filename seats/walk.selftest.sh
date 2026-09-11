@@ -146,6 +146,21 @@ printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out"
 [ ! -f "$HOME_FIX/.pi-seats-$ns/verifier/cwd.txt" ] && pass 'obscured GUI target does not spawn the verifier seat' || fail 'obscured GUI target spawned stub pi before the guard'
 if grep -q '"mode": "window-list"' "$FIX/out-gui/walk.json" && grep -q 'Bench Simulator Clone' "$FIX/out-gui/walk.json"; then pass 'walk.json records the window-list guard mode and blocker'; else fail "walk.json missing guard mode/blocker: $(cat "$FIX/out-gui/walk.json" 2>/dev/null)"; fi
 
+for case in failcmd malformed wrongshape; do
+  proj="$FIX/proj-gui-$case"; ns="walk-gui-$case"; outdir="$FIX/out-gui-$case"; build_proj "$proj" "$ns"
+  case "$case" in
+    failcmd) cmd='printf "fixture command stderr\\n" >&2; exit 1'; want='window-list command failed';;
+    malformed) cmd='printf "not json"'; want='window-list command malformed JSON';;
+    wrongshape) cmd='printf "{\\\"notWindows\\\":[]}"'; want='returned wrong shape';;
+  esac
+  out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_COMMAND="$cmd" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:gui:Fixture --out "$outdir" 2>&1)
+  rc=$?
+  [ "$rc" -eq 3 ] && pass "GUI command $case exits COULD-NOT-WALK (3)" || fail "GUI command $case rc=$rc output=$out"
+  printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep -q "$want" && pass "GUI command $case names the window-list failure" || fail "GUI command $case did not name failure '$want': $out"
+  [ -s "$outdir/walk.json" ] && grep -q "$want" "$outdir/walk.json" && pass "GUI command $case writes walk.json with reason" || fail "GUI command $case walk.json missing reason: $(cat "$outdir/walk.json" 2>/dev/null)"
+  [ ! -f "$HOME_FIX/.pi-seats-$ns/verifier/cwd.txt" ] && pass "GUI command $case does not spawn the verifier seat" || fail "GUI command $case spawned stub pi before guard refusal"
+done
+
 proj="$FIX/proj-nongui"; ns="walk-nongui"; build_proj "$proj" "$ns"
 out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_JSON='not-json-if-read' STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface install:README.md --out "$FIX/out-nongui" 2>&1)
 rc=$?

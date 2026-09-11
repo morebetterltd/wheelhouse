@@ -1,0 +1,14 @@
+$ git diff --check HEAD
+$ rg -n -- "window-list command failed|malformed JSON|wrong shape|GUI command failcmd|GUI command malformed|GUI command wrongshape|normalizeWindowList" seats/walk.ts seats/walk.selftest.sh
+seats/walk.selftest.sh:152:    failcmd) cmd='printf "fixture command stderr\\n" >&2; exit 1'; want='window-list command failed';;
+seats/walk.selftest.sh:153:    malformed) cmd='printf "not json"'; want='window-list command malformed JSON';;
+seats/walk.selftest.sh:154:    wrongshape) cmd='printf "{\\\"notWindows\\\":[]}"'; want='returned wrong shape';;
+seats/walk.ts:152:function normalizeWindowList(source: string, parsed: any): any[] | string {
+seats/walk.ts:154:  if (!windows) return `${source} returned wrong shape: expected JSON array or object with windows array`;
+seats/walk.ts:156:  if (bad) return `${source} returned wrong shape: each window needs title or name`;
+seats/walk.ts:164:      return normalizeWindowList("window-list JSON", JSON.parse(raw));
+seats/walk.ts:172:    if (res.error) return `window-list command failed (${cmd}): ${res.error.message}`;
+seats/walk.ts:173:    if (res.status !== 0) return `window-list command failed (${cmd}): exit ${res.status}${res.stderr ? `: ${String(res.stderr).trim()}` : ""}`;
+seats/walk.ts:175:    if (!out) return `window-list command failed (${cmd}): empty output`;
+seats/walk.ts:177:      return normalizeWindowList(`window-list command (${cmd})`, JSON.parse(out));
+seats/walk.ts:179:      return `window-list command malformed JSON (${cmd}): ${e?.message ?? e}`;
