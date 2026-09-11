@@ -1,4 +1,3 @@
-swept: removed stale fixture [tmpdir]wheelhouse-adapter-selftest.42539.aG0NoH
 
 installed layout — wheelhouse/fleet brief is preferred without contracts/
   ok    installed layout: spawn exits 0 with no contracts/ directory
@@ -161,7 +160,6 @@ capacity events — in-turn quota errors park the seat and a later success clear
   ok    host budget: re-entrant child reaches real cargo without deadlock and inherits caps
   ok    host budget: dotnet real tool sees -maxcpucount:8 and MSBUILDDISABLENODEREUSE=1
   ok    host budget: missing lock primitive fails with actionable STOP
-seats/adapter.selftest.sh: line 1125: 85071 Killed: 9               STUB_CARGO_LOG="$HOST_KILL_LOG" STUB_CARGO_HOLD=1 HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" hold > /dev/null 2>&1
   ok    host budget: real flock(2) primitive releases lock after SIGKILLed holder
   ok    host budget: cargo --contract prints lock/jobs/test_threads/reentry and parity scan result
   ok    host budget: --contract parity scan reports mismatched fleet shims
@@ -171,15 +169,15 @@ seats/adapter.selftest.sh: line 1125: 85071 Killed: 9               STUB_CARGO_L
   ok    canary: an adapter that resumes without the session is caught
 
 8. real pi — one smoke leg, spawn/dispatch/agent_end/resume/grow
-  ok    real: spawn exits 0 (seat worker-1: pid 87232, session 01a0920c-ef60-7c37-ba2a-1400ee81b2d7
-  events -> [tmpdir]wheelhouse-adapter-selftest.47853.6NRY2r/realproj/seats/logs/worker-1.jsonl)
+  ok    real: spawn exits 0 (seat worker-1: pid 95830, session 01a0920f-ece3-7798-96a2-ae6612a5afdb
+  events -> [tmpdir]wheelhouse-adapter-selftest.56952.fMwa6F/realproj/seats/logs/worker-1.jsonl)
   ok    real: spawn state.json cwd equals process live cwd
   ok    real: dispatch accepted
   ok    real: agent_end captured
   ok    real: cross-bead dispatch state.json cwd equals process live cwd
   ok    real: stop exits 0
-  ok    real: resume exits 0 (seat worker-1: pid 89103, session 01a0920c-f4d2-7c93-8914-894f9bfc1a42
-  events -> [tmpdir]wheelhouse-adapter-selftest.47853.6NRY2r/realproj/seats/logs/worker-1.jsonl)
+  ok    real: resume exits 0 (seat worker-1: pid 97814, session 01a0920f-f2d9-79ad-8969-b852f7091c0e
+  events -> [tmpdir]wheelhouse-adapter-selftest.56952.fMwa6F/realproj/seats/logs/worker-1.jsonl)
   ok    real: resume state.json cwd equals process live cwd
   ok    real: post-resume dispatch reached agent_end
   ok    real: the SAME session file grew across resume (5 -> 7 lines)
