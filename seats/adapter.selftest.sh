@@ -1118,6 +1118,7 @@ HOST_KILL_LOG="$FIX/host-budget-kill.log"
 STUB_CARGO_LOG="$HOST_KILL_LOG" STUB_CARGO_HOLD=1 HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" hold >/dev/null 2>&1 & HOLD_PID=$!
 if wait_for "$HOST_KILL_LOG" 'args=hold' 5; then
   kill -9 "$HOLD_PID" 2>/dev/null || true
+  wait "$HOLD_PID" 2>/dev/null || true
   sleep 0.2
   STUB_CARGO_LOG="$HOST_KILL_LOG" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" after-kill >/dev/null 2>&1; AFTER_RC=$?
   if [ $AFTER_RC -eq 0 ] && grep -q 'args=after-kill' "$HOST_KILL_LOG" 2>/dev/null; then pass "host budget: real flock(2) primitive releases lock after SIGKILLed holder"
