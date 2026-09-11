@@ -170,6 +170,14 @@ rc=$?
 [ "$rc" -eq 0 ] && pass 'non-GUI install surface does not consult the injected window list' || fail "non-GUI install consulted the window list or otherwise failed (rc=$rc): $out"
 if grep -q '"mode": "not-gui"' "$FIX/out-nongui/walk.json"; then pass 'walk.json records not-gui mode for non-GUI surfaces'; else fail "non-GUI walk.json missing not-gui mode: $(cat "$FIX/out-nongui/walk.json" 2>/dev/null)"; fi
 
+phase 'timeout names phase and honors per-walk budget env'
+proj="$FIX/proj-timeout"; ns="walk-timeout"; build_proj "$proj" "$ns"
+out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=200 STUB_SLEEP_MS=1000 STUB_REPLY=$'working before timeout\nVERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-timeout" 2>&1)
+rc=$?
+[ "$rc" -eq 3 ] && pass 'timeout exits as COULD-NOT-WALK (3)' || fail "timeout rc=$rc output=$out"
+printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK — timed out after 200ms during run verifier walk' && pass 'timeout verdict names budget and phase' || fail "timeout did not name budget/phase: $out"
+if grep -q '"phase": "run verifier walk"' "$FIX/out-timeout/walk.json" && grep -q 'timed out after 200ms during run verifier walk' "$FIX/out-timeout/walk.json"; then pass 'timeout metadata records phase'; else fail "timeout metadata missing phase: $(cat "$FIX/out-timeout/walk.json" 2>/dev/null)"; fi
+
 phase 'upgrade surface requires baseline'
 proj="$FIX/proj-upgrade"; ns="walk-upgrade"; build_proj "$proj" "$ns"
 out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface upgrade:runbooks/UPGRADE.md --out "$FIX/out-upgrade" 2>&1)
