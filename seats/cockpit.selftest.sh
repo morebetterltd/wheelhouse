@@ -127,6 +127,27 @@ fi
 kill "$PIPED_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/herald.pid"
 
+PLANTED_BIN="$FIX/planted-bin"
+mkdir -p "$PLANTED_BIN"
+cat > "$PLANTED_BIN/tmux" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "-L" ]; then shift 2; fi
+case "${1:-}" in
+  has-session) exit 1 ;;
+  new-session|set-option|select-pane) exit 0 ;;
+  split-window) echo 'fixture split-window failed' >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$PLANTED_BIN/tmux"
+PATH="$PLANTED_BIN:$(dirname "$(command -v bun)"):/usr/bin:/bin" "$PROJ/seats/cockpit.sh" planted > "$FIX/planted-floor-fail.out" 2>&1
+PLANTED_RC=$?
+if [ $PLANTED_RC -ne 0 ] && grep -q 'STOP: could not create bridge floor pane in wh-planted:bridge' "$FIX/planted-floor-fail.out" && grep -q 'fixture split-window failed' "$FIX/planted-floor-fail.out"; then
+  pass "planted floor-pane split failure STOPs loudly"
+else
+  fail "planted floor-pane split failure did not STOP loudly (rc=$PLANTED_RC out=$(cat "$FIX/planted-floor-fail.out" 2>/dev/null))"
+fi
+
 run_cockpit
 if grep -q 'bridge built: session wh-ratio' "$FIX/cockpit.out" && [ "$(pane_count)" = 2 ]; then
   pass "cockpit builds one bridge window with two panes on a private tmux socket"

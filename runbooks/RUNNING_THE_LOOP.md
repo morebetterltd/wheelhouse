@@ -136,6 +136,8 @@ Run the intent-check gate at `seats/intent-check.sh` before integrating when tha
 
 If the merge changed a contract half that is injected as a standing seat's role brief, reset every idle standing seat holding that brief after the merge: `bun seats/adapter.ts reset <seat>`. A running seat received its brief at spawn, so `resume` keeps the stale instructions and only a cold respawn makes the new contract effective. Do not reset a mid-turn seat; note it on the bead and reset it when it next goes idle.
 
+If a change touches `seats/cockpit.sh`, re-run both cockpit surfaces before review/integration: `bash seats/cockpit.selftest.sh` and `WHEELHOUSE_SKIP_REAL_PI=1 bash seats/floor.selftest.sh`. The floor selftest drives cockpit pane creation and repair, so cockpit-only evidence is incomplete for that file.
+
 Push, open and merge PRs, and run automated deploys per your project's recorded authority, in `wheelhouse/INTEGRATOR.md`'s project section. Before acting on a reviewer verdict file, run `seats/push-authority-lint.sh` so a stale `PUSH: ... principal-only` line cannot contradict a recorded project push grant unnoticed. The shipped default is all the way; an empty section means the install failed to record its authority, not that a generated conservative agent profile owns the answer. Ask once with a recommendation and default, write the answer, then proceed.
 
 ### 7. Close

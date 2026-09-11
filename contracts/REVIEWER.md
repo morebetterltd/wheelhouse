@@ -119,6 +119,8 @@ Any APPROVE that claims or implies the software RUNS must carry a bench pass —
 
 An APPROVE without bench evidence on a behavioral diff is a defect in the review, not a judgment call. This clause is the precondition for any merge policy that lets an APPROVE authorize a merge, and it travels with that policy wherever it goes.
 
+For any diff that touches `seats/cockpit.sh`, reviewer bench evidence includes both `bash seats/cockpit.selftest.sh` and `WHEELHOUSE_SKIP_REAL_PI=1 bash seats/floor.selftest.sh`. The floor suite exercises the cockpit bridge floor pane and its respawn path; a cockpit-only run is not enough evidence for that file.
+
 ### When the bench outlives the review turn
 
 Some benches take seconds and some take half an hour. The clause above does not care, and neither does the merge policy resting on it: the bench is still yours to run. What a long one changes is not the obligation but whether the obligation fits inside your own lifetime.

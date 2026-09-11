@@ -1,0 +1,13 @@
+$ TMPDIR=$PWD/.wheelhouse-runs/wheelhouse-project-8rp3/tmp bash seats/cockpit.selftest.sh
+ok 1 - cockpit --herald starts only the herald without building or attaching tmux
+ok 2 - cockpit --pane-commander starts commander-inbox-poll.sh bound to the pane
+ok 3 - cockpit --herald exits under a stdout pipe and leaves a live herald pid
+ok 4 - planted floor-pane split failure STOPs loudly
+ok 5 - cockpit builds one bridge window with two panes on a private tmux socket
+ok 6 - fresh cockpit session enables mouse and sets history-limit 50000
+ok 7 - known-size attached tmux client creates a split bridge and keeps commander pane near its ratio (window=152 commander=83 floor=68)
+ok 8 - fixture floor pane killed for respawn check
+ok 9 - re-running cockpit respawns a missing floor pane
+ok 10 - cockpit re-run leaves mouse/history options idempotently set
+ok 11 - WHEELHOUSE_COCKPIT_MOUSE=0 leaves mouse off while preserving history-limit
+cockpit.selftest: PASS (11 checks)
