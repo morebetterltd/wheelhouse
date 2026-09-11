@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 # stop-all.selftest.sh — hermetic checks for adapter.ts stop-all.
 
 set -uo pipefail
@@ -19,7 +22,7 @@ FIX=""
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
-cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null; [ -n "$FIX" ] && rm -rf "$FIX"; }
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null; [ -n "$FIX" ] && rm -rf "$FIX"; }
 trap cleanup EXIT INT TERM
 
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-stop-all-selftest.$$.XXXXXX")"

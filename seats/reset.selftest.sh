@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 #
 # reset.selftest.sh — does adapter.ts's `reset` verb do what seats/README.md
 # and contracts/SEATS.md's Lifecycle section claim, on THIS machine?
@@ -45,6 +48,7 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 phase(){ printf '\n%s\n' "$*"; }
 
 cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   # Seats spawned from the fixture carry the fixture path in their argv
   # (their role brief lives there); kill any that outlived their phase.
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null

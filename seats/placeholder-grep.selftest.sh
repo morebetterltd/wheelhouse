@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 # placeholder-grep.selftest.sh — prove BOOTSTRAP's placeholder grep is text-only.
 #
 # A clean install can carry binary evidence under wheelhouse/evidence. The
@@ -18,7 +21,7 @@ pass() { printf '  ok    %s\n' "$*"; }
 fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-placeholder-grep.XXXXXX")"
-cleanup() { rm -rf "$FIX"; }
+cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
 trap cleanup EXIT INT TERM
 
 run_placeholder_check() {

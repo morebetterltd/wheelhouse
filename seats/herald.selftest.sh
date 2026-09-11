@@ -5,6 +5,9 @@
 
 set -u
 
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
+
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
 command -v node >/dev/null 2>&1 || { echo "selftest: node is required" >&2; exit 2; }
 
@@ -15,6 +18,7 @@ PASS=0
 FAIL=0
 
 cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   if [ -n "${DAEMON_PID:-}" ]; then kill "$DAEMON_PID" 2>/dev/null || true; fi
   if [ -n "${REVIVED_PID:-}" ]; then kill "$REVIVED_PID" 2>/dev/null || true; fi
   rm -rf "$FIX"
@@ -397,6 +401,26 @@ fi
 
 if grep -R "wheelhouse_truncated_bytes" "$PROJ/seats/logs" >/dev/null 2>&1 || true; then :; fi
 pass "truncated tool_execution_update payloads are harmless to herald's log reader shape"
+
+ROOT_GONE="$FIX/root-gone"
+mkdir -p "$ROOT_GONE/seats/logs"
+WHEELHOUSE_HERALD_ROOT="$ROOT_GONE" WHEELHOUSE_HERALD_INTERVAL_MS=100 bun "$ROOT/seats/herald.ts" > "$FIX/root-gone.out" 2> "$FIX/root-gone.err" &
+ROOT_GONE_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -s "$ROOT_GONE/seats/run/herald.pid" ] && break
+  sleep 0.1
+done
+rm -rf "$ROOT_GONE"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 "$ROOT_GONE_PID" 2>/dev/null || break
+  sleep 0.15
+done
+if ! kill -0 "$ROOT_GONE_PID" 2>/dev/null && grep -q 'project root disappeared' "$FIX/root-gone.err" 2>/dev/null; then
+  pass "herald exits within one scan when its project root disappears"
+else
+  fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
+  kill "$ROOT_GONE_PID" 2>/dev/null || true
+fi
 
 if [ $FAIL -eq 0 ]; then
   echo "herald.selftest: PASS ($PASS checks)"
