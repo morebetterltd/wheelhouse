@@ -768,6 +768,7 @@ function main(): void {
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
   });
   const elapsedMs = Date.now() - startedAt;
   const stdout = res.stdout ?? "";

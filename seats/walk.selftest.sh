@@ -47,11 +47,19 @@ fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.s
 fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 const reply = process.env.STUB_REPLY || '';
-process.stdout.write(reply.replaceAll('__HOME__', process.env.HOME || '').replaceAll('__TMP__', process.cwd()));
-if (process.env.STUB_SLEEP_MS) {
-  setTimeout(() => process.exit(Number(process.env.STUB_EXIT || 0)), Number(process.env.STUB_SLEEP_MS));
+const finish = () => {
+  process.stdout.write(reply.replaceAll('__HOME__', process.env.HOME || '').replaceAll('__TMP__', process.cwd()));
+  if (process.env.STUB_SLEEP_MS) {
+    setTimeout(() => process.exit(Number(process.env.STUB_EXIT || 0)), Number(process.env.STUB_SLEEP_MS));
+  } else {
+    process.exit(Number(process.env.STUB_EXIT || 0));
+  }
+};
+if (process.env.STUB_READ_STDIN_TO_EOF) {
+  process.stdin.resume();
+  process.stdin.on('end', finish);
 } else {
-  process.exit(Number(process.env.STUB_EXIT || 0));
+  finish();
 }
 STUB
 chmod +x "$BIN/pi"
@@ -169,6 +177,21 @@ out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIS
 rc=$?
 [ "$rc" -eq 0 ] && pass 'non-GUI install surface does not consult the injected window list' || fail "non-GUI install consulted the window list or otherwise failed (rc=$rc): $out"
 if grep -q '"mode": "not-gui"' "$FIX/out-nongui/walk.json"; then pass 'walk.json records not-gui mode for non-GUI surfaces'; else fail "non-GUI walk.json missing not-gui mode: $(cat "$FIX/out-nongui/walk.json" 2>/dev/null)"; fi
+
+phase 'stdin-reading verifier receives EOF immediately'
+proj="$FIX/proj-stdin"; ns="walk-stdin"; build_proj "$proj" "$ns"
+STDIN_FIFO="$FIX/stdin-open.fifo"
+mkfifo "$STDIN_FIFO"
+exec 9<> "$STDIN_FIFO"
+start_ms=$(node -e 'console.log(Date.now())')
+out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=3000 STUB_READ_STDIN_TO_EOF=1 STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-stdin" < "$STDIN_FIFO" 2>&1)
+rc=$?
+end_ms=$(node -e 'console.log(Date.now())')
+exec 9>&-
+elapsed_ms=$((end_ms - start_ms))
+[ "$rc" -eq 0 ] && pass 'stdin-reading verifier exits 0' || fail "stdin-reading verifier rc=$rc output=$out"
+printf '%s\n' "$out" | grep -q 'VERDICT: WALKED-DONE' && pass 'stdin-reading verifier walk completes with a verdict' || fail "stdin-reading verifier missing verdict: $out"
+[ "$elapsed_ms" -lt 5000 ] && pass "stdin-reading verifier completed under 5s (${elapsed_ms}ms)" || fail "stdin-reading verifier exceeded 5s (${elapsed_ms}ms): $out"
 
 phase 'timeout names phase and honors per-walk budget env'
 proj="$FIX/proj-timeout"; ns="walk-timeout"; build_proj "$proj" "$ns"
