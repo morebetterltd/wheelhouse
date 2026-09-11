@@ -1084,6 +1084,7 @@ async function cmdSteer(name: string, text: string): Promise<void> {
 }
 
 interface ProcessRow { pid: number; ppid: number; startMs: number | null; command: string }
+type OpenPathSnapshot = Map<number, string[]>;
 
 function processRows(): Map<number, ProcessRow> {
   const rows = new Map<number, ProcessRow>();
@@ -1111,40 +1112,57 @@ function isDescendantOf(pid: number, ancestor: number | null | undefined, rows: 
   return false;
 }
 
-function fifoHolderPids(fifo: string | undefined): Set<number> {
-  const out = new Set<number>();
-  if (!fifo || !fs.existsSync(fifo)) return out;
-  try {
-    for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
-      const r = spawnSync(lsof, ["-t", fifo], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-      if (r.error) continue;
-      for (const s of (r.stdout || "").split(/\s+/).filter(Boolean)) {
-        const pid = Number(s);
-        if (Number.isFinite(pid) && pid > 0) out.add(pid);
-      }
-      break;
+function processOpenPaths(): OpenPathSnapshot | null {
+  for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
+    const r = spawnSync(lsof, ["-Fn"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+    if (r.error) {
+      if ((r.error as any).code === "ENOENT") continue;
+      return null;
     }
-  } catch { /* lsof absent or refused: status still prints the recorded row */ }
+    const out: OpenPathSnapshot = new Map();
+    let pid: number | null = null;
+    for (const line of (r.stdout || "").split(/\n/)) {
+      if (line.startsWith("p")) {
+        const n = Number(line.slice(1));
+        pid = Number.isFinite(n) && n > 0 ? n : null;
+        if (pid !== null && !out.has(pid)) out.set(pid, []);
+      } else if (pid !== null && line.startsWith("n")) {
+        out.get(pid)!.push(line.slice(1));
+      }
+    }
+    return out;
+  }
+  return null;
+}
+
+function pathsMatch(openPaths: string[] | undefined, p: string | undefined): boolean {
+  if (!p || !openPaths) return false;
+  const wanted = new Set([p]);
+  try { wanted.add(fs.realpathSync(p)); } catch {}
+  return openPaths.some((n) => wanted.has(n));
+}
+
+function pidAliveFromSnapshot(pid: number | null, fifo: string | undefined, open: OpenPathSnapshot | null): boolean {
+  if (!barePidAlive(pid)) return false;
+  if (!fifo || open === null) return true;
+  return pathsMatch(open.get(pid!), fifo);
+}
+
+function fifoHolderPids(fifo: string | undefined, open: OpenPathSnapshot | null): Set<number> {
+  const out = new Set<number>();
+  if (!fifo || !fs.existsSync(fifo) || open === null) return out;
+  for (const [pid, paths] of open) if (pathsMatch(paths, fifo)) out.add(pid);
   return out;
 }
 
-function orphanCandidatesFor(name: string, rec: SeatRecord): Map<number, string> {
+function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): Map<number, string> {
   const seen = new Map<number, string>();
-  const rows = processRows();
-  const fifoPids = fifoHolderPids(rec.fifo);
-  const recordedStart = rec.pid ? rows.get(rec.pid)?.startMs ?? null : null;
   function add(pid: number, reason: string) {
-    if (!Number.isFinite(pid) || pid <= 0 || pid === rec.pid || !pidAlive(pid)) return;
+    if (!Number.isFinite(pid) || pid <= 0 || pid === rec.pid || !barePidAlive(pid)) return;
     if (isDescendantOf(pid, rec.pid, rows)) return;
-    const candidateStart = rows.get(pid)?.startMs ?? null;
-    const holdsFifo = fifoPids.has(pid) || Boolean(rec.fifo && pidHoldsPath(pid, rec.fifo));
-    const predatesRecorded = recordedStart !== null && candidateStart !== null && candidateStart < recordedStart;
-    if (!holdsFifo && !predatesRecorded) return;
-    const qualified = holdsFifo ? reason : `${reason}; predates recorded pid ${rec.pid ?? "none"}`;
     const prev = seen.get(pid);
-    seen.set(pid, prev ? `${prev},${qualified}` : qualified);
+    seen.set(pid, prev ? `${prev},${reason}` : reason);
   }
-  for (const pid of fifoPids) add(pid, `holding stdin FIFO ${rec.fifo}`);
   const needles = [rec.accountDir, rec.cwd].filter((s): s is string => Boolean(s));
   if (needles.length) {
     for (const row of rows.values()) {
@@ -1156,15 +1174,13 @@ function orphanCandidatesFor(name: string, rec: SeatRecord): Map<number, string>
   return seen;
 }
 
-function orphanMatchesFor(name: string, rec: SeatRecord): { pid: number; reason: string }[] {
-  const first = orphanCandidatesFor(name, rec);
+function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): { pid: number; reason: string }[] {
+  const first = orphanCandidatesFor(name, rec, rows);
   if (first.size === 0) return [];
   if (ORPHAN_CONFIRM_MS > 0) sleepMs(ORPHAN_CONFIRM_MS);
-  const second = orphanCandidatesFor(name, rec);
   const confirmed: { pid: number; reason: string }[] = [];
   for (const [pid, reason] of first) {
-    const again = second.get(pid);
-    if (again) confirmed.push({ pid, reason: again.includes(reason) ? again : `${reason};${again}` });
+    if (barePidAlive(pid)) confirmed.push({ pid, reason });
   }
   return confirmed.sort((a, b) => a.pid - b.pid);
 }
@@ -1214,10 +1230,11 @@ function cmdStatus(): void {
     return;
   }
   const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
+  const rows = processRows();
   for (const name of names) {
     const rec = state.seats[name];
     syncCapacityFromLog(name, rec, state, roster);
-    const alive = pidAlive(rec.pid, rec.fifo);
+    const alive = barePidAlive(rec.pid);
     // A seat nobody stopped whose pid is gone DIED — that is a failure, and
     // rendering it as the same calm STOPPED a graceful stop earns would be
     // a failure conflated into a normal state. Say which one it is.
@@ -1239,7 +1256,7 @@ function cmdStatus(): void {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
       console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
     }
-    for (const orphan of orphanMatchesFor(name, rec)) {
+    for (const orphan of orphanMatchesFor(name, rec, rows)) {
       console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}; remedy: inspect pid ${orphan.pid}, then stop it or run bun seats/recover.ts`);
     }
   }

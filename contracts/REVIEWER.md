@@ -121,6 +121,8 @@ An APPROVE without bench evidence on a behavioral diff is a defect in the review
 
 For any diff that touches `seats/cockpit.sh`, reviewer bench evidence includes both `bash seats/cockpit.selftest.sh` and `WHEELHOUSE_SKIP_REAL_PI=1 bash seats/floor.selftest.sh`. The floor suite exercises the cockpit bridge floor pane and its respawn path; a cockpit-only run is not enough evidence for that file.
 
+For any diff that touches `seats/adapter.ts` status rendering, liveness checks, orphan detection, or process/FIFO ownership, reviewer bench evidence includes `bash seats/legibility.selftest.sh`. The legibility suite exercises the multi-seat failure-state fixture through `adapter.ts status` and `floor.ts --once`, so adapter-only evidence is incomplete for that path.
+
 ### When the bench outlives the review turn
 
 Some benches take seconds and some take half an hour. The clause above does not care, and neither does the merge policy resting on it: the bench is still yours to run. What a long one changes is not the obligation but whether the obligation fits inside your own lifetime.

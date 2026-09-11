@@ -1053,6 +1053,30 @@ else fail "slow get_state steer was not queued (exit $RC): $OUT commands=$(cat "
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
+phase "6d. status cost — six recorded seats with no orphan candidates returns promptly"
+STATUS_COST_PROJ="$FIX/status-cost-proj"
+build_proj "$STATUS_COST_PROJ" status-cost
+mkdir -p "$STATUS_COST_PROJ/seats/logs"
+env HOME="$HOME_FIX" PROJ="$STATUS_COST_PROJ" ME="$$" bun -e '
+  const fs = require("fs"), path = require("path");
+  const proj = process.env.PROJ, seats = {};
+  for (let i = 1; i <= 6; i++) {
+    const name = `cost-${i}`;
+    const log = path.join(proj, "seats", "logs", `${name}.jsonl`);
+    fs.writeFileSync(log, "");
+    seats[name] = { pid: Number(process.env.ME), startedAt: new Date().toISOString(), accountDir: path.join(proj, "acct", name), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", `${name}.stdin`), log, sessionId: "s", sessionFile: null };
+  }
+  fs.writeFileSync(path.join(proj, "seats", "state.json"), JSON.stringify({ seats }, null, 2));
+'
+RUN_PROJ="$STATUS_COST_PROJ"; STATE="$STATUS_COST_PROJ/seats/state.json"
+START_MS="$(node -e 'console.log(Date.now())')"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=0 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+END_MS="$(node -e 'console.log(Date.now())')"
+ELAPSED_MS=$((END_MS - START_MS))
+if [ $RC -eq 0 ] && [ "$ELAPSED_MS" -lt 2000 ]; then pass "status cost: 6 fixture seats and no candidates completes under 2s (${ELAPSED_MS}ms)"
+else fail "status cost: rc=$RC elapsed=${ELAPSED_MS}ms output=$OUT"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
 phase "7. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
 CAN_A="$FIX/can-a"
