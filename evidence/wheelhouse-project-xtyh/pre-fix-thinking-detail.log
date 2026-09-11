@@ -1,0 +1,4 @@
+$ WHEELHOUSE_HERALD_ROOT=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-xtyh/.wheelhouse-runs/wheelhouse-project-xtyh/repro/proj bun seats/herald.ts --once
+herald: appended 1 wake event(s)
+$ inbox row
+{"id":"dc44e44067ba4c0f67531a6a4d6ffea03a6cdbb9ce91cabc58962b99db0576d4","at":"2026-09-11T14:42:05.018Z","seat":"worker-1","class":"settle","state":"terminal","title":"seat turn settled","detail":"{\"type\":\"thinking\",\"thinking\":\"**Updating verify and static checks**\",\"thinkingSignature\":\"redacted-signature\"}","source":{"log":"seats/logs/worker-1.jsonl","offset":0,"type":"agent_end"}}
