@@ -45,7 +45,7 @@ VERDICT: COULD-NOT-WALK — <why: missing credential, unreachable surface, ambig
 - **WALKED-NOT-DONE** — the consumer path was reachable and walkable, but it falsified the claim. Quote the failing step from the transcript on the verdict line, then explain the failure with transcript excerpts above or below it.
 - **COULD-NOT-WALK** — you could not honestly reach the judgment because a precondition outside the surface was missing, the surface was unreachable, or the instructions did not identify a consumer-actionable next step. Name the first blocker on the verdict line.
 
-No other verdict vocabulary belongs to this role. One verdict, exclusively. If the walk exposed adjacent work but the claim held, the verdict is still `WALKED-DONE` and the adjacent observation is evidence for the commander, not a different verdict.
+No other verdict vocabulary belongs to this role. One verdict, exclusively. If the walk exposed adjacent work but the claim held, the verdict is still `WALKED-DONE` and the adjacent observation is evidence for the commander, not a different verdict. If a dispatcher pins a branch or artifact for the walk and the branch moves while you are walking, judge the pinned identifier and name the move; do not use a discovery-style verdict merely because later commits exist. Publication/integration must refuse any tip other than the pinned verdict identifier until the new tip is walked or reviewed.
 
 ### Evidence, not adjectives
 
