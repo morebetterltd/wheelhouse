@@ -1,0 +1,9 @@
+$ scrubbed committed evidence with seats/evidence-scrub.sh
+files:
+evidence/wheelhouse-project-d6xo/before-after-examples.txt
+evidence/wheelhouse-project-d6xo/commander-voice-lint-selftest.log
+evidence/wheelhouse-project-d6xo/evidence-scrub.log
+evidence/wheelhouse-project-d6xo/intent-check-selftest.log
+evidence/wheelhouse-project-d6xo/legibility-selftest.log
+evidence/wheelhouse-project-d6xo/static-doctrine-grep.log
+rc=0
