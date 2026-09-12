@@ -32,6 +32,38 @@ roster is safe to commit precisely because it records only names, paths,
 optional non-secret human labels, and optional auth-route names; the moment a
 credential appears in it, that stops being true.
 
+## Host build budget (opt-in)
+
+A fleet that has expensive builds may opt in by creating `seats/host-budget.json`
+(any JSON object; the file's existence is the switch). When present, the adapter
+prepends `seats/bin` to `PATH` for every seat process, and `verify.ts`/`walk.ts`
+do the same for their one-shot Pi verifier spawns. When absent, PATH is left as
+it was, so the template does not throttle light projects by default.
+
+The template ships `seats/bin/cargo` and `seats/bin/dotnet` as symlinks to one
+plain-bash shim. The frozen host contract is:
+
+- blocking `flock(2)` on `~/.cache/wheelhouse-build.lock` by default, held for the
+  whole tool invocation by Perl's standard `Fcntl` binding (car fleets that
+  predate this template change used the same contract with
+  `~/.cache/car-build.lock`);
+- re-entrancy guard `WHEELHOUSE_BUILD_LOCK_HELD=1`, exported while the lock is
+  held, so a child build invoking the same tool execs the real tool directly;
+- caps: `CARGO_BUILD_JOBS<=8`, `cargo nextest ... --test-threads<=4`, dotnet
+  `-maxcpucount:8`, and `MSBUILDDISABLENODEREUSE=1`;
+- `seats/bin/cargo --contract` / `seats/bin/dotnet --contract` print the lock,
+  caps, guard variable, and a parity scan.
+
+The cross-fleet parity scan looks under
+`~/.config/wheelhouse/host-build-shims` by default. If an operator wants fleets
+on the same host to assert each other's shim contract, put each fleet's shim(s)
+there under any subdirectory (for example
+`~/.config/wheelhouse/host-build-shims/<fleet>/cargo`) or set
+`WHEELHOUSE_HOST_BUDGET_PARITY_DIR` to a different documented host directory.
+Any scanned executable named `cargo` or `dotnet` whose first `--contract` line
+has a different lock/cap/re-entry contract is reported as `parity=mismatch` and
+the `--contract` command exits non-zero.
+
 ## The roster format
 
 `seats.json` is plain JSON with no comments, so its fields are documented

@@ -11,6 +11,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 WALK="${1:-$HERE/walk.ts}"
 VERIFY="$(cd "$(dirname "$WALK")" && pwd)/verify.ts"
 BRIEFS="$(cd "$(dirname "$WALK")" && pwd)/briefs.ts"
+HOST_BUDGET_TS="$(cd "$(dirname "$WALK")" && pwd)/host-budget.ts"
 SCRUB="$HERE/evidence-scrub.sh"
 [ -f "$WALK" ] || { echo "selftest: not found: $WALK" >&2; exit 2; }
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
@@ -46,6 +47,7 @@ fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
+fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null }));
 const reply = process.env.STUB_REPLY || '';
 const finish = () => {
   process.stdout.write(reply.replaceAll('__HOME__', process.env.HOME || '').replaceAll('__TMP__', process.cwd()));
@@ -70,6 +72,7 @@ build_proj(){
   cp "$WALK" "$proj/seats/walk.ts"
   cp "$VERIFY" "$proj/seats/verify.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
+  cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   cp "$SCRUB" "$proj/seats/evidence-scrub.sh"
   chmod +x "$proj/seats/walk.ts" "$proj/seats/evidence-scrub.sh"
   cat > "$proj/contracts/VERIFIER.md" <<'EOF'
@@ -122,6 +125,7 @@ run_case(){
   prompt="$HOME_FIX/.pi-seats-$ns/verifier/prompt.txt"
   if grep -q -- '--append-system-prompt' "$argv" && grep -q 'contracts/VERIFIER.md' "$argv"; then pass "$name appended verifier brief"; else fail "$name did not append verifier brief: $(cat "$argv" 2>/dev/null)"; fi
   if grep -q 'Claim under verifier walk' "$prompt" && grep -q 'Product surface: echo product' "$prompt"; then pass "$name prompt carries claim and surface"; else fail "$name prompt missing claim/surface"; fi
+  if ! grep -q "$proj/seats/bin" "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null; then pass "$name host budget absent leaves PATH alone except walk helper"; else fail "$name host budget absent unexpectedly prepended seats/bin: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
   if grep -E 'contracts/REVIEWER|contracts/WORKER|wheelhouse/ISA|seats/logs|bd show' "$prompt" >/dev/null; then fail "$name prompt leaked fleet internals"; else pass "$name prompt avoids fleet internals"; fi
 }
 
@@ -131,6 +135,15 @@ run_case notdone $'step output __HOME__ __TMP__\nVERDICT: WALKED-NOT-DONE — fa
 run_case couldnot $'blocked __HOME__ __TMP__\nVERDICT: COULD-NOT-WALK — missing fixture credential\n' 3 'VERDICT: COULD-NOT-WALK'
 run_case zero $'no verdict here __HOME__ __TMP__\n' 4 'expected exactly one'
 run_case two $'VERDICT: WALKED-DONE\nVERDICT: COULD-NOT-WALK — duplicate\n__HOME__ __TMP__\n' 4 'expected exactly one'
+
+phase 'host budget PATH is opt-in for verifier walks'
+proj="$FIX/proj-budget"; ns="walk-budget"; outdir="$FIX/out-budget"; build_proj "$proj" "$ns"
+mkdir -p "$proj/seats/bin"
+printf '{"enabled":true}\n' > "$proj/seats/host-budget.json"
+out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$outdir" 2>&1)
+rc=$?
+[ "$rc" -eq 0 ] && pass 'host-budget walk exits 0' || fail "host-budget walk rc=$rc output=$out"
+if grep -q "$proj/seats/bin" "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null; then pass 'host budget enabled: walk PATH includes project seats/bin'; else fail "host budget enabled: walk PATH missing seats/bin: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
 
 phase 'image budget reduces over-budget capture set before spawn'
 imgdir="$FIX/images-overbudget"

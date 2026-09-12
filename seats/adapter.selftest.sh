@@ -146,7 +146,11 @@ fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 // Same construction argument for BEADS_ACTOR: the adapter is supposed to set
 // it in OUR process env directly (not rely on an operator export reaching
 // us), so record what we actually got, not what anyone claims to have set.
-fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null }));
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null }));
+if (process.env.STUB_RUN_CARGO_ON_START) {
+  const r = cp.spawnSync("cargo", ["build"], { stdio: "ignore", env: process.env });
+  if (r.status !== 0) process.exit(r.status || 1);
+}
 if (args.includes("-p")) {
   const prompt = args[args.length - 1] || "";
   fs.writeFileSync(path.join(agentDir, "probe-prompt.txt"), prompt);
@@ -278,6 +282,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   local proj="$1" ns="$2" seatdir
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
+  cp "$ADAPTER_DIR/host-budget.ts" "$proj/seats/host-budget.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$FLOOR" "$proj/seats/floor.ts"
   cp "$FLEET_GATE" "$proj/seats/fleet-gate.sh"
@@ -1053,7 +1058,84 @@ else fail "slow get_state steer was not queued (exit $RC): $OUT commands=$(cat "
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
-phase "7. canary — can these checks detect a broken adapter?"
+phase "7. host build budget — opt-in PATH shim serializes cargo and allows re-entrant children"
+BUDGET_PROJ="$FIX/host-budget-proj"
+build_proj "$BUDGET_PROJ" budget
+mkdir -p "$BUDGET_PROJ/seats/bin"
+cp "$HERE/bin/host-build-shim" "$BUDGET_PROJ/seats/bin/host-build-shim"
+ln -sf host-build-shim "$BUDGET_PROJ/seats/bin/cargo"
+ln -sf host-build-shim "$BUDGET_PROJ/seats/bin/dotnet"
+printf '{"enabled":true}\n' > "$BUDGET_PROJ/seats/host-budget.json"
+cat > "$BIN/cargo" <<'CARGO_STUB'
+#!/usr/bin/env bash
+now_ms(){ node -e 'console.log(Date.now())'; }
+printf '%s pid=%s ms=%s args=%s guard=%s jobs=%s\n' start "$$" "$(now_ms)" "$*" "${WHEELHOUSE_BUILD_LOCK_HELD:-}" "${CARGO_BUILD_JOBS:-}" >> "$STUB_CARGO_LOG"
+if [ "${STUB_CARGO_REENTER:-}" = 1 ] && [ "${STUB_CARGO_REENTERED:-}" != 1 ]; then
+  STUB_CARGO_REENTERED=1 cargo build-child
+fi
+if [ "${STUB_CARGO_HOLD:-}" = 1 ]; then while :; do :; done; fi
+sleep 0.4
+printf '%s pid=%s ms=%s args=%s guard=%s jobs=%s\n' end "$$" "$(now_ms)" "$*" "${WHEELHOUSE_BUILD_LOCK_HELD:-}" "${CARGO_BUILD_JOBS:-}" >> "$STUB_CARGO_LOG"
+CARGO_STUB
+chmod +x "$BIN/cargo"
+cat > "$BIN/dotnet" <<'DOTNET_STUB'
+#!/usr/bin/env bash
+printf 'dotnet pid=%s args=%s node_reuse=%s guard=%s\n' "$$" "$*" "${MSBUILDDISABLENODEREUSE:-unset}" "${WHEELHOUSE_BUILD_LOCK_HELD:-}" >> "$STUB_DOTNET_LOG"
+DOTNET_STUB
+chmod +x "$BIN/dotnet"
+RUN_PROJ="$BUDGET_PROJ"; STATE="$BUDGET_PROJ/seats/state.json"
+STUB_CARGO_LOG="$FIX/host-budget-cargo.log" STUB_RUN_CARGO_ON_START=1 STUB_CARGO_REENTER=1 OUT_A="$FIX/budget-a.out" OUT_B="$FIX/budget-b.out" bash -c '
+  env -u BEADS_ACTOR HOME="$0" PATH="$1" STUB_CARGO_LOG="$2" STUB_RUN_CARGO_ON_START=1 STUB_CARGO_REENTER=1 bun "$3/seats/adapter.ts" spawn worker-1 > "$4" 2>&1 & p1=$!
+  env -u BEADS_ACTOR HOME="$0" PATH="$1" STUB_CARGO_LOG="$2" STUB_RUN_CARGO_ON_START=1 STUB_CARGO_REENTER=1 bun "$3/seats/adapter.ts" probe worker-1 > "$5" 2>&1 & p2=$!
+  wait $p1; r1=$?; wait $p2; r2=$?; exit $((r1+r2))
+' "$HOME_FIX" "$RUN_PATH" "$FIX/host-budget-cargo.log" "$BUDGET_PROJ" "$FIX/budget-a.out" "$FIX/budget-b.out"
+BUDGET_RC=$?
+if [ "$BUDGET_RC" -eq 0 ]; then pass "host budget: concurrent spawn/probe both complete through shim"
+else fail "host budget: concurrent spawn/probe failed rc=$BUDGET_RC a=$(cat "$FIX/budget-a.out" 2>/dev/null) b=$(cat "$FIX/budget-b.out" 2>/dev/null)"; fi
+HOST_LOG="$FIX/host-budget-cargo.log"
+if env HOST_LOG="$HOST_LOG" node <<'NODE'
+const fs=require('fs'); const lines=fs.readFileSync(process.env.HOST_LOG,'utf8').trim().split(/\n/);
+const main=lines.filter(l=>/args=build( |$)/.test(l));
+const starts=main.filter(l=>l.startsWith('start')).map(l=>+l.match(/ms=(\d+)/)[1]).sort((a,b)=>a-b);
+const ends=main.filter(l=>l.startsWith('end')).map(l=>+l.match(/ms=(\d+)/)[1]).sort((a,b)=>a-b);
+const serialized=starts.length===2 && ends.length===2 && starts[1] >= ends[0];
+process.exit(serialized ? 0 : 1);
+NODE
+then pass "host budget: second cargo build starts after first cargo build exits"
+else fail "host budget: cargo builds overlapped or log malformed: $(cat "$HOST_LOG" 2>/dev/null)"; fi
+if grep -q 'args=build-child guard=1 jobs=8' "$HOST_LOG" 2>/dev/null; then pass "host budget: re-entrant child reaches real cargo without deadlock and inherits caps"
+else fail "host budget: re-entrant child did not run with guard/caps: $(cat "$HOST_LOG" 2>/dev/null)"; fi
+STUB_DOTNET_LOG="$FIX/host-budget-dotnet.log" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/dotnet" build -maxcpucount:64 >/dev/null 2>&1; DOTNET_RC=$?
+if [ $DOTNET_RC -eq 0 ] && grep -q 'args=build -maxcpucount:8 node_reuse=1 guard=1' "$FIX/host-budget-dotnet.log" 2>/dev/null; then
+  pass "host budget: dotnet real tool sees -maxcpucount:8 and MSBUILDDISABLENODEREUSE=1"
+else fail "host budget: dotnet caps/env missing rc=$DOTNET_RC log=$(cat "$FIX/host-budget-dotnet.log" 2>/dev/null)"; fi
+FAKE_PERL_DIR="$FIX/fake-perl"; mkdir -p "$FAKE_PERL_DIR"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FAKE_PERL_DIR/perl"; chmod +x "$FAKE_PERL_DIR/perl"
+PRIM_OUT="$(STUB_CARGO_LOG="$FIX/no-primitive.log" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$FAKE_PERL_DIR:$BIN:/usr/bin:/bin" "$BUDGET_PROJ/seats/bin/cargo" no-primitive 2>&1)"; PRIM_RC=$?
+if [ $PRIM_RC -eq 127 ] && printf '%s\n' "$PRIM_OUT" | grep -q 'STOP: host-build-shim needs a crash-safe flock(2) primitive' && printf '%s\n' "$PRIM_OUT" | grep -q 'Refusing mkdir locks'; then
+  pass "host budget: missing lock primitive fails with actionable STOP"
+else fail "host budget: missing lock primitive was not actionable rc=$PRIM_RC: $PRIM_OUT"; fi
+HOST_KILL_LOG="$FIX/host-budget-kill.log"
+STUB_CARGO_LOG="$HOST_KILL_LOG" STUB_CARGO_HOLD=1 HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" hold >/dev/null 2>&1 & HOLD_PID=$!
+if wait_for "$HOST_KILL_LOG" 'args=hold' 5; then
+  kill -9 "$HOLD_PID" 2>/dev/null || true
+  wait "$HOLD_PID" 2>/dev/null || true
+  sleep 0.2
+  STUB_CARGO_LOG="$HOST_KILL_LOG" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" after-kill >/dev/null 2>&1; AFTER_RC=$?
+  if [ $AFTER_RC -eq 0 ] && grep -q 'args=after-kill' "$HOST_KILL_LOG" 2>/dev/null; then pass "host budget: real flock(2) primitive releases lock after SIGKILLed holder"
+  else fail "host budget: next build did not acquire after killed holder rc=$AFTER_RC log=$(cat "$HOST_KILL_LOG" 2>/dev/null)"; fi
+else fail "host budget: killed-holder setup never acquired lock: $(cat "$HOST_KILL_LOG" 2>/dev/null)"; fi
+CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/no-parity-dir" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)"; CONTRACT_RC=$?
+if [ $CONTRACT_RC -eq 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep -q 'lock=.*/.cache/wheelhouse-build.lock jobs=8 test_threads=4 reentry=WHEELHOUSE_BUILD_LOCK_HELD' && printf '%s\n' "$CONTRACT_OUT" | grep -q 'parity=ok scanned='; then
+  pass "host budget: cargo --contract prints lock/jobs/test_threads/reentry and parity scan result"
+else fail "host budget: cargo --contract mismatch rc=$CONTRACT_RC: $CONTRACT_OUT"; fi
+BAD_PARITY="$FIX/parity/fleet-x"; mkdir -p "$BAD_PARITY"; printf '#!/usr/bin/env bash\nprintf "tool=cargo lock=/other jobs=99 test_threads=9 reentry=OTHER\\n"\n' > "$BAD_PARITY/cargo"; chmod +x "$BAD_PARITY/cargo"
+CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/parity" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)"; CONTRACT_RC=$?
+if [ $CONTRACT_RC -ne 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep -q 'parity=mismatch'; then pass "host budget: --contract parity scan reports mismatched fleet shims"
+else fail "host budget: parity mismatch not reported rc=$CONTRACT_RC: $CONTRACT_OUT"; fi
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)"; RC=$?
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
+phase "8. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
 CAN_A="$FIX/can-a"
 build_proj "$CAN_A" can-a
