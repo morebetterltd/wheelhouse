@@ -22,6 +22,7 @@ import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { die, expandTilde, makeScratchCwd, sweepStaleScratchWorktrees, validateSegment } from "./verify";
+import { hostBudgetPath } from "./host-budget";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -429,7 +430,7 @@ function main(): void {
   phase = "run verifier walk";
   const res = spawnSync("pi", args, {
     cwd: scratchCwd,
-    env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir, PATH: `${helperBin}${path.delimiter}${process.env.PATH ?? ""}`, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper },
+    env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir, PATH: `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper },
     encoding: "utf8",
     timeout: TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,

@@ -1,0 +1,9 @@
+pre-change adapter overlap reproduction (expected before shim: two cargo builds overlap)
+adapter_sha=9aeabf929249e56e4a929ef45ff0f47958097569
+spawn_rc worker-a=0 worker-b=0
+raw_log:
+start pid=55640 ms=1789144713228 args=build
+start pid=55641 ms=1789144713227 args=build
+end pid=55641 ms=1789144714271 args=build
+end pid=55640 ms=1789144714274 args=build
+computed first_start=1789144713227 second_start=1789144713228 first_end=1789144714271 overlap=true
