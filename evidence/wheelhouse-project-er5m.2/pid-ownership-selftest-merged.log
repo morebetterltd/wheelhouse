@@ -1,0 +1,7 @@
+$ /usr/bin/time -p seats/pid-ownership.selftest.sh
+  ok    adapter pid liveness is gated by the seat FIFO ownership proof, not bare kill -0 for recorded seats
+pid-ownership.selftest: PASS
+real 0.17
+user 0.01
+sys 0.02
+rc=0

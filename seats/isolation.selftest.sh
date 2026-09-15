@@ -53,9 +53,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SEATS_SRC="${1:-$HERE}"
 ADAPTER="$SEATS_SRC/adapter.ts"
 BRIEFS="$SEATS_SRC/briefs.ts"
+HARNESS="$SEATS_SRC/harness.ts"
+HOST_BUDGET_TS="$SEATS_SRC/host-budget.ts"
 SEAT_ENV="$SEATS_SRC/seat-env.sh"
 [ -f "$ADAPTER" ]  || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
+[ -f "$HARNESS" ]  || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$BRIEFS" ]  || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
+[ -f "$HOST_BUDGET_TS" ] || { echo "selftest: not found: $HOST_BUDGET_TS" >&2; exit 2; }
 [ -f "$SEAT_ENV" ] || { echo "selftest: not found: $SEAT_ENV" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
@@ -236,6 +240,8 @@ build_proj() {   # $1 = project dir, $2 = namespace, $3 = seat name
   mkdir -p "$proj/seats" "$proj/contracts" "$proj/.beads" "$proj/.wheelhouse-worktrees/wt-1"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
+  cp "$HARNESS" "$proj/seats/harness.ts"
+  cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf 'graph store of %s\n' "$proj" > "$proj/.beads/marker.txt"
   printf 'worktree of %s\n' "$proj" > "$proj/.wheelhouse-worktrees/wt-1/marker.txt"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
