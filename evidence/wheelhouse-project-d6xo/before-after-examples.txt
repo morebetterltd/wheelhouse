@@ -6,5 +6,5 @@ Before examples taken from this umbrella's wheelhouse/ISA.md, then rewritten in 
 2. BEFORE: The 32v integration exposed a commander process defect — secret-scan and merge in one compound command let a real leak merge before the scan was read — fixed as doctrine ...
    AFTER: The README integration exposed a commander process defect: secret scanning and merging were chained together, so the scan result was not read before integration. The outcome is shipped doctrine: scan and merge are separate steps.
 
-3. BEFORE: Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by Keenan; encoded as OPERATIONAL_RULES ... and bead 2eu for the template.
-   AFTER: That morning's startup order was wrong: machinery sync happened before the fleet was running, and Keenan caught it. The outcome is shipped startup doctrine and a pre-turn gate: bring the fleet up and dispatch ready work before commander chores.
+3. BEFORE: Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by the principal; encoded as OPERATIONAL_RULES ... and bead 2eu for the template.
+   AFTER: That morning's startup order was wrong: machinery sync happened before the fleet was running, and the principal caught it. The outcome is shipped startup doctrine and a pre-turn gate: bring the fleet up and dispatch ready work before commander chores.

@@ -1,0 +1,13 @@
+$ cd $EXT/seats && TMPDIR=$EXT/tmp ./commander-voice-lint.selftest.sh
+ok 1 - human task prose passes with fixture namespace
+ok 2 - ordinary hyphenated English and parenthesized words pass
+ok 3 - planted negative: bead wording fails
+ok 4 - planted negative: bare namespace id fails
+ok 5 - planted negative: 3-character issue id fails
+ok 6 - planted negative: child issue id fails
+ok 7 - planted negative: before-example #3 bare shorthand id fails
+ok 8 - fresh seats copy outside this umbrella uses fixture namespace
+ok 9 - --namespace option makes namespace explicit outside any install
+commander-voice-lint.selftest: PASS (9 checks, namespace=releaf)
+        2.89 real         0.20 user         0.49 sys
+rc=0

@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 # commander-voice-lint.sh — flag commander-facing prose that talks in fleet jargon instead of human tasks.
-# Usage: seats/commander-voice-lint.sh <file> [file ...]
+# Usage: seats/commander-voice-lint.sh [--namespace <namespace>] <file> [file ...]
 
 set -u
 
+NAMESPACE_OVERRIDE=""
+if [ "${1:-}" = "--namespace" ]; then
+  if [ "$#" -lt 3 ] || [ -z "${2:-}" ]; then
+    echo "Usage: seats/commander-voice-lint.sh [--namespace <namespace>] <file> [file ...]" >&2
+    exit 2
+  fi
+  NAMESPACE_OVERRIDE="$2"
+  shift 2
+fi
+
 if [ "$#" -eq 0 ]; then
-  echo "Usage: seats/commander-voice-lint.sh <file> [file ...]" >&2
+  echo "Usage: seats/commander-voice-lint.sh [--namespace <namespace>] <file> [file ...]" >&2
   exit 2
 fi
 
@@ -29,7 +39,7 @@ regex_escape() {
   printf '%s' "$1" | sed 's/[][\\.^$*+?{}()|]/\\&/g'
 }
 
-NAMESPACE="$(find_namespace || true)"
+NAMESPACE="${NAMESPACE_OVERRIDE:-$(find_namespace || true)}"
 if [ -z "$NAMESPACE" ]; then
   echo "UNRUNNABLE: could not determine graph namespace from wheelhouse/.template-source or bd info" >&2
   exit 2
@@ -49,7 +59,12 @@ for file in "$@"; do
     echo "FAIL commander-voice: $file uses bead/beads; name the human task, intent, or outcome instead"
     FAIL=1
   fi
-  if grep -nE "$FULL_ID_RE|$PAREN_BARE_ID_RE" "$file"; then
+  if grep -nE "$FULL_ID_RE" "$file"; then
+    echo "FAIL commander-voice: $file uses a bare work id; name the task or outcome instead"
+    FAIL=1
+  fi
+  if grep -Eo "$PAREN_BARE_ID_RE" "$file" | grep -E '[0-9]' >/dev/null; then
+    grep -nE "$PAREN_BARE_ID_RE" "$file"
     echo "FAIL commander-voice: $file uses a bare work id; name the task or outcome instead"
     FAIL=1
   fi
