@@ -97,6 +97,11 @@ if command -v node >/dev/null 2>&1; then
 elif command -v bun >/dev/null 2>&1; then
   json_runtime="bun"
 fi
+if [ -f "$roster_file" ] && [ -z "$json_runtime" ]; then
+  echo "MISSING node-or-bun"
+  echo "        seats/seats.json exists, so seat-env.sh needs node or bun to read the selected harness for this seat"
+  exit 1
+fi
 if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   harness="$($json_runtime -e '
     const fs = require("fs");
@@ -245,7 +250,7 @@ if [ "$harness" = "pi" ]; then
     note "wrote   $trust_file (pre-grants $root)"
   elif [ "$(cat "$trust_file")" = "$expected_trust" ]; then
     note "current $trust_file (already grants $root)"
-  elif grep -q ""$root"[[:space:]]*:[[:space:]]*true" "$trust_file"; then
+  elif grep -q "\"$root\"[[:space:]]*:[[:space:]]*true" "$trust_file"; then
     note "current $trust_file (grants $root among other entries; left as it is)"
   else
     die "$trust_file exists but does not grant $root.

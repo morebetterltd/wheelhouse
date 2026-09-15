@@ -23,6 +23,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { die, expandTilde, makeScratchCwd, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
+import { requirePiHarness } from "./harness";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -36,6 +37,7 @@ const IMAGE_QUALITY = Number(process.env.WHEELHOUSE_WALK_IMAGE_JPEG_QUALITY || 7
 
 interface SeatEntry {
   role: string;
+  harness?: string;
   provider?: string;
   model?: string;
   external?: boolean;
@@ -387,6 +389,11 @@ function main(): void {
   phase = "prepare verifier seat";
   sweepStaleScratchWorktrees(ROOT);
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  try {
+    requirePiHarness(verifierSeat, entry, "walk.ts verifier walk");
+  } catch (e: any) {
+    refuse(e.message);
+  }
   const verifierDir = requireCredential(entry, verifierSeat);
   let brief: string;
   try {

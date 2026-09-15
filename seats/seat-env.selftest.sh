@@ -234,6 +234,26 @@ if cmp -s "$D1/trust.json" "$FIX/trust-before.json"; then
   pass "rerun leaves trust.json byte-identical"
 else fail "rerun rewrote trust.json"; fi
 
+# Existing trust.json may carry grants an operator added by hand. A file that
+# includes this project root among other true entries is valid and must not be
+# rewritten; this catches the grep quoting regression that treated the root as
+# an unquoted regex fragment.
+D3="$HOME_FIX/.pi-seats-alpha/worker-trust-extra"
+mkdir -p "$D3"
+printf '{
+  "%s/elsewhere": true,
+  "%s": true
+}
+' "$PROJECT" "$PROJECT" > "$D3/trust.json"
+cp "$D3/trust.json" "$FIX/trust-extra-before.json"
+run alpha worker-trust-extra "$PROJECT"
+if [ $RC -eq 0 ] && says "grants $PROJECT among other entries"; then
+  pass "trust.json with root among other entries is accepted"
+else fail "trust.json with root among other entries was not accepted (exit $RC): $OUT"; fi
+if cmp -s "$D3/trust.json" "$FIX/trust-extra-before.json"; then
+  pass "trust.json with extra entries is left byte-identical"
+else fail "trust.json with extra entries was rewritten"; fi
+
 phase "2b. refusal — namespace root belongs to one project"
 OTHER_PROJECT="$FIX/other-project"
 mkdir -p "$OTHER_PROJECT"
@@ -281,9 +301,14 @@ if cmp -s "$FOREIGN/trust.json" "$FIX/foreign-before.json"; then
 else fail "the refusal still rewrote trust.json"; fi
 
 phase "5. refusing to guess"
-OUT="$(env HOME="$HOME_FIX" PATH="$FIX/emptybin:/usr/bin:/bin" "$SCRIPT" alpha worker-3 "$PROJECT" 2>&1)"; RC=$?
+NO_ROSTER_PROJECT="$FIX/no-roster-project"
+mkdir -p "$NO_ROSTER_PROJECT"
+OUT="$(env HOME="$HOME_FIX" PATH="$FIX/emptybin:/usr/bin:/bin" "$SCRIPT" alpha worker-3 "$NO_ROSTER_PROJECT" 2>&1)"; RC=$?
 if [ $RC -ne 0 ] && says "MISSING pi"; then pass "no pi on PATH is a STOP, named as MISSING"
 else fail "a missing pi did not stop the run (exit $RC)"; fi
+OUT="$(env HOME="$HOME_FIX" PATH="$FIX/emptybin:/usr/bin:/bin" "$SCRIPT" alpha worker-labeled "$PROJECT" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && says "MISSING node-or-bun"; then pass "no node/bun on PATH with seats.json is a STOP, named as MISSING"
+else fail "missing node/bun did not produce the MISSING line (exit $RC): $OUT"; fi
 
 run alpha worker-3 "relative/path"
 if [ $RC -ne 0 ] && says "absolute"; then pass "a relative project root is refused"
