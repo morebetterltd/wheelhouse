@@ -1034,9 +1034,9 @@ function requireRunning(name: string): SeatRecord {
 }
 
 async function cmdDispatch(name: string, beadId: string, text: string): Promise<void> {
-  const entry = requireSeat(name);
-  const driver = driverForSeat(name, entry, "adapter dispatch");
   let rec = requireRunning(name);
+  const rosterEntry = readRoster()[name];
+  const sameCwdDriver = rosterEntry ? driverForSeat(name, rosterEntry, "adapter dispatch") : PI_DRIVER;
   const targetCwd = beadWorktreeDir(beadId);
   if (rec.cwd !== targetCwd) {
     // Construction, not prompt discipline: a seat handed a DIFFERENT bead
@@ -1046,7 +1046,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     // missing worktree must refuse loudly with the seat left exactly as it
     // was, not stopped on the way to discovering the target doesn't exist.
     requireCwdDir(targetCwd);
-    const st = await driver.getState(rec);
+    const st = await sameCwdDriver.getState(rec);
     if (!st.success) {
       die(`get_state failed while checking seat "${name}" before cross-bead dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
     }
@@ -1068,13 +1068,15 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     await cmdStop(name);
     if (recordedCwdExists) {
-      await driver.launch(name, entry, rec.sessionFile, targetCwd);
+      const entry = requireSeat(name);
+      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, rec.sessionFile, targetCwd);
     } else {
       console.log(
         `seat ${name}: session continuity intentionally dropped because recorded cwd is gone: ${recordedCwd}; ` +
           `falling back to fresh spawn in dispatch target ${targetCwd}`
       );
-      await driver.launch(name, entry, null, targetCwd);
+      const entry = requireSeat(name);
+      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, null, targetCwd);
     }
     rec = requireRunning(name);
   }
@@ -1089,7 +1091,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   writeState(state);
   let resp: any;
   try {
-    resp = await driver.prompt(rec, promptText, "followUp", PROMPT_ACK_MS);
+    resp = await sameCwdDriver.prompt(rec, promptText, "followUp", PROMPT_ACK_MS);
   } catch (e: any) {
     if (e?.code === "WHEELHOUSE_RPC_TIMEOUT" && promptDeliveredAfter(rec, Number(e.logOffset ?? 0), promptText)) {
       console.log(`WARNING: prompt delivered, ack late for ${beadId} to ${name}; watch ${rec.log}`);
@@ -1124,9 +1126,9 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
 }
 
 async function cmdSteer(name: string, text: string): Promise<void> {
-  const entry = requireSeat(name);
-  const driver = driverForSeat(name, entry, "adapter steer");
   const rec = requireRunning(name);
+  const entry = readRoster()[name];
+  const driver = entry ? driverForSeat(name, entry, "adapter steer") : PI_DRIVER;
   let st: any;
   try {
     st = await driver.getState(rec);
@@ -1345,8 +1347,8 @@ async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<
 
 async function cmdStop(name: string): Promise<void> {
   const state = readState();
-  const entry = requireSeat(name);
-  const driver = driverForSeat(name, entry, "adapter stop");
+  const entry = readRoster()[name];
+  const driver = entry ? driverForSeat(name, entry, "adapter stop") : PI_DRIVER;
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo)) {
