@@ -1,15 +1,15 @@
 bench: wheelhouse cold install + upgrade
-artifact: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5 at commit 4fe34e8a5d08dec6a17111d28d35f9a2a40af584 (ref: HEAD)
+artifact: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5 at commit 18c3ae7c8cbb5b1e70bce07fd535f28e8cfb5e87 (ref: HEAD)
 upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
 phases: install=0 upgrade=0 interview=1
-evidence: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-er5m.5/bench-thirdpass-pre-evidence2
+evidence: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-er5m.5/bench-thirdpass-pre-evidence4
 
 === interview ===
-interview: PASS — see [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-er5m.5/bench-thirdpass-pre-evidence2/interview
+interview: PASS — see [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-er5m.5/bench-thirdpass-pre-evidence4/interview
 
 wheelhouse cold-install + upgrade bench verdict
-date: 2026-09-15T16:57:22Z
-artifact: template tree at commit 4fe34e8a5d08dec6a17111d28d35f9a2a40af584 (repo: .wheelhouse-worktrees/wheelhouse-project-er5m.5)
+date: 2026-09-15T17:05:54Z
+artifact: template tree at commit 18c3ae7c8cbb5b1e70bce07fd535f28e8cfb5e87 (repo: .wheelhouse-worktrees/wheelhouse-project-er5m.5)
 upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
 phases run: install=0 upgrade=0 (bash and zsh each) interview=1 (PASS)
 result: PASS
