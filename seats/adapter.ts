@@ -59,6 +59,17 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetPath } from "./host-budget";
+import { harnessNameForSeat, requirePiHarness } from "./harness";
+
+interface SeatDriver {
+  readonly name: string;
+  launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh?: boolean): Promise<void>;
+  probe(name: string, entry: SeatEntry): void;
+  getState(rec: SeatRecord): Promise<any>;
+  prompt(rec: SeatRecord, message: string, streamingBehavior: "followUp" | "steer", timeoutMs?: number): Promise<any>;
+  steer(rec: SeatRecord, text: string): Promise<any>;
+  stop(state: State, name: string, rec: SeatRecord): Promise<string>;
+}
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -165,6 +176,7 @@ function beadsActorFor(name: string): string {
 
 interface SeatEntry {
   role: string;
+  harness?: string;
   provider?: string;
   model?: string;
   external?: boolean;
@@ -172,6 +184,7 @@ interface SeatEntry {
   skills?: string[];
   account?: { dir: string; label?: string; authRoute?: string };
 }
+
 
 // The three routes BOOTSTRAP.md's question 8 offers: `oauth` for a
 // subscription seat's REPL /login, `api_key` for a written auth.json entry,
@@ -188,6 +201,14 @@ function validateAuthRoute(seatName: string, entry: SeatEntry): void {
       `seat "${seatName}" has an invalid account.authRoute ${JSON.stringify(route)} in seats/seats.json — ` +
         `must be one of ${AUTH_ROUTES.join(", ")} (or omitted)`
     );
+  }
+}
+
+function validateHarness(seatName: string, entry: SeatEntry): void {
+  try {
+    harnessNameForSeat(seatName, entry);
+  } catch (e: any) {
+    die(e.message);
   }
 }
 
@@ -252,18 +273,41 @@ interface State {
   seats: Record<string, SeatRecord>;
 }
 
+function parseRosterFile(): Record<string, SeatEntry> {
+  const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
+  return raw.seats ?? {};
+}
+
 function readRoster(): Record<string, SeatEntry> {
   if (!fs.existsSync(ROSTER_FILE)) {
     die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   }
-  const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
-  const seats: Record<string, SeatEntry> = raw.seats ?? {};
+  const seats = parseRosterFile();
   for (const [name, entry] of Object.entries(seats)) {
+    validateHarness(name, entry);
     validateAuthRoute(name, entry);
     validateShadow(name, entry);
     validateSkills(name, entry);
   }
   return seats;
+}
+
+function readNamedRosterEntry(name: string): SeatEntry | undefined {
+  if (!fs.existsSync(ROSTER_FILE)) return undefined;
+  const seats = parseRosterFile();
+  return seats[name];
+}
+
+function driverForRunningSeat(name: string, operation: string): SeatDriver {
+  let entry: SeatEntry | undefined;
+  try {
+    entry = readNamedRosterEntry(name);
+  } catch {
+    return PI_DRIVER;
+  }
+  if (!entry) return PI_DRIVER;
+  requirePiHarness(name, entry, operation);
+  return PI_DRIVER;
 }
 
 function readState(): State {
@@ -856,12 +900,27 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   console.log(`  events -> ${log}`);
 }
 
-async function cmdSpawn(name: string, beadId?: string): Promise<void> {
-  await launch(name, requireSeat(name), null, beadId ? beadWorktreeDir(beadId) : ROOT);
+const PI_DRIVER: SeatDriver = {
+  name: "pi",
+  launch,
+  probe: piProbe,
+  getState: (rec) => rpc(rec, { type: "get_state" }),
+  prompt: (rec, message, streamingBehavior, timeoutMs = PROMPT_ACK_MS) => rpc(rec, promptCommand(message, streamingBehavior), timeoutMs),
+  steer: (rec, text) => rpc(rec, { type: "steer", message: text }),
+  stop: stopRecord,
+};
+
+function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatDriver {
+  requirePiHarness(name, entry, operation);
+  return PI_DRIVER;
 }
 
-function cmdProbe(name: string): void {
+async function cmdSpawn(name: string, beadId?: string): Promise<void> {
   const entry = requireSeat(name);
+  await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, beadId ? beadWorktreeDir(beadId) : ROOT);
+}
+
+function piProbe(name: string, entry: SeatEntry): void {
   const labelSuffix = accountLabelSuffix(entry);
   const accountDir = expandTilde(entry.account!.dir);
   if (!fs.existsSync(accountDir)) {
@@ -895,6 +954,11 @@ function cmdProbe(name: string): void {
   process.exit(result.status ?? 1);
 }
 
+function cmdProbe(name: string): void {
+  const entry = requireSeat(name);
+  return driverForSeat(name, entry, "adapter probe").probe(name, entry);
+}
+
 async function cmdResume(name: string): Promise<void> {
   const rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" in seats/state.json — spawn it instead`);
@@ -916,10 +980,12 @@ async function cmdResume(name: string): Promise<void> {
       `seat ${name}: recorded seat cwd is gone: ${resumeCwd}; ` +
         `session continuity intentionally dropped; resuming fresh in ${fallbackCwd}`
     );
-    await launch(name, requireSeat(name), null, fallbackCwd);
+    const entry = requireSeat(name);
+    await driverForSeat(name, entry, "adapter resume").launch(name, entry, null, fallbackCwd);
     return;
   }
-  await launch(name, requireSeat(name), rec.sessionFile, resumeCwd);
+  const entry = requireSeat(name);
+  await driverForSeat(name, entry, "adapter resume").launch(name, entry, rec.sessionFile, resumeCwd);
 }
 
 /**
@@ -962,7 +1028,7 @@ async function cmdReset(name: string): Promise<void> {
     state.seats[name].sessionFile = null;
     writeState(state); // reset-record
   }
-  await launch(name, entry, null, cwd); // null sessionFile: cold, no --session
+  await driverForSeat(name, entry, "adapter reset").launch(name, entry, null, cwd); // null sessionFile: cold, no --session
   console.log(`seat ${name}: reset — session discarded, respawned cold`);
 }
 
@@ -975,6 +1041,7 @@ function requireRunning(name: string): SeatRecord {
 
 async function cmdDispatch(name: string, beadId: string, text: string): Promise<void> {
   let rec = requireRunning(name);
+  const sameCwdDriver = driverForRunningSeat(name, "adapter dispatch");
   const targetCwd = beadWorktreeDir(beadId);
   if (rec.cwd !== targetCwd) {
     // Construction, not prompt discipline: a seat handed a DIFFERENT bead
@@ -984,7 +1051,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     // missing worktree must refuse loudly with the seat left exactly as it
     // was, not stopped on the way to discovering the target doesn't exist.
     requireCwdDir(targetCwd);
-    const st = await rpc(rec, { type: "get_state" });
+    const st = await sameCwdDriver.getState(rec);
     if (!st.success) {
       die(`get_state failed while checking seat "${name}" before cross-bead dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
     }
@@ -1006,13 +1073,15 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     await cmdStop(name);
     if (recordedCwdExists) {
-      await launch(name, requireSeat(name), rec.sessionFile, targetCwd);
+      const entry = requireSeat(name);
+      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, rec.sessionFile, targetCwd);
     } else {
       console.log(
         `seat ${name}: session continuity intentionally dropped because recorded cwd is gone: ${recordedCwd}; ` +
           `falling back to fresh spawn in dispatch target ${targetCwd}`
       );
-      await launch(name, requireSeat(name), null, targetCwd);
+      const entry = requireSeat(name);
+      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, null, targetCwd);
     }
     rec = requireRunning(name);
   }
@@ -1027,7 +1096,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   writeState(state);
   let resp: any;
   try {
-    resp = await rpc(rec, promptCommand(promptText, "followUp"), PROMPT_ACK_MS);
+    resp = await sameCwdDriver.prompt(rec, promptText, "followUp", PROMPT_ACK_MS);
   } catch (e: any) {
     if (e?.code === "WHEELHOUSE_RPC_TIMEOUT" && promptDeliveredAfter(rec, Number(e.logOffset ?? 0), promptText)) {
       console.log(`WARNING: prompt delivered, ack late for ${beadId} to ${name}; watch ${rec.log}`);
@@ -1063,9 +1132,10 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
 
 async function cmdSteer(name: string, text: string): Promise<void> {
   const rec = requireRunning(name);
+  const driver = driverForRunningSeat(name, "adapter steer");
   let st: any;
   try {
-    st = await rpc(rec, { type: "get_state" });
+    st = await driver.getState(rec);
   } catch (e: any) {
     if (!String(e.message || e).includes("timed out")) die(`steer preflight get_state failed: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
     await fifoWrite(rec.fifo, promptCommand(text, "steer"));
@@ -1074,12 +1144,12 @@ async function cmdSteer(name: string, text: string): Promise<void> {
   }
   if (!st.success) die(`steer preflight get_state failed: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
   if (st.data?.isStreaming) {
-    const resp = await rpc(rec, { type: "steer", message: text });
+    const resp = await driver.steer(rec, text);
     if (!resp.success) die(`steer failed: ${resp.error}`);
     console.log(`steered ${name} mid-turn`);
     return;
   }
-  const resp = await rpc(rec, promptCommand(text, "steer"));
+  const resp = await driver.prompt(rec, text, "steer");
   if (!resp.success) die(`steer prompt failed: ${resp.error}`);
   console.log(`steered ${name} idle-started`);
 }
@@ -1287,7 +1357,8 @@ async function cmdStop(name: string): Promise<void> {
     console.log(`seat ${name} is not running`);
     return;
   }
-  console.log(await stopRecord(state, name, rec));
+  const driver = driverForRunningSeat(name, "adapter stop");
+  console.log(await driver.stop(state, name, rec));
 }
 
 async function cmdStopAll(): Promise<void> {
@@ -1308,9 +1379,16 @@ async function cmdStopAll(): Promise<void> {
       console.log(`seat ${name}: not running; session ${rec.sessionId ?? "-"} kept for resume`);
       continue;
     }
+    let driver: SeatDriver;
+    try {
+      driver = driverForSeat(name, roster[name], "adapter stop-all");
+    } catch (e: any) {
+      console.log(`seat ${name}: REPORT ${e.message}; left running (pid ${rec.pid})`);
+      continue;
+    }
     let st: any;
     try {
-      st = await rpc(rec, { type: "get_state" });
+      st = await driver.getState(rec);
     } catch (e: any) {
       console.log(`seat ${name}: REPORT unable to check idle state; left running (pid ${rec.pid}) — ${e.message}`);
       continue;
@@ -1324,7 +1402,7 @@ async function cmdStopAll(): Promise<void> {
       continue;
     }
     try {
-      console.log(await stopRecord(state, name, rec));
+      console.log(await driver.stop(state, name, rec));
     } catch (e: any) {
       console.log(`seat ${name}: REPORT stop failed; left for human inspection — ${e.message}`);
     }
