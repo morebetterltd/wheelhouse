@@ -66,8 +66,8 @@ Generated at install.
 ### Roster
 
 <!-- One line per seat this project took, mirroring seats/seats.json: the seat's
-     name, which brief it reads, its provider and model, its auth route, and its
-     agent directory (account.dir). seats.json is the machine record and decides;
+     name, which brief it reads, its harness, provider and model, its auth route,
+     and its agent directory (account.dir). seats.json is the machine record and decides;
      this section is the human record and must agree with it. The verifier row
      describes the consumer-surface walker role when the project takes one:
      it runs via seats/walk.ts, gates ISA claims rather than beads, and can be
