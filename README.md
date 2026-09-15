@@ -137,7 +137,7 @@ A seat is a standing session pinned to **one subscription, serving one human ben
 
 ## Multiple fleets on one host
 
-Independent fleets on the same machine cannot see each other's rosters or worktrees, so heavy builds need a machine-wide budget rather than a per-fleet convention. When a project opts in by creating `seats/host-budget.json`, the seat machinery prepends `seats/bin` to worker, reviewer, and verifier PATHs. The shipped shims live in `seats/bin`: `host-build-shim` with `cargo` and `dotnet` symlinks.
+Independent fleets on the same machine cannot see each other's rosters or worktrees, so heavy builds need a machine-wide budget rather than a per-fleet convention. When a project opts in by creating `seats/host-budget.json`, the seat machinery prepends `seats/bin` to worker, reviewer, and verifier PATHs for every harness (`pi`, `claude-code`, or `codex`) rather than making separate per-harness build rules. The shipped shims live in `seats/bin`: `host-build-shim` with `cargo` and `dotnet` symlinks.
 
 The shared lock is the fixed path `~/.cache/wheelhouse-build.lock`, held with blocking `flock` for the whole build/test invocation. The car fleets that motivated this used historical path `~/.cache/car-build.lock`; name that difference when checking parity. The re-entry variable is `WHEELHOUSE_BUILD_LOCK_HELD`; caps are `jobs=8` and `test_threads=4` for cargo/nextest, and `-maxcpucount:8` plus `MSBUILDDISABLENODEREUSE=1` for dotnet. Cross-fleet contract scans look under `~/.config/wheelhouse/host-build-shims`.
 
