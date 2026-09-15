@@ -97,6 +97,11 @@ if command -v node >/dev/null 2>&1; then
 elif command -v bun >/dev/null 2>&1; then
   json_runtime="bun"
 fi
+if [ -f "$roster_file" ] && [ -z "$json_runtime" ]; then
+  echo "MISSING node-or-bun"
+  echo "        seats/seats.json exists, so seat-env.sh needs node or bun to read the selected harness for this seat"
+  exit 1
+fi
 if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   harness="$($json_runtime -e '
     const fs = require("fs");
@@ -245,7 +250,7 @@ if [ "$harness" = "pi" ]; then
     note "wrote   $trust_file (pre-grants $root)"
   elif [ "$(cat "$trust_file")" = "$expected_trust" ]; then
     note "current $trust_file (already grants $root)"
-  elif grep -q ""$root"[[:space:]]*:[[:space:]]*true" "$trust_file"; then
+  elif grep -q "\"$root\"[[:space:]]*:[[:space:]]*true" "$trust_file"; then
     note "current $trust_file (grants $root among other entries; left as it is)"
   else
     die "$trust_file exists but does not grant $root.
@@ -271,17 +276,35 @@ auth_is_identity() {
 }
 
 login_needed=1
-if auth_is_identity; then
-  login_needed=0
-  note "exists  $auth_file — this seat is already logged in; not printing a"
-  note "        login command. This script never touches auth.json: it is the"
-  note "        seat's identity and overwriting it has no undo. To re-login"
-  note "        deliberately, remove it first:  rm \"$auth_file\""
-elif [ -e "$auth_file" ]; then
-  note "empty   $auth_file — pi auto-creates an empty {} auth.json on a first"
-  note "        headless run; that is not a login. The login command below"
-  note "        fills it in place."
-fi
+case "$harness" in
+  claude-code)
+    claude_auth_file="$seat_dir/.claude.json"
+    if [ -s "$claude_auth_file" ]; then
+      login_needed=0
+      note "exists  $claude_auth_file — this Claude Code seat is already logged in; not printing a login command"
+    fi
+    ;;
+  codex)
+    codex_auth_file="$seat_dir/auth.json"
+    if [ -s "$codex_auth_file" ]; then
+      login_needed=0
+      note "exists  $codex_auth_file — this Codex seat is already logged in; not printing a login command"
+    fi
+    ;;
+  *)
+    if auth_is_identity; then
+      login_needed=0
+      note "exists  $auth_file — this seat is already logged in; not printing a"
+      note "        login command. This script never touches auth.json: it is the"
+      note "        seat's identity and overwriting it has no undo. To re-login"
+      note "        deliberately, remove it first:  rm \"$auth_file\""
+    elif [ -e "$auth_file" ]; then
+      note "empty   $auth_file — pi auto-creates an empty {} auth.json on a first"
+      note "        headless run; that is not a login. The login command below"
+      note "        fills it in place."
+    fi
+    ;;
+esac
 
 # --- hand-back ---------------------------------------------------------------
 note ""

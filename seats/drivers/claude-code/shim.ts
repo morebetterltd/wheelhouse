@@ -1,10 +1,189 @@
 #!/usr/bin/env bun
-import {spawn} from "node:child_process"; import * as fs from "node:fs"; import * as path from "node:path";
-const get=(n:string)=>{const i=process.argv.indexOf(`--${n}`); if(i<0||!process.argv[i+1]) throw new Error(`missing --${n}`); return process.argv[i+1]}; const opt=(n:string)=>{const i=process.argv.indexOf(`--${n}`); return i>=0?process.argv[i+1]??null:null};
-const log=get('log'), rawLog=get('raw-log'), errLog=get('err-log'), accountDir=get('account-dir'), brief=get('brief'), model=get('model'), cwd=get('cwd'), actor=get('actor'); const resumeRef=opt('resume'); const defaultLogin=process.argv.includes('--default-login');
-fs.mkdirSync(path.dirname(log),{recursive:true}); fs.mkdirSync(accountDir,{recursive:true}); const env:Record<string,string>={...process.env,BEADS_ACTOR:actor} as any; if(!defaultLogin) env.CLAUDE_CONFIG_DIR=accountDir; else delete env.CLAUDE_CONFIG_DIR; delete env.ANTHROPIC_API_KEY; delete env.ANTHROPIC_AUTH_TOKEN; delete env.OPENAI_API_KEY;
-const args=['-p','--input-format','stream-json','--output-format','stream-json','--verbose','--model',model,'--append-system-prompt',brief,'--setting-sources','project','--permission-mode',opt('permission-mode')||'acceptEdits','--permission-prompts','none']; if(opt('allowed-tools')) args.push('--allowedTools',opt('allowed-tools')!); if(resumeRef) args.push('--resume',path.basename(resumeRef,'.jsonl'));
-const child=spawn('claude',args,{cwd,env,stdio:['pipe','pipe','pipe']}); let sessionId:string|null=resumeRef?path.basename(resumeRef,'.jsonl'):null; const slug=(s:string)=>s.replace(/[/.]/g,'-'); let sessionFile:string|null=sessionId?path.join(accountDir,'projects',slug(cwd),`${sessionId}.jsonl`):null; let resolvedModel=model, streaming=false, text='', buf='', pending:any[]=[]; const wr=(o:any)=>fs.appendFileSync(log,JSON.stringify({timestamp:Date.now(),...o})+'\n'); const resp=(id:any,success:boolean,data?:any,error?:string)=>wr({type:'response',id,success,...(success?{data}:{error})});
-child.stderr.on('data',c=>fs.appendFileSync(errLog,c)); child.stdout.on('data',c=>{buf+=c.toString('utf8'); let i; while((i=buf.indexOf('\n'))>=0){const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim())continue; fs.appendFileSync(rawLog,line+'\n'); let ev:any; try{ev=JSON.parse(line)}catch{continue} if(ev.type==='system'&&ev.subtype==='init'){sessionId=ev.session_id||sessionId; resolvedModel=ev.model||resolvedModel; if(sessionId){sessionFile=path.join(accountDir,'projects',slug(cwd),`${sessionId}.jsonl`); fs.mkdirSync(path.dirname(sessionFile),{recursive:true}); fs.appendFileSync(sessionFile,line+'\n')} if(streaming)wr({type:'agent_start'}); for(const id of pending.splice(0))resp(id,true,{delivered:true,sessionId,sessionFile,model:resolvedModel});} else if(ev.type==='assistant'){const parts=ev.message?.content??[]; const content=parts.map((p:any)=>({type:p.type||'text',text:p.text??''})); text=content.map((p:any)=>p.text).join('\n'); wr({type:'message_end',message:{role:'assistant',content}}); wr({type:'turn_end',message:{role:'assistant',content}});} else if(ev.type==='result'){streaming=false; const ok=ev.subtype==='success'&&!ev.is_error; wr({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:ev.result??text}],stopReason:ok?'stop':'error'}],...(ok?{}:{error:String(ev.result??ev.stop_reason??'claude error')})});}}});
-const send=(id:any,msg:string)=>{streaming=true; wr({type:'message_end',message:{role:'user',content:[{type:'text',text:msg}]}}); child.stdin.write(JSON.stringify({type:'user',message:{role:'user',content:[{type:'text',text:msg}]}})+'\n'); if(sessionId)resp(id,true,{delivered:true,sessionId,sessionFile,model:resolvedModel}); else pending.push(id)}; let ib=''; process.stdin.on('data',c=>{ib+=c.toString('utf8'); let i; while((i=ib.indexOf('\n'))>=0){const line=ib.slice(0,i); ib=ib.slice(i+1); if(!line.trim())continue; const cmd=JSON.parse(line); if(cmd.type==='get_state')resp(cmd.id,true,{isStreaming:streaming,sessionId,sessionFile,model:resolvedModel}); else if(cmd.type==='prompt'||cmd.type==='steer')send(cmd.id,cmd.message||''); else resp(cmd.id,false,undefined,`unknown command ${cmd.type}`)}});
-process.on('SIGTERM',()=>{try{child.stdin.end()}catch{}; setTimeout(()=>{try{child.kill('SIGTERM')}catch{};process.exit(143)},Number(process.env.WHEELHOUSE_CLAUDE_STOP_GRACE_MS||500))}); child.on('exit',(code,sig)=>process.exit(sig?143:(code??0)));
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+function requiredArg(name: string): string {
+  const i = process.argv.indexOf(`--${name}`);
+  if (i < 0 || !process.argv[i + 1]) throw new Error(`missing --${name}`);
+  return process.argv[i + 1];
+}
+function optionalArg(name: string): string | null {
+  const i = process.argv.indexOf(`--${name}`);
+  return i >= 0 ? process.argv[i + 1] ?? null : null;
+}
+function appendJson(file: string, obj: any): void {
+  fs.appendFileSync(file, JSON.stringify({ timestamp: Date.now(), ...obj }) + "\n");
+}
+function slugCwd(cwd: string): string { return cwd.replace(/[/.]/g, "-"); }
+
+const log = requiredArg("log");
+const rawLog = requiredArg("raw-log");
+const errLog = requiredArg("err-log");
+const accountDir = requiredArg("account-dir");
+const briefPath = requiredArg("brief");
+const briefText = fs.readFileSync(briefPath, "utf8");
+const model = requiredArg("model");
+const cwd = requiredArg("cwd");
+const actor = requiredArg("actor");
+const resumeRef = optionalArg("resume");
+const defaultLogin = process.argv.includes("--default-login");
+const permissionMode = optionalArg("permission-mode") || "acceptEdits";
+const allowedTools = optionalArg("allowed-tools");
+
+fs.mkdirSync(path.dirname(log), { recursive: true });
+fs.mkdirSync(accountDir, { recursive: true });
+
+const env: NodeJS.ProcessEnv = { ...process.env, BEADS_ACTOR: actor };
+if (defaultLogin) delete env.CLAUDE_CONFIG_DIR;
+else env.CLAUDE_CONFIG_DIR = accountDir;
+delete env.ANTHROPIC_API_KEY;
+delete env.ANTHROPIC_AUTH_TOKEN;
+delete env.OPENAI_API_KEY;
+
+const args = [
+  "-p",
+  "--input-format", "stream-json",
+  "--output-format", "stream-json",
+  "--verbose",
+  "--model", model,
+  "--append-system-prompt", briefText,
+  "--setting-sources", "project",
+  "--permission-mode", permissionMode,
+  "--permission-prompts", "none",
+];
+if (allowedTools) args.push("--allowedTools", allowedTools);
+if (resumeRef) args.push("--resume", path.basename(resumeRef, ".jsonl"));
+
+const child = spawn("claude", args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+
+let sessionId: string | null = resumeRef ? path.basename(resumeRef, ".jsonl") : null;
+let sessionFile: string | null = sessionId ? sessionFileFor(sessionId) : null;
+let resolvedModel = model;
+let streaming = false;
+let stdoutBuffer = "";
+let fifoBuffer = "";
+let pendingPromptResponses: any[] = [];
+let currentAssistantContent: any[] = [];
+let turnEndEmitted = false;
+
+function sessionFileFor(id: string): string {
+  const root = defaultLogin ? path.join(os.homedir(), ".claude") : accountDir;
+  return path.join(root, "projects", slugCwd(cwd), `${id}.jsonl`);
+}
+function sendResponse(id: any, success: boolean, data?: any, error?: string): void {
+  appendJson(log, { type: "response", id, success, ...(success ? { data } : { error }) });
+}
+function responseState(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { isStreaming: streaming, sessionId, sessionFile, model: resolvedModel, ...extra };
+}
+function contentFromParts(parts: any[]): any[] {
+  const content: any[] = [];
+  for (const part of parts) {
+    if (!part || typeof part !== "object") continue;
+    if (part.type === "text") content.push({ type: "text", text: part.text ?? "" });
+    else if (part.type === "thinking") content.push({ type: "thinking", thinking: part.thinking ?? part.text ?? "" });
+    else if (part.type === "tool_use") {
+      const args = part.input ?? {};
+      content.push({ type: "toolCall", id: part.id, name: part.name, args });
+      appendJson(log, { type: "tool_execution_start", toolCallId: part.id, toolName: part.name, args });
+    }
+  }
+  return content;
+}
+function emitToolResultEnd(parts: any[]): void {
+  for (const part of parts) {
+    if (part?.type !== "tool_result") continue;
+    appendJson(log, {
+      type: "tool_execution_end",
+      toolCallId: part.tool_use_id,
+      toolName: part.name ?? null,
+      result: { isError: Boolean(part.is_error), content: part.content ?? part.text ?? "" },
+    });
+  }
+}
+function emitTurnEnd(): void {
+  if (turnEndEmitted) return;
+  turnEndEmitted = true;
+  appendJson(log, { type: "turn_end", message: { role: "assistant", content: currentAssistantContent } });
+}
+
+child.stderr.on("data", (chunk) => fs.appendFileSync(errLog, chunk));
+child.stdout.on("data", (chunk) => {
+  stdoutBuffer += chunk.toString("utf8");
+  let i: number;
+  while ((i = stdoutBuffer.indexOf("\n")) >= 0) {
+    const line = stdoutBuffer.slice(0, i);
+    stdoutBuffer = stdoutBuffer.slice(i + 1);
+    if (!line.trim()) continue;
+    fs.appendFileSync(rawLog, line + "\n");
+    let ev: any;
+    try { ev = JSON.parse(line); } catch { continue; }
+
+    if (ev.type === "rate_limit_event") {
+      const info = ev.rate_limit_info ?? {};
+      if (info.status && info.status !== "allowed") {
+        streaming = false;
+        appendJson(log, { type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text: JSON.stringify(info) }], stopReason: "error" }], error: JSON.stringify(info) });
+      }
+      continue;
+    }
+    if (ev.type === "system" && ev.subtype === "init") {
+      sessionId = ev.session_id || sessionId;
+      resolvedModel = ev.model || resolvedModel;
+      if (sessionId) sessionFile = sessionFileFor(sessionId);
+      if (streaming) appendJson(log, { type: "agent_start" });
+      for (const id of pendingPromptResponses.splice(0)) sendResponse(id, true, responseState({ delivered: true }));
+      continue;
+    }
+    if (ev.type === "assistant") {
+      currentAssistantContent = contentFromParts(ev.message?.content ?? ev.content ?? []);
+      appendJson(log, { type: "message_end", message: { role: "assistant", content: currentAssistantContent } });
+      continue;
+    }
+    if (ev.type === "user") {
+      emitToolResultEnd(ev.message?.content ?? ev.content ?? []);
+      continue;
+    }
+    if (ev.type === "result") {
+      streaming = false;
+      emitTurnEnd();
+      const ok = ev.subtype === "success" && !ev.is_error;
+      const stopReason = ok ? "stop" : ev.subtype === "error_during_execution" ? "aborted" : "error";
+      const finalText = ev.result ?? currentAssistantContent.map((p) => p.text || p.thinking || "").filter(Boolean).join("\n") ?? "";
+      appendJson(log, { type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text: finalText }], stopReason }], ...(ok ? {} : { error: finalText || ev.stop_reason || ev.subtype || "claude error" }) });
+    }
+  }
+});
+
+function sendUser(id: any, message: string): void {
+  streaming = true;
+  turnEndEmitted = false;
+  currentAssistantContent = [];
+  appendJson(log, { type: "message_end", message: { role: "user", content: [{ type: "text", text: message }] } });
+  child.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: message }] } }) + "\n");
+  if (sessionId) sendResponse(id, true, responseState({ delivered: true }));
+  else pendingPromptResponses.push(id);
+}
+
+process.stdin.on("data", (chunk) => {
+  fifoBuffer += chunk.toString("utf8");
+  let i: number;
+  while ((i = fifoBuffer.indexOf("\n")) >= 0) {
+    const line = fifoBuffer.slice(0, i);
+    fifoBuffer = fifoBuffer.slice(i + 1);
+    if (!line.trim()) continue;
+    let cmd: any;
+    try { cmd = JSON.parse(line); } catch (e: any) { sendResponse(null, false, undefined, String(e)); continue; }
+    if (cmd.type === "get_state") sendResponse(cmd.id, true, responseState());
+    else if (cmd.type === "prompt" || cmd.type === "steer") sendUser(cmd.id, cmd.message || "");
+    else sendResponse(cmd.id, false, undefined, `unknown command ${cmd.type}`);
+  }
+});
+
+process.on("SIGTERM", () => {
+  try { child.stdin.end(); } catch {}
+  setTimeout(() => { try { child.kill("SIGTERM"); } catch {} process.exit(143); }, Number(process.env.WHEELHOUSE_CLAUDE_STOP_GRACE_MS || 500));
+});
+child.on("exit", (code, sig) => process.exit(sig ? 143 : (code ?? 0)));
