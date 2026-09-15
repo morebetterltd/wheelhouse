@@ -1,0 +1,9 @@
+adapter status rc=0
+lsof calls=12
+   6 -Fn -p 33953
+   1 -t [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7u0b/.wheelhouse-runs/wheelhouse-project-7u0b/lsof-count/proj/seats/run/seat-1.stdin
+   1 -t [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7u0b/.wheelhouse-runs/wheelhouse-project-7u0b/lsof-count/proj/seats/run/seat-2.stdin
+   1 -t [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7u0b/.wheelhouse-runs/wheelhouse-project-7u0b/lsof-count/proj/seats/run/seat-3.stdin
+   1 -t [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7u0b/.wheelhouse-runs/wheelhouse-project-7u0b/lsof-count/proj/seats/run/seat-4.stdin
+   1 -t [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7u0b/.wheelhouse-runs/wheelhouse-project-7u0b/lsof-count/proj/seats/run/seat-5.stdin
+   1 -t [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7u0b/.wheelhouse-runs/wheelhouse-project-7u0b/lsof-count/proj/seats/run/seat-6.stdin
