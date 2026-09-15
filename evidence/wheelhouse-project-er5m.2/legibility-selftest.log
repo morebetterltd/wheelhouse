@@ -1,2 +1,0 @@
-$ timeout 300 seats/legibility.selftest.sh
-rc=124

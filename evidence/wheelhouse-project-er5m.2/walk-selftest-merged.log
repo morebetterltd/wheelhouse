@@ -1,4 +1,7 @@
-$ seats/walk.selftest.sh
+$ /usr/bin/time -p seats/walk.selftest.sh
+real 15.56
+user 1.77
+sys 2.22
 rc=0
 
 walk verdict parsing and transcript retention
@@ -83,7 +86,7 @@ GUI window-list guard refuses an obscured target before spawn
 stdin-reading verifier receives EOF immediately
   ok    stdin-reading verifier exits 0
   ok    stdin-reading verifier walk completes with a verdict
-  ok    stdin-reading verifier completed under 5s (363ms)
+  ok    stdin-reading verifier completed under 5s (270ms)
 
 timeout names phase and honors per-walk budget env
   ok    timeout exits as COULD-NOT-WALK (3)

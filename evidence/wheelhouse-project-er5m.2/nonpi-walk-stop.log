@@ -1,3 +1,0 @@
-$ PATH=$PWD/.wheelhouse-runs/wheelhouse-project-er5m.2/nonpi-walk/bin:$PATH bun seats/walk.ts claim --surface product:http://example.invalid --out evidence/wheelhouse-project-er5m.2/walk-out --verifier verifier
-REFUSED: seat "verifier" has harness="claude-code" in seats/seats.json; walk.ts verifier walk is not implemented for that harness yet
-rc=5

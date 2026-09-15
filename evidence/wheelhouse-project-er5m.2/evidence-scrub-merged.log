@@ -1,0 +1,19 @@
+$ scrubbed merged-tip evidence with seats/evidence-scrub.sh
+evidence/wheelhouse-project-er5m.2/adapter-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/adapter-status-smoke.log
+evidence/wheelhouse-project-er5m.2/concurrency-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/evidence-scrub-merged.log
+evidence/wheelhouse-project-er5m.2/evidence-scrub.log
+evidence/wheelhouse-project-er5m.2/isolation-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/legibility-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/nonpi-adapter-spawn-stop-merged.log
+evidence/wheelhouse-project-er5m.2/nonpi-verify-stop-merged.log
+evidence/wheelhouse-project-er5m.2/nonpi-walk-stop-merged.log
+evidence/wheelhouse-project-er5m.2/pid-ownership-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/recover-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/reset-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/stop-all-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/verify-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/walk-out-merged/image-budget.json
+evidence/wheelhouse-project-er5m.2/walk-selftest-merged.log
+rc=0

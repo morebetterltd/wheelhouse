@@ -1,4 +1,4 @@
-$ WHEELHOUSE_SKIP_REAL_PI=1 seats/verify.selftest.sh
+$ WHEELHOUSE_SKIP_REAL_PI=1 /usr/bin/time -p seats/verify.selftest.sh
 
 installed layout — wheelhouse/crew brief is preferred without contracts/
   ok    installed layout: APPROVE exits 0 with no contracts/ directory
@@ -118,4 +118,7 @@ multi-repo umbrella layout — --repo selects the product repository
   SKIP  real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1
 
 verify.ts works on this machine.
+real 53.90
+user 4.76
+sys 4.10
 rc=0

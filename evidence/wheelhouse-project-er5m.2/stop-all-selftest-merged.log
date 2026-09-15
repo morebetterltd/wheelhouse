@@ -1,4 +1,7 @@
-$ seats/stop-all.selftest.sh
+$ /usr/bin/time -p seats/stop-all.selftest.sh
+real 9.61
+user 1.39
+sys 1.36
 rc=0
 
 1. all-idle stop-all stops every running rostered seat

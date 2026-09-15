@@ -1,4 +1,4 @@
-$ seats/adapter.selftest.sh
+$ /usr/bin/time -p seats/adapter.selftest.sh
 
 installed layout — wheelhouse/fleet brief is preferred without contracts/
   ok    installed layout: spawn exits 0 with no contracts/ directory
@@ -155,6 +155,9 @@ capacity events — in-turn quota errors park the seat and a later success clear
   ok    status reports a duplicate pi process as ORPHAN with recorded pid, match reason, and remedy
   ok    slow get_state steer queues prompt with streamingBehavior=steer instead of losing text
 
+6d. status cost — six recorded seats with no orphan candidates returns promptly
+  ok    status cost: 6 fixture seats and no candidates completes under 2s (239ms)
+
 7. host build budget — opt-in PATH shim serializes cargo and allows re-entrant children
   ok    host budget: concurrent spawn/probe both complete through shim
   ok    host budget: second cargo build starts after first cargo build exits
@@ -169,20 +172,23 @@ capacity events — in-turn quota errors park the seat and a later success clear
   ok    canary: an adapter that records no state is caught
   ok    canary: an adapter that resumes without the session is caught
 
-8. real pi — one smoke leg, spawn/dispatch/agent_end/resume/grow
-  ok    real: spawn exits 0 (seat worker-1: pid 92100, session 01a0a4c6-19b7-7245-9762-e8e32004b1b0
-  events -> [tmpdir]wheelhouse-adapter-selftest.81355.CNIpF4/realproj/seats/logs/worker-1.jsonl)
+9. real pi — one smoke leg, spawn/dispatch/agent_end/resume/grow
+  ok    real: spawn exits 0 (seat worker-1: pid 43790, session 01a0a508-7cca-7937-9e2f-60b6ec5f3be0
+  events -> [tmpdir]wheelhouse-adapter-selftest.56145.CiCVTK/realproj/seats/logs/worker-1.jsonl)
   ok    real: spawn state.json cwd equals process live cwd
   ok    real: dispatch accepted
   ok    real: agent_end captured
   ok    real: cross-bead dispatch state.json cwd equals process live cwd
   ok    real: stop exits 0
-  ok    real: resume exits 0 (seat worker-1: pid 99499, session 01a0a4c6-241a-7830-87ca-f5f23c38536a
-  events -> [tmpdir]wheelhouse-adapter-selftest.81355.CNIpF4/realproj/seats/logs/worker-1.jsonl)
+  ok    real: resume exits 0 (seat worker-1: pid 49810, session 01a0a508-8690-738c-8287-6f51e42fb0d2
+  events -> [tmpdir]wheelhouse-adapter-selftest.56145.CiCVTK/realproj/seats/logs/worker-1.jsonl)
   ok    real: resume state.json cwd equals process live cwd
   ok    real: post-resume dispatch reached agent_end
   ok    real: the SAME session file grew across resume (5 -> 7 lines)
   ok    real: no auth material in state.json or the logs before fixture deletion
 
 adapter.ts works on this machine.
+real 82.98
+user 11.57
+sys 12.12
 rc=0

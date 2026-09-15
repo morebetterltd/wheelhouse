@@ -1,4 +1,7 @@
-$ seats/reset.selftest.sh
+$ /usr/bin/time -p seats/reset.selftest.sh
+real 16.25
+user 1.42
+sys 1.55
 rc=0
 
 1. reset refuses a seat mid-turn

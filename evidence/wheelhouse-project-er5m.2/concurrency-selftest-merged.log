@@ -1,5 +1,4 @@
-$ seats/concurrency.selftest.sh
-swept: removed stale fixture [tmpdir]wheelhouse-concurrency-selftest.92974.pwUKK1
+$ /usr/bin/time -p seats/concurrency.selftest.sh
 
 1. two seats, one roster — spawn, overlap, isolation, clean stop
   ok    hermetic: worker-a spawns
@@ -7,7 +6,7 @@ swept: removed stale fixture [tmpdir]wheelhouse-concurrency-selftest.92974.pwUKK
   ok    hermetic: each seat has its OWN FIFO (worker-a.stdin, worker-b.stdin)
   ok    hermetic: bead-a dispatched to worker-a
   ok    hermetic: bead-b dispatched to worker-b (before bead-a's turn ended)
-  ok    hermetic: overlapping RUNNING — both state.json pids alive at once (73220, 74608)
+  ok    hermetic: overlapping RUNNING — both state.json pids alive at once (59088, 60705)
   ok    hermetic: both turns in flight at the same moment (agent_start seen, no agent_end yet, both logs)
   ok    hermetic: status shows both seats RUNNING
   ok    hermetic: worker-a's turn finished
@@ -46,7 +45,7 @@ swept: removed stale fixture [tmpdir]wheelhouse-concurrency-selftest.92974.pwUKK
 
 2. capacity visibility — a quota-shaped failure is stamped and rendered
   ok    quota-shaped dispatch fails loudly
-  ok    state.json records lastCapacityEvent with the failure detail: {"at":"2026-09-15T11:39:29.950Z","detail":"429 rate limit exceeded — usage limit reached for this account"}
+  ok    state.json records lastCapacityEvent with the failure detail: {"at":"2026-09-15T12:27:08.602Z","detail":"429 rate limit exceeded — usage limit reached for this account"}
   ok    adapter status surfaces the capacity event
   ok    floor --once renders the AMBER PARKED/QUOTA line with the re-probe command
   ok    floor STATUS cell shows per-account capacity state
@@ -57,10 +56,10 @@ swept: removed stale fixture [tmpdir]wheelhouse-concurrency-selftest.92974.pwUKK
   ok    canary: an adapter with the capacity stamp cut is caught (no lastCapacityEvent lands)
 
 4. real pi — two real seats, concurrent dispatch, disjoint logs
-  ok    real: worker-a spawns (seat worker-a: pid 69232, session 01a0a4de-218d-7686-8ee2-ad6ccb8d09ac
-  events -> [tmpdir]wheelhouse-concurrency-selftest.69873.Q8iiGl/realproj/seats/logs/worker-a.jsonl)
-  ok    real: worker-b spawns (seat worker-b: pid 70850, session 01a0a4de-2665-7ddb-aa50-2759519a3da7
-  events -> [tmpdir]wheelhouse-concurrency-selftest.69873.Q8iiGl/realproj/seats/logs/worker-b.jsonl)
+  ok    real: worker-a spawns (seat worker-a: pid 52951, session 01a0a509-bbb3-7b7b-8d2c-9f6805ba7659
+  events -> [tmpdir]wheelhouse-concurrency-selftest.56129.V32ng6/realproj/seats/logs/worker-a.jsonl)
+  ok    real: worker-b spawns (seat worker-b: pid 53901, session 01a0a509-bf2e-7f29-844a-c4b9acdc1c82
+  events -> [tmpdir]wheelhouse-concurrency-selftest.56129.V32ng6/realproj/seats/logs/worker-b.jsonl)
   ok    real: bead real-a dispatched
   ok    real: bead real-b dispatched (worker-a's turn already ended at that moment: no)
   ok    real: worker-a agent_end captured
@@ -70,4 +69,7 @@ swept: removed stale fixture [tmpdir]wheelhouse-concurrency-selftest.92974.pwUKK
   ok    real: worker-b stops cleanly
 
 two-seat concurrency and capacity visibility work on this machine.
+real 78.74
+user 6.96
+sys 6.37
 rc=0

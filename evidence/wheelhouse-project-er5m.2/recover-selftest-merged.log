@@ -1,9 +1,12 @@
-$ seats/recover.selftest.sh
+$ /usr/bin/time -p seats/recover.selftest.sh
+real 14.64
+user 1.96
+sys 6.14
 rc=0
 
 1. SIGKILL mid-turn — DEAD, bead named, printed resume re-attaches the same session
   ok    stub mimics the title rewrite: the live seat's ps line is bare 'pi', no argv
-  ok    seat pid 98453 force-killed mid-turn
+  ok    seat pid 79542 force-killed mid-turn
   ok    recover exits 0
   ok    killed seat classified DEAD
   ok    the unfinished bead is named on the seat line
@@ -38,7 +41,7 @@ rc=0
   ok    no bd calls (fake bd on PATH logged nothing)
 
 6. real binary — the premise probe: pi's ps title is bare, its FIFO is not hidden
-  ok    real pi started login-free in the RPC shape (pid 11788)
+  ok    real pi started login-free in the RPC shape (pid 92429)
   ok    real pi's ps line is exactly 'pi' — NO argv: any command-line identity test is blind here
   ok    real pi holds its stdin FIFO where lsof sees it — the identity mechanism recover relies on
 

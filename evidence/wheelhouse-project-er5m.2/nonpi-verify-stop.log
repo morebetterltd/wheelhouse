@@ -1,3 +1,0 @@
-$ PATH=$PWD/.wheelhouse-runs/wheelhouse-project-er5m.2/nonpi-verify/bin:$PATH bun seats/verify.ts wheelhouse-project-er5m.2 fleet/wheelhouse-project-er5m.2 author verifier --repo .
-STOP: seat "verifier" has harness="codex" in seats/seats.json; verify.ts one-shot verifier is not implemented for that harness yet
-rc=1

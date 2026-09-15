@@ -1,4 +1,7 @@
-$ seats/isolation.selftest.sh
+$ /usr/bin/time -p seats/isolation.selftest.sh
+real 9.88
+user 1.64
+sys 1.57
 rc=0
 
 0. provisioning — the REAL seat-env.sh builds both seats in the temp HOME
