@@ -138,6 +138,8 @@ If the merge changed a contract half that is injected as a standing seat's role 
 
 If a change touches `seats/cockpit.sh`, re-run both cockpit surfaces before review/integration: `bash seats/cockpit.selftest.sh` and `WHEELHOUSE_SKIP_REAL_PI=1 bash seats/floor.selftest.sh`. The floor selftest drives cockpit pane creation and repair, so cockpit-only evidence is incomplete for that file.
 
+If a change touches `seats/adapter.ts` status rendering, liveness checks, orphan detection, or process/FIFO ownership, re-run `bash seats/legibility.selftest.sh` before review/integration. The legibility selftest drives the multi-seat failure-state fixture through `adapter.ts status` and `floor.ts --once`, so adapter-only evidence is incomplete for that path.
+
 Push, open and merge PRs, and run automated deploys per your project's recorded authority, in `wheelhouse/INTEGRATOR.md`'s project section. Before acting on a reviewer verdict file, run `seats/push-authority-lint.sh` so a stale `PUSH: ... principal-only` line cannot contradict a recorded project push grant unnoticed. The shipped default is all the way; an empty section means the install failed to record its authority, not that a generated conservative agent profile owns the answer. Ask once with a recommendation and default, write the answer, then proceed.
 
 ### 7. Close
