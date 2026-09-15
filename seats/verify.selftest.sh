@@ -42,8 +42,10 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
 BRIEFS="$(cd "$(dirname "$VERIFY")" && pwd)/briefs.ts"
+HARNESS="$(cd "$(dirname "$VERIFY")" && pwd)/harness.ts"
 HOST_BUDGET_TS="$(cd "$(dirname "$VERIFY")" && pwd)/host-budget.ts"
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
+[ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run verify.ts" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
@@ -167,6 +169,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$src" "$proj/seats/verify.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
+  cp "$HARNESS" "$proj/seats/harness.ts"
   cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf '# Crew: Reviewer\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/REVIEWER.md"
@@ -213,6 +216,7 @@ build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.
   mkdir -p "$umb/seats" "$umb/contracts" "$product"
   cp "$src" "$umb/seats/verify.ts"
   cp "$BRIEFS" "$umb/seats/briefs.ts"
+  cp "$HARNESS" "$umb/seats/harness.ts"
   cp "$HOST_BUDGET_TS" "$umb/seats/host-budget.ts"
   printf '# Crew: Reviewer\n\numbrella reviewer brief.\n' > "$umb/contracts/REVIEWER.md"
   cat > "$umb/seats/seats.json" <<EOF
