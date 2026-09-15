@@ -1,0 +1,75 @@
+$ wheelhouse/crew/bench.sh --mode interview --ref HEAD $MAIN_WT .wheelhouse-runs/wheelhouse-project-er5m.5/main-bench2
+bench: wheelhouse cold install + upgrade
+artifact: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-er5m.5/main-660287a-2 at commit 660287ad4b2d4084034d081c8916e1983607abea (ref: HEAD)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases: install=0 upgrade=0 interview=1
+evidence: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-er5m.5/main-bench2
+Note: switching to '660287ad4b2d4084034d081c8916e1983607abea'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+Note: switching to '660287ad4b2d4084034d081c8916e1983607abea'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+
+=== interview ===
+interview: FAIL (exit 1) — see [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-er5m.5/main-bench2/interview; last lines:
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+artifact=660287ad4b2d4084034d081c8916e1983607abea
+interviewer=openai-codex/gpt-5.5
+clause_7_caveat=PASS benches conduct mechanics, not interview quality; FAIL needs capture adjudication. Model-option provenance is keyed to the provider settled in seats.json when present, so downstream PROVIDER_* divergence is not double-counted as expected-provider provenance.
+MEASUREMENT fixture_replay_questions=13
+MEASUREMENT fixture_replay_misses=0
+MEASUREMENT askuserquestion_rounds=23
+MEASUREMENT q8_answer_rounds=15
+MEASUREMENT readback_present=true
+FAIL FREE_TEXT_MISS: 3 AskUserQuestion answer(s) used free text
+
+wheelhouse cold-install + upgrade bench verdict
+date: 2026-09-15T14:20:18Z
+artifact: template tree at commit 660287ad4b2d4084034d081c8916e1983607abea (repo: .wheelhouse-runs/wheelhouse-project-er5m.5/main-660287a-2)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases run: install=0 upgrade=0 (bash and zsh each) interview=1 (FAIL)
+result: FAIL
+evidence: install-{bash,zsh}.log, upgrade-{bash,zsh}.log and/or interview/ in this directory
+
+This verdict cannot distinguish install-phase onboarding mechanics from
+interview quality. The interview mode benches Q7/Q8 conduct mechanics
+on one transcript; FAIL needs retained-capture adjudication and cannot
+distinguish a prose defect from interviewer-model weakness. It also
+cannot distinguish a current specimen-leak list from a stale one.
+The upgrade phase additionally cannot say that an
+install produced by the baseline commit's own BOOTSTRAP would upgrade
+the same way — its fixture has the SHAPE of that install, not its
+history — nor that the v1→Pi migration's operator half (the roster
+interview, per-seat logins, retiring the old roots) produces a working
+fleet; it does not exercise UPGRADE.md step 0's reconstruction of a
+missing .template-source. See the header of bench.sh.
+rc=1

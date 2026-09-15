@@ -26,9 +26,9 @@ graph.
 
 ## 2. Seats
 
-Each seat is a persistent `pi` process the commander owns — provisioned once, then started with the adapter. Nothing here is a terminal you keep open, and there is nothing to paste into a seat: the role brief is injected at spawn. `wheelhouse/fleet/SEATS.md` is the contract; `seats/README.md` documents every command below.
+Each seat is a persistent harness process the commander owns — provisioned once, then started with the adapter. The roster chooses the harness per seat (`pi`, `claude-code`, or `codex`); the same role brief is injected at spawn. Nothing here is a terminal you keep open, and there is nothing to paste into a seat. `wheelhouse/fleet/SEATS.md` is the contract; `seats/README.md` documents every command below.
 
-Provision each roster seat once (safe to re-run; it changes nothing for a seat that exists). The script creates the seat's agent directory under `$HOME/.pi-seats-ebb/`, pre-grants trust for the project root, and prints the one-time login for the account that seat should BE — run that login before the first spawn:
+Provision each roster seat once (safe to re-run; it changes nothing for a seat that exists). The script creates the seat's agent directory under the historical `$HOME/.pi-seats-ebb/` root and prints the one-time login for the harness and account that seat should BE — for example `PI_CODING_AGENT_DIR=... pi`, `CLAUDE_CONFIG_DIR=... claude auth login --claudeai`, or `CODEX_HOME=... codex login`, matching the roster. Run that login before the first spawn:
 
 ```bash
 cd ~/code/ebb

@@ -1,0 +1,43 @@
+=== worker ===
+wrote   [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/.project (records [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/proj)
+dir     [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/worker
+skip    trust.json (harness=claude-code does not use Pi trust.json)
+
+seat ready: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/worker
+
+point a process at this seat:
+  export CLAUDE_CONFIG_DIR="[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/worker"
+
+one-time Claude subscription login (default for claude-code seats):
+  CLAUDE_CONFIG_DIR="[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/worker" claude auth login --claudeai
+rc=0
+=== coder ===
+current [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/.project (already records [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/proj)
+dir     [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/coder
+skip    trust.json (harness=codex does not use Pi trust.json)
+
+seat ready: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/coder
+
+point a process at this seat:
+  export CODEX_HOME="[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/coder"
+
+one-time Codex login:
+  CODEX_HOME="[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/coder" codex login
+  # or, for headless setup: CODEX_HOME="[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/coder" codex login --device-auth
+rc=0
+=== pi ===
+OK      pi — [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/bin/pi
+current [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/.project (already records [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/proj)
+dir     [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/pi
+wrote   [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/pi/trust.json (pre-grants [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/proj)
+
+seat ready: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/pi
+
+point a process at this seat:
+  export PI_CODING_AGENT_DIR="[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/pi"
+
+env credential route (writes no auth.json): export the provider's env var in the shell that spawns the seat.
+  Do not write an auth.json stub for env; pi checks auth.json before the env var, so a provider entry there shadows the exported key.
+rc=0
+trust files:
+.wheelhouse-runs/wheelhouse-project-er5m.5/seat-env-harness/home/.pi-seats-x/pi/trust.json
