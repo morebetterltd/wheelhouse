@@ -332,6 +332,17 @@ run() { OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PR
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
+phase "0a. launch paths validate the whole roster before choosing a seat"
+BAD_ROSTER_PROJ="$FIX/bad-roster-proj"
+build_proj "$BAD_ROSTER_PROJ" badroster
+RUN_PROJ="$BAD_ROSTER_PROJ"
+env HOME="$HOME_FIX" PROJ="$BAD_ROSTER_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["bad-peer"]={role:"worker", provider:"anthropic", model:"stub", account:{dir:"~/.pi-seats-badroster/bad-peer", authRoute:"bogus"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+run spawn worker-1
+if [ $RC -eq 1 ] && says 'seat "bad-peer" has an invalid account.authRoute "bogus"'; then
+  pass "spawn refuses before launch when a peer roster entry has a bad authRoute"
+else fail "spawn did not preserve whole-roster validation for launch paths (rc=$RC): $OUT"; fi
+RUN_PROJ="$PROJ"
+
 STATE="$PROJ/seats/state.json"
 LOG="$PROJ/seats/logs/worker-1.jsonl"
 ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
