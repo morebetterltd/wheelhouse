@@ -29,8 +29,10 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ADAPTER="${1:-$HERE/adapter.ts}"
 BRIEFS="$(cd "$(dirname "$ADAPTER")" && pwd)/briefs.ts"
+HOST_BUDGET_TS="$(cd "$(dirname "$ADAPTER")" && pwd)/host-budget.ts"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
+[ -f "$HOST_BUDGET_TS" ] || { echo "selftest: not found: $HOST_BUDGET_TS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run adapter.ts" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
 
@@ -172,6 +174,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
+  cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
 {

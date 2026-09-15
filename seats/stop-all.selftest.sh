@@ -9,8 +9,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ADAPTER="${1:-$HERE/adapter.ts}"
 BRIEFS="$(cd "$(dirname "$ADAPTER")" && pwd)/briefs.ts"
+HOST_BUDGET_TS="$(cd "$(dirname "$ADAPTER")" && pwd)/host-budget.ts"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
+[ -f "$HOST_BUDGET_TS" ] || { echo "selftest: not found: $HOST_BUDGET_TS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required" >&2; exit 2; }
 SCRUB="$HERE/evidence-scrub.sh"
@@ -60,7 +62,7 @@ chmod +x "$BIN/pi"
 build_proj(){
   local proj="$1" ns="$2"
   mkdir -p "$proj/seats" "$proj/contracts" "$proj/.wheelhouse-worktrees/bead-x"
-  cp "$ADAPTER" "$proj/seats/adapter.ts"; cp "$BRIEFS" "$proj/seats/briefs.ts"
+  cp "$ADAPTER" "$proj/seats/adapter.ts"; cp "$BRIEFS" "$proj/seats/briefs.ts"; cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
 {
