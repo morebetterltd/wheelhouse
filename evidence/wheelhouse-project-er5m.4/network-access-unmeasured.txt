@@ -1,0 +1,1 @@
+network_access=true sandbox reachability was not re-measured in this rework. The committed real default-route smoke proves Codex app-server spawn/dispatch/stop/resume/dispatch, but not outbound network from inside the Codex sandbox.

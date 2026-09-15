@@ -1,0 +1,20 @@
+spawn:
+seat codex-default (account label: default-smoke): pid 14361, session 01a0a70e-bfc7-7743-abd9-1bb41b85fb10
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.4/.wheelhouse-runs/wheelhouse-project-er5m.4/real-default-rework2/proj/seats/logs/codex-default.jsonl
+dispatch1:
+dispatched bead-a to codex-default; watch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.4/.wheelhouse-runs/wheelhouse-project-er5m.4/real-default-rework2/proj/seats/logs/codex-default.jsonl
+{"timestamp":1789509167245,"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"CODEX_BRIEF_TOKEN_7f1a"}]}}
+{"timestamp":1789509167315,"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"CODEX_BRIEF_TOKEN_7f1a"}]}}
+{"timestamp":1789509167315,"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"CODEX_BRIEF_TOKEN_7f1a"}],"stopReason":"stop"}]}
+stop:
+seat codex-default stopped; session 01a0a70e-bfc7-7743-abd9-1bb41b85fb10 kept for resume
+resume:
+seat codex-default (account label: default-smoke): pid 35595, session 01a0a70e-bfc7-7743-abd9-1bb41b85fb10
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.4/.wheelhouse-runs/wheelhouse-project-er5m.4/real-default-rework2/proj/seats/logs/codex-default.jsonl
+dispatch2:
+seat codex-default stopped; session 01a0a70e-bfc7-7743-abd9-1bb41b85fb10 kept for resume
+seat codex-default (account label: default-smoke): pid 47416, session 01a0a70e-bfc7-7743-abd9-1bb41b85fb10
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.4/.wheelhouse-runs/wheelhouse-project-er5m.4/real-default-rework2/proj/seats/logs/codex-default.jsonl
+dispatched bead-b to codex-default; watch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.4/.wheelhouse-runs/wheelhouse-project-er5m.4/real-default-rework2/proj/seats/logs/codex-default.jsonl
+{"timestamp":1789509196309,"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"CODEX_RESUME_OK"}]}}
+rc=0
