@@ -114,10 +114,10 @@ phase "2b. non-pi seats report and do not abort later stops"
 PROJ3="$FIX/proj3"; build_proj "$PROJ3" gamma; RUN_PROJ="$PROJ3"
 run spawn worker-a; [ $RC -eq 0 ] || fail "non-pi setup spawn a failed: $OUT"
 run spawn worker-b; [ $RC -eq 0 ] || fail "non-pi setup spawn b failed: $OUT"
-env HOME="$HOME_FIX" PROJ="$PROJ3" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["worker-a"].harness="claude-code"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+env HOME="$HOME_FIX" PROJ="$PROJ3" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["worker-a"].harness="codex"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 PID_NONPI="$(state_get worker-a pid)"
 run stop-all
-if [ $RC -eq 0 ] && says 'worker-a: REPORT seat "worker-a" has harness="claude-code"' && says "worker-b stopped"; then pass "stop-all reports non-pi seat and continues to later pi seats"; else fail "stop-all did not report-and-continue for non-pi seat (rc=$RC): $OUT"; fi
+if [ $RC -eq 0 ] && says 'worker-a: REPORT seat "worker-a" has harness="codex"' && says "worker-b stopped"; then pass "stop-all reports unimplemented harness seat and continues to later pi seats"; else fail "stop-all did not report-and-continue for unimplemented harness seat (rc=$RC): $OUT"; fi
 if [ "$(state_get worker-a pid)" = "$PID_NONPI" ] && kill -0 "$PID_NONPI" 2>/dev/null; then pass "non-pi seat was left running for human handling"; else fail "non-pi seat was stopped or state changed"; fi
 kill "$PID_NONPI" 2>/dev/null || true
 run stop-all >/dev/null

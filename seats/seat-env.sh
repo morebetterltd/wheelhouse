@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# seat-env.sh — provision one Pi seat: an isolated per-account agent directory.
+# seat-env.sh — provision one seat: an isolated per-account harness directory.
 #
 # A seat is an account, and Pi keeps an account's identity in auth.json inside
 # its agent directory (~/.pi/agent by default). PI_CODING_AGENT_DIR relocates
@@ -48,19 +48,6 @@ set -u
 die()  { printf 'STOP: %s\n' "$*" >&2; exit 1; }
 note() { printf '%s\n' "$*"; }
 
-# --- pi must exist before anything writes -----------------------------------
-# Same shape as BOOTSTRAP.md's preflight: a MISSING line is a STOP, and it
-# names why the tool is needed and how to get it, because a bare
-# `command not found` halfway through leaves a half-made seat.
-if command -v pi >/dev/null 2>&1; then
-  note "OK      pi — $(command -v pi)"
-else
-  echo "MISSING pi"
-  echo "        seats run on the Pi coding agent; without it there is no login to run"
-  echo "        install it: npm install -g @earendil-works/pi-coding-agent   # or see https://github.com/earendil-works/pi"
-  exit 1
-fi
-
 # --- arguments ---------------------------------------------------------------
 ns="${1:-}"
 seat="${2:-}"
@@ -98,6 +85,7 @@ auth_file="$seat_dir/auth.json"
 roster_file="$root/seats/seats.json"
 account_label=""
 auth_route=""
+harness="pi"
 
 # Optional roster hint for humans. Missing seats.json, missing JS runtime,
 # absent account.label, or a non-string label all mean "no label to print";
@@ -109,6 +97,47 @@ if command -v node >/dev/null 2>&1; then
 elif command -v bun >/dev/null 2>&1; then
   json_runtime="bun"
 fi
+if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
+  harness="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const h = j.seats?.[seat]?.harness ?? "pi";
+      if (["pi", "claude-code", "codex"].includes(h)) process.stdout.write(h);
+      else process.stdout.write(`__INVALID_HARNESS__:${JSON.stringify(h)}`);
+    } catch {}
+  ' "$roster_file" "$seat")"
+  case "$harness" in
+    pi|claude-code|codex) : ;;
+    __INVALID_HARNESS__:*) die "seat \"$seat\" has an invalid harness \"${harness#__INVALID_HARNESS__:}\" in $roster_file — must be one of pi, claude-code, codex (or omitted for pi)" ;;
+    *) die "seat \"$seat\" has an invalid harness \"$harness\" in $roster_file — must be one of pi, claude-code, codex (or omitted for pi)" ;;
+  esac
+fi
+
+if [ "$harness" = "pi" ]; then
+  if command -v pi >/dev/null 2>&1; then
+    note "OK      pi — $(command -v pi)"
+  else
+    echo "MISSING pi"
+    echo "        this rostered seat uses harness=pi; without pi there is no login to run"
+    echo "        install it: npm install -g @earendil-works/pi-coding-agent   # or see https://github.com/earendil-works/pi"
+    exit 1
+  fi
+fi
+if [ "$harness" = "claude-code" ] && ! command -v claude >/dev/null 2>&1; then
+  echo "MISSING claude"
+  echo "        this rostered seat uses harness=claude-code; without Claude Code there is no login/probe to run"
+  echo "        install it: npm install -g @anthropic-ai/claude-code"
+  exit 1
+fi
+if [ "$harness" = "codex" ] && ! command -v codex >/dev/null 2>&1; then
+  echo "MISSING codex"
+  echo "        this rostered seat uses harness=codex; without Codex there is no login/probe to run"
+  echo "        install it: npm install -g @openai/codex"
+  exit 1
+fi
+
 if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   account_label="$($json_runtime -e '
     const fs = require("fs");
@@ -141,9 +170,9 @@ if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   ' "$roster_file" "$seat")"
   if [ -n "$auth_route" ]; then
     case "$auth_route" in
-      oauth|api_key|env) : ;;
-      __INVALID_AUTH_ROUTE__:*) die "seat \"$seat\" has an invalid account.authRoute \"${auth_route#__INVALID_AUTH_ROUTE__:}\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
-      *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
+      oauth|api_key|env|default) : ;;
+      __INVALID_AUTH_ROUTE__:*) die "seat \"$seat\" has an invalid account.authRoute \"${auth_route#__INVALID_AUTH_ROUTE__:}\" in $roster_file — must be one of oauth, api_key, env, default (or omitted)" ;;
+      *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env, default (or omitted)" ;;
     esac
   fi
   shadow_value="$($json_runtime -e '
@@ -200,25 +229,32 @@ mkdir -p "$seat_dir" || die "could not create $seat_dir"
 note "dir     $seat_dir"
 
 # --- trust -------------------------------------------------------------------
-# Pi reads trust.json as a flat map of absolute directory -> bool. A headless
-# run with no matching grant does not stall or error — it silently skips the
-# project's .pi/ resources and nothing surfaces it — so the grant is written
-# here, before the seat ever runs.
-expected_trust="$(printf '{\n  "%s": true\n}' "$root")"
-write_trust() { printf '%s\n' "$expected_trust" > "$trust_file"; }
+if [ "$harness" = "pi" ]; then
+  # Pi reads trust.json as a flat map of absolute directory -> bool. A headless
+  # run with no matching grant does not stall or error — it silently skips the
+  # project's .pi/ resources and nothing surfaces it — so the grant is written
+  # here, before the seat ever runs.
+  expected_trust="$(printf '{
+  "%s": true
+}' "$root")"
+  write_trust() { printf '%s
+' "$expected_trust" > "$trust_file"; }
 
-if [ ! -e "$trust_file" ]; then
+  if [ ! -e "$trust_file" ]; then
   write_trust
-  note "wrote   $trust_file (pre-grants $root)"
-elif [ "$(cat "$trust_file")" = "$expected_trust" ]; then
-  note "current $trust_file (already grants $root)"
-elif grep -q "\"$root\"[[:space:]]*:[[:space:]]*true" "$trust_file"; then
-  note "current $trust_file (grants $root among other entries; left as it is)"
+    note "wrote   $trust_file (pre-grants $root)"
+  elif [ "$(cat "$trust_file")" = "$expected_trust" ]; then
+    note "current $trust_file (already grants $root)"
+  elif grep -q ""$root"[[:space:]]*:[[:space:]]*true" "$trust_file"; then
+    note "current $trust_file (grants $root among other entries; left as it is)"
+  else
+    die "$trust_file exists but does not grant $root.
+        This script will not rewrite a trust file it did not write: it may carry
+        grants an operator added by hand, and shell is the wrong tool to edit
+        JSON. Add the entry yourself: \"$root\": true"
+  fi
 else
-  die "$trust_file exists but does not grant $root.
-      This script will not rewrite a trust file it did not write: it may carry
-      grants an operator added by hand, and shell is the wrong tool to edit
-      JSON. Add the entry yourself: \"$root\": true"
+  note "skip    trust.json (harness=$harness does not use Pi trust.json)"
 fi
 
 # --- auth --------------------------------------------------------------------
@@ -255,19 +291,49 @@ if [ -n "$account_label" ]; then
 fi
 note ""
 note "point a process at this seat:"
-note "  export PI_CODING_AGENT_DIR=\"$seat_dir\""
+case "$harness" in
+  pi) note "  export PI_CODING_AGENT_DIR=\"$seat_dir\"" ;;
+  claude-code)
+    if [ "$auth_route" = "default" ]; then
+      note "  # account.authRoute=default: leave CLAUDE_CONFIG_DIR unset for this smoke/evidence run"
+    else
+      note "  export CLAUDE_CONFIG_DIR=\"$seat_dir\""
+    fi
+    ;;
+  codex) note "  export CODEX_HOME=\"$seat_dir\"" ;;
+esac
 if [ "$login_needed" -eq 1 ]; then
   note ""
-  case "$auth_route" in
-    env)
+  case "$harness:$auth_route" in
+    pi:env)
       note "env credential route (writes no auth.json): export the provider's env var in the shell that spawns the seat."
       note "  Do not write an auth.json stub for env; pi checks auth.json before the env var, so a provider entry there shadows the exported key."
       ;;
-    api_key)
-      note "api_key credential route: either write $auth_file yourself as"
+    pi:api_key)
+      note "api_key credential route: write $auth_file yourself as"
       note "  {\"<provider>\": {\"type\": \"api_key\", \"key\": \"<the key>\"}}  (chmod 600)"
       note "  or switch account.authRoute to env and export the provider's env var in the shell that spawns the seat."
-      note "  auth.json survives new shells; the env-var route writes nothing to disk."
+      ;;
+    claude-code:api_key)
+      note "metered Claude API-key route:"
+      note "  CLAUDE_CONFIG_DIR=\"$seat_dir\" claude auth login --console"
+      ;;
+    claude-code:default)
+      note "default-login smoke route (not for production rosters):"
+      note "  claude already uses the operator default login; CLAUDE_CONFIG_DIR stays unset"
+      ;;
+    claude-code:*)
+      note "one-time Claude subscription login (default for claude-code seats):"
+      note "  CLAUDE_CONFIG_DIR=\"$seat_dir\" claude auth login --claudeai"
+      ;;
+    codex:api_key)
+      note "one-time Codex API-key login:"
+      note "  printenv OPENAI_API_KEY | CODEX_HOME=\"$seat_dir\" codex login --with-api-key"
+      ;;
+    codex:*)
+      note "one-time Codex login:"
+      note "  CODEX_HOME=\"$seat_dir\" codex login"
+      note "  # or, for headless setup: CODEX_HOME=\"$seat_dir\" codex login --device-auth"
       ;;
     *)
       note "one-time OAuth login (writes $auth_file; sign in as the account this seat should BE):"
@@ -276,7 +342,6 @@ if [ "$login_needed" -eq 1 ]; then
       note "api_key alternative: either write $auth_file yourself as"
       note "  {\"<provider>\": {\"type\": \"api_key\", \"key\": \"<the key>\"}}  (chmod 600)"
       note "  or set account.authRoute to env and export the provider's env var in the shell that spawns the seat."
-      note "  auth.json survives new shells; the env-var route writes nothing to disk."
       ;;
   esac
 fi
