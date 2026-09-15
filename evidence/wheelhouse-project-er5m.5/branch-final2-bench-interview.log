@@ -1,0 +1,46 @@
+$ wheelhouse/crew/bench.sh --mode interview --ref HEAD .wheelhouse-worktrees/wheelhouse-project-er5m.5 .wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/branch-bench3
+bench: wheelhouse cold install + upgrade
+artifact: .wheelhouse-worktrees/wheelhouse-project-er5m.5 at commit 9fd461e21bf6d4c89daf406a74446c26417603c8 (ref: HEAD)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases: install=0 upgrade=0 interview=1
+evidence: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/branch-bench3
+
+=== interview ===
+interview: FAIL (exit 1) — see [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.5/.wheelhouse-runs/wheelhouse-project-er5m.5/branch-bench3/interview; last lines:
+FAIL MODEL_OPTION_PROVENANCE_verifier: offered codex | openai | api_key | gpt-5.5 for provider anthropic; gpt-5.5 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_verifier: offered pi | openai-codex | oauth | gpt-5.5 for provider anthropic; gpt-5.5 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_verifier: offered pi | openai-codex | oauth | gpt-5.5 for provider anthropic; gpt-5.5 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_verifier: offered pi | openai-codex | oauth | gpt-5.4 for provider anthropic; gpt-5.4 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_verifier: offered pi | openai-codex | oauth | gpt-5.4 for provider anthropic; gpt-5.4 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_verifier: offered pi | openai | api_key | gpt-5.5 for provider anthropic; gpt-5.5 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_verifier: offered pi | openai | api_key | gpt-5.5 for provider anthropic; gpt-5.5 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_verifier: offered claude-code | anthropic | oauth | claude-opus-4-5 for provider anthropic; claude-code is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_verifier: offered claude-code | anthropic | oauth | claude-sonnet-4-5 for provider anthropic; claude-code is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_designer: offered pi | anthropic | api_key | claude-opus-4-5 for provider openai; claude-opus-4-5 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_designer: offered pi | anthropic | api_key | claude-sonnet-4-5 for provider openai; claude-sonnet-4-5 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_designer: offered claude-code | anthropic | oauth | claude-opus-4-5 for provider openai; claude-opus-4-5 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_designer: offered claude-code | anthropic | oauth | claude-opus-4-5 for provider openai; claude-code is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_designer: offered claude-code | anthropic | oauth | claude-sonnet-4-5 for provider openai; claude-sonnet-4-5 is not a shim row for that provider
+FAIL MODEL_OPTION_PROVENANCE_designer: offered claude-code | anthropic | oauth | claude-sonnet-4-5 for provider openai; claude-code is not a shim row for that provider
+
+wheelhouse cold-install + upgrade bench verdict
+date: 2026-09-15T14:17:47Z
+artifact: template tree at commit 9fd461e21bf6d4c89daf406a74446c26417603c8 (repo: .wheelhouse-worktrees/wheelhouse-project-er5m.5)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases run: install=0 upgrade=0 (bash and zsh each) interview=1 (FAIL)
+result: FAIL
+evidence: install-{bash,zsh}.log, upgrade-{bash,zsh}.log and/or interview/ in this directory
+
+This verdict cannot distinguish install-phase onboarding mechanics from
+interview quality. The interview mode benches Q7/Q8 conduct mechanics
+on one transcript; FAIL needs retained-capture adjudication and cannot
+distinguish a prose defect from interviewer-model weakness. It also
+cannot distinguish a current specimen-leak list from a stale one.
+The upgrade phase additionally cannot say that an
+install produced by the baseline commit's own BOOTSTRAP would upgrade
+the same way — its fixture has the SHAPE of that install, not its
+history — nor that the v1→Pi migration's operator half (the roster
+interview, per-seat logins, retiring the old roots) produces a working
+fleet; it does not exercise UPGRADE.md step 0's reconstruction of a
+missing .template-source. See the header of bench.sh.
+rc=1

@@ -1,0 +1,9 @@
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+artifact=8107a6cfa0bead3f3f738d40053d1b561581d58b
+interviewer=openai-codex/gpt-5.5
+clause_7_caveat=PASS benches conduct mechanics, not interview quality; FAIL needs capture adjudication. Model-option provenance is keyed to the provider settled in seats.json when present, so downstream PROVIDER_* divergence is not double-counted as expected-provider provenance.
+MEASUREMENT fixture_replay_questions=13
+MEASUREMENT fixture_replay_misses=0
+MEASUREMENT askuserquestion_rounds=19
+MEASUREMENT q8_answer_rounds=12
+MEASUREMENT readback_present=true

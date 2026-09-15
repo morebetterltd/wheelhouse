@@ -42,7 +42,10 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
 BRIEFS="$(cd "$(dirname "$VERIFY")" && pwd)/briefs.ts"
+HARNESS="$(cd "$(dirname "$VERIFY")" && pwd)/harness.ts"
+HOST_BUDGET_TS="$(cd "$(dirname "$VERIFY")" && pwd)/host-budget.ts"
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
+[ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run verify.ts" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
@@ -126,7 +129,7 @@ fs.writeFileSync(path.join(agentDir, "invoked"), "");
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the verifier), not rely on an operator
 // export reaching this one-shot process.
-fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null }));
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null }));
 // The dispatcher sets our cwd by construction (a scratch worktree), not by
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
@@ -166,6 +169,8 @@ build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$src" "$proj/seats/verify.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
+  cp "$HARNESS" "$proj/seats/harness.ts"
+  cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf '# Crew: Reviewer\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/REVIEWER.md"
   cat > "$proj/seats/seats.json" <<EOF
@@ -211,6 +216,8 @@ build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.
   mkdir -p "$umb/seats" "$umb/contracts" "$product"
   cp "$src" "$umb/seats/verify.ts"
   cp "$BRIEFS" "$umb/seats/briefs.ts"
+  cp "$HARNESS" "$umb/seats/harness.ts"
+  cp "$HOST_BUDGET_TS" "$umb/seats/host-budget.ts"
   printf '# Crew: Reviewer\n\numbrella reviewer brief.\n' > "$umb/contracts/REVIEWER.md"
   cat > "$umb/seats/seats.json" <<EOF
 {
@@ -367,6 +374,9 @@ else fail "prompt is missing bead id, tip SHA, or bead claim"; fi
 if grep -q '"BEADS_ACTOR":"verifier"' "${VARGV%argv.json}env.json" 2>/dev/null; then
   pass "the ephemeral verifier's own env carries BEADS_ACTOR=verifier, with no operator export"
 else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:verifier set by verify.ts itself"; fi
+if ! grep -q "$PROJ/seats/bin" "${VARGV%argv.json}env.json" 2>/dev/null; then
+  pass "host budget absent: verifier PATH is not rewritten to seats/bin"
+else fail "host budget absent: verifier PATH unexpectedly included seats/bin: $(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
 
 # --- scratch cwd: construction, not contract discipline ---------------------
 # The verifier's process cwd must be A repository the branch's ref resolves
@@ -442,6 +452,22 @@ EOF
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" OPENAI_API_KEY=fixture-key bun "$RUN_PROJ/seats/verify.ts" bead-env fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then pass "account.authRoute=env verifier runs with exported provider env var and no auth.json"
 else fail "account.authRoute=env verifier was refused (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
+
+phase "1d. host budget — verifier one-shot prepends seats/bin only when opted in"
+BUDGET_PROJ="$FIX/verify-budget-proj"
+build_proj "$BUDGET_PROJ" verify-budget "$VERIFY"
+mkdir -p "$BUDGET_PROJ/seats/bin"
+printf '{"enabled":true}\n' > "$BUDGET_PROJ/seats/host-budget.json"
+RUN_PROJ="$BUDGET_PROJ"; VARGV="$HOME_FIX/.pi-seats-verify-budget/verifier/argv.json"; VDIR="$BUDGET_PROJ/seats/verdicts"
+cat > "$REPLY" <<'EOF'
+Host-budget verifier checked.
+VERDICT: APPROVE
+EOF
+run bead-1 fleet/bead-1 worker-1
+if [ $RC -eq 0 ] && grep -q "$BUDGET_PROJ/seats/bin" "${VARGV%argv.json}env.json" 2>/dev/null; then
+  pass "host budget enabled: verifier PATH includes this project's seats/bin"
+else fail "host budget enabled: verifier PATH missing seats/bin (exit $RC): $OUT env=$(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
 RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
 
 phase "2. BOUNCE — exit 2"

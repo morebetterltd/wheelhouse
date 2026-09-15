@@ -1,0 +1,13 @@
+Commands run with WHEELHOUSE_SKIP_REAL_PI=1 and TMPDIR=$PWD/.wheelhouse-runs/wheelhouse-project-er5m.3/tmp
+
+seats/adapter.selftest.sh
+source log: evidence/wheelhouse-project-er5m.3/adapter-selftest-thirdpass.log
+result: rc=0
+
+seats/concurrency.selftest.sh
+source log: evidence/wheelhouse-project-er5m.3/concurrency-selftest-thirdpass-rerun.log
+result: rc=0
+
+seats/isolation.selftest.sh, seats/recover.selftest.sh, seats/reset.selftest.sh, seats/stop-all.selftest.sh, seats/verify.selftest.sh, seats/walk.selftest.sh, seats/legibility.selftest.sh, seats/floor.selftest.sh, seats/herald.selftest.sh, seats/drivers/claude-code/selftest.sh, seats/seat-env.selftest.sh
+source log: evidence/wheelhouse-project-er5m.3/seat-selftests-thirdpass-rest.log
+result: rc=0

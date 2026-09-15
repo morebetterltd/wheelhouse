@@ -1,0 +1,3 @@
+$ bun seats/adapter.ts status
+no seats recorded in seats/state.json
+rc=0

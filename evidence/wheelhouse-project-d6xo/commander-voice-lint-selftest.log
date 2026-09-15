@@ -1,0 +1,6 @@
+$ TMPDIR=$PWD/.wheelhouse-runs/wheelhouse-project-d6xo/tmp seats/commander-voice-lint.selftest.sh
+ok 1 - human task prose passes
+ok 2 - planted negative: bead wording fails
+ok 3 - planted negative: bare namespace id fails
+commander-voice-lint.selftest: PASS (3 checks)
+rc=0

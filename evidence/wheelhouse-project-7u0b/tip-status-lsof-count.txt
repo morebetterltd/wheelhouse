@@ -1,0 +1,3 @@
+adapter status rc=0
+lsof calls=0
+ps calls=1

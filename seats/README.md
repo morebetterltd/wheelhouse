@@ -32,6 +32,38 @@ roster is safe to commit precisely because it records only names, paths,
 optional non-secret human labels, and optional auth-route names; the moment a
 credential appears in it, that stops being true.
 
+## Host build budget (opt-in)
+
+A fleet that has expensive builds may opt in by creating `seats/host-budget.json`
+(any JSON object; the file's existence is the switch). When present, the adapter
+prepends `seats/bin` to `PATH` for every seat process, and `verify.ts`/`walk.ts`
+do the same for their one-shot Pi verifier spawns. When absent, PATH is left as
+it was, so the template does not throttle light projects by default.
+
+The template ships `seats/bin/cargo` and `seats/bin/dotnet` as symlinks to one
+plain-bash shim. The frozen host contract is:
+
+- blocking `flock(2)` on `~/.cache/wheelhouse-build.lock` by default, held for the
+  whole tool invocation by Perl's standard `Fcntl` binding (car fleets that
+  predate this template change used the same contract with
+  `~/.cache/car-build.lock`);
+- re-entrancy guard `WHEELHOUSE_BUILD_LOCK_HELD=1`, exported while the lock is
+  held, so a child build invoking the same tool execs the real tool directly;
+- caps: `CARGO_BUILD_JOBS<=8`, `cargo nextest ... --test-threads<=4`, dotnet
+  `-maxcpucount:8`, and `MSBUILDDISABLENODEREUSE=1`;
+- `seats/bin/cargo --contract` / `seats/bin/dotnet --contract` print the lock,
+  caps, guard variable, and a parity scan.
+
+The cross-fleet parity scan looks under
+`~/.config/wheelhouse/host-build-shims` by default. If an operator wants fleets
+on the same host to assert each other's shim contract, put each fleet's shim(s)
+there under any subdirectory (for example
+`~/.config/wheelhouse/host-build-shims/<fleet>/cargo`) or set
+`WHEELHOUSE_HOST_BUDGET_PARITY_DIR` to a different documented host directory.
+Any scanned executable named `cargo` or `dotnet` whose first `--contract` line
+has a different lock/cap/re-entry contract is reported as `parity=mismatch` and
+the `--contract` command exits non-zero.
+
 ## The roster format
 
 `seats.json` is plain JSON with no comments, so its fields are documented
@@ -49,13 +81,16 @@ Each seat entry:
 | Field | What it is |
 |---|---|
 | `role` | What the seat does: `worker`, `reviewer`, `verifier`, `researcher`, or another installed brief. Free-form string; the crew briefs define what each role means. Installed fleets read `wheelhouse/fleet/WORKER.md` for workers and `wheelhouse/crew/<ROLE>.md` for other roles, with `contracts/<ROLE>.md` retained as the template-tree fallback. |
+| `harness` | Optional harness driver, one of `pi`, `claude-code`, or `codex`; absent means `pi` for existing rosters. `account.dir` stays under the historical `~/.pi-seats-<namespace>/<seat>` root for every harness, but the driver reads it as `PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME` respectively. At this stage the adapter implements `pi` and `claude-code` and validates all three harness names; `codex` is documented/provisioned by bootstrap and lands in its own driver bead. `claude-code` runs a resident shim around `claude -p --input-format stream-json --output-format stream-json` under `CLAUDE_CONFIG_DIR=<account.dir>`, emits the same FIFO/log protocol as a Pi seat, and strips `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `OPENAI_API_KEY` from the child environment. |
 | `shadow` | Optional boolean; absent means `false`. `"shadow": true` marks a mirror seat whose output is recorded but never gates or carries assigned work. The commander dispatches to a shadow seat only as a mirror of a gating dispatch, and its verdict or review comment is prefixed `SHADOW`; it informs the real reviewer/commander but never gates a merge. `seat-env.sh` and `adapter.ts` reject any present non-boolean value. |
-| `provider` | Whose model the seat runs (`anthropic`, `openai`, ...). Recorded so the roster answers "which vendor is this seat" without starting the seat. |
+| `provider` | Whose model the seat runs (`anthropic`, `openai`, ...), narrowed by harness: `claude-code` is first-party `anthropic`, `codex` is `openai-codex` or `openai`, and `pi` uses Pi's provider list. Recorded so the roster answers "which vendor is this seat" without starting the seat. |
 | `model` | The model the seat is pinned to, in the provider's own id format. Pin reasoning effort by appending Pi's thinking-level suffix to this same string, for example `gpt-5.6-sol:high`. |
 | `skills` | Optional array of skill directory paths passed to Pi as repeated `--skill <path>` arguments at spawn, resume, reset, and dispatch relaunch. Paths are tilde-expanded like `account.dir`. `adapter.ts` validates the field while reading `seats/seats.json`: it must be an array of non-empty strings if present, and every path must exist, or the adapter STOPs naming the seat and the missing path before spawning Pi. |
 | `account.dir` | The seat's agent directory — the value `PI_CODING_AGENT_DIR` is set to. By convention `~/.pi-seats-<namespace>/<seat-name>`, where the namespace is this project's (recorded as `namespace=` in `wheelhouse/.template-source`). This field is the record; the convention just explains where it came from. |
 | `account.label` | Optional free-form, human-meaningful account label (`kk-personal-anthropic`, `work-chatgpt-2`) printed in status/provisioning/error output so an operator can tell which real account backs the seat. It is NEVER a secret: do not put tokens, keys, passwords, emails you would not commit, or other credentials here. Omit it freely; existing rosters without labels stay valid. |
-| `account.authRoute` | Optional durable record of which credential route this seat's identity was given, one of `oauth`, `api_key`, `env` — the same three routes BOOTSTRAP.md's question 8 walks per seat (OAuth `/login` for a subscription seat; a written `auth.json` entry for file-backed API-key identity; or an exported provider env var for env-backed API-key identity). It records the route, never the credential itself. Omit it freely; existing rosters without it stay valid — `seat-env.sh` and `adapter.ts` only validate the value when the field is present, rejecting anything outside those three strings. |
+| `account.authRoute` | Optional durable record of which credential route this seat's identity was given. For `pi`: `oauth`, `api_key`, or `env`. For `claude-code`: `oauth` by default through `claude auth login --claudeai`, explicit metered `api_key` through `claude auth login --console`, or the Claude-only smoke-test escape `default`; no `env` route. `default` is only for Claude Code evidence/smoke runs on the operator's already-logged-in default Claude Code account: it launches with `CLAUDE_CONFIG_DIR` unset, must not be committed for a rostered production seat, and exists because the login step is interactive and principal-owned. For `codex`: `oauth` through `codex login` / `--device-auth`, or `api_key` through `codex login --with-api-key`; no `env` route. It records the route, never the credential itself. Omit it freely on old Pi rosters; new bootstrap writes it from the read-back table. |
+
+Claude Code seats launch in measured-safe unattended mode: `--permission-mode acceptEdits --permission-prompts none` plus the roster's `allowedTools` list. A project section may deliberately opt a seat up to a broader Claude Code permission mode, but this fleet did not probe broader modes for production use, and the template default does not ship one.
 
 Two gotchas about `provider` + `model`. The set of valid model ids depends on
 the ACCOUNT behind the seat, not just the provider — e.g. Codex via a ChatGPT

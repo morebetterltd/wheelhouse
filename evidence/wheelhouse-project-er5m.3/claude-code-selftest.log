@@ -1,0 +1,1 @@
+claude-code.selftest: PASS (shim normalized events and stripped credential env vars)

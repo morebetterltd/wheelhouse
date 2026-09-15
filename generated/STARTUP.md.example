@@ -26,9 +26,9 @@ graph.
 
 ## 2. Seats
 
-Each seat is a persistent `pi` process the commander owns — provisioned once, then started with the adapter. Nothing here is a terminal you keep open, and there is nothing to paste into a seat: the role brief is injected at spawn. `wheelhouse/fleet/SEATS.md` is the contract; `seats/README.md` documents every command below.
+Each seat is a persistent harness process the commander owns — provisioned once, then started with the adapter. The roster chooses the harness per seat (`pi`, `claude-code`, or `codex`); the same role brief is injected at spawn. Nothing here is a terminal you keep open, and there is nothing to paste into a seat. `wheelhouse/fleet/SEATS.md` is the contract; `seats/README.md` documents every command below.
 
-Provision each roster seat once (safe to re-run; it changes nothing for a seat that exists). The script creates the seat's agent directory under `$HOME/.pi-seats-ebb/`, pre-grants trust for the project root, and prints the one-time login for the account that seat should BE — run that login before the first spawn:
+Provision each roster seat once (safe to re-run; it changes nothing for a seat that exists). The script creates the seat's agent directory under the historical `$HOME/.pi-seats-ebb/` root and prints the one-time login for the harness and account that seat should BE — for example `PI_CODING_AGENT_DIR=... pi`, `CLAUDE_CONFIG_DIR=... claude auth login --claudeai`, or `CODEX_HOME=... codex login`, matching the roster. Run that login before the first spawn:
 
 ```bash
 cd ~/code/ebb
@@ -54,13 +54,13 @@ The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id
 
 ## 4. Feed it
 
-Speak backlog items to the commander in plain language. It files them as beads, the fleet claims them, workers report done on the bead with comments and the `needs-review` label without closing, the reviewer gates them with bench evidence, and only the commander/integrator closes after merge per this project's merge policy. Before the first ISA claim closes on a consumer surface, run the verifier walker with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out evidence/<bead>/<surface-walk> --verifier verifier` and cite the verdict plus transcript, or write `Not walked:` on the claim.
+Speak backlog items to the commander in plain language. It files them as described tasks in the graph; the fleet claims them; workers report done on the task record with comments and the `needs-review` label without closing; the reviewer gates branches with bench evidence; and only the commander/integrator closes after merge per this project's merge policy. Commander prose keeps using human task, intent, and outcome names rather than `bead`, bare namespace ids, or mannered filler. Before the first ISA claim closes on a consumer surface, run the verifier walker with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out evidence/<task>/<surface-walk> --verifier verifier` and cite the verdict plus transcript, or write `Not walked:` on the claim.
 
 ## Shutdown
 
 The end-of-day ritual, in order (`wheelhouse/runbooks/RUNNING_THE_LOOP.md`,
 "End of day"): dispatch each active seat a write-your-handoff request — the
-seat answers on its bead — then compose the fleet note at
+seat answers on its task record — then compose the fleet note at
 `wheelhouse/HANDOFF.md` (per-seat status, waiting verdicts, tomorrow's first
 actions), and only then:
 
