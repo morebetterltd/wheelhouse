@@ -1165,28 +1165,34 @@ async function cmdResume(name: string): Promise<void> {
  * busy signal, not a guess from the log.
  */
 async function cmdReset(name: string): Promise<void> {
-  const rec = requireRunning(name);
+  const stateBefore = readState();
+  const rec = stateBefore.seats[name];
+  if (!rec) die(`no record of seat "${name}" — spawn it first`);
   const entry = requireSeat(name);
-  const st = await rpc(rec, { type: "get_state" });
-  if (!st.success) {
-    die(`get_state failed while checking seat "${name}" before reset: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
-  }
-  if (st.data?.isStreaming) {
-    die(
-      `seat "${name}" is mid-turn (isStreaming) — reset refuses to interrupt a running turn. ` +
-        `Wait for it to finish, or steer it, before resetting.`
-    );
+  if (pidAlive(rec.pid, rec.fifo)) {
+    const st = await rpc(rec, { type: "get_state" });
+    if (!st.success) {
+      die(`get_state failed while checking seat "${name}" before reset: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
+    }
+    if (st.data?.isStreaming) {
+      die(
+        `seat "${name}" is mid-turn (isStreaming) — reset refuses to interrupt a running turn. ` +
+          `Wait for it to finish, or steer it, before resetting.`
+      );
+    }
+    await cmdStop(name);
   }
   const cwd = rec.cwd ?? ROOT;
-  await cmdStop(name);
   // Discard the recorded session explicitly, ahead of the cold spawn below
   // that would overwrite it anyway: if reset dies between stop and spawn,
   // state.json must already show no session to resume into, not the stale
-  // one reset was meant to drop.
+  // one reset was meant to drop. This also supports the documented upgrade
+  // path where an operator stops an idle seat before changing its harness.
   const state = readState();
   if (state.seats[name]) {
     state.seats[name].sessionId = null;
     state.seats[name].sessionFile = null;
+    state.seats[name].pid = null;
     writeState(state); // reset-record
   }
   await driverForSeat(name, entry, "adapter reset").launch(name, entry, null, cwd); // null sessionFile: cold, no --session

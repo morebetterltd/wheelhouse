@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
-. "$SELFTEST_LIB"
+if [ -f "$SELFTEST_LIB" ]; then
+  . "$SELFTEST_LIB"
+else
+  selftest_cleanup_fixture_processes() { :; }
+fi
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -239,6 +243,87 @@ EOF
   else
     fail "installed-layout bad path= without source= was not legible (rc=$BAD_RC): $BAD_OUT"
   fi
+fi
+
+
+if [ -f "$ROOT/seats/adapter.ts" ] && [ -f "$ROOT/seats/seat-env.sh" ]; then
+# Harness-switch upgrade: old rosters without harness fields still mean pi, and
+# changing one seat's harness must not touch another seat's running session.
+HARNESS_FIX="$TMP/harness-switch"
+HARNESS_HOME="$HARNESS_FIX/home"
+HARNESS_BIN="$HARNESS_FIX/bin"
+HARNESS_PROJ="$HARNESS_FIX/project"
+mkdir -p "$HARNESS_HOME" "$HARNESS_BIN" "$HARNESS_PROJ/seats" "$HARNESS_PROJ/contracts" "$HARNESS_PROJ/wheelhouse" "$HARNESS_PROJ/.wheelhouse-worktrees/smoke-a" "$HARNESS_PROJ/.wheelhouse-worktrees/smoke-b"
+cp "$ROOT/seats/adapter.ts" "$HARNESS_PROJ/seats/adapter.ts"
+cp "$ROOT/seats/harness.ts" "$HARNESS_PROJ/seats/harness.ts"
+cp "$ROOT/seats/briefs.ts" "$HARNESS_PROJ/seats/briefs.ts"
+cp "$ROOT/seats/host-budget.ts" "$HARNESS_PROJ/seats/host-budget.ts"
+cp -R "$ROOT/seats/drivers" "$HARNESS_PROJ/seats/drivers"
+printf '# Fleet: Worker\n\nfixture brief for harness switching.\n' > "$HARNESS_PROJ/contracts/WORKER.md"
+printf 'namespace=harnessswitch\n' > "$HARNESS_PROJ/wheelhouse/.template-source"
+cat > "$HARNESS_PROJ/seats/seats.json" <<'JSON'
+{"seats":{"worker-a":{"role":"worker","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-harnessswitch/worker-a","authRoute":"oauth"}},"worker-b":{"role":"worker","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-harnessswitch/worker-b","authRoute":"oauth"}}}}
+JSON
+for seat in worker-a worker-b; do mkdir -p "$HARNESS_HOME/.pi-seats-harnessswitch/$seat"; printf '{"stub":true}\n' > "$HARNESS_HOME/.pi-seats-harnessswitch/$seat/auth.json"; done
+cat > "$HARNESS_BIN/pi" <<'PISTUB'
+#!/usr/bin/env node
+const fs=require('fs'),path=require('path'),crypto=require('crypto');
+const dir=process.env.PI_CODING_AGENT_DIR; if(!dir) process.exit(2); fs.mkdirSync(dir,{recursive:true});
+const args=process.argv.slice(2); fs.writeFileSync(path.join(dir,'pi-argv.json'),JSON.stringify(args));
+if(!args.includes('--mode')) { console.log('OK'); process.exit(0); }
+const sessDir=path.join(dir,'sessions'); fs.mkdirSync(sessDir,{recursive:true});
+let sessionFile, sessionId; const si=args.indexOf('--session');
+if(si>=0){ sessionFile=args[si+1]; sessionId=path.basename(sessionFile,'.jsonl'); fs.appendFileSync(sessionFile, JSON.stringify({type:'resumed'})+'\n'); }
+else { sessionId=crypto.randomUUID(); sessionFile=path.join(sessDir,sessionId+'.jsonl'); fs.writeFileSync(sessionFile, JSON.stringify({type:'start'})+'\n'); }
+let buf='', streaming=false; const out=o=>process.stdout.write(JSON.stringify(o)+'\n');
+function finish(cmd){ fs.appendFileSync(sessionFile, JSON.stringify({type:'prompt',message:cmd.message})+'\n'); out({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'OK'}]}}); out({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:'OK'}],stopReason:'stop'}]}); streaming=false; }
+function handle(cmd){ if(cmd.type==='get_state') out({id:cmd.id,type:'response',success:true,data:{isStreaming:streaming,sessionId,sessionFile}}); else if(cmd.type==='prompt'){ streaming=true; out({id:cmd.id,type:'response',success:true}); out({type:'agent_start'}); setTimeout(()=>finish(cmd),50); } else out({id:cmd.id,type:'response',success:false,error:'unknown'}); }
+process.stdin.on('data',c=>{buf+=c;let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(l.trim())handle(JSON.parse(l));}});
+process.on('SIGTERM',()=>process.exit(0));
+PISTUB
+chmod +x "$HARNESS_BIN/pi"
+cat > "$HARNESS_BIN/claude" <<'CLAUDESTUB'
+#!/usr/bin/env node
+const fs=require('fs'),path=require('path');
+const args=process.argv.slice(2); const dir=process.env.CLAUDE_CONFIG_DIR||process.env.HOME; fs.mkdirSync(dir,{recursive:true}); fs.writeFileSync(path.join(dir,'claude-argv.json'),JSON.stringify(args));
+if(args.includes('--output-format') && args.includes('json') && !args.includes('stream-json')) { console.log(JSON.stringify({type:'result',subtype:'success',result:'OK',session_id:'probe'})); process.exit(0); }
+const session=args.includes('--resume')?args[args.indexOf('--resume')+1]:'claude-session-'+process.pid;
+const proj=path.join(dir,'projects','fixture'); fs.mkdirSync(proj,{recursive:true}); fs.appendFileSync(path.join(proj,session+'.jsonl'), JSON.stringify({type:'start'})+'\n');
+let buf=''; process.stdin.on('data',c=>{buf+=c;let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue; const msg=JSON.parse(l).message?.content?.[0]?.text||''; fs.appendFileSync(path.join(proj,session+'.jsonl'), JSON.stringify({type:'prompt',message:msg})+'\n'); console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:'sonnet'})); console.log(JSON.stringify({type:'assistant',message:{role:'assistant',content:[{type:'text',text:'OK'}]}})); console.log(JSON.stringify({type:'result',subtype:'success',result:'OK',session_id:session,num_turns:1})); }});
+process.on('SIGTERM',()=>process.exit(0));
+CLAUDESTUB
+chmod +x "$HARNESS_BIN/claude"
+hrun(){ HOUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$HARNESS_PROJ/seats/adapter.ts" "$@" 2>&1); HRC=$?; }
+hstate(){ env HOME="$HARNESS_HOME" node -e "const s=require(process.argv[1]).seats[process.argv[2]]||{}; process.stdout.write(String(s[process.argv[3]]??''));" "$HARNESS_PROJ/seats/state.json" "$1" "$2"; }
+# Pre-field roster: absent harness means pi and needs no edit.
+hrun probe worker-b; [ "$HRC" -eq 0 ] || fail "pre-field roster without harness failed pi probe: $HOUT"
+hrun spawn worker-a; [ "$HRC" -eq 0 ] || fail "worker-a initial pi spawn failed: $HOUT"
+hrun spawn worker-b; [ "$HRC" -eq 0 ] || fail "worker-b initial pi spawn failed: $HOUT"
+B_PID_BEFORE=$(hstate worker-b pid); B_SESS_BEFORE=$(hstate worker-b sessionFile)
+hrun stop worker-a; [ "$HRC" -eq 0 ] || fail "stop switched seat before harness edit failed: $HOUT"
+env HOME="$HARNESS_HOME" PROJ="$HARNESS_PROJ" node -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); const s=r.seats["worker-a"]; s.harness="claude-code"; s.model="sonnet"; s.provider="anthropic"; s.allowedTools="Bash(printf *)"; s.account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+printf '{"loggedIn":true}\n' > "$HARNESS_HOME/.pi-seats-harnessswitch/worker-a/.claude.json"
+SEAT_ENV_OUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" "$ROOT/seats/seat-env.sh" harnessswitch worker-a "$HARNESS_PROJ")
+printf '%s\n' "$SEAT_ENV_OUT" | grep -q 'CLAUDE_CONFIG_DIR' || fail "seat-env did not print claude binding after switch: $SEAT_ENV_OUT"
+hrun probe worker-a; [ "$HRC" -eq 0 ] && [ "$HOUT" = OK ] || fail "claude-code binding probe failed: $HOUT"
+hrun reset worker-a; [ "$HRC" -eq 0 ] || fail "claude-code reset failed: $HOUT"
+hrun dispatch worker-a smoke-a 'Smoke check after harness switch: reply OK and stop.'; [ "$HRC" -eq 0 ] || fail "claude-code smoke dispatch failed: $HOUT"
+for i in $(seq 1 50); do grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl" && break; sleep 0.1; done
+grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl" || fail "claude-code smoke dispatch did not complete OK"
+[ "$(hstate worker-b pid)" = "$B_PID_BEFORE" ] && [ "$(hstate worker-b sessionFile)" = "$B_SESS_BEFORE" ] || fail "switching worker-a touched worker-b state/session"
+# Switch back to pi, again without touching worker-b.
+hrun stop worker-a; [ "$HRC" -eq 0 ] || fail "stop claude-code seat before switching back failed: $HOUT"
+env HOME="$HARNESS_HOME" PROJ="$HARNESS_PROJ" node -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); const s=r.seats["worker-a"]; s.harness="pi"; s.model="stub-model"; s.provider="anthropic"; delete s.allowedTools; s.account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+SEAT_ENV_OUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" "$ROOT/seats/seat-env.sh" harnessswitch worker-a "$HARNESS_PROJ")
+printf '%s\n' "$SEAT_ENV_OUT" | grep -q 'PI_CODING_AGENT_DIR' || fail "seat-env did not print pi binding after switch back: $SEAT_ENV_OUT"
+hrun probe worker-a; [ "$HRC" -eq 0 ] || fail "pi binding probe after switch back failed: $HOUT"
+hrun reset worker-a; [ "$HRC" -eq 0 ] || fail "pi reset after switch back failed: $HOUT"
+hrun dispatch worker-a smoke-b 'Smoke check after switching back to pi: reply OK and stop.'; [ "$HRC" -eq 0 ] || fail "pi smoke dispatch after switch back failed: $HOUT"
+[ "$(hstate worker-b pid)" = "$B_PID_BEFORE" ] && [ "$(hstate worker-b sessionFile)" = "$B_SESS_BEFORE" ] || fail "switching worker-a back touched worker-b state/session"
+pass "harness switch pi -> claude-code -> pi leaves pre-field and untouched seats intact"
+
+else
+  pass "installed-layout harness-switch scratch leg skipped until copied seats machinery is present"
 fi
 
 echo "upgrade-runbook.selftest: PASS ($PASS checks)"
