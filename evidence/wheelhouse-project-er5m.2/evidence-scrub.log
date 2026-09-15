@@ -1,0 +1,19 @@
+$ scrubbed evidence with seats/evidence-scrub.sh
+evidence/wheelhouse-project-er5m.2/adapter-selftest.log
+evidence/wheelhouse-project-er5m.2/adapter-status-smoke.log
+evidence/wheelhouse-project-er5m.2/concurrency-selftest.log
+evidence/wheelhouse-project-er5m.2/evidence-scrub.log
+evidence/wheelhouse-project-er5m.2/isolation-selftest.log
+evidence/wheelhouse-project-er5m.2/legibility-selftest.log
+evidence/wheelhouse-project-er5m.2/nonpi-adapter-spawn-stop.log
+evidence/wheelhouse-project-er5m.2/nonpi-verify-stop.log
+evidence/wheelhouse-project-er5m.2/nonpi-walk-stop.log
+evidence/wheelhouse-project-er5m.2/parent-concurrency-selftest.log
+evidence/wheelhouse-project-er5m.2/parent-legibility-selftest.log
+evidence/wheelhouse-project-er5m.2/pid-ownership-selftest.log
+evidence/wheelhouse-project-er5m.2/recover-selftest.log
+evidence/wheelhouse-project-er5m.2/reset-selftest.log
+evidence/wheelhouse-project-er5m.2/stop-all-selftest.log
+evidence/wheelhouse-project-er5m.2/verify-selftest.log
+evidence/wheelhouse-project-er5m.2/walk-selftest.log
+rc=0

@@ -1,0 +1,2 @@
+$ timeout 300 seats/legibility.selftest.sh (parent 3e3a5d1)
+rc=124

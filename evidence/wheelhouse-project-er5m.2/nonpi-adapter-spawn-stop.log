@@ -1,0 +1,3 @@
+$ PATH=$PWD/.wheelhouse-runs/wheelhouse-project-er5m.2/nonpi/bin:$PATH bun seats/adapter.ts spawn cc
+STOP: seat "cc" has harness="claude-code" in seats/seats.json; adapter spawn is not implemented for that harness yet
+rc=1

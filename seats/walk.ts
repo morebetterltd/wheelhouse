@@ -33,9 +33,16 @@ const TIMEOUT_MS = Number(process.env.WHEELHOUSE_WALK_TIMEOUT_MS || 1800000);
 const IMAGE_MAX_WIDTH = Number(process.env.WHEELHOUSE_WALK_IMAGE_MAX_WIDTH || 1000);
 const IMAGE_MAX_CONTEXT = Number(process.env.WHEELHOUSE_WALK_IMAGE_MAX_CONTEXT || 3);
 const IMAGE_QUALITY = Number(process.env.WHEELHOUSE_WALK_IMAGE_JPEG_QUALITY || 75);
+const HARNESS_VALUES = ["pi", "claude-code", "codex"] as const;
+function requirePiHarness(seatName: string, entry: { harness?: string } | undefined, operation: string): void {
+  const raw = entry?.harness ?? "pi";
+  if (!(HARNESS_VALUES as readonly string[]).includes(raw)) throw new Error(`seat "${seatName}" has invalid harness ${JSON.stringify(raw)} in seats/seats.json — must be one of ${HARNESS_VALUES.join(", ")} (or omitted for pi)`);
+  if (raw !== "pi") throw new Error(`seat "${seatName}" has harness=${JSON.stringify(raw)} in seats/seats.json; ${operation} is not implemented for that harness yet`);
+}
 
 interface SeatEntry {
   role: string;
+  harness?: string;
   provider?: string;
   model?: string;
   external?: boolean;
@@ -387,6 +394,11 @@ function main(): void {
   phase = "prepare verifier seat";
   sweepStaleScratchWorktrees(ROOT);
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  try {
+    requirePiHarness(verifierSeat, entry, "walk.ts verifier walk");
+  } catch (e: any) {
+    refuse(e.message);
+  }
   const verifierDir = requireCredential(entry, verifierSeat);
   let brief: string;
   try {
