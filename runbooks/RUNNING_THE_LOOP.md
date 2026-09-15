@@ -52,7 +52,7 @@ Three real rewrites from commander records:
 
 - Before: `Evidence: worker run + reviewer's independent re-run at the reviewed SHA, both on bead wheelhouse-project-0pf.` After: `Evidence: the install bench and the independent review run both passed for the cold-install verification task.`
 - Before: `The 32v integration exposed a commander process defect — secret-scan and merge in one compound command let a real leak merge before the scan was read.` After: `The README integration exposed a commander process defect: secret scanning and merging were chained together, so the scan result was not read before integration.`
-- Before: `Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by Keenan.` After: `That morning's startup order was wrong: machinery sync happened before the fleet was running, and Keenan caught it.`
+- Before: `Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by the principal.` After: `That morning's startup order was wrong: machinery sync happened before the fleet was running, and the principal caught it.`
 
 **What crosses:** a task name, the graph id needed for tooling, and enough for someone to start without asking.
 
