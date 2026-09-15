@@ -10,14 +10,14 @@ This specimen shows only what the interview writes: the roster below, and the se
 
 ### Roster
 
-One line per seat, mirroring `seats/seats.json` — the machine record, which decides; this table is the human record and must agree with it. Agent directories land under `$HOME/.pi-seats-ebb/` (namespace `ebb`, recorded as `namespace=ebb` in `wheelhouse/.template-source`). Each model was pinned per seat from the live `pi --list-models` listing at install (BOOTSTRAP question 8's read-back table), not from a remembered family. Auth route is the durable `account.authRoute` column question 8's read-back also fills — `oauth`, `api_key`, or `env` — and is safe to show here because it names a route, never a credential.
+One line per seat, mirroring `seats/seats.json` — the machine record, which decides; this table is the human record and must agree with it. Agent directories land under `$HOME/.pi-seats-ebb/` (namespace `ebb`, recorded as `namespace=ebb` in `wheelhouse/.template-source`). Each model was pinned per seat from the selected harness's own live listing or binding probe at install (BOOTSTRAP question 8's read-back table), not from a remembered family. Harness and auth route are durable columns question 8 also fills; auth route names a route, never a credential.
 
-| Seat | Role brief | Provider | Model | Auth route | Agent directory |
-|---|---|---|---|---|---|
-| `worker-1` | `wheelhouse/fleet/WORKER.md` | `openai-codex` | `gpt-5.5` | `oauth` | `~/.pi-seats-ebb/worker-1` |
-| `reviewer` | `wheelhouse/crew/REVIEWER.md` | `openrouter` | `z-ai/glm-5.3-flash` | `api_key` | `~/.pi-seats-ebb/reviewer` — never authors what it reviews, so its directory differs from every worker's |
-| `verifier` | `wheelhouse/crew/VERIFIER.md` consumer-surface walker | `openrouter` | `z-ai/glm-5.3-flash` | `api_key` | `~/.pi-seats-ebb/verifier` — walks ISA claim surfaces via `seats/walk.ts`; gates claims, not beads |
-| (commander) | this folder's `CLAUDE.md` | — | — | — | none: the principal's own session, `"external": true` in the roster |
+| Seat | Role brief | Harness | Provider | Model | Auth route | Agent directory |
+|---|---|---|---|---|---|---|
+| `worker-1` | `wheelhouse/fleet/WORKER.md` | `claude-code` | `anthropic` | `claude-sonnet-5` | `oauth` | `~/.pi-seats-ebb/worker-1` |
+| `reviewer` | `wheelhouse/crew/REVIEWER.md` | `codex` | `openai-codex` | `gpt-5.6-sol` | `oauth` | `~/.pi-seats-ebb/reviewer` — never authors what it reviews, so its directory differs from every worker's |
+| `verifier` | `wheelhouse/crew/VERIFIER.md` consumer-surface walker | `pi` | `openrouter` | `z-ai/glm-5.3-flash` | `api_key` | `~/.pi-seats-ebb/verifier` — walks ISA claim surfaces via `seats/walk.ts`; gates claims, not beads |
+| (commander) | this folder's `CLAUDE.md` | external | — | — | — | none: the principal's own session, `"external": true` in the roster |
 
 ### Declined seats
 
