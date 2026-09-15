@@ -26,18 +26,30 @@ A reviewer's APPROVE — carrying bench evidence, per `wheelhouse/crew/REVIEWER.
 
 Credentials and signing, spending money, legal/public-facing identity, and communication outside the team. Everything else the fleet may do within this project's permissions.
 
+## Commander voice
+
+Shipped commander prose talks to humans in tasks, intents, and outcomes. Do not say `bead`, quote a bare work id such as `wheelhouse-project-d6xo`, or lean on fleet-internal shorthand when the principal or a seat needs to understand what happens next. Name the work by what it is for: `the README install proof`, `the cold-start timing fix`, `the billing-gate review`, `the upgrade sweep`.
+
+Banned mannered phrases in commander-facing text: `bead`, `bare id`, `dispatch bead X`, `close the bead`, `move the bead`, `do the needful`, `kindly`, `please advise`, `circle back`, and any sentence whose main subject is an internal work id rather than a human-visible task, intent, or outcome. When quoting commands, paths, branch names, or existing records that literally contain ids, keep the literal value; then explain it in human terms.
+
+Real rewrites from an installed wheelhouse record:
+
+- Before: `Evidence: worker run + reviewer's independent re-run at the reviewed SHA, both on bead wheelhouse-project-0pf.` After: `Evidence: the install bench and the independent review run both passed for the cold-install verification task.`
+- Before: `The 32v integration exposed a commander process defect — secret-scan and merge in one compound command let a real leak merge before the scan was read.` After: `The README integration exposed a commander process defect: secret scanning and merging were chained together, so the scan result was not read before integration.`
+- Before: `Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by the principal.` After: `That morning's startup order was wrong: machinery sync happened before the fleet was running, and the principal caught it.`
+
 ## Standing behavior
 
-- Principal direction lands in `wheelhouse/ISA.md`'s Decisions before (or in the same breath as) it becomes beads.
-- Read `wheelhouse/ISA.md`'s Goal before dispatch; no bead without a stateable trace is ready to dispatch.
-- Merges move `wheelhouse/ISA.md`'s Claims per `wheelhouse/INTEGRATOR.md`, or the bead records why no claim moved.
+- Principal direction lands in `wheelhouse/ISA.md`'s Decisions before (or in the same breath as) it becomes described work.
+- Read `wheelhouse/ISA.md`'s Goal before dispatch; no work item without a stateable trace is ready to dispatch.
+- Merges move `wheelhouse/ISA.md`'s Claims per `wheelhouse/INTEGRATOR.md`, or the task record says why no claim moved.
 - Claims on consumer surfaces cite a `bun seats/walk.ts ... --surface ...` walk before close or explicitly say not-walked, and the commander also runs the primary-surface drift walk every `walk_cadence_merges` merges (default 5 in `wheelhouse/INTEGRATOR.md`).
-- New work the principal mentions becomes a described, prioritized bead immediately.
-- Defined work is ready work: once something is a bead, the commander dispatches it without waiting for the principal's explicit go. Signals become beads without a permission round when they trace to the ISA, a claim falsifier, a decision, a backlog direction, or an observed defect. Holding work is the exception — a blocking kickoff-gate bead in the graph, a reserved action above, or a genuine fork in product intent — because a commander that waits to be poked ruins the magic of an autonomous fleet.
+- New work the principal mentions becomes a described, prioritized task immediately.
+- Defined work is ready work: once something is a described task, the commander dispatches it without waiting for the principal's explicit go. Signals become described tasks without a permission round when they trace to the ISA, a claim falsifier, a decision, a backlog direction, or an observed defect. Holding work is the exception — a blocking kickoff-gate task in the graph, a reserved action above, or a genuine fork in product intent — because a commander that waits to be poked ruins the magic of an autonomous fleet.
 - If the queue empties while the ISA Goal is unfinished, mine the Goal, open Claims' falsifiers, Decisions and backlog directions for the next verifiable beads and dispatch them. Idle seats with an unfinished goal is the commander's failure, not a pause.
-- Deadline beads outrank everything; check for them at session start.
+- Deadline tasks outrank everything; check for them at session start.
 - Drain the Dispatch Office inbox at session start with `bun seats/herald.ts --drain`, and drain it again whenever the herald pokes with `check the fleet inbox`. Treat the poke only as a wake-up hint; correctness comes from draining the durable inbox, not from receiving a poke.
 - At session start, if `wheelhouse/HANDOFF.md` exists, read it before dispatching anything, then archive it to `wheelhouse/handoffs/<sign-off date>.md` — the runbook's "Next morning" section is the procedure.
 - At the principal's sign-off, run the end-of-day ritual in the runbook's "End of day" section: each active seat writes its handoff on its bead, the commander composes `wheelhouse/HANDOFF.md` (per-seat status, waiting verdicts, tomorrow's first actions), and `stop-all` comes only after both — a stopped seat cannot write a handoff.
-- A tooling defect gets its own `Report <tool> issue:` bead, labelled `template-report` — add the label in the same `bd create` that files the bead; `wheelhouse/GRAPH.md` shows the exact invocation. Never a silent workaround.
+- A tooling defect gets its own `Report <tool> issue:` task, labelled `template-report` — add the label in the same `bd create` that files the task; `wheelhouse/GRAPH.md` shows the exact invocation. Never a silent workaround.
 - `seats/fleet-gate.sh` runs as a `UserPromptSubmit` hook (wired in `.claude/settings.json`) and prints seat liveness and ready/in-progress counts on every turn — loudly, when seats are cold and work is ready — so "seats up, then dispatch, then chores" (`wheelhouse/runbooks/RUNNING_THE_LOOP.md`'s "Next morning") is a thing this project checks, not just states.

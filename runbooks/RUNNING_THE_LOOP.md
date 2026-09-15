@@ -44,7 +44,17 @@ What remains forbidden, in every shape: the session that authored a change writi
 
 ### 1. Dispatch
 
-**What crosses:** a bead id, and enough for someone to start without asking.
+#### Commander voice
+
+Commander-facing prose is for humans first. In tasks, intents, outcomes, handoffs, kickoff notes, and status summaries, name work by what it is meant to accomplish rather than by fleet jargon. Do not say `bead`, do not cite a bare namespace id such as `wheelhouse-project-d6xo` as the subject of a sentence, and do not use mannered filler such as `kindly`, `please advise`, `circle back`, or `do the needful`. Acceptable literal exceptions are commands, branch names, paths, and quotes from existing records; pair them with the human task name.
+
+Three real rewrites from commander records:
+
+- Before: `Evidence: worker run + reviewer's independent re-run at the reviewed SHA, both on bead wheelhouse-project-0pf.` After: `Evidence: the install bench and the independent review run both passed for the cold-install verification task.`
+- Before: `The 32v integration exposed a commander process defect — secret-scan and merge in one compound command let a real leak merge before the scan was read.` After: `The README integration exposed a commander process defect: secret scanning and merging were chained together, so the scan result was not read before integration.`
+- Before: `Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by the principal.` After: `That morning's startup order was wrong: machinery sync happened before the fleet was running, and the principal caught it.`
+
+**What crosses:** a task name, the graph id needed for tooling, and enough for someone to start without asking.
 
 The commander reads `wheelhouse/ISA.md`'s Goal before choosing what to send next, because dispatch is a claim about what advances that goal. A bead with no stateable trace under `wheelhouse/GRAPH.md`'s rule is not dispatched; fix the bead first.
 
