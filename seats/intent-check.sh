@@ -92,12 +92,19 @@ check_claim_walk_gate_for_commit() {
 find_root() {
   dir=${1:-$(pwd)}
   while :; do
-    if [ -f "$dir/wheelhouse/.template-source" ] && grep -Eq '^(product_repo|product_repos|product-repo|product-repos)=' "$dir/wheelhouse/.template-source"; then
-      product=$(sed -n 's/^product_repo=//p; s/^product_repos=//p; s/^product-repo=//p; s/^product-repos=//p' "$dir/wheelhouse/.template-source" | tr ',:' '\n\n' | sed '/^[[:space:]]*$/d' | head -1)
-      if [ -n "$product" ] && [ -f "$product/wheelhouse/ISA.md" ] && [ -d "$product/.beads" ]; then
-        printf '%s\n' "$product"
+    if [ -f "$dir/wheelhouse/.template-source" ]; then
+      if grep -Eq '^(product_repo|product_repos|product-repo|product-repos)=' "$dir/wheelhouse/.template-source"; then
+        product=$(sed -n 's/^product_repo=//p; s/^product_repos=//p; s/^product-repo=//p; s/^product-repos=//p' "$dir/wheelhouse/.template-source" | tr ',:' '\n\n' | sed '/^[[:space:]]*$/d' | head -1)
+        if [ -n "$product" ] && [ -f "$product/wheelhouse/ISA.md" ] && [ -d "$product/.beads" ]; then
+          printf '%s\n' "$product"
+          return 0
+        fi
+      fi
+      if [ -f "$dir/wheelhouse/ISA.md" ] && [ -d "$dir/.beads" ]; then
+        printf '%s\n' "$dir"
         return 0
       fi
+      return 1
     fi
     if [ -f "$dir/wheelhouse/ISA.md" ] && [ -d "$dir/.beads" ]; then
       printf '%s\n' "$dir"
