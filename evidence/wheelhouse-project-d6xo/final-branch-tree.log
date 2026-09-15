@@ -1,0 +1,22 @@
+$ git status --short
+?? evidence/wheelhouse-project-d6xo/final-branch-tree.log
+$ git symbolic-ref --short HEAD
+fleet/wheelhouse-project-d6xo
+$ git rev-parse HEAD
+5fca71d94e86d957bab67a234152062ab72ff1b1
+$ git rev-parse fleet/wheelhouse-project-d6xo
+5fca71d94e86d957bab67a234152062ab72ff1b1
+$ git diff --name-only main...HEAD
+BOOTSTRAP.md
+evidence/wheelhouse-project-d6xo/before-after-examples.txt
+evidence/wheelhouse-project-d6xo/commander-voice-lint-selftest.log
+evidence/wheelhouse-project-d6xo/evidence-scrub.log
+evidence/wheelhouse-project-d6xo/intent-check-selftest.log
+evidence/wheelhouse-project-d6xo/legibility-selftest.log
+evidence/wheelhouse-project-d6xo/static-doctrine-grep.log
+generated/CLAUDE.md.example
+generated/STARTUP.md.example
+runbooks/RUNNING_THE_LOOP.md
+runbooks/UPGRADE.md
+seats/commander-voice-lint.selftest.sh
+seats/commander-voice-lint.sh
