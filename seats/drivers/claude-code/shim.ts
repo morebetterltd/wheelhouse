@@ -16,7 +16,37 @@ function optionalArg(name: string): string | null {
 function appendJson(file: string, obj: any): void {
   fs.appendFileSync(file, JSON.stringify({ timestamp: Date.now(), ...obj }) + "\n");
 }
-function slugCwd(cwd: string): string { return cwd.replace(/[/.]/g, "-"); }
+function projectsRoot(): string {
+  const root = defaultLogin ? path.join(os.homedir(), ".claude") : accountDir;
+  return path.join(root, "projects");
+}
+function findSessionFile(id: string): string | null {
+  const root = projectsRoot();
+  if (!fs.existsSync(root)) return null;
+  const stack = [root];
+  const want = `${id}.jsonl`;
+  while (stack.length) {
+    const dir = stack.pop()!;
+    let ents: fs.Dirent[];
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const ent of ents) {
+      const full = path.join(dir, ent.name);
+      if (ent.isFile() && ent.name === want) return full;
+      if (ent.isDirectory()) stack.push(full);
+    }
+  }
+  return null;
+}
+function waitForSessionFile(id: string, ms = Number(process.env.WHEELHOUSE_CLAUDE_SESSION_LOCATE_MS || 2000)): string | null {
+  const deadline = Date.now() + ms;
+  let found: string | null = null;
+  do {
+    found = findSessionFile(id);
+    if (found) return found;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  } while (Date.now() < deadline);
+  return null;
+}
 
 const log = requiredArg("log");
 const rawLog = requiredArg("raw-log");
@@ -59,7 +89,7 @@ if (resumeRef) args.push("--resume", path.basename(resumeRef, ".jsonl"));
 const child = spawn("claude", args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
 
 let sessionId: string | null = resumeRef ? path.basename(resumeRef, ".jsonl") : null;
-let sessionFile: string | null = sessionId ? sessionFileFor(sessionId) : null;
+let sessionFile: string | null = sessionId ? findSessionFile(sessionId) : null;
 let resolvedModel = model;
 let streaming = false;
 let stdoutBuffer = "";
@@ -67,11 +97,9 @@ let fifoBuffer = "";
 let pendingPromptResponses: any[] = [];
 let currentAssistantContent: any[] = [];
 let turnEndEmitted = false;
+let capacityErrorEmitted = false;
+const toolNames = new Map<string, string>();
 
-function sessionFileFor(id: string): string {
-  const root = defaultLogin ? path.join(os.homedir(), ".claude") : accountDir;
-  return path.join(root, "projects", slugCwd(cwd), `${id}.jsonl`);
-}
 function sendResponse(id: any, success: boolean, data?: any, error?: string): void {
   appendJson(log, { type: "response", id, success, ...(success ? { data } : { error }) });
 }
@@ -86,6 +114,7 @@ function contentFromParts(parts: any[]): any[] {
     else if (part.type === "thinking") content.push({ type: "thinking", thinking: part.thinking ?? part.text ?? "" });
     else if (part.type === "tool_use") {
       const args = part.input ?? {};
+      if (part.id) toolNames.set(String(part.id), String(part.name ?? ""));
       content.push({ type: "toolCall", id: part.id, name: part.name, args });
       appendJson(log, { type: "tool_execution_start", toolCallId: part.id, toolName: part.name, args });
     }
@@ -98,7 +127,7 @@ function emitToolResultEnd(parts: any[]): void {
     appendJson(log, {
       type: "tool_execution_end",
       toolCallId: part.tool_use_id,
-      toolName: part.name ?? null,
+      toolName: part.name ?? toolNames.get(String(part.tool_use_id)) ?? null,
       result: { isError: Boolean(part.is_error), content: part.content ?? part.text ?? "" },
     });
   }
@@ -123,16 +152,17 @@ child.stdout.on("data", (chunk) => {
 
     if (ev.type === "rate_limit_event") {
       const info = ev.rate_limit_info ?? {};
-      if (info.status && info.status !== "allowed") {
-        streaming = false;
-        appendJson(log, { type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text: JSON.stringify(info) }], stopReason: "error" }], error: JSON.stringify(info) });
+      if (info.status && info.status !== "allowed" && !capacityErrorEmitted) {
+        capacityErrorEmitted = true;
+        const text = JSON.stringify(info);
+        appendJson(log, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text }], stopReason: "error", error: text } });
       }
       continue;
     }
     if (ev.type === "system" && ev.subtype === "init") {
       sessionId = ev.session_id || sessionId;
       resolvedModel = ev.model || resolvedModel;
-      if (sessionId) sessionFile = sessionFileFor(sessionId);
+      if (sessionId) sessionFile = waitForSessionFile(sessionId);
       if (streaming) appendJson(log, { type: "agent_start" });
       for (const id of pendingPromptResponses.splice(0)) sendResponse(id, true, responseState({ delivered: true }));
       continue;
@@ -148,6 +178,7 @@ child.stdout.on("data", (chunk) => {
     }
     if (ev.type === "result") {
       streaming = false;
+      if (sessionId && !sessionFile) sessionFile = waitForSessionFile(sessionId);
       emitTurnEnd();
       const ok = ev.subtype === "success" && !ev.is_error;
       const stopReason = ok ? "stop" : ev.subtype === "error_during_execution" ? "aborted" : "error";
@@ -160,6 +191,7 @@ child.stdout.on("data", (chunk) => {
 function sendUser(id: any, message: string): void {
   streaming = true;
   turnEndEmitted = false;
+  capacityErrorEmitted = false;
   currentAssistantContent = [];
   appendJson(log, { type: "message_end", message: { role: "user", content: [{ type: "text", text: message }] } });
   child.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: message }] } }) + "\n");

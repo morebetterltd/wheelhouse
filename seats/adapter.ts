@@ -942,10 +942,6 @@ function requireClaudeCredential(name: string, entry: SeatEntry, accountDir: str
   }
 }
 
-function claudeSessionFile(accountDir: string, cwd: string, sessionId: string): string {
-  return path.join(accountDir, "projects", cwd.replace(/[/.]/g, "-"), `${sessionId}.jsonl`);
-}
-
 function claudeChildEnv(entry: SeatEntry, accountDir: string, name: string): NodeJS.ProcessEnv {
   return scrubbedSeatEnv({
     PATH: hostBudgetPath(ROOT),
@@ -1037,7 +1033,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
     fifo,
     log,
     sessionId: st.data?.sessionId ?? null,
-    sessionFile: st.data?.sessionFile ?? (st.data?.sessionId ? claudeSessionFile(accountDir, requestedCwd, st.data.sessionId) : null),
+    sessionFile: st.data?.sessionFile ?? null,
     model: st.data?.model ?? entry.model,
     ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}),
   };
