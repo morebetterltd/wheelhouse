@@ -38,7 +38,7 @@ worker-1         worker            RUNNING  pid 11353   last-event agent_end  be
 {"timestamp":1789501596917,"type":"agent_start"}
 {"timestamp":1789501600117,"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Bead bead-codex\n\nFrom your developer instructions, what exact CODEX_BRIEF_TOKEN token were you told to answer? Reply with the token only."}]}}
 {"timestamp":1789501601624,"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"CODEX_BRIEF_TOKEN_7f1a"}]}}
-{"timestamp":1789501601747,"type":"capacity","rateLimits":{"limitId":"codex","limitName":null,"primary":{"usedPercent":28,"windowDurationMins":10080,"resetsAt":1789819881},"secondary":null,"credits":{"hasCredits":false,"unlimited":false,"balance":"0"},"individualLimit":null,"planType":"pro","rateLimitReachedType":null}}
+{"timestamp":1789501601747,"type":"capacity","rateLimits":{"limitId":"codex","limitName":null,"primary":{"windowDurationMins":10080,"resetsAt":1789819881},"secondary":null,"individualLimit":null,"rateLimitReachedType":null}}
 {"timestamp":1789501601755,"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"CODEX_BRIEF_TOKEN_7f1a"}]}}
 {"timestamp":1789501601755,"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"CODEX_BRIEF_TOKEN_7f1a"}],"stopReason":"stop"}]}
 {"timestamp":1789501613585,"type":"response","id":"f320c946-61bf-4617-bfd8-aff1cd814f61","success":true,"data":{"isStreaming":false,"sessionId":"01a0a69b-241e-7711-bae6-30e078ca9ed4","sessionFile":"[home]/.codex/sessions/2026/09/15/rollout-2026-09-15T15-46-20-01a0a69b-241e-7711-bae6-30e078ca9ed4.jsonl","model":"gpt-5.6-sol"}}
@@ -48,7 +48,7 @@ worker-1         worker            RUNNING  pid 11353   last-event agent_end  be
 {"timestamp":1789501627347,"type":"agent_start"}
 {"timestamp":1789501633776,"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Bead bead-resume\n\nAfter resume, reply exactly CODEX_RESUME_OK."}]}}
 {"timestamp":1789501635333,"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"CODEX_RESUME_OK"}]}}
-{"timestamp":1789501635491,"type":"capacity","rateLimits":{"limitId":"codex","limitName":null,"primary":{"usedPercent":28,"windowDurationMins":10080,"resetsAt":1789819881},"secondary":null,"credits":{"hasCredits":false,"unlimited":false,"balance":"0"},"individualLimit":null,"planType":"pro","rateLimitReachedType":null}}
+{"timestamp":1789501635491,"type":"capacity","rateLimits":{"limitId":"codex","limitName":null,"primary":{"windowDurationMins":10080,"resetsAt":1789819881},"secondary":null,"individualLimit":null,"rateLimitReachedType":null}}
 {"timestamp":1789501635503,"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"CODEX_RESUME_OK"}]}}
 {"timestamp":1789501635504,"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"CODEX_RESUME_OK"}],"stopReason":"stop"}]}
 == stop final ==

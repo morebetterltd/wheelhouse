@@ -1,0 +1,14 @@
+$ bun seats/adapter.ts spawn claude-default wheelhouse-project-er5m.3
+seat claude-default (account label: default-login-smoke): pid 85768, session null
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.3/seats/logs/claude-default.jsonl
+$ bun seats/adapter.ts dispatch claude-default wheelhouse-project-er5m.3 "Run Bash sleep 5, then answer SLEPT."
+dispatched wheelhouse-project-er5m.3 to claude-default; watch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.3/seats/logs/claude-default.jsonl
+$ bun seats/adapter.ts steer claude-default "After the sleep, also mention STEERED."
+steered claude-default mid-turn
+$ wait for agent_end
+$ tail normalized agent_end
+{"timestamp":1789484459186,"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"SLEPT. STEERED."}],"stopReason":"stop"}]}
+$ tail raw result
+{"duration_api_ms":3862,"stop_reason":"end_turn","session_id":"e67a51f2-5882-4ecf-815f-c7de434e8c61","permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","subagent_stats":{"spawned":0,"requested":{"background":0,"foreground":0,"unset":0},"started_in_background":0,"max_depth":0,"spawned_by_subagents":0,"completed":0,"failed":0,"killed":{"parent":0,"user":0,"system":0},"refused":{"depth_limit":0,"concurrency_limit":0,"budget":0},"by_type":{}},"is_error":false,"num_turns":2,"subtype":"success","api_error_status":null,"result":"SLEPT. STEERED.","ttft_ms":1769,"type":"result","duration_ms":18596,"uuid":"73181c0f-9d50-421a-a0a9-405168d83a02","ttft_stream_ms":1287,"time_to_request_ms":409,"first_content_frame_ms":1472,"queued_turn_count":0,"result_index":0}
+$ bun seats/adapter.ts stop claude-default
+seat claude-default stopped; session e67a51f2-5882-4ecf-815f-c7de434e8c61 kept for resume

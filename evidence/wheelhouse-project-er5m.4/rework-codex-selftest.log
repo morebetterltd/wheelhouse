@@ -1,0 +1,3 @@
+RUN seats/drivers/codex/selftest.sh
+codex.selftest: PASS (shim queue, steer, mappings, auth-dead, idle settle, and stripped credential env vars)
+rc=0
