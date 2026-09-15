@@ -285,4 +285,14 @@ expect_output umbrella_missing 'refusing to guess'
 say 'ok 12 - .template-source without product-repo STOPs instead of scanning umbrella'
 pass_count=$((pass_count + 1))
 
+nested_missing="$umb/nested-missing-key"
+mkdir -p "$nested_missing/wheelhouse"
+printf 'path=%s/template\ncommit=fixture\n' "$nested_missing" >"$nested_missing/wheelhouse/.template-source"
+run_capture umbrella_nested_missing sh -c "cd '$nested_missing' && '$CHECK'"
+expect_rc umbrella_nested_missing 2
+expect_output umbrella_nested_missing 'no product-repo= key'
+expect_output umbrella_nested_missing 'refusing to guess'
+say 'ok 13 - nearest .template-source without product-repo STOPs even inside a real umbrella'
+pass_count=$((pass_count + 1))
+
 say "intent-check.selftest: PASS ($pass_count legs)"
