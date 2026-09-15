@@ -43,8 +43,8 @@ This specimen shows only the generated half. The file at `wheelhouse/fleet/SEATS
 <intro line>
 
 ## Contract                 <- copied verbatim from contracts/SEATS.md, never edited
-  ### What a seat is        <- a commander-owned persistent pi RPC process
-  ### Lifecycle             <- context is a cache; session survives stop/resume
+  ### What a seat is        <- persistent seats, plus verify.ts REVIEWER and walk.ts VERIFIER one-shots
+  ### Lifecycle             <- persistent context is a cache; session survives stop/resume
   ### Seat accounting       <- one seat = one subscription = one human beneficiary
   ### Rules
   ### Running a seat        <- one paragraph, pointing at seats/README.md
