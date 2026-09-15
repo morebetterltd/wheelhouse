@@ -1,0 +1,12 @@
+$ rg -n "the principal|wheelhouse-project-0pf|wheelhouse-project-er5m\\.2|\\(q4v\\)|fleet-gate hook is read-only" generated/CLAUDE.md.example runbooks/RUNNING_THE_LOOP.md seats/commander-voice-lint.selftest.sh seats/commander-voice-lint.sh
+generated/CLAUDE.md.example:37:- Before: `Evidence: worker run + reviewer's independent re-run at the reviewed SHA, both on bead wheelhouse-project-0pf.` After: `Evidence: the install bench and the independent review run both passed for the cold-install verification task.`
+generated/CLAUDE.md.example:39:- Before: `Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by the principal.` After: `That morning's startup order was wrong: machinery sync happened before the fleet was running, and the principal caught it.`
+runbooks/RUNNING_THE_LOOP.md:53:- Before: `Evidence: worker run + reviewer's independent re-run at the reviewed SHA, both on bead wheelhouse-project-0pf.` After: `Evidence: the install bench and the independent review run both passed for the cold-install verification task.`
+runbooks/RUNNING_THE_LOOP.md:55:- Before: `Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by the principal.` After: `That morning's startup order was wrong: machinery sync happened before the fleet was running, and the principal caught it.`
+seats/commander-voice-lint.selftest.sh:31:The fleet-gate hook is read-only and runs a two-step check before morning startup chores.
+seats/commander-voice-lint.selftest.sh:55:Shipped wheelhouse-project-0pf to main.
+seats/commander-voice-lint.selftest.sh:63:Continue wheelhouse-project-er5m.2 after the merge.
+seats/commander-voice-lint.selftest.sh:71:Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by the principal.
+rc=0
+$ ! rg -n "the principal" generated/CLAUDE.md.example runbooks/RUNNING_THE_LOOP.md
+rc=0
