@@ -345,6 +345,7 @@ if [ "$login_needed" -eq 1 ]; then
       note "default-login smoke route (not for production rosters):"
       note "  claude already uses the operator default login; CLAUDE_CONFIG_DIR stays unset"
       ;;
+
     claude-code:*)
       note "one-time Claude subscription login (default for claude-code seats):"
       note "  CLAUDE_CONFIG_DIR=\"$seat_dir\" claude auth login --claudeai"

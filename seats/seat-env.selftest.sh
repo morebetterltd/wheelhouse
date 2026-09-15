@@ -298,9 +298,14 @@ if cmp -s "$FOREIGN/trust.json" "$FIX/foreign-before.json"; then
 else fail "the refusal still rewrote trust.json"; fi
 
 phase "5. refusing to guess"
+NO_ROSTER_PROJECT="$FIX/no-roster-project"
+mkdir -p "$NO_ROSTER_PROJECT"
+OUT="$(env HOME="$HOME_FIX" PATH="$FIX/emptybin:/usr/bin:/bin" "$SCRIPT" alpha worker-3 "$NO_ROSTER_PROJECT" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && says "MISSING pi"; then pass "no pi on PATH is a STOP without a roster, named as MISSING"
+else fail "a missing pi without a roster did not stop the run (exit $RC)"; fi
 OUT="$(env HOME="$HOME_FIX" PATH="$FIX/node-only-bin:/bin" "$SCRIPT" alpha worker-3 "$PROJECT" 2>&1)"; RC=$?
-if [ $RC -ne 0 ] && says "MISSING pi"; then pass "no pi on PATH is a STOP, named as MISSING"
-else fail "a missing pi did not stop the run (exit $RC)"; fi
+if [ $RC -ne 0 ] && says "MISSING pi"; then pass "no pi on PATH is a STOP with node available, named as MISSING"
+else fail "a missing pi with node available did not stop the run (exit $RC)"; fi
 OUT="$(env HOME="$HOME_FIX" PATH="$FIX/emptybin:/usr/bin:/bin" "$SCRIPT" alpha worker-labeled "$PROJECT" 2>&1)"; RC=$?
 if [ $RC -ne 0 ] && says "MISSING node-or-bun"; then pass "no node/bun on PATH with seats.json is a STOP, named as MISSING"
 else fail "missing node/bun did not produce the MISSING line (exit $RC): $OUT"; fi
