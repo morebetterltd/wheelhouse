@@ -298,24 +298,6 @@ function readNamedRosterEntry(name: string): SeatEntry | undefined {
   return seats[name];
 }
 
-function requireSeatFromNamedRoster(name: string): SeatEntry {
-  if (!fs.existsSync(ROSTER_FILE)) {
-    die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
-  }
-  const roster = parseRosterFile();
-  const entry = roster[name];
-  if (!entry) {
-    die(`no seat named "${name}" in seats/seats.json (have: ${Object.keys(roster).join(", ") || "none"})`);
-  }
-  validateHarness(name, entry);
-  validateAuthRoute(name, entry);
-  validateShadow(name, entry);
-  validateSkills(name, entry);
-  if (entry.external) die(`"${name}" is external — it runs on its own harness, not on a Pi seat`);
-  if (!entry.account?.dir) die(`seat "${name}" has no account.dir in seats/seats.json`);
-  return entry;
-}
-
 function driverForRunningSeat(name: string, operation: string): SeatDriver {
   let entry: SeatEntry | undefined;
   try {
@@ -748,7 +730,14 @@ function stderrTail(rec: { log: string }, maxBytes = 8 * 1024): string {
 // ---------------------------------------------------------------------------
 
 function requireSeat(name: string): SeatEntry {
-  return requireSeatFromNamedRoster(name);
+  const roster = readRoster();
+  const entry = roster[name];
+  if (!entry) {
+    die(`no seat named "${name}" in seats/seats.json (have: ${Object.keys(roster).join(", ") || "none"})`);
+  }
+  if (entry.external) die(`"${name}" is external — it runs on its own harness, not on a Pi seat`);
+  if (!entry.account?.dir) die(`seat "${name}" has no account.dir in seats/seats.json`);
+  return entry;
 }
 
 function roleBriefPath(role: string): string {
