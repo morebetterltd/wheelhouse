@@ -1,0 +1,19 @@
+ok 1 - clean state PASSes
+ok 2 - closed bead still labelled needs-review FAILs
+ok 3 - planted merge without claim movement FAILs
+Automatic merge went well; stopped before committing as requested
+ok 4 - ISA-moving merge PASSes without escape hatch
+Automatic merge went well; stopped before committing as requested
+ok 5 - consumer-surface claim citing seats/walk.ts verdict and evidence home PASSes
+Automatic merge went well; stopped before committing as requested
+ok 6 - consumer-surface claim with Not walked statement PASSes
+Automatic merge went well; stopped before committing as requested
+ok 7 - silent consumer-surface claim FAILs
+Automatic merge went well; stopped before committing as requested
+ok 8 - non-consumer-surface claim is exempt from walk citation
+ok 9 - planted traceless bead FAILs
+ok 10 - uncommitted ISA exits distinct unrunnable code 2
+ok 11 - umbrella no-argv scan resolves product-repo from .template-source
+ok 12 - .template-source without product-repo STOPs instead of scanning umbrella
+ok 13 - nearest .template-source without product-repo STOPs even inside a real umbrella
+intent-check.selftest: PASS (13 legs)
