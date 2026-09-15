@@ -11,10 +11,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 WALK="${1:-$HERE/walk.ts}"
 VERIFY="$(cd "$(dirname "$WALK")" && pwd)/verify.ts"
 BRIEFS="$(cd "$(dirname "$WALK")" && pwd)/briefs.ts"
+HARNESS="$(cd "$(dirname "$WALK")" && pwd)/harness.ts"
 HOST_BUDGET_TS="$(cd "$(dirname "$WALK")" && pwd)/host-budget.ts"
 SCRUB="$HERE/evidence-scrub.sh"
 [ -f "$WALK" ] || { echo "selftest: not found: $WALK" >&2; exit 2; }
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
+[ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 [ -x "$SCRUB" ] || { echo "selftest: not executable: $SCRUB" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
@@ -71,6 +73,7 @@ build_proj(){
   mkdir -p "$proj/seats" "$proj/contracts" "$HOME_FIX/.pi-seats-$ns/verifier"
   cp "$WALK" "$proj/seats/walk.ts"
   cp "$VERIFY" "$proj/seats/verify.ts"
+  cp "$HARNESS" "$proj/seats/harness.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   cp "$SCRUB" "$proj/seats/evidence-scrub.sh"

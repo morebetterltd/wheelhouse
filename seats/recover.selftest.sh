@@ -51,9 +51,11 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 RECOVER="${1:-$HERE/recover.ts}"
 ADAPTER="$HERE/adapter.ts"
 BRIEFS="$HERE/briefs.ts"
+HARNESS="$HERE/harness.ts"
 HOST_BUDGET_TS="$HERE/host-budget.ts"
 [ -f "$RECOVER" ] || { echo "selftest: not found: $RECOVER" >&2; exit 2; }
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER (recover's resume commands point at it)" >&2; exit 2; }
+[ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 [ -f "$HOST_BUDGET_TS" ] || { echo "selftest: not found: $HOST_BUDGET_TS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
@@ -193,6 +195,7 @@ mkdir -p "$PROJ/seats" "$PROJ/contracts"
 cp "$ADAPTER" "$PROJ/seats/adapter.ts"
 cp "$RECOVER" "$PROJ/seats/recover.ts"
 cp "$BRIEFS" "$PROJ/seats/briefs.ts"
+cp "$HARNESS" "$PROJ/seats/harness.ts"
 cp "$HOST_BUDGET_TS" "$PROJ/seats/host-budget.ts"
 printf '# Fleet: Worker\n\nfixture brief.\n' > "$PROJ/contracts/WORKER.md"
 cat > "$PROJ/seats/seats.json" <<EOF
