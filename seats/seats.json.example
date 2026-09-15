@@ -17,7 +17,11 @@
       "harness": "pi",
       "provider": "openai-codex",
       "model": "gpt-5.5:high",
-      "account": { "dir": "~/.pi-seats-myproject/worker-2", "label": "work-chatgpt-2", "authRoute": "oauth" }
+      "account": {
+        "dir": "~/.pi-seats-myproject/worker-2",
+        "label": "work-chatgpt-2",
+        "authRoute": "oauth"
+      }
     },
     "reviewer": {
       "role": "reviewer",
@@ -29,18 +33,27 @@
     "reviewer-shadow": {
       "role": "reviewer",
       "shadow": true,
-      "harness": "pi",
-      "provider": "openai-codex",
-      "model": "gpt-5.5",
-      "account": { "dir": "~/.pi-seats-myproject/reviewer-shadow", "authRoute": "oauth" }
+      "harness": "claude-code",
+      "provider": "anthropic",
+      "model": "sonnet",
+      "account": {
+        "dir": "~/.pi-seats-myproject/reviewer-shadow",
+        "authRoute": "oauth"
+      },
+      "allowedTools": "Bash(git status:*),Bash(bun test:*)"
     },
     "researcher": {
       "role": "researcher",
       "harness": "pi",
       "provider": "anthropic",
       "model": "claude-sonnet-5",
-      "skills": ["~/.agents/skills/example-research-skill"],
-      "account": { "dir": "~/.pi-seats-myproject/researcher", "authRoute": "api_key" }
+      "skills": [
+        "~/.agents/skills/example-research-skill"
+      ],
+      "account": {
+        "dir": "~/.pi-seats-myproject/researcher",
+        "authRoute": "api_key"
+      }
     }
   }
 }

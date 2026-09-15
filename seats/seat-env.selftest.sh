@@ -67,9 +67,10 @@ FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 PROJECT="$FIX/project"
-mkdir -p "$HOME_FIX" "$BIN" "$PROJECT/seats" "$FIX/emptybin"
+mkdir -p "$HOME_FIX" "$BIN" "$PROJECT/seats" "$FIX/emptybin" "$FIX/node-only-bin"
 printf '#!/bin/sh\nexit 0\n' > "$BIN/pi"
 chmod +x "$BIN/pi"
+ln -s "$(command -v node)" "$FIX/node-only-bin/node"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):/usr/bin:/bin"
 
 # What trust.json must contain, written down BEFORE anything runs, so a wrong
@@ -240,11 +241,7 @@ else fail "rerun rewrote trust.json"; fi
 # an unquoted regex fragment.
 D3="$HOME_FIX/.pi-seats-alpha/worker-trust-extra"
 mkdir -p "$D3"
-printf '{
-  "%s/elsewhere": true,
-  "%s": true
-}
-' "$PROJECT" "$PROJECT" > "$D3/trust.json"
+printf '{\n  "%s/elsewhere": true,\n  "%s": true\n}\n' "$PROJECT" "$PROJECT" > "$D3/trust.json"
 cp "$D3/trust.json" "$FIX/trust-extra-before.json"
 run alpha worker-trust-extra "$PROJECT"
 if [ $RC -eq 0 ] && says "grants $PROJECT among other entries"; then
@@ -304,8 +301,11 @@ phase "5. refusing to guess"
 NO_ROSTER_PROJECT="$FIX/no-roster-project"
 mkdir -p "$NO_ROSTER_PROJECT"
 OUT="$(env HOME="$HOME_FIX" PATH="$FIX/emptybin:/usr/bin:/bin" "$SCRIPT" alpha worker-3 "$NO_ROSTER_PROJECT" 2>&1)"; RC=$?
-if [ $RC -ne 0 ] && says "MISSING pi"; then pass "no pi on PATH is a STOP, named as MISSING"
-else fail "a missing pi did not stop the run (exit $RC)"; fi
+if [ $RC -ne 0 ] && says "MISSING pi"; then pass "no pi on PATH is a STOP without a roster, named as MISSING"
+else fail "a missing pi without a roster did not stop the run (exit $RC)"; fi
+OUT="$(env HOME="$HOME_FIX" PATH="$FIX/node-only-bin:/bin" "$SCRIPT" alpha worker-3 "$PROJECT" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && says "MISSING pi"; then pass "no pi on PATH is a STOP with node available, named as MISSING"
+else fail "a missing pi with node available did not stop the run (exit $RC)"; fi
 OUT="$(env HOME="$HOME_FIX" PATH="$FIX/emptybin:/usr/bin:/bin" "$SCRIPT" alpha worker-labeled "$PROJECT" 2>&1)"; RC=$?
 if [ $RC -ne 0 ] && says "MISSING node-or-bun"; then pass "no node/bun on PATH with seats.json is a STOP, named as MISSING"
 else fail "missing node/bun did not produce the MISSING line (exit $RC): $OUT"; fi
@@ -356,7 +356,7 @@ else
 fi
 
 SAB_AUTH="$FIX/seat-env-no-auth-guard.sh"
-sed 's|^if auth_is_identity; then$|if false; then|' "$SCRIPT" > "$SAB_AUTH"
+sed 's|^    if auth_is_identity; then$|    if false; then|' "$SCRIPT" > "$SAB_AUTH"
 chmod +x "$SAB_AUTH"
 if cmp -s "$SCRIPT" "$SAB_AUTH"; then
   fail "canary: could not cut the auth guard — its line no longer matches the pattern this test cuts, so the canary proves nothing"

@@ -175,9 +175,9 @@ if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   ' "$roster_file" "$seat")"
   if [ -n "$auth_route" ]; then
     case "$auth_route" in
-      oauth|api_key|env) : ;;
-      __INVALID_AUTH_ROUTE__:*) die "seat \"$seat\" has an invalid account.authRoute \"${auth_route#__INVALID_AUTH_ROUTE__:}\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
-      *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
+      oauth|api_key|env|default) : ;;
+      __INVALID_AUTH_ROUTE__:*) die "seat \"$seat\" has an invalid account.authRoute \"${auth_route#__INVALID_AUTH_ROUTE__:}\" in $roster_file — must be one of oauth, api_key, env, default (or omitted)" ;;
+      *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env, default (or omitted)" ;;
     esac
   fi
   shadow_value="$($json_runtime -e '
@@ -276,17 +276,35 @@ auth_is_identity() {
 }
 
 login_needed=1
-if auth_is_identity; then
-  login_needed=0
-  note "exists  $auth_file — this seat is already logged in; not printing a"
-  note "        login command. This script never touches auth.json: it is the"
-  note "        seat's identity and overwriting it has no undo. To re-login"
-  note "        deliberately, remove it first:  rm \"$auth_file\""
-elif [ -e "$auth_file" ]; then
-  note "empty   $auth_file — pi auto-creates an empty {} auth.json on a first"
-  note "        headless run; that is not a login. The login command below"
-  note "        fills it in place."
-fi
+case "$harness" in
+  claude-code)
+    claude_auth_file="$seat_dir/.claude.json"
+    if [ -s "$claude_auth_file" ]; then
+      login_needed=0
+      note "exists  $claude_auth_file — this Claude Code seat is already logged in; not printing a login command"
+    fi
+    ;;
+  codex)
+    codex_auth_file="$seat_dir/auth.json"
+    if [ -s "$codex_auth_file" ]; then
+      login_needed=0
+      note "exists  $codex_auth_file — this Codex seat is already logged in; not printing a login command"
+    fi
+    ;;
+  *)
+    if auth_is_identity; then
+      login_needed=0
+      note "exists  $auth_file — this seat is already logged in; not printing a"
+      note "        login command. This script never touches auth.json: it is the"
+      note "        seat's identity and overwriting it has no undo. To re-login"
+      note "        deliberately, remove it first:  rm \"$auth_file\""
+    elif [ -e "$auth_file" ]; then
+      note "empty   $auth_file — pi auto-creates an empty {} auth.json on a first"
+      note "        headless run; that is not a login. The login command below"
+      note "        fills it in place."
+    fi
+    ;;
+esac
 
 # --- hand-back ---------------------------------------------------------------
 note ""
@@ -298,7 +316,13 @@ note ""
 note "point a process at this seat:"
 case "$harness" in
   pi) note "  export PI_CODING_AGENT_DIR=\"$seat_dir\"" ;;
-  claude-code) note "  export CLAUDE_CONFIG_DIR=\"$seat_dir\"" ;;
+  claude-code)
+    if [ "$auth_route" = "default" ]; then
+      note "  # account.authRoute=default: leave CLAUDE_CONFIG_DIR unset for this smoke/evidence run"
+    else
+      note "  export CLAUDE_CONFIG_DIR=\"$seat_dir\""
+    fi
+    ;;
   codex) note "  export CODEX_HOME=\"$seat_dir\"" ;;
 esac
 if [ "$login_needed" -eq 1 ]; then
@@ -317,6 +341,11 @@ if [ "$login_needed" -eq 1 ]; then
       note "metered Claude API-key route:"
       note "  CLAUDE_CONFIG_DIR=\"$seat_dir\" claude auth login --console"
       ;;
+    claude-code:default)
+      note "default-login smoke route (not for production rosters):"
+      note "  claude already uses the operator default login; CLAUDE_CONFIG_DIR stays unset"
+      ;;
+
     claude-code:*)
       note "one-time Claude subscription login (default for claude-code seats):"
       note "  CLAUDE_CONFIG_DIR=\"$seat_dir\" claude auth login --claudeai"

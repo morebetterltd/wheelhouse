@@ -182,6 +182,7 @@ interface SeatEntry {
   external?: boolean;
   shadow?: boolean;
   skills?: string[];
+  allowedTools?: string;
   account?: { dir: string; label?: string; authRoute?: string };
 }
 
@@ -191,7 +192,7 @@ interface SeatEntry {
 // `env` for a provider env var exported in the spawning shell. Durable but
 // optional — `seats/seats.json` written before this field existed has no
 // `account.authRoute` at all, and that stays a valid roster.
-const AUTH_ROUTES = ["oauth", "api_key", "env"] as const;
+const AUTH_ROUTES = ["oauth", "api_key", "env", "default"] as const;
 
 function validateAuthRoute(seatName: string, entry: SeatEntry): void {
   const route = entry.account?.authRoute;
@@ -256,6 +257,7 @@ interface SeatRecord {
   accountLabel?: string;
   role: string;
   roleBrief: string;
+  roleBriefHash?: string;
   cwd: string;
   fifo: string;
   log: string;
@@ -306,8 +308,7 @@ function driverForRunningSeat(name: string, operation: string): SeatDriver {
     return PI_DRIVER;
   }
   if (!entry) return PI_DRIVER;
-  requirePiHarness(name, entry, operation);
-  return PI_DRIVER;
+  return driverForSeat(name, entry, operation);
 }
 
 function readState(): State {
@@ -736,7 +737,8 @@ function requireSeat(name: string): SeatEntry {
     die(`no seat named "${name}" in seats/seats.json (have: ${Object.keys(roster).join(", ") || "none"})`);
   }
   if (entry.external) die(`"${name}" is external — it runs on its own harness, not on a Pi seat`);
-  if (!entry.account?.dir) die(`seat "${name}" has no account.dir in seats/seats.json`);
+  const harness = harnessNameForSeat(name, entry);
+  if (!entry.account?.dir && !(harness === "claude-code" && entry.account?.authRoute === "default")) die(`seat "${name}" has no account.dir in seats/seats.json`);
   return entry;
 }
 
@@ -792,7 +794,7 @@ function logFilterShell(): string {
   return `'${process.execPath.replace(/'/g, `'\\''`)}' -e '${script.replace(/'/g, `'\\''`)}'`;
 }
 
-async function launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
+async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
   const state = readState();
@@ -874,7 +876,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
         `seat ${name}: recorded session could not move cwd from ${liveCwd} to ${requestedCwd}; ${cleanup}; ` +
           `starting a fresh session in the requested cwd`
       );
-      await launch(name, entry, null, cwd, true);
+      await piLaunch(name, entry, null, cwd, true);
       return;
     }
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} has live cwd ${liveCwd}, not requested cwd ${requestedCwd}. launch-only cleanup: ${cleanup}`);
@@ -902,7 +904,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
 
 const PI_DRIVER: SeatDriver = {
   name: "pi",
-  launch,
+  launch: piLaunch,
   probe: piProbe,
   getState: (rec) => rpc(rec, { type: "get_state" }),
   prompt: (rec, message, streamingBehavior, timeoutMs = PROMPT_ACK_MS) => rpc(rec, promptCommand(message, streamingBehavior), timeoutMs),
@@ -910,11 +912,170 @@ const PI_DRIVER: SeatDriver = {
   stop: stopRecord,
 };
 
+
+function scrubbedSeatEnv(extra: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+  delete env.ANTHROPIC_API_KEY;
+  delete env.ANTHROPIC_AUTH_TOKEN;
+  delete env.OPENAI_API_KEY;
+  for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
+  return env;
+}
+
+function isClaudeDefaultAuth(entry: SeatEntry): boolean {
+  return entry.account?.authRoute === "default";
+}
+
+function claudeAccountDir(entry: SeatEntry): string {
+  if (isClaudeDefaultAuth(entry)) return process.env.HOME ?? ROOT;
+  return expandTilde(entry.account!.dir);
+}
+
+function requireClaudeCredential(name: string, entry: SeatEntry, accountDir: string, labelSuffix: string): void {
+  if (isClaudeDefaultAuth(entry)) return;
+  const config = path.join(accountDir, ".claude.json");
+  if (!fs.existsSync(config) || fs.statSync(config).size === 0) {
+    die(
+      `seat "${name}"${labelSuffix} has no Claude Code identity in ${accountDir}.\n` +
+        `      OAuth: CLAUDE_CONFIG_DIR="${accountDir}" claude auth login --claudeai`
+    );
+  }
+}
+
+function claudeChildEnv(entry: SeatEntry, accountDir: string, name: string): NodeJS.ProcessEnv {
+  return scrubbedSeatEnv({
+    PATH: hostBudgetPath(ROOT),
+    CLAUDE_CONFIG_DIR: isClaudeDefaultAuth(entry) ? undefined : accountDir,
+    BEADS_ACTOR: beadsActorFor(name),
+  });
+}
+
+async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
+  requireCwdDir(cwd);
+  const labelSuffix = accountLabelSuffix(entry);
+  const state = readState();
+  const existing = state.seats[name];
+  if (existing && pidAlive(existing.pid, existing.fifo)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
+
+  const accountDir = claudeAccountDir(entry);
+  if (!isClaudeDefaultAuth(entry) && !fs.existsSync(accountDir)) {
+    die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`);
+  }
+  requireClaudeCredential(name, entry, accountDir, labelSuffix);
+  if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — claude-code launch must pin the exact model`);
+  if (!entry.allowedTools) die(`seat "${name}"${labelSuffix} has no allowedTools list in seats/seats.json — claude-code acceptEdits mode must name the tools it may use`);
+
+  const brief = roleBriefPath(entry.role);
+  const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+  if (sessionFile && existing?.roleBriefHash && existing.roleBriefHash !== roleBriefHash) {
+    die(`seat "${name}" brief changed; reset instead of resume (recorded ${existing.roleBriefHash.slice(0, 12)}, current ${roleBriefHash.slice(0, 12)})`);
+  }
+
+  fs.mkdirSync(RUN_DIR, { recursive: true });
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+  const fifo = path.join(RUN_DIR, `${name}.stdin`);
+  const log = path.join(LOG_DIR, `${name}.jsonl`);
+  const rawLog = path.join(LOG_DIR, `${name}.raw.jsonl`);
+  const errLog = path.join(LOG_DIR, `${name}.stderr.log`);
+  if (fs.existsSync(fifo)) {
+    if (!fs.statSync(fifo).isFIFO()) die(`${fifo} exists and is not a FIFO — refusing to guess what it is`);
+  } else {
+    execFileSync("mkfifo", [fifo]);
+  }
+
+  const args = [
+    path.join(SEATS_DIR, "drivers", "claude-code", "shim.ts"),
+    "--log", log,
+    "--raw-log", rawLog,
+    "--err-log", errLog,
+    "--account-dir", accountDir,
+    "--brief", brief,
+    "--model", entry.model,
+    "--cwd", cwd,
+    "--actor", beadsActorFor(name),
+    "--permission-mode", "acceptEdits",
+    "--allowed-tools", entry.allowedTools,
+  ];
+  if (isClaudeDefaultAuth(entry)) args.push("--default-login");
+  if (sessionFile) args.push("--resume", sessionFile);
+  const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+  const shellCmd = `exec ${q(process.execPath)} ${args.map(q).join(" ")} 0<> ${q(fifo)} 2>> ${q(errLog)}`;
+  const child = spawn("bash", ["-c", shellCmd], { cwd, env: claudeChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" });
+  child.unref();
+  const pid = child.pid!;
+
+  const probe = { fifo, log, pid };
+  let st: any;
+  try {
+    st = await rpc(probe, { type: "get_state" });
+  } catch (e: any) {
+    const cleanup = await terminateSpawnedOnly(pid);
+    recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
+    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+  }
+  if (!st.success) {
+    const cleanup = await terminateSpawnedOnly(pid);
+    recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
+    die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+  }
+
+  const requestedCwd = path.resolve(cwd);
+  const liveCwd = processCwd(pid);
+  state.seats[name] = {
+    pid,
+    startedAt: new Date().toISOString(),
+    accountDir,
+    ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
+    role: entry.role,
+    roleBrief: brief,
+    roleBriefHash,
+    cwd: liveCwd ?? requestedCwd,
+    fifo,
+    log,
+    sessionId: st.data?.sessionId ?? null,
+    sessionFile: st.data?.sessionFile ?? null,
+    model: st.data?.model ?? entry.model,
+    ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}),
+  };
+  writeState(state);
+  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`);
+  console.log(`  events -> ${log}`);
+}
+
+function claudeProbe(name: string, entry: SeatEntry): void {
+  const labelSuffix = accountLabelSuffix(entry);
+  const accountDir = claudeAccountDir(entry);
+  if (!isClaudeDefaultAuth(entry) && !fs.existsSync(accountDir)) die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}`);
+  requireClaudeCredential(name, entry, accountDir, labelSuffix);
+  if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — probe must test the exact roster model`);
+  const args = ["-p", "--output-format", "json", "--model", entry.model, "--setting-sources", "project", "Reply with exactly the word OK. Use no tools."];
+  const result = spawnSync("claude", args, { cwd: ROOT, env: claudeChildEnv(entry, accountDir, name), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  if (result.error) die(`probe failed to start claude for seat "${name}"${labelSuffix}: ${result.error.message}`);
+  let parsed: any = null;
+  try { parsed = JSON.parse(result.stdout.trim()); } catch {}
+  if (result.status === 0 && parsed?.subtype === "success" && String(parsed?.result ?? "").trim() === "OK") { console.log("OK"); return; }
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  process.exit(result.status ?? 1);
+}
+
+const CLAUDE_DRIVER: SeatDriver = {
+  name: "claude-code",
+  launch: claudeLaunch,
+  probe: claudeProbe,
+  getState: (rec) => rpc(rec, { type: "get_state" }),
+  prompt: (rec, message, streamingBehavior, timeoutMs = PROMPT_ACK_MS) => rpc(rec, promptCommand(message, streamingBehavior), timeoutMs),
+  steer: (rec, text) => rpc(rec, { type: "steer", message: text }),
+  stop: stopRecord,
+};
+
 function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatDriver {
+  const harness = harnessNameForSeat(name, entry);
+  if (harness === "pi") return PI_DRIVER;
+  if (harness === "claude-code") return CLAUDE_DRIVER;
   requirePiHarness(name, entry, operation);
   return PI_DRIVER;
 }
-
 async function cmdSpawn(name: string, beadId?: string): Promise<void> {
   const entry = requireSeat(name);
   await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, beadId ? beadWorktreeDir(beadId) : ROOT);
@@ -1122,6 +1283,9 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     die(`dispatch failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
   }
   const landedState = readState();
+  if (resp.data?.sessionId) landedState.seats[name].sessionId = resp.data.sessionId;
+  if (resp.data?.sessionFile) landedState.seats[name].sessionFile = resp.data.sessionFile;
+  if (resp.data?.model) landedState.seats[name].model = resp.data.model;
   landedState.seats[name].lastBead = beadId;
   landedState.seats[name].lastDispatchAt = new Date().toISOString();
   landedState.seats[name].lastPrompt = promptText;
@@ -1238,7 +1402,9 @@ function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, Pr
   if (needles.length) {
     for (const row of rows.values()) {
       const cmd = row.command;
-      if (!/(^|[ /])pi( |$)/.test(cmd) || !cmd.includes("--mode rpc")) continue;
+      const looksLikePiSeat = /(^|[ /])pi( |$)/.test(cmd) && cmd.includes("--mode rpc");
+      const looksLikeClaudeSeat = cmd.includes("drivers/claude-code/shim.ts") && cmd.includes("--account-dir") && cmd.includes("--cwd");
+      if (!looksLikePiSeat && !looksLikeClaudeSeat) continue;
       if (needles.some((n) => cmd.includes(n))) add(row.pid, "argv/cwd/account match");
     }
   }
