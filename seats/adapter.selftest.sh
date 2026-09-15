@@ -38,9 +38,11 @@ ADAPTER="${1:-$HERE/adapter.ts}"
 ADAPTER_DIR="$(cd "$(dirname "$ADAPTER")" && pwd)"
 BRIEFS="$ADAPTER_DIR/briefs.ts"
 FLOOR="$ADAPTER_DIR/floor.ts"
+HARNESS="$ADAPTER_DIR/harness.ts"
 FLEET_GATE="$ADAPTER_DIR/fleet-gate.sh"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
+[ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
 [ -f "$FLEET_GATE" ] || { echo "selftest: not found: $FLEET_GATE" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run adapter.ts" >&2; exit 2; }
@@ -283,6 +285,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
   cp "$ADAPTER_DIR/host-budget.ts" "$proj/seats/host-budget.ts"
+  cp "$HARNESS" "$proj/seats/harness.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$FLOOR" "$proj/seats/floor.ts"
   cp "$FLEET_GATE" "$proj/seats/fleet-gate.sh"
@@ -913,6 +916,25 @@ else fail "stop did not terminate pid $PID_BEFORE (exit $RC)"; fi
 if [ -z "$(state_get pid)" ] && [ -n "$(state_get sessionFile)" ]; then
   pass "state keeps the session but drops the pid"
 else fail "stopped state is wrong (pid=$(state_get pid))"; fi
+
+run resume worker-1 >/dev/null 2>&1
+PID_BEFORE="$(state_get pid)"
+mv -f "$PROJ/seats/seats.json" "$PROJ/seats/seats.json.missing-fixture"
+run stop worker-1
+if [ $RC -eq 0 ] && ! kill -0 "$PID_BEFORE" 2>/dev/null; then
+  pass "stop does not need seats.json when state already records a running pi seat"
+else fail "stop was blocked by a missing roster (exit $RC): $OUT"; fi
+mv -f "$PROJ/seats/seats.json.missing-fixture" "$PROJ/seats/seats.json"
+
+run resume worker-1 >/dev/null 2>&1
+PID_BEFORE="$(state_get pid)"
+cp "$PROJ/seats/seats.json" "$PROJ/seats/seats.json.good"
+env HOME="$HOME_FIX" PROJ="$PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["bad-peer"]={role:"worker", provider:"anthropic", model:"stub", account:{dir:"~/.pi-seats-alpha/bad-peer", authRoute:"definitely-not-valid"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+run stop worker-1
+if [ $RC -eq 0 ] && ! kill -0 "$PID_BEFORE" 2>/dev/null; then
+  pass "stop validates only the named running seat, not another seat's broken authRoute"
+else fail "stop was blocked by another roster entry's bad authRoute (exit $RC): $OUT"; fi
+mv -f "$PROJ/seats/seats.json.good" "$PROJ/seats/seats.json"
 
 check_resume() {   # $1 = label; expects a stopped seat with a recorded session
   local label="$1" sess

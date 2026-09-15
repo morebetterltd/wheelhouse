@@ -63,6 +63,7 @@ import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetPath } from "./host-budget";
+import { requirePiHarness } from "./harness";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -72,12 +73,6 @@ const VERDICTS_DIR = path.join(SEATS_DIR, "verdicts");
 
 // One-shot verification reads a diff and maybe runs a bench; give it room.
 const DEFAULT_TIMEOUT_MS = 900000;
-const HARNESS_VALUES = ["pi", "claude-code", "codex"] as const;
-function requirePiHarness(seatName: string, entry: { harness?: string } | undefined, operation: string): void {
-  const raw = entry?.harness ?? "pi";
-  if (!(HARNESS_VALUES as readonly string[]).includes(raw)) throw new Error(`seat "${seatName}" has invalid harness ${JSON.stringify(raw)} in seats/seats.json — must be one of ${HARNESS_VALUES.join(", ")} (or omitted for pi)`);
-  if (raw !== "pi") throw new Error(`seat "${seatName}" has harness=${JSON.stringify(raw)} in seats/seats.json; ${operation} is not implemented for that harness yet`);
-}
 
 /**
  * A throwaway git worktree, used ONLY as the one-shot verifier spawn's

@@ -59,23 +59,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetPath } from "./host-budget";
-
-
-const HARNESS_VALUES = ["pi", "claude-code", "codex"] as const;
-type HarnessName = (typeof HARNESS_VALUES)[number];
-
-function harnessNameFor(entry: { harness?: string } | undefined): HarnessName {
-  const raw = entry?.harness ?? "pi";
-  if ((HARNESS_VALUES as readonly string[]).includes(raw)) return raw as HarnessName;
-  throw new Error(`invalid harness ${JSON.stringify(raw)} in seats/seats.json — must be one of ${HARNESS_VALUES.join(", ")} (or omitted for pi)`);
-}
-
-function requirePiHarness(seatName: string, entry: { harness?: string } | undefined, operation: string): void {
-  const harness = harnessNameFor(entry);
-  if (harness !== "pi") {
-    throw new Error(`seat "${seatName}" has harness=${JSON.stringify(harness)} in seats/seats.json; ${operation} is not implemented for that harness yet`);
-  }
-}
+import { harnessNameForSeat, requirePiHarness } from "./harness";
 
 interface SeatDriver {
   readonly name: string;
@@ -222,9 +206,9 @@ function validateAuthRoute(seatName: string, entry: SeatEntry): void {
 
 function validateHarness(seatName: string, entry: SeatEntry): void {
   try {
-    harnessNameFor(entry);
+    harnessNameForSeat(seatName, entry);
   } catch (e: any) {
-    die(`seat "${seatName}" has ${e.message}`);
+    die(e.message);
   }
 }
 
@@ -289,12 +273,16 @@ interface State {
   seats: Record<string, SeatRecord>;
 }
 
+function parseRosterFile(): Record<string, SeatEntry> {
+  const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
+  return raw.seats ?? {};
+}
+
 function readRoster(): Record<string, SeatEntry> {
   if (!fs.existsSync(ROSTER_FILE)) {
     die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   }
-  const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
-  const seats: Record<string, SeatEntry> = raw.seats ?? {};
+  const seats = parseRosterFile();
   for (const [name, entry] of Object.entries(seats)) {
     validateHarness(name, entry);
     validateAuthRoute(name, entry);
@@ -302,6 +290,42 @@ function readRoster(): Record<string, SeatEntry> {
     validateSkills(name, entry);
   }
   return seats;
+}
+
+function readNamedRosterEntry(name: string): SeatEntry | undefined {
+  if (!fs.existsSync(ROSTER_FILE)) return undefined;
+  const seats = parseRosterFile();
+  return seats[name];
+}
+
+function requireSeatFromNamedRoster(name: string): SeatEntry {
+  if (!fs.existsSync(ROSTER_FILE)) {
+    die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
+  }
+  const roster = parseRosterFile();
+  const entry = roster[name];
+  if (!entry) {
+    die(`no seat named "${name}" in seats/seats.json (have: ${Object.keys(roster).join(", ") || "none"})`);
+  }
+  validateHarness(name, entry);
+  validateAuthRoute(name, entry);
+  validateShadow(name, entry);
+  validateSkills(name, entry);
+  if (entry.external) die(`"${name}" is external — it runs on its own harness, not on a Pi seat`);
+  if (!entry.account?.dir) die(`seat "${name}" has no account.dir in seats/seats.json`);
+  return entry;
+}
+
+function driverForRunningSeat(name: string, operation: string): SeatDriver {
+  let entry: SeatEntry | undefined;
+  try {
+    entry = readNamedRosterEntry(name);
+  } catch {
+    return PI_DRIVER;
+  }
+  if (!entry) return PI_DRIVER;
+  requirePiHarness(name, entry, operation);
+  return PI_DRIVER;
 }
 
 function readState(): State {
@@ -724,14 +748,7 @@ function stderrTail(rec: { log: string }, maxBytes = 8 * 1024): string {
 // ---------------------------------------------------------------------------
 
 function requireSeat(name: string): SeatEntry {
-  const roster = readRoster();
-  const entry = roster[name];
-  if (!entry) {
-    die(`no seat named "${name}" in seats/seats.json (have: ${Object.keys(roster).join(", ") || "none"})`);
-  }
-  if (entry.external) die(`"${name}" is external — it runs on its own harness, not on a Pi seat`);
-  if (!entry.account?.dir) die(`seat "${name}" has no account.dir in seats/seats.json`);
-  return entry;
+  return requireSeatFromNamedRoster(name);
 }
 
 function roleBriefPath(role: string): string {
@@ -1035,8 +1052,7 @@ function requireRunning(name: string): SeatRecord {
 
 async function cmdDispatch(name: string, beadId: string, text: string): Promise<void> {
   let rec = requireRunning(name);
-  const rosterEntry = readRoster()[name];
-  const sameCwdDriver = rosterEntry ? driverForSeat(name, rosterEntry, "adapter dispatch") : PI_DRIVER;
+  const sameCwdDriver = driverForRunningSeat(name, "adapter dispatch");
   const targetCwd = beadWorktreeDir(beadId);
   if (rec.cwd !== targetCwd) {
     // Construction, not prompt discipline: a seat handed a DIFFERENT bead
@@ -1127,8 +1143,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
 
 async function cmdSteer(name: string, text: string): Promise<void> {
   const rec = requireRunning(name);
-  const entry = readRoster()[name];
-  const driver = entry ? driverForSeat(name, entry, "adapter steer") : PI_DRIVER;
+  const driver = driverForRunningSeat(name, "adapter steer");
   let st: any;
   try {
     st = await driver.getState(rec);
@@ -1347,14 +1362,13 @@ async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<
 
 async function cmdStop(name: string): Promise<void> {
   const state = readState();
-  const entry = readRoster()[name];
-  const driver = entry ? driverForSeat(name, entry, "adapter stop") : PI_DRIVER;
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo)) {
     console.log(`seat ${name} is not running`);
     return;
   }
+  const driver = driverForRunningSeat(name, "adapter stop");
   console.log(await driver.stop(state, name, rec));
 }
 
@@ -1376,7 +1390,13 @@ async function cmdStopAll(): Promise<void> {
       console.log(`seat ${name}: not running; session ${rec.sessionId ?? "-"} kept for resume`);
       continue;
     }
-    const driver = driverForSeat(name, roster[name], "adapter stop-all");
+    let driver: SeatDriver;
+    try {
+      driver = driverForSeat(name, roster[name], "adapter stop-all");
+    } catch (e: any) {
+      console.log(`seat ${name}: REPORT ${e.message}; left running (pid ${rec.pid})`);
+      continue;
+    }
     let st: any;
     try {
       st = await driver.getState(rec);

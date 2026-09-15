@@ -9,8 +9,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ADAPTER="${1:-$HERE/adapter.ts}"
 BRIEFS="$(cd "$(dirname "$ADAPTER")" && pwd)/briefs.ts"
+HARNESS="$(cd "$(dirname "$ADAPTER")" && pwd)/harness.ts"
 HOST_BUDGET_TS="$(cd "$(dirname "$ADAPTER")" && pwd)/host-budget.ts"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
+[ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 [ -f "$HOST_BUDGET_TS" ] || { echo "selftest: not found: $HOST_BUDGET_TS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
@@ -62,7 +64,7 @@ chmod +x "$BIN/pi"
 build_proj(){
   local proj="$1" ns="$2"
   mkdir -p "$proj/seats" "$proj/contracts" "$proj/.wheelhouse-worktrees/bead-x"
-  cp "$ADAPTER" "$proj/seats/adapter.ts"; cp "$BRIEFS" "$proj/seats/briefs.ts"; cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
+  cp "$ADAPTER" "$proj/seats/adapter.ts"; cp "$HARNESS" "$proj/seats/harness.ts"; cp "$BRIEFS" "$proj/seats/briefs.ts"; cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
 {
@@ -106,6 +108,18 @@ if [ $RC -eq 0 ] && says "worker-a: BUSY mid-turn; NOT stopped" && says "worker-
 if [ "$(state_get worker-a pid)" = "$PID_BUSY" ] && kill -0 "$PID_BUSY" 2>/dev/null; then pass "busy seat was not killed"; else fail "busy seat was touched or killed"; fi
 if [ "$(state_get worker-a sessionFile)" = "$SESS_BUSY" ] && [ "$(state_get worker-b sessionFile)" = "$SESS_IDLE" ]; then pass "busy and stopped sessions remain resumable in state.json"; else fail "session records changed unexpectedly"; fi
 wait_for "$PROJ2/seats/logs/worker-a.jsonl" 'agent_end' || fail "busy turn did not finish after being spared"
+run stop-all >/dev/null
+
+phase "2b. non-pi seats report and do not abort later stops"
+PROJ3="$FIX/proj3"; build_proj "$PROJ3" gamma; RUN_PROJ="$PROJ3"
+run spawn worker-a; [ $RC -eq 0 ] || fail "non-pi setup spawn a failed: $OUT"
+run spawn worker-b; [ $RC -eq 0 ] || fail "non-pi setup spawn b failed: $OUT"
+env HOME="$HOME_FIX" PROJ="$PROJ3" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["worker-a"].harness="claude-code"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+PID_NONPI="$(state_get worker-a pid)"
+run stop-all
+if [ $RC -eq 0 ] && says 'worker-a: REPORT seat "worker-a" has harness="claude-code"' && says "worker-b stopped"; then pass "stop-all reports non-pi seat and continues to later pi seats"; else fail "stop-all did not report-and-continue for non-pi seat (rc=$RC): $OUT"; fi
+if [ "$(state_get worker-a pid)" = "$PID_NONPI" ] && kill -0 "$PID_NONPI" 2>/dev/null; then pass "non-pi seat was left running for human handling"; else fail "non-pi seat was stopped or state changed"; fi
+kill "$PID_NONPI" 2>/dev/null || true
 run stop-all >/dev/null
 
 phase "3. canary — removing the busy check must be caught"

@@ -56,9 +56,11 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ADAPTER="${1:-$HERE/adapter.ts}"
 FLOOR="$HERE/floor.ts"
 BRIEFS="$HERE/briefs.ts"
+HARNESS="$HERE/harness.ts"
 HOST_BUDGET_TS="$HERE/host-budget.ts"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
 [ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
+[ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 [ -f "$HOST_BUDGET_TS" ] || { echo "selftest: not found: $HOST_BUDGET_TS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
@@ -196,6 +198,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   cp "$ADAPTER" "$proj/seats/adapter.ts"
   cp "$FLOOR" "$proj/seats/floor.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
+  cp "$HARNESS" "$proj/seats/harness.ts"
   cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
@@ -455,6 +458,7 @@ else
   mkdir -p "$RPROJ/seats" "$RPROJ/contracts"
   cp "$ADAPTER" "$RPROJ/seats/adapter.ts"
   cp "$BRIEFS" "$RPROJ/seats/briefs.ts"
+  cp "$HARNESS" "$RPROJ/seats/harness.ts"
   cp "$HOST_BUDGET_TS" "$RPROJ/seats/host-budget.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$RPROJ/contracts/WORKER.md"
   # Two real seats, BOTH borrowing your login (auth is copied per seat dir
