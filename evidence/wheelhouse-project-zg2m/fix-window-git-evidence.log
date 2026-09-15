@@ -1,0 +1,11 @@
+RUN git show -s --format for fix candidates
+3e3a5d1073b266c7ffa8c7fe7fcce8964536684a 9aeabf929249e56e4a929ef45ff0f47958097569 0d9fb1c29f08b8cfe91f3ece1f1cbffdc5842c66 Merge fleet/wheelhouse-project-bnw3: host build budget 1/4 — seats/bin cargo/dotnet shim on a Perl flock(2) lock, opt-in PATH injection via seats/host-budget.json, serialization/re-entrancy/killed-holder/caps/--contract selftests (reviewed 0d9fb1c)
+c8bd03942b4e53956c4467e3f0d69de27d39e031 3e3a5d1073b266c7ffa8c7fe7fcce8964536684a ce5d09b43104c80a9410172e8162c02197860f37 Merge fleet/wheelhouse-project-7u0b: legibility selftest no longer minutes-slow — adapter status drops per-seat lsof scans in multi-seat fixtures (reviewed ce5d09b, APPROVE)
+824ff3082fa9c4aa8cfff7398069eca047117f7b 59ffbcded6f6273f3495a5d097d3783cfdb40c4f 46643d6edc78efd081c455bfeaef7dd554f659f6 Merge fleet/wheelhouse-project-ilw9: intent-check root discovery stops at the nearest .template-source; selftest fixture no longer leaks into an enclosing umbrella (reviewed 46643d6, APPROVE)
+
+RUN git log --oneline --grep lsof/status around c8bd039
+c8bd039 Merge fleet/wheelhouse-project-7u0b: legibility selftest no longer minutes-slow — adapter status drops per-seat lsof scans in multi-seat fixtures (reviewed ce5d09b, APPROVE)
+ce5d09b Capture full adapter timing
+1136524 Bound adapter status process scanning
+f059a9c Measure base status lsof count
+12aff19 Capture legibility timeout at base

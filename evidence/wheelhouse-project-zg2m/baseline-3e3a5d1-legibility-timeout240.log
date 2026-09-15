@@ -1,0 +1,4 @@
+RUN baseline 3e3a5d1 timeout 240 seats/legibility.selftest.sh
+start=2026-09-15T22:30:08Z
+end=2026-09-15T22:34:10Z
+rc=124
