@@ -38,9 +38,11 @@ ADAPTER="${1:-$HERE/adapter.ts}"
 ADAPTER_DIR="$(cd "$(dirname "$ADAPTER")" && pwd)"
 BRIEFS="$ADAPTER_DIR/briefs.ts"
 FLOOR="$ADAPTER_DIR/floor.ts"
+HARNESS="$ADAPTER_DIR/harness.ts"
 FLEET_GATE="$ADAPTER_DIR/fleet-gate.sh"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
+[ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
 [ -f "$FLEET_GATE" ] || { echo "selftest: not found: $FLEET_GATE" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run adapter.ts" >&2; exit 2; }
@@ -146,7 +148,11 @@ fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 // Same construction argument for BEADS_ACTOR: the adapter is supposed to set
 // it in OUR process env directly (not rely on an operator export reaching
 // us), so record what we actually got, not what anyone claims to have set.
-fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null }));
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null }));
+if (process.env.STUB_RUN_CARGO_ON_START) {
+  const r = cp.spawnSync("cargo", ["build"], { stdio: "ignore", env: process.env });
+  if (r.status !== 0) process.exit(r.status || 1);
+}
 if (args.includes("-p")) {
   const prompt = args[args.length - 1] || "";
   fs.writeFileSync(path.join(agentDir, "probe-prompt.txt"), prompt);
@@ -269,6 +275,28 @@ case "$1" in
 esac
 BDSTUB
 chmod +x "$BIN/bd"
+cat > "$BIN/claude" <<'CLAUDESTUB'
+#!/usr/bin/env node
+const fs = require('fs'), path = require('path');
+const args = process.argv.slice(2);
+const account = process.env.CLAUDE_CONFIG_DIR || process.env.HOME || '';
+fs.mkdirSync(account, { recursive: true });
+function writeSession(id){ const d=path.join(account,'projects','Claude_replaces_non_alnum_and_hashes-long-cwd-x9z'); fs.mkdirSync(d,{recursive:true}); fs.appendFileSync(path.join(d,id+'.jsonl'), JSON.stringify({type:'session', id, cwd:process.cwd()})+'\n'); }
+fs.writeFileSync(path.join(account, 'claude-env.json'), JSON.stringify({ANTHROPIC_API_KEY:process.env.ANTHROPIC_API_KEY||null,ANTHROPIC_AUTH_TOKEN:process.env.ANTHROPIC_AUTH_TOKEN||null,OPENAI_API_KEY:process.env.OPENAI_API_KEY||null,BEADS_ACTOR:process.env.BEADS_ACTOR||null}));
+fs.writeFileSync(path.join(account, 'claude-argv.json'), JSON.stringify(args));
+if (args.includes('--output-format') && args.includes('json') && !args.includes('stream-json')) { console.log(JSON.stringify({type:'result',subtype:'success',result:'OK',session_id:'probe-session'})); process.exit(0); }
+if (!args.includes('--permission-mode') || args[args.indexOf('--permission-mode')+1] !== 'acceptEdits') { console.error('expected --permission-mode acceptEdits'); process.exit(2); }
+if (!args.includes('--permission-prompts') || args[args.indexOf('--permission-prompts')+1] !== 'none') { console.error('expected --permission-prompts none'); process.exit(2); }
+const brief = args[args.indexOf('--append-system-prompt') + 1] || '';
+if (!/fixture brief/.test(brief) || /contracts\/WORKER\.md/.test(brief)) { console.error('expected brief text, not path: '+brief); process.exit(3); }
+const session = args.includes('--resume') ? args[args.indexOf('--resume')+1] : `claude-session-${process.pid}`;
+const model = args.includes('--model') ? args[args.indexOf('--model')+1] : 'sonnet';
+let buf='';
+process.stdin.on('data', c => { buf += c.toString(); let i; while ((i=buf.indexOf('\n')) >= 0) { const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim()) continue; const msg=JSON.parse(line).message?.content?.[0]?.text || ''; writeSession(session); console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model})); const done=()=>{ if (/tools/i.test(msg)) { console.log(JSON.stringify({type:'assistant',message:{role:'assistant',content:[{type:'thinking',thinking:'thinking kept'},{type:'tool_use',id:'tool-1',name:'Bash',input:{command:'printf OK'}}]}})); console.log(JSON.stringify({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:'tool-1',content:'OK',is_error:false}]}})); } console.log(JSON.stringify({type:'assistant',message:{role:'assistant',content:[{type:'text',text:/steer|slow/i.test(msg)?'STEERED':'OK'}]}})); console.log(JSON.stringify({type:'result',subtype:'success',result:/steer|slow/i.test(msg)?'STEERED':'OK',session_id:session,num_turns:/steer|slow/i.test(msg)?2:1})); }; /slow/i.test(msg) ? setTimeout(done, 900) : done(); }});
+setTimeout(() => console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{status:'limited',rateLimitType:'five_hour'}})), process.env.STUB_RATE_LIMIT ? 100 : 2147483647);
+process.on('SIGTERM', () => process.exit(0));
+CLAUDESTUB
+chmod +x "$BIN/claude"
 
 # A fixture project: adapter.ts expects to live at <root>/seats/adapter.ts
 # with crew briefs at <root>/contracts/. build_proj makes one; the canaries
@@ -278,9 +306,12 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   local proj="$1" ns="$2" seatdir
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
+  cp "$ADAPTER_DIR/host-budget.ts" "$proj/seats/host-budget.ts"
+  cp "$HARNESS" "$proj/seats/harness.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$FLOOR" "$proj/seats/floor.ts"
   cp "$FLEET_GATE" "$proj/seats/fleet-gate.sh"
+  cp -R "$ADAPTER_DIR/drivers" "$proj/seats/drivers"
   printf '# Fleet: Worker\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
@@ -322,6 +353,60 @@ build_proj "$PROJ" alpha
 # override case sets WHEELHOUSE_BEADS_ACTOR_WORKER_1 explicitly instead.
 run() { OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+RUN_PROJ="$PROJ"
+
+phase "0a. launch paths validate the whole roster before choosing a seat"
+BAD_ROSTER_PROJ="$FIX/bad-roster-proj"
+build_proj "$BAD_ROSTER_PROJ" badroster
+RUN_PROJ="$BAD_ROSTER_PROJ"
+env HOME="$HOME_FIX" PROJ="$BAD_ROSTER_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["bad-peer"]={role:"worker", provider:"anthropic", model:"stub", account:{dir:"~/.pi-seats-badroster/bad-peer", authRoute:"bogus"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+run spawn worker-1
+if [ $RC -eq 1 ] && says 'seat "bad-peer" has an invalid account.authRoute "bogus"'; then
+  pass "spawn refuses before launch when a peer roster entry has a bad authRoute"
+else fail "spawn did not preserve whole-roster validation for launch paths (rc=$RC): $OUT"; fi
+RUN_PROJ="$PROJ"
+
+phase "0b. claude-code driver — spawn, dispatch ack, steer, settled, resume, stop, dead-process"
+CLAUDE_PROJ="$FIX/claude-proj"
+build_proj "$CLAUDE_PROJ" claude
+mkdir -p "$CLAUDE_PROJ/.wheelhouse-worktrees/bead-y"
+RUN_PROJ="$CLAUDE_PROJ"
+env HOME="$HOME_FIX" PROJ="$CLAUDE_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["worker-1"].harness="claude-code"; r.seats["worker-1"].model="sonnet"; r.seats["worker-1"].allowedTools="Bash(printf *)"; r.seats["worker-1"].account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+mkdir -p "$HOME_FIX/.pi-seats-claude/worker-1"
+printf '{"loggedIn":true}\n' > "$HOME_FIX/.pi-seats-claude/worker-1/.claude.json"
+ANTHROPIC_API_KEY=leak ANTHROPIC_AUTH_TOKEN=leak OPENAI_API_KEY=leak run spawn worker-1
+if [ $RC -eq 0 ] && grep -q 'seat worker-1' <<<"$OUT"; then pass "claude-code spawn exits 0 through the adapter"; else fail "claude-code spawn failed: $OUT"; fi
+for _ in $(seq 1 100); do [ -f "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" ] && break; sleep 0.05; done
+if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" && ! grep -q 'contracts/WORKER.md' "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json"; then pass "claude-code passes brief text, not a path"; else fail "claude-code did not pass brief text: $(cat "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" 2>/dev/null)"; fi
+CLAUDE_LOG="$CLAUDE_PROJ/seats/logs/worker-1.jsonl"
+run dispatch worker-1 bead-y "tools hello claude"
+if [ $RC -eq 0 ] && grep -q 'dispatched bead-y to worker-1' <<<"$OUT"; then pass "claude-code dispatch ack exits 0"; else fail "claude-code dispatch ack failed (rc=$RC): $OUT"; fi
+for _ in $(seq 1 100); do grep -q '"type":"agent_end"' "$CLAUDE_LOG" 2>/dev/null && break; sleep 0.05; done
+if grep -q '"type":"agent_end"' "$CLAUDE_LOG" && grep -q '"type":"turn_end"' "$CLAUDE_LOG"; then pass "claude-code settled detection lands turn_end and agent_end"; else fail "claude-code did not settle with expected events"; fi
+if grep -q '"type":"thinking"' "$CLAUDE_LOG" && grep -q '"type":"toolCall"' "$CLAUDE_LOG" && grep -q '"type":"tool_execution_start"' "$CLAUDE_LOG" && grep -q '"type":"tool_execution_end"' "$CLAUDE_LOG" && grep -q '"toolName":"Bash"' "$CLAUDE_LOG" && grep -q '"isError":false' "$CLAUDE_LOG"; then pass "claude-code normalizes thinking, toolCall, tool_execution_start/end with toolName"; else fail "claude-code missing normalized tool/thinking events: $(cat "$CLAUDE_LOG" 2>/dev/null)"; fi
+if [ "$(grep -c '"type":"turn_end"' "$CLAUDE_LOG")" -eq 1 ]; then pass "claude-code emits one turn_end for the turn"; else fail "claude-code emitted wrong turn_end count"; fi
+if grep -q '"ANTHROPIC_API_KEY":null' "$HOME_FIX/.pi-seats-claude/worker-1/claude-env.json" && grep -q '"ANTHROPIC_AUTH_TOKEN":null' "$HOME_FIX/.pi-seats-claude/worker-1/claude-env.json" && grep -q '"OPENAI_API_KEY":null' "$HOME_FIX/.pi-seats-claude/worker-1/claude-env.json"; then pass "claude-code child env strips provider credential variables"; else fail "claude-code child env leaked provider credentials: $(cat "$HOME_FIX/.pi-seats-claude/worker-1/claude-env.json" 2>/dev/null)"; fi
+run dispatch worker-1 bead-y "slow claude"
+sleep 0.1
+run steer worker-1 "steer now"
+if [ $RC -eq 0 ]; then pass "claude-code steer mid-turn returns ack"; else fail "claude-code steer failed (rc=$RC): $OUT"; fi
+for _ in $(seq 1 100); do grep -q 'STEERED' "$CLAUDE_LOG" 2>/dev/null && break; sleep 0.05; done
+if grep -q 'STEERED' "$CLAUDE_LOG"; then pass "claude-code steer reaches the running turn"; else fail "claude-code steer text did not settle"; fi
+CLAUDE_SESSION_FILE="$(env HOME="$HOME_FIX" bun -e "const s=require('$CLAUDE_PROJ/seats/state.json'); console.log(s.seats['worker-1'].sessionFile||'')")"
+if [ -n "$CLAUDE_SESSION_FILE" ] && [ -f "$CLAUDE_SESSION_FILE" ] && grep -q 'Claude_replaces_non_alnum' <<<"$CLAUDE_SESSION_FILE"; then pass "claude-code locates Claude's session file instead of deriving cwd slug"; else fail "claude-code did not record the actual session file: $CLAUDE_SESSION_FILE"; fi
+run stop worker-1
+if [ $RC -eq 0 ] && grep -q 'stopped' <<<"$OUT"; then pass "claude-code stop exits 0"; else fail "claude-code stop failed (rc=$RC): $OUT"; fi
+run resume worker-1
+if [ $RC -eq 0 ]; then pass "claude-code resume exits 0 with recorded session"; else fail "claude-code resume failed: $OUT"; fi
+pid="$(env HOME="$HOME_FIX" bun -e "const s=require('$CLAUDE_PROJ/seats/state.json'); console.log(s.seats['worker-1'].pid)")"
+kill -9 "$pid" 2>/dev/null || true
+run status
+if [ $RC -eq 0 ] && grep -q 'DIED' <<<"$OUT"; then pass "claude-code dead-process status reports DIED"; else fail "claude-code dead-process status did not report DIED (rc=$RC): $OUT"; fi
+run resume worker-1 >/dev/null 2>&1
+run stop worker-1 >/dev/null 2>&1
+printf '\nchanged brief\n' >> "$CLAUDE_PROJ/contracts/WORKER.md"
+run resume worker-1
+if [ $RC -eq 1 ] && grep -q 'brief changed; reset instead' <<<"$OUT"; then pass "claude-code resume STOPs on brief-hash mismatch"; else fail "claude-code resume did not stop on brief-hash mismatch (rc=$RC): $OUT"; fi
 RUN_PROJ="$PROJ"
 
 STATE="$PROJ/seats/state.json"
@@ -909,6 +994,25 @@ if [ -z "$(state_get pid)" ] && [ -n "$(state_get sessionFile)" ]; then
   pass "state keeps the session but drops the pid"
 else fail "stopped state is wrong (pid=$(state_get pid))"; fi
 
+run resume worker-1 >/dev/null 2>&1
+PID_BEFORE="$(state_get pid)"
+mv -f "$PROJ/seats/seats.json" "$PROJ/seats/seats.json.missing-fixture"
+run stop worker-1
+if [ $RC -eq 0 ] && ! kill -0 "$PID_BEFORE" 2>/dev/null; then
+  pass "stop does not need seats.json when state already records a running pi seat"
+else fail "stop was blocked by a missing roster (exit $RC): $OUT"; fi
+mv -f "$PROJ/seats/seats.json.missing-fixture" "$PROJ/seats/seats.json"
+
+run resume worker-1 >/dev/null 2>&1
+PID_BEFORE="$(state_get pid)"
+cp "$PROJ/seats/seats.json" "$PROJ/seats/seats.json.good"
+env HOME="$HOME_FIX" PROJ="$PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["bad-peer"]={role:"worker", provider:"anthropic", model:"stub", account:{dir:"~/.pi-seats-alpha/bad-peer", authRoute:"definitely-not-valid"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+run stop worker-1
+if [ $RC -eq 0 ] && ! kill -0 "$PID_BEFORE" 2>/dev/null; then
+  pass "stop validates only the named running seat, not another seat's broken authRoute"
+else fail "stop was blocked by another roster entry's bad authRoute (exit $RC): $OUT"; fi
+mv -f "$PROJ/seats/seats.json.good" "$PROJ/seats/seats.json"
+
 check_resume() {   # $1 = label; expects a stopped seat with a recorded session
   local label="$1" sess
   sess="$(state_get sessionFile)"
@@ -1053,7 +1157,108 @@ else fail "slow get_state steer was not queued (exit $RC): $OUT commands=$(cat "
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
-phase "7. canary — can these checks detect a broken adapter?"
+phase "6d. status cost — six recorded seats with no orphan candidates returns promptly"
+STATUS_COST_PROJ="$FIX/status-cost-proj"
+build_proj "$STATUS_COST_PROJ" status-cost
+mkdir -p "$STATUS_COST_PROJ/seats/logs"
+env HOME="$HOME_FIX" PROJ="$STATUS_COST_PROJ" ME="$$" bun -e '
+  const fs = require("fs"), path = require("path");
+  const proj = process.env.PROJ, seats = {};
+  for (let i = 1; i <= 6; i++) {
+    const name = `cost-${i}`;
+    const log = path.join(proj, "seats", "logs", `${name}.jsonl`);
+    fs.writeFileSync(log, "");
+    seats[name] = { pid: Number(process.env.ME), startedAt: new Date().toISOString(), accountDir: path.join(proj, "acct", name), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", `${name}.stdin`), log, sessionId: "s", sessionFile: null };
+  }
+  fs.writeFileSync(path.join(proj, "seats", "state.json"), JSON.stringify({ seats }, null, 2));
+'
+RUN_PROJ="$STATUS_COST_PROJ"; STATE="$STATUS_COST_PROJ/seats/state.json"
+START_MS="$(node -e 'console.log(Date.now())')"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=0 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+END_MS="$(node -e 'console.log(Date.now())')"
+ELAPSED_MS=$((END_MS - START_MS))
+if [ $RC -eq 0 ] && [ "$ELAPSED_MS" -lt 2000 ]; then pass "status cost: 6 fixture seats and no candidates completes under 2s (${ELAPSED_MS}ms)"
+else fail "status cost: rc=$RC elapsed=${ELAPSED_MS}ms output=$OUT"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
+phase "7. host build budget — opt-in PATH shim serializes cargo and allows re-entrant children"
+BUDGET_PROJ="$FIX/host-budget-proj"
+build_proj "$BUDGET_PROJ" budget
+mkdir -p "$BUDGET_PROJ/seats/bin"
+cp "$HERE/bin/host-build-shim" "$BUDGET_PROJ/seats/bin/host-build-shim"
+ln -sf host-build-shim "$BUDGET_PROJ/seats/bin/cargo"
+ln -sf host-build-shim "$BUDGET_PROJ/seats/bin/dotnet"
+printf '{"enabled":true}\n' > "$BUDGET_PROJ/seats/host-budget.json"
+cat > "$BIN/cargo" <<'CARGO_STUB'
+#!/usr/bin/env bash
+now_ms(){ node -e 'console.log(Date.now())'; }
+printf '%s pid=%s ms=%s args=%s guard=%s jobs=%s\n' start "$$" "$(now_ms)" "$*" "${WHEELHOUSE_BUILD_LOCK_HELD:-}" "${CARGO_BUILD_JOBS:-}" >> "$STUB_CARGO_LOG"
+if [ "${STUB_CARGO_REENTER:-}" = 1 ] && [ "${STUB_CARGO_REENTERED:-}" != 1 ]; then
+  STUB_CARGO_REENTERED=1 cargo build-child
+fi
+if [ "${STUB_CARGO_HOLD:-}" = 1 ]; then while :; do :; done; fi
+sleep 0.4
+printf '%s pid=%s ms=%s args=%s guard=%s jobs=%s\n' end "$$" "$(now_ms)" "$*" "${WHEELHOUSE_BUILD_LOCK_HELD:-}" "${CARGO_BUILD_JOBS:-}" >> "$STUB_CARGO_LOG"
+CARGO_STUB
+chmod +x "$BIN/cargo"
+cat > "$BIN/dotnet" <<'DOTNET_STUB'
+#!/usr/bin/env bash
+printf 'dotnet pid=%s args=%s node_reuse=%s guard=%s\n' "$$" "$*" "${MSBUILDDISABLENODEREUSE:-unset}" "${WHEELHOUSE_BUILD_LOCK_HELD:-}" >> "$STUB_DOTNET_LOG"
+DOTNET_STUB
+chmod +x "$BIN/dotnet"
+RUN_PROJ="$BUDGET_PROJ"; STATE="$BUDGET_PROJ/seats/state.json"
+STUB_CARGO_LOG="$FIX/host-budget-cargo.log" STUB_RUN_CARGO_ON_START=1 STUB_CARGO_REENTER=1 OUT_A="$FIX/budget-a.out" OUT_B="$FIX/budget-b.out" bash -c '
+  env -u BEADS_ACTOR HOME="$0" PATH="$1" STUB_CARGO_LOG="$2" STUB_RUN_CARGO_ON_START=1 STUB_CARGO_REENTER=1 bun "$3/seats/adapter.ts" spawn worker-1 > "$4" 2>&1 & p1=$!
+  env -u BEADS_ACTOR HOME="$0" PATH="$1" STUB_CARGO_LOG="$2" STUB_RUN_CARGO_ON_START=1 STUB_CARGO_REENTER=1 bun "$3/seats/adapter.ts" probe worker-1 > "$5" 2>&1 & p2=$!
+  wait $p1; r1=$?; wait $p2; r2=$?; exit $((r1+r2))
+' "$HOME_FIX" "$RUN_PATH" "$FIX/host-budget-cargo.log" "$BUDGET_PROJ" "$FIX/budget-a.out" "$FIX/budget-b.out"
+BUDGET_RC=$?
+if [ "$BUDGET_RC" -eq 0 ]; then pass "host budget: concurrent spawn/probe both complete through shim"
+else fail "host budget: concurrent spawn/probe failed rc=$BUDGET_RC a=$(cat "$FIX/budget-a.out" 2>/dev/null) b=$(cat "$FIX/budget-b.out" 2>/dev/null)"; fi
+HOST_LOG="$FIX/host-budget-cargo.log"
+if env HOST_LOG="$HOST_LOG" node <<'NODE'
+const fs=require('fs'); const lines=fs.readFileSync(process.env.HOST_LOG,'utf8').trim().split(/\n/);
+const main=lines.filter(l=>/args=build( |$)/.test(l));
+const starts=main.filter(l=>l.startsWith('start')).map(l=>+l.match(/ms=(\d+)/)[1]).sort((a,b)=>a-b);
+const ends=main.filter(l=>l.startsWith('end')).map(l=>+l.match(/ms=(\d+)/)[1]).sort((a,b)=>a-b);
+const serialized=starts.length===2 && ends.length===2 && starts[1] >= ends[0];
+process.exit(serialized ? 0 : 1);
+NODE
+then pass "host budget: second cargo build starts after first cargo build exits"
+else fail "host budget: cargo builds overlapped or log malformed: $(cat "$HOST_LOG" 2>/dev/null)"; fi
+if grep -q 'args=build-child guard=1 jobs=8' "$HOST_LOG" 2>/dev/null; then pass "host budget: re-entrant child reaches real cargo without deadlock and inherits caps"
+else fail "host budget: re-entrant child did not run with guard/caps: $(cat "$HOST_LOG" 2>/dev/null)"; fi
+STUB_DOTNET_LOG="$FIX/host-budget-dotnet.log" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/dotnet" build -maxcpucount:64 >/dev/null 2>&1; DOTNET_RC=$?
+if [ $DOTNET_RC -eq 0 ] && grep -q 'args=build -maxcpucount:8 node_reuse=1 guard=1' "$FIX/host-budget-dotnet.log" 2>/dev/null; then
+  pass "host budget: dotnet real tool sees -maxcpucount:8 and MSBUILDDISABLENODEREUSE=1"
+else fail "host budget: dotnet caps/env missing rc=$DOTNET_RC log=$(cat "$FIX/host-budget-dotnet.log" 2>/dev/null)"; fi
+FAKE_PERL_DIR="$FIX/fake-perl"; mkdir -p "$FAKE_PERL_DIR"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FAKE_PERL_DIR/perl"; chmod +x "$FAKE_PERL_DIR/perl"
+PRIM_OUT="$(STUB_CARGO_LOG="$FIX/no-primitive.log" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$FAKE_PERL_DIR:$BIN:/usr/bin:/bin" "$BUDGET_PROJ/seats/bin/cargo" no-primitive 2>&1)"; PRIM_RC=$?
+if [ $PRIM_RC -eq 127 ] && printf '%s\n' "$PRIM_OUT" | grep -q 'STOP: host-build-shim needs a crash-safe flock(2) primitive' && printf '%s\n' "$PRIM_OUT" | grep -q 'Refusing mkdir locks'; then
+  pass "host budget: missing lock primitive fails with actionable STOP"
+else fail "host budget: missing lock primitive was not actionable rc=$PRIM_RC: $PRIM_OUT"; fi
+HOST_KILL_LOG="$FIX/host-budget-kill.log"
+STUB_CARGO_LOG="$HOST_KILL_LOG" STUB_CARGO_HOLD=1 HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" hold >/dev/null 2>&1 & HOLD_PID=$!
+if wait_for "$HOST_KILL_LOG" 'args=hold' 5; then
+  kill -9 "$HOLD_PID" 2>/dev/null || true
+  wait "$HOLD_PID" 2>/dev/null || true
+  sleep 0.2
+  STUB_CARGO_LOG="$HOST_KILL_LOG" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" after-kill >/dev/null 2>&1; AFTER_RC=$?
+  if [ $AFTER_RC -eq 0 ] && grep -q 'args=after-kill' "$HOST_KILL_LOG" 2>/dev/null; then pass "host budget: real flock(2) primitive releases lock after SIGKILLed holder"
+  else fail "host budget: next build did not acquire after killed holder rc=$AFTER_RC log=$(cat "$HOST_KILL_LOG" 2>/dev/null)"; fi
+else fail "host budget: killed-holder setup never acquired lock: $(cat "$HOST_KILL_LOG" 2>/dev/null)"; fi
+CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/no-parity-dir" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)"; CONTRACT_RC=$?
+if [ $CONTRACT_RC -eq 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep -q 'lock=.*/.cache/wheelhouse-build.lock jobs=8 test_threads=4 reentry=WHEELHOUSE_BUILD_LOCK_HELD' && printf '%s\n' "$CONTRACT_OUT" | grep -q 'parity=ok scanned='; then
+  pass "host budget: cargo --contract prints lock/jobs/test_threads/reentry and parity scan result"
+else fail "host budget: cargo --contract mismatch rc=$CONTRACT_RC: $CONTRACT_OUT"; fi
+BAD_PARITY="$FIX/parity/fleet-x"; mkdir -p "$BAD_PARITY"; printf '#!/usr/bin/env bash\nprintf "tool=cargo lock=/other jobs=99 test_threads=9 reentry=OTHER\\n"\n' > "$BAD_PARITY/cargo"; chmod +x "$BAD_PARITY/cargo"
+CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/parity" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)"; CONTRACT_RC=$?
+if [ $CONTRACT_RC -ne 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep -q 'parity=mismatch'; then pass "host budget: --contract parity scan reports mismatched fleet shims"
+else fail "host budget: parity mismatch not reported rc=$CONTRACT_RC: $CONTRACT_OUT"; fi
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)"; RC=$?
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
+phase "8. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
 CAN_A="$FIX/can-a"
 build_proj "$CAN_A" can-a
@@ -1097,7 +1302,7 @@ fi
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"
 ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
-phase "8. real pi — one smoke leg, spawn/dispatch/agent_end/resume/grow"
+phase "9. real pi — one smoke leg, spawn/dispatch/agent_end/resume/grow"
 REAL_AUTH="$HOME/.pi/agent/auth.json"
 real_auth_is_identity() {
   [ -f "$REAL_AUTH" ] && [ -n "$(tr -d '{}[:space:]' < "$REAL_AUTH" 2>/dev/null)" ]

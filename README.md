@@ -58,7 +58,7 @@ Two things before you start:
   me. Do not work around it, and do not overwrite anything I already have.
 ```
 
-It will survey your repo, then interview you about the things it cannot derive: which repos the fleet changes, what proves a build actually works (that one is several questions), what is true when the first iteration is done, which actions stay yours alone, what authorizes a merge, and what your priorities mean. Then it walks your seat roster one seat at a time, and walks the seats you took a second time for their models — each seat taken gets a role and an account directory of its own, then its own provider, auth route, and a model pinned from a live `pi --list-models` listing rather than from anyone's memory, recorded in `seats/seats.json` (names and paths only; never a secret) — and declining every seat is a legitimate answer. Then it provisions the seats, writes the tree, verifies it, tells you what is stubbed, and closes the loop with a smoke dispatch through a real seat.
+It will survey your repo, then interview you about the things it cannot derive: which repos the fleet changes, what proves a build actually works (that one is several questions), what is true when the first iteration is done, which actions stay yours alone, what authorizes a merge, and what your priorities mean. Then it walks your seat roster one seat at a time, and walks the seats you took a second time for their models — each seat taken gets a role and an account directory of its own, then its own harness, provider, auth route, and model pinned from that harness's live listing/probe rather than from anyone's memory, recorded in `seats/seats.json` (names and paths only; never a secret) — and declining every seat is a legitimate answer. Then it provisions the seats, writes the tree, verifies it, tells you what is stubbed, and closes the loop with a smoke dispatch through a real seat.
 
 If you would rather read the template before installing anything, this is safe to paste into a terminal — it clones a copy you can browse and installs nothing:
 
@@ -73,7 +73,7 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 ├── CLAUDE.md                    generated — makes this folder's sessions the commander
 ├── .beads/                      the work graph
 ├── seats/                       the seat machinery, at the root because every path it prints is root-relative
-│   ├── seats.json               generated — the roster: role, provider, model, auth route, account dir per seat; never a secret
+│   ├── seats.json               generated — the roster: role, harness, provider, model, auth route, account dir per seat; never a secret
 │   ├── seat-env.sh              provisions one seat's isolated account directory, once
 │   ├── adapter.ts               runs the seats: spawn, dispatch, steer, status, stop, resume
 │   ├── verify.ts                dispatches the ephemeral bead-verdict pass on a finished branch

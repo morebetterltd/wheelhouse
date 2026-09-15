@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+set -euo pipefail
+TOOL="$(basename "$0")"
+LOCK_PATH="${WHEELHOUSE_BUILD_LOCK:-$HOME/.cache/wheelhouse-build.lock}"
+REENTRY_VAR="WHEELHOUSE_BUILD_LOCK_HELD"
+CARGO_JOBS_CAP=8
+NEXTEST_THREADS_CAP=4
+DOTNET_MAXCPU_CAP=8
+PARITY_DIR="${WHEELHOUSE_HOST_BUDGET_PARITY_DIR:-$HOME/.config/wheelhouse/host-build-shims}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+
+contract_line() {
+  case "$TOOL" in
+    cargo) printf 'tool=cargo lock=%s jobs=%s test_threads=%s reentry=%s\n' "$LOCK_PATH" "$CARGO_JOBS_CAP" "$NEXTEST_THREADS_CAP" "$REENTRY_VAR" ;;
+    dotnet) printf 'tool=dotnet lock=%s jobs=%s test_threads= reentry=%s maxcpucount=%s node_reuse=disabled\n' "$LOCK_PATH" "$DOTNET_MAXCPU_CAP" "$REENTRY_VAR" "$DOTNET_MAXCPU_CAP" ;;
+    *) printf 'tool=%s lock=%s jobs= test_threads= reentry=%s\n' "$TOOL" "$LOCK_PATH" "$REENTRY_VAR" ;;
+  esac
+}
+
+real_tool() {
+  local override=""
+  case "$TOOL" in
+    cargo) override="${WHEELHOUSE_REAL_CARGO:-}" ;;
+    dotnet) override="${WHEELHOUSE_REAL_DOTNET:-}" ;;
+  esac
+  if [ -n "$override" ]; then printf '%s\n' "$override"; return 0; fi
+  local IFS=: dir phys candidate
+  for dir in $PATH; do
+    [ -n "$dir" ] || dir=.
+    phys="$(cd "$dir" 2>/dev/null && pwd -P || true)"
+    [ "$phys" = "$SCRIPT_DIR" ] && continue
+    candidate="$dir/$TOOL"
+    if [ -x "$candidate" ] && [ ! -d "$candidate" ]; then printf '%s\n' "$candidate"; return 0; fi
+  done
+  printf 'host-build-shim: could not find real %s after %s\n' "$TOOL" "$SCRIPT_DIR" >&2
+  return 127
+}
+
+print_contract_and_parity() {
+  local own expected other got failed=0
+  own="$(contract_line)"
+  printf '%s\n' "$own"
+  if [ ! -d "$PARITY_DIR" ]; then
+    printf 'parity=ok scanned=%s (missing)\n' "$PARITY_DIR"
+    return 0
+  fi
+  expected="$(printf '%s\n' "$own" | sed 's/^tool=[^ ]* //')"
+  while IFS= read -r other; do
+    [ -x "$other" ] || continue
+    [ "$(cd "$(dirname "$other")" && pwd -P)/$(basename "$other")" = "$SCRIPT_DIR/$TOOL" ] && continue
+    got="$({ "$other" --contract 2>/dev/null || true; } | sed -n '1p' | sed 's/^tool=[^ ]* //')"
+    if [ "$got" != "$expected" ]; then
+      printf 'parity=mismatch path=%s expected="%s" got="%s"\n' "$other" "$expected" "$got"
+      failed=1
+    fi
+  done < <(find "$PARITY_DIR" -type f -name "$TOOL" 2>/dev/null | sort)
+  [ "$failed" -eq 0 ] && printf 'parity=ok scanned=%s\n' "$PARITY_DIR"
+  return "$failed"
+}
+
+cap_cargo_args() {
+  local out=() a next=0 saw=0
+  for a in "$@"; do
+    if [ "$next" -eq 1 ]; then
+      if { [ "$a" -gt "$NEXTEST_THREADS_CAP" ] 2>/dev/null; }; then out+=("$NEXTEST_THREADS_CAP"); else out+=("$a"); fi
+      next=0; saw=1; continue
+    fi
+    case "$a" in
+      --test-threads) out+=("$a"); next=1 ;;
+      --test-threads=*)
+        local v="${a#--test-threads=}"
+        if { [ "$v" -gt "$NEXTEST_THREADS_CAP" ] 2>/dev/null; }; then out+=("--test-threads=$NEXTEST_THREADS_CAP"); else out+=("$a"); fi
+        saw=1 ;;
+      *) out+=("$a") ;;
+    esac
+  done
+  if [ "${out[0]:-}" = "nextest" ] && [ "$saw" -eq 0 ]; then out+=("--test-threads" "$NEXTEST_THREADS_CAP"); fi
+  printf '%s\0' "${out[@]}"
+}
+
+cap_dotnet_args() {
+  local out=() a saw=0
+  for a in "$@"; do
+    case "$a" in
+      -maxcpucount|/maxcpucount|-m|/m) out+=("$a:$DOTNET_MAXCPU_CAP"); saw=1 ;;
+      -maxcpucount:*|/maxcpucount:*|-m:*|/m:*) out+=("${a%%:*}:$DOTNET_MAXCPU_CAP"); saw=1 ;;
+      -maxcpucount=*|/maxcpucount=*|-m=*|/m=*) out+=("${a%%=*}=$DOTNET_MAXCPU_CAP"); saw=1 ;;
+      *) out+=("$a") ;;
+    esac
+  done
+  [ "$saw" -eq 0 ] && out+=("-maxcpucount:$DOTNET_MAXCPU_CAP")
+  printf '%s\0' "${out[@]}"
+}
+
+if [ "${1:-}" = "--contract" ]; then
+  print_contract_and_parity
+  exit $?
+fi
+
+REAL="$(real_tool)"
+if [ "${!REENTRY_VAR:-}" = "1" ]; then
+  exec "$REAL" "$@"
+fi
+mkdir -p "$(dirname "$LOCK_PATH")"
+lock_exec() {
+  if command -v perl >/dev/null 2>&1 && perl -MFcntl=:flock,F_GETFD,F_SETFD,FD_CLOEXEC -e 'exit 0' >/dev/null 2>&1; then
+    exec perl -MFcntl=:flock,F_GETFD,F_SETFD,FD_CLOEXEC -e '
+      my ($lock, $guard, @cmd) = @ARGV;
+      open(my $fh, ">>", $lock) or die "STOP: host-build-shim could not open lock $lock: $!\n";
+      flock($fh, LOCK_EX) or die "STOP: host-build-shim could not lock $lock: $!\n";
+      my $flags = fcntl($fh, F_GETFD, 0);
+      defined($flags) and fcntl($fh, F_SETFD, $flags & ~FD_CLOEXEC);
+      $ENV{$guard} = 1;
+      exec { $cmd[0] } @cmd or die "STOP: host-build-shim could not exec $cmd[0]: $!\n";
+    ' "$LOCK_PATH" "$REENTRY_VAR" "$@"
+  fi
+  printf 'STOP: host-build-shim needs a crash-safe flock(2) primitive; install perl with Fcntl (standard on macOS and Linux) or disable seats/host-budget.json. Refusing mkdir locks because they survive a killed holder.\n' >&2
+  exit 127
+}
+ARGS=()
+case "$TOOL" in
+  cargo)
+    if [ -z "${CARGO_BUILD_JOBS:-}" ] || { [ "${CARGO_BUILD_JOBS:-0}" -gt "$CARGO_JOBS_CAP" ] 2>/dev/null; }; then
+      export CARGO_BUILD_JOBS="$CARGO_JOBS_CAP"
+    fi
+    while IFS= read -r -d '' arg; do ARGS+=("$arg"); done < <(cap_cargo_args "$@") ;;
+  dotnet)
+    export MSBUILDDISABLENODEREUSE=1
+    while IFS= read -r -d '' arg; do ARGS+=("$arg"); done < <(cap_dotnet_args "$@") ;;
+  *) ARGS=("$@") ;;
+esac
+export "$REENTRY_VAR=1"
+lock_exec "$REAL" "${ARGS[@]}"

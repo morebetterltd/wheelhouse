@@ -62,6 +62,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
+import { hostBudgetPath } from "./host-budget";
+import { requirePiHarness } from "./harness";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -523,6 +525,7 @@ function canonicalDir(p: string): string {
 
 interface SeatEntry {
   role: string;
+  harness?: string;
   provider?: string;
   model?: string;
   external?: boolean;
@@ -666,6 +669,11 @@ function main(): void {
   }
 
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  try {
+    requirePiHarness(verifierSeat, entry, "verify.ts one-shot verifier");
+  } catch (e: any) {
+    die(e.message);
+  }
   if (!entry.account?.dir) die(`verifier seat "${verifierSeat}" has no account.dir in seats/seats.json`);
 
   // --- account distinctness, before anything is spawned ---------------------
@@ -764,7 +772,7 @@ function main(): void {
   const startedAt = Date.now();
   const res = spawnSync("pi", args, {
     cwd: scratchCwd,
-    env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir, BEADS_ACTOR: beadsActorFor(verifierSeat) },
+    env: { ...process.env, PATH: hostBudgetPath(ROOT), PI_CODING_AGENT_DIR: verifierDir, BEADS_ACTOR: beadsActorFor(verifierSeat) },
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,

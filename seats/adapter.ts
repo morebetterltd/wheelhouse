@@ -58,6 +58,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
+import { hostBudgetPath } from "./host-budget";
+import { harnessNameForSeat, requirePiHarness } from "./harness";
+
+interface SeatDriver {
+  readonly name: string;
+  launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh?: boolean): Promise<void>;
+  probe(name: string, entry: SeatEntry): void;
+  getState(rec: SeatRecord): Promise<any>;
+  prompt(rec: SeatRecord, message: string, streamingBehavior: "followUp" | "steer", timeoutMs?: number): Promise<any>;
+  steer(rec: SeatRecord, text: string): Promise<any>;
+  stop(state: State, name: string, rec: SeatRecord): Promise<string>;
+}
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -164,20 +176,23 @@ function beadsActorFor(name: string): string {
 
 interface SeatEntry {
   role: string;
+  harness?: string;
   provider?: string;
   model?: string;
   external?: boolean;
   shadow?: boolean;
   skills?: string[];
+  allowedTools?: string;
   account?: { dir: string; label?: string; authRoute?: string };
 }
+
 
 // The three routes BOOTSTRAP.md's question 8 offers: `oauth` for a
 // subscription seat's REPL /login, `api_key` for a written auth.json entry,
 // `env` for a provider env var exported in the spawning shell. Durable but
 // optional — `seats/seats.json` written before this field existed has no
 // `account.authRoute` at all, and that stays a valid roster.
-const AUTH_ROUTES = ["oauth", "api_key", "env"] as const;
+const AUTH_ROUTES = ["oauth", "api_key", "env", "default"] as const;
 
 function validateAuthRoute(seatName: string, entry: SeatEntry): void {
   const route = entry.account?.authRoute;
@@ -187,6 +202,14 @@ function validateAuthRoute(seatName: string, entry: SeatEntry): void {
       `seat "${seatName}" has an invalid account.authRoute ${JSON.stringify(route)} in seats/seats.json — ` +
         `must be one of ${AUTH_ROUTES.join(", ")} (or omitted)`
     );
+  }
+}
+
+function validateHarness(seatName: string, entry: SeatEntry): void {
+  try {
+    harnessNameForSeat(seatName, entry);
+  } catch (e: any) {
+    die(e.message);
   }
 }
 
@@ -234,6 +257,7 @@ interface SeatRecord {
   accountLabel?: string;
   role: string;
   roleBrief: string;
+  roleBriefHash?: string;
   cwd: string;
   fifo: string;
   log: string;
@@ -251,18 +275,40 @@ interface State {
   seats: Record<string, SeatRecord>;
 }
 
+function parseRosterFile(): Record<string, SeatEntry> {
+  const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
+  return raw.seats ?? {};
+}
+
 function readRoster(): Record<string, SeatEntry> {
   if (!fs.existsSync(ROSTER_FILE)) {
     die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   }
-  const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
-  const seats: Record<string, SeatEntry> = raw.seats ?? {};
+  const seats = parseRosterFile();
   for (const [name, entry] of Object.entries(seats)) {
+    validateHarness(name, entry);
     validateAuthRoute(name, entry);
     validateShadow(name, entry);
     validateSkills(name, entry);
   }
   return seats;
+}
+
+function readNamedRosterEntry(name: string): SeatEntry | undefined {
+  if (!fs.existsSync(ROSTER_FILE)) return undefined;
+  const seats = parseRosterFile();
+  return seats[name];
+}
+
+function driverForRunningSeat(name: string, operation: string): SeatDriver {
+  let entry: SeatEntry | undefined;
+  try {
+    entry = readNamedRosterEntry(name);
+  } catch {
+    return PI_DRIVER;
+  }
+  if (!entry) return PI_DRIVER;
+  return driverForSeat(name, entry, operation);
 }
 
 function readState(): State {
@@ -691,7 +737,8 @@ function requireSeat(name: string): SeatEntry {
     die(`no seat named "${name}" in seats/seats.json (have: ${Object.keys(roster).join(", ") || "none"})`);
   }
   if (entry.external) die(`"${name}" is external — it runs on its own harness, not on a Pi seat`);
-  if (!entry.account?.dir) die(`seat "${name}" has no account.dir in seats/seats.json`);
+  const harness = harnessNameForSeat(name, entry);
+  if (!entry.account?.dir && !(harness === "claude-code" && entry.account?.authRoute === "default")) die(`seat "${name}" has no account.dir in seats/seats.json`);
   return entry;
 }
 
@@ -747,7 +794,7 @@ function logFilterShell(): string {
   return `'${process.execPath.replace(/'/g, `'\\''`)}' -e '${script.replace(/'/g, `'\\''`)}'`;
 }
 
-async function launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
+async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
   const state = readState();
@@ -795,7 +842,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
     `0<> '${fifo}' > >(${logFilterShell()} >> '${log}') 2>> '${errLog}'`;
   const child = spawn("bash", ["-c", shellCmd], {
     cwd,
-    env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
+    env: { ...process.env, PATH: hostBudgetPath(ROOT), PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
     detached: true,
     stdio: "ignore",
   });
@@ -829,7 +876,7 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
         `seat ${name}: recorded session could not move cwd from ${liveCwd} to ${requestedCwd}; ${cleanup}; ` +
           `starting a fresh session in the requested cwd`
       );
-      await launch(name, entry, null, cwd, true);
+      await piLaunch(name, entry, null, cwd, true);
       return;
     }
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} has live cwd ${liveCwd}, not requested cwd ${requestedCwd}. launch-only cleanup: ${cleanup}`);
@@ -855,12 +902,186 @@ async function launch(name: string, entry: SeatEntry, sessionFile: string | null
   console.log(`  events -> ${log}`);
 }
 
-async function cmdSpawn(name: string, beadId?: string): Promise<void> {
-  await launch(name, requireSeat(name), null, beadId ? beadWorktreeDir(beadId) : ROOT);
+const PI_DRIVER: SeatDriver = {
+  name: "pi",
+  launch: piLaunch,
+  probe: piProbe,
+  getState: (rec) => rpc(rec, { type: "get_state" }),
+  prompt: (rec, message, streamingBehavior, timeoutMs = PROMPT_ACK_MS) => rpc(rec, promptCommand(message, streamingBehavior), timeoutMs),
+  steer: (rec, text) => rpc(rec, { type: "steer", message: text }),
+  stop: stopRecord,
+};
+
+
+function scrubbedSeatEnv(extra: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+  delete env.ANTHROPIC_API_KEY;
+  delete env.ANTHROPIC_AUTH_TOKEN;
+  delete env.OPENAI_API_KEY;
+  for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
+  return env;
 }
 
-function cmdProbe(name: string): void {
+function isClaudeDefaultAuth(entry: SeatEntry): boolean {
+  return entry.account?.authRoute === "default";
+}
+
+function claudeAccountDir(entry: SeatEntry): string {
+  if (isClaudeDefaultAuth(entry)) return process.env.HOME ?? ROOT;
+  return expandTilde(entry.account!.dir);
+}
+
+function requireClaudeCredential(name: string, entry: SeatEntry, accountDir: string, labelSuffix: string): void {
+  if (isClaudeDefaultAuth(entry)) return;
+  const config = path.join(accountDir, ".claude.json");
+  if (!fs.existsSync(config) || fs.statSync(config).size === 0) {
+    die(
+      `seat "${name}"${labelSuffix} has no Claude Code identity in ${accountDir}.\n` +
+        `      OAuth: CLAUDE_CONFIG_DIR="${accountDir}" claude auth login --claudeai`
+    );
+  }
+}
+
+function claudeChildEnv(entry: SeatEntry, accountDir: string, name: string): NodeJS.ProcessEnv {
+  return scrubbedSeatEnv({
+    PATH: hostBudgetPath(ROOT),
+    CLAUDE_CONFIG_DIR: isClaudeDefaultAuth(entry) ? undefined : accountDir,
+    BEADS_ACTOR: beadsActorFor(name),
+  });
+}
+
+async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
+  requireCwdDir(cwd);
+  const labelSuffix = accountLabelSuffix(entry);
+  const state = readState();
+  const existing = state.seats[name];
+  if (existing && pidAlive(existing.pid, existing.fifo)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
+
+  const accountDir = claudeAccountDir(entry);
+  if (!isClaudeDefaultAuth(entry) && !fs.existsSync(accountDir)) {
+    die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`);
+  }
+  requireClaudeCredential(name, entry, accountDir, labelSuffix);
+  if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — claude-code launch must pin the exact model`);
+  if (!entry.allowedTools) die(`seat "${name}"${labelSuffix} has no allowedTools list in seats/seats.json — claude-code acceptEdits mode must name the tools it may use`);
+
+  const brief = roleBriefPath(entry.role);
+  const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+  if (sessionFile && existing?.roleBriefHash && existing.roleBriefHash !== roleBriefHash) {
+    die(`seat "${name}" brief changed; reset instead of resume (recorded ${existing.roleBriefHash.slice(0, 12)}, current ${roleBriefHash.slice(0, 12)})`);
+  }
+
+  fs.mkdirSync(RUN_DIR, { recursive: true });
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+  const fifo = path.join(RUN_DIR, `${name}.stdin`);
+  const log = path.join(LOG_DIR, `${name}.jsonl`);
+  const rawLog = path.join(LOG_DIR, `${name}.raw.jsonl`);
+  const errLog = path.join(LOG_DIR, `${name}.stderr.log`);
+  if (fs.existsSync(fifo)) {
+    if (!fs.statSync(fifo).isFIFO()) die(`${fifo} exists and is not a FIFO — refusing to guess what it is`);
+  } else {
+    execFileSync("mkfifo", [fifo]);
+  }
+
+  const args = [
+    path.join(SEATS_DIR, "drivers", "claude-code", "shim.ts"),
+    "--log", log,
+    "--raw-log", rawLog,
+    "--err-log", errLog,
+    "--account-dir", accountDir,
+    "--brief", brief,
+    "--model", entry.model,
+    "--cwd", cwd,
+    "--actor", beadsActorFor(name),
+    "--permission-mode", "acceptEdits",
+    "--allowed-tools", entry.allowedTools,
+  ];
+  if (isClaudeDefaultAuth(entry)) args.push("--default-login");
+  if (sessionFile) args.push("--resume", sessionFile);
+  const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+  const shellCmd = `exec ${q(process.execPath)} ${args.map(q).join(" ")} 0<> ${q(fifo)} 2>> ${q(errLog)}`;
+  const child = spawn("bash", ["-c", shellCmd], { cwd, env: claudeChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" });
+  child.unref();
+  const pid = child.pid!;
+
+  const probe = { fifo, log, pid };
+  let st: any;
+  try {
+    st = await rpc(probe, { type: "get_state" });
+  } catch (e: any) {
+    const cleanup = await terminateSpawnedOnly(pid);
+    recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
+    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+  }
+  if (!st.success) {
+    const cleanup = await terminateSpawnedOnly(pid);
+    recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
+    die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+  }
+
+  const requestedCwd = path.resolve(cwd);
+  const liveCwd = processCwd(pid);
+  state.seats[name] = {
+    pid,
+    startedAt: new Date().toISOString(),
+    accountDir,
+    ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
+    role: entry.role,
+    roleBrief: brief,
+    roleBriefHash,
+    cwd: liveCwd ?? requestedCwd,
+    fifo,
+    log,
+    sessionId: st.data?.sessionId ?? null,
+    sessionFile: st.data?.sessionFile ?? null,
+    model: st.data?.model ?? entry.model,
+    ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}),
+  };
+  writeState(state);
+  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`);
+  console.log(`  events -> ${log}`);
+}
+
+function claudeProbe(name: string, entry: SeatEntry): void {
+  const labelSuffix = accountLabelSuffix(entry);
+  const accountDir = claudeAccountDir(entry);
+  if (!isClaudeDefaultAuth(entry) && !fs.existsSync(accountDir)) die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}`);
+  requireClaudeCredential(name, entry, accountDir, labelSuffix);
+  if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — probe must test the exact roster model`);
+  const args = ["-p", "--output-format", "json", "--model", entry.model, "--setting-sources", "project", "Reply with exactly the word OK. Use no tools."];
+  const result = spawnSync("claude", args, { cwd: ROOT, env: claudeChildEnv(entry, accountDir, name), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  if (result.error) die(`probe failed to start claude for seat "${name}"${labelSuffix}: ${result.error.message}`);
+  let parsed: any = null;
+  try { parsed = JSON.parse(result.stdout.trim()); } catch {}
+  if (result.status === 0 && parsed?.subtype === "success" && String(parsed?.result ?? "").trim() === "OK") { console.log("OK"); return; }
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  process.exit(result.status ?? 1);
+}
+
+const CLAUDE_DRIVER: SeatDriver = {
+  name: "claude-code",
+  launch: claudeLaunch,
+  probe: claudeProbe,
+  getState: (rec) => rpc(rec, { type: "get_state" }),
+  prompt: (rec, message, streamingBehavior, timeoutMs = PROMPT_ACK_MS) => rpc(rec, promptCommand(message, streamingBehavior), timeoutMs),
+  steer: (rec, text) => rpc(rec, { type: "steer", message: text }),
+  stop: stopRecord,
+};
+
+function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatDriver {
+  const harness = harnessNameForSeat(name, entry);
+  if (harness === "pi") return PI_DRIVER;
+  if (harness === "claude-code") return CLAUDE_DRIVER;
+  requirePiHarness(name, entry, operation);
+  return PI_DRIVER;
+}
+async function cmdSpawn(name: string, beadId?: string): Promise<void> {
   const entry = requireSeat(name);
+  await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, beadId ? beadWorktreeDir(beadId) : ROOT);
+}
+
+function piProbe(name: string, entry: SeatEntry): void {
   const labelSuffix = accountLabelSuffix(entry);
   const accountDir = expandTilde(entry.account!.dir);
   if (!fs.existsSync(accountDir)) {
@@ -880,7 +1101,7 @@ function cmdProbe(name: string): void {
   ];
   const result = spawnSync("pi", args, {
     cwd: ROOT,
-    env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
+    env: { ...process.env, PATH: hostBudgetPath(ROOT), PI_CODING_AGENT_DIR: accountDir, BEADS_ACTOR: beadsActorFor(name) },
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -892,6 +1113,11 @@ function cmdProbe(name: string): void {
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   process.exit(result.status ?? 1);
+}
+
+function cmdProbe(name: string): void {
+  const entry = requireSeat(name);
+  return driverForSeat(name, entry, "adapter probe").probe(name, entry);
 }
 
 async function cmdResume(name: string): Promise<void> {
@@ -915,10 +1141,12 @@ async function cmdResume(name: string): Promise<void> {
       `seat ${name}: recorded seat cwd is gone: ${resumeCwd}; ` +
         `session continuity intentionally dropped; resuming fresh in ${fallbackCwd}`
     );
-    await launch(name, requireSeat(name), null, fallbackCwd);
+    const entry = requireSeat(name);
+    await driverForSeat(name, entry, "adapter resume").launch(name, entry, null, fallbackCwd);
     return;
   }
-  await launch(name, requireSeat(name), rec.sessionFile, resumeCwd);
+  const entry = requireSeat(name);
+  await driverForSeat(name, entry, "adapter resume").launch(name, entry, rec.sessionFile, resumeCwd);
 }
 
 /**
@@ -961,7 +1189,7 @@ async function cmdReset(name: string): Promise<void> {
     state.seats[name].sessionFile = null;
     writeState(state); // reset-record
   }
-  await launch(name, entry, null, cwd); // null sessionFile: cold, no --session
+  await driverForSeat(name, entry, "adapter reset").launch(name, entry, null, cwd); // null sessionFile: cold, no --session
   console.log(`seat ${name}: reset — session discarded, respawned cold`);
 }
 
@@ -974,6 +1202,7 @@ function requireRunning(name: string): SeatRecord {
 
 async function cmdDispatch(name: string, beadId: string, text: string): Promise<void> {
   let rec = requireRunning(name);
+  const sameCwdDriver = driverForRunningSeat(name, "adapter dispatch");
   const targetCwd = beadWorktreeDir(beadId);
   if (rec.cwd !== targetCwd) {
     // Construction, not prompt discipline: a seat handed a DIFFERENT bead
@@ -983,7 +1212,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     // missing worktree must refuse loudly with the seat left exactly as it
     // was, not stopped on the way to discovering the target doesn't exist.
     requireCwdDir(targetCwd);
-    const st = await rpc(rec, { type: "get_state" });
+    const st = await sameCwdDriver.getState(rec);
     if (!st.success) {
       die(`get_state failed while checking seat "${name}" before cross-bead dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
     }
@@ -1005,13 +1234,15 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     await cmdStop(name);
     if (recordedCwdExists) {
-      await launch(name, requireSeat(name), rec.sessionFile, targetCwd);
+      const entry = requireSeat(name);
+      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, rec.sessionFile, targetCwd);
     } else {
       console.log(
         `seat ${name}: session continuity intentionally dropped because recorded cwd is gone: ${recordedCwd}; ` +
           `falling back to fresh spawn in dispatch target ${targetCwd}`
       );
-      await launch(name, requireSeat(name), null, targetCwd);
+      const entry = requireSeat(name);
+      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, null, targetCwd);
     }
     rec = requireRunning(name);
   }
@@ -1026,7 +1257,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   writeState(state);
   let resp: any;
   try {
-    resp = await rpc(rec, promptCommand(promptText, "followUp"), PROMPT_ACK_MS);
+    resp = await sameCwdDriver.prompt(rec, promptText, "followUp", PROMPT_ACK_MS);
   } catch (e: any) {
     if (e?.code === "WHEELHOUSE_RPC_TIMEOUT" && promptDeliveredAfter(rec, Number(e.logOffset ?? 0), promptText)) {
       console.log(`WARNING: prompt delivered, ack late for ${beadId} to ${name}; watch ${rec.log}`);
@@ -1052,6 +1283,9 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     die(`dispatch failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
   }
   const landedState = readState();
+  if (resp.data?.sessionId) landedState.seats[name].sessionId = resp.data.sessionId;
+  if (resp.data?.sessionFile) landedState.seats[name].sessionFile = resp.data.sessionFile;
+  if (resp.data?.model) landedState.seats[name].model = resp.data.model;
   landedState.seats[name].lastBead = beadId;
   landedState.seats[name].lastDispatchAt = new Date().toISOString();
   landedState.seats[name].lastPrompt = promptText;
@@ -1062,9 +1296,10 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
 
 async function cmdSteer(name: string, text: string): Promise<void> {
   const rec = requireRunning(name);
+  const driver = driverForRunningSeat(name, "adapter steer");
   let st: any;
   try {
-    st = await rpc(rec, { type: "get_state" });
+    st = await driver.getState(rec);
   } catch (e: any) {
     if (!String(e.message || e).includes("timed out")) die(`steer preflight get_state failed: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
     await fifoWrite(rec.fifo, promptCommand(text, "steer"));
@@ -1073,17 +1308,18 @@ async function cmdSteer(name: string, text: string): Promise<void> {
   }
   if (!st.success) die(`steer preflight get_state failed: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
   if (st.data?.isStreaming) {
-    const resp = await rpc(rec, { type: "steer", message: text });
+    const resp = await driver.steer(rec, text);
     if (!resp.success) die(`steer failed: ${resp.error}`);
     console.log(`steered ${name} mid-turn`);
     return;
   }
-  const resp = await rpc(rec, promptCommand(text, "steer"));
+  const resp = await driver.prompt(rec, text, "steer");
   if (!resp.success) die(`steer prompt failed: ${resp.error}`);
   console.log(`steered ${name} idle-started`);
 }
 
 interface ProcessRow { pid: number; ppid: number; startMs: number | null; command: string }
+type OpenPathSnapshot = Map<number, string[]>;
 
 function processRows(): Map<number, ProcessRow> {
   const rows = new Map<number, ProcessRow>();
@@ -1111,60 +1347,77 @@ function isDescendantOf(pid: number, ancestor: number | null | undefined, rows: 
   return false;
 }
 
-function fifoHolderPids(fifo: string | undefined): Set<number> {
-  const out = new Set<number>();
-  if (!fifo || !fs.existsSync(fifo)) return out;
-  try {
-    for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
-      const r = spawnSync(lsof, ["-t", fifo], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-      if (r.error) continue;
-      for (const s of (r.stdout || "").split(/\s+/).filter(Boolean)) {
-        const pid = Number(s);
-        if (Number.isFinite(pid) && pid > 0) out.add(pid);
-      }
-      break;
+function processOpenPaths(): OpenPathSnapshot | null {
+  for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
+    const r = spawnSync(lsof, ["-Fn"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+    if (r.error) {
+      if ((r.error as any).code === "ENOENT") continue;
+      return null;
     }
-  } catch { /* lsof absent or refused: status still prints the recorded row */ }
+    const out: OpenPathSnapshot = new Map();
+    let pid: number | null = null;
+    for (const line of (r.stdout || "").split(/\n/)) {
+      if (line.startsWith("p")) {
+        const n = Number(line.slice(1));
+        pid = Number.isFinite(n) && n > 0 ? n : null;
+        if (pid !== null && !out.has(pid)) out.set(pid, []);
+      } else if (pid !== null && line.startsWith("n")) {
+        out.get(pid)!.push(line.slice(1));
+      }
+    }
+    return out;
+  }
+  return null;
+}
+
+function pathsMatch(openPaths: string[] | undefined, p: string | undefined): boolean {
+  if (!p || !openPaths) return false;
+  const wanted = new Set([p]);
+  try { wanted.add(fs.realpathSync(p)); } catch {}
+  return openPaths.some((n) => wanted.has(n));
+}
+
+function pidAliveFromSnapshot(pid: number | null, fifo: string | undefined, open: OpenPathSnapshot | null): boolean {
+  if (!barePidAlive(pid)) return false;
+  if (!fifo || open === null) return true;
+  return pathsMatch(open.get(pid!), fifo);
+}
+
+function fifoHolderPids(fifo: string | undefined, open: OpenPathSnapshot | null): Set<number> {
+  const out = new Set<number>();
+  if (!fifo || !fs.existsSync(fifo) || open === null) return out;
+  for (const [pid, paths] of open) if (pathsMatch(paths, fifo)) out.add(pid);
   return out;
 }
 
-function orphanCandidatesFor(name: string, rec: SeatRecord): Map<number, string> {
+function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): Map<number, string> {
   const seen = new Map<number, string>();
-  const rows = processRows();
-  const fifoPids = fifoHolderPids(rec.fifo);
-  const recordedStart = rec.pid ? rows.get(rec.pid)?.startMs ?? null : null;
   function add(pid: number, reason: string) {
-    if (!Number.isFinite(pid) || pid <= 0 || pid === rec.pid || !pidAlive(pid)) return;
+    if (!Number.isFinite(pid) || pid <= 0 || pid === rec.pid || !barePidAlive(pid)) return;
     if (isDescendantOf(pid, rec.pid, rows)) return;
-    const candidateStart = rows.get(pid)?.startMs ?? null;
-    const holdsFifo = fifoPids.has(pid) || Boolean(rec.fifo && pidHoldsPath(pid, rec.fifo));
-    const predatesRecorded = recordedStart !== null && candidateStart !== null && candidateStart < recordedStart;
-    if (!holdsFifo && !predatesRecorded) return;
-    const qualified = holdsFifo ? reason : `${reason}; predates recorded pid ${rec.pid ?? "none"}`;
     const prev = seen.get(pid);
-    seen.set(pid, prev ? `${prev},${qualified}` : qualified);
+    seen.set(pid, prev ? `${prev},${reason}` : reason);
   }
-  for (const pid of fifoPids) add(pid, `holding stdin FIFO ${rec.fifo}`);
   const needles = [rec.accountDir, rec.cwd].filter((s): s is string => Boolean(s));
   if (needles.length) {
     for (const row of rows.values()) {
       const cmd = row.command;
-      if (!/(^|[ /])pi( |$)/.test(cmd) || !cmd.includes("--mode rpc")) continue;
+      const looksLikePiSeat = /(^|[ /])pi( |$)/.test(cmd) && cmd.includes("--mode rpc");
+      const looksLikeClaudeSeat = cmd.includes("drivers/claude-code/shim.ts") && cmd.includes("--account-dir") && cmd.includes("--cwd");
+      if (!looksLikePiSeat && !looksLikeClaudeSeat) continue;
       if (needles.some((n) => cmd.includes(n))) add(row.pid, "argv/cwd/account match");
     }
   }
   return seen;
 }
 
-function orphanMatchesFor(name: string, rec: SeatRecord): { pid: number; reason: string }[] {
-  const first = orphanCandidatesFor(name, rec);
+function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): { pid: number; reason: string }[] {
+  const first = orphanCandidatesFor(name, rec, rows);
   if (first.size === 0) return [];
   if (ORPHAN_CONFIRM_MS > 0) sleepMs(ORPHAN_CONFIRM_MS);
-  const second = orphanCandidatesFor(name, rec);
   const confirmed: { pid: number; reason: string }[] = [];
   for (const [pid, reason] of first) {
-    const again = second.get(pid);
-    if (again) confirmed.push({ pid, reason: again.includes(reason) ? again : `${reason};${again}` });
+    if (barePidAlive(pid)) confirmed.push({ pid, reason });
   }
   return confirmed.sort((a, b) => a.pid - b.pid);
 }
@@ -1214,10 +1467,11 @@ function cmdStatus(): void {
     return;
   }
   const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
+  const rows = processRows();
   for (const name of names) {
     const rec = state.seats[name];
     syncCapacityFromLog(name, rec, state, roster);
-    const alive = pidAlive(rec.pid, rec.fifo);
+    const alive = barePidAlive(rec.pid);
     // A seat nobody stopped whose pid is gone DIED — that is a failure, and
     // rendering it as the same calm STOPPED a graceful stop earns would be
     // a failure conflated into a normal state. Say which one it is.
@@ -1239,7 +1493,7 @@ function cmdStatus(): void {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
       console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
     }
-    for (const orphan of orphanMatchesFor(name, rec)) {
+    for (const orphan of orphanMatchesFor(name, rec, rows)) {
       console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}; remedy: inspect pid ${orphan.pid}, then stop it or run bun seats/recover.ts`);
     }
   }
@@ -1269,7 +1523,8 @@ async function cmdStop(name: string): Promise<void> {
     console.log(`seat ${name} is not running`);
     return;
   }
-  console.log(await stopRecord(state, name, rec));
+  const driver = driverForRunningSeat(name, "adapter stop");
+  console.log(await driver.stop(state, name, rec));
 }
 
 async function cmdStopAll(): Promise<void> {
@@ -1290,9 +1545,16 @@ async function cmdStopAll(): Promise<void> {
       console.log(`seat ${name}: not running; session ${rec.sessionId ?? "-"} kept for resume`);
       continue;
     }
+    let driver: SeatDriver;
+    try {
+      driver = driverForSeat(name, roster[name], "adapter stop-all");
+    } catch (e: any) {
+      console.log(`seat ${name}: REPORT ${e.message}; left running (pid ${rec.pid})`);
+      continue;
+    }
     let st: any;
     try {
-      st = await rpc(rec, { type: "get_state" });
+      st = await driver.getState(rec);
     } catch (e: any) {
       console.log(`seat ${name}: REPORT unable to check idle state; left running (pid ${rec.pid}) — ${e.message}`);
       continue;
@@ -1306,7 +1568,7 @@ async function cmdStopAll(): Promise<void> {
       continue;
     }
     try {
-      console.log(await stopRecord(state, name, rec));
+      console.log(await driver.stop(state, name, rec));
     } catch (e: any) {
       console.log(`seat ${name}: REPORT stop failed; left for human inspection — ${e.message}`);
     }
