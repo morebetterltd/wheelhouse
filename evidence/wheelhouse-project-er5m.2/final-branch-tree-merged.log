@@ -1,0 +1,37 @@
+$ git diff --name-only --diff-filter=U
+$ git status --short
+?? .wheelhouse-runs/
+?? evidence/wheelhouse-project-er5m.2/final-branch-tree-merged.log
+$ git symbolic-ref --short HEAD
+fleet/wheelhouse-project-er5m.2
+$ git rev-parse HEAD
+094ea94c501a24563179b099366ab793d7043b48
+$ git rev-parse fleet/wheelhouse-project-er5m.2
+094ea94c501a24563179b099366ab793d7043b48
+$ git diff --name-only main...HEAD
+evidence/wheelhouse-project-er5m.2/adapter-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/adapter-status-smoke-merged.log
+evidence/wheelhouse-project-er5m.2/concurrency-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/evidence-scrub-merged.log
+evidence/wheelhouse-project-er5m.2/isolation-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/legibility-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/nonpi-adapter-spawn-stop-merged.log
+evidence/wheelhouse-project-er5m.2/nonpi-verify-stop-merged.log
+evidence/wheelhouse-project-er5m.2/nonpi-walk-stop-merged.log
+evidence/wheelhouse-project-er5m.2/pid-ownership-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/recover-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/reset-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/stop-all-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/verify-selftest-merged.log
+evidence/wheelhouse-project-er5m.2/walk-out-merged/image-budget.json
+evidence/wheelhouse-project-er5m.2/walk-selftest-merged.log
+seats/README.md
+seats/adapter.ts
+seats/concurrency.selftest.sh
+seats/isolation.selftest.sh
+seats/recover.selftest.sh
+seats/reset.selftest.sh
+seats/seats.json.example
+seats/stop-all.selftest.sh
+seats/verify.ts
+seats/walk.ts
