@@ -1,0 +1,6 @@
+$ scrubbed rework evidence with seats/evidence-scrub.sh
+evidence/wheelhouse-project-d6xo/commander-voice-lint-selftest-rework.log
+evidence/wheelhouse-project-d6xo/evidence-scrub-rework.log
+evidence/wheelhouse-project-d6xo/intent-check-selftest-rework.log
+evidence/wheelhouse-project-d6xo/static-rework-grep.log
+rc=0

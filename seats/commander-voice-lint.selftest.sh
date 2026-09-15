@@ -23,8 +23,16 @@ cat > "$GOOD" <<'MD'
 Ship the README install proof. Evidence needs the cold-install transcript and the reviewer rerun. Dispatch the task to worker one and keep the branch moving until review.
 MD
 OUT="$($LINT "$GOOD" 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'commander-voice-lint: PASS (1 file(s))'; then pass "human task prose passes"
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'commander-voice-lint: PASS (1 file(s), namespace=wheelhouse-project)'; then pass "human task prose passes"
 else fail "human task prose failed (rc=$RC): $OUT"; fi
+
+GOOD_HYPHENS="$FIX/good-hyphens.md"
+cat > "$GOOD_HYPHENS" <<'MD'
+The fleet-gate hook is read-only and runs a two-step check before morning startup chores.
+MD
+OUT="$($LINT "$GOOD_HYPHENS" 2>&1)"; RC=$?
+if [ $RC -eq 0 ]; then pass "ordinary hyphenated English passes"
+else fail "ordinary hyphenated English was flagged (rc=$RC): $OUT"; fi
 
 BAD_BEAD="$FIX/bad-bead.md"
 cat > "$BAD_BEAD" <<'MD'
@@ -41,6 +49,30 @@ MD
 OUT="$($LINT "$BAD_ID" 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'uses a bare work id'; then pass "planted negative: bare namespace id fails"
 else fail "bare id was not caught (rc=$RC): $OUT"; fi
+
+BAD_3CHAR="$FIX/bad-3char.md"
+cat > "$BAD_3CHAR" <<'MD'
+Shipped wheelhouse-project-0pf to main.
+MD
+OUT="$($LINT "$BAD_3CHAR" 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'uses a bare work id'; then pass "planted negative: 3-character issue id fails"
+else fail "3-character issue id was not caught (rc=$RC): $OUT"; fi
+
+BAD_CHILD="$FIX/bad-child.md"
+cat > "$BAD_CHILD" <<'MD'
+Continue wheelhouse-project-er5m.2 after the merge.
+MD
+OUT="$($LINT "$BAD_CHILD" 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'uses a bare work id'; then pass "planted negative: child issue id fails"
+else fail "child issue id was not caught (rc=$RC): $OUT"; fi
+
+BAD_BEFORE3="$FIX/bad-before3.md"
+cat > "$BAD_BEFORE3" <<'MD'
+Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by the principal.
+MD
+OUT="$($LINT "$BAD_BEFORE3" 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'uses a bare work id'; then pass "planted negative: before-example #3 bare shorthand id fails"
+else fail "before-example #3 id was not caught (rc=$RC): $OUT"; fi
 
 if [ $FAIL -eq 0 ]; then
   echo "commander-voice-lint.selftest: PASS ($PASS checks)"
