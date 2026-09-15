@@ -1055,7 +1055,9 @@ function claudeProbe(name: string, entry: SeatEntry): void {
   const args = ["-p", "--output-format", "json", "--model", entry.model, "--setting-sources", "project", "Reply with exactly the word OK. Use no tools."];
   const result = spawnSync("claude", args, { cwd: ROOT, env: claudeChildEnv(entry, accountDir, name), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   if (result.error) die(`probe failed to start claude for seat "${name}"${labelSuffix}: ${result.error.message}`);
-  if (result.status === 0) { console.log(result.stdout.trim() || "OK"); return; }
+  let parsed: any = null;
+  try { parsed = JSON.parse(result.stdout.trim()); } catch {}
+  if (result.status === 0 && parsed?.subtype === "success" && String(parsed?.result ?? "").trim() === "OK") { console.log("OK"); return; }
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   process.exit(result.status ?? 1);
@@ -1404,7 +1406,9 @@ function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, Pr
   if (needles.length) {
     for (const row of rows.values()) {
       const cmd = row.command;
-      if (!/(^|[ /])pi( |$)/.test(cmd) || !cmd.includes("--mode rpc")) continue;
+      const looksLikePiSeat = /(^|[ /])pi( |$)/.test(cmd) && cmd.includes("--mode rpc");
+      const looksLikeClaudeSeat = cmd.includes("drivers/claude-code/shim.ts") && cmd.includes("--account-dir") && cmd.includes("--cwd");
+      if (!looksLikePiSeat && !looksLikeClaudeSeat) continue;
       if (needles.some((n) => cmd.includes(n))) add(row.pid, "argv/cwd/account match");
     }
   }

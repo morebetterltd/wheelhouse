@@ -282,13 +282,17 @@ const args = process.argv.slice(2);
 const account = process.env.CLAUDE_CONFIG_DIR || process.env.HOME || '';
 fs.mkdirSync(account, { recursive: true });
 fs.writeFileSync(path.join(account, 'claude-env.json'), JSON.stringify({ANTHROPIC_API_KEY:process.env.ANTHROPIC_API_KEY||null,ANTHROPIC_AUTH_TOKEN:process.env.ANTHROPIC_AUTH_TOKEN||null,OPENAI_API_KEY:process.env.OPENAI_API_KEY||null,BEADS_ACTOR:process.env.BEADS_ACTOR||null}));
+fs.writeFileSync(path.join(account, 'claude-argv.json'), JSON.stringify(args));
 if (args.includes('--output-format') && args.includes('json') && !args.includes('stream-json')) { console.log(JSON.stringify({type:'result',subtype:'success',result:'OK',session_id:'probe-session'})); process.exit(0); }
 if (!args.includes('--permission-mode') || args[args.indexOf('--permission-mode')+1] !== 'acceptEdits') { console.error('expected --permission-mode acceptEdits'); process.exit(2); }
 if (!args.includes('--permission-prompts') || args[args.indexOf('--permission-prompts')+1] !== 'none') { console.error('expected --permission-prompts none'); process.exit(2); }
+const brief = args[args.indexOf('--append-system-prompt') + 1] || '';
+if (!/fixture brief/.test(brief) || /contracts\/WORKER\.md/.test(brief)) { console.error('expected brief text, not path: '+brief); process.exit(3); }
 const session = args.includes('--resume') ? args[args.indexOf('--resume')+1] : `claude-session-${process.pid}`;
 const model = args.includes('--model') ? args[args.indexOf('--model')+1] : 'sonnet';
 let buf='';
-process.stdin.on('data', c => { buf += c.toString(); let i; while ((i=buf.indexOf('\n')) >= 0) { const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim()) continue; const msg=JSON.parse(line).message?.content?.[0]?.text || ''; console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model})); const send=()=>{ console.log(JSON.stringify({type:'assistant',message:{role:'assistant',content:[{type:'text',text:/steer|slow/i.test(msg)?'STEERED':'OK'}]}})); console.log(JSON.stringify({type:'result',subtype:'success',result:/steer|slow/i.test(msg)?'STEERED':'OK',session_id:session,num_turns:/steer|slow/i.test(msg)?2:1})); }; /slow/i.test(msg) ? setTimeout(send, 900) : send(); }});
+process.stdin.on('data', c => { buf += c.toString(); let i; while ((i=buf.indexOf('\n')) >= 0) { const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim()) continue; const msg=JSON.parse(line).message?.content?.[0]?.text || ''; console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model})); const done=()=>{ if (/tools/i.test(msg)) { console.log(JSON.stringify({type:'assistant',message:{role:'assistant',content:[{type:'thinking',thinking:'thinking kept'},{type:'tool_use',id:'tool-1',name:'Bash',input:{command:'printf OK'}}]}})); console.log(JSON.stringify({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:'tool-1',content:'OK',is_error:false}]}})); } console.log(JSON.stringify({type:'assistant',message:{role:'assistant',content:[{type:'text',text:/steer|slow/i.test(msg)?'STEERED':'OK'}]}})); console.log(JSON.stringify({type:'result',subtype:'success',result:/steer|slow/i.test(msg)?'STEERED':'OK',session_id:session,num_turns:/steer|slow/i.test(msg)?2:1})); }; /slow/i.test(msg) ? setTimeout(done, 900) : done(); }});
+setTimeout(() => console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{status:'limited',rateLimitType:'five_hour'}})), process.env.STUB_RATE_LIMIT ? 100 : 2147483647);
 process.on('SIGTERM', () => process.exit(0));
 CLAUDESTUB
 chmod +x "$BIN/claude"
@@ -371,11 +375,15 @@ mkdir -p "$HOME_FIX/.pi-seats-claude/worker-1"
 printf '{"loggedIn":true}\n' > "$HOME_FIX/.pi-seats-claude/worker-1/.claude.json"
 ANTHROPIC_API_KEY=leak ANTHROPIC_AUTH_TOKEN=leak OPENAI_API_KEY=leak run spawn worker-1
 if [ $RC -eq 0 ] && grep -q 'seat worker-1' <<<"$OUT"; then pass "claude-code spawn exits 0 through the adapter"; else fail "claude-code spawn failed: $OUT"; fi
+for _ in $(seq 1 100); do [ -f "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" ] && break; sleep 0.05; done
+if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" && ! grep -q 'contracts/WORKER.md' "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json"; then pass "claude-code passes brief text, not a path"; else fail "claude-code did not pass brief text: $(cat "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" 2>/dev/null)"; fi
 CLAUDE_LOG="$CLAUDE_PROJ/seats/logs/worker-1.jsonl"
-run dispatch worker-1 bead-y "hello claude"
+run dispatch worker-1 bead-y "tools hello claude"
 if [ $RC -eq 0 ] && grep -q 'dispatched bead-y to worker-1' <<<"$OUT"; then pass "claude-code dispatch ack exits 0"; else fail "claude-code dispatch ack failed (rc=$RC): $OUT"; fi
 for _ in $(seq 1 100); do grep -q '"type":"agent_end"' "$CLAUDE_LOG" 2>/dev/null && break; sleep 0.05; done
 if grep -q '"type":"agent_end"' "$CLAUDE_LOG" && grep -q '"type":"turn_end"' "$CLAUDE_LOG"; then pass "claude-code settled detection lands turn_end and agent_end"; else fail "claude-code did not settle with expected events"; fi
+if grep -q '"type":"thinking"' "$CLAUDE_LOG" && grep -q '"type":"toolCall"' "$CLAUDE_LOG" && grep -q '"type":"tool_execution_start"' "$CLAUDE_LOG" && grep -q '"type":"tool_execution_end"' "$CLAUDE_LOG" && grep -q '"isError":false' "$CLAUDE_LOG"; then pass "claude-code normalizes thinking, toolCall, tool_execution_start/end"; else fail "claude-code missing normalized tool/thinking events: $(cat "$CLAUDE_LOG" 2>/dev/null)"; fi
+if [ "$(grep -c '"type":"turn_end"' "$CLAUDE_LOG")" -eq 1 ]; then pass "claude-code emits one turn_end for the turn"; else fail "claude-code emitted wrong turn_end count"; fi
 if grep -q '"ANTHROPIC_API_KEY":null' "$HOME_FIX/.pi-seats-claude/worker-1/claude-env.json" && grep -q '"ANTHROPIC_AUTH_TOKEN":null' "$HOME_FIX/.pi-seats-claude/worker-1/claude-env.json" && grep -q '"OPENAI_API_KEY":null' "$HOME_FIX/.pi-seats-claude/worker-1/claude-env.json"; then pass "claude-code child env strips provider credential variables"; else fail "claude-code child env leaked provider credentials: $(cat "$HOME_FIX/.pi-seats-claude/worker-1/claude-env.json" 2>/dev/null)"; fi
 run dispatch worker-1 bead-y "slow claude"
 sleep 0.1
@@ -383,6 +391,7 @@ run steer worker-1 "steer now"
 if [ $RC -eq 0 ]; then pass "claude-code steer mid-turn returns ack"; else fail "claude-code steer failed (rc=$RC): $OUT"; fi
 for _ in $(seq 1 100); do grep -q 'STEERED' "$CLAUDE_LOG" 2>/dev/null && break; sleep 0.05; done
 if grep -q 'STEERED' "$CLAUDE_LOG"; then pass "claude-code steer reaches the running turn"; else fail "claude-code steer text did not settle"; fi
+env HOME="$HOME_FIX" bun -e "const fs=require('fs'); const s=require('$CLAUDE_PROJ/seats/state.json'); const f=s.seats['worker-1'].sessionFile; fs.mkdirSync(require('path').dirname(f),{recursive:true}); fs.writeFileSync(f,'stub session\n')"
 run stop worker-1
 if [ $RC -eq 0 ] && grep -q 'stopped' <<<"$OUT"; then pass "claude-code stop exits 0"; else fail "claude-code stop failed (rc=$RC): $OUT"; fi
 run resume worker-1
