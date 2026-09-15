@@ -191,7 +191,7 @@ interface SeatEntry {
 // `env` for a provider env var exported in the spawning shell. Durable but
 // optional — `seats/seats.json` written before this field existed has no
 // `account.authRoute` at all, and that stays a valid roster.
-const AUTH_ROUTES = ["oauth", "api_key", "env"] as const;
+const AUTH_ROUTES = ["oauth", "api_key", "env", "default"] as const;
 
 function validateAuthRoute(seatName: string, entry: SeatEntry): void {
   const route = entry.account?.authRoute;
@@ -306,8 +306,10 @@ function driverForRunningSeat(name: string, operation: string): SeatDriver {
     return PI_DRIVER;
   }
   if (!entry) return PI_DRIVER;
-  requirePiHarness(name, entry, operation);
-  return PI_DRIVER;
+  const harness = harnessNameForSeat(name, entry);
+  if (harness === "pi") return PI_DRIVER;
+  if (harness === "codex") return CODEX_DRIVER;
+  throw new Error(`seat "${name}" has harness=${JSON.stringify(harness)} in seats/seats.json; ${operation} is not implemented for that harness yet`);
 }
 
 function readState(): State {
@@ -423,6 +425,18 @@ const PROVIDER_ENV_VARS: Record<string, string> = {
 
 function providerEnvVar(provider: string): string | undefined {
   return PROVIDER_ENV_VARS[provider];
+}
+
+function scrubbedSeatEnv(extra: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.OPENAI_API_KEY;
+  delete env.ANTHROPIC_API_KEY;
+  delete env.ANTHROPIC_AUTH_TOKEN;
+  for (const [k, v] of Object.entries(extra)) {
+    if (v === undefined) delete env[k];
+    else env[k] = v;
+  }
+  return env;
 }
 
 function providerAuthEntry(authFile: string, provider: string): unknown {
@@ -910,9 +924,58 @@ const PI_DRIVER: SeatDriver = {
   stop: stopRecord,
 };
 
+
+function isCodexDefaultAuth(entry: SeatEntry): boolean { return entry.account?.authRoute === "default"; }
+function codexAccountDir(entry: SeatEntry): string { return isCodexDefaultAuth(entry) ? (process.env.HOME ?? ROOT) : expandTilde(entry.account!.dir); }
+function requireCodexCredential(name: string, entry: SeatEntry, accountDir: string, labelSuffix: string): void {
+  if (isCodexDefaultAuth(entry) || entry.account?.authRoute === "api_key" || entry.account?.authRoute === "env") return;
+  if (!fs.existsSync(path.join(accountDir, "auth.json"))) die(`seat "${name}"${labelSuffix} has no Codex identity in ${accountDir}.\n      OAuth: CODEX_HOME="${accountDir}" codex login`);
+}
+function codexChildEnv(entry: SeatEntry, accountDir: string, name: string): NodeJS.ProcessEnv {
+  return scrubbedSeatEnv({ PATH: hostBudgetPath(ROOT), CODEX_HOME: isCodexDefaultAuth(entry) ? undefined : accountDir, BEADS_ACTOR: beadsActorFor(name) });
+}
+async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
+  requireCwdDir(cwd);
+  const labelSuffix = accountLabelSuffix(entry);
+  const state = readState(); const existing = state.seats[name];
+  if (existing && pidAlive(existing.pid, existing.fifo)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
+  const accountDir = codexAccountDir(entry);
+  if (!isCodexDefaultAuth(entry) && !fs.existsSync(accountDir)) die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`);
+  requireCodexCredential(name, entry, accountDir, labelSuffix);
+  if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — codex launch must pin the exact model`);
+  const brief = roleBriefPath(entry.role); const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+  if (sessionFile && existing?.roleBriefHash && existing.roleBriefHash !== roleBriefHash) die(`seat "${name}" brief changed; reset instead of resume (recorded ${existing.roleBriefHash.slice(0, 12)}, current ${roleBriefHash.slice(0, 12)})`);
+  fs.mkdirSync(RUN_DIR, { recursive: true }); fs.mkdirSync(LOG_DIR, { recursive: true });
+  const fifo = path.join(RUN_DIR, `${name}.stdin`), log = path.join(LOG_DIR, `${name}.jsonl`), rawLog = path.join(LOG_DIR, `${name}.raw.jsonl`), errLog = path.join(LOG_DIR, `${name}.stderr.log`);
+  if (fs.existsSync(fifo)) { if (!fs.statSync(fifo).isFIFO()) die(`${fifo} exists and is not a FIFO — refusing to guess what it is`); } else execFileSync("mkfifo", [fifo]);
+  const args = [path.join(SEATS_DIR, "drivers", "codex", "shim.ts"), "--log", log, "--raw-log", rawLog, "--err-log", errLog, "--account-dir", accountDir, "--brief", brief, "--model", entry.model, "--cwd", cwd, "--actor", beadsActorFor(name)];
+  if (isCodexDefaultAuth(entry)) args.push("--default-login");
+  if (sessionFile) { const base = path.basename(sessionFile, ".jsonl"); const m = base.match(/^rollout--(.+)$/); args.push("--resume", existing?.sessionId ?? m?.[1] ?? base); }
+  const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+  const shellCmd = `exec ${q(process.execPath)} ${args.map(q).join(" ")} 0<> ${q(fifo)} 2>> ${q(errLog)}`;
+  const child = spawn("bash", ["-c", shellCmd], { cwd, env: codexChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" }); child.unref();
+  const pid = child.pid!, probe = { fifo, log, pid }; let st: any;
+  try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
+  if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
+  const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
+  state.seats[name] = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: liveCwd ?? requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model, ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}) };
+  writeState(state); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`); console.log(`  events -> ${log}`);
+}
+function codexProbe(name: string, entry: SeatEntry): void {
+  const labelSuffix = accountLabelSuffix(entry); const accountDir = codexAccountDir(entry);
+  requireCodexCredential(name, entry, accountDir, labelSuffix);
+  if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — probe must test the exact roster model`);
+  const result = spawnSync("codex", ["exec", "--json", "--skip-git-repo-check", "-s", "read-only", "-c", "approval_policy=never", "-m", entry.model, "Reply with exactly the word OK. Use no tools."], { cwd: ROOT, env: codexChildEnv(entry, accountDir, name), input: "", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  if (result.status === 0 && /OK/.test(result.stdout)) { console.log("OK"); return; }
+  if (result.stdout) process.stdout.write(result.stdout); if (result.stderr) process.stderr.write(result.stderr); process.exit(result.status ?? 1);
+}
+const CODEX_DRIVER: SeatDriver = { name: "codex", launch: codexLaunch, probe: codexProbe, getState: (rec) => rpc(rec, { type: "get_state" }), prompt: (rec, message, streamingBehavior, timeoutMs = PROMPT_ACK_MS) => rpc(rec, promptCommand(message, streamingBehavior), timeoutMs), steer: (rec, text) => rpc(rec, { type: "steer", message: text }), stop: stopRecord };
+
 function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatDriver {
-  requirePiHarness(name, entry, operation);
-  return PI_DRIVER;
+  const harness = harnessNameForSeat(name, entry);
+  if (harness === "pi") return PI_DRIVER;
+  if (harness === "codex") return CODEX_DRIVER;
+  throw new Error(`seat "${name}" has harness=${JSON.stringify(harness)} in seats/seats.json; ${operation} is not implemented for that harness yet`);
 }
 
 async function cmdSpawn(name: string, beadId?: string): Promise<void> {
@@ -1074,7 +1137,9 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     await cmdStop(name);
     if (recordedCwdExists) {
       const entry = requireSeat(name);
-      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, rec.sessionFile, targetCwd);
+      const resumeFile = rec.sessionFile && fs.existsSync(rec.sessionFile) ? rec.sessionFile : null;
+      if (rec.sessionFile && !resumeFile) console.log(`seat ${name}: recorded session file is gone or not yet written; session continuity intentionally dropped; starting fresh in ${targetCwd}`);
+      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, resumeFile, targetCwd);
     } else {
       console.log(
         `seat ${name}: session continuity intentionally dropped because recorded cwd is gone: ${recordedCwd}; ` +

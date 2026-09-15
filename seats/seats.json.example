@@ -14,8 +14,9 @@
     },
     "worker-2": {
       "role": "worker",
+      "harness": "codex",
       "provider": "openai-codex",
-      "model": "gpt-5.5:high",
+      "model": "gpt-5.5",
       "account": { "dir": "~/.pi-seats-myproject/worker-2", "label": "work-chatgpt-2", "authRoute": "oauth" }
     },
     "reviewer": {

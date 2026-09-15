@@ -121,12 +121,23 @@ if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   ' "$roster_file" "$seat")"
 fi
 
-# Optional roster fields. account.authRoute is one of oauth/api_key/env — the
+# Optional roster fields. account.authRoute is one of oauth/api_key/env/default — the
 # routes BOOTSTRAP.md's question 8 offers. shadow is a boolean marker for a
 # non-gating mirror seat. Absent means "not recorded yet" / false; present-
 # but-invalid is a STOP so a typo in the roster is caught here instead of
 # silently ignored.
+harness="pi"
 if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
+  harness="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const h = j.seats?.[seat]?.harness;
+      if (typeof h === "string" && h.length > 0) process.stdout.write(h);
+      else process.stdout.write("pi");
+    } catch { process.stdout.write("pi"); }
+  ' "$roster_file" "$seat")"
   auth_route="$($json_runtime -e '
     const fs = require("fs");
     const file = process.argv[1], seat = process.argv[2];
@@ -141,9 +152,9 @@ if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   ' "$roster_file" "$seat")"
   if [ -n "$auth_route" ]; then
     case "$auth_route" in
-      oauth|api_key|env) : ;;
-      __INVALID_AUTH_ROUTE__:*) die "seat \"$seat\" has an invalid account.authRoute \"${auth_route#__INVALID_AUTH_ROUTE__:}\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
-      *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env (or omitted)" ;;
+      oauth|api_key|env|default) : ;;
+      __INVALID_AUTH_ROUTE__:*) die "seat \"$seat\" has an invalid account.authRoute \"${auth_route#__INVALID_AUTH_ROUTE__:}\" in $roster_file — must be one of oauth, api_key, env, default (or omitted)" ;;
+      *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env, default (or omitted)" ;;
     esac
   fi
   shadow_value="$($json_runtime -e '
@@ -255,9 +266,19 @@ if [ -n "$account_label" ]; then
 fi
 note ""
 note "point a process at this seat:"
-note "  export PI_CODING_AGENT_DIR=\"$seat_dir\""
+if [ "$harness" = "codex" ]; then
+  note "  export CODEX_HOME=\"$seat_dir\""
+else
+  note "  export PI_CODING_AGENT_DIR=\"$seat_dir\""
+fi
 if [ "$login_needed" -eq 1 ]; then
   note ""
+  if [ "$harness" = "codex" ]; then
+    note "Codex login:"
+    note "  CODEX_HOME=\"$seat_dir\" codex login"
+    note "  # headless: CODEX_HOME=\"$seat_dir\" codex login --device-auth"
+    note "  # API key: printenv OPENAI_API_KEY | CODEX_HOME=\"$seat_dir\" codex login --with-api-key"
+  else
   case "$auth_route" in
     env)
       note "env credential route (writes no auth.json): export the provider's env var in the shell that spawns the seat."
@@ -279,5 +300,6 @@ if [ "$login_needed" -eq 1 ]; then
       note "  auth.json survives new shells; the env-var route writes nothing to disk."
       ;;
   esac
+  fi
 fi
 exit 0
