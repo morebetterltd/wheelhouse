@@ -10,33 +10,54 @@
       "harness": "pi",
       "provider": "anthropic",
       "model": "claude-sonnet-5",
-      "account": { "dir": "~/.pi-seats-myproject/worker-1", "label": "kk-personal-anthropic", "authRoute": "api_key" }
+      "account": {
+        "dir": "~/.pi-seats-myproject/worker-1",
+        "label": "kk-personal-anthropic",
+        "authRoute": "api_key"
+      }
     },
     "worker-2": {
       "role": "worker",
       "provider": "openai-codex",
       "model": "gpt-5.5:high",
-      "account": { "dir": "~/.pi-seats-myproject/worker-2", "label": "work-chatgpt-2", "authRoute": "oauth" }
+      "account": {
+        "dir": "~/.pi-seats-myproject/worker-2",
+        "label": "work-chatgpt-2",
+        "authRoute": "oauth"
+      }
     },
     "reviewer": {
       "role": "reviewer",
       "provider": "openrouter",
       "model": "z-ai/glm-5.3-flash",
-      "account": { "dir": "~/.pi-seats-myproject/reviewer", "authRoute": "api_key" }
+      "account": {
+        "dir": "~/.pi-seats-myproject/reviewer",
+        "authRoute": "api_key"
+      }
     },
     "reviewer-shadow": {
       "role": "reviewer",
       "shadow": true,
       "provider": "openai-codex",
       "model": "gpt-5.5",
-      "account": { "dir": "~/.pi-seats-myproject/reviewer-shadow", "authRoute": "oauth" }
+      "account": {
+        "dir": "~/.pi-seats-myproject/reviewer-shadow",
+        "authRoute": "oauth"
+      },
+      "harness": "claude-code",
+      "allowedTools": "Bash(git status:*),Bash(bun test:*)"
     },
     "researcher": {
       "role": "researcher",
       "provider": "anthropic",
       "model": "claude-sonnet-5",
-      "skills": ["~/.agents/skills/example-research-skill"],
-      "account": { "dir": "~/.pi-seats-myproject/researcher", "authRoute": "api_key" }
+      "skills": [
+        "~/.agents/skills/example-research-skill"
+      ],
+      "account": {
+        "dir": "~/.pi-seats-myproject/researcher",
+        "authRoute": "api_key"
+      }
     }
   }
 }

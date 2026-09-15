@@ -1,9 +1,0 @@
-$ bun seats/adapter.ts spawn claude-real wheelhouse-project-er5m.3
-seat claude-real (account label: scratch-claude): pid 25101, session null
-  events -> /Users/codeshack-vii/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.3/seats/logs/claude-real.jsonl
-$ bun seats/adapter.ts dispatch claude-real wheelhouse-project-er5m.3 "Reply with exactly OK and do not modify files."
-dispatched wheelhouse-project-er5m.3 to claude-real; watch /Users/codeshack-vii/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-er5m.3/seats/logs/claude-real.jsonl
-$ grep agent_end seats/logs/claude-real.jsonl
-{"timestamp":1789483181309,"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"Not logged in · Please run /login"}],"stopReason":"error"}],"error":"Not logged in · Please run /login"}
-$ bun seats/adapter.ts stop claude-real
-seat claude-real stopped; session 4f31fb5b-ee25-4a7f-a5da-b94a9033602b kept for resume
