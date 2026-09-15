@@ -1,0 +1,5 @@
+RUN timeout 900 seats/drivers/claude-code/selftest.sh
+start=2026-09-15T23:43:19Z
+claude-code.selftest: PASS (shim normalized events, brief text, rate limits, and stripped credential env vars)
+end=2026-09-15T23:43:22Z
+rc=0

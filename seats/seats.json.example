@@ -14,7 +14,7 @@
     },
     "worker-2": {
       "role": "worker",
-"harness": "codex",
+      "harness": "codex",
       "provider": "openai-codex",
       "model": "gpt-5.5",
       "account": {

@@ -748,6 +748,14 @@ PATH="$CODEX_TMP/bin:$PATH" run stop worker-1; [ $RC -eq 0 ] && pass "codex stop
 PATH="$CODEX_TMP/bin:$PATH" run resume worker-1; [ $RC -eq 0 ] && pass "codex resume exits 0 with recorded thread" || fail "codex resume failed: $OUT"
 PATH="$CODEX_TMP/bin:$PATH" run dispatch worker-1 bead-resume "resume check"; for i in {1..80}; do grep -q 'RESUME_OK' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl" && break; sleep .1; done
 if grep -q 'RESUME_OK' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl"; then pass "codex dispatch after resume answers"; else fail "codex resumed dispatch did not answer"; fi
+codex_pid=$(node -e 'const s=require(process.argv[1]).seats["worker-1"]; process.stdout.write(String(s.pid||""))' "$CODEX_TMP/proj/seats/state.json")
+[ -n "$codex_pid" ] || fail "codex pid missing before dead-process check"
+kill -9 "$codex_pid" 2>/dev/null || true
+for i in {1..80}; do PATH="$CODEX_TMP/bin:$PATH" run status worker-1; echo "$OUT" | grep -q 'DIED' && break; sleep .1; done
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'DIED'; then pass "codex status reports DIED after the recorded process is killed"; else fail "codex dead process was not reported DIED (rc=$RC): $OUT"; fi
+printf 'changed brief\n' >> "$CODEX_TMP/proj/contracts/WORKER.md"
+PATH="$CODEX_TMP/bin:$PATH" run resume worker-1
+if [ $RC -eq 1 ] && says "brief changed; reset instead of resume"; then pass "codex resume refuses when the role brief hash changed"; else fail "codex resume did not refuse changed brief (rc=$RC): $OUT"; fi
 PATH="$CODEX_TMP/bin:$PATH" run stop worker-1 >/dev/null 2>&1 || true
 RUN_PROJ="$OLD_RUN_PROJ"; STATE="$OLD_STATE"; LOG="$OLD_LOG"; ARGV="$OLD_ARGV"
 
