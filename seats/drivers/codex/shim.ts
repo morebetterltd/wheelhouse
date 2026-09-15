@@ -1,0 +1,48 @@
+#!/usr/bin/env bun
+import { spawn } from "node:child_process";
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+const args = process.argv.slice(2);
+function arg(name: string, fallback = ""): string { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : fallback; }
+const log = arg("--log"), rawLog = arg("--raw-log"), errLog = arg("--err-log"), accountDir = arg("--account-dir"), brief = arg("--brief"), model = arg("--model"), cwd = arg("--cwd"), actor = arg("--actor");
+const defaultLogin = args.includes("--default-login");
+const resumeThread = arg("--resume", "");
+const briefText = fs.readFileSync(brief, "utf8");
+function appendJson(file: string, obj: any) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, JSON.stringify({ timestamp: Date.now(), ...obj }) + "\n"); }
+function raw(obj: any) { fs.mkdirSync(path.dirname(rawLog), { recursive: true }); fs.appendFileSync(rawLog, JSON.stringify(obj) + "\n"); }
+let rpcId = 1, appBuf = "", fifoBuf = "", ready = false, threadId = resumeThread, sessionFile: string | null = null, resolvedModel = model, streaming = false, activeTurnId: string | null = null;
+const rpcPending = new Map<number, (ev: any) => void>();
+const piPending: any[] = [];
+const toolNames = new Map<string, string>();
+let currentAssistantContent: any[] = [];
+let capacityErrorEmitted = false;
+const env: NodeJS.ProcessEnv = { ...process.env, ...(defaultLogin ? {} : { CODEX_HOME: accountDir }), BEADS_ACTOR: actor };
+delete env.OPENAI_API_KEY; delete env.ANTHROPIC_API_KEY; delete env.ANTHROPIC_AUTH_TOKEN;
+const child = spawn("codex", ["app-server"], { cwd, env, stdio: ["pipe", "pipe", fs.openSync(errLog, "a")] });
+function sendRpc(method: string, params: any, timeoutMs = 120000): Promise<any> { const id = rpcId++; child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"); return new Promise((resolve) => { rpcPending.set(id, resolve); setTimeout(() => { if (rpcPending.has(id)) { rpcPending.delete(id); resolve({ error: { message: `timeout ${method}` } }); } }, timeoutMs); }); }
+function notify(method: string, params?: any) { child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, ...(params ? { params } : {}) }) + "\n"); }
+function response(id: any, success: boolean, data?: any, error?: string) { appendJson(log, { type: "response", id, success, ...(success ? { data } : { error }) }); }
+function state(extra: any = {}) { return { isStreaming: streaming, sessionId: threadId || null, sessionFile, model: resolvedModel, ...extra }; }
+function flush() { while (piPending.length) handlePiCommand(piPending.shift()); }
+function textInput(message: string) { return [{ type: "text", text: message, text_elements: [] }]; }
+function itemText(item: any): string { if (typeof item.text === "string") return item.text; if (Array.isArray(item.content)) return item.content.map((c: any) => c.text ?? "").join(""); return item.message ?? ""; }
+function toolNameFor(item: any): string { return item.command ? "shell" : item.type === "fileChange" ? "fileChange" : item.serverName ?? item.toolName ?? item.type ?? "tool"; }
+function itemArgs(item: any): any { return item.command ? { command: item.command, cwd: item.cwd } : item.arguments ?? item; }
+function updateThread(t: any) { if (!t) return; threadId = t.id ?? t.sessionId ?? threadId; sessionFile = t.path ?? sessionFile; }
+function emitTurnEnd() { appendJson(log, { type: "turn_end", message: { role: "assistant", content: currentAssistantContent.length ? currentAssistantContent : [{ type: "text", text: "" }] } }); }
+child.stdout.on("data", (chunk) => { appBuf += chunk.toString("utf8"); let i; while ((i = appBuf.indexOf("\n")) >= 0) { const line = appBuf.slice(0, i); appBuf = appBuf.slice(i + 1); if (!line.trim()) continue; let ev: any; try { ev = JSON.parse(line); } catch { continue; } raw(ev); if (ev.id !== undefined && rpcPending.has(ev.id) && (ev.result !== undefined || ev.error !== undefined)) { const fn = rpcPending.get(ev.id)!; rpcPending.delete(ev.id); fn(ev); }
+  const m = ev.method; const p = ev.params ?? {};
+  if (m === "thread/status/changed") { streaming = p.status?.type === "active"; continue; }
+  if (m === "turn/started") { activeTurnId = p.turn?.id ?? activeTurnId; streaming = true; appendJson(log, { type: "agent_start" }); continue; }
+  if (m === "account/rateLimits/updated") { appendJson(log, { type: "capacity", rateLimits: p.rateLimits }); continue; }
+  if (m === "item/started") { const item = p.item ?? {}; if (["commandExecution", "fileChange", "mcpToolCall"].includes(item.type)) { const tn = toolNameFor(item); toolNames.set(String(item.id), tn); appendJson(log, { type: "tool_execution_start", toolCallId: item.id, toolName: tn, args: itemArgs(item) }); } continue; }
+  if (m === "item/completed") { const item = p.item ?? {}; if (item.type === "userMessage") appendJson(log, { type: "message_end", message: { role: "user", content: [{ type: "text", text: itemText(item) }] } }); else if (item.type === "agentMessage") { currentAssistantContent = [{ type: "text", text: itemText(item) }]; appendJson(log, { type: "message_end", message: { role: "assistant", content: currentAssistantContent } }); } else if (["commandExecution", "fileChange", "mcpToolCall"].includes(item.type)) appendJson(log, { type: "tool_execution_end", toolCallId: item.id, toolName: toolNames.get(String(item.id)) ?? toolNameFor(item), result: { isError: item.status === "failed" || Number(item.exitCode ?? 0) !== 0, status: item.status, exitCode: item.exitCode, output: item.output ?? item.stderr ?? item.message ?? "" } }); continue; }
+  if (m === "turn/completed") { streaming = false; const turn = p.turn ?? {}; activeTurnId = null; const failed = turn.status === "failed" || turn.error; if (failed && /401|unauth|not logged in/i.test(JSON.stringify(turn.error ?? {}))) appendJson(log, { type: "auth_dead", error: JSON.stringify(turn.error) }); if (failed && /quota|rate.?limit|429|usage limit|out of credits/i.test(JSON.stringify(turn.error ?? {})) && !capacityErrorEmitted) { capacityErrorEmitted = true; appendJson(log, { type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text: JSON.stringify(turn.error) }], stopReason: "error" }], error: JSON.stringify(turn.error) }); continue; } emitTurnEnd(); appendJson(log, { type: "agent_end", messages: [{ role: "assistant", content: currentAssistantContent.length ? currentAssistantContent : [{ type: "text", text: "" }], stopReason: turn.status === "interrupted" ? "aborted" : failed ? "error" : "stop" }], ...(failed ? { error: JSON.stringify(turn.error ?? {}) } : {}) }); continue; }
+}});
+process.stdin.on("data", (chunk) => { fifoBuf += chunk.toString("utf8"); let i; while ((i = fifoBuf.indexOf("\n")) >= 0) { const line = fifoBuf.slice(0, i); fifoBuf = fifoBuf.slice(i + 1); if (!line.trim()) continue; try { handlePiCommand(JSON.parse(line)); } catch (e: any) { response(null, false, undefined, String(e)); } } });
+async function handlePiCommand(cmd: any) { if (!ready) { piPending.push(cmd); return; } if (cmd.type === "get_state") { response(cmd.id, true, state()); return; } if (cmd.type === "prompt") { currentAssistantContent = []; const r = await sendRpc("turn/start", { threadId, input: textInput(cmd.message) }); if (r.error) response(cmd.id, false, undefined, JSON.stringify(r.error)); else response(cmd.id, true, state({ delivered: true })); return; } if (cmd.type === "steer") { currentAssistantContent = []; const method = streaming ? "turn/steer" : "turn/start"; const params: any = { threadId, input: textInput(cmd.message) }; if (method === "turn/steer" && activeTurnId) params.expectedTurnId = activeTurnId; const r = await sendRpc(method, params); if (r.error) response(cmd.id, false, undefined, JSON.stringify(r.error)); else response(cmd.id, true, state({ delivered: true })); return; } response(cmd.id, false, undefined, `unsupported command ${cmd.type}`); }
+(async () => { const init = await sendRpc("initialize", { clientInfo: { name: "wheelhouse-codex-seat", title: null, version: "0" }, capabilities: { experimentalApi: true, requestAttestation: false } }); if (init.error) throw new Error(JSON.stringify(init.error)); notify("initialized"); const policy = { approvalPolicy: "never", sandbox: "workspace-write", config: { sandbox_workspace_write: { network_access: true } }, model, cwd } as any; const res = resumeThread ? await sendRpc("thread/resume", { threadId: resumeThread, ...policy }) : await sendRpc("thread/start", { ...policy, developerInstructions: briefText }); if (res.error) throw new Error(JSON.stringify(res.error)); updateThread(res.result?.thread); resolvedModel = res.result?.model ?? model; ready = true; flush(); })().catch((e) => { appendJson(log, { type: "response", id: null, success: false, error: String(e?.message ?? e) }); try { child.kill("SIGTERM"); } catch {} });
+process.on("SIGTERM", () => { try { child.stdin.end(); } catch {} setTimeout(() => { try { child.kill("SIGTERM"); } catch {} process.exit(143); }, Number(process.env.WHEELHOUSE_CODEX_STOP_GRACE_MS || 500)); });
+child.on("exit", (code, sig) => process.exit(sig ? 143 : (code ?? 0)));
