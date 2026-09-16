@@ -134,18 +134,33 @@ fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: 
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+if (process.env.STUB_CANONICAL_WRITE_REPO) {
+  const cp = require("child_process");
+  const repo = process.env.STUB_CANONICAL_WRITE_REPO;
+  let status = "not-run";
+  try {
+    cp.execFileSync("git", ["-C", repo, "checkout", "--", "canonical-guard.txt"], { env: process.env, stdio: "pipe" });
+    status = "ok";
+  } catch (e) {
+    status = `failed:${e.status ?? e.code ?? "unknown"}`;
+  }
+  fs.writeFileSync(path.join(agentDir, "canonical-write-attempt.txt"), `repo=${repo}\nstatus=${status}\ncwd=${process.cwd()}\nGIT_WORK_TREE=${process.env.GIT_WORK_TREE ?? ""}\n`);
+}
 const reply = process.env.STUB_REPLY_FILE;
 let text = reply ? fs.readFileSync(reply, "utf8") : "";
 if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
   const cp = require("child_process");
   const repo = process.env.STUB_MOVE_BRANCH_REPO;
   const branch = process.env.STUB_MOVE_BRANCH;
-  const pinned = cp.execFileSync("git", ["-C", repo, "rev-parse", `${branch}^{commit}`], { encoding: "utf8" }).trim();
-  cp.execFileSync("git", ["-C", repo, "checkout", "-q", branch]);
+  const gitEnv = { ...process.env };
+  delete gitEnv.GIT_DIR;
+  delete gitEnv.GIT_WORK_TREE;
+  const pinned = cp.execFileSync("git", ["-C", repo, "rev-parse", `${branch}^{commit}`], { encoding: "utf8", env: gitEnv }).trim();
+  cp.execFileSync("git", ["-C", repo, "checkout", "-q", branch], { env: gitEnv });
   fs.writeFileSync(path.join(repo, "midpass-move.txt"), `moved ${Date.now()}\n`);
-  cp.execFileSync("git", ["-C", repo, "add", "midpass-move.txt"]);
-  cp.execFileSync("git", ["-C", repo, "-c", "user.email=selftest@local", "-c", "user.name=selftest", "commit", "-q", "-m", "mid-pass move"]);
-  const moved = cp.execFileSync("git", ["-C", repo, "rev-parse", `${branch}^{commit}`], { encoding: "utf8" }).trim();
+  cp.execFileSync("git", ["-C", repo, "add", "midpass-move.txt"], { env: gitEnv });
+  cp.execFileSync("git", ["-C", repo, "-c", "user.email=selftest@local", "-c", "user.name=selftest", "commit", "-q", "-m", "mid-pass move"], { env: gitEnv });
+  const moved = cp.execFileSync("git", ["-C", repo, "rev-parse", `${branch}^{commit}`], { encoding: "utf8", env: gitEnv }).trim();
   text = text.replaceAll("__PINNED__", pinned).replaceAll("__MOVED__", moved);
 }
 const streamRequested = process.argv.includes("--mode") && process.argv[process.argv.indexOf("--mode") + 1] === "json";
@@ -441,6 +456,35 @@ else pass "the scratch worktree is unregistered after verify.ts exited (process-
 if [ -d "$SCRATCH_CWD" ]; then
   fail "the scratch worktree directory $SCRATCH_CWD still exists on disk after verify.ts exited"
 else pass "the scratch worktree directory no longer exists on disk"; fi
+
+cat > "$REPLY" <<EOF
+Annotated approve with the GH#34 shape.
+VERDICT: APPROVE at pinned $TIP; branch has since moved on origin to moved-tip, same tree
+PUSH: NOT CONSIDERED trailing parser annotation
+EOF
+run_without_default_push bead-1-annotated fleet/bead-1 worker-1
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q "verdict: APPROVE at pinned $TIP; branch has since moved on origin to moved-tip, same tree" "$VDIR/bead-1-annotated.md" 2>/dev/null; then
+  pass "annotated APPROVE verdict and trailing PUSH text parse"
+else fail "annotated APPROVE/PUSH did not parse (exit $RC): $OUT file=$(cat "$VDIR/bead-1-annotated.md" 2>/dev/null)"; fi
+
+printf 'base\n' > "$PROJ/canonical-guard.txt"
+git -C "$PROJ" add canonical-guard.txt && git -C "$PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m canonical-guard
+CANONICAL_TIP="$(git -C "$PROJ" rev-parse HEAD)"
+git -C "$PROJ" branch -f fleet/bead-1 "$CANONICAL_TIP"
+printf 'canonical dirty\n' > "$PROJ/canonical-guard.txt"
+cat > "$REPLY" <<'EOF'
+Attempted canonical checkout write; dispatcher should pin git to scratch.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED — fixture
+EOF
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CANONICAL_WRITE_REPO="$PROJ" \
+  bun "$RUN_PROJ/seats/verify.ts" bead-canonical fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
+ATTEMPT="$HOME_FIX/.pi-seats-alpha/verifier/canonical-write-attempt.txt"
+if [ $RC -eq 0 ] && grep -q 'canonical dirty' "$PROJ/canonical-guard.txt" && grep -q "GIT_WORK_TREE=.*wheelhouse-verify" "$ATTEMPT" 2>/dev/null; then
+  pass "canonical checkout git write is pinned to scratch and leaves canonical checkout unchanged"
+else fail "canonical checkout changed or attempt was not reported (exit $RC): guard=$(cat "$PROJ/canonical-guard.txt" 2>/dev/null) attempt=$(cat "$ATTEMPT" 2>/dev/null) out=$OUT"; fi
+git -C "$PROJ" checkout -q -- canonical-guard.txt
+TIP="$CANONICAL_TIP"
 
 cat > "$REPLY" <<EOF
 Static half verified; no bench covers the docs deployable this touches.
