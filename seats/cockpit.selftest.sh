@@ -72,6 +72,7 @@ pane_width() { tmux -L "$SOCK" display-message -p -t "wh-ratio:bridge.$1" '#{pan
 window_width() { tmux -L "$SOCK" display-message -p -t 'wh-ratio:bridge' '#{window_width}'; }
 pane_count() { tmux -L "$SOCK" list-panes -t 'wh-ratio:bridge' 2>/dev/null | wc -l | tr -d ' '; }
 opt_value() { tmux -L "$SOCK" show-options -v -t "$1" "$2"; }
+session_exists() { tmux -L "$SOCK" has-session -t "=$1" >/dev/null 2>&1; }
 
 attach_at_152() {
   # Drive a real tmux client of a known size instead of relying on the tool
@@ -87,6 +88,28 @@ attach_at_152() {
   tmux -L "$client_sock" kill-server >/dev/null 2>&1 || true
   sleep 0.1
 }
+
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" "$PROJ/seats/cockpit.sh" --status > "$FIX/bad-flag.out" 2>&1
+BAD_FLAG_RC=$?
+BAD_FLAG_HERALD="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
+if [ $BAD_FLAG_RC -eq 2 ] && grep -q 'usage: seats/cockpit.sh' "$FIX/bad-flag.out" && grep -q -- '--herald' "$FIX/bad-flag.out" && grep -q -- '--pane-commander' "$FIX/bad-flag.out" && ! session_exists 'wh---status' && [ -z "$BAD_FLAG_HERALD" ]; then
+  pass "unknown -- flag is refused before tmux or herald startup"
+else
+  fail "unknown -- flag was not refused cleanly (rc=$BAD_FLAG_RC herald=${BAD_FLAG_HERALD:-none} session=$(session_exists 'wh---status' && echo yes || echo no) out=$(cat "$FIX/bad-flag.out" 2>/dev/null))"
+fi
+
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" "$PROJ/seats/cockpit.sh" '-bad' > "$FIX/bad-namespace-dash.out" 2>&1
+BAD_NS_DASH_RC=$?
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" "$PROJ/seats/cockpit.sh" 'bad ns' > "$FIX/bad-namespace-space.out" 2>&1
+BAD_NS_SPACE_RC=$?
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" "$PROJ/seats/cockpit.sh" '' > "$FIX/bad-namespace-empty.out" 2>&1
+BAD_NS_EMPTY_RC=$?
+BAD_NS_HERALD="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
+if [ $BAD_NS_DASH_RC -eq 2 ] && [ $BAD_NS_SPACE_RC -eq 2 ] && [ $BAD_NS_EMPTY_RC -eq 2 ] && grep -q 'usage: seats/cockpit.sh' "$FIX/bad-namespace-dash.out" && grep -q 'usage: seats/cockpit.sh' "$FIX/bad-namespace-space.out" && grep -q 'usage: seats/cockpit.sh' "$FIX/bad-namespace-empty.out" && ! session_exists 'wh--bad' && ! session_exists 'wh-bad ns' && [ -z "$BAD_NS_HERALD" ]; then
+  pass "implausible namespaces are refused before tmux or herald startup"
+else
+  fail "implausible namespace refusal failed (dash=$BAD_NS_DASH_RC space=$BAD_NS_SPACE_RC empty=$BAD_NS_EMPTY_RC herald=${BAD_NS_HERALD:-none} out=$(cat "$FIX/bad-namespace-dash.out" "$FIX/bad-namespace-space.out" "$FIX/bad-namespace-empty.out" 2>/dev/null))"
+fi
 
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" "$PROJ/seats/cockpit.sh" --herald > "$FIX/herald-only.out" 2>&1
 HERALD_ONLY_RC=$?
