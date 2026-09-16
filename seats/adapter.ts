@@ -82,6 +82,7 @@ const WORKTREES_DIR = path.join(ROOT, ".wheelhouse-worktrees");
 // One knob for every wait in this file; the selftest raises it for real pi.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_RPC_TIMEOUT_MS || 20000);
 const PROMPT_ACK_MS = Number(process.env.WHEELHOUSE_PROMPT_ACK_MS || 60000);
+const FIFO_WRITE_MS = Number(process.env.WHEELHOUSE_FIFO_WRITE_MS || 3000);
 const SPAWN_TERM_GRACE_MS = Number(process.env.WHEELHOUSE_SPAWN_TERM_GRACE_MS || 2000);
 const LOG_TAIL_BYTES = Number(process.env.WHEELHOUSE_LOG_TAIL_BYTES || 1024 * 1024);
 const LOG_ROTATE_BYTES = Number(process.env.WHEELHOUSE_LOG_ROTATE_BYTES || 256 * 1024 * 1024);
@@ -489,24 +490,40 @@ function requireLaunchCredential(name: string, entry: SeatEntry, accountDir: str
  * Retried briefly because a just-spawned seat opens its end a moment after
  * the adapter returns from spawn.
  */
-async function fifoWrite(fifo: string, obj: unknown, retryMs = 3000): Promise<void> {
-  const line = JSON.stringify(obj) + "\n";
+async function fifoWrite(fifo: string, obj: unknown, retryMs = FIFO_WRITE_MS): Promise<void> {
+  const line = Buffer.from(JSON.stringify(obj) + "\n");
   const deadline = Date.now() + retryMs;
-  for (;;) {
-    try {
-      const fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+  let fd: number | null = null;
+  let offset = 0;
+  try {
+    for (;;) {
       try {
-        fs.writeSync(fd, line);
-      } finally {
-        fs.closeSync(fd);
+        fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+        break;
+      } catch (e: any) {
+        if (e.code !== "ENXIO" || Date.now() > deadline) {
+          throw new Error(`cannot write to ${fifo}: ${e.code ?? e.message} — is the seat running?`);
+        }
+        await sleep(100);
       }
-      return;
-    } catch (e: any) {
-      if (e.code !== "ENXIO" || Date.now() > deadline) {
-        throw new Error(`cannot write to ${fifo}: ${e.code ?? e.message} — is the seat running?`);
-      }
-      await sleep(100);
     }
+    while (offset < line.length) {
+      try {
+        const n = fs.writeSync(fd, line, offset, line.length - offset);
+        if (n > 0) { offset += n; continue; }
+      } catch (e: any) {
+        if (e.code !== "EAGAIN" && e.code !== "EWOULDBLOCK") throw e;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`prompt not delivered (partial FIFO write?) to ${fifo}: wrote ${offset}/${line.length} bytes before timeout`);
+      }
+      await sleep(25);
+    }
+  } catch (e: any) {
+    if (String(e?.message ?? "").includes("partial FIFO write")) throw e;
+    throw new Error(`cannot write to ${fifo}: ${e.code ?? e.message} — is the seat running?`);
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
   }
 }
 

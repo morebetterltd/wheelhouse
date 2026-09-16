@@ -211,6 +211,11 @@ function handle(cmd) {
       try { fs.rmSync(path.join(agentDir, "get-state-stalled"), { force: true }); } catch {}
       out({ id, type: "response", command: "get_state", success: true,
             data: { isStreaming: streaming, sessionFile, sessionId, messageCount: 0 } });
+      if (process.env.STUB_PAUSE_STDIN_AFTER_GET_STATE_MS && !fs.existsSync(path.join(agentDir, "stdin-paused-once"))) {
+        fs.writeFileSync(path.join(agentDir, "stdin-paused-once"), "1");
+        process.stdin.pause();
+        setTimeout(() => process.stdin.resume(), Number(process.env.STUB_PAUSE_STDIN_AFTER_GET_STATE_MS));
+      }
       break;
     }
     case "prompt": {
@@ -869,6 +874,10 @@ else fail "relaunch did not carry --session with the prior session file"; fi
 if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
   pass "the dispatch relaunch still carries BEADS_ACTOR=worker-1, with no operator export in this shell either"
 else fail "relaunched seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
+LARGE_PROMPT="$(node -e 'process.stdout.write("L".repeat(70 * 1024))')"
+run dispatch worker-1 bead-x "$LARGE_PROMPT"
+if [ $RC -eq 0 ]; then pass "dispatch writes and acks a prompt larger than 64 KB"
+else fail "large dispatch did not ack (exit $RC): $OUT"; fi
 
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-missing-session"
 rm -f "$SESS"
@@ -916,6 +925,19 @@ run spawn worker-1 old-bead
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)"; RC=$?
 if [ $RC -ne 0 ] && says "timed out after 200ms waiting for prompt response" && ! says "prompt delivered, ack late"; then pass "late prompt ack without delivery remains a STOP"
 else fail "late prompt ack without delivery did not STOP (exit $RC): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+
+FIFO_TIMEOUT_PROJ="$FIX/fifo-timeout-proj"
+build_proj "$FIFO_TIMEOUT_PROJ" fifo-timeout
+mkdir -p "$FIFO_TIMEOUT_PROJ/.wheelhouse-worktrees/old-bead" "$FIFO_TIMEOUT_PROJ/.wheelhouse-worktrees/new-bead"
+RUN_PROJ="$FIFO_TIMEOUT_PROJ"; STATE="$FIFO_TIMEOUT_PROJ/seats/state.json"; LOG="$FIFO_TIMEOUT_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-fifo-timeout/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-fifo-timeout/worker-1/cwd.txt"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PAUSE_STDIN_AFTER_GET_STATE_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)"; RC=$?
+if [ $RC -eq 0 ]; then pass "fifo timeout setup: spawn exits 0 with a live paused seat"
+else fail "fifo timeout setup spawn failed (exit $RC): $OUT"; fi
+HUGE_PROMPT="$(node -e 'process.stdout.write("H".repeat(128 * 1024))')"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_FIFO_WRITE_MS=200 WHEELHOUSE_PROMPT_ACK_MS=1000 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "$HUGE_PROMPT" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && says "prompt not delivered (partial FIFO write?)"; then pass "fifo write timeout names possible partial FIFO write"
+else fail "fifo write timeout did not report partial FIFO write (exit $RC): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$SAVE_RUN_PROJ"; STATE="$SAVE_STATE"; LOG="$SAVE_LOG"; ARGV="$SAVE_ARGV"; CWD_FILE="$SAVE_CWD_FILE"
 
