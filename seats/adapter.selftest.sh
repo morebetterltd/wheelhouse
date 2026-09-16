@@ -696,6 +696,13 @@ run status
 if [ $RC -eq 0 ] && says "PARKED" && says "CAPACITY: QUOTA" && says "usage limit has been reached" && says "fixture-quota-account" && says "RE-PROBE: bun seats/adapter.ts probe worker-1"; then
   pass "capacity: adapter status renders PARKED/QUOTA with provider text, account label, and re-probe command"
 else fail "capacity: adapter status did not park on in-turn quota event (exit $RC): $OUT"; fi
+STATE_MTIME_BEFORE="$(stat -f %m "$STATE")"
+sleep 1
+run status >/dev/null 2>&1
+STATE_MTIME_AFTER="$(stat -f %m "$STATE")"
+if [ "$STATE_MTIME_AFTER" = "$STATE_MTIME_BEFORE" ]; then
+  pass "capacity: rescanning the same quota marker does not rewrite state.json"
+else fail "capacity: status rewrote state.json without a marker change ($STATE_MTIME_BEFORE -> $STATE_MTIME_AFTER)"; fi
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" NO_COLOR=1 bun "$RUN_PROJ/seats/floor.ts" --once --pin 0 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
   pass "capacity: floor row surfaces PARKED/QUOTA and the re-probe command"
@@ -704,6 +711,14 @@ OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$RUN_PROJ/seat
 if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
   pass "capacity: fleet-gate surfaces PARKED/QUOTA and the re-probe command"
 else fail "capacity: fleet-gate did not surface PARKED/QUOTA (exit $RC): $OUT"; fi
+run probe worker-1
+if [ $RC -eq 0 ] && says "OK" && says "capacity cleared at"; then
+  pass "capacity: successful probe records capacity cleared time"
+else fail "capacity: probe did not report a capacity clear (exit $RC): $OUT"; fi
+run status
+if [ $RC -eq 0 ] && says "RUNNING" && ! says "PARKED" && ! says "CAPACITY: QUOTA"; then
+  pass "capacity: successful probe clears the parked quota marker"
+else fail "capacity: status stayed parked after successful probe (exit $RC): $OUT"; fi
 run dispatch worker-1 quota-bead 'successful turn after quota'
 if [ $RC -eq 0 ] && wait_for "$LOG" 'echo: Bead quota-bead' 5; then pass "capacity: later successful turn reached the event log"
 else fail "capacity: later successful turn did not land (exit $RC): $OUT"; fi
