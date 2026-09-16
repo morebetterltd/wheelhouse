@@ -126,6 +126,7 @@ if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); proc
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
+fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the verifier), not rely on an operator
 // export reaching this one-shot process.
@@ -992,13 +993,17 @@ fi
 RUN_PROJ="$PROJ"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 
-phase "10. sweep — a SIGKILLed run's scratch worktree is reclaimed, a live one is spared"
+phase "10. sweep — a SIGKILLed run's scratch worktree and stale SHA branch are reclaimed"
 # sweepStaleScratchWorktrees() runs at the very top of main(), before argv
 # is even validated, so a bare no-args invocation (an immediate usage STOP)
 # exercises it as cheaply as a full round trip does.
 ORPHAN_DIR="$FIX/wheelhouse-verify-999999999-orphan"
-mkdir -p "$ORPHAN_DIR"
+REVIEW_ORPHAN_DIR="$FIX/wheelhouse-review-999999998-orphan"
+SHA_BRANCH="0123456789abcdef0123456789abcdef01234567"
+mkdir -p "$ORPHAN_DIR" "$REVIEW_ORPHAN_DIR"
 git -C "$PROJ" worktree add --detach "$ORPHAN_DIR" HEAD >/dev/null 2>&1
+git -C "$PROJ" worktree add --detach "$REVIEW_ORPHAN_DIR" HEAD >/dev/null 2>&1
+git -C "$PROJ" branch "$SHA_BRANCH" HEAD >/dev/null 2>&1
 bash -c '
   pid=$$
   dir="$1/wheelhouse-verify-${pid}-live"
@@ -1011,16 +1016,25 @@ bash -c '
 while [ ! -f "$FIX/live-owner.txt" ]; do sleep 0.05; done
 LIVE_OWNER_PID=$(sed -n '1p' "$FIX/live-owner.txt")
 LIVE_DIR=$(sed -n '2p' "$FIX/live-owner.txt")
-if git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" && git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR"; then
-  pass "both a planted orphan (dead pid) and a planted live (real pid) scratch worktree are registered"
-else fail "could not plant both test scratch worktrees before sweeping"; fi
+if git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" \
+   && git -C "$PROJ" worktree list | grep -qF "$REVIEW_ORPHAN_DIR" \
+   && git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" \
+   && git -C "$PROJ" show-ref --verify --quiet "refs/heads/$SHA_BRANCH"; then
+  pass "planted verify/review orphan worktrees, a live scratch worktree, and a SHA-named branch"
+else fail "could not plant stale scratch fixtures before sweeping"; fi
 
 run   # no args: usage STOP, but only after sweepStaleScratchWorktrees() ran
 if ! git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" && [ ! -d "$ORPHAN_DIR" ]; then
-  pass "the orphaned scratch worktree (dead pid) was reclaimed: unregistered and removed from disk"
-else fail "the orphan was NOT reclaimed — still registered or still on disk: $(git -C "$PROJ" worktree list)"; fi
+  pass "the orphaned verify scratch worktree (dead pid) was reclaimed"
+else fail "the verify orphan survived: $(git -C "$PROJ" worktree list)"; fi
+if ! git -C "$PROJ" worktree list | grep -qF "$REVIEW_ORPHAN_DIR" && [ ! -d "$REVIEW_ORPHAN_DIR" ]; then
+  pass "the orphaned review scratch worktree (dead pid) was reclaimed"
+else fail "the review orphan survived: $(git -C "$PROJ" worktree list)"; fi
+if ! git -C "$PROJ" show-ref --verify --quiet "refs/heads/$SHA_BRANCH"; then
+  pass "the stale 40-hex local branch was reclaimed"
+else fail "the stale SHA-named branch survived: $(git -C "$PROJ" branch --list "$SHA_BRANCH")"; fi
 if git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ -d "$LIVE_DIR" ]; then
-  pass "the live scratch worktree (real running pid) was spared — still registered and on disk"
+  pass "the live scratch worktree (real running pid) was spared"
 else fail "the live worktree was swept even though its owner pid is still alive"; fi
 
 kill "$LIVE_OWNER_PID" 2>/dev/null
@@ -1029,6 +1043,36 @@ run   # a second sweep pass, now that the "live" owner has actually exited
 if ! git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
   pass "once its owner pid actually exits, a later sweep reclaims that worktree too"
 else fail "the formerly-live worktree was not reclaimed after its owner pid died: $(git -C "$PROJ" worktree list)"; fi
+
+phase "10b. killed one-shot — reaper leaves no scratch worktree or SHA branch"
+KILL_PROJ="$FIX/proj-kill"
+build_proj "$KILL_PROJ" kill "$VERIFY"
+RUN_PROJ="$KILL_PROJ"; VDIR="$KILL_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-kill/verifier/argv.json"
+KILL_SHA_BRANCH="89abcdef0123456789abcdef0123456789abcdef"
+git -C "$KILL_PROJ" branch "$KILL_SHA_BRANCH" HEAD >/dev/null 2>&1
+OUT_FILE="$FIX/killed-verify.out"
+(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$OUT_FILE" 2>&1) &
+KILLED_DISPATCHER_PID=$!
+KILLED_DIR=""
+for _ in $(seq 1 100); do
+  KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | head -n 1 || true)"
+  [ -n "$KILLED_DIR" ] && break
+  sleep 0.05
+done
+if [ -n "$KILLED_DIR" ]; then pass "killed one-shot fixture reached a registered scratch worktree"
+else fail "killed one-shot fixture never registered a scratch worktree: $(cat "$OUT_FILE" 2>/dev/null)"; fi
+kill -9 "$KILLED_DISPATCHER_PID" 2>/dev/null || true
+wait "$KILLED_DISPATCHER_PID" 2>/dev/null || true
+PI_PID_FILE="$HOME_FIX/.pi-seats-kill/verifier/pi-pid.txt"
+if [ -s "$PI_PID_FILE" ]; then kill "$(cat "$PI_PID_FILE")" 2>/dev/null || true; fi
+run   # sweep the killed run's scratch worktree and stale SHA branch
+if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -qF "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
+  pass "killed one-shot scratch worktree was reclaimed by the reaper pass"
+else fail "killed one-shot scratch survived: dir=$KILLED_DIR list=$(git -C "$KILL_PROJ" worktree list)"; fi
+if ! git -C "$KILL_PROJ" show-ref --verify --quiet "refs/heads/$KILL_SHA_BRANCH"; then
+  pass "killed one-shot reaper pass removed the stale SHA-named branch"
+else fail "killed one-shot stale SHA branch survived"; fi
+RUN_PROJ="$PROJ"; VDIR="$PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 
 phase "11. real pi — one smoke leg through the actual binary (SKIP-able)"
 REAL_AUTH="$HOME/.pi/agent/auth.json"

@@ -109,7 +109,8 @@ function assertHostBuildLockAvailable(): void {
  * repository (`--repo` when an umbrella install needs one), which has nothing
  * to do with the spawned pi PROCESS's cwd.
  *
- * Detached at the branch repo's own HEAD — an arbitrary, always-resolvable commit.
+ * Detached at a commit object (`<tip>^{commit}` for verify, `HEAD^{commit}` for
+ * verifier walks) so git never creates a branch named by the reviewed SHA.
  * The checked-out content is never read by anyone; the worktree exists
  * only so a stray write has somewhere harmless to land, and so `git`
  * commands run from inside it resolve at all. Removed on every exit path
@@ -119,25 +120,62 @@ function assertHostBuildLockAvailable(): void {
  * sweepStaleScratchWorktrees() below, run once at the top of every
  * invocation, not by anything here.
  *
- * Named `wheelhouse-verify-<owning-pid>-<random>` so a later sweep can
- * tell which process made it without asking anything but the path.
+ * Named `wheelhouse-verify-<owning-pid>-<random>` or
+ * `wheelhouse-review-<owning-pid>-<random>` so a later sweep can tell which
+ * process made it without asking anything but the path.
  */
-export function makeScratchCwd(repoRoot: string, tip = "HEAD"): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-verify-${process.pid}-`));
+export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD"): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`));
   try {
-    execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, tip], { stdio: "pipe" });
+    execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, `${tip}^{commit}`], { stdio: "pipe" });
   } catch (e: any) {
     fs.rmSync(dir, { recursive: true, force: true });
-    die(`could not create a scratch worktree for the verifier spawn in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
+    die(`could not create a detached scratch worktree for the ${kind} one-shot in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
   }
   process.on("exit", () => {
-    try {
-      execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { stdio: "ignore" });
-    } catch {
-      try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-    }
+    removeScratchWorktree(repoRoot, dir);
+    sweepShaNamedBranches(repoRoot);
   });
   return dir;
+}
+
+function removeScratchWorktree(repoRoot: string, dir: string): void {
+  try {
+    execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { stdio: "ignore" });
+  } catch {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    try { execFileSync("git", ["-C", repoRoot, "worktree", "prune"], { stdio: "ignore" }); } catch {}
+  }
+}
+
+function checkedOutBranches(repoRoot: string): Set<string> {
+  const out = new Set<string>();
+  try {
+    const listing = execFileSync("git", ["-C", repoRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" });
+    for (const line of listing.split("\n")) {
+      const m = line.match(/^branch refs\/heads\/(.+)$/);
+      if (m) out.add(m[1]);
+    }
+  } catch {}
+  return out;
+}
+
+function sweepShaNamedBranches(repoRoot: string): void {
+  let refs = "";
+  try {
+    refs = execFileSync("git", ["-C", repoRoot, "for-each-ref", "--format=%(refname:short)", "refs/heads"], { encoding: "utf8" });
+  } catch {
+    return;
+  }
+  const checkedOut = checkedOutBranches(repoRoot);
+  for (const name of refs.split("\n").filter(Boolean)) {
+    if (!/^[0-9a-fA-F]{40}$/.test(name)) continue;
+    if (checkedOut.has(name)) continue;
+    try {
+      execFileSync("git", ["-C", repoRoot, "branch", "-D", name], { stdio: "ignore" });
+      process.stderr.write(`swept: deleted stale SHA-named branch ${name}\n`);
+    } catch {}
+  }
 }
 
 function barePidAlive(pid: number): boolean {
@@ -188,8 +226,9 @@ function pidAlive(pid: number, ownedPath: string): boolean {
  * same box) can leave same-prefixed scratch dirs there — `git worktree list`
  * only ever names worktrees that belong to THIS repository, so nothing gets
  * touched that the branch repository does not already confirm is its own.
- * Filters those to the `wheelhouse-verify-<pid>-*` naming makeScratchCwd()
- * uses, and reclaims only the ones whose stamped pid is no longer alive.
+ * Filters those to the `wheelhouse-verify-<pid>-*` and
+ * `wheelhouse-review-<pid>-*` naming makeScratchCwd() uses, and reclaims only
+ * the ones whose stamped pid is no longer alive.
  *
  * No fd-based cross-check the way recover.ts's fixture sweep needs one:
  * that sweep KILLS live processes, so a reused pid is a real hazard it
@@ -214,17 +253,13 @@ export function sweepStaleScratchWorktrees(repoRoot: string): void {
     .filter((l) => l.startsWith("worktree "))
     .map((l) => l.slice("worktree ".length));
   for (const p of worktreePaths) {
-    const m = path.basename(p).match(/^wheelhouse-verify-(\d+)-/);
+    const m = path.basename(p).match(/^wheelhouse-(?:verify|review)-(\d+)-/);
     if (!m) continue; // not one of ours
     if (pidAlive(Number(m[1]), p)) continue; // owner still running and holds this scratch worktree — not stale
-    try {
-      execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", p], { stdio: "ignore" });
-    } catch {
-      try { fs.rmSync(p, { recursive: true, force: true }); } catch {}
-      try { execFileSync("git", ["-C", repoRoot, "worktree", "prune"], { stdio: "ignore" }); } catch {}
-    }
+    removeScratchWorktree(repoRoot, p);
     process.stderr.write(`swept: removed orphaned scratch worktree ${p} (owner pid ${m[1]} is gone)\n`);
   }
+  sweepShaNamedBranches(repoRoot);
 }
 
 export function die(msg: string): never {
@@ -839,7 +874,7 @@ function main(): void {
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
   assertHostBuildLockAvailable();
-  const scratchCwd = makeScratchCwd(repoRoot, tip);
+  const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const scratchGitDir = execFileSync("git", ["-C", scratchCwd, "rev-parse", "--git-dir"], { encoding: "utf8" }).trim();
   const startedAt = Date.now();
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
