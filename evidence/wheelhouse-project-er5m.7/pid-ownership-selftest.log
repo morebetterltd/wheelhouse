@@ -1,0 +1,6 @@
+RUN timeout 900 seats/pid-ownership.selftest.sh
+start=2026-09-16T00:14:55Z
+  ok    adapter pid liveness is gated by the seat FIFO ownership proof, not bare kill -0 for recorded seats
+pid-ownership.selftest: PASS
+end=2026-09-16T00:14:55Z
+rc=0
