@@ -1,0 +1,11 @@
+RUN claude version
+2.1.273 (Claude Code)
+
+RUN allowedTools Bash(printf *) with redirected command
+result: {"subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":2,"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"printf x > redirected.txt","description":"Write x to redirected.txt"}}],"result":"DENIED"}
+redirected_rc=0
+redirected_exists=no
+
+RUN allowedTools Bash(printf *) with plain command
+result: {"subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":2,"permission_denials":[],"result":"OUTPUT x"}
+plain_rc=0
