@@ -1,0 +1,10 @@
+status-1:
+worker-1         worker            PARKED   stopped     last-event agent_end  bead bead-q  account quota-label
+                 CAPACITY: QUOTA at 2026-09-16T10:25:50.610Z — Codex error: The usage limit has been reached (account quota-label)
+                 RE-PROBE: bun seats/adapter.ts probe worker-1
+mtime1=1789554350
+status-2:
+worker-1         worker            PARKED   stopped     last-event agent_end  bead bead-q  account quota-label
+                 CAPACITY: QUOTA at 2026-09-16T10:25:51.679Z — Codex error: The usage limit has been reached (account quota-label)
+                 RE-PROBE: bun seats/adapter.ts probe worker-1
+mtime2=1789554351
