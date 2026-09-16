@@ -196,6 +196,8 @@ function handle(cmd) {
   const id = cmd.id;
   switch (cmd.type) {
     case "get_state": {
+      const ignoreGetState = path.join(agentDir, "ignore-get-state");
+      if (fs.existsSync(ignoreGetState)) break;
       if (process.env.STUB_GET_STATE_FAIL_ONCE && !fs.existsSync(path.join(agentDir, "get-state-failed-once"))) {
         fs.writeFileSync(path.join(agentDir, "get-state-failed-once"), "1");
         out({ id, type: "response", command: "get_state", success: false, error: process.env.STUB_GET_STATE_FAIL_ONCE });
@@ -273,7 +275,10 @@ process.stdin.on("data", (c) => {
 });
 process.stdin.on("end", () => process.exit(0));
 process.on("exit", () => { if (matchingChild?.pid) { try { process.kill(matchingChild.pid, "SIGTERM"); } catch {} } });
-process.on("SIGTERM", () => { if (!process.env.STUB_IGNORE_SIGTERM) process.exit(0); });
+process.on("SIGTERM", () => {
+  try { fs.rmSync(path.join(agentDir, "ignore-get-state"), { force: true }); } catch {}
+  if (!process.env.STUB_IGNORE_SIGTERM) process.exit(0);
+});
 STUB
 chmod +x "$BIN/pi"
 [ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
@@ -924,7 +929,33 @@ if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'echo: Bead bead-x' 5 && gr
   pass "after live rotation, get_state answers and the writer's next event lands in the current log"
 else fail "dispatch after live rotation did not read responses from the current log (exit $RC): $OUT current=$(cat "$LOG" 2>/dev/null) archive_tail=$(tail -5 "$LOG.1" 2>/dev/null)"; fi
 
-phase "2a. dispatch — late prompt ack after delivery is a warning, not stale state"
+phase "2a. wedged idle seat — status diagnoses, dispatch stop+resumes and retries once"
+ANSWERING_PID_BEFORE="$(state_get pid)"
+run dispatch worker-1 bead-x "answering seat should not relaunch"
+if [ $RC -eq 0 ] && [ "$(state_get pid)" = "$ANSWERING_PID_BEFORE" ] && ! says "WEDGED"; then
+  pass "answering idle seat dispatches without a relaunch"
+else fail "answering idle seat was relaunched or diagnosed wedged (exit $RC): before=$ANSWERING_PID_BEFORE after=$(state_get pid) out=$OUT"; fi
+WEDGED_AGENT_DIR="${ARGV%argv.json}"
+touch "$WEDGED_AGENT_DIR/ignore-get-state"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WEDGED_GET_STATE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && grep -q 'worker-1.*WEDGED' <<<"$OUT" && says 'remedy: bun seats/adapter.ts stop worker-1; bun seats/adapter.ts resume worker-1'; then
+  pass "status renders an idle get_state-timeout seat as WEDGED with remedy"
+else fail "status did not render WEDGED/remedy for ignored get_state (exit $RC): $OUT"; fi
+WEDGED_PID_BEFORE="$(state_get pid)"
+WEDGED_SESSION_BEFORE="$(state_get sessionFile)"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "wedged seat self-heals" 2>&1)"; RC=$?
+WEDGED_PID_AFTER="$(state_get pid)"
+if [ $RC -eq 0 ] && says "WEDGED" && says "stopping and resuming" && says "retrying dispatch once" && [ "$WEDGED_PID_AFTER" != "$WEDGED_PID_BEFORE" ]; then
+  pass "dispatch self-heals an idle get_state timeout by stop+resume and retry"
+else fail "dispatch did not self-heal WEDGED seat (exit $RC): before=$WEDGED_PID_BEFORE after=$WEDGED_PID_AFTER out=$OUT"; fi
+if [ "$(state_get sessionFile)" = "$WEDGED_SESSION_BEFORE" ] && grep -Fq -- "\"--session\",\"$WEDGED_SESSION_BEFORE\"" "$ARGV" 2>/dev/null; then
+  pass "wedged self-heal keeps the recorded session"
+else fail "wedged self-heal did not keep session: before=$WEDGED_SESSION_BEFORE after=$(state_get sessionFile) argv=$(cat "$ARGV" 2>/dev/null)"; fi
+if grep -q 'wedged seat self-heals' "$LOG" 2>/dev/null; then
+  pass "wedged self-heal retry delivered the dispatch after resume"
+else fail "wedged self-heal did not deliver retried prompt: $(tail -20 "$LOG" 2>/dev/null)"; fi
+
+phase "2b. dispatch — late prompt ack after delivery is a warning, not stale state"
 SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
 LATE_PROJ="$FIX/late-ack-proj"
 build_proj "$LATE_PROJ" late-ack
