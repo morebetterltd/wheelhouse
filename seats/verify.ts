@@ -122,10 +122,10 @@ function assertHostBuildLockAvailable(): void {
  * Named `wheelhouse-verify-<owning-pid>-<random>` so a later sweep can
  * tell which process made it without asking anything but the path.
  */
-export function makeScratchCwd(repoRoot: string): string {
+export function makeScratchCwd(repoRoot: string, tip = "HEAD"): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-verify-${process.pid}-`));
   try {
-    execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, "HEAD"], { stdio: "pipe" });
+    execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, tip], { stdio: "pipe" });
   } catch (e: any) {
     fs.rmSync(dir, { recursive: true, force: true });
     die(`could not create a scratch worktree for the verifier spawn in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
@@ -839,9 +839,16 @@ function main(): void {
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
   assertHostBuildLockAvailable();
-  const scratchCwd = makeScratchCwd(repoRoot);
+  const scratchCwd = makeScratchCwd(repoRoot, tip);
+  const scratchGitDir = execFileSync("git", ["-C", scratchCwd, "rev-parse", "--git-dir"], { encoding: "utf8" }).trim();
   const startedAt = Date.now();
-  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: hostBudgetPath(ROOT), BEADS_ACTOR: beadsActorFor(verifierSeat) });
+  const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
+    ...process.env,
+    PATH: hostBudgetPath(ROOT),
+    BEADS_ACTOR: beadsActorFor(verifierSeat),
+    GIT_DIR: path.resolve(scratchCwd, scratchGitDir),
+    GIT_WORK_TREE: scratchCwd,
+  });
   const res = spawnSync(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
     env,
@@ -895,8 +902,8 @@ function main(): void {
         pushLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
     );
   }
-  if (!/^PUSH:\s*(APPROVE\s+\S+\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+[—-]\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
-    die(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED [— why]`);
+  if (!/^PUSH:\s*(APPROVE\s+\S+\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
+    die(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> [detail] | HOLD — <why> [detail] | NOT CONSIDERED [detail]`);
   }
   // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
   // you are reviewing") belongs to APPROVE and to nothing else.
@@ -906,14 +913,16 @@ function main(): void {
   const movedShape = movedTo && appendedCount !== null
     ? new RegExp(`^VERDICT:\\s*(APPROVE|BOUNCE)\\s+[—-]\\s+at pinned tip ${tip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; branch has since moved to ${movedTo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(${appendedCount} commits appended, history unrewritten\\)$`)
     : null;
-  const m = movedShape?.exec(verdictLines[0].normalized)
-    ?? verdictLines[0].normalized.match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)\s*(?:[—-]{1,2}\s*NOT BENCHED:\s*(\S.*))?$/);
+  const movedMatch = movedShape?.exec(verdictLines[0].normalized) ?? null;
+  const ordinaryMatch = verdictLines[0].normalized.match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)(?:\s+(.*))?$/);
+  const notBenchedMatch = ordinaryMatch?.[2]?.match(/^[—-]{1,2}\s*NOT BENCHED:\s*(\S.*)$/);
+  const m = movedMatch ?? ordinaryMatch;
   if (!m) {
-    die(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] | BOUNCE | DISCOVER${movedTo && appendedCount !== null ? ` | APPROVE/BOUNCE — at pinned tip ${tip}; branch has since moved to ${movedTo} (${appendedCount} commits appended, history unrewritten)` : ""}`);
+    die(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] [detail] | BOUNCE [detail] | DISCOVER [detail]${movedTo && appendedCount !== null ? ` | APPROVE/BOUNCE — at pinned tip ${tip}; branch has since moved to ${movedTo} (${appendedCount} commits appended, history unrewritten)` : ""}`);
   }
   const verdict = m[1];
-  const movedVerdictShown = movedShape && movedShape.test(verdictLines[0].normalized) ? verdictLines[0].normalized.replace(/^VERDICT:\s*/, "") : "";
-  const notBenched = m[2]?.trim();
+  const movedVerdictShown = movedMatch ? verdictLines[0].normalized.replace(/^VERDICT:\s*/, "") : "";
+  const notBenched = notBenchedMatch?.[1]?.trim();
   if (notBenched && verdict !== "APPROVE") {
     die(`malformed verdict line: NOT BENCHED qualifies APPROVE and nothing else, got: "${verdictLines[0].normalized}"`);
   }
@@ -929,7 +938,8 @@ function main(): void {
       die(`branch "${branch}" moved during verification; PUSH must be exactly "${expectedPush}" so publish waits for re-verification at the moved tip`);
     }
   }
-  const verdictShown = movedVerdictShown || (notBenched ? `${verdict} — NOT BENCHED: ${notBenched}` : verdict);
+  const annotatedVerdictShown = verdictLines[0].normalized.replace(/^VERDICT:\s*/, "");
+  const verdictShown = movedVerdictShown || (ordinaryMatch?.[2] ? annotatedVerdictShown : verdict);
   const benchGapNotes = benchGapNotices(notBenched);
 
   // An APPROVE over a missing, empty, or mistyped artifact the bead requires
