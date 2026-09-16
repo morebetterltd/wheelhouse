@@ -1,6 +1,6 @@
 # INTENT.md — ISA grammar
 
-Wheelhouse's intent interface is the shape of `wheelhouse/ISA.md`. Any intent layer that reads and writes this grammar can drive a wheelhouse: it can tell the fleet which hill to climb, trace work back to direction, and keep claims tied to evidence. LifeOS is one example of such a layer, and a PAI-style setup is another; nothing in this template requires either.
+Wheelhouse's intent interface is the shape of `wheelhouse/ISA.md`. Any intent layer that reads and writes this grammar can drive a wheelhouse: it can tell the fleet which hill to climb, trace work back to direction, and keep claims tied to evidence. The seats that execute those claims may run on Pi, Claude Code, or Codex in the same fleet — subscription accounts included — because harness choice is a roster fact, not a different intent grammar. LifeOS is one example of such a layer, and a PAI-style setup is another; nothing in this template requires either.
 
 The section headings are the interface. Frontmatter is optional machine-readable metadata, not required grammar.
 

@@ -280,6 +280,15 @@ function classify(obj: any): Candidate | null {
       sourceType: type,
     };
   }
+  if (type === "agent_settled" && obj?.state === "stalled") {
+    return {
+      eventClass: "settle",
+      state: "stalled",
+      title: "seat stalled after resume",
+      detail: truncate(textOf([obj.message, obj.detail]) || "resume detected a cut-off tool call"),
+      sourceType: type,
+    };
+  }
   if (type === "agent_end") {
     const stopReason = agentEndStopReason(obj);
     if (stopReason === "error") {
