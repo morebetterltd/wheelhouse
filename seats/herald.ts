@@ -21,7 +21,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import.meta.dir, ".."));
@@ -50,7 +50,7 @@ const DISTRESS_RE = /(?:\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|atio
 const STOP_DISTRESS_RE = /\bSTOP\b/;
 const SENTINEL_RE = /^\s*@commander\s*:/im;
 
-type WakeClass = "settle" | "distress" | "sentinel";
+type WakeClass = "settle" | "distress" | "sentinel" | "verdict-not-posted";
 type A2AState = "terminal" | "input-required" | "failed";
 
 interface HeraldState {
@@ -69,7 +69,7 @@ interface Candidate {
   sourceType?: string;
 }
 
-interface AdapterSeatState { lastBead?: string; lastPrompt?: string }
+interface AdapterSeatState { role?: string; lastBead?: string; lastPrompt?: string; lastDispatchAt?: string }
 
 function die(msg: string): never {
   process.stderr.write(`STOP: ${msg}\n`);
@@ -268,8 +268,31 @@ function truncate(s: string, n = 700): string {
   return oneLine.length > n ? `${oneLine.slice(0, n - 1)}…` : oneLine;
 }
 
+function finalAssistantVerdictText(obj: any): string {
+  if (obj?.type !== "agent_end") return "";
+  const messages = Array.isArray(obj?.messages) ? obj.messages : [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== "assistant") continue;
+    const text = assistantTextContent(m.content) || textOf(m);
+    return /\bVERDICT\s*:/m.test(text) ? text.trim() : "";
+  }
+  const text = textOf(obj);
+  return /\bVERDICT\s*:/m.test(text) ? text.trim() : "";
+}
+
 function classify(obj: any): Candidate | null {
   const type = typeof obj?.type === "string" ? obj.type : undefined;
+  const verdictText = finalAssistantVerdictText(obj);
+  if (verdictText) {
+    return {
+      eventClass: "verdict-not-posted",
+      state: "terminal",
+      title: "verdict final text was not posted",
+      detail: truncate(verdictText, 1200),
+      sourceType: type,
+    };
+  }
   const sentinel = sentinelText(obj);
   if (sentinel && SENTINEL_RE.test(sentinel)) {
     return {
@@ -352,6 +375,28 @@ function settleForInbox(candidate: Candidate, seat: string): { title: string; de
   const head = promptHead(prompt);
   if (head) return { title: `seat turn settled — ${bead}`, detail: truncate(`${bead}\n${head}`) };
   return { title: `${candidate.title} — log-derived`, detail: truncate(`log-derived (state.json has no recorded prompt for ${seat}): ${candidate.detail}`) };
+}
+
+function verdictLine(text: string): string {
+  return text.split(/\r?\n/).find((line) => /\bVERDICT\s*:/i.test(line))?.trim() ?? "VERDICT:";
+}
+
+function relayUnpostedVerdict(candidate: Candidate, seat: string): boolean {
+  if (candidate.eventClass !== "verdict-not-posted") return true;
+  const rec = adapterSeatState(seat);
+  if (rec?.role !== "reviewer" && rec?.role !== "verifier") return false;
+  const bead = typeof rec?.lastBead === "string" && rec.lastBead.trim() ? rec.lastBead.trim() : "";
+  if (!bead) return false;
+  const verdict = verdictLine(candidate.detail);
+  const shown = spawnSync("bd", ["show", bead], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000 });
+  if (shown.status === 0 && (shown.stdout ?? "").includes(verdict)) return false;
+  const body = `relayed by adapter: ${seat} settled with a verdict in final text but no matching bead comment was found.\n\n${candidate.detail}\n`;
+  const posted = spawnSync("bd", ["comment", bead, "--stdin"], { cwd: ROOT, input: body, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 30000 });
+  if (posted.status !== 0) {
+    logPoke("dropped", `reason=verdict-relay-failed seat=${seat} bead=${bead} error=${(posted.stderr || posted.stdout || "").trim().slice(0, 300)}`);
+    return false;
+  }
+  return true;
 }
 
 function eventId(relLog: string, offset: number, line: string, candidate: Candidate): string {
@@ -506,18 +551,20 @@ function scanOnce(): number {
         if (!seen.has(id)) {
           seen.add(id);
           const seat = path.basename(file, ".jsonl");
-          const rendered = settleForInbox(candidate, seat);
-          appendInbox({
-            id,
-            at: new Date().toISOString(),
-            seat,
-            class: candidate.eventClass,
-            state: candidate.state,
-            title: rendered.title,
-            detail: rendered.detail,
-            source: { log: rel, offset: rec.offset, type: candidate.sourceType ?? null },
-          });
-          appended++;
+          if (relayUnpostedVerdict(candidate, seat)) {
+            const rendered = settleForInbox(candidate, seat);
+            appendInbox({
+              id,
+              at: new Date().toISOString(),
+              seat,
+              class: candidate.eventClass,
+              state: candidate.state,
+              title: rendered.title,
+              detail: rendered.detail,
+              source: { log: rel, offset: rec.offset, type: candidate.sourceType ?? null },
+            });
+            appended++;
+          }
         }
       }
       state.logs[rel] = { offset: rec.endOffset };
