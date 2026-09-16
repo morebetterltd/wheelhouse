@@ -155,12 +155,23 @@ if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   ' "$roster_file" "$seat")"
 fi
 
-# Optional roster fields. account.authRoute is one of oauth/api_key/env — the
+# Optional roster fields. account.authRoute is one of oauth/api_key/env/default — the
 # routes BOOTSTRAP.md's question 8 offers. shadow is a boolean marker for a
 # non-gating mirror seat. Absent means "not recorded yet" / false; present-
 # but-invalid is a STOP so a typo in the roster is caught here instead of
 # silently ignored.
+harness="pi"
 if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
+  harness="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const h = j.seats?.[seat]?.harness;
+      if (typeof h === "string" && h.length > 0) process.stdout.write(h);
+      else process.stdout.write("pi");
+    } catch { process.stdout.write("pi"); }
+  ' "$roster_file" "$seat")"
   auth_route="$($json_runtime -e '
     const fs = require("fs");
     const file = process.argv[1], seat = process.argv[2];
@@ -323,7 +334,13 @@ case "$harness" in
       note "  export CLAUDE_CONFIG_DIR=\"$seat_dir\""
     fi
     ;;
-  codex) note "  export CODEX_HOME=\"$seat_dir\"" ;;
+  codex)
+    if [ "$auth_route" = "default" ]; then
+      note "  # account.authRoute=default: leave CODEX_HOME unset for this smoke/evidence run"
+    else
+      note "  export CODEX_HOME=\"$seat_dir\""
+    fi
+    ;;
 esac
 if [ "$login_needed" -eq 1 ]; then
   note ""

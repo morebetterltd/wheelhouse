@@ -29,6 +29,8 @@ When you capture screens, obey the image budget the dispatcher prints before the
 
 Every ad-hoc derived-data directory, review-output directory, walk-simulator artifact, or other scratch artifact you create for the walk lives under the dispatcher's `<container>/.wheelhouse-runs/<bead-or-walk-id>/...`, not a bare `/tmp` path. Any simulator you create for that walk is named `<bead-or-walk-id>-*` so the scratch pruner can identify it later.
 
+When this install has a host build budget (`seats/host-budget.json` exists and seat launch/probe/one-shot PATHs include `seats/bin`), every build and test the surface leads you to run goes through the shim, regardless of whether the seat harness is `pi`, `claude-code`, or `codex`; never call the raw tool by absolute path, by a PATH that skips `seats/bin`, or by any other escape hatch. Build caches are shared under the host lock by default. Per-worktree cache isolation is allowed only with a written reason on the bead, because isolation multiplies disk and compile load.
+
 You never edit repositories, never patch files, never file beads, never close claims, and never write to the work graph. The transcript and verdict are your whole output. The commander acts on them.
 
 ### The verdict schema

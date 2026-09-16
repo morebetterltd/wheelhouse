@@ -719,6 +719,46 @@ check_spawn() {   # $1 = label
   else fail "${label}: no session file recorded, or it does not exist"; fi
 }
 
+
+phase "0b. codex driver — spawn, dispatch, normalized events, resume, stop"
+CODEX_TMP="$FIX/codex-driver"; mkdir -p "$CODEX_TMP/bin" "$CODEX_TMP/home" "$CODEX_TMP/home/codex" "$CODEX_TMP/proj/contracts" "$CODEX_TMP/proj/.wheelhouse-worktrees/bead-codex" "$CODEX_TMP/proj/.wheelhouse-worktrees/bead-resume"; printf "{}\n" > "$CODEX_TMP/home/codex/auth.json"
+cat > "$CODEX_TMP/bin/codex" <<'CODEXSTUB'
+#!/usr/bin/env node
+const fs=require('fs'),path=require('path'); const home=process.env.CODEX_HOME||process.env.HOME; fs.mkdirSync(home,{recursive:true}); fs.appendFileSync(path.join(home,'codex-calls.jsonl'),JSON.stringify({argv:process.argv.slice(2)})+'\n'); if(process.argv[2]==='login'&&process.argv[3]==='status') process.exit(0); if(process.argv[2]==='exec'){console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'OK'}}));process.exit(0);} fs.writeFileSync(path.join(home,'codex-env.json'),JSON.stringify({OPENAI_API_KEY:process.env.OPENAI_API_KEY||null,ANTHROPIC_API_KEY:process.env.ANTHROPIC_API_KEY||null,ANTHROPIC_AUTH_TOKEN:process.env.ANTHROPIC_AUTH_TOKEN||null})); let thread='thread-'+process.pid, threadPath=path.join(home,'sessions','odd','rollout--'+thread+'.jsonl'), buf=''; function ensure(){fs.mkdirSync(path.dirname(threadPath),{recursive:true});fs.appendFileSync(threadPath,'{}\n');} function send(o){console.log(JSON.stringify(o));} function text(input){return (input||[]).map(x=>x.text||'').join('\n')}
+process.stdin.on('data',d=>{buf+=d;let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue;const r=JSON.parse(l),m=r.method,p=r.params||{};if(m==='initialize')send({jsonrpc:'2.0',id:r.id,result:{codexHome:home,userAgent:'stub'}});else if(m==='thread/start'){ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model,sandbox:p.sandbox,approvalPolicy:p.approvalPolicy}})}else if(m==='thread/resume'){thread=p.threadId;threadPath=path.join(home,'sessions','odd','rollout--'+thread+'.jsonl');ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model}})}else if(m==='turn/start'||m==='turn/steer'){const turn='turn-'+Date.now(), msg=text(p.input);send({jsonrpc:'2.0',id:r.id,result:{turn:{id:turn,status:'inProgress'}}});send({jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'active'}}});send({jsonrpc:'2.0',method:'turn/started',params:{threadId:thread,turn:{id:turn,status:'inProgress'}}});if(/tools/i.test(msg)){send({jsonrpc:'2.0',method:'item/started',params:{threadId:thread,item:{id:'tool-1',type:'commandExecution',command:'printf OK'}}});send({jsonrpc:'2.0',method:'item/completed',params:{threadId:thread,item:{id:'tool-1',type:'commandExecution',command:'printf OK',status:'completed',exitCode:0,output:'OK'}}});}send({jsonrpc:'2.0',method:'item/completed',params:{threadId:thread,item:{id:'msg-1',type:'agentMessage',text:/resume/i.test(msg)?'RESUME_OK':'OK'}}});send({jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'idle'}}});send({jsonrpc:'2.0',method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed'}}});}}});process.on('SIGTERM',()=>process.exit(0));
+CODEXSTUB
+chmod +x "$CODEX_TMP/bin/codex"
+printf 'worker brief\n' > "$CODEX_TMP/proj/contracts/WORKER.md"; printf 'x\n' > "$CODEX_TMP/proj/contracts/COMMANDER.md"; printf 'x\n' > "$CODEX_TMP/proj/contracts/REVIEWER.md"
+mkdir -p "$CODEX_TMP/proj/seats/bin"; cp "$CODEX_TMP/bin/codex" "$CODEX_TMP/proj/seats/bin/codex"; printf '{}\n' > "$CODEX_TMP/proj/seats/host-budget.json"; cp "$PWD/seats/adapter.ts" "$CODEX_TMP/proj/seats/adapter.ts"; cp -R "$PWD/seats/drivers" "$CODEX_TMP/proj/seats/drivers"; cp "$PWD/seats/host-budget.ts" "$CODEX_TMP/proj/seats/host-budget.ts"; cp "$PWD/seats/briefs.ts" "$CODEX_TMP/proj/seats/briefs.ts"; cp "$PWD/seats/harness.ts" "$CODEX_TMP/proj/seats/harness.ts"
+cat > "$CODEX_TMP/proj/seats/seats.json" <<JSON
+{"seats":{"worker-1":{"role":"worker","harness":"codex","provider":"openai-codex","model":"gpt-5.5","account":{"dir":"$CODEX_TMP/home/codex","authRoute":"oauth"}}}}
+JSON
+OLD_RUN_PROJ="$RUN_PROJ"; OLD_STATE="$STATE"; OLD_LOG="$LOG"; OLD_ARGV="$ARGV"
+RUN_PROJ="$CODEX_TMP/proj"; STATE="$CODEX_TMP/proj/seats/state.json"; LOG="$CODEX_TMP/proj/seats/logs/worker-1.jsonl"; ARGV="$CODEX_TMP/home/codex/unused-argv.json"
+PATH="$CODEX_TMP/bin:$PATH" OPENAI_API_KEY=leak ANTHROPIC_API_KEY=leak ANTHROPIC_AUTH_TOKEN=leak run spawn worker-1
+[ $RC -eq 0 ] && pass "codex spawn exits 0 through the adapter" || fail "codex spawn failed: $OUT"
+session_file=$(node -e 'const s=require(process.argv[1]).seats["worker-1"]; process.stdout.write(s.sessionFile||"")' "$CODEX_TMP/proj/seats/state.json")
+[ -n "$session_file" ] && [ -f "$session_file" ] && pass "codex records thread.path session file that exists" || fail "codex session file missing: $session_file"
+if grep -q leak "$CODEX_TMP/home/codex/codex-env.json"; then fail "codex child env leaked provider credentials"; else pass "codex child env strips provider credential variables"; fi
+PATH="$CODEX_TMP/bin:$PATH" run probe worker-1; [ $RC -eq 0 ] && [ "$OUT" = "OK" ] && grep -Fq '"argv":["login","status"]' "$CODEX_TMP/home/codex/codex-calls.jsonl" && pass "codex probe checks login status and accepts exact OK agent_message" || fail "codex probe failed/login not checked (rc=$RC out=$OUT calls=$(cat "$CODEX_TMP/home/codex/codex-calls.jsonl" 2>/dev/null))"
+PATH="$CODEX_TMP/bin:$PATH" run dispatch worker-1 bead-codex "tools please"; [ $RC -eq 0 ] && pass "codex dispatch ack exits 0" || fail "codex dispatch ack failed (rc=$RC): $OUT"
+for i in {1..80}; do grep -q '"type":"agent_end"' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl" && break; sleep .1; done
+if grep -q '"type":"tool_execution_start".*"toolName":"shell"' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl" && grep -q '"type":"turn_end"' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl"; then pass "codex normalizes tool execution, turn_end, and agent_end"; else fail "codex normalized events missing: $(tail -20 "$CODEX_TMP/proj/seats/logs/worker-1.jsonl" 2>/dev/null)"; fi
+PATH="$CODEX_TMP/bin:$PATH" run stop worker-1; [ $RC -eq 0 ] && pass "codex stop exits 0" || fail "codex stop failed (rc=$RC): $OUT"
+PATH="$CODEX_TMP/bin:$PATH" run resume worker-1; [ $RC -eq 0 ] && pass "codex resume exits 0 with recorded thread" || fail "codex resume failed: $OUT"
+PATH="$CODEX_TMP/bin:$PATH" run dispatch worker-1 bead-resume "resume check"; for i in {1..80}; do grep -q 'RESUME_OK' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl" && break; sleep .1; done
+if grep -q 'RESUME_OK' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl"; then pass "codex dispatch after resume answers"; else fail "codex resumed dispatch did not answer"; fi
+codex_pid=$(node -e 'const s=require(process.argv[1]).seats["worker-1"]; process.stdout.write(String(s.pid||""))' "$CODEX_TMP/proj/seats/state.json")
+[ -n "$codex_pid" ] || fail "codex pid missing before dead-process check"
+kill -9 "$codex_pid" 2>/dev/null || true
+for i in {1..80}; do PATH="$CODEX_TMP/bin:$PATH" run status worker-1; echo "$OUT" | grep -q 'DIED' && break; sleep .1; done
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'DIED'; then pass "codex status reports DIED after the recorded process is killed"; else fail "codex dead process was not reported DIED (rc=$RC): $OUT"; fi
+printf 'changed brief\n' >> "$CODEX_TMP/proj/contracts/WORKER.md"
+PATH="$CODEX_TMP/bin:$PATH" run resume worker-1
+if [ $RC -eq 1 ] && says "brief changed; reset instead of resume"; then pass "codex resume refuses when the role brief hash changed"; else fail "codex resume did not refuse changed brief (rc=$RC): $OUT"; fi
+PATH="$CODEX_TMP/bin:$PATH" run stop worker-1 >/dev/null 2>&1 || true
+RUN_PROJ="$OLD_RUN_PROJ"; STATE="$OLD_STATE"; LOG="$OLD_LOG"; ARGV="$OLD_ARGV"
+
 phase "0. seat-name validation — a name is one path segment or it is refused"
 check_bad_name() {   # $1 = label, $2 = offending name
   run spawn "$2"
@@ -823,12 +863,19 @@ if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ/.wheelhouse-worktrees/bead-x" ]; 
   pass "dispatch relaunched the seat rooted in the bead's worktree, by construction"
 else fail "seat cwd after dispatch was $(cat "$CWD_FILE" 2>/dev/null) — expected the bead-x worktree"; fi
 assert_state_cwd_is_live_cwd "dispatch relaunch"
-if grep -q "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null; then
+if grep -Fq -- "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null; then
   pass "the cwd-changing relaunch reattached the SAME session (--session), not a cold start"
 else fail "relaunch did not carry --session with the prior session file"; fi
 if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
   pass "the dispatch relaunch still carries BEADS_ACTOR=worker-1, with no operator export in this shell either"
 else fail "relaunched seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
+
+mkdir -p "$PROJ/.wheelhouse-worktrees/bead-missing-session"
+rm -f "$SESS"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-missing-session "missing session file keeps pi continuity" 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && grep -Fq -- "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null && ! says "session continuity intentionally dropped"; then
+  pass "pi missing recorded session file still relaunches with the recorded --session path"
+else fail "pi missing recorded session file did not preserve --session (exit $RC): $OUT argv=$(cat "$ARGV" 2>/dev/null)"; fi
 LOG_MARK=$(wc -c < "$LOG" | tr -d ' ')
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_EVENT_STRING_BYTES=1024 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "TOOLBIG payload" 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes' 5 && grep -q 'wheelhouse log truncated' "$LOG"; then

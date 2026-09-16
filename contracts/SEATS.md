@@ -12,6 +12,8 @@ A persistent seat process the commander owns: one long-lived harness per seat, s
 
 The commander is on the roster but is not a Pi seat: it runs on its own harness and is marked `"external": true` there, so the roster stays the complete crew list without pretending the adapter manages it.
 
+Two commands use a rostered identity without creating or resuming a persistent seat process. `seats/verify.ts` is a one-shot REVIEWER pass for a bead and branch: it uses the verifier seat's account directory, injects `REVIEWER.md`, writes a verdict, and exits with no warm session. `seats/walk.ts` is a one-shot VERIFIER walk on a consumer surface: it uses the verifier identity, injects `VERIFIER.md`, prompts only with the claim and named surface, writes the walk verdict, and exits with no bead-review context.
+
 ### Lifecycle
 
 A seat's session context is a CACHE. Everything durable lives on the graph, in the contracts, in git, and in the ISA — which is why reports go on the bead. A seat that loses its context loses nothing the fleet needs: at most one in-flight bead, which the commander re-dispatches. The context a seat holds across dispatches is a warm cache, nothing more.
@@ -47,7 +49,7 @@ One consequence is enforced rather than trusted: **the verifier's account must b
 
 ### Running a seat
 
-Provision once, then run with the adapter; the commands and what each one does live in `seats/README.md`, and this paragraph is deliberately all this contract says about launching. Provisioning is `seats/seat-env.sh <namespace> <seat-name>` — it creates the seat's agent directory, pre-grants trust for the project root, and prints the one-time credential flow for the account that seat should BE: OAuth seats launch `PI_CODING_AGENT_DIR=... pi`, type `/login` inside the REPL, then `/exit`; api_key seats place the key by the recorded file or env-var route. From then on the seat is `bun seats/adapter.ts spawn <seat>` to start, `dispatch` to hand it a bead, `steer` to redirect mid-turn, `status` for liveness, `stop` and `resume` for the graceful stop and the warm reattach. A one-shot verifier pass is `bun seats/verify.ts <bead-id> <branch> <author-seat>`. If any of those refuse to run, the refusal names the provisioning step that was skipped; the refusal is the guard working.
+Provision once, then run with the adapter; the commands and what each one does live in `seats/README.md`, and this paragraph is deliberately all this contract says about launching. Provisioning is `seats/seat-env.sh <namespace> <seat-name>` — it creates the seat's agent directory, pre-grants trust for the project root, and prints the one-time credential flow for the account that seat should BE: OAuth seats launch `PI_CODING_AGENT_DIR=... pi`, type `/login` inside the REPL, then `/exit`; api_key seats place the key by the recorded file or env-var route. From then on the seat is `bun seats/adapter.ts spawn <seat>` to start, `dispatch` to hand it a bead, `steer` to redirect mid-turn, `status` for liveness, `stop` and `resume` for the graceful stop and the warm reattach. The one-shot bead review is `bun seats/verify.ts <bead-id> <branch> <author-seat>` and injects the REVIEWER brief; the one-shot consumer walk is `bun seats/walk.ts <claim-ref> --surface <kind>:<spec>` and injects the VERIFIER brief. If any of those refuse to run, the refusal names the provisioning step that was skipped; the refusal is the guard working.
 
 ### Minimum viable fleet
 
