@@ -4,10 +4,10 @@ bench: wheelhouse cold install + upgrade
 artifact: .wheelhouse-worktrees/wheelhouse-project-q768 at commit 69c98de7e4eb1dc6967c1737ed88a00cb7d9d9c4 (ref: 69c98de7e4eb1dc6967c1737ed88a00cb7d9d9c4)
 upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
 phases: install=0 upgrade=0 interview=1
-evidence: /Users/codeshack-vii/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/q768/live-bench
+evidence: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/q768/live-bench
 
 === interview ===
-interview: PASS — see /Users/codeshack-vii/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/q768/live-bench/interview
+interview: PASS — see [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/q768/live-bench/interview
 
 wheelhouse cold-install + upgrade bench verdict
 date: 2026-09-16T00:06:37Z
