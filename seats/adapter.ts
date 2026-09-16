@@ -89,6 +89,7 @@ const LOG_ROTATE_BYTES = Number(process.env.WHEELHOUSE_LOG_ROTATE_BYTES || 256 *
 const LOG_ROTATE_KEEP = Number(process.env.WHEELHOUSE_LOG_ROTATE_KEEP || 3);
 const LOG_EVENT_STRING_BYTES = Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES || 64 * 1024);
 const ORPHAN_CONFIRM_MS = Number(process.env.WHEELHOUSE_ORPHAN_CONFIRM_MS || 3000);
+const WEDGED_GET_STATE_MS = Number(process.env.WHEELHOUSE_WEDGED_GET_STATE_MS || Math.min(TIMEOUT_MS, 3000));
 
 /** A bead's worktree, by the convention every worker and reviewer already
  * follows (wheelhouse/fleet/WORKER.md): `.wheelhouse-worktrees/<bead-id>`
@@ -1338,10 +1339,48 @@ function requireRunning(name: string): SeatRecord {
   return rec;
 }
 
-async function cmdDispatch(name: string, beadId: string, text: string): Promise<void> {
+async function healWedgedSeat(name: string, rec: SeatRecord, context: string): Promise<SeatRecord> {
+  const entry = requireSeat(name);
+  const driver = driverForRunningSeat(name, context);
+  const oldPid = rec.pid;
+  const sessionFile = rec.sessionFile;
+  const cwd = rec.cwd ?? ROOT;
+  console.log(`seat ${name}: WEDGED — idle seat timed out answering get_state during ${context}; stopping and resuming with session ${sessionFile ?? rec.sessionId ?? "-"}`);
+  const state = readState();
+  const current = state.seats[name];
+  if (!current) die(`seat "${name}" disappeared while healing WEDGED seat`);
+  try {
+    console.log(await driver.stop(state, name, current));
+  } catch (e: any) {
+    die(`seat "${name}" is WEDGED but stop failed while healing after get_state timeout: ${e.message}. Remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}`);
+  }
+  try {
+    await driverForSeat(name, entry, context).launch(name, entry, sessionFile, cwd);
+  } catch (e: any) {
+    die(`seat "${name}" is WEDGED — get_state still timed out or failed after stop+resume during ${context}: ${e.message}. Remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}`);
+  }
+  const healed = requireRunning(name);
+  console.log(`seat ${name}: WEDGED self-heal resumed pid ${oldPid ?? "-"} -> ${healed.pid ?? "-"}; retrying ${context} once`);
+  return healed;
+}
+
+async function cmdDispatch(name: string, beadId: string, text: string, retriedWedged = false): Promise<void> {
   let rec = requireRunning(name);
   const sameCwdDriver = driverForRunningSeat(name, "adapter dispatch");
   const targetCwd = beadWorktreeDir(beadId);
+  if (seatIdleByLog(rec)) {
+    try {
+      const st = await sameCwdDriver.getState(rec);
+      if (!st.success) die(`get_state failed while checking idle seat "${name}" before dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
+    } catch (e: any) {
+      if (isRpcTimeout(e, "get_state")) {
+        if (retriedWedged) die(`seat "${name}" is WEDGED — idle get_state timed out again after stop+resume; remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}. stderr tail:\n${stderrTail(rec)}`);
+        await healWedgedSeat(name, rec, "dispatch");
+        return cmdDispatch(name, beadId, text, true);
+      }
+      die(`get_state failed while checking idle seat "${name}" before dispatch: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
+    }
+  }
   if (rec.cwd !== targetCwd) {
     // Construction, not prompt discipline: a seat handed a DIFFERENT bead
     // than the one it is sitting in gets stopped and relaunched attached to
@@ -1350,7 +1389,17 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
     // missing worktree must refuse loudly with the seat left exactly as it
     // was, not stopped on the way to discovering the target doesn't exist.
     requireCwdDir(targetCwd);
-    const st = await sameCwdDriver.getState(rec);
+    let st: any;
+    try {
+      st = await sameCwdDriver.getState(rec);
+    } catch (e: any) {
+      if (isRpcTimeout(e, "get_state") && seatIdleByLog(rec)) {
+        if (retriedWedged) die(`seat "${name}" is WEDGED — idle get_state timed out again after stop+resume; remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}. stderr tail:\n${stderrTail(rec)}`);
+        await healWedgedSeat(name, rec, "cross-bead dispatch");
+        return cmdDispatch(name, beadId, text, true);
+      }
+      die(`get_state failed while checking seat "${name}" before cross-bead dispatch: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
+    }
     if (!st.success) {
       die(`get_state failed while checking seat "${name}" before cross-bead dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
     }
@@ -1622,6 +1671,10 @@ function lastEvent(log: string): string {
 }
 
 function agentSettledEvent(ev: string): boolean { return ev === "agent_end" || ev === "turn_end" || ev === "agent_settled"; }
+function seatIdleByLog(rec: SeatRecord): boolean { return agentSettledEvent(lastEvent(rec.log)); }
+function isRpcTimeout(e: any, commandType?: string): boolean {
+  return e?.code === "WHEELHOUSE_RPC_TIMEOUT" && (commandType === undefined || e?.commandType === commandType);
+}
 
 function logHasUnfinishedToolCall(log: string): boolean {
   try {
@@ -1735,7 +1788,7 @@ function rotateLogIfSafe(log: string, last: string): void {
   fs.truncateSync(log, 0);
 }
 
-function cmdStatus(): void {
+async function cmdStatus(): Promise<void> {
   const state = readState();
   const names = Object.keys(state.seats);
   if (names.length === 0) {
@@ -1755,18 +1808,30 @@ function cmdStatus(): void {
     const died = !alive && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
     const stalled = Boolean(rec.lastStalledEvent) || logLastStalledEvent(rec.log);
-    const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
+    const last = lastEvent(rec.log);
+    let wedged = false;
+    if (alive && agentSettledEvent(last)) {
+      try {
+        const st = await rpc(rec, { type: "get_state" }, WEDGED_GET_STATE_MS);
+        if (!st.success) wedged = false;
+      } catch (e: any) {
+        if (isRpcTimeout(e, "get_state")) wedged = true;
+      }
+    }
+    const word = parkedQuota ? "PARKED" : wedged ? "WEDGED" : alive && stalled ? "STALLED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
     const pid = alive ? `pid ${rec.pid}` : died ? `pid ${rec.pid} gone` : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
     const labelText = label ? `  account ${label}` : "";
     const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
-    const last = lastEvent(rec.log);
     if (agentSettledEvent(last)) sawSettled = true;
     console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${last}${bead}${labelText}`);
     rotateLogIfSafe(rec.log, last);
     if (died) {
       console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} is gone and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
+    }
+    if (wedged) {
+      console.log(`${" ".repeat(16)} WEDGED: idle seat is alive but get_state timed out; remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}`);
     }
     if (rec.lastCapacityEvent) {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
