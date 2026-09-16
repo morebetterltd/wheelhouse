@@ -266,6 +266,21 @@ function currentBranchTip(repoRoot: string, branch: string): string | null {
   }
 }
 
+function benchGapNotices(notBenched: string | undefined): string[] {
+  if (!notBenched) return [];
+  const notices: string[] = [];
+  const expiry = notBenched.match(/\b(?:expires|expiry|until)\s*[:=]\s*(\d{4}-\d{2}-\d{2})\b/i)?.[1];
+  const target = notBenched.match(/\b(?:coverage[- ]?target|target|coverage)\s*[:=]\s*([^;]+)/i)?.[1]?.trim();
+  if (expiry) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (expiry < today) notices.push(`BENCH GAP EXPIRED: NOT BENCHED gap expired ${expiry}; BENCH.md says this is a funding/scope nudge at the gate, not a silent pass.`);
+    else notices.push(`BENCH GAP: NOT BENCHED gap declared until ${expiry}.`);
+  }
+  if (target) notices.push(`BENCH GAP TARGET: ${target}`);
+  if (!expiry && !target) notices.push("BENCH GAP STANDING: NOT BENCHED has no expires=YYYY-MM-DD or target=... marker; treat this as the standing answer and fund/define the bench rather than letting it pass silently.");
+  return notices;
+}
+
 function appendedCommitCount(repoRoot: string, fromTip: string, toTip: string): number | null {
   try {
     execFileSync("git", ["merge-base", "--is-ancestor", fromTip, toTip], { cwd: repoRoot, stdio: "ignore" });
@@ -857,6 +872,7 @@ function main(): void {
     }
   }
   const verdictShown = movedVerdictShown || (notBenched ? `${verdict} — NOT BENCHED: ${notBenched}` : verdict);
+  const benchGapNotes = benchGapNotices(notBenched);
 
   // An APPROVE over a missing, empty, or mistyped artifact the bead requires
   // is a defect in the verdict, not a judgment — same family as the NOT
@@ -886,6 +902,7 @@ function main(): void {
     `- at: ${new Date().toISOString()}`,
     `- verdict: ${verdictShown}`,
     `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
+    ...benchGapNotes.map((note) => `- ${note}`),
     ``,
     `> Working copy only. Evidence the graph can cite lives on the bead —`,
     `> transcribe the decisive extract there before citing this verdict.`,
@@ -917,6 +934,7 @@ function main(): void {
   if (evidence.length > 0) {
     console.log(`  evidence: ${evidence.length} named artifact(s) floor-checked at the tip, ${evidenceUnsatisfied.length} unsatisfied`);
   }
+  for (const note of benchGapNotes) console.log(`  ${note}`);
   if (verdict === "DISCOVER") {
     console.log(`  DISCOVER files no beads — the proposal waits in the verdict file for the commander.`);
   }
