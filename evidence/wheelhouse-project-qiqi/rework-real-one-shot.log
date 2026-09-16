@@ -1,0 +1,2 @@
+STOP: could not run pi: timed out after 20000ms (elapsed 20010ms; last phase: turn_start; partial output: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-qiqi/real-install-after-commit/seats/verdicts/wheelhouse-project-qiqi.partial.md)
+rc=1
