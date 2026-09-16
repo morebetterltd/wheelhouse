@@ -1255,6 +1255,16 @@ if [ $RC -eq 0 ] && says "ORPHAN" && says "pid $ORPHAN_PID" && says "recorded pi
   pass "status reports a duplicate pi process as ORPHAN with recorded pid, match reason, and remedy"
 else fail "status did not report the duplicate process as ORPHAN (exit $RC orphan=$ORPHAN_PID recorded=$REC_PID): $OUT"; fi
 kill "$ORPHAN_PID" 2>/dev/null
+FIXTURE_LEAK_ROOT="$FIX/.wheelhouse-runs/fixture-leak-bead/repro-fixture"
+mkdir -p "$FIXTURE_LEAK_ROOT"
+( env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bash -c "cd '$FIXTURE_LEAK_ROOT' && exec -a 'pi --mode rpc fixture-leak $HOME_FIX/.pi-seats-orphan/worker-1 $ORPHAN_PROJ $FIXTURE_LEAK_ROOT' sleep 1000" ) &
+FIXTURE_LEAK_PID=$!
+sleep 0.5
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "fixture leak (fixture-leak-bead)" && says "pid $FIXTURE_LEAK_PID" && ! grep -q "ORPHAN: pid $FIXTURE_LEAK_PID" <<<"$OUT"; then
+  pass "status labels leaked fixture processes separately instead of ORPHAN"
+else fail "status did not label fixture leak separately (exit $RC leak=$FIXTURE_LEAK_PID): $OUT"; fi
+kill "$FIXTURE_LEAK_PID" 2>/dev/null
 run stop worker-1 >/dev/null 2>&1
 
 STEER_PROJ="$FIX/steer-slow-proj"

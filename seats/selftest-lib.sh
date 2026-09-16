@@ -9,10 +9,27 @@ selftest_fixture_processes() {
   ps axww -o pid=,command= | grep -F "$root" | grep -v 'grep -F' | grep -v 'awk -v root' || true
 }
 
+selftest_stop_fixture_adapters() {
+  root="${1:-}"
+  [ -n "$root" ] || return 0
+  command -v bun >/dev/null 2>&1 || return 0
+  [ -d "$root" ] || return 0
+  while IFS= read -r state; do
+    seats_dir="$(dirname "$state")"
+    adapter="$seats_dir/adapter.ts"
+    [ -f "$adapter" ] || continue
+    (cd "$(dirname "$seats_dir")" && bun seats/adapter.ts stop-all >/dev/null 2>&1) || true
+  done <<EOF
+$(find "$root" -path '*/seats/state.json' -type f 2>/dev/null)
+EOF
+}
+
 selftest_cleanup_fixture_processes() {
   root="${1:-}"
   shift || true
   [ -n "$root" ] || return 0
+
+  selftest_stop_fixture_adapters "$root"
 
   for sock in "$@"; do
     [ -n "${sock:-}" ] || continue
