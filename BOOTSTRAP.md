@@ -275,10 +275,28 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    **The round ends in a read-back, not a feeling of completeness**: one line per taken seat — name, harness, provider, auth route, pinned model, account directory, with any provisional pin marked as such — shown to the principal as a table before anything is written. Every taken seat has all six answers or the round is not over. The read-back columns are: `seat | harness | provider | auth route | model | account dir`.
 
+9. **Host build budget — opt in only for projects with heavy builds or tests.** Ask this after the roster rounds, because the answer is a project-wide seat-runtime setting rather than a property of any one seat: "Does this project have heavy builds or tests (Rust, C++, dotnet, large JS) that should be serialized machine-wide so several fleets do not saturate the host?" With `AskUserQuestion`, offer record-shaped labels the installer can write directly: `seats/host-budget.json = enabled` and `absent`. Default to `absent` for light projects. If the principal answers yes, write `seats/host-budget.json` with this object and keep the shipped shims in `seats/bin`:
+
+   ```json
+   {
+     "enabled": true,
+     "lock": "~/.cache/wheelhouse-build.lock",
+     "toolchains": ["cargo", "dotnet"],
+     "caps": {
+       "cargoBuildJobs": 8,
+       "nextestTestThreads": 4,
+       "dotnetMaxCpuCount": 8
+     },
+     "cachePolicy": "shared-under-host-lock"
+   }
+   ```
+
+   Those fields mirror the shim's `--contract` output: `cargo` and `dotnet` go through `seats/bin/host-build-shim`, the lock is host-wide and crash-safe (`flock(2)`), and build caches are shared under the lock by default. If the principal answers no, record nothing: remove `seats/host-budget.json` if it exists and remove `seats/bin` from this install so no host-build shim is installed for a project that declined it.
+
 
 ### Record what the interview decided — the machine copies, before anything derives from them
 
-Two writes close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
+Three writes close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
 
 **First, the namespace, into `wheelhouse/.template-source`** — the machine record, the value `seats/seat-env.sh` is invoked with:
 
@@ -288,6 +306,8 @@ grep '^namespace=' wheelhouse/.template-source     # read it back; this value is
 ```
 
 An install upgrading over a `.template-source` that has no `namespace=` line at all — every install predating this field — appends one instead; `runbooks/UPGRADE.md` covers that case.
+
+**Then the host-build budget record, from question 9** — if the answer was `seats/host-budget.json = enabled`, write `seats/host-budget.json` exactly as the JSON object in question 9 and ensure `seats/bin/host-build-shim`, `seats/bin/cargo`, and `seats/bin/dotnet` are present and executable/symlinked as shipped by the template. If the answer was `absent`, remove `seats/host-budget.json` and remove `seats/bin`; the absence of the file is the adapter's switch, and the absence of `seats/bin` is the install's record that it did not opt in.
 
 **Then `seats/seats.json`, from the read-back value** — the roster's machine record, in the format `seats/README.md` documents and `seats/seats.json.example` shows: the `commander` entry marked external, then one entry per taken seat carrying exactly the six roster columns the interview collected — name and agent directory from question 7, harness, provider, pinned model, and auth route from question 8's read-back table — `account.dir` spelled under `~/.pi-seats-<namespace>/`, `harness` written as `pi`, `claude-code`, or `codex` (omitting it is allowed only for explicit Pi/default compatibility), and the auth route written as `account.authRoute` matching whichever route the seat's read-back row recorded. If every seat was declined, write the file anyway with the commander entry and an empty `seats` map — a roster that says "nobody" is a record; an absent file is a question. Read it back with `bun -e 'console.log(JSON.stringify(require("./seats/seats.json"), null, 2))'` or equivalent so a syntax error surfaces now, at the moment of writing, not at the first spawn.
 
