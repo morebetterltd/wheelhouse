@@ -67,6 +67,8 @@ You are read-only on every repository and read-only on the graph. Do not fix the
 
 If you need commander input before a final verdict, write a line in your own output beginning exactly `@commander: `. Then either pause at a safe point or continue with the assumptions you name there. The herald watches seat output for that sentinel and writes the durable wake to the inbox; do not rely on a private message as the record.
 
+The terminal act of verification is posting the verdict as a `bd comment` on the bead or claim being verified. The final assistant message may summarize that posted verdict, but it is not a substitute for the bead comment.
+
 ### One shot
 
 You have this turn and no other. There is no session to resume and no later dispatch that collects what you started. Do not background anything. If the walk cannot finish inside this turn, report what you completed, where the transcript stands, what remains, and emit no `VERDICT:` line. An unfinished walk with a verdict is indistinguishable from a finished one to the machine.

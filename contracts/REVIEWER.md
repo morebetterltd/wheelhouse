@@ -86,6 +86,8 @@ When the commander has promoted this reviewer as a FALLBACK GATE for a gating-re
 
 If you need commander input before a final verdict, write a line in your own output beginning exactly `@commander: `. Then either pause at a safe point or continue with the assumptions you name there. The herald watches seat output for that sentinel and writes the durable wake to the inbox; do not rely on a private message as the record.
 
+The terminal act of review is posting the verdict as a `bd comment` on the bead. The final assistant message may summarize that posted verdict, but it is not a substitute for the bead comment.
+
 ### Reading a branch without disturbing it
 
 - **Default: read, do not check out.** `git diff <base> <sha>` and `git show <sha>:<path>` from the canonical repository answer essentially every review question. A working tree was only ever needed for building and running.
