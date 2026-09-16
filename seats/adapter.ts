@@ -1536,13 +1536,44 @@ function fifoHolderPids(fifo: string | undefined, open: OpenPathSnapshot | null)
   return out;
 }
 
-function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): Map<number, string> {
-  const seen = new Map<number, string>();
-  function add(pid: number, reason: string) {
+interface ExtraProcessMatch { pid: number; reason: string; fixtureBead?: string }
+
+function fixtureLeakBeadFromText(text: string): string | null {
+  const m = text.match(/(?:^|[\s'\"])(?:[^\s'\"]*\/)?\.wheelhouse-runs\/([^\/\s'\"]+)/) || text.match(/\.wheelhouse-runs\/([^\/\s'\"]+)/);
+  return m?.[1] ?? null;
+}
+
+function openPathsForPid(pid: number): string[] {
+  for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
+    const r = spawnSync(lsof, ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    if (r.error) {
+      if ((r.error as any).code === "ENOENT") continue;
+      return [];
+    }
+    return (r.stdout || "").split(/\n/).filter((l) => l.startsWith("n")).map((l) => l.slice(1));
+  }
+  return [];
+}
+
+function fixtureLeakBeadForProcess(row: ProcessRow, openPaths: string[] = []): string | null {
+  const fromArgv = fixtureLeakBeadFromText(row.command);
+  if (fromArgv) return fromArgv;
+  for (const p of openPaths.length ? openPaths : openPathsForPid(row.pid)) {
+    const bead = fixtureLeakBeadFromText(p);
+    if (bead) return bead;
+  }
+  return null;
+}
+
+function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): Map<number, ExtraProcessMatch> {
+  const seen = new Map<number, ExtraProcessMatch>();
+  function add(row: ProcessRow, reason: string, openPaths: string[] = []) {
+    const pid = row.pid;
     if (!Number.isFinite(pid) || pid <= 0 || pid === rec.pid || !barePidAlive(pid)) return;
     if (isDescendantOf(pid, rec.pid, rows)) return;
+    const fixtureBead = fixtureLeakBeadForProcess(row, openPaths) ?? undefined;
     const prev = seen.get(pid);
-    seen.set(pid, prev ? `${prev},${reason}` : reason);
+    seen.set(pid, { pid, reason: prev ? `${prev.reason},${reason}` : reason, ...(fixtureBead ? { fixtureBead } : prev?.fixtureBead ? { fixtureBead: prev.fixtureBead } : {}) });
   }
   const needles = [rec.accountDir, rec.cwd].filter((s): s is string => Boolean(s));
   if (needles.length) {
@@ -1551,19 +1582,26 @@ function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, Pr
       const looksLikePiSeat = /(^|[ /])pi( |$)/.test(cmd) && cmd.includes("--mode rpc");
       const looksLikeClaudeSeat = cmd.includes("drivers/claude-code/shim.ts") && cmd.includes("--account-dir") && cmd.includes("--cwd");
       if (!looksLikePiSeat && !looksLikeClaudeSeat) continue;
-      if (needles.some((n) => cmd.includes(n))) add(row.pid, "argv/cwd/account match");
+      if (needles.some((n) => cmd.includes(n))) {
+        add(row, "argv/cwd/account match");
+        continue;
+      }
+      const openPaths = openPathsForPid(row.pid);
+      if (needles.some((n) => openPaths.some((p) => p.includes(n)))) add(row, "argv/cwd/account match", openPaths);
     }
   }
   return seen;
 }
 
-function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): { pid: number; reason: string }[] {
+function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): ExtraProcessMatch[] {
   const first = orphanCandidatesFor(name, rec, rows);
   if (first.size === 0) return [];
   if (ORPHAN_CONFIRM_MS > 0) sleepMs(ORPHAN_CONFIRM_MS);
-  const confirmed: { pid: number; reason: string }[] = [];
-  for (const [pid, reason] of first) {
-    if (barePidAlive(pid)) confirmed.push({ pid, reason });
+  const confirmed: ExtraProcessMatch[] = [];
+  for (const [pid, match] of first) {
+    if (!barePidAlive(pid)) continue;
+    const row = rows.get(pid);
+    confirmed.push({ ...match, fixtureBead: match.fixtureBead ?? (row ? fixtureLeakBeadForProcess(row) : null) ?? undefined });
   }
   return confirmed.sort((a, b) => a.pid - b.pid);
 }
@@ -1738,7 +1776,11 @@ function cmdStatus(): void {
       console.log(`${" ".repeat(16)} STALLED: ${rec.lastStalledEvent.detail}`);
     }
     for (const orphan of orphanMatchesFor(name, rec, rows)) {
-      console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}; remedy: inspect pid ${orphan.pid}, then stop it or run bun seats/recover.ts`);
+      if (orphan.fixtureBead) {
+        console.log(`${" ".repeat(16)} fixture leak (${orphan.fixtureBead}): pid ${orphan.pid} matches rostered seat ${name} but is running under a .wheelhouse-runs fixture root; reason: ${orphan.reason}; remedy: kill the fixture process and inspect fixture cleanup`);
+      } else {
+        console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}; remedy: inspect pid ${orphan.pid}, then stop it or run bun seats/recover.ts`);
+      }
     }
   }
   if (sawSettled) reportHostBudgetWorktreeCap();
