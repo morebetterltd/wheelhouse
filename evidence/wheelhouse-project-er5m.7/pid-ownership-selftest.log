@@ -1,6 +1,6 @@
-RUN timeout 900 seats/pid-ownership.selftest.sh
-start=2026-09-16T00:14:55Z
+RUN WHEELHOUSE_SKIP_REAL_PI=1 timeout 900 seats/pid-ownership.selftest.sh
+start=2026-09-16T00:53:31Z
   ok    adapter pid liveness is gated by the seat FIFO ownership proof, not bare kill -0 for recorded seats
 pid-ownership.selftest: PASS
-end=2026-09-16T00:14:55Z
+end=2026-09-16T00:53:31Z
 rc=0

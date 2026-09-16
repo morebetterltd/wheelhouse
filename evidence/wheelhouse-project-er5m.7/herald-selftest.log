@@ -1,5 +1,5 @@
-RUN timeout 900 seats/herald.selftest.sh
-start=2026-09-16T00:11:33Z
+RUN WHEELHOUSE_SKIP_REAL_PI=1 timeout 900 seats/herald.selftest.sh
+start=2026-09-16T00:51:09Z
 ok 1 - state tmp rename ENOENT is retried once and the herald survives
 ok 2 - settle fallback detail says when state.json has no recorded prompt
 ok 3 - pre-existing large cursorless log starts at EOF and yields zero stale events
@@ -45,5 +45,5 @@ ok 42 - cockpit verifies and restarts a dead herald on re-run
 ok 43 - truncated tool_execution_update payloads are harmless to herald's log reader shape
 ok 44 - herald exits within one scan when its project root disappears
 herald.selftest: PASS (44 checks)
-end=2026-09-16T00:12:38Z
+end=2026-09-16T00:52:11Z
 rc=0

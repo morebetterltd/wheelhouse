@@ -1,9 +1,9 @@
 RUN WHEELHOUSE_SKIP_REAL_PI=1 timeout 900 seats/recover.selftest.sh
-start=2026-09-16T00:18:46Z
+start=2026-09-16T00:52:46Z
 
 1. SIGKILL mid-turn — DEAD, bead named, printed resume re-attaches the same session
   ok    stub mimics the title rewrite: the live seat's ps line is bare 'pi', no argv
-  ok    seat pid 8630 force-killed mid-turn
+  ok    seat pid 21844 force-killed mid-turn
   ok    recover exits 0
   ok    killed seat classified DEAD
   ok    the unfinished bead is named on the seat line
@@ -38,7 +38,7 @@ start=2026-09-16T00:18:46Z
   ok    no bd calls (fake bd on PATH logged nothing)
 
 6. real binary — the premise probe: pi's ps title is bare, its FIFO is not hidden
-  ok    real pi started login-free in the RPC shape (pid 17834)
+  ok    real pi started login-free in the RPC shape (pid 31704)
   ok    real pi's ps line is exactly 'pi' — NO argv: any command-line identity test is blind here
   ok    real pi holds its stdin FIFO where lsof sees it — the identity mechanism recover relies on
 
@@ -48,5 +48,5 @@ start=2026-09-16T00:18:46Z
   ok    canary: a recover with the attachment check cut prints the double-resume — and is caught
 
 recover.ts works on this machine.
-end=2026-09-16T00:19:00Z
+end=2026-09-16T00:53:02Z
 rc=0

@@ -1,5 +1,5 @@
-RUN timeout 900 seats/fleet-gate.selftest.sh
-start=2026-09-16T00:13:29Z
+RUN WHEELHOUSE_SKIP_REAL_PI=1 timeout 900 seats/fleet-gate.selftest.sh
+start=2026-09-16T00:53:31Z
 
 1. cold + ready — seats cold, work ready: loud nudge fires
   ok    cold+ready prints counts and the loud nudge
@@ -23,5 +23,5 @@ start=2026-09-16T00:13:29Z
   ok    no adapter.ts: silent, exit 0
 
 fleet-gate.sh works on this machine.
-end=2026-09-16T00:13:31Z
+end=2026-09-16T00:53:33Z
 rc=0

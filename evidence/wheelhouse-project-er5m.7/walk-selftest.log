@@ -1,5 +1,5 @@
 RUN WHEELHOUSE_SKIP_REAL_PI=1 timeout 900 seats/walk.selftest.sh
-start=2026-09-16T00:17:33Z
+start=2026-09-16T00:50:00Z
 
 walk verdict parsing and transcript retention
   ok    done exit 0
@@ -56,6 +56,7 @@ host budget PATH is opt-in for verifier walks
 mixed harness verifier walks use the selected driver
   ok    claude-code walk one-shot uses claude driver environment, not pi
   ok    codex walk one-shot uses codex driver environment, not pi
+  ok    codex walk one-shot carries verifier brief and measured-safe exec flags
 
 image budget reduces over-budget capture set before spawn
   ok    image-budget walk exits 0
@@ -87,7 +88,7 @@ GUI window-list guard refuses an obscured target before spawn
 stdin-reading verifier receives EOF immediately
   ok    stdin-reading verifier exits 0
   ok    stdin-reading verifier walk completes with a verdict
-  ok    stdin-reading verifier completed under 5s (352ms)
+  ok    stdin-reading verifier completed under 5s (353ms)
 
 timeout names phase and honors per-walk budget env
   ok    timeout exits as COULD-NOT-WALK (3)
@@ -106,5 +107,5 @@ interrupt removes scratch worktree
   ok    interrupt fixture captured scratch cwd
   ok    interrupt removed scratch cwd
 walk.selftest: PASS
-end=2026-09-16T00:17:47Z
+end=2026-09-16T00:50:17Z
 rc=0

@@ -1,5 +1,5 @@
-RUN timeout 900 seats/floor.selftest.sh
-start=2026-09-16T00:12:48Z
+RUN WHEELHOUSE_SKIP_REAL_PI=1 timeout 900 seats/floor.selftest.sh
+start=2026-09-16T00:52:11Z
 
 phase 1: spotlight renders the pinned seat's events
   ok    --once --pin 1 exits 0
@@ -84,5 +84,5 @@ phase 8: cockpit.sh (tmux leg)
   ok    still exactly 1 session after pane repair
 
 floor.ts works on this machine.
-end=2026-09-16T00:12:55Z
+end=2026-09-16T00:52:18Z
 rc=0

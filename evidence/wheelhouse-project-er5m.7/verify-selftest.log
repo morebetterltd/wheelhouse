@@ -1,5 +1,5 @@
 RUN WHEELHOUSE_SKIP_REAL_PI=1 timeout 900 seats/verify.selftest.sh
-start=2026-09-16T00:17:09Z
+start=2026-09-16T00:49:26Z
 
 installed layout — wheelhouse/crew brief is preferred without contracts/
   ok    installed layout: APPROVE exits 0 with no contracts/ directory
@@ -48,6 +48,7 @@ multi-repo umbrella layout — --repo selects the product repository
 1e. mixed harness verifier one-shots — claude-code and codex use their drivers
   ok    claude-code verifier one-shot uses the claude driver environment, not pi
   ok    codex verifier one-shot uses the codex driver environment, not pi
+  ok    codex verifier one-shot carries reviewer brief and measured-safe exec flags
 
 2. BOUNCE — exit 2
   ok    BOUNCE exits 2
@@ -123,5 +124,5 @@ multi-repo umbrella layout — --repo selects the product repository
   SKIP  real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1
 
 verify.ts works on this machine.
-end=2026-09-16T00:17:24Z
+end=2026-09-16T00:49:49Z
 rc=0

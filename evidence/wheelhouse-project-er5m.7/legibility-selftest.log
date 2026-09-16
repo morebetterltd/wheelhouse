@@ -1,6 +1,5 @@
-RUN timeout 900 seats/legibility.selftest.sh
-start=2026-09-16T00:10:40Z
-end=2026-09-16T00:11:05Z
+RUN WHEELHOUSE_SKIP_REAL_PI=1 timeout 900 seats/legibility.selftest.sh
+start=2026-09-16T00:50:28Z
 
 fixture import scanner — multiline, side-effect, and re-export imports are copied
   ok    fixture import scanner copies multi.ts
@@ -24,7 +23,7 @@ phase 2: AUTH FAILURE — red, names the credential flow, distinct from quota
 
 phase 3: DEAD PROCESS — SIGKILL, red PROCESS GONE, recover says DEAD
   ok    d-seat spawns
-  ok    d-seat pid 97577 SIGKILLed
+  ok    d-seat pid 88300 SIGKILLed
   ok    floor: red PROCESS GONE names the stderr log
   ok    floor: dead-process cue is RED
   ok    dead-process line is DISTINCT from the auth line
@@ -72,4 +71,5 @@ canaries — sabotage a copy; these checks must notice (all cmp-guarded)
   ok    canary 5: verify.ts still refuses a stub verdict without PUSH
 
 every failure class is legible on this machine.
+end=2026-09-16T00:50:50Z
 rc=0
