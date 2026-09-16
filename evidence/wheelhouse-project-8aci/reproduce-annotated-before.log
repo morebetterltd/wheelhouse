@@ -1,0 +1,2 @@
+STOP: malformed verdict line: "VERDICT: APPROVE at pinned 517c2291c50af1a36df68093e0d3bad9485bf0e5; branch has since moved on origin to moved-tip, same tree" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] | BOUNCE | DISCOVER
+rc=1

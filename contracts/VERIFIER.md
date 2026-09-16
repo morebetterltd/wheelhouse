@@ -73,6 +73,8 @@ The terminal act of verification is posting the verdict as a `bd comment` on the
 
 You have this turn and no other. There is no session to resume and no later dispatch that collects what you started. Do not background anything. If the walk cannot finish inside this turn, report what you completed, where the transcript stands, what remains, and emit no `VERDICT:` line. An unfinished walk with a verdict is indistinguishable from a finished one to the machine.
 
+Any git write outside the scratch worktree the dispatcher provided is a defect in the verification run, even if it self-restores.
+
 ## This project
 
 Generated at install.
