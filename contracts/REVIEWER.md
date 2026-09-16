@@ -17,7 +17,7 @@ The standing reviewer seat is not the only way this contract is used. A commande
 For that one-shot pass, the output stays machine-parseable. Exactly one line in the output begins `VERDICT:`, and it reads:
 
 ```
-VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers>; expires=YYYY-MM-DD | APPROVE — NOT BENCHED: <what no bench covers>; target=<coverage target> | BOUNCE | DISCOVER
+VERDICT: APPROVE [— <annotation>] | APPROVE — NOT BENCHED: <what no bench covers>; expires=YYYY-MM-DD | APPROVE — NOT BENCHED: <what no bench covers>; target=<coverage target> | BOUNCE [— <annotation>] | DISCOVER [— <annotation>]
 ```
 
 The `NOT BENCHED` qualifier belongs to APPROVE and to nothing else; it is defined under *When no bench covers the part you are reviewing* below.
@@ -30,7 +30,7 @@ One verdict, exclusively. If the done holds and adjacent work was discovered, th
 
 The evidence floor from the former verifier pass also belongs here. A bead's done can require an artifact no shell assertion stands in for — a screenshot, a bench log, the captured output of a deployment probe. The bead names such artifacts at committed paths on the branch under review (`wheelhouse/GRAPH.md`, *Where evidence lives*), and a dispatcher may carry them as part of the one-shot verdict contract, each with a floor check run before spawn: the artifact exists at the SHA under review, is not empty, and is the kind of file it claims to be. The floor is not the judgment. Open each named artifact yourself, judge its content against the claim it is supposed to support, and record what you inspected and what it showed. While any named artifact fails the floor — missing, empty, degenerate, or the wrong kind — the done does not hold as stated, and an APPROVE is malformed exactly as an unbenched behavioral APPROVE is.
 
-A one-shot pass inherits the rest of this reviewer contract: never review what you authored; read branches without disturbing them; never fix the diff, push, merge, or write to the graph; run the bench for behavioral claims; use the `NOT BENCHED` verdict form only within its limits; and name anything that could not be checked rather than approving it in silence.
+A one-shot pass inherits the rest of this reviewer contract: never review what you authored; read branches without disturbing them; never fix the diff, push, merge, or write to the graph; run the bench for behavioral claims; use the `NOT BENCHED` verdict form only within its limits; and name anything that could not be checked rather than approving it in silence. Any git write outside the scratch worktree the dispatcher provided is a defect in the review run, even if it self-restores.
 
 ### What a verdict must contain
 
@@ -39,8 +39,8 @@ A one-shot pass inherits the rest of this reviewer contract: never review what y
 - **A merge answer and a push answer, as two labelled lines.** The second is required on every verdict, including the ones where you have no answer to give:
 
   ```
-  VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers>; expires=YYYY-MM-DD | APPROVE — NOT BENCHED: <what no bench covers>; target=<coverage target> | BOUNCE | APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten) | BOUNCE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)
-  PUSH:    APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED | NOT CONSIDERED — branch moved; re-verify at Y before publish
+  VERDICT: APPROVE [— <annotation>] | APPROVE — NOT BENCHED: <what no bench covers>; expires=YYYY-MM-DD | APPROVE — NOT BENCHED: <what no bench covers>; target=<coverage target> | BOUNCE [— <annotation>] | APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten) | BOUNCE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)
+  PUSH:    APPROVE <remote> — verified: <what you checked> [<annotation>] | HOLD — <why> [<annotation>] | NOT CONSIDERED [<annotation>] | NOT CONSIDERED — branch moved; re-verify at Y before publish
   ```
 
   Filled in, so that the schema's shape is not something the next reviewer has to infer — `— verified:` belongs to APPROVE and to nothing else:
