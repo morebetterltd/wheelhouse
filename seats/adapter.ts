@@ -268,6 +268,7 @@ interface SeatRecord {
   lastDispatchAt?: string;
   lastPrompt?: string;
   lastCapacityEvent?: { at: string; detail: string; accountLabel?: string };
+  lastStalledEvent?: { at: string; detail: string };
   lastLaunchFailure?: { at: string; detail: string };
 }
 
@@ -1223,7 +1224,9 @@ async function cmdResume(name: string): Promise<void> {
     return;
   }
   const entry = requireSeat(name);
+  const wasMidTool = logHasUnfinishedToolCall(rec.log);
   await driverForSeat(name, entry, "adapter resume").launch(name, entry, rec.sessionFile, resumeCwd);
+  if (wasMidTool) markSeatStalledAfterResume(name, rec.lastBead);
 }
 
 /**
@@ -1340,6 +1343,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   state.seats[name].lastDispatchAt = new Date().toISOString();
   state.seats[name].lastPrompt = promptText;
   delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
+  delete state.seats[name].lastStalledEvent; // a new dispatch supersedes a prior resumed-cutoff stall
   writeState(state);
   let resp: any;
   try {
@@ -1376,6 +1380,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   landedState.seats[name].lastDispatchAt = new Date().toISOString();
   landedState.seats[name].lastPrompt = promptText;
   delete landedState.seats[name].lastCapacityEvent; // a dispatch that lands clears it
+  delete landedState.seats[name].lastStalledEvent; // a dispatch that lands clears it
   writeState(landedState);
   console.log(`dispatched ${beadId} to ${name}; watch ${rec.log}`);
 }
@@ -1525,6 +1530,55 @@ function lastEvent(log: string): string {
 
 function agentSettledEvent(ev: string): boolean { return ev === "agent_end" || ev === "turn_end" || ev === "agent_settled"; }
 
+function logHasUnfinishedToolCall(log: string): boolean {
+  try {
+    const r = logLinesFrom(log, 0);
+    let lastToolStart = -1;
+    let lastToolEndOrSettle = -1;
+    for (let i = 0; i < r.lines.length; i++) {
+      try {
+        const obj = JSON.parse(r.lines[i]);
+        if (obj?.type === "tool_execution_start") lastToolStart = i;
+        if (obj?.type === "tool_execution_end" || agentSettledEvent(obj?.type)) lastToolEndOrSettle = i;
+      } catch { /* skip */ }
+    }
+    return lastToolStart >= 0 && lastToolStart > lastToolEndOrSettle;
+  } catch {
+    return false;
+  }
+}
+
+function appendSeatLog(log: string, obj: any): void {
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  fs.appendFileSync(log, `${JSON.stringify(obj)}\n`);
+}
+
+function markSeatStalledAfterResume(name: string, bead: string | undefined): void {
+  const state = readState();
+  const rec = state.seats[name];
+  if (!rec) return;
+  const at = new Date().toISOString();
+  const detail = `resume detected prior turn was cut off during a tool call${bead ? ` for bead ${bead}` : ""}; commander must redispatch or reset`;
+  rec.lastStalledEvent = { at, detail };
+  writeState(state);
+  appendSeatLog(rec.log, { type: "agent_settled", state: "stalled", message: detail, bead: bead ?? null, at });
+  console.log(`seat ${name}: STALLED — ${detail}`);
+}
+
+function logLastStalledEvent(log: string): boolean {
+  try {
+    const r = logLinesFrom(log, 0);
+    for (let i = r.lines.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(r.lines[i]);
+        if (obj?.type === "agent_settled" && obj?.state === "stalled") return true;
+        if (obj?.type === "agent_end" || obj?.type === "turn_end" || obj?.type === "tool_execution_end") return false;
+      } catch { /* skip */ }
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
 function hostBudgetWorktreeCount(): number {
   const r = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   if (r.status !== 0) return 0;
@@ -1607,7 +1661,8 @@ function cmdStatus(): void {
     // a failure conflated into a normal state. Say which one it is.
     const died = !alive && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
-    const word = parkedQuota ? "PARKED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
+    const stalled = Boolean(rec.lastStalledEvent) || logLastStalledEvent(rec.log);
+    const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
     const pid = alive ? `pid ${rec.pid}` : died ? `pid ${rec.pid} gone` : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
@@ -1623,6 +1678,9 @@ function cmdStatus(): void {
     if (rec.lastCapacityEvent) {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
       console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
+    }
+    if (stalled && rec.lastStalledEvent) {
+      console.log(`${" ".repeat(16)} STALLED: ${rec.lastStalledEvent.detail}`);
     }
     for (const orphan of orphanMatchesFor(name, rec, rows)) {
       console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}; remedy: inspect pid ${orphan.pid}, then stop it or run bun seats/recover.ts`);
