@@ -74,7 +74,7 @@ If the dispatch asks a worker to launch or verify a host app, daemon, service, s
 
 The worker sets the bead in progress, then works in a git worktree it creates itself, on the branch `fleet/<bead-id>`. `wheelhouse/fleet/WORKER.md` is the contract; the operational points that bite:
 
-- Create the worktree **outside the repository it branches from**, so it never nests inside it — a sibling directory such as `../.wheelhouse-worktrees/<bead-id>`. `wheelhouse/fleet/WORKER.md` requires that the worktree is one you created and that you never edit the live checkout; the sibling placement is the operational form of that, and it holds whether the wheelhouse sits at a product root or above several.
+- Create the worktree at this install's worktree root, `<root>/.wheelhouse-worktrees/<bead-id>`, the same in-root directory `seats/adapter.ts` dispatches to and `seats/prune.ts` scans. Exclude `.wheelhouse-worktrees/` locally via `.git/info/exclude` as `BOOTSTRAP.md` prescribes, so these machine-local worktrees never become product diff. `wheelhouse/fleet/WORKER.md` still requires that the worktree is one you created and that you never edit the live checkout; the in-root directory is the operational path the seat machinery agrees on.
 - Before the first commit, and again before reporting, check that you are on a branch and that the branch's tip is your worktree's HEAD. Both halves. `wheelhouse/fleet/WORKER.md` says why the second is not redundant.
 - One bead at a time. A seat working two is a seat reporting on neither.
 

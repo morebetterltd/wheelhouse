@@ -1,0 +1,4 @@
+$ rg -n "\\.\\./\\.wheelhouse-worktrees" BOOTSTRAP.md README.md INTENT.md MANIFESTO.md contracts generated runbooks seats examples
+(no output; rg rc=1)
+$ rg -n "sibling directory such as|worktree.*sibling|sibling.*worktree|outside the repository it branches from" BOOTSTRAP.md README.md INTENT.md MANIFESTO.md contracts generated runbooks seats examples
+(no output; rg rc=1)
