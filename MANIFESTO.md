@@ -22,7 +22,7 @@ The wheelhouse knows where its signal comes from: direct intent from the person 
 
 ### The factory runs itself
 
-Once configured, the wheelhouse operates on its own: it manages its workflow, delegates to its workers, and converges on outcomes without hand-holding. The contributor steers. The wheelhouse executes.
+Once configured, the wheelhouse operates on its own: it manages its workflow, delegates to its workers, and converges on outcomes without hand-holding. Any seat can run on Pi, Claude Code, or Codex — including subscription-backed accounts — in the same fleet, because harness choice belongs to the roster while the work graph, role briefs, evidence rules, cockpit, review, and verifier walk stay one contract. The contributor steers. The wheelhouse executes.
 
 ## What a wheelhouse is not
 
