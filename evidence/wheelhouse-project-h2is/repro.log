@@ -1,0 +1,12 @@
+RUN codex-cli version
+codex-cli 0.144.0
+
+RUN scratch CODEX_HOME with stale models_cache.json missing base_instructions
+Reading additional input from stdin...
+2026-09-16T00:36:09.198815Z ERROR codex_models_manager::cache: failed to load models cache: missing field `base_instructions` at line 80 column 5
+2026-09-16T00:36:09.202773Z ERROR codex_models_manager::cache: failed to load models cache: missing field `base_instructions` at line 80 column 5
+{"type":"thread.started","thread_id":"01a0a7a4-7977-7662-8334-6f7d0643570b"}
+{"type":"turn.started"}
+2026-09-16T00:36:11.120667Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses
+2026-09-16T00:36:12.084624Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses
+rc=124
