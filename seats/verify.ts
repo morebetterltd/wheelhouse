@@ -63,7 +63,7 @@ import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetPath } from "./host-budget";
-import { requirePiHarness } from "./harness";
+import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness } from "./harness";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -669,8 +669,9 @@ function main(): void {
   }
 
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  let verifierHarness: ReturnType<typeof harnessNameForSeat>;
   try {
-    requirePiHarness(verifierSeat, entry, "verify.ts one-shot verifier");
+    verifierHarness = harnessNameForSeat(verifierSeat, entry);
   } catch (e: any) {
     die(e.message);
   }
@@ -756,10 +757,7 @@ function main(): void {
     `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
   ].join("\n");
 
-  const args = ["-p", "--no-session", "--append-system-prompt", brief];
-  if (entry.provider) args.push("--provider", entry.provider);
-  if (entry.model) args.push("--model", entry.model);
-  args.push(prompt);
+  const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt);
 
   // cwd is a throwaway scratch worktree, not ROOT and not a bead's
   // worktree — construction closing the confused-writer hazard, still
@@ -770,9 +768,10 @@ function main(): void {
   // the full reasoning.
   const scratchCwd = makeScratchCwd(repoRoot);
   const startedAt = Date.now();
-  const res = spawnSync("pi", args, {
+  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: hostBudgetPath(ROOT), BEADS_ACTOR: beadsActorFor(verifierSeat) });
+  const res = spawnSync(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
-    env: { ...process.env, PATH: hostBudgetPath(ROOT), PI_CODING_AGENT_DIR: verifierDir, BEADS_ACTOR: beadsActorFor(verifierSeat) },
+    env,
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
@@ -786,13 +785,13 @@ function main(): void {
     if ((res.error as any).code === "ETIMEDOUT") {
       const phase = lastVerifierPhase(stdout);
       const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, timeoutMs);
-      die(`could not run pi: timed out after ${timeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial})`);
+      die(`could not run ${oneShot.bin}: timed out after ${timeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial})`);
     }
-    die(`could not run pi: ${res.error.message}`);
+    die(`could not run ${oneShot.bin}: ${res.error.message}`);
   }
   if (res.status !== 0) {
     die(
-      `pi exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}"${accountLabelSuffix(entry)} — no verdict. stderr tail:\n` +
+      `${oneShot.bin} exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}"${accountLabelSuffix(entry)} — no verdict. stderr tail:\n` +
         stderr.slice(-2000)
     );
   }
