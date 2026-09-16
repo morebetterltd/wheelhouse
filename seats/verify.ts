@@ -238,10 +238,33 @@ interface VerdictCandidate {
   lineNumber: number;
 }
 
+function collectJsonText(value: unknown, out: string[]): void {
+  if (value === null || value === undefined) return;
+  if (typeof value === "string") { out.push(value); return; }
+  if (Array.isArray(value)) { for (const v of value) collectJsonText(v, out); return; }
+  if (typeof value === "object") {
+    const obj: any = value;
+    for (const key of ["text", "result", "message", "content", "delta", "output"]) collectJsonText(obj[key], out);
+  }
+}
+
+function jsonStreamTextLines(stdout: string): string[] {
+  const lines: string[] = [];
+  for (const raw of stdout.split(/\r?\n/)) {
+    if (!raw.trim().startsWith("{")) continue;
+    try {
+      const texts: string[] = [];
+      collectJsonText(JSON.parse(raw), texts);
+      for (const text of texts) for (const line of text.split(/\r?\n/)) lines.push(line);
+    } catch { /* raw verifier prose is handled by liveLineCandidates below */ }
+  }
+  return lines;
+}
+
 function liveLineCandidates(stdout: string, tag: "VERDICT" | "PUSH"): VerdictCandidate[] {
   const out: VerdictCandidate[] = [];
   let inFence = false;
-  const lines = stdout.split("\n");
+  const lines = [...stdout.split("\n"), ...jsonStreamTextLines(stdout)];
   const re = new RegExp(`^${tag}:`);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];

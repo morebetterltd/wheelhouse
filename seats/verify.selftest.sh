@@ -148,12 +148,14 @@ if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
   const moved = cp.execFileSync("git", ["-C", repo, "rev-parse", `${branch}^{commit}`], { encoding: "utf8" }).trim();
   text = text.replaceAll("__PINNED__", pinned).replaceAll("__MOVED__", moved);
 }
+const streamRequested = process.argv.includes("--mode") && process.argv[process.argv.indexOf("--mode") + 1] === "json";
 if (process.env.STUB_STALL === "1") {
-  process.stdout.write(JSON.stringify({type:"tool_execution_start",toolName:"bash",args:{cmd:"cargo test"}})+"\n");
+  if (streamRequested) process.stdout.write(JSON.stringify({type:"tool_execution_start",toolName:"bash",args:{cmd:"cargo test"}})+"\n");
   setTimeout(() => {}, 10000);
 } else {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
-  process.stdout.write(text);
+  if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{content:text}})+"\n");
+  else process.stdout.write(text);
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 STUB
@@ -169,7 +171,10 @@ fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
-process.stdout.write(reply ? fs.readFileSync(reply, "utf8") : "");
+const text = reply ? fs.readFileSync(reply, "utf8") : "";
+const streamRequested = process.argv.includes("--output-format") && process.argv[process.argv.indexOf("--output-format") + 1] === "stream-json";
+if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{content:text}})+"\n");
+else process.stdout.write(text);
 process.exit(Number(process.env.STUB_EXIT || "0"));
 STUB
 cat > "$BIN/codex" <<'STUB'
@@ -183,7 +188,10 @@ fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, CODEX_HOME: process.env.CODEX_HOME ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
-process.stdout.write(reply ? fs.readFileSync(reply, "utf8") : "");
+const text = reply ? fs.readFileSync(reply, "utf8") : "";
+const streamRequested = process.argv.includes("--json");
+if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{content:text}})+"\n");
+else process.stdout.write(text);
 process.exit(Number(process.env.STUB_EXIT || "0"));
 STUB
 chmod +x "$BIN/claude" "$BIN/codex"
@@ -388,9 +396,9 @@ else fail "verdict file is missing verdict, tip, or evidence"; fi
 if grep -q "Working copy only" "$VDIR/bead-1.md" 2>/dev/null; then
   pass "verdict file names itself a working copy, not an evidence home"
 else fail "verdict file does not carry the working-copy warning"; fi
-if [ -f "$VARGV" ] && grep -q '"-p","--no-session"' "$VARGV"; then
-  pass "pi was launched one-shot: -p --no-session"
-else fail "argv.json missing or pi not launched with -p --no-session"; fi
+if [ -f "$VARGV" ] && grep -q '"-p","--mode","json","--no-session"' "$VARGV"; then
+  pass "pi was launched one-shot with streaming json: -p --mode json --no-session"
+else fail "argv.json missing or pi not launched with -p --mode json --no-session: $(cat "$VARGV" 2>/dev/null)"; fi
 if grep -q "\"--append-system-prompt\",\"$PROJ/contracts/REVIEWER.md\"" "$VARGV" 2>/dev/null; then
   pass "role brief injected: --append-system-prompt names contracts/REVIEWER.md"
 else fail "verifier brief not passed"; fi
@@ -523,12 +531,18 @@ run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
   pass "claude-code verifier one-shot uses the claude driver environment, not pi"
 else fail "claude-code verifier one-shot did not use claude driver (rc=$RC out=$OUT env=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" 2>/dev/null))"; fi
+if grep -q '"--output-format","stream-json"' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
+  pass "claude-code verifier one-shot requests stream-json output"
+else fail "claude-code verifier one-shot did not request stream-json: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
 bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
   pass "codex verifier one-shot uses the codex driver environment, not pi"
 else fail "codex verifier one-shot did not use codex driver (rc=$RC out=$OUT env=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" 2>/dev/null))"; fi
+if grep -q '"--json"' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
+  pass "codex verifier one-shot requests json streaming"
+else fail "codex verifier one-shot did not request --json: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
 if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
   pass "codex verifier one-shot carries reviewer brief and measured-safe exec flags"
 else fail "codex verifier one-shot missing brief or safe flags: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
@@ -634,13 +648,13 @@ wait, actually:
 VERDICT: BOUNCE
 EOF
 run_without_default_push bead-5 fleet/bead-1 worker-1
-if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
-  pass "two conflicting live VERDICT: lines exit 1 and print both candidates"
+if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 3: VERDICT: APPROVE" && says "line 5: VERDICT: BOUNCE"; then
+  pass "two conflicting live VERDICT: lines exit 1 and print both json-stream candidates"
 else fail "ambiguous double verdict not refused with candidates (exit $RC): $OUT"; fi
-if cmp -s "$REPLY" "$VDIR/.raw.md"; then
-  pass "ambiguous double verdict writes byte-exact raw stdout to seats/verdicts/.raw.md before STOP"
+if grep -q '"type":"message_end"' "$VDIR/.raw.md" 2>/dev/null && grep -q 'VERDICT: APPROVE' "$VDIR/.raw.md" && grep -q 'VERDICT: BOUNCE' "$VDIR/.raw.md"; then
+  pass "ambiguous double verdict writes raw json stdout to seats/verdicts/.raw.md before STOP"
 else
-  fail "ambiguous double verdict raw stdout differed; raw was: $(cat "$VDIR/.raw.md" 2>/dev/null)"
+  fail "ambiguous double verdict raw stdout missing json verdicts; raw was: $(cat "$VDIR/.raw.md" 2>/dev/null)"
 fi
 cat > "$REPLY" <<'EOF'
 VERDICT: BOUNCE — NOT BENCHED: something

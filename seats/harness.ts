@@ -35,20 +35,20 @@ export function oneShotEnvForHarness(harness: HarnessName, accountDir: string, b
 
 export function oneShotCommandForHarness(harness: HarnessName, brief: string, provider: string | undefined, model: string | undefined, prompt: string): { bin: string; args: string[]; display: string } {
   if (harness === "pi") {
-    const args = ["-p", "--no-session", "--append-system-prompt", brief];
+    const args = ["-p", "--mode", "json", "--no-session", "--append-system-prompt", brief];
     if (provider) args.push("--provider", provider);
     if (model) args.push("--model", model);
     args.push(prompt);
     return { bin: "pi", args, display: `pi ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
   }
   if (harness === "claude-code") {
-    const args = ["-p", "--append-system-prompt", brief];
+    const args = ["-p", "--output-format", "stream-json", "--append-system-prompt", brief];
     if (model) args.push("--model", model);
     args.push(prompt);
     return { bin: "claude", args, display: `claude ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
   }
   const briefText = fs.existsSync(brief) ? fs.readFileSync(brief, "utf8") : brief;
-  const args = ["exec", "--skip-git-repo-check", "-s", "read-only", "-c", "approval_policy=never", "-c", `developer_instructions=${JSON.stringify(briefText)}`];
+  const args = ["exec", "--json", "--skip-git-repo-check", "-s", "read-only", "-c", "approval_policy=never", "-c", `developer_instructions=${JSON.stringify(briefText)}`];
   if (model) args.push("--model", model);
   args.push(prompt);
   return { bin: "codex", args, display: `codex ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
