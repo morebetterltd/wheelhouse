@@ -82,6 +82,7 @@ const WORKTREES_DIR = path.join(ROOT, ".wheelhouse-worktrees");
 // One knob for every wait in this file; the selftest raises it for real pi.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_RPC_TIMEOUT_MS || 20000);
 const PROMPT_ACK_MS = Number(process.env.WHEELHOUSE_PROMPT_ACK_MS || 60000);
+const FIFO_WRITE_MS = Number(process.env.WHEELHOUSE_FIFO_WRITE_MS || 3000);
 const SPAWN_TERM_GRACE_MS = Number(process.env.WHEELHOUSE_SPAWN_TERM_GRACE_MS || 2000);
 const LOG_TAIL_BYTES = Number(process.env.WHEELHOUSE_LOG_TAIL_BYTES || 1024 * 1024);
 const LOG_ROTATE_BYTES = Number(process.env.WHEELHOUSE_LOG_ROTATE_BYTES || 256 * 1024 * 1024);
@@ -268,6 +269,7 @@ interface SeatRecord {
   lastDispatchAt?: string;
   lastPrompt?: string;
   lastCapacityEvent?: { at: string; detail: string; accountLabel?: string };
+  lastStalledEvent?: { at: string; detail: string };
   lastLaunchFailure?: { at: string; detail: string };
 }
 
@@ -489,24 +491,40 @@ function requireLaunchCredential(name: string, entry: SeatEntry, accountDir: str
  * Retried briefly because a just-spawned seat opens its end a moment after
  * the adapter returns from spawn.
  */
-async function fifoWrite(fifo: string, obj: unknown, retryMs = 3000): Promise<void> {
-  const line = JSON.stringify(obj) + "\n";
+async function fifoWrite(fifo: string, obj: unknown, retryMs = FIFO_WRITE_MS): Promise<void> {
+  const line = Buffer.from(JSON.stringify(obj) + "\n");
   const deadline = Date.now() + retryMs;
-  for (;;) {
-    try {
-      const fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+  let fd: number | null = null;
+  let offset = 0;
+  try {
+    for (;;) {
       try {
-        fs.writeSync(fd, line);
-      } finally {
-        fs.closeSync(fd);
+        fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+        break;
+      } catch (e: any) {
+        if (e.code !== "ENXIO" || Date.now() > deadline) {
+          throw new Error(`cannot write to ${fifo}: ${e.code ?? e.message} — is the seat running?`);
+        }
+        await sleep(100);
       }
-      return;
-    } catch (e: any) {
-      if (e.code !== "ENXIO" || Date.now() > deadline) {
-        throw new Error(`cannot write to ${fifo}: ${e.code ?? e.message} — is the seat running?`);
-      }
-      await sleep(100);
     }
+    while (offset < line.length) {
+      try {
+        const n = fs.writeSync(fd, line, offset, line.length - offset);
+        if (n > 0) { offset += n; continue; }
+      } catch (e: any) {
+        if (e.code !== "EAGAIN" && e.code !== "EWOULDBLOCK") throw e;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`prompt not delivered (partial FIFO write?) to ${fifo}: wrote ${offset}/${line.length} bytes before timeout`);
+      }
+      await sleep(25);
+    }
+  } catch (e: any) {
+    if (String(e?.message ?? "").includes("partial FIFO write")) throw e;
+    throw new Error(`cannot write to ${fifo}: ${e.code ?? e.message} — is the seat running?`);
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
   }
 }
 
@@ -1223,7 +1241,9 @@ async function cmdResume(name: string): Promise<void> {
     return;
   }
   const entry = requireSeat(name);
+  const wasMidTool = logHasUnfinishedToolCall(rec.log);
   await driverForSeat(name, entry, "adapter resume").launch(name, entry, rec.sessionFile, resumeCwd);
+  if (wasMidTool) markSeatStalledAfterResume(name, rec.lastBead);
 }
 
 /**
@@ -1340,6 +1360,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   state.seats[name].lastDispatchAt = new Date().toISOString();
   state.seats[name].lastPrompt = promptText;
   delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
+  delete state.seats[name].lastStalledEvent; // a new dispatch supersedes a prior resumed-cutoff stall
   writeState(state);
   let resp: any;
   try {
@@ -1376,6 +1397,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   landedState.seats[name].lastDispatchAt = new Date().toISOString();
   landedState.seats[name].lastPrompt = promptText;
   delete landedState.seats[name].lastCapacityEvent; // a dispatch that lands clears it
+  delete landedState.seats[name].lastStalledEvent; // a dispatch that lands clears it
   writeState(landedState);
   console.log(`dispatched ${beadId} to ${name}; watch ${rec.log}`);
 }
@@ -1525,6 +1547,55 @@ function lastEvent(log: string): string {
 
 function agentSettledEvent(ev: string): boolean { return ev === "agent_end" || ev === "turn_end" || ev === "agent_settled"; }
 
+function logHasUnfinishedToolCall(log: string): boolean {
+  try {
+    const r = logLinesFrom(log, 0);
+    let lastToolStart = -1;
+    let lastToolEndOrSettle = -1;
+    for (let i = 0; i < r.lines.length; i++) {
+      try {
+        const obj = JSON.parse(r.lines[i]);
+        if (obj?.type === "tool_execution_start") lastToolStart = i;
+        if (obj?.type === "tool_execution_end" || agentSettledEvent(obj?.type)) lastToolEndOrSettle = i;
+      } catch { /* skip */ }
+    }
+    return lastToolStart >= 0 && lastToolStart > lastToolEndOrSettle;
+  } catch {
+    return false;
+  }
+}
+
+function appendSeatLog(log: string, obj: any): void {
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  fs.appendFileSync(log, `${JSON.stringify(obj)}\n`);
+}
+
+function markSeatStalledAfterResume(name: string, bead: string | undefined): void {
+  const state = readState();
+  const rec = state.seats[name];
+  if (!rec) return;
+  const at = new Date().toISOString();
+  const detail = `resume detected prior turn was cut off during a tool call${bead ? ` for bead ${bead}` : ""}; commander must redispatch or reset`;
+  rec.lastStalledEvent = { at, detail };
+  writeState(state);
+  appendSeatLog(rec.log, { type: "agent_settled", state: "stalled", message: detail, bead: bead ?? null, at });
+  console.log(`seat ${name}: STALLED — ${detail}`);
+}
+
+function logLastStalledEvent(log: string): boolean {
+  try {
+    const r = logLinesFrom(log, 0);
+    for (let i = r.lines.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(r.lines[i]);
+        if (obj?.type === "agent_settled" && obj?.state === "stalled") return true;
+        if (obj?.type === "agent_end" || obj?.type === "turn_end" || obj?.type === "tool_execution_end") return false;
+      } catch { /* skip */ }
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
 function hostBudgetWorktreeCount(): number {
   const r = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   if (r.status !== 0) return 0;
@@ -1607,7 +1678,8 @@ function cmdStatus(): void {
     // a failure conflated into a normal state. Say which one it is.
     const died = !alive && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
-    const word = parkedQuota ? "PARKED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
+    const stalled = Boolean(rec.lastStalledEvent) || logLastStalledEvent(rec.log);
+    const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
     const pid = alive ? `pid ${rec.pid}` : died ? `pid ${rec.pid} gone` : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
@@ -1623,6 +1695,9 @@ function cmdStatus(): void {
     if (rec.lastCapacityEvent) {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
       console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
+    }
+    if (stalled && rec.lastStalledEvent) {
+      console.log(`${" ".repeat(16)} STALLED: ${rec.lastStalledEvent.detail}`);
     }
     for (const orphan of orphanMatchesFor(name, rec, rows)) {
       console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}; remedy: inspect pid ${orphan.pid}, then stop it or run bun seats/recover.ts`);

@@ -40,11 +40,13 @@ BRIEFS="$ADAPTER_DIR/briefs.ts"
 FLOOR="$ADAPTER_DIR/floor.ts"
 HARNESS="$ADAPTER_DIR/harness.ts"
 FLEET_GATE="$ADAPTER_DIR/fleet-gate.sh"
+HERALD="$ADAPTER_DIR/herald.ts"
 [ -f "$ADAPTER" ] || { echo "selftest: not found: $ADAPTER" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 [ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
 [ -f "$FLEET_GATE" ] || { echo "selftest: not found: $FLEET_GATE" >&2; exit 2; }
+[ -f "$HERALD" ] || { echo "selftest: not found: $HERALD" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run adapter.ts" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
 REAL_PI="$(command -v pi || true)"
@@ -211,6 +213,11 @@ function handle(cmd) {
       try { fs.rmSync(path.join(agentDir, "get-state-stalled"), { force: true }); } catch {}
       out({ id, type: "response", command: "get_state", success: true,
             data: { isStreaming: streaming, sessionFile, sessionId, messageCount: 0 } });
+      if (process.env.STUB_PAUSE_STDIN_AFTER_GET_STATE_MS && !fs.existsSync(path.join(agentDir, "stdin-paused-once"))) {
+        fs.writeFileSync(path.join(agentDir, "stdin-paused-once"), "1");
+        process.stdin.pause();
+        setTimeout(() => process.stdin.resume(), Number(process.env.STUB_PAUSE_STDIN_AFTER_GET_STATE_MS));
+      }
       break;
     }
     case "prompt": {
@@ -229,6 +236,10 @@ function handle(cmd) {
           out({ type: "turn_end", message: failed });
           out({ type: "agent_end", messages: [{ role: "user", content: [{ type: "text", text: cmd.message }] }, failed] });
           streaming = false;
+          return;
+        }
+        if (/MIDTOOL/.test(cmd.message)) {
+          out({ type: "tool_execution_start", toolCallId: "midtool-1", toolName: "Bash", command: "sleep 1000" });
           return;
         }
         if (/TOOLBIG/.test(cmd.message)) out({ type: "tool_execution_update", output: "X".repeat(200000) });
@@ -311,6 +322,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$FLOOR" "$proj/seats/floor.ts"
   cp "$FLEET_GATE" "$proj/seats/fleet-gate.sh"
+  cp "$HERALD" "$proj/seats/herald.ts"
   cp -R "$ADAPTER_DIR/drivers" "$proj/seats/drivers"
   printf '# Fleet: Worker\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/WORKER.md"
@@ -869,6 +881,10 @@ else fail "relaunch did not carry --session with the prior session file"; fi
 if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
   pass "the dispatch relaunch still carries BEADS_ACTOR=worker-1, with no operator export in this shell either"
 else fail "relaunched seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
+LARGE_PROMPT="$(node -e 'process.stdout.write("L".repeat(70 * 1024))')"
+run dispatch worker-1 bead-x "$LARGE_PROMPT"
+if [ $RC -eq 0 ]; then pass "dispatch writes and acks a prompt larger than 64 KB"
+else fail "large dispatch did not ack (exit $RC): $OUT"; fi
 
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-missing-session"
 rm -f "$SESS"
@@ -916,6 +932,19 @@ run spawn worker-1 old-bead
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)"; RC=$?
 if [ $RC -ne 0 ] && says "timed out after 200ms waiting for prompt response" && ! says "prompt delivered, ack late"; then pass "late prompt ack without delivery remains a STOP"
 else fail "late prompt ack without delivery did not STOP (exit $RC): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+
+FIFO_TIMEOUT_PROJ="$FIX/fifo-timeout-proj"
+build_proj "$FIFO_TIMEOUT_PROJ" fifo-timeout
+mkdir -p "$FIFO_TIMEOUT_PROJ/.wheelhouse-worktrees/old-bead" "$FIFO_TIMEOUT_PROJ/.wheelhouse-worktrees/new-bead"
+RUN_PROJ="$FIFO_TIMEOUT_PROJ"; STATE="$FIFO_TIMEOUT_PROJ/seats/state.json"; LOG="$FIFO_TIMEOUT_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-fifo-timeout/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-fifo-timeout/worker-1/cwd.txt"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PAUSE_STDIN_AFTER_GET_STATE_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)"; RC=$?
+if [ $RC -eq 0 ]; then pass "fifo timeout setup: spawn exits 0 with a live paused seat"
+else fail "fifo timeout setup spawn failed (exit $RC): $OUT"; fi
+HUGE_PROMPT="$(node -e 'process.stdout.write("H".repeat(128 * 1024))')"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_FIFO_WRITE_MS=200 WHEELHOUSE_PROMPT_ACK_MS=1000 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "$HUGE_PROMPT" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && says "prompt not delivered (partial FIFO write?)"; then pass "fifo write timeout names possible partial FIFO write"
+else fail "fifo write timeout did not report partial FIFO write (exit $RC): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$SAVE_RUN_PROJ"; STATE="$SAVE_STATE"; LOG="$SAVE_LOG"; ARGV="$SAVE_ARGV"; CWD_FILE="$SAVE_CWD_FILE"
 
@@ -1089,6 +1118,28 @@ if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; t
   pass "reset's cold respawn still carries BEADS_ACTOR=worker-1"
 else fail "reset's respawned seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
 run stop worker-1
+
+phase "6a. resume after mid-tool death surfaces a stalled seat and herald row"
+run resume worker-1 >/dev/null 2>&1
+run dispatch worker-1 bead-y "MIDTOOL sleep until killed"
+if [ $RC -eq 0 ]; then pass "mid-tool setup: dispatch exits 0"; else fail "mid-tool setup: dispatch failed (rc=$RC): $OUT"; fi
+for _ in $(seq 1 100); do grep -q '"type":"tool_execution_start"' "$LOG" 2>/dev/null && break; sleep 0.05; done
+if grep -q '"type":"tool_execution_start"' "$LOG"; then pass "mid-tool setup: log records unfinished tool start"; else fail "mid-tool setup: no tool_execution_start in log"; fi
+# Seed herald's cursor before the resume appends the synthetic stalled settle row;
+# first sight starts at EOF by design, so this makes the later row observable.
+env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/herald.ts" --once >/dev/null 2>&1
+PID_BEFORE="$(state_get pid)"
+kill -9 "$PID_BEFORE" 2>/dev/null || true
+for _ in $(seq 1 100); do kill -0 "$PID_BEFORE" 2>/dev/null || break; sleep 0.05; done
+run resume worker-1
+if [ $RC -eq 0 ] && says "STALLED" && says "cut off during a tool call"; then pass "resume detects the unfinished tool call and marks the seat STALLED"; else fail "resume did not surface mid-tool cutoff (rc=$RC): $OUT"; fi
+run status
+if [ $RC -eq 0 ] && says "STALLED" && says "last-event agent_settled"; then pass "status renders resumed mid-tool cutoff as STALLED, not RUNNING"; else fail "status did not render STALLED after mid-tool resume (rc=$RC): $OUT"; fi
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/herald.ts" --once 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && grep -q '"class":"settle"' "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null && grep -q '"state":"stalled"' "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null; then
+  pass "herald appends a settle/stalled inbox row for the resumed cutoff"
+else fail "herald did not append settle/stalled row (rc=$RC out=$OUT inbox=$(cat "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null))"; fi
+run stop worker-1 >/dev/null 2>&1
 
 phase "6b. pruned cwd — dispatch and plain resume fall back visibly"
 run resume worker-1
