@@ -268,7 +268,8 @@ interface SeatRecord {
   lastBead?: string;
   lastDispatchAt?: string;
   lastPrompt?: string;
-  lastCapacityEvent?: { at: string; detail: string; accountLabel?: string };
+  lastCapacityEvent?: { at: string; detail: string; accountLabel?: string; sourceOffset?: number };
+  lastCapacityCleared?: { at: string; logOffset: number };
   lastStalledEvent?: { at: string; detail: string };
   lastLaunchFailure?: { at: string; detail: string };
 }
@@ -654,7 +655,7 @@ function textOf(value: unknown): string {
   return String(value);
 }
 
-function eventTimeIso(ev: any): string {
+function eventTimeIso(ev: any): string | null {
   for (const key of ["timestamp", "time", "created_at", "createdAt", "at"]) {
     const v = ev?.[key] ?? ev?.message?.[key];
     if (typeof v === "number" && Number.isFinite(v)) return new Date(v < 10_000_000_000 ? v * 1000 : v).toISOString();
@@ -663,7 +664,7 @@ function eventTimeIso(ev: any): string {
       if (Number.isFinite(t)) return new Date(t).toISOString();
     }
   }
-  return new Date().toISOString();
+  return null;
 }
 
 function lastMessage(obj: any): any {
@@ -703,27 +704,48 @@ function eventIsSuccessfulTurnEnd(obj: any): boolean {
 
 function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster: Record<string, SeatEntry>): void {
   const r = logLinesFrom(rec.log, 0);
-  let changed = false;
   let sawCapacityInThisScan = false;
+  let cursor = r.offset - Buffer.byteLength(r.lines.map((l) => `${l}\n`).join(""));
+  let nextCapacity = rec.lastCapacityEvent;
+  let nextCleared = rec.lastCapacityCleared;
   for (const line of r.lines) {
+    const lineEnd = cursor + Buffer.byteLength(`${line}\n`);
+    cursor = lineEnd;
+    if (rec.lastCapacityCleared && lineEnd <= rec.lastCapacityCleared.logOffset) continue;
     let obj: any;
     try { obj = JSON.parse(line); } catch { continue; }
     const detail = capacityDetailFromEvent(obj);
     if (detail) {
       sawCapacityInThisScan = true;
       const label = accountLabel(roster[name], rec);
-      rec.lastCapacityEvent = {
-        at: eventTimeIso(obj),
-        detail: label ? `${detail} (account ${label})` : detail,
+      const renderedDetail = label ? `${detail} (account ${label})` : detail;
+      const priorAtSameSource = rec.lastCapacityEvent?.sourceOffset === lineEnd && rec.lastCapacityEvent.detail === renderedDetail ? rec.lastCapacityEvent.at : undefined;
+      nextCapacity = {
+        at: eventTimeIso(obj) ?? priorAtSameSource ?? new Date().toISOString(),
+        detail: renderedDetail,
         ...(label ? { accountLabel: label } : {}),
+        sourceOffset: lineEnd,
       };
-      changed = true;
-    } else if (sawCapacityInThisScan && rec.lastCapacityEvent && eventIsSuccessfulTurnEnd(obj)) {
-      delete rec.lastCapacityEvent;
-      changed = true;
+      nextCleared = undefined;
+    } else if (sawCapacityInThisScan && nextCapacity && eventIsSuccessfulTurnEnd(obj)) {
+      nextCapacity = undefined;
+      nextCleared = { at: eventTimeIso(obj) ?? new Date().toISOString(), logOffset: lineEnd };
     }
   }
-  if (changed) writeState(state);
+  const prior = rec.lastCapacityEvent;
+  const priorCleared = rec.lastCapacityCleared;
+  const changed = (prior?.at ?? "") !== (nextCapacity?.at ?? "")
+    || (prior?.detail ?? "") !== (nextCapacity?.detail ?? "")
+    || (prior?.accountLabel ?? "") !== (nextCapacity?.accountLabel ?? "")
+    || (prior?.sourceOffset ?? -1) !== (nextCapacity?.sourceOffset ?? -1)
+    || (priorCleared?.at ?? "") !== (nextCleared?.at ?? "")
+    || (priorCleared?.logOffset ?? -1) !== (nextCleared?.logOffset ?? -1);
+  if (!changed) return;
+  if (nextCapacity) rec.lastCapacityEvent = nextCapacity;
+  else delete rec.lastCapacityEvent;
+  if (nextCleared) rec.lastCapacityCleared = nextCleared;
+  else delete rec.lastCapacityCleared;
+  writeState(state);
 }
 
 
@@ -1210,9 +1232,22 @@ function piProbe(name: string, entry: SeatEntry): void {
   process.exit(result.status ?? 1);
 }
 
+function clearCapacityAfterProbe(name: string): void {
+  const state = readState();
+  const rec = state.seats[name];
+  if (!rec?.lastCapacityEvent) return;
+  const logOffset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
+  const at = new Date().toISOString();
+  delete rec.lastCapacityEvent;
+  rec.lastCapacityCleared = { at, logOffset };
+  writeState(state);
+  console.log(`capacity cleared at ${at} (probe OK at ${at})`);
+}
+
 function cmdProbe(name: string): void {
   const entry = requireSeat(name);
-  return driverForSeat(name, entry, "adapter probe").probe(name, entry);
+  driverForSeat(name, entry, "adapter probe").probe(name, entry);
+  clearCapacityAfterProbe(name);
 }
 
 async function cmdResume(name: string): Promise<void> {
@@ -1360,6 +1395,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   state.seats[name].lastDispatchAt = new Date().toISOString();
   state.seats[name].lastPrompt = promptText;
   delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
+  delete state.seats[name].lastCapacityCleared;
   delete state.seats[name].lastStalledEvent; // a new dispatch supersedes a prior resumed-cutoff stall
   writeState(state);
   let resp: any;
@@ -1385,6 +1421,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
         detail: label ? `${String(resp.error ?? "quota-shaped stderr")} (account ${label})` : String(resp.error ?? "quota-shaped stderr"),
         ...(label ? { accountLabel: label } : {}),
       }; // capacity-record
+      delete state.seats[name].lastCapacityCleared;
       writeState(state);
     }
     die(`dispatch failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
@@ -1397,6 +1434,7 @@ async function cmdDispatch(name: string, beadId: string, text: string): Promise<
   landedState.seats[name].lastDispatchAt = new Date().toISOString();
   landedState.seats[name].lastPrompt = promptText;
   delete landedState.seats[name].lastCapacityEvent; // a dispatch that lands clears it
+  delete landedState.seats[name].lastCapacityCleared;
   delete landedState.seats[name].lastStalledEvent; // a dispatch that lands clears it
   writeState(landedState);
   console.log(`dispatched ${beadId} to ${name}; watch ${rec.log}`);
