@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+
 export const HARNESS_VALUES = ["pi", "claude-code", "codex"] as const;
 export type HarnessName = (typeof HARNESS_VALUES)[number];
 
@@ -45,7 +47,8 @@ export function oneShotCommandForHarness(harness: HarnessName, brief: string, pr
     args.push(prompt);
     return { bin: "claude", args, display: `claude ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
   }
-  const args = ["exec"];
+  const briefText = fs.existsSync(brief) ? fs.readFileSync(brief, "utf8") : brief;
+  const args = ["exec", "--skip-git-repo-check", "-s", "read-only", "-c", "approval_policy=never", "-c", `developer_instructions=${JSON.stringify(briefText)}`];
   if (model) args.push("--model", model);
   args.push(prompt);
   return { bin: "codex", args, display: `codex ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };

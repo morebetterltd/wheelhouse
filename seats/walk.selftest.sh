@@ -186,6 +186,7 @@ rm -f "$HOME_FIX/.pi-seats-$ns/verifier/env.json"
 out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-codex" 2>&1)
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'codex walk one-shot uses codex driver environment, not pi'; else fail "codex walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
+if grep -q 'Fixture walker brief' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'codex walk one-shot carries verifier brief and measured-safe exec flags'; else fail "codex walk one-shot missing brief or safe flags: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
 
 phase 'image budget reduces over-budget capture set before spawn'
 imgdir="$FIX/images-overbudget"

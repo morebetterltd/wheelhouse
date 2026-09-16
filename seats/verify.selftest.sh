@@ -519,6 +519,9 @@ run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
   pass "codex verifier one-shot uses the codex driver environment, not pi"
 else fail "codex verifier one-shot did not use codex driver (rc=$RC out=$OUT env=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" 2>/dev/null))"; fi
+if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
+  pass "codex verifier one-shot carries reviewer brief and measured-safe exec flags"
+else fail "codex verifier one-shot missing brief or safe flags: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
 RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
 
 phase "2. BOUNCE — exit 2"
