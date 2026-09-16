@@ -1,0 +1,9 @@
+
+single-repo worktree root agreement
+  ok    seat-env writes the Pi trust grant
+  ok    trust grant covers the in-root .wheelhouse-worktrees directory
+  ok    fixture seat spawns
+  ok    adapter dispatch uses <root>/.wheelhouse-worktrees/<bead>
+  ok    prune scans the same <root>/.wheelhouse-worktrees directory
+worktree-root selftest passed.
+rc=0
