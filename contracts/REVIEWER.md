@@ -17,7 +17,7 @@ The standing reviewer seat is not the only way this contract is used. A commande
 For that one-shot pass, the output stays machine-parseable. Exactly one line in the output begins `VERDICT:`, and it reads:
 
 ```
-VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers> | BOUNCE | DISCOVER
+VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers>; expires=YYYY-MM-DD | APPROVE — NOT BENCHED: <what no bench covers>; target=<coverage target> | BOUNCE | DISCOVER
 ```
 
 The `NOT BENCHED` qualifier belongs to APPROVE and to nothing else; it is defined under *When no bench covers the part you are reviewing* below.
@@ -39,7 +39,7 @@ A one-shot pass inherits the rest of this reviewer contract: never review what y
 - **A merge answer and a push answer, as two labelled lines.** The second is required on every verdict, including the ones where you have no answer to give:
 
   ```
-  VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers> | BOUNCE | APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten) | BOUNCE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)
+  VERDICT: APPROVE | APPROVE — NOT BENCHED: <what no bench covers>; expires=YYYY-MM-DD | APPROVE — NOT BENCHED: <what no bench covers>; target=<coverage target> | BOUNCE | APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten) | BOUNCE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)
   PUSH:    APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED | NOT CONSIDERED — branch moved; re-verify at Y before publish
   ```
 
@@ -154,7 +154,8 @@ The defect is an APPROVE on the uncovered part that does not say so. The clause 
 Name the absence on the verdict line, where the reader is already looking:
 
 ```
-VERDICT: APPROVE — NOT BENCHED: <what this diff touches that no bench covers>
+VERDICT: APPROVE — NOT BENCHED: <what this diff touches that no bench covers>; expires=YYYY-MM-DD
+VERDICT: APPROVE — NOT BENCHED: <what this diff touches that no bench covers>; target=<coverage target>
 ```
 
 It rides the line the verdict already has rather than adding a second place to look, for the same reason `NOT CONSIDERED` does: a fact kept somewhere the reader must go and find is a fact that stops arriving.
