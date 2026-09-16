@@ -1,0 +1,7 @@
+RUN timeout 900 seats/upgrade-runbook.selftest.sh
+start=2026-09-15T23:02:05Z
+ok 1 - zsh step 0 baseline reconstruction reads commit:path with braces
+ok 2 - zsh step 3 runbook loop reads real baseline for every runbook
+ok 3 - step 8 broad wheelhouse add stages untracked files under wheelhouse
+end=2026-09-15T23:02:29Z
+rc=127

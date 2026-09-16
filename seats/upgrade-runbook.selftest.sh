@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
-if [ -f "$SELFTEST_LIB" ]; then
-  . "$SELFTEST_LIB"
-else
-  selftest_cleanup_fixture_processes() { :; }
-fi
+. "$SELFTEST_LIB"
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -73,6 +69,12 @@ trap cleanup EXIT
 PASS=0
 fail() { echo "not ok $((PASS+1)) - $*"; exit 1; }
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
+
+copy_installed_selftest() {
+  local dest="$1"
+  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$dest/upgrade-runbook.selftest.sh"
+  cp "$ROOT/seats/selftest-lib.sh" "$dest/selftest-lib.sh"
+}
 
 command -v zsh >/dev/null 2>&1 || fail "zsh is required for this selftest"
 
@@ -156,6 +158,26 @@ if [ "${WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG:-1}" = 1 ]; then
   BARE_SOURCE="$TMP/template-source.git"
   git clone --quiet --bare "$TEMPLATE" "$BARE_SOURCE"
 
+  INSTALL_NO_LIB="$TMP/install-no-selftest-lib"
+  mkdir -p "$INSTALL_NO_LIB/seats" "$INSTALL_NO_LIB/wheelhouse"
+  git -C "$INSTALL_NO_LIB" init -b main >/dev/null
+  cat > "$INSTALL_NO_LIB/wheelhouse/.template-source" <<EOF
+source=$BARE_SOURCE
+commit=$BASELINE
+path=$TEMPLATE
+namespace=fixture
+EOF
+  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_NO_LIB/seats/upgrade-runbook.selftest.sh"
+  set +e
+  NO_LIB_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_NO_LIB/seats/upgrade-runbook.selftest.sh" 2>&1)
+  NO_LIB_RC=$?
+  set -e
+  if [ "$NO_LIB_RC" -eq 127 ] && printf '%s\n' "$NO_LIB_OUT" | grep -q 'selftest-lib.sh'; then
+    pass "installed-layout fixture without selftest-lib.sh fails honestly instead of passing"
+  else
+    fail "installed-layout fixture without selftest-lib.sh was not caught (rc=$NO_LIB_RC): $NO_LIB_OUT"
+  fi
+
   INSTALL="$TMP/install-root"
   mkdir -p "$INSTALL/seats" "$INSTALL/wheelhouse"
   git -C "$INSTALL" init -b main >/dev/null
@@ -165,7 +187,7 @@ commit=$BASELINE
 path=$TEMPLATE
 namespace=fixture
 EOF
-  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL/seats/upgrade-runbook.selftest.sh"
+  copy_installed_selftest "$INSTALL/seats"
   INSTALLED_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL/seats/upgrade-runbook.selftest.sh" 2>&1)
   case "$INSTALLED_OUT" in
     *"upgrade-runbook.selftest: PASS"*) pass "installed-layout copied upgrade-runbook selftest uses live path= when it carries commit=" ;;
@@ -181,7 +203,7 @@ commit=$BASELINE
 path=$TMP/dead-template-path
 namespace=fixture
 EOF
-  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_DEAD_REACHABLE/seats/upgrade-runbook.selftest.sh"
+  copy_installed_selftest "$INSTALL_DEAD_REACHABLE/seats"
   DEAD_REACHABLE_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_DEAD_REACHABLE/seats/upgrade-runbook.selftest.sh" 2>&1)
   case "$DEAD_REACHABLE_OUT" in
     *"upgrade-runbook.selftest: PASS"*)
@@ -198,7 +220,7 @@ EOF
   INSTALL_DEAD_UNREACHABLE="$TMP/install-dead-unreachable"
   mkdir -p "$INSTALL_DEAD_UNREACHABLE/seats" "$INSTALL_DEAD_UNREACHABLE/wheelhouse"
   git -C "$INSTALL_DEAD_UNREACHABLE" init -b main >/dev/null
-  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_DEAD_UNREACHABLE/seats/upgrade-runbook.selftest.sh"
+  copy_installed_selftest "$INSTALL_DEAD_UNREACHABLE/seats"
   cat > "$INSTALL_DEAD_UNREACHABLE/wheelhouse/.template-source" <<EOF
 source=$TMP/not-a-source.git
 commit=$BASELINE
@@ -218,7 +240,7 @@ EOF
   INSTALL_MISSING="$TMP/install-missing-source"
   mkdir -p "$INSTALL_MISSING/seats" "$INSTALL_MISSING/wheelhouse"
   git -C "$INSTALL_MISSING" init -b main >/dev/null
-  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_MISSING/seats/upgrade-runbook.selftest.sh"
+  copy_installed_selftest "$INSTALL_MISSING/seats"
   set +e
   MISSING_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_MISSING/seats/upgrade-runbook.selftest.sh" 2>&1)
   MISSING_RC=$?
@@ -232,7 +254,7 @@ EOF
   INSTALL_BAD="$TMP/install-bad-source"
   mkdir -p "$INSTALL_BAD/seats" "$INSTALL_BAD/wheelhouse"
   git -C "$INSTALL_BAD" init -b main >/dev/null
-  cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh"
+  copy_installed_selftest "$INSTALL_BAD/seats"
   printf 'path=%s\ncommit=%s\n' "$TMP/not-a-template-repo" "$BASELINE" > "$INSTALL_BAD/wheelhouse/.template-source"
   set +e
   BAD_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh" 2>&1)

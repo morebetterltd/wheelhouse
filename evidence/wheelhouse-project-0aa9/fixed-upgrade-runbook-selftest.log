@@ -1,0 +1,14 @@
+RUN timeout 900 seats/upgrade-runbook.selftest.sh
+start=2026-09-15T23:06:09Z
+ok 1 - zsh step 0 baseline reconstruction reads commit:path with braces
+ok 2 - zsh step 3 runbook loop reads real baseline for every runbook
+ok 3 - step 8 broad wheelhouse add stages untracked files under wheelhouse
+ok 4 - installed-layout fixture without selftest-lib.sh fails honestly instead of passing
+ok 5 - installed-layout copied upgrade-runbook selftest uses live path= when it carries commit=
+ok 6 - installed-layout dead path= fetches commit= from reachable source= into git-excluded install-local cache
+ok 7 - installed-layout dead path= with unreachable source= refuses by named source reason
+ok 8 - installed-layout missing .template-source fails legibly with source= and commit= expectation
+ok 9 - installed-layout bad path= without source= fails legibly before raw git fatal
+upgrade-runbook.selftest: PASS (9 checks)
+end=2026-09-15T23:07:06Z
+rc=0
