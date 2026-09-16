@@ -1,0 +1,7 @@
+RUN bun build seats/adapter.ts seats/prune.ts --outdir .wheelhouse-runs/wheelhouse-project-8zi7/build
+Bundled 12 modules in 90ms
+
+  adapter.js  75.53 KB  (entry point)
+  prune.js    0.93 MB   (entry point)
+
+rc=0

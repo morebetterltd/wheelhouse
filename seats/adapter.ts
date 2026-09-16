@@ -58,7 +58,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
-import { hostBudgetPath } from "./host-budget";
+import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
 
 interface SeatDriver {
@@ -1525,6 +1525,49 @@ function lastEvent(log: string): string {
 
 function agentSettledEvent(ev: string): boolean { return ev === "agent_end" || ev === "turn_end" || ev === "agent_settled"; }
 
+function hostBudgetWorktreeCount(): number {
+  const r = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  if (r.status !== 0) return 0;
+  return (r.stdout ?? "").split(/\n/).filter((l) => l.startsWith("worktree ") && !l.endsWith(` ${ROOT}`)).length;
+}
+
+function hostBudgetPruneRows(): { rows: any[]; scanFile: string } | null {
+  const scan = spawnSync("bun", ["seats/prune.ts", "scan", "--format", "json"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  if (scan.status !== 0) {
+    console.log(`HOST-BUDGET worktree cap: prune scan failed (${scan.status ?? scan.signal}): ${(scan.stderr ?? scan.stdout ?? "").trim().slice(-1000)}`);
+    return null;
+  }
+  const scanFile = path.join(ROOT, "seats", "logs", "prune-worktree-cap-scan.json");
+  fs.mkdirSync(path.dirname(scanFile), { recursive: true });
+  fs.writeFileSync(scanFile, scan.stdout ?? "[]");
+  let rows: any[] = [];
+  try { rows = JSON.parse(scan.stdout || "[]"); } catch { rows = []; }
+  return { rows, scanFile };
+}
+
+function reportHostBudgetWorktreeCap(): void {
+  const cap = hostBudgetMaxWorktrees(ROOT);
+  if (cap == null) return;
+  const count = hostBudgetWorktreeCount();
+  if (count <= cap) return;
+  const scan = hostBudgetPruneRows();
+  if (!scan) return;
+  const safe = scan.rows.filter((r) => r?.category === "merged-worktree" && r?.safe === 1 && r?.action === "worktree");
+  console.log(`HOST-BUDGET worktree cap exceeded: count=${count} max_worktrees=${cap}`);
+  if (safe.length === 0) {
+    console.log("HOST-BUDGET prune scan found no safe merged-worktree rows; inspect seats/prune-worktree-cap-scan.json");
+    return;
+  }
+  for (const r of safe) console.log(`HOST-BUDGET safe merged-worktree ${r.branch || "(detached)"} ${r.path} ${r.size_human ?? ""} — ${r.reason ?? ""}`);
+  const cmd = `bun seats/prune.ts prune --from-file ${path.relative(ROOT, scan.scanFile)} --yes --categories merged-worktree`;
+  console.log(`HOST-BUDGET prune command: ${cmd}`);
+  if (hostBudgetAutoPrune(ROOT)) {
+    const pr = spawnSync("bun", ["seats/prune.ts", "prune", "--from-file", path.relative(ROOT, scan.scanFile), "--yes", "--categories", "merged-worktree"], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+    process.stdout.write(pr.stdout ?? "");
+    if (pr.status !== 0) console.log(`HOST-BUDGET auto_prune failed (${pr.status ?? pr.signal}): ${(pr.stderr ?? "").trim()}`);
+  }
+}
+
 function rotateLogIfSafe(log: string, last: string): void {
   if (!fs.existsSync(log) || !agentSettledEvent(last)) return;
   const cap = LOG_ROTATE_BYTES;
@@ -1554,6 +1597,7 @@ function cmdStatus(): void {
   }
   const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   const rows = processRows();
+  let sawSettled = false;
   for (const name of names) {
     const rec = state.seats[name];
     syncCapacityFromLog(name, rec, state, roster);
@@ -1570,6 +1614,7 @@ function cmdStatus(): void {
     const labelText = label ? `  account ${label}` : "";
     const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
     const last = lastEvent(rec.log);
+    if (agentSettledEvent(last)) sawSettled = true;
     console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${last}${bead}${labelText}`);
     rotateLogIfSafe(rec.log, last);
     if (died) {
@@ -1583,6 +1628,7 @@ function cmdStatus(): void {
       console.log(`${" ".repeat(16)} ORPHAN: pid ${orphan.pid} also matches rostered seat ${name}; recorded pid ${rec.pid ?? "none"}; reason: ${orphan.reason}; remedy: inspect pid ${orphan.pid}, then stop it or run bun seats/recover.ts`);
     }
   }
+  if (sawSettled) reportHostBudgetWorktreeCap();
 }
 
 async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<string> {

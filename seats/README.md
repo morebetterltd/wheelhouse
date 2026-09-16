@@ -38,7 +38,12 @@ A fleet that has expensive builds may opt in by creating `seats/host-budget.json
 (any JSON object; the file's existence is the switch). When present, the adapter
 prepends `seats/bin` to `PATH` for every seat process, and `verify.ts`/`walk.ts`
 do the same for their one-shot Pi verifier spawns. When absent, PATH is left as
-it was, so the template does not throttle light projects by default.
+it was, so the template does not throttle light projects by default. The same
+file may carry `max_worktrees` (default `24`) and `auto_prune` (default `false`):
+when a settled seat is observed and the fleet is over the cap, `adapter.ts
+status` runs `seats/prune.ts scan`, prints safe `merged-worktree` rows with the
+exact `bun seats/prune.ts prune ...` command, and deletes nothing unless
+`auto_prune` is true.
 
 The template ships `seats/bin/cargo` and `seats/bin/dotnet` as symlinks to one
 plain-bash shim. The frozen host contract is:
