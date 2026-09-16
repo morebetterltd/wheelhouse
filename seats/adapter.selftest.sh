@@ -1302,6 +1302,53 @@ BAD_PARITY="$FIX/parity/fleet-x"; mkdir -p "$BAD_PARITY"; printf '#!/usr/bin/env
 CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/parity" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)"; CONTRACT_RC=$?
 if [ $CONTRACT_RC -ne 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep -q 'parity=mismatch'; then pass "host budget: --contract parity scan reports mismatched fleet shims"
 else fail "host budget: parity mismatch not reported rc=$CONTRACT_RC: $CONTRACT_OUT"; fi
+
+setup_worktree_cap_repo() { # $1 proj, $2 max, $3 auto
+  local proj="$1" max="$2" auto="$3" fakebin wtbase
+  fakebin="$proj/fakebin"
+  wtbase="$proj/.wheelhouse-worktrees"
+  mkdir -p "$wtbase" "$fakebin" "$proj/seats/logs"
+  git -C "$proj" init -q
+  git -C "$proj" config user.email fixture@example.invalid
+  git -C "$proj" config user.name Fixture
+  printf base > "$proj/base.txt"; git -C "$proj" add base.txt; git -C "$proj" commit -qm base
+  git -C "$proj" branch fleet/closed
+  git -C "$proj" branch fleet/closed2
+  git -C "$proj" worktree add -q "$wtbase/closed" fleet/closed
+  git -C "$proj" worktree add -q "$wtbase/closed2" fleet/closed2
+  printf '{"enabled":true,"max_worktrees":%s,"auto_prune":%s}\n' "$max" "$auto" > "$proj/seats/host-budget.json"
+  printf '{"commander":{"role":"commander","external":true},"seats":{"worker-1":{"role":"worker","provider":"anthropic","model":"stub","account":{"dir":"%s"}}}}\n' "$HOME_FIX/.pi-seats-budget/worker-1" > "$proj/seats/seats.json"
+  printf '{"type":"agent_end"}\n' > "$proj/seats/logs/worker-1.jsonl"
+  printf '{"seats":{"worker-1":{"pid":null,"role":"worker","accountDir":"%s","log":"%s","fifo":"%s","sessionId":"s"}}}\n' "$HOME_FIX/.pi-seats-budget/worker-1" "$proj/seats/logs/worker-1.jsonl" "$proj/seats/run/worker-1.stdin" > "$proj/seats/state.json"
+  cat > "$fakebin/bun" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "seats/prune.ts" ] && [ "\$2" = "scan" ]; then
+  cat <<JSON
+[{"category":"merged-worktree","safe":1,"repo":"$proj","path":"$wtbase/closed","branch":"fleet/closed","size_bytes":1,"size_human":"1.0B","action":"worktree","reason":"fixture safe merged worktree"}]
+JSON
+  exit 0
+fi
+if [ "\$1" = "seats/prune.ts" ] && [ "\$2" = "prune" ]; then
+  rm -rf "$wtbase/closed"
+  printf 'PRUNED worktree merged-worktree %s\\nprune summary: touched=1 skipped=0 dry_run=0 reclaimed_bytes=1 reclaimed_human=1.0B\\n' "$wtbase/closed"
+  exit 0
+fi
+exec "$(command -v bun)" "\$@"
+EOF
+  chmod +x "$fakebin/bun"
+}
+CAP_UNDER="$FIX/host-budget-cap-under"; build_proj "$CAP_UNDER" cap-under; setup_worktree_cap_repo "$CAP_UNDER" 9 false
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_UNDER/fakebin:$RUN_PATH" bun "$CAP_UNDER/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && ! printf '%s\n' "$OUT" | grep -q 'HOST-BUDGET worktree cap'; then pass "host budget worktree cap: under cap is silent"
+else fail "host budget worktree cap: under cap printed or failed rc=$RC: $OUT"; fi
+CAP_OVER="$FIX/host-budget-cap-over"; build_proj "$CAP_OVER" cap-over; setup_worktree_cap_repo "$CAP_OVER" 1 false
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_OVER/fakebin:$RUN_PATH" bun "$CAP_OVER/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'HOST-BUDGET worktree cap exceeded' && printf '%s\n' "$OUT" | grep -q 'HOST-BUDGET safe merged-worktree' && printf '%s\n' "$OUT" | grep -q 'bun seats/prune.ts prune --from-file seats/logs/prune-worktree-cap-scan.json --yes --categories merged-worktree'; then pass "host budget worktree cap: over cap reports safe rows and exact prune command"
+else fail "host budget worktree cap: over cap report missing rc=$RC: $OUT"; fi
+CAP_AUTO="$FIX/host-budget-cap-auto"; build_proj "$CAP_AUTO" cap-auto; setup_worktree_cap_repo "$CAP_AUTO" 1 true
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_AUTO/fakebin:$RUN_PATH" bun "$CAP_AUTO/seats/adapter.ts" status 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'PRUNED worktree merged-worktree' && [ ! -e "$CAP_AUTO/.wheelhouse-worktrees/closed" ]; then pass "host budget worktree cap: auto_prune removes a safe merged worktree"
+else fail "host budget worktree cap: auto_prune failed rc=$RC out=$OUT exists=$(test -e "$CAP_AUTO/.wheelhouse-worktrees/closed" && echo yes || echo no)"; fi
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)"; RC=$?
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
