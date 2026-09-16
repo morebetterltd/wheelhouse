@@ -1,0 +1,322 @@
+diff --git a/wheelhouse/crew/bench.sh b/wheelhouse/crew/bench.sh
+index e361ddd..ba16d4c 100755
+--- a/wheelhouse/crew/bench.sh
++++ b/wheelhouse/crew/bench.sh
+@@ -318,6 +318,8 @@ if [ "$MODE" = "--install" ]; then
+   TPLCLONE="$2"
+   SCRATCH="$3"
+   EXPECTED_SHA="$4"
++  ROSTER_FIXTURE="${WHEELHOUSE_BENCH_ROSTER_FIXTURE:-pi-only}"
++  case "$ROSTER_FIXTURE" in pi-only|mixed-harness) ;; *) fail "unknown WHEELHOUSE_BENCH_ROSTER_FIXTURE=$ROSTER_FIXTURE (want pi-only or mixed-harness)" ;; esac
+ 
+   # Which shell is actually executing (evidence, not trust in the caller).
+   if [ -n "${ZSH_VERSION:-}" ]; then
+@@ -332,6 +334,7 @@ if [ "$MODE" = "--install" ]; then
+   GOT_SHA=$(git -C "$TPLCLONE" rev-parse HEAD)
+   [ "$GOT_SHA" = "$EXPECTED_SHA" ] || fail "template clone HEAD $GOT_SHA != expected $EXPECTED_SHA"
+   say "artifact: template tree at commit $GOT_SHA"
++  say "roster fixture: $ROSTER_FIXTURE"
+ 
+   # -------------------------------------------------------------------------
+   # BOOTSTRAP step 1 — dependency preflight. It runs here, before the fixture
+@@ -588,46 +591,11 @@ if [ "$MODE" = "--install" ]; then
+   say "step 3: merge target 'main' confirmed against the repository's refs"
+ 
+   # Fixture interview answers (mechanics only), recorded here so the writes
+-  # below have a stated source:
+-  #   Q1 shape: single repo; worktrees are siblings at ../.wheelhouse-worktrees/
+-  #   Q2 bench: artifact is hello.sh at a commit; proof is the greeting line;
+-  #             a scratch dir per run; scan for a missing greeting or non-zero exit
+-  #   Q3 ideal state: "sh hello.sh prints its greeting, and one bead can go
+-  #             from dispatch to merged" (fixture principal's words)
+-  #   Q4 principal-only: the BOOTSTRAP defaults, accepted unchanged
+-  #   Q5 merge policy: principal confirms each merge (the default)
+-  #   Q6 priorities: the default scheme, accepted unchanged
+-  #   Q7 seats: the NAMESPACE FIRST — `fixture-product`, proposed from the
+-  #             project's own directory name and accepted unchanged, so the
+-  #             seat root is $HOME/.pi-seats-fixture-product. Its one job is
+-  #             naming that root; seat names are seats.json keys and carry no
+-  #             prefix. Derived ONCE here; every surface below is written FROM
+-  #             the recorded value, never from a second recollection.
+-  #             The commander is not a question: it goes into seats.json as
+-  #             the external entry. Each remaining seat is a separate
+-  #             yes-with-a-count or no, with the four roster facts collected
+-  #             per yes, and every no recorded:
+-  #               Worker    — yes, one: `worker-1`, provider openai-codex
+-  #                           (ChatGPT subscription OAuth), model gpt-5.5
+-  #                           (validated against the openai-codex list —
+-  #                           never gpt-5.2-codex, per the l0e gotcha),
+-  #                           dir ~/.pi-seats-fixture-product/worker-1
+-  #               Reviewer  — yes, one: `reviewer-1`, provider anthropic
+-  #                           (api_key seat — no secret enters seats.json),
+-  #                           model claude-opus-5,
+-  #                           dir ~/.pi-seats-fixture-product/reviewer-1
+-  #               Verifier  — NO: "the fixture has no third account, and the
+-  #                           verifier must not share the author's; the smoke
+-  #                           verdict takes the solo path." (2026-08-30)
+-  #               Designer  — NO: "I am decomposing the first beads myself
+-  #                           for now." (fixture principal's words, 2026-08-21)
+-  #               2nd worker— NO: one worker is enough until the reviewer sits
+-  #                           idle waiting for work.
+-  #             The fixture declines seats on purpose: a walk that only ever
+-  #             says yes never exercises the declined-seats half of the write,
+-  #             and that half is the only thing separating a refused seat from
+-  #             one nobody was asked about.
+-  say "step 3: fixture interview answers loaded (onboarding mechanics only)"
++  # below have a stated source. The default pi-only fixture preserves the
++  # historical cold-install coverage; WHEELHOUSE_BENCH_ROSTER_FIXTURE=mixed-harness
++  # adds the harness-contract fixture: worker on claude-code, reviewer on codex,
++  # verifier on pi, all against shim binaries and scratch account roots.
++  say "step 3: fixture interview answers loaded (onboarding mechanics only; roster fixture=$ROSTER_FIXTURE)"
+ 
+   # The interview's first machine record: the namespace, into the file a
+   # PROGRAM reads — the value seats/seat-env.sh is invoked with — before any
+@@ -645,7 +613,43 @@ if [ "$MODE" = "--install" ]; then
+   # The interview's second machine record: seats/seats.json, from the
+   # read-back value. No secret enters it — names, roles, providers, models
+   # and directories only, which is why it is safe to commit.
+-  sed -e "s|@NS@|$NS_RECORDED|g" > seats/seats.json <<'EOF'
++  if [ "$ROSTER_FIXTURE" = "mixed-harness" ]; then
++    sed -e "s|@NS@|$NS_RECORDED|g" > seats/seats.json <<'EOF'
++{
++  "commander": {
++    "role": "commander",
++    "external": true,
++    "runtime": "claude-code"
++  },
++  "seats": {
++    "worker-1": {
++      "role": "worker",
++      "harness": "claude-code",
++      "provider": "anthropic",
++      "model": "sonnet",
++      "allowedTools": "Bash(printf *)",
++      "account": { "dir": "~/.pi-seats-@NS@/worker-1", "authRoute": "oauth" }
++    },
++    "reviewer-1": {
++      "role": "reviewer",
++      "harness": "codex",
++      "provider": "openai-codex",
++      "model": "gpt-5.5",
++      "account": { "dir": "~/.pi-seats-@NS@/reviewer-1", "authRoute": "oauth" }
++    },
++    "verifier": {
++      "role": "verifier",
++      "harness": "pi",
++      "provider": "openai",
++      "model": "gpt-5.5",
++      "account": { "dir": "~/.pi-seats-@NS@/verifier", "authRoute": "oauth" }
++    }
++  }
++}
++EOF
++    EXPECTED_SEATS=3
++  else
++    sed -e "s|@NS@|$NS_RECORDED|g" > seats/seats.json <<'EOF'
+ {
+   "commander": {
+     "role": "commander",
+@@ -668,12 +672,14 @@ if [ "$MODE" = "--install" ]; then
+   }
+ }
+ EOF
++    EXPECTED_SEATS=2
++  fi
+   if grep -q '@NS@' seats/seats.json; then fail "seats.json still carries an unsubstituted token"; fi
+   # Read it back as JSON so a syntax error surfaces at the moment of writing —
+   # BOOTSTRAP prescribes exactly this read-back.
+-  bun -e 'const r=require("./seats/seats.json"); if(!r.commander || !r.commander.external) throw new Error("no external commander entry"); if(Object.keys(r.seats).length!==2) throw new Error("expected 2 seats");' \
++  bun -e 'const r=require("./seats/seats.json"); const n=Number(process.argv[1]); if(!r.commander || !r.commander.external) throw new Error("no external commander entry"); if(Object.keys(r.seats).length!==n) throw new Error(`expected ${n} seats`); if(process.argv[2]==="mixed-harness"){ if(r.seats["worker-1"].harness!=="claude-code") throw new Error("worker not claude-code"); if(r.seats["reviewer-1"].harness!=="codex") throw new Error("reviewer not codex"); if(r.seats.verifier.harness!=="pi") throw new Error("verifier not pi"); }' "$EXPECTED_SEATS" "$ROSTER_FIXTURE" \
+     || fail "seats/seats.json does not parse or lacks the required entries"
+-  say "step 3: seats/seats.json written and read back as JSON (commander external + 2 seats)"
++  say "step 3: seats/seats.json written and read back as JSON (commander external + $EXPECTED_SEATS seats; roster fixture=$ROSTER_FIXTURE)"
+ 
+   # -------------------------------------------------------------------------
+   # BOOTSTRAP step 4 — provision the seats. The provisioning script runs FOR
+@@ -684,23 +690,32 @@ EOF
+   # -------------------------------------------------------------------------
+   FHOME="$SCRATCH/fixture-home"
+   mkdir -p "$FHOME"
+-  for seat in worker-1 reviewer-1; do
++  if [ "$ROSTER_FIXTURE" = "mixed-harness" ]; then
++    set -- worker-1:CLAUDE_CONFIG_DIR:claude reviewer-1:CODEX_HOME:codex verifier:PI_CODING_AGENT_DIR:pi
++  else
++    set -- worker-1:PI_CODING_AGENT_DIR:pi reviewer-1:PI_CODING_AGENT_DIR:pi
++  fi
++  for spec do
++    seat=${spec%%:*}; rest=${spec#*:}; envname=${rest%%:*}; binname=${rest#*:}
+     HOME="$FHOME" seats/seat-env.sh "$NS_RECORDED" "$seat" "$PROJ" > "$SCRATCH/seat-env-$seat.out" 2>&1 \
+       || { cat "$SCRATCH/seat-env-$seat.out"; fail "seat-env.sh exited non-zero for $seat"; }
+     sed 's/^/  | /' "$SCRATCH/seat-env-$seat.out"
+     [ -d "$FHOME/.pi-seats-$NS_RECORDED/$seat" ] || fail "seat-env.sh created no directory for $seat"
+-    [ -s "$FHOME/.pi-seats-$NS_RECORDED/$seat/trust.json" ] || fail "seat-env.sh wrote no trust.json for $seat"
+-    PHYS_PROJ=$(cd "$PROJ" && pwd -P)
+-    grep -qF "\"$PHYS_PROJ\"" "$FHOME/.pi-seats-$NS_RECORDED/$seat/trust.json" \
+-      || { cat "$FHOME/.pi-seats-$NS_RECORDED/$seat/trust.json"; fail "trust.json for $seat does not grant the canonicalized project root $PHYS_PROJ"; }
+-    grep -qE '^  PI_CODING_AGENT_DIR="[^"]+" pi$' "$SCRATCH/seat-env-$seat.out" \
+-      && grep -qF '# in the Pi REPL: type /login, complete the browser flow, then type /exit' "$SCRATCH/seat-env-$seat.out" \
+-      || fail "seat-env.sh printed no one-time login flow for the unauthenticated seat $seat"
++    if [ "$envname" = "PI_CODING_AGENT_DIR" ]; then
++      [ -s "$FHOME/.pi-seats-$NS_RECORDED/$seat/trust.json" ] || fail "seat-env.sh wrote no trust.json for $seat"
++      PHYS_PROJ=$(cd "$PROJ" && pwd -P)
++      grep -qF "\"$PHYS_PROJ\"" "$FHOME/.pi-seats-$NS_RECORDED/$seat/trust.json" \
++        || { cat "$FHOME/.pi-seats-$NS_RECORDED/$seat/trust.json"; fail "trust.json for $seat does not grant the canonicalized project root $PHYS_PROJ"; }
++    fi
++    if grep -qE "^  ${envname}=\"[^\"]+\" ${binname}" "$SCRATCH/seat-env-$seat.out"; then :; else
++      _seat_env_out=$(cat "$SCRATCH/seat-env-$seat.out")
++      fail "seat-env.sh printed no $envname binding for $seat ($binname): $_seat_env_out"
++    fi
+     # Idempotence, as the script promises: a second run changes nothing, exit 0.
+     HOME="$FHOME" seats/seat-env.sh "$NS_RECORDED" "$seat" "$PROJ" > "$SCRATCH/seat-env-$seat-again.out" 2>&1 \
+       || { cat "$SCRATCH/seat-env-$seat-again.out"; fail "seat-env.sh re-run exited non-zero for $seat"; }
+   done
+-  say "step 4: seats provisioned for real against a fixture HOME — directories, canonicalized trust grants and login commands verified, re-runs idempotent"
++  say "step 4: seats provisioned for real against a fixture HOME — directories, harness login commands and pi trust grants verified, re-runs idempotent"
+   say "step 4 probe: SKIP — the per-seat provider probe (pi -p --no-session --provider ... --model ... 'reply OK') needs a real login, and a bench has none; a real install must run it per seat and paste the reply"
+ 
+   # -------------------------------------------------------------------------
+@@ -799,7 +814,38 @@ EOF
+   # @NS@ / @SEAT_ROOT@ are substituted from the values READ BACK above, not
+   # expanded by the heredoc: the project half is dense with backticks, and an
+   # unquoted heredoc would run every one of them as a command substitution.
+-  sed -e "s|@NS@|$NS_RECORDED|g" -e "s|@SEAT_ROOT@|$SEAT_ROOT|g" > "$SCRATCH/seats-project-half" <<'EOF'
++  if [ "$ROSTER_FIXTURE" = "mixed-harness" ]; then
++    sed -e "s|@NS@|$NS_RECORDED|g" -e "s|@SEAT_ROOT@|$SEAT_ROOT|g" > "$SCRATCH/seats-project-half" <<'EOF'
++
++Generated at install (cold-install bench fixture).
++
++### Roster
++
++One line per seat this project took, from question 7's per-seat walk, mirroring
++`seats/seats.json` — the machine record, which decides; this table is the human
++record and must agree with it. Agent directories land under `@SEAT_ROOT@/`
++(namespace `@NS@`, recorded as `namespace=` in `wheelhouse/.template-source`,
++the value `seats/seat-env.sh` is invoked with). The commander is always here
++and was never a question.
++
++| Seat | Role brief | Harness | Provider | Model | Agent directory |
++|---|---|---|---|---|---|
++| `worker-1` | `wheelhouse/fleet/WORKER.md` | `claude-code` | `anthropic` | `sonnet` | `~/.pi-seats-@NS@/worker-1` |
++| `reviewer-1` | `wheelhouse/crew/REVIEWER.md` | `codex` | `openai-codex` | `gpt-5.5` | `~/.pi-seats-@NS@/reviewer-1` |
++| `verifier` | `wheelhouse/crew/VERIFIER.md` | `pi` | `openai` | `gpt-5.5` | `~/.pi-seats-@NS@/verifier` |
++| (commander) | this folder's `CLAUDE.md` | external | — | — | none: the fixture principal's own session, `"external": true` in the roster |
++
++### Declined seats
++
++Offered individually at install and refused, in the fixture principal's words.
++
++| Seat | Reason | Date |
++|---|---|---|
++| Designer | "I am decomposing the first beads myself for now." | 2026-08-21 |
++| Second worker | One worker is enough until the reviewer sits idle. | 2026-08-21 |
++EOF
++  else
++    sed -e "s|@NS@|$NS_RECORDED|g" -e "s|@SEAT_ROOT@|$SEAT_ROOT|g" > "$SCRATCH/seats-project-half" <<'EOF'
+ 
+ Generated at install (cold-install bench fixture).
+ 
+@@ -828,6 +874,7 @@ Offered individually at install and refused, in the fixture principal's words.
+ | Designer | "I am decomposing the first beads myself for now." | 2026-08-21 |
+ | Second worker | One worker is enough until the reviewer sits idle. | 2026-08-21 |
+ EOF
++  fi
+   if grep -q '@NS@\|@SEAT_ROOT@' "$SCRATCH/seats-project-half"; then
+     fail "SEATS.md project half still carries an unsubstituted token"
+   fi
+@@ -1074,6 +1121,10 @@ Shutdown is `bun seats/adapter.ts stop <seat>` per running seat (graceful,
+ session kept) — or just shut the machine down; in-flight work resumes from the
+ graph, and `resume` brings a stopped seat back warm.
+ EOF
++  if [ "$ROSTER_FIXTURE" = "mixed-harness" ]; then
++    awk -v ns="$NS_RECORDED" '{print} $0=="seats/seat-env.sh " ns " reviewer-1"{print "seats/seat-env.sh " ns " verifier"}' wheelhouse/STARTUP.md > wheelhouse/STARTUP.md.tmp && mv wheelhouse/STARTUP.md.tmp wheelhouse/STARTUP.md
++    awk '{print} $0=="bun seats/adapter.ts spawn reviewer-1"{print "bun seats/adapter.ts spawn verifier"}' wheelhouse/STARTUP.md > wheelhouse/STARTUP.md.tmp && mv wheelhouse/STARTUP.md.tmp wheelhouse/STARTUP.md
++  fi
+   if grep -q '@NS@\|@ROOT@' wheelhouse/STARTUP.md; then
+     fail "STARTUP.md still carries an unsubstituted token"
+   fi
+@@ -1288,15 +1339,20 @@ EOF
+   [ -n "$SEATS_ROSTER" ]   || fail "SEATS.md '### Roster' section is empty (an empty result is unread, not passed)"
+   [ -n "$SEATS_DECLINED" ] || fail "SEATS.md '### Declined seats' section is empty (an empty result is unread, not passed)"
+ 
+-  # Taken seats: the two the fixture said yes to, plus the commander, which q7
+-  # states is not a question and is on the roster regardless — and the four
+-  # roster facts q7 collects per seat: provider and model as columns, pinned
+-  # (the l0e gotcha: an unpinned model silently falls back to the default
+-  # provider, so a roster without the pin records nothing the spawn uses).
+-  for seat in 'worker-1' 'reviewer-1' 'commander'; do
+-    printf '%s\n' "$SEATS_ROSTER" | grep -q "$seat" \
+-      || fail "SEATS.md roster does not name '$seat', which the fixture interview took"
++  # Taken seats: the fixture's roster plus the commander, which q7 states is not
++  # a question and is on the roster regardless. The mixed-harness variant adds a
++  # verifier as a real pi seat so the same clauses cover all three harnesses.
++  if [ "$ROSTER_FIXTURE" = "mixed-harness" ]; then
++    set -- worker-1 reviewer-1 verifier
++  else
++    set -- worker-1 reviewer-1
++  fi
++  for seat do
++    printf '%s
++' "$SEATS_ROSTER" | grep -q "$seat"       || fail "SEATS.md roster does not name '$seat', which the fixture interview took"
+   done
++  printf '%s
++' "$SEATS_ROSTER" | grep -q "commander"     || fail "SEATS.md roster does not name 'commander', which the fixture interview took"
+   printf '%s\n' "$SEATS_ROSTER" | grep -q '`openai-codex`' \
+     || fail "SEATS.md roster does not record worker-1's provider openai-codex"
+   printf '%s\n' "$SEATS_ROSTER" | grep -q '`gpt-5.5`' \
+@@ -1307,14 +1363,14 @@ EOF
+     fail "SEATS.md roster names gpt-5.2-codex, which ChatGPT-subscription seats cannot run (bead l0e says never to suggest it)"
+   fi
+ 
+-  # Refused seats: the designer is the seat q7 exists to stop going missing,
+-  # and the verifier is the seat whose absence silently downgrades step 6's
+-  # smoke verdict to the solo path — the fixture declines both and the install
+-  # must say so, with a reason and a date.
++  # Refused seats: the designer is the seat q7 exists to stop going missing. The
++  # pi-only fixture also declines the verifier; the mixed-harness fixture takes it.
+   printf '%s\n' "$SEATS_DECLINED" | grep -qi 'designer' \
+     || fail "SEATS.md declined seats does not record the designer the fixture refused"
+-  printf '%s\n' "$SEATS_DECLINED" | grep -qi 'verifier' \
+-    || fail "SEATS.md declined seats does not record the verifier the fixture refused"
++  if [ "$ROSTER_FIXTURE" = "pi-only" ]; then
++    printf '%s\n' "$SEATS_DECLINED" | grep -qi 'verifier' \
++      || fail "SEATS.md declined seats does not record the verifier the fixture refused"
++  fi
+   printf '%s\n' "$SEATS_DECLINED" | grep -qE '20[0-9][0-9]-[01][0-9]-[0-3][0-9]' \
+     || fail "SEATS.md declined seats records no date; a refusal without one cannot be aged"
+ 
+@@ -1351,7 +1407,7 @@ EOF
+   SJ_ROOTS=$(grep -oE 'pi-seats-[A-Za-z0-9_-]+' seats/seats.json | sort -u)
+   [ "$SJ_ROOTS" = "pi-seats-$NS_FILE" ] \
+     || { printf '%s\n' "$SJ_ROOTS"; fail "seats/seats.json records directories under a root other than pi-seats-$NS_FILE"; }
+-  for seat in worker-1 reviewer-1; do
++  for seat do
+     grep -qF "~/.pi-seats-$NS_FILE/$seat" seats/seats.json \
+       || fail "seats/seats.json does not record ~/.pi-seats-$NS_FILE/$seat for $seat"
+     printf '%s\n' "$SEATS_ROSTER" | grep -qF "~/.pi-seats-$NS_FILE/$seat" \
+@@ -1360,7 +1416,7 @@ EOF
+ 
+   # The provisioned reality: step 4 created exactly these directories under the
+   # fixture HOME, so the records describe seats that exist.
+-  for seat in worker-1 reviewer-1; do
++  for seat do
+     [ -d "$FHOME/.pi-seats-$NS_FILE/$seat" ] \
+       || fail "step 4 provisioned no directory for $seat under the recorded root"
+   done
+@@ -1372,7 +1428,7 @@ EOF
+   # the real namespace rather than pointed at vaguely.
+   STARTF=wheelhouse/STARTUP.md
+   test -s "$STARTF" || fail "$STARTF missing or empty"
+-  for seat in worker-1 reviewer-1; do
++  for seat do
+     grep -qF "seats/seat-env.sh $NS_FILE $seat" "$STARTF" \
+       || fail "STARTUP.md has no provisioning line 'seats/seat-env.sh $NS_FILE $seat'"
+     grep -qF "bun seats/adapter.ts spawn $seat" "$STARTF" \
+@@ -1400,7 +1456,7 @@ EOF
+   # The negative half: the pre-Pi machinery must be GONE. A STARTUP.md still
+   # carrying claude-seats exports, wire-seats or SEATS_ROOT is a launch card
+   # for seats that no longer exist.
+-  for dead in 'CLAUDE_CONFIG_DIR' 'wire-seats' 'SEATS_ROOT' '\.claude-seats'; do
++  for dead in 'wire-seats' 'SEATS_ROOT' '\.claude-seats'; do
+     if grep -qE "$dead" "$STARTF" "$SEATSF"; then
+       grep -nE "$dead" "$STARTF" "$SEATSF"
+       fail "installed seat surfaces still carry the retired pre-Pi machinery '$dead'"
