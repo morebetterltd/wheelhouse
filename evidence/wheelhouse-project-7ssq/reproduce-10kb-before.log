@@ -1,0 +1,13 @@
+spawn: seat worker-1: pid 845, session sess
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7ssq/.wheelhouse-runs/wheelhouse-project-7ssq/repro-fixture/proj/seats/logs/worker-1.jsonl
+dispatch-10kb: seat worker-1 stopped; session sess kept for resume
+seat worker-1: pid 2906, session sess
+  events -> [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7ssq/.wheelhouse-runs/wheelhouse-project-7ssq/repro-fixture/proj/seats/logs/worker-1.jsonl
+STOP: dispatch prompt failed for seat "worker-1": timed out after 1500ms waiting for prompt response. stderr tail:
+
+dispatch_rc=1
+log_tail:
+{"id":"c8cbcd5a-f594-4322-9bd7-c8a61f90dea7","type":"response","command":"get_state","success":true,"data":{"isStreaming":false,"sessionFile":"[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7ssq/.wheelhouse-runs/wheelhouse-project-7ssq/repro-fixture/home/.pi-seats-repro/worker-1/session.jsonl","sessionId":"sess"}}
+{"id":"667cd87d-310f-4ca6-9a86-21be9adf399f","type":"response","command":"get_state","success":true,"data":{"isStreaming":false,"sessionFile":"[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7ssq/.wheelhouse-runs/wheelhouse-project-7ssq/repro-fixture/home/.pi-seats-repro/worker-1/session.jsonl","sessionId":"sess"}}
+{"id":"67306615-4ebc-4445-aa4c-c22aeb6e3cfc","type":"response","command":"get_state","success":true,"data":{"isStreaming":false,"sessionFile":"[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-7ssq/.wheelhouse-runs/wheelhouse-project-7ssq/repro-fixture/home/.pi-seats-repro/worker-1/session.jsonl","sessionId":"sess"}}
+rc=1
