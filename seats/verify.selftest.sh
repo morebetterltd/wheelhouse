@@ -440,6 +440,17 @@ else fail "NOT BENCHED APPROVE exited ${RC}: $OUT"; fi
 if grep -q "verdict: APPROVE — NOT BENCHED: the docs deployable" "$VDIR/bead-1nb.md" 2>/dev/null; then
   pass "the NOT BENCHED qualifier survives into the verdict record"
 else fail "NOT BENCHED qualifier lost from the verdict file"; fi
+if grep -q "BENCH GAP STANDING" "$VDIR/bead-1nb.md" 2>/dev/null && says "BENCH GAP STANDING"; then
+  pass "NOT BENCHED without expiry/target is visible as a standing bench gap"
+else fail "standing NOT BENCHED gap was silent: out=$OUT verdict=$(cat "$VDIR/bead-1nb.md" 2>/dev/null)"; fi
+cat > "$REPLY" <<EOF
+Static half verified; BENCH.md declares this gap expired.
+VERDICT: APPROVE — NOT BENCHED: CAR app user journey; expires=2000-01-01
+EOF
+run bead-1nb-expired fleet/bead-1 worker-1
+if [ $RC -eq 0 ] && says "BENCH GAP EXPIRED" && grep -q "BENCH GAP EXPIRED" "$VDIR/bead-1nb-expired.md" 2>/dev/null; then
+  pass "expired NOT BENCHED gap passes only with an explicit gate nudge"
+else fail "expired NOT BENCHED gap passed silently or failed wrong (exit $RC): $OUT verdict=$(cat "$VDIR/bead-1nb-expired.md" 2>/dev/null)"; fi
 
 phase "1b. branch moves mid-pass — verdict stays pinned, publish waits"
 MOVE_PROJ="$FIX/proj-move"
