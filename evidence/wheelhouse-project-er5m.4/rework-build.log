@@ -1,0 +1,7 @@
+RUN bun build seats/adapter.ts seats/drivers/codex/shim.ts --outdir .wheelhouse-runs/wheelhouse-project-er5m.4/rework-build
+Bundled 6 modules in 26ms
+
+  adapter.js            70.58 KB  (entry point)
+  drivers/codex/shim.js  21.0 KB   (entry point)
+
+rc=0

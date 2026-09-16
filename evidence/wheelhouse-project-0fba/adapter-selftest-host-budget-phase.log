@@ -1,0 +1,11 @@
+7. host build budget — opt-in PATH shim serializes cargo and allows re-entrant children
+  ok    host budget: concurrent spawn/probe both complete through shim
+  ok    host budget: second cargo build starts after first cargo build exits
+  ok    host budget: re-entrant child reaches real cargo without deadlock and inherits caps
+  ok    host budget: dotnet real tool sees -maxcpucount:8 and MSBUILDDISABLENODEREUSE=1
+  ok    host budget: missing lock primitive fails with actionable STOP
+  ok    host budget: real flock(2) primitive releases lock after SIGKILLed holder
+  ok    host budget: cargo --contract prints lock/jobs/test_threads/reentry and parity scan result
+  ok    host budget: --contract parity scan reports mismatched fleet shims
+
+rc=0

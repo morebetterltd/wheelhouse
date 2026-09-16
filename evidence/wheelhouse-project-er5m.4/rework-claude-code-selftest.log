@@ -1,0 +1,3 @@
+RUN seats/drivers/claude-code/selftest.sh
+claude-code.selftest: PASS (shim normalized events, brief text, rate limits, and stripped credential env vars)
+rc=0

@@ -1,0 +1,5 @@
+RUN timeout 900 seats/drivers/codex/selftest.sh
+start=2026-09-15T23:43:05Z
+codex.selftest: PASS (shim queue, steer, mappings, auth-dead, streaming state, idle settle, single agent_end, and stripped credential env vars)
+end=2026-09-15T23:43:09Z
+rc=0

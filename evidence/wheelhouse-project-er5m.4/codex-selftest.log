@@ -1,0 +1,1 @@
+codex.selftest: PASS (shim normalized events, thread.path, and stripped credential env vars)

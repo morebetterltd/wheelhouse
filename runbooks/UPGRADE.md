@@ -143,6 +143,64 @@ done
 
 There is no safe deterministic conversion from an old roster: the same `provider` can be backed by file credentials or environment credentials, and committed roster data deliberately does not expose the secret source. Do not invent `shadow` while doing this. Absence still means `false`; add `"shadow": true` only when the project is intentionally creating a mirror seat whose output never gates or carries assigned work.
 
+### Change a seat's harness
+
+Existing rosters that have no `harness` field need **zero edits** for this upgrade: absent `harness` means `pi`. Leave those rows alone unless the principal is deliberately switching that named seat to another harness. A valid upgrade must not require touching any seat the principal did not switch; their `seats/state.json` records, sessions, account dirs, and worktrees stay intact.
+
+For the one seat being changed:
+
+1. Wait until it is idle, then stop only that seat:
+
+   ```bash
+   bun seats/adapter.ts status
+   bun seats/adapter.ts stop <seat>
+   ```
+
+   Do not run `stop-all` as a shortcut unless the principal asked to stop the whole fleet. Other seats are not part of this migration.
+
+2. Edit only that seat's entry in `seats/seats.json`:
+
+   - set `harness` to `pi`, `claude-code`, or `codex`;
+   - set the matching `provider`, `model`, and `account.authRoute`;
+   - for `claude-code`, set `provider: "anthropic"`, choose a Claude Code model alias/id, and keep an `allowedTools` list for unattended `acceptEdits` mode;
+   - for `codex`, use the Codex account's live model list (for ChatGPT Codex seats this is the `openai-codex` provider family) and record `authRoute: "oauth"` or `"api_key"` as appropriate.
+
+3. Provision the new harness binding directory for that same seat name:
+
+   ```bash
+   NS=$(sed -n 's/^namespace=//p' wheelhouse/.template-source | tail -1)
+   seats/seat-env.sh "$NS" <seat> "$(pwd -P)"
+   ```
+
+   `seat-env.sh` reads the roster and prints the binding for the selected harness: `PI_CODING_AGENT_DIR` for `pi`, `CLAUDE_CONFIG_DIR` for `claude-code`, or `CODEX_HOME` for `codex`. It also prints the credential flow for that harness. Run that login/key step as the account the seat should be:
+
+   - `pi`: OAuth `/login` in `pi`, an operator-written `auth.json` for `api_key`, or provider env var for `env`;
+   - `claude-code`: `CLAUDE_CONFIG_DIR=<dir> claude auth login --claudeai` for subscription OAuth, or `claude auth login --console` for metered API-key setup;
+   - `codex`: `CODEX_HOME=<dir> codex login` / `codex login --device-auth` for OAuth, or `printenv OPENAI_API_KEY | CODEX_HOME=<dir> codex login --with-api-key` for API-key setup.
+
+4. Probe the binding through the selected harness before doing work:
+
+   ```bash
+   bun seats/adapter.ts probe <seat>
+   ```
+
+   A good probe prints exactly `OK`. If it fails, fix that seat's harness login/model/allowed-tools entry; do not edit unrelated seats.
+
+5. Reset only that seat so it starts cold under the new harness and cannot accidentally resume the old harness session:
+
+   ```bash
+   bun seats/adapter.ts reset <seat>
+   ```
+
+6. Send one smoke dispatch to a scratch bead/worktree and wait for a normal completion in that seat's log:
+
+   ```bash
+   bun seats/adapter.ts dispatch <seat> <scratch-bead-id> 'Smoke check after harness switch: reply OK and stop.'
+   tail -f seats/logs/<seat>.jsonl
+   ```
+
+The old harness session file remains history in `seats/state.json` until `reset` replaces that seat's record. Other seats' records and session files must not change; that is the falsifier for this procedure.
+
 If your install already has a verifier entry, this upgrade changes what that role means: `wheelhouse/crew/VERIFIER.md` is now the consumer-surface walker, dispatched by `bun seats/walk.ts` for ISA claims, not the bead-review verdict pass. Keep or repoint the verifier to a cheap tool-capable model (for example a GLM-class OpenRouter row when the seat's own live `pi --list-models` prints it), because the empty context is what matters, not the model's depth. Fill `wheelhouse/crew/VERIFIER.md`'s `## This project` section with this install's named surfaces — README/front door or first morning for a template-style fleet, upgrade runbook from a real baseline when one exists, or the product's staging URL/emulator/launch command/API/CLI surface. If there is no walkable consumer surface yet, write the honest gap: `no consumer surface yet — walks impossible, claims close not-walked`. Existing ISA claims that already say `Not walked:` remain valid history; this upgrade does not demand retro-walking them.
 
 If your install predates `seats/` entirely — every seat a Claude Code session — this copy is the first half of a real migration, and the second half is written out at the end of step 7.

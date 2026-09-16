@@ -1,0 +1,1849 @@
+RUN baseline 3e3a5d1 bash -x timeout 240 seats/legibility.selftest.sh
+start=2026-09-15T22:34:23Z
++++ dirname seats/legibility.selftest.sh
+++ cd seats
+++ pwd -P
++ SELFTEST_LIB=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/selftest-lib.sh
++ . [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/selftest-lib.sh
++ set -uo pipefail
++++ dirname seats/legibility.selftest.sh
+++ cd seats
+++ pwd -P
++ HERE=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats
++ SRC=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats
++ SEED_TS='floor.ts adapter.ts verify.ts recover.ts'
++ for f in '$SEED_TS'
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/floor.ts ']'
++ for f in '$SEED_TS'
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/adapter.ts ']'
++ for f in '$SEED_TS'
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/verify.ts ']'
++ for f in '$SEED_TS'
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/recover.ts ']'
++ command -v bun
+++ command -v node
++ NODE_BIN=[home]/.nvm/versions/node/v22.21.0/bin/node
+++ command -v git
++ GIT_BIN=/usr/bin/git
++ command -v lsof
++ SCRUB=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/evidence-scrub.sh
++ '[' -x [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/evidence-scrub.sh ']'
++ exec
+++ [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/evidence-scrub.sh
+++ [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/evidence-scrub.sh
++ FAILED=0
++ FIX=
++ trap cleanup EXIT INT TERM
++ FIX_PREFIX=wheelhouse-legibility-selftest
++ sweep_stale_fixtures
++ local base=[tmpdir] d stamp phys sf pid
+++ find [tmpdir] -mindepth 1 -maxdepth 1 -type d -name 'wheelhouse-legibility-selftest.*'
++ IFS=
++ read -r d
++ return 0
+++ mktemp -d [tmpdir]/wheelhouse-legibility-selftest.6557.XXXXXX
++ FIX=[tmpdir]/wheelhouse-legibility-selftest.6557.YajwzF
+++ cd [tmpdir]/wheelhouse-legibility-selftest.6557.YajwzF
+++ pwd -P
++ FIX=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF
++ HOME_FIX=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home
++ BIN=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin
++++ command -v bun
+++ dirname [home]/.bun/bin/bun
+++ dirname [home]/.nvm/versions/node/v22.21.0/bin/node
+++ dirname /usr/bin/git
++ RUN_PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin
++ cat
++ chmod +x [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin/bd
++ cat
++ chmod +x [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin/pi
++ PROJ=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/logs [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/contracts
++ phase 'fixture import scanner — multiline, side-effect, and re-export imports are copied'
++ printf '\n%s\n' 'fixture import scanner — multiline, side-effect, and re-export imports are copied'
++ SCAN_SRC=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src
++ SCAN_PROJ=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats
++ cat
++ cat
++ cat
++ cat
++ printf 'export const multi = true;\n'
++ printf 'export const side = true;\n'
++ printf 'export const reexported = true;\n'
++ ORIG_SRC=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats
++ ORIG_PROJ=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ ORIG_SEED_TS='floor.ts adapter.ts verify.ts recover.ts'
++ SRC=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src
++ PROJ=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj
++ SEED_TS='adapter.ts floor.ts verify.ts recover.ts'
++ copy_fixture_ts
++ local 'queue=adapter.ts floor.ts verify.ts recover.ts' 'seen= ' f spec dep changed
++ :
++ changed=0
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/adapter.ts ']'
++ seen=' adapter.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/adapter.ts
++ dep=multi
++ case "$dep" in
++ dep=multi.ts
++ case "$dep" in
++ case " $queue " in
++ queue='adapter.ts floor.ts verify.ts recover.ts multi.ts'
++ changed=1
++ IFS=
++ read -r spec
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/floor.ts ']'
++ seen=' adapter.ts floor.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/floor.ts
++ dep=side-effect
++ case "$dep" in
++ dep=side-effect.ts
++ case "$dep" in
++ case " $queue " in
++ queue='adapter.ts floor.ts verify.ts recover.ts multi.ts side-effect.ts'
++ changed=1
++ IFS=
++ read -r spec
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/verify.ts ']'
++ seen=' adapter.ts floor.ts verify.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/verify.ts
++ dep=re-exported
++ case "$dep" in
++ dep=re-exported.ts
++ case "$dep" in
++ case " $queue " in
++ queue='adapter.ts floor.ts verify.ts recover.ts multi.ts side-effect.ts re-exported.ts'
++ changed=1
++ IFS=
++ read -r spec
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/recover.ts ']'
++ seen=' adapter.ts floor.ts verify.ts recover.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/recover.ts
++ '[' 1 -eq 0 ']'
++ :
++ changed=0
++ for f in '$queue'
++ case "$seen" in
++ continue
++ for f in '$queue'
++ case "$seen" in
++ continue
++ for f in '$queue'
++ case "$seen" in
++ continue
++ for f in '$queue'
++ case "$seen" in
++ continue
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/multi.ts ']'
++ seen=' adapter.ts floor.ts verify.ts recover.ts multi.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/multi.ts
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/side-effect.ts ']'
++ seen=' adapter.ts floor.ts verify.ts recover.ts multi.ts side-effect.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/side-effect.ts
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/re-exported.ts ']'
++ seen=' adapter.ts floor.ts verify.ts recover.ts multi.ts side-effect.ts re-exported.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/re-exported.ts
++ '[' 0 -eq 0 ']'
++ break
++ for f in '$queue'
++ cp [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/adapter.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/
++ for f in '$queue'
++ cp [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/floor.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/
++ for f in '$queue'
++ cp [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/verify.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/
++ for f in '$queue'
++ cp [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/recover.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/
++ for f in '$queue'
++ cp [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/multi.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/
++ for f in '$queue'
++ cp [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/side-effect.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/
++ for f in '$queue'
++ cp [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-src/re-exported.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/
++ SRC=[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats
++ PROJ=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ SEED_TS='floor.ts adapter.ts verify.ts recover.ts'
++ for dep in multi.ts side-effect.ts re-exported.ts
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/multi.ts ']'
++ pass 'fixture import scanner copies multi.ts'
++ printf '  ok    %s\n' 'fixture import scanner copies multi.ts'
++ for dep in multi.ts side-effect.ts re-exported.ts
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/side-effect.ts ']'
++ pass 'fixture import scanner copies side-effect.ts'
++ printf '  ok    %s\n' 'fixture import scanner copies side-effect.ts'
++ for dep in multi.ts side-effect.ts re-exported.ts
++ '[' -f [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/import-scan-proj/seats/re-exported.ts ']'
++ pass 'fixture import scanner copies re-exported.ts'
++ printf '  ok    %s\n' 'fixture import scanner copies re-exported.ts'
++ copy_fixture_ts
++ local 'queue=floor.ts adapter.ts verify.ts recover.ts' 'seen= ' f spec dep changed
++ :
++ changed=0
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/floor.ts ']'
++ seen=' floor.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/floor.ts
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/adapter.ts ']'
++ seen=' floor.ts adapter.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/adapter.ts
++ dep=briefs
++ case "$dep" in
++ dep=briefs.ts
++ case "$dep" in
++ case " $queue " in
++ queue='floor.ts adapter.ts verify.ts recover.ts briefs.ts'
++ changed=1
++ IFS=
++ read -r spec
++ dep=host-budget
++ case "$dep" in
++ dep=host-budget.ts
++ case "$dep" in
++ case " $queue " in
++ queue='floor.ts adapter.ts verify.ts recover.ts briefs.ts host-budget.ts'
++ changed=1
++ IFS=
++ read -r spec
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/verify.ts ']'
++ seen=' floor.ts adapter.ts verify.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/verify.ts
++ dep=briefs
++ case "$dep" in
++ dep=briefs.ts
++ case "$dep" in
++ case " $queue " in
++ IFS=
++ read -r spec
++ dep=host-budget
++ case "$dep" in
++ dep=host-budget.ts
++ case "$dep" in
++ case " $queue " in
++ IFS=
++ read -r spec
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/recover.ts ']'
++ seen=' floor.ts adapter.ts verify.ts recover.ts '
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/recover.ts
++ IFS=
++ read -r spec
++ '[' 1 -eq 0 ']'
++ :
++ changed=0
++ for f in '$queue'
++ case "$seen" in
++ continue
++ for f in '$queue'
++ case "$seen" in
++ continue
++ for f in '$queue'
++ case "$seen" in
++ continue
++ for f in '$queue'
++ case "$seen" in
++ continue
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/briefs.ts ']'
++ seen=' floor.ts adapter.ts verify.ts recover.ts briefs.ts '
++ IFS=
++ read -r spec
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/briefs.ts
++ for f in '$queue'
++ case "$seen" in
++ '[' -f [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/host-budget.ts ']'
++ seen=' floor.ts adapter.ts verify.ts recover.ts briefs.ts host-budget.ts '
+++ [home]/.nvm/versions/node/v22.21.0/bin/node -e '
+        const fs = require("fs");
+        const text = fs.readFileSync(process.argv[1], "utf8");
+        const specs = new Set();
+        const patterns = [
+          /\bimport\s+(?:[\s\S]*?\s+from\s*)?["'\''](\.\/[^"'\'']+)["'\'']/g,
+          /\bexport\s+(?:\*|\{[\s\S]*?\})\s+from\s*["'\''](\.\/[^"'\'']+)["'\'']/g,
+        ];
+        for (const re of patterns) {
+          let m;
+          while ((m = re.exec(text))) specs.add(m[1]);
+        }
+        for (const spec of specs) console.log(spec);
+      ' [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/host-budget.ts
++ IFS=
++ read -r spec
++ '[' 0 -eq 0 ']'
++ break
++ for f in '$queue'
++ cp [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/floor.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/
++ for f in '$queue'
++ cp [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/adapter.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/
++ for f in '$queue'
++ cp [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/verify.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/
++ for f in '$queue'
++ cp [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/recover.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/
++ for f in '$queue'
++ cp [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/briefs.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/
++ for f in '$queue'
++ cp [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-zg2m/.wheelhouse-runs/wheelhouse-project-zg2m/baseline-3e3a5d1/seats/host-budget.ts [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/
++ printf '# Fleet: Worker\n\nfixture brief.\n'
++ printf '# Crew: Reviewer\n\nfixture brief.\n'
++ printf '# Crew: Verifier\n\nfixture brief.\n'
++ cat
++ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/q-seat
++ printf '{\n  "%s": true\n}\n' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ '[' q-seat = a-seat ']'
++ printf '{"stub":"identity"}\n'
++ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat
++ printf '{\n  "%s": true\n}\n' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ '[' a-seat = a-seat ']'
++ printf '{}\n'
++ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/d-seat
++ printf '{\n  "%s": true\n}\n' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ '[' d-seat = a-seat ']'
++ printf '{"stub":"identity"}\n'
++ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/r-seat
++ printf '{\n  "%s": true\n}\n' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ '[' r-seat = a-seat ']'
++ printf '{"stub":"identity"}\n'
++ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/e-seat
++ printf '{\n  "%s": true\n}\n' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ '[' e-seat = a-seat ']'
++ printf '{"stub":"identity"}\n'
++ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/u-seat
++ printf '{\n  "%s": true\n}\n' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ '[' u-seat = a-seat ']'
++ printf '{"stub":"identity"}\n'
++ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/verifier
++ printf '{\n  "%s": true\n}\n' [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ '[' verifier = a-seat ']'
++ printf '{"stub":"identity"}\n'
++ cd [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj
++ git init -q
++ git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base
++ git branch fleet/bead-rev
++ git branch fleet/bead-ev
++ STATE=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/state.json
++ VDIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/verdicts
++ REPLY=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/reply.txt
++ ME=6557
++ phase 'phase 1: QUOTA — a quota-shaped dispatch failure is amber, never done'
++ printf '\n%s\n' 'phase 1: QUOTA — a quota-shaped dispatch failure is amber, never done'
++ arun spawn q-seat
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/adapter.ts spawn q-seat
++ OUT='seat q-seat: pid 12325, session 97fafd99-bbad-49f2-b74b-7040cbc37547
+  events -> [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/logs/q-seat.jsonl'
++ RC=0
++ '[' 0 -eq 0 ']'
++ pass 'q-seat spawns against the stub'
++ printf '  ok    %s\n' 'q-seat spawns against the stub'
++ mkdir -p [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/.wheelhouse-worktrees/bead-q
++ arun dispatch q-seat bead-q 'QUOTA please'
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/adapter.ts dispatch q-seat bead-q 'QUOTA please'
++ OUT='seat q-seat stopped; session 97fafd99-bbad-49f2-b74b-7040cbc37547 kept for resume
+seat q-seat: pid 14312, session 28c3205f-837e-40fc-b09b-d8a950e4ae2e
+  events -> [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/logs/q-seat.jsonl
+STOP: dispatch failed for seat "q-seat": 429: usage limit reached — quota exhausted for this account. stderr tail:'
++ RC=1
++ '[' 1 -ne 0 ']'
++ says 'dispatch failed'
++ case "$OUT" in
++ return 0
++ pass 'quota-shaped dispatch fails loudly (rc=1) — non-success at the adapter'
++ printf '  ok    %s\n' 'quota-shaped dispatch fails loudly (rc=1) — non-success at the adapter'
+++ state_get q-seat lastCapacityEvent
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home bun -e 'const s=require('\''[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/state.json'\'');const v=s.seats['\''q-seat'\'']?.['\''lastCapacityEvent'\''];if(v!=null)console.log(typeof v==='\''object'\''?JSON.stringify(v):v)'
++ '[' -n '{"at":"2026-09-15T22:34:30.251Z","detail":"429: usage limit reached — quota exhausted for this account"}' ']'
++ pass 'state.json carries the capacity stamp'
++ printf '  ok    %s\n' 'state.json carries the capacity stamp'
++ arun status
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/adapter.ts status
++ OUT='q-seat           worker            PARKED   pid 14312   last-event response  bead bead-q
+                 CAPACITY: QUOTA at 2026-09-15T22:34:30.251Z — 429: usage limit reached — quota exhausted for this account
+                 RE-PROBE: bun seats/adapter.ts probe q-seat'
++ RC=0
++ says 'CAPACITY: QUOTA'
++ case "$OUT" in
++ return 0
++ pass 'adapter status surfaces the CAPACITY line'
++ printf '  ok    %s\n' 'adapter status surfaces the CAPACITY line'
++ render
++ local f=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/floor.ts
++ shift
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin COLUMNS=160 LINES=70 NO_COLOR=1 bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/floor.ts --once
++ OUT='SPOTLIGHT q-seat (worker; -/-; account -; last 2s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 2s ago
+[2] a-seat | worker | -/- | - | ○ off - | - | -
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ RC=0
++ seatline q-seat
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 2s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 2s ago
+[2] a-seat | worker | -/- | - | ○ off - | - | -
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep -q PARKED/QUOTA
++ grep q-seat
++ seatline q-seat
++ grep -q 'bun seats/adapter.ts probe q-seat'
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 2s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 2s ago
+[2] a-seat | worker | -/- | - | ○ off - | - | -
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep q-seat
++ pass 'floor: amber PARKED/QUOTA names the re-probe command'
++ printf '  ok    %s\n' 'floor: amber PARKED/QUOTA names the re-probe command'
++ grep -q AMBER
++ seatline q-seat
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 2s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 2s ago
+[2] a-seat | worker | -/- | - | ○ off - | - | -
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep q-seat
++ pass 'floor: quota cue is AMBER'
++ printf '  ok    %s\n' 'floor: quota cue is AMBER'
++ cp [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/seats.json [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/seats.before-roster-drop.json
++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home ROSTER=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/seats.json bun -e '
+  const fs = require("fs");
+  const f = process.env.ROSTER;
+  const roster = JSON.parse(fs.readFileSync(f, "utf8"));
+  delete roster.seats["q-seat"];
+  fs.writeFileSync(f, JSON.stringify(roster, null, 2) + "\n");
+'
++ arun dispatch q-seat bead-q 'QUOTA after roster removal'
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/adapter.ts dispatch q-seat bead-q 'QUOTA after roster removal'
++ OUT='STOP: dispatch failed for seat "q-seat": 429: usage limit reached — quota exhausted for this account. stderr tail:'
++ RC=1
++ '[' 1 -ne 0 ']'
++ says 'dispatch failed'
++ case "$OUT" in
++ return 0
++ says '429: usage limit reached'
++ case "$OUT" in
++ return 0
++ says 'no seat named'
++ case "$OUT" in
++ return 1
++ pass 'dispatch failure keeps the real error when the seat vanished from the roster'
++ printf '  ok    %s\n' 'dispatch failure keeps the real error when the seat vanished from the roster'
++ cp [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/seats.before-roster-drop.json [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/seats.json
++ phase 'phase 2: AUTH FAILURE — red, names the credential flow, distinct from quota'
++ printf '\n%s\n' 'phase 2: AUTH FAILURE — red, names the credential flow, distinct from quota'
++ arun spawn a-seat
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/adapter.ts spawn a-seat
++ OUT='STOP: seat "a-seat" has no identity — [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat/auth.json is missing or empty.
+      OAuth: PI_CODING_AGENT_DIR="[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat" pi, then type /login in the REPL and /exit after the browser flow
+      api_key: write [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat/auth.json or set account.authRoute=env and export the provider env var in the shell that spawns this seat'
++ RC=1
++ '[' 1 -ne 0 ']'
++ says 'no identity'
++ case "$OUT" in
++ return 0
++ says 'type /login'
++ case "$OUT" in
++ return 0
++ says api_key
++ case "$OUT" in
++ return 0
++ pass 'spawn on an empty {} auth.json is refused, printing the credential flow'
++ printf '  ok    %s\n' 'spawn on an empty {} auth.json is refused, printing the credential flow'
++ cat
++ inject_seat a-seat 6557 ''
++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home INJ_STATE=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/state.json INJ_NAME=a-seat INJ_PID=6557 INJ_BEAD= INJ_PROJ=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj bun -e '
+    const fs = require("fs");
+    const f = process.env.INJ_STATE;
+    const s = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { seats: {} };
+    const n = process.env.INJ_NAME, p = process.env.INJ_PROJ;
+    s.seats[n] = {
+      pid: Number(process.env.INJ_PID), startedAt: "2026-08-30T00:00:00Z",
+      accountDir: process.env.HOME + "/.pi-seats-leg/" + n, role: "worker", roleBrief: "x",
+      fifo: p + "/seats/run/" + n + ".stdin", log: p + "/seats/logs/" + n + ".jsonl",
+      sessionId: "s-" + n, sessionFile: null,
+      ...(process.env.INJ_BEAD ? { lastBead: process.env.INJ_BEAD } : {}),
+    };
+    fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
+  '
++ COLS=400
++ render
++ local f=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/floor.ts
++ shift
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin COLUMNS=400 LINES=70 NO_COLOR=1 bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/floor.ts --once
++ OUT='SPOTLIGHT q-seat (worker; -/-; account -; last 0s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 0s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: auth.json or provider env var | - | 0s ago
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ RC=0
++ seatline a-seat
++ grep -q 'AUTH DEAD'
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 0s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 0s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: auth.json or provider env var | - | 0s ago
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep a-seat
++ seatline a-seat
++ grep a-seat
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 0s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 0s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: auth.json or provider env var | - | 0s ago
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep -q 'then /login in the REPL'
++ seatline a-seat
++ grep -q api_key
++ grep a-seat
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 0s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 0s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: auth.json or provider env var | - | 0s ago
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ pass 'floor: red AUTH DEAD with the credential flow'
++ printf '  ok    %s\n' 'floor: red AUTH DEAD with the credential flow'
++ render
++ local f=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/floor.ts
++ shift
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin COLUMNS=160 LINES=70 NO_COLOR=1 bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/floor.ts --once
++ OUT='SPOTLIGHT q-seat (worker; -/-; account -; last 1s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 1s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: au…
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ RC=0
++ seatline a-seat
++ grep -q ' RED'
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 1s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 1s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: au…
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep a-seat
++ pass 'floor: auth cue is RED'
++ printf '  ok    %s\n' 'floor: auth cue is RED'
++ seatline a-seat
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 1s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 0s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 1s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: au…
+[3] d-seat | worker | -/- | - | ○ off - | - | -
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep -q QUOTA
++ grep a-seat
++ pass 'auth line is DISTINCT from the quota line'
++ printf '  ok    %s\n' 'auth line is DISTINCT from the quota line'
++ phase 'phase 3: DEAD PROCESS — SIGKILL, red PROCESS GONE, recover says DEAD'
++ printf '\n%s\n' 'phase 3: DEAD PROCESS — SIGKILL, red PROCESS GONE, recover says DEAD'
++ arun spawn d-seat
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/adapter.ts spawn d-seat
++ OUT='seat d-seat: pid 21306, session 731c5983-a5be-4168-9531-5ebd2e1b7c6a
+  events -> [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/logs/d-seat.jsonl'
++ RC=0
++ '[' 0 -eq 0 ']'
++ pass 'd-seat spawns'
++ printf '  ok    %s\n' 'd-seat spawns'
++ arun dispatch d-seat bead-d hello
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/adapter.ts dispatch d-seat bead-d hello
++ OUT='STOP: seat cwd target does not exist or is not a directory: [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/.wheelhouse-worktrees/bead-d — create the worktree before spawning/dispatching there (see wheelhouse/fleet/WORKER.md)'
++ RC=1
+++ state_get d-seat pid
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home bun -e 'const s=require('\''[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/state.json'\'');const v=s.seats['\''d-seat'\'']?.['\''pid'\''];if(v!=null)console.log(typeof v==='\''object'\''?JSON.stringify(v):v)'
++ DPID=21306
++ kill -9 21306
++ sleep 0.3
++ kill -0 21306
++ pass 'd-seat pid 21306 SIGKILLed'
++ printf '  ok    %s\n' 'd-seat pid 21306 SIGKILLed'
++ render
++ local f=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/floor.ts
++ shift
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/usr/bin:/usr/bin:/bin:/usr/sbin COLUMNS=160 LINES=70 NO_COLOR=1 bun [tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/proj/seats/floor.ts --once
++ OUT='SPOTLIGHT q-seat (worker; -/-; account -; last 2s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 2s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: au…
+[3] d-seat | worker | -/- | - | ● RED PROCESS GONE — pid 21306 died; check seats/logs/d-seat.stderr.log | - | 1s ago
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ RC=0
++ grep -q 'PROCESS GONE'
++ seatline d-seat
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 2s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 2s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: au…
+[3] d-seat | worker | -/- | - | ● RED PROCESS GONE — pid 21306 died; check seats/logs/d-seat.stderr.log | - | 1s ago
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep d-seat
++ seatline d-seat
++ grep -q d-seat.stderr.log
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 2s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 2s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: au…
+[3] d-seat | worker | -/- | - | ● RED PROCESS GONE — pid 21306 died; check seats/logs/d-seat.stderr.log | - | 1s ago
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep d-seat
++ pass 'floor: red PROCESS GONE names the stderr log'
++ printf '  ok    %s\n' 'floor: red PROCESS GONE names the stderr log'
++ grep -q ' RED'
++ seatline d-seat
++ grep d-seat
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 2s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 2s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: au…
+[3] d-seat | worker | -/- | - | ● RED PROCESS GONE — pid 21306 died; check seats/logs/d-seat.stderr.log | - | 1s ago
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ pass 'floor: dead-process cue is RED'
++ printf '  ok    %s\n' 'floor: dead-process cue is RED'
++ grep -q AUTH
++ seatline d-seat
++ printf '%s\n' 'SPOTLIGHT q-seat (worker; -/-; account -; last 2s ago; pid 14312) ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this ac…
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] get_state ok
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+[rpc] prompt FAIL: 429: usage limit reached — quota exhausted for this account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ RAIL  name | role | provider/model | account | state | active bead | last activity   1-9 pin  0 status  f follow(off)  o/q overview  Ctrl-C quit
+▶[1] q-seat | worker | -/- | - | ● AMBER PARKED/QUOTA — probe with: bun seats/adapter.ts probe q-seat — 2s ago: 429: usage limit reached — quota exhausted for this account | bead-q | 2s ago
+[2] a-seat | worker | -/- | - | ● RED AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home/.pi-seats-leg/a-seat pi, then /login in the REPL; api_key: au…
+[3] d-seat | worker | -/- | - | ● RED PROCESS GONE — pid 21306 died; check seats/logs/d-seat.stderr.log | - | 1s ago
+[4] r-seat | worker | -/- | - | ○ off - | - | -
+[5] e-seat | worker | -/- | - | ○ off - | - | -
+[6] u-seat | worker | -/- | - | ○ off - | - | -
+[7] verifier | verifier | -/- | - | ○ off - | - | -
+ [0] STATUS | - | -/- | - | ● cell full fleet status | - | -'
++ grep d-seat
++ pass 'dead-process line is DISTINCT from the auth line'
++ printf '  ok    %s\n' 'dead-process line is DISTINCT from the auth line'
++ arun status
+++ env HOME=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/home PATH=[tmpdir]wheelhouse-legibility-selftest.6557.YajwzF/bin:[home]/.bun/bin:[home]/.nvm/versions/node/v22.21.0/bin:/uend=2026-09-15T22:40:58Z
+rc=124

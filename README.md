@@ -135,6 +135,14 @@ Your install ships a bench stub that exits non-zero. Until you implement it, no 
 
 A seat is a standing session pinned to **one subscription, serving one human beneficiary**. No seat serves anyone else. This is a licensing-compliance statement, not a preference, and it does not change with the size of your fleet.
 
+## Multiple fleets on one host
+
+Independent fleets on the same machine cannot see each other's rosters or worktrees, so heavy builds need a machine-wide budget rather than a per-fleet convention. When a project opts in by creating `seats/host-budget.json`, the seat machinery prepends `seats/bin` to worker, reviewer, and verifier PATHs for every harness (`pi`, `claude-code`, or `codex`) rather than making separate per-harness build rules. The shipped shims live in `seats/bin`: `host-build-shim` with `cargo` and `dotnet` symlinks.
+
+The shared lock is the fixed path `~/.cache/wheelhouse-build.lock`, held with blocking `flock` for the whole build/test invocation. The car fleets that motivated this used historical path `~/.cache/car-build.lock`; name that difference when checking parity. The re-entry variable is `WHEELHOUSE_BUILD_LOCK_HELD`; caps are `jobs=8` and `test_threads=4` for cargo/nextest, and `-maxcpucount:8` plus `MSBUILDDISABLENODEREUSE=1` for dotnet. Cross-fleet contract scans look under `~/.config/wheelhouse/host-build-shims`.
+
+On macOS, exclude the worktrees directory and shared build caches from Spotlight indexing, or the indexer can spend hours walking generated build output. Review passes should prefer targeted tests for touched crates (for example `cargo test -p <crate>`) over workspace-wide `nextest` unless the bead requires the whole suite: `nextest` launches every test binary twice (`--list` and `--list --ignored`), and Gatekeeper assesses those freshly built binaries on each launch.
+
 ## Upgrading
 
 Already have a `wheelhouse/` in this project? Use this path, even if it is an early v1 install from before Pi seats. The same paste block covers current installs and the v1 Claude Code seats-to-Pi migration.
