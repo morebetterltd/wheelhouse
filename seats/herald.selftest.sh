@@ -85,6 +85,22 @@ case "$cmd" in
 esac
 EOF
 chmod +x "$FIX/bin/tmux"
+cat > "$FIX/bin/bd" <<'EOF'
+#!/usr/bin/env bash
+set -u
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  show)
+    bead="${1:-}"; file="${BD_SHOW_DIR:?}/$bead.txt"; [ -f "$file" ] && cat "$file" || true ;;
+  comment)
+    bead="${1:-}"; shift || true
+    mkdir -p "${BD_COMMENT_DIR:?}"
+    cat > "${BD_COMMENT_DIR}/$bead.comment"
+    printf 'commented %s\n' "$bead" ;;
+  *) echo "bd stub: unsupported $cmd" >&2; exit 2 ;;
+esac
+EOF
+chmod +x "$FIX/bin/bd"
 SEND_LOG="$FIX/send-keys.log"
 
 printf '%s\n' '{"type":"agent_end","messages":["rename retry settle"],"timestamp":"2026-09-10T00:00:00Z"}' > "$PROJ/seats/logs/rename-retry.jsonl"
@@ -153,6 +169,23 @@ if [ "$(json_count '/thinkingSignature|^\\{\"type\":\"thinking\"/.test(r.detail)
   pass "thinking/thinkingSignature frames never appear in settle row detail"
 else
   fail "thinking frame leaked into inbox detail: $(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true)"
+fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/logs"/*.jsonl 2>/dev/null || true
+mkdir -p "$FIX/bd-show" "$FIX/bd-comments"
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"reviewer-1":{"role":"reviewer","lastBead":"bead-review","lastPrompt":"Bead bead-review\n\nReview this branch.","lastDispatchAt":"2026-09-16T00:00:00Z"}}}
+JSON
+printf 'worker report only\n' > "$FIX/bd-show/bead-review.txt"
+cat > "$PROJ/seats/logs/reviewer-1.jsonl" <<'JSONL'
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"Review complete.\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED"}]}]}
+JSONL
+seed_log_cursor reviewer-1.jsonl 0
+OUT="$(BD_SHOW_DIR="$FIX/bd-show" BD_COMMENT_DIR="$FIX/bd-comments" PATH="$FIX/bin:$PATH" run_herald --once 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && [ "$(json_count 'r.class==="verdict-not-posted" && r.seat==="reviewer-1" && /VERDICT: APPROVE/.test(r.detail)')" = 1 ] && grep -q '^relayed by adapter:' "$FIX/bd-comments/bead-review.comment" 2>/dev/null && grep -q 'VERDICT: APPROVE' "$FIX/bd-comments/bead-review.comment"; then
+  pass "unposted reviewer verdict is relayed to the bead and heralded"
+else
+  fail "unposted reviewer verdict was not relayed/heralded (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true) comment=$(cat "$FIX/bd-comments/bead-review.comment" 2>/dev/null || true))"
 fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/state.json" "$PROJ/seats/logs"/*.jsonl "$PROJ/seats/logs"/*.jsonl.1 2>/dev/null || true
