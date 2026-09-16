@@ -1,0 +1,12 @@
+(paths redacted for retention: <workdir> = this run's mktemp workdir, removed at teardown; <evidence> = this output directory; <template-repo> = the repository under test; <home> = $HOME. Tool locations printed by the artifact's own preflight are left as found.)
+{
+  "enabled": true,
+  "lock": "~/.cache/wheelhouse-build.lock",
+  "toolchains": ["cargo", "dotnet"],
+  "caps": {
+    "cargoBuildJobs": 8,
+    "nextestTestThreads": 4,
+    "dotnetMaxCpuCount": 8
+  },
+  "cachePolicy": "shared-under-host-lock"
+}

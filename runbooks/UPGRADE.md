@@ -131,6 +131,30 @@ done
 
 `seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
 
+### Optional host build budget for existing installs
+
+If this project has heavy builds or tests (Rust, C++, dotnet, large JS) and the principal wants them serialized machine-wide, adopt the same opt-in record that new installs choose in `BOOTSTRAP.md` question 9:
+
+1. Keep/copy the shipped shims under `seats/bin`: `host-build-shim`, plus `cargo` and `dotnet` symlinks to it.
+2. Ensure seat launch and one-shot commands will see that directory by relying on the copied adapter/verify/walk machinery; when `seats/host-budget.json` exists, they prepend this project's `seats/bin` to PATH.
+3. Write `seats/host-budget.json`:
+
+   ```json
+   {
+     "enabled": true,
+     "lock": "~/.cache/wheelhouse-build.lock",
+     "toolchains": ["cargo", "dotnet"],
+     "caps": {
+       "cargoBuildJobs": 8,
+       "nextestTestThreads": 4,
+       "dotnetMaxCpuCount": 8
+     },
+     "cachePolicy": "shared-under-host-lock"
+   }
+   ```
+
+If the project does not opt in, do not write `seats/host-budget.json`; remove `seats/bin` if this upgrade copied it but the install is intentionally staying out of the host budget.
+
 If this project already had Pi seats, open `seats/seats.json` now and inspect every carried seat. Current rosters may record two fields older Pi rosters do not: `account.authRoute`, which is the credential route (`oauth`, `api_key`, or `env`) that gave the seat its identity, and `shadow`, which is a boolean only for intentional mirror seats. Back-fill `account.authRoute` for each carried seat from the route you actually use — OAuth `/login` for `openai-codex` subscription accounts, a file-backed provider entry in that seat's `auth.json` for `api_key`, or an exported provider env var for `env` — and do not record any credential material. Then read the JSON and probe every seat so both syntax and route are checked by the copied machinery:
 
 ```bash

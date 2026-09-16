@@ -1,0 +1,10 @@
+RUN seats/placeholder-grep.selftest.sh
+start=2026-09-16T00:00:48Z
+placeholder grep selftest: binary evidence fixture
+  ok    text-only grep ignores a PNG carrying the {{ byte pair
+
+placeholder grep selftest: planted text placeholder
+  ok    text placeholder still fails the prescribed check
+placeholder-grep.selftest: PASS (2 legs)
+end=2026-09-16T00:00:48Z
+rc=0
