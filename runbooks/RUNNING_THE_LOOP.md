@@ -152,6 +152,8 @@ If a change touches `seats/adapter.ts` status rendering, liveness checks, orphan
 
 Push, open and merge PRs, and run automated deploys per your project's recorded authority, in `wheelhouse/INTEGRATOR.md`'s project section. Before acting on a reviewer verdict file, run `seats/push-authority-lint.sh` so a stale `PUSH: ... principal-only` line cannot contradict a recorded project push grant unnoticed. The shipped default is all the way; an empty section means the install failed to record its authority, not that a generated conservative agent profile owns the answer. Ask once with a recommendation and default, write the answer, then proceed.
 
+When publishing a reviewed tip by object id, force Git to resolve the token as a commit object, not as a same-named ref: push `<tip>^{commit}`, never a bare 40-hex token. Refuse before pushing if a local branch exists with that exact name; the one-line detector is `git show-ref --verify --quiet "refs/heads/$tip" && { echo "refusing: local branch named like reviewed tip $tip" >&2; exit 1; }`. A SHA-named branch is a cleanup defect, not something to publish around.
+
 ### 7. Close
 
 Close the bead and drop the review-queue label in the same breath, after the integrator has satisfied `wheelhouse/INTEGRATOR.md`'s claim-move duty or its explicit no-claim-moved escape hatch. A closed bead still carrying it reads as in-flight to everyone else. `wheelhouse/GRAPH.md` says so; it is listed here because it is the step most often forgotten at the end of a long round.

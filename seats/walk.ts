@@ -404,7 +404,7 @@ function main(): void {
   }
 
   phase = "prepare scratch workspace";
-  const scratchCwd = makeScratchCwd(ROOT);
+  const scratchCwd = makeScratchCwd(ROOT, "review");
   const helperBin = path.join(scratchCwd, ".wheelhouse-walk-bin");
   const captureHelper = writeCaptureHelper(helperBin, outDir);
   let workspaceRel = ".";
