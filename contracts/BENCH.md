@@ -47,6 +47,15 @@ The template repository carries two, under `examples/`. Each is one project's im
 
 The second is the one to read if your project ships more than one deployable, or if starting from clean state means standing up a dependency rather than wiping a device.
 
+### Declared bench gaps
+
+If the bench intentionally does not cover a shipped surface yet, record the gap in this BENCH.md project section and give it either an expiry date or a coverage target. Reviewers cite that declaration with the `NOT BENCHED` verdict qualifier:
+
+- `VERDICT: APPROVE — NOT BENCHED: <gap>; expires=YYYY-MM-DD`
+- `VERDICT: APPROVE — NOT BENCHED: <gap>; target=<coverage target>`
+
+An expired gap is not an automatic BOUNCE: it is a gate-visible nudge to fund or write the missing bench, never a silent pass. The one-shot verifier records and prints `BENCH GAP EXPIRED` when `expires=YYYY-MM-DD` is before the verification date. A `NOT BENCHED` approval with neither `expires=` nor `target=` is still accepted for backward compatibility, but the gate records it as `BENCH GAP STANDING` so repeated unbenched approvals are visible instead of becoming the project's quiet default.
+
 ## This project
 
 Generated at install.
@@ -118,6 +127,23 @@ named here -- the process name, bundle id or log tag the scan matches before
 treating a finding as failure -- per clause 7's scoping half. A scan clause
 written without one fails this bench on any bystander process that stumbles
 during the run window.
+-->
+
+### Declared bench gaps
+
+<!--
+If any shipped surface is intentionally not covered by the bench yet, name it
+here and give either:
+
+- an expiry date: expires=YYYY-MM-DD, after which verify.ts prints BENCH GAP
+  EXPIRED at the gate; or
+- a coverage target: target=<the bench capability or surface that will close
+  the gap>.
+
+The matching reviewer verdict is `VERDICT: APPROVE — NOT BENCHED: <gap>;
+expires=YYYY-MM-DD` or `...; target=<coverage target>`. An expired declaration
+is a funding/scope nudge, not an automatic failure, but it must be visible at
+the gate.
 -->
 
 ### Prerequisites
