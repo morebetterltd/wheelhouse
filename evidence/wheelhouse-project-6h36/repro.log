@@ -1,0 +1,16 @@
+RUN claude --version
+2.1.273 (Claude Code)
+
+SOURCE reused: wheelhouse/evidence/harness-probes/claude-multiturn.events.jsonl
+Repro shape: claude -p --input-format stream-json --output-format stream-json --verbose --model sonnet --permission-mode acceptEdits --permission-prompts none; send a user message that starts a Bash sleep tool, then send a control_request interrupt mid-turn.
+
+Normal result event has a string result:
+{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","stop_reason":"end_turn","num_turns":1,"result_index":0,"result":"probe-1"}
+
+Interrupt acknowledgment and user interruption marker:
+{"type":"control_response","response":{"subtype":"success","request_id":"wh-int-1","response":{"still_queued":[]}}}
+{"type":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}
+
+Interrupted result event has no result key:
+{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_tools","stop_reason":"tool_use","num_turns":3,"result_index":4,"errors":["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"]}
+result_key_present=false
