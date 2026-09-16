@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
-if [ -f "$SELFTEST_LIB" ]; then
-  . "$SELFTEST_LIB"
-else
-  selftest_cleanup_fixture_processes() { :; }
-fi
+. "$SELFTEST_LIB"
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
