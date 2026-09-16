@@ -1,0 +1,48 @@
+# Partial verifier output — wheelhouse-project-qiqi
+
+- elapsed_ms: 20010
+- timeout_ms: 20000
+- last_phase: turn_start
+
+## scrubbed event-tail excerpt (sensitive accounting fields omitted)
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta"}}
+{"type":"message_end","message":{"role":"assistant","contentTypes":["thinking","text","toolCall"]}}
+{"type":"tool_execution_start","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_end","toolName":"bash","toolCallId":"[tool-call-id]","result":"[present]"}
+{"type":"message_end","message":{"role":"toolResult","contentTypes":["text"]}}
+{"type":"turn_start"}
+{"type":"turn_start"}
+{"type":"message_end","message":{"role":"user","contentTypes":["text"]}}
+{"type":"message_end","message":{"role":"assistant","contentTypes":["thinking","toolCall","toolCall"]}}
+{"type":"tool_execution_start","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_start","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_end","toolName":"bash","toolCallId":"[tool-call-id]","result":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_end","toolName":"bash","toolCallId":"[tool-call-id]","result":"[present]"}
+{"type":"message_end","message":{"role":"toolResult","contentTypes":["text"]}}
+{"type":"message_end","message":{"role":"toolResult","contentTypes":["text"]}}
+{"type":"turn_start"}
+{"type":"message_end","message":{"role":"assistant","contentTypes":["thinking","text","toolCall"]}}
+{"type":"tool_execution_start","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_update","toolName":"bash","toolCallId":"[tool-call-id]","args":"[present]"}
+{"type":"tool_execution_end","toolName":"bash","toolCallId":"[tool-call-id]","result":"[present]"}
+{"type":"message_end","message":{"role":"toolResult","contentTypes":["text"]}}
+{"type":"turn_start"}
+event_tail_json_lines=351

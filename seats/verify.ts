@@ -62,7 +62,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
-import { hostBudgetPath } from "./host-budget";
+import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness } from "./harness";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -73,6 +73,20 @@ const VERDICTS_DIR = path.join(SEATS_DIR, "verdicts");
 
 // One-shot verification reads a diff and maybe runs a bench; give it room.
 const DEFAULT_TIMEOUT_MS = 900000;
+
+function hostBuildLockPath(): string {
+  return process.env.WHEELHOUSE_BUILD_LOCK || path.join(os.homedir(), ".cache", "wheelhouse-build.lock");
+}
+
+function assertHostBuildLockAvailable(): void {
+  if (!hostBudgetEnabled(ROOT) || process.env.WHEELHOUSE_BUILD_LOCK_HELD === "1") return;
+  const lock = hostBuildLockPath();
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  const probe = spawnSync("perl", ["-MFcntl=:flock,LOCK_EX,LOCK_NB", "-e", "open(my $fh, '>>', $ARGV[0]) or die $!; exit(flock($fh, LOCK_EX|LOCK_NB) ? 0 : 75)", lock], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  if (probe.error) die(`host build budget is enabled but verify cannot probe ${lock}: ${probe.error.message}`);
+  if (probe.status === 75) die(`host build lock is held by another bead (${lock}); refusing to start verifier until the build lock is free so --timeout-ms is not spent queued on the host build lock`);
+  if (probe.status !== 0) die(`host build budget is enabled but verify cannot probe ${lock}: ${(probe.stderr || probe.stdout || "unknown error").trim()}`);
+}
 
 /**
  * A throwaway git worktree, used ONLY as the one-shot verifier spawn's
@@ -224,10 +238,33 @@ interface VerdictCandidate {
   lineNumber: number;
 }
 
+function collectJsonText(value: unknown, out: string[]): void {
+  if (value === null || value === undefined) return;
+  if (typeof value === "string") { out.push(value); return; }
+  if (Array.isArray(value)) { for (const v of value) collectJsonText(v, out); return; }
+  if (typeof value === "object") {
+    const obj: any = value;
+    for (const key of ["text", "result", "message", "content", "delta", "output"]) collectJsonText(obj[key], out);
+  }
+}
+
+function jsonStreamTextLines(stdout: string): string[] {
+  const lines: string[] = [];
+  for (const raw of stdout.split(/\r?\n/)) {
+    if (!raw.trim().startsWith("{")) continue;
+    try {
+      const texts: string[] = [];
+      collectJsonText(JSON.parse(raw), texts);
+      for (const text of texts) for (const line of text.split(/\r?\n/)) lines.push(line);
+    } catch { /* raw verifier prose is handled by liveLineCandidates below */ }
+  }
+  return lines;
+}
+
 function liveLineCandidates(stdout: string, tag: "VERDICT" | "PUSH"): VerdictCandidate[] {
   const out: VerdictCandidate[] = [];
   let inFence = false;
-  const lines = stdout.split("\n");
+  const lines = [...stdout.split("\n"), ...jsonStreamTextLines(stdout)];
   const re = new RegExp(`^${tag}:`);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -302,6 +339,21 @@ function lastVerifierPhase(stdout: string): string {
   return phase;
 }
 
+function verifierEventLogTail(stdout: string, stderr: string): string {
+  const events: string[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj?.type) events.push(line);
+    } catch { /* stdout may also contain final prose */ }
+  }
+  const tail = events.slice(-40).join("\n");
+  if (tail) return tail;
+  const stderrTail = stderr.trim().slice(-4000);
+  return stderrTail ? `no JSON event lines on stdout; stderr tail:\n${stderrTail}` : "no JSON event lines reached stdout or stderr before timeout";
+}
+
 function writePartialVerifierOutput(beadId: string, stdout: string, stderr: string, phase: string, elapsedMs: number, timeoutMs: number): string {
   fs.mkdirSync(VERDICTS_DIR, { recursive: true });
   const partialFile = path.join(VERDICTS_DIR, `${beadId}.partial.md`);
@@ -311,6 +363,11 @@ function writePartialVerifierOutput(beadId: string, stdout: string, stderr: stri
     `- elapsed_ms: ${elapsedMs}`,
     `- timeout_ms: ${timeoutMs}`,
     `- last_phase: ${phase}`,
+    ``,
+    `## seat tool-call/event log tail`,
+    "```jsonl",
+    verifierEventLogTail(stdout, stderr),
+    "```",
     ``,
     `## stdout`,
     "```",
@@ -781,6 +838,7 @@ function main(): void {
   // branch's ref resolves from, which any worktree of this repo is). See
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
+  assertHostBuildLockAvailable();
   const scratchCwd = makeScratchCwd(repoRoot);
   const startedAt = Date.now();
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: hostBudgetPath(ROOT), BEADS_ACTOR: beadsActorFor(verifierSeat) });
