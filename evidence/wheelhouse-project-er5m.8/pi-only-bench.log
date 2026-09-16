@@ -1,0 +1,46 @@
+bench: wheelhouse cold install + upgrade
+artifact: .wheelhouse-worktrees/wheelhouse-project-er5m.8 at commit 6a2444cad97433f1de18657678d6bc075c03e2e4 (ref: fleet/wheelhouse-project-er5m.8)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases: install=1 upgrade=0 interview=0
+evidence: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/er5m.8/pi-only
+
+=== install under bash ===
+bash/install: PASS (210 log lines) — [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/er5m.8/pi-only/install-bash.log
+
+=== install under zsh ===
+zsh/install: PASS (212 log lines) — [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/er5m.8/pi-only/install-zsh.log
+
+=== install negative control: recreated root AGENTS.md claim ===
+install negative control: PASS — recreated root AGENTS.md claim failed install leg (exit 1):
+84:FAIL root AGENTS.md carries the wheelhouse override; BOOTSTRAP says root AGENTS.md is product-owned
+
+=== install negative control: wheelhouse/AGENTS.md specimen leak ===
+wheelhouse/AGENTS.md specimen negative control: PASS — planted specimen failed install leg (exit 1):
+143:wheelhouse/AGENTS.md:69:Ebb specimen leak planted in wheelhouse/AGENTS.md
+144:FAIL specimen-leak grep: expected zero hits, got exit 0
+
+=== install negative control: BOOTSTRAP missing --skip-agents ===
+missing --skip-agents negative control: PASS — sabotaged BOOTSTRAP failed install leg (exit 1):
+78:FAIL artifact BOOTSTRAP.md step 5 does not prescribe bd init --skip-agents
+
+wheelhouse cold-install + upgrade bench verdict
+date: 2026-09-16T02:49:50Z
+artifact: template tree at commit 6a2444cad97433f1de18657678d6bc075c03e2e4 (repo: .wheelhouse-worktrees/wheelhouse-project-er5m.8)
+upgrade baseline: e39f3760132e98c1dffc7131c3ffee51364085ad
+phases run: install=1 upgrade=0 (bash and zsh each) interview=0
+result: PASS
+evidence: install-{bash,zsh}.log, upgrade-{bash,zsh}.log and/or interview/ in this directory
+
+This verdict cannot distinguish install-phase onboarding mechanics from
+interview quality. The interview mode benches Q7/Q8 conduct mechanics
+on one transcript; FAIL needs retained-capture adjudication and cannot
+distinguish a prose defect from interviewer-model weakness. It also
+cannot distinguish a current specimen-leak list from a stale one.
+The upgrade phase additionally cannot say that an
+install produced by the baseline commit's own BOOTSTRAP would upgrade
+the same way — its fixture has the SHAPE of that install, not its
+history — nor that the v1→Pi migration's operator half (the roster
+interview, per-seat logins, retiring the old roots) produces a working
+fleet; it does not exercise UPGRADE.md step 0's reconstruction of a
+missing .template-source. See the header of bench.sh.
+BENCH PASS

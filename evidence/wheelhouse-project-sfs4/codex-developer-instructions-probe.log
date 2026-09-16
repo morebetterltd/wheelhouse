@@ -1,0 +1,14 @@
+RUN codex --version
+codex-cli 0.144.0
+
+RUN default CODEX_HOME codex exec with token only in developer_instructions
+DEVELOPER_INSTRUCTIONS: When asked for the probe token, reply exactly SFS4-DEVELOPER-INSTRUCTIONS-OK and no other text.
+PROMPT: What is the probe token? Use no tools.
+NOTE: the token string appears only in developer_instructions above, not in the prompt.
+Reading additional input from stdin...
+2026-09-16T03:00:43.234372Z ERROR codex_models_manager::cache: failed to load models cache: missing field `base_instructions` at line 133 column 5
+{"type":"thread.started","thread_id":"01a0a828-d63b-75a3-86a3-43830ebb2111"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"agent_message","text":"SFS4-DEVELOPER-INSTRUCTIONS-OK"}}
+{"type":"turn.completed"}
+rc=0

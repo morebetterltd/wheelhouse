@@ -105,6 +105,21 @@ ensure_herald() {
   exit 1
 }
 
+usage() {
+  cat >&2 <<EOF
+usage: seats/cockpit.sh [namespace]
+       seats/cockpit.sh --herald [namespace]
+       seats/cockpit.sh --pane-commander
+       seats/cockpit.sh --pane-floor
+EOF
+}
+
+refuse_arg() {
+  echo "STOP: invalid cockpit argument: ${1:-<empty>}" >&2
+  usage
+  exit 2
+}
+
 # --- internal pane commands (tmux runs this script back) ---------------------
 case "${1:-}" in
   --herald)
@@ -142,6 +157,13 @@ EOF
 esac
 
 # --- main --------------------------------------------------------------------
+case "${1-}" in
+  --*) refuse_arg "$1" ;;
+esac
+case "${1-$(basename "$ROOT")}" in
+  ""|-*|*[[:space:]]*) refuse_arg "${1-}" ;;
+esac
+
 command -v tmux >/dev/null 2>&1 || {
   echo "STOP: tmux is required for the bridge and is not on PATH" >&2
   exit 1
