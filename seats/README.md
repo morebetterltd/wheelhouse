@@ -18,7 +18,9 @@ The main files here:
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
 - `commander-inbox-poll.sh` — wrapper-independent commander fallback: drains the Dispatch Office inbox from inside the commander pane whenever the cursor lags.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
-  and maps its verdict to an exit code.
+  and maps its verdict to an exit code. Default timeout is 15 minutes; for
+  large cold workspaces that must build/test from scratch, set
+  `WHEELHOUSE_VERIFY_TIMEOUT_MS` or `--timeout-ms` to at least 60 minutes.
 - `prune.ts` — scans/prunes safe worktrees and regenerable caches from a reviewed scan file; dry-run by default.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
