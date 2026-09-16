@@ -150,7 +150,11 @@ if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
 }
 const streamRequested = process.argv.includes("--mode") && process.argv[process.argv.indexOf("--mode") + 1] === "json";
 if (process.env.STUB_STALL === "1") {
-  if (streamRequested) process.stdout.write(JSON.stringify({type:"tool_execution_start",toolName:"bash",args:{cmd:"cargo test"}})+"\n");
+  // Match real pi behavior: without --mode json, a stalled one-shot emits no
+  // JSON events before timeout, so this selftest catches a missing stream flag.
+  if (streamRequested) {
+    process.stdout.write(JSON.stringify({type:"tool_execution_start",toolName:"bash",args:{cmd:"cargo test"}})+"\n");
+  }
   setTimeout(() => {}, 10000);
 } else {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
