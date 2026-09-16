@@ -23,7 +23,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { die, expandTilde, makeScratchCwd, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
-import { requirePiHarness } from "./harness";
+import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness } from "./harness";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -389,8 +389,9 @@ function main(): void {
   phase = "prepare verifier seat";
   sweepStaleScratchWorktrees(ROOT);
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  let verifierHarness: ReturnType<typeof harnessNameForSeat>;
   try {
-    requirePiHarness(verifierSeat, entry, "walk.ts verifier walk");
+    verifierHarness = harnessNameForSeat(verifierSeat, entry);
   } catch (e: any) {
     refuse(e.message);
   }
@@ -429,15 +430,13 @@ function main(): void {
     `Retain a full transcript. End with exactly one line: VERDICT: WALKED-DONE | WALKED-NOT-DONE — <failing step quoted from the transcript> | COULD-NOT-WALK — <why>.`,
   ].join("\n");
 
-  const args = ["-p", "--no-session", "--append-system-prompt", brief];
-  if (entry.provider) args.push("--provider", entry.provider);
-  if (entry.model) args.push("--model", entry.model);
-  args.push(prompt);
+  const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt);
 
   phase = "run verifier walk";
-  const res = spawnSync("pi", args, {
+  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper });
+  const res = spawnSync(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
-    env: { ...process.env, PI_CODING_AGENT_DIR: verifierDir, PATH: `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper },
+    env,
     encoding: "utf8",
     timeout: TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,
@@ -447,7 +446,7 @@ function main(): void {
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   const rawTranscript = [
-    `$ pi ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}`,
+    `$ ${oneShot.display}`,
     `$ cwd ${scratchCwd}`,
     `--- stdout ---`,
     stdout,
@@ -463,10 +462,10 @@ function main(): void {
       console.log(`transcript: ${transcriptRel}`);
       process.exit(3);
     }
-    die(`could not run pi: ${res.error.message}`);
+    die(`could not run ${oneShot.bin}: ${res.error.message}`);
   }
   if (res.status !== 0) {
-    refuse(`pi exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}" — transcript: ${transcriptRel}`);
+    refuse(`${oneShot.bin} exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}" — transcript: ${transcriptRel}`);
   }
 
   const parsed = parseWalkVerdict(stdout);

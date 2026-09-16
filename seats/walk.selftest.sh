@@ -67,6 +67,33 @@ if (process.env.STUB_READ_STDIN_TO_EOF) {
 }
 STUB
 chmod +x "$BIN/pi"
+cat > "$BIN/claude" <<'STUB'
+#!/usr/bin/env node
+const fs = require('fs'), path = require('path');
+const agentDir = process.env.CLAUDE_CONFIG_DIR;
+if (!agentDir) { process.stderr.write('stub claude: no CLAUDE_CONFIG_DIR\n'); process.exit(1); }
+fs.mkdirSync(agentDir, { recursive: true });
+fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
+fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
+fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || null }));
+process.stdout.write(process.env.STUB_REPLY || '');
+process.exit(Number(process.env.STUB_EXIT || 0));
+STUB
+cat > "$BIN/codex" <<'STUB'
+#!/usr/bin/env node
+const fs = require('fs'), path = require('path');
+const agentDir = process.env.CODEX_HOME;
+if (!agentDir) { process.stderr.write('stub codex: no CODEX_HOME\n'); process.exit(1); }
+fs.mkdirSync(agentDir, { recursive: true });
+fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
+fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
+fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null, CODEX_HOME: process.env.CODEX_HOME || null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || null }));
+process.stdout.write(process.env.STUB_REPLY || '');
+process.exit(Number(process.env.STUB_EXIT || 0));
+STUB
+chmod +x "$BIN/claude" "$BIN/codex"
 
 build_proj(){
   local proj="$1" ns="$2"
@@ -147,6 +174,19 @@ out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALK
 rc=$?
 [ "$rc" -eq 0 ] && pass 'host-budget walk exits 0' || fail "host-budget walk rc=$rc output=$out"
 if grep -q "$proj/seats/bin" "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null; then pass 'host budget enabled: walk PATH includes project seats/bin'; else fail "host budget enabled: walk PATH missing seats/bin: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
+
+phase 'mixed harness verifier walks use the selected driver'
+proj="$FIX/proj-mixed-walk"; ns="walk-mixed"; build_proj "$proj" "$ns"
+bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-claude" 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'claude-code walk one-shot uses claude driver environment, not pi'; else fail "claude-code walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
+bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+rm -f "$HOME_FIX/.pi-seats-$ns/verifier/env.json"
+out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-codex" 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'codex walk one-shot uses codex driver environment, not pi'; else fail "codex walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
+if grep -q 'Fixture walker brief' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'codex walk one-shot carries verifier brief and measured-safe exec flags'; else fail "codex walk one-shot missing brief or safe flags: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
 
 phase 'image budget reduces over-budget capture set before spawn'
 imgdir="$FIX/images-overbudget"

@@ -158,6 +158,35 @@ if (process.env.STUB_STALL === "1") {
 }
 STUB
 chmod +x "$BIN/pi"
+cat > "$BIN/claude" <<'STUB'
+#!/usr/bin/env node
+const fs = require("fs"), path = require("path");
+const agentDir = process.env.CLAUDE_CONFIG_DIR;
+if (!agentDir) { process.stderr.write("stub claude: no CLAUDE_CONFIG_DIR\n"); process.exit(1); }
+fs.mkdirSync(agentDir, { recursive: true });
+fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(path.join(agentDir, "invoked"), "");
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
+fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+const reply = process.env.STUB_REPLY_FILE;
+process.stdout.write(reply ? fs.readFileSync(reply, "utf8") : "");
+process.exit(Number(process.env.STUB_EXIT || "0"));
+STUB
+cat > "$BIN/codex" <<'STUB'
+#!/usr/bin/env node
+const fs = require("fs"), path = require("path");
+const agentDir = process.env.CODEX_HOME;
+if (!agentDir) { process.stderr.write("stub codex: no CODEX_HOME\n"); process.exit(1); }
+fs.mkdirSync(agentDir, { recursive: true });
+fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(path.join(agentDir, "invoked"), "");
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, CODEX_HOME: process.env.CODEX_HOME ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
+fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+const reply = process.env.STUB_REPLY_FILE;
+process.stdout.write(reply ? fs.readFileSync(reply, "utf8") : "");
+process.exit(Number(process.env.STUB_EXIT || "0"));
+STUB
+chmod +x "$BIN/claude" "$BIN/codex"
 [ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
 
 # A fixture project: verify.ts expects to live at <root>/seats/verify.ts with
@@ -468,6 +497,31 @@ run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && grep -q "$BUDGET_PROJ/seats/bin" "${VARGV%argv.json}env.json" 2>/dev/null; then
   pass "host budget enabled: verifier PATH includes this project's seats/bin"
 else fail "host budget enabled: verifier PATH missing seats/bin (exit $RC): $OUT env=$(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
+RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
+
+phase "1e. mixed harness verifier one-shots — claude-code and codex use their drivers"
+MIX_PROJ="$FIX/mixed-harness-verify"
+build_proj "$MIX_PROJ" mixedv "$VERIFY"
+cat > "$REPLY" <<'EOF'
+Mixed harness verifier checked.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED — fixture
+EOF
+bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+RUN_PROJ="$MIX_PROJ"; VDIR="$MIX_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
+run bead-1 fleet/bead-1 worker-1
+if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
+  pass "claude-code verifier one-shot uses the claude driver environment, not pi"
+else fail "claude-code verifier one-shot did not use claude driver (rc=$RC out=$OUT env=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" 2>/dev/null))"; fi
+bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"
+run bead-1 fleet/bead-1 worker-1
+if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
+  pass "codex verifier one-shot uses the codex driver environment, not pi"
+else fail "codex verifier one-shot did not use codex driver (rc=$RC out=$OUT env=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" 2>/dev/null))"; fi
+if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
+  pass "codex verifier one-shot carries reviewer brief and measured-safe exec flags"
+else fail "codex verifier one-shot missing brief or safe flags: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
 RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
 
 phase "2. BOUNCE — exit 2"

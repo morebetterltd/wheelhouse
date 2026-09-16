@@ -1,0 +1,10 @@
+RUN codex --version
+codex-cli 0.144.0
+
+RUN scratch CODEX_HOME with copied default-login auth, developer_instructions config
+Reading additional input from stdin...
+{"type":"thread.started","thread_id":"01a0a7ad-d55f-7510-b5ed-7e70f45fda4a"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"agent_message","text":"DEVINSTR-PROBE-OK"}}
+{"type":"turn.completed"}
+rc=0
