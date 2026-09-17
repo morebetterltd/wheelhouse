@@ -413,6 +413,61 @@ tolerates); the commander reads the bead and restates its requirement as
 arguments — the same relationship the bead claim itself has to the
 dispatch.
 
+## Landing an approved branch
+
+```bash
+bun seats/land.ts <bead-id>   # land one bead
+bun seats/land.ts --scan      # every bead whose verdict triggers
+```
+
+One invocation turns a reviewed APPROVE into merged, pushed where the install grants it, closed, the GitHub issue answered, and the next review dispatched. `seats/commander-inbox-poll.sh` calls `--scan` on every tick, which is what makes it automatic; the reasoning for hooking the poll script rather than the herald is in `land.ts`'s header and in `runbooks/RUNNING_THE_LOOP.md`'s landing section, and it comes down to the poll script being the durable path while the herald is a poke-budgeted log tailer that must not stall behind a merge.
+
+**It never resolves a conflict and it never overrides a red selftest.** Those are two of its gates, and every gate runs before any write: `stale-tip` (the branch moved past the SHA the verdict pinned), `merge-conflict` (`git merge-tree` against the trunk reports conflicts), `selftest-red` (a `seats/*.selftest.sh` whose sibling the branch touches fails on the would-be merge), `not-in-review` (the bead is not `in_progress` with `needs-review`), plus three this tool adds to the brief's four: `push-destination`, `malformed-verdict` and `sha-named-branch`, described below. A refusal writes exactly one `land-refused` row to `seats/inbox.jsonl` carrying the reason, makes no git or graph write at all, and exits 2. A land writes exactly one `landed` row saying what was and was not done.
+
+Gate 3 runs in a scratch worktree of the would-be merge, `wheelhouse-land-<pid>-*`, never in your checkout — `contracts/INTEGRATOR.md` forbids pointing anyone at a working tree they did not create, and a gate that dirties the tree it is judging has already changed the thing it was asked about. It discovers which selftests to run FROM THAT MERGED TREE, not from the branch: when the trunk adds `seats/x.selftest.sh` after the branch forks and the branch changes `seats/x.ts`, that selftest is precisely the one that catches the integration, and discovering from the branch would skip it. Stale scratch worktrees from a killed run are reclaimed the way `verify.ts` reclaims its own: ask git which worktrees belong to this repository, and act only on a stamped pid that is gone.
+
+Branch and trunk are resolved to commit ids ONCE, before the gates, and every later step uses those ids — including a re-check immediately before the merge that neither has moved. Resolving `fleet/<id>` by name again after the tip gate is a tip-gate bypass: a worker appending a commit while gate 3 runs its suite would otherwise have the merge take the new tip, and `contracts/REVIEWER.md` promises the integrator refuses any tip but the verdict's pinned SHA.
+
+**The commit it publishes is named as an object, not as a token.** `runbooks/RUNNING_THE_LOOP.md`'s "When publishing a reviewed tip by object id" requires `<tip>^{commit}` and never a bare 40-hex token, because Git resolves a same-named ref ahead of the object; the push is `<merge>^{commit}:refs/heads/<trunk>` for that reason. The same section names the `refs/heads` detector, and a local branch carrying that id refuses as `sha-named-branch` BEFORE the push rather than publishing whatever the branch points at — a SHA-named branch is a cleanup defect, not something to publish around. Worth knowing where the two halves divide: the detector covers `refs/heads`, so a TAG named like the id is caught by the caret alone. `seats/land.selftest.sh` measures exactly that — with such a tag in place, a bare token publishes the tag's target and `^{commit}` publishes the merge.
+
+One lander runs at a time, under `seats/land.lock`. The gates take real time, so the poll tick and a commander running the same command by hand can both pass them against the same pre-merge state; the second then merges nothing — `git merge` says "Already up to date", exits 0 and leaves no unmerged paths, which is this tool's whole success condition — and goes on to close the bead, comment the issue and dispatch the next review a second time. A second run refuses the lock cleanly rather than queueing, and the merge additionally asserts that HEAD actually moved.
+
+**Push authority is PROSE, not a field — and `land.ts` reads it MORE STRICTLY than `push-authority-lint.sh` does. This is a deliberate divergence from an existing repo tool, and it is the only one.** Both read the same source and the same section: every line after the literal `## This project` in `wheelhouse/INTEGRATOR.md`, falling back to `contracts/INTEGRATOR.md`. `land.ts` keeps that script's regex as a *necessary* condition, so it never publishes anywhere the lint would not — and then refuses if the matching sentence also carries a negation or a reservation. Measured, by running the lint's own regex:
+
+| sentence under `## This project` | the lint's regex | `land.ts` |
+|---|---|---|
+| `Do not push main to origin` | GRANTS | refuses |
+| `Never push main. Ask the principal.` | GRANTS | refuses |
+| `Only the principal may push main to origin` | GRANTS | refuses |
+| `Pushing to origin is reserved to the principal.` | GRANTS | refuses |
+| `push authority is not authorised … on main` | GRANTS | refuses |
+| `The commander … pushes main.` | GRANTS | grants |
+| `The fleet may publish commits to origin` | no grant | no grant (a real grant, still missed) |
+
+`push(es|ing)?[ \t].*(main|origin|…)` asks whether the words appear near each other; it cannot see a negation, so the prohibitions an install is most likely to write read as permission. Bug-compatibility would be right if both callers did the same thing with the answer, and they do not: **the lint flags a contradiction for a human to read, and this tool publishes irreversibly.** The divergence only ever refuses more often — it never newly grants, so the `publish commits` miss in the last row stays missed, because widening a grant is the dangerous direction and under-granting costs a human one push. Fixing `push-authority-lint.sh` itself was out of scope; its defect is reported rather than worked around.
+
+It also does NOT shell out to that lint and read exit 0 as authority: with `seats/verdicts/` gitignored and absent, which is its shipped state, the lint's loop body never runs and it exits 0 having checked nothing. A vacuous pass is not a grant. With no grant recorded the branch is merged and closed and never pushed, and the row says which.
+
+**Where it publishes is the install's business, not the comment's.** `PUSH: APPROVE <dest>` is text a reviewer seat wrote into the graph, and spawning git through argv stops shell injection and nothing else — `git push https://elsewhere.example/x.git main` is a well-formed command that publishes this repository to a stranger. `contracts/INTEGRATOR.md`'s "only to the remote that line names" limits where we may publish; it does not make any string a destination. So the name must resolve to a remote this install has configured, and a URL, a path, an option-shaped token or an unconfigured name is a `push-destination` refusal before anything is written.
+
+**A verdict that decides two things decides nothing — and an annotation that mentions another verdict decides nothing either.** `contracts/REVIEWER.md` prescribes one verdict, exclusively, and its grammar is `VERDICT: APPROVE|BOUNCE|DISCOVER [— <annotation>]`, where the annotation is free prose and may perfectly well name the BOUNCE it has addressed or the branch that moved. So the keyword is read at its position in that grammar and never searched for in the line: `VERDICT: APPROVE — at pinned tip X; the earlier BOUNCE is addressed` is one verdict and lands. What refuses as `malformed-verdict` is two live `VERDICT:` lines, two live `PUSH:` lines, or a line that does not match the grammar at all. Live is the same reading `verify.ts` uses in `liveLineCandidates`: a line inside a ``` fence is evidence text and is not counted, while a leading `> ` is stripped and the line still counts. `push-authority-lint.sh` already fails a verdict FILE without exactly one `PUSH:` line; a bead comment with none is a different case, which `contracts/INTEGRATOR.md` calls unanswered and this tool treats as a non-trigger. The pinned SHA binds to the VERDICT line, not to free text anywhere in the comment.
+
+**An approval is only an approval from a seat entitled to give one.** The brief's trigger is a reviewer/verifier settle, and without an author check any comment is a comment — a worker seat holding the bd binary could post an APPROVE on its own bead and have its own work merged and published. `contracts/GRAPH.md` says every seat's process carries `BEADS_ACTOR=<seat name>` so the comment records which seat spoke, and the authoring seat must hold `reviewer` or `verifier` in the roster. **Neither GRAPH.md nor the vendor names the JSON field.** The beads vendor's published JSON Output Schema Contract (`https://beads.gascity.com/reference/json-schema.md`, read 2026-09-16) specifies `bd list`, `bd ready`, `bd blocked`, `bd show`, `import` and `export`, and does not specify the comment object's fields at all — zero occurrences of "author" on that page, with "comment" present on it as a positive control. So the probe covers the plausible spellings and the failure is loud rather than permissive: a comment with no recognisable author field exits 1 and lands nothing. If your bd names it differently, add it to the list in `readComments()` — the symptom will be that STOP, never a silent bypass.
+
+**A missing `PUSH:` line is not malformed.** `contracts/INTEGRATOR.md` calls it unanswered — "neither permission nor refusal. Go and ask." — so it is a documented, expected state and simply not a trigger: no row, no writes, exit 0, exactly as `PUSH: NOT CONSIDERED` behaves. Only *more than one* push answer is malformed, because a comment that decided twice decided nothing.
+
+**A skip and a failure are not the same thing.** The brief permits exactly two skips — no recorded push grant, and no `gh` on PATH — and neither means anything broke. A push that was authorised, attempted and rejected is a failure: the bead is left open, no GitHub issue is answered (commenting "Fixed by `<sha>`" about a commit nobody can fetch is the claim this avoids), nothing is dispatched, the row says `NOT PUBLISHED`, and the run exits 1. The next tick reconciles it.
+
+**Ancestry proves the merge happened and nothing else.** A run that died after merging leaves the push, label, close, issue, dispatch and row undone, and "the branch is an ancestor of the trunk" is true for all of them. So an already-merged branch is reconciled rather than declared finished: each duty checks its own observable state — is the bead closed, is the label still on, is the issue already closed, does the adapter's `state.json` show this review already dispatched — and a reconcile that finds everything done writes no row, because a second run must not post twice either.
+
+**A dependency this tool cannot read is an error, never a judgment.** Unparseable `bd` JSON, a bead record with no status field, a selftest that could not be spawned or died on a signal: each exits 1. `verify.ts` sets the rule — the machine must never mistake an error for a judgment — and the dangerous shape here is specific: unreadable comments becoming "no verdict, not triggered, exit 0" is a broken graph reading as a clean result.
+
+Exit codes are `0` for a run that finished with nothing left to do (landed, already landed, or never triggered), `2` for a gate refusal with the reason on the row, and `1` for an unexpected error — `verify.ts`'s rule that the machine must never mistake an error for a judgment.
+
+Closing drops `needs-review` first and closes second, which is the opposite of the order the sentence in stage 7 reads in. The two orderings leave different wreckage when half of them fails, and only one of those is caught: `seats/intent-check.sh` fails a bead closed while still labelled, which is what closing first and then failing to drop would leave. Dropping first can only leave an open bead out of the review queue — and it cannot even do that here, because a failed close puts the label back.
+
+**`bd` was not installed on the machine this was built on.** `seats/land.selftest.sh`'s stubs are the only bd path this repo exercises, so these invocations have never run against a real graph; a green selftest is evidence about the calls `land.ts` makes and their order, and about nothing bd does. `bd update <id> --remove-label needs-review` is documented in the beads vendor CLI reference for `bd update`, alongside `--add-label` and `--set-labels` — it is not inferred from the `--add-label` spelling this repo happens to document. It is also not a measurement: that page carries no version and `wheelhouse/GRAPH.md` stamps this install's bd facts against build 1.2.2, so the flag is vendor-documented and the BUILD is unconfirmed. Re-verify it against your own build the way GRAPH.md asks, and correct that file rather than working around it. A non-zero exit there is recorded on the row as a note and never fails the land: the merge and the close have already happened, and aborting on an unconfirmed flag would be the uncertainty doing the damage.
+
 ## Walking a consumer surface
 
 ```bash
@@ -495,6 +550,7 @@ bash seats/seat-env.selftest.sh
 bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
+bash seats/land.selftest.sh
 bash seats/walk.selftest.sh
 bash seats/prune.selftest.sh
 bash seats/intent-check.selftest.sh

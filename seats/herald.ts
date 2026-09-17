@@ -50,7 +50,13 @@ const DISTRESS_RE = /(?:\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|atio
 const STOP_DISTRESS_RE = /\bSTOP\b/;
 const SENTINEL_RE = /^\s*@commander\s*:/im;
 
-type WakeClass = "settle" | "distress" | "sentinel" | "verdict-not-posted";
+// `landed` and `land-refused` are written by seats/land.ts, not by this file:
+// herald exports no writer, so land.ts appends its own row of the same shape
+// through the same two calls appendInbox() makes. They are named here because
+// the commander reads one inbox and this union is where its classes are
+// written down — a class the reader meets only in the file would be a class
+// nobody can look up.
+type WakeClass = "settle" | "distress" | "sentinel" | "verdict-not-posted" | "landed" | "land-refused";
 type A2AState = "terminal" | "input-required" | "failed";
 
 interface HeraldState {

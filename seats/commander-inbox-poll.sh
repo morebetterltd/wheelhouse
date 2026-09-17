@@ -12,8 +12,25 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="${WHEELHOUSE_COMMANDER_POLL_ROOT:-$(cd "$HERE/.." && pwd -P)}"
 HERALD="$ROOT/seats/herald.ts"
+LAND="$ROOT/seats/land.ts"
 INTERVAL="${WHEELHOUSE_COMMANDER_INBOX_POLL_SECONDS:-120}"
 PHRASE="check the fleet inbox"
+
+# Landing hangs off this script rather than off the herald for the two reasons
+# seats/land.ts's header states: this is the durable path (a merge must not be
+# lost to a missed poke), and the herald is a log tailer on a poke budget that
+# must not stall the fleet's wake path behind a scratch checkout and a selftest
+# run. Unconditional, NOT inside inbox_lags: whether the commander has drained
+# the inbox says nothing about whether a reviewed branch is waiting. land.ts is
+# gated and idempotent, so a tick with nothing to do writes nothing.
+# Exit 2 is a gate refusal, which has already written its own inbox row.
+land_ready() {
+  [ -f "$LAND" ] || return 0
+  WHEELHOUSE_LAND_ROOT="$ROOT" bun "$LAND" --scan
+  rc=$?
+  [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || printf 'commander-inbox-poll: land --scan exited %s\n' "$rc" >&2
+  return 0
+}
 
 inbox_lags() {
   local inbox="$ROOT/seats/inbox.jsonl" cursor_file="$ROOT/seats/inbox.cursor" size cursor
@@ -36,6 +53,7 @@ drain_if_lagging() {
 
 case "${1:-}" in
   --once)
+    land_ready
     drain_if_lagging
     exit 0
     ;;
@@ -46,6 +64,7 @@ case "${1:-}" in
 esac
 
 while :; do
+  land_ready || true
   drain_if_lagging || true
   sleep "$INTERVAL"
 done

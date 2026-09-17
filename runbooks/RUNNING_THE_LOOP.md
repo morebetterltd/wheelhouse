@@ -154,6 +154,41 @@ Push, open and merge PRs, and run automated deploys per your project's recorded 
 
 When publishing a reviewed tip by object id, force Git to resolve the token as a commit object, not as a same-named ref: push `<tip>^{commit}`, never a bare 40-hex token. Refuse before pushing if a local branch exists with that exact name; the one-line detector is `git show-ref --verify --quiet "refs/heads/$tip" && { echo "refusing: local branch named like reviewed tip $tip" >&2; exit 1; }`. A SHA-named branch is a cleanup defect, not something to publish around.
 
+#### Landing, without a human in between
+
+`seats/land.ts` does stages 6 and 7 on its own for the branches that qualify. The commands below stay exactly as they are and the manual path stays doable; this is the same loop run by a program.
+
+```bash
+bun seats/land.ts <bead-id>   # land one bead
+bun seats/land.ts --scan      # every bead whose verdict triggers
+```
+
+**What triggers it, and why it hangs off the poll script.** `seats/commander-inbox-poll.sh` calls `--scan` on every tick, unconditionally — not only when the inbox lags, because whether you have drained the inbox says nothing about whether a reviewed branch is waiting. That script is the loop's durable path: it describes itself as the correctness fallback for a missed herald poke and re-checks a cursor rather than an event, and a merge lost to a missed poke is a branch nobody lands. The herald was the other candidate and is the wrong one twice over. It is a log tailer on a poke budget, and gate 3 below builds a scratch checkout and runs selftests in it, which inside the herald's `classify()` would stall every other seat's wake path behind one merge. And the herald only ever parses a verdict on its `verdict-not-posted` exception path: the authoritative verdict is a bead comment, which the herald never reads, so landing off the herald would key on the one verdict shape `contracts/REVIEWER.md` says does not count.
+
+**What it fires on.** The bead's latest verdict comment carrying `VERDICT: APPROVE` and `PUSH: APPROVE <remote>`. Nothing else is a trigger — and that includes the two shapes `wheelhouse/INTEGRATOR.md` treats as unanswered rather than answered. A missing PUSH line is "neither permission nor refusal" and `NOT CONSIDERED` "routes back rather than blocking"; neither is a grant, so land.ts does not fire, writes no row, and leaves the asking to you. A row saying it refused would report a decision nobody made.
+
+**Four gates, before any write.** A refusal writes one inbox row and nothing else — no merge, no push, no graph write — and exits 2.
+
+| reason | what it means |
+|---|---|
+| `stale-tip` | the branch moved past the SHA the verdict pinned. `contracts/REVIEWER.md` promises the integrator refuses any other tip; this is that promise kept. |
+| `merge-conflict` | `git merge-tree` against the trunk reports conflicts. It never resolves one. |
+| `selftest-red` | a `seats/*.selftest.sh` whose sibling the branch touches fails **on the would-be merge, in a scratch worktree**, never in your checkout. It never overrides a red. |
+| `not-in-review` | the bead is not `in_progress` with `needs-review`. (This bd build has no `in_review` status — `wheelhouse/GRAPH.md`.) |
+| `push-destination` | the verdict's `PUSH: APPROVE <dest>` names something that is not a remote this install configured — a URL, a path, an option-shaped token, or a name nobody added. INTEGRATOR.md limits publishing to the remote the PUSH line names; it does not make any string in a bead comment a destination. |
+| `malformed-verdict` | the comment carries two live `VERDICT:` lines or two live `PUSH:` lines, or a line that does not match REVIEWER.md's grammar at all. REVIEWER.md prescribes one verdict, exclusively, and first-match-wins on a comment that decided twice is how a BOUNCE becomes an approval. An annotation is prose and is read as prose: `VERDICT: APPROVE — the earlier BOUNCE is addressed` is one verdict, because the keyword is read at its position in the grammar rather than searched for in the line. Lines inside a ``` fence are evidence text and are not counted; a `> ` marker is stripped and the line still counts, which is how `verify.ts`'s `liveLineCandidates` reads the same shapes. |
+| `sha-named-branch` | a local branch is named exactly like the object id this run would publish. The section above requires `<tip>^{commit}` rather than a bare 40-hex token for this reason, and names the `refs/heads` detector; this is that detector, fired before the push instead of after it. |
+
+The last three are not in the original specification of this tool; they were added after review and are marked as ours in the code. It also refuses to act on a verdict written by a seat that is not a `reviewer` or `verifier` in the roster, and on anything it cannot read — unparseable `bd` output, a bead record with no status, a selftest it could not spawn — all of which exit 1 rather than becoming a verdict about somebody's branch.
+
+**What it does when they pass**, in order: `git merge --no-ff` with the `Merge fleet/<id>: <summary> (reviewed <sha>, APPROVE)` subject, gated on its exit code *and* an empty unmerged-paths list *and* the trunk actually moving; publishes the merge to the remote the PUSH line named **by object id** — `<merge>^{commit}:refs/heads/<trunk>`, per the section above, and refusing first if a local branch carries that id as its name — but **only where this install's `## This project` section grants push in prose, and only where that sentence is not itself a prohibition** — `seats/README.md` has the table of prohibitions the lint's own regex reads as grants, and this is the one place the lander deliberately reads that section more strictly than `seats/push-authority-lint.sh` does. With no grant recorded the branch is merged and closed and never pushed, and the row says which. A push that was authorised and then FAILED is not a skip: the bead stays open, no issue is answered, and the run exits 1 so the next tick retries; closes the bead with the merge SHA in the reason, dropping `needs-review` first so a failed close puts the label back rather than leaving stage 7's rule broken — and if the drop itself fails the land still stands, with the row saying the label is still on the bead, because the merge and the close have already happened (`bd update --remove-label` is vendor-documented but unconfirmed against the bd build `wheelhouse/GRAPH.md` stamps, and an unconfirmed flag must not be able to abort a completed merge); comments the fix commit on a `gh-<N>` issue and closes it, or notes that `gh` was unavailable; and dispatches the oldest other `needs-review` bead to the reviewer seat, but only when that seat's last log event says it has settled.
+
+It is idempotent from what it can observe, not from a marker file — and ancestry is where that has to be read carefully. A branch already in the trunk proves the merge happened and nothing else: a run that died after merging left the push, the label, the close, the issue and the dispatch undone, and ancestry is true for all of them. So an already-merged branch is **reconciled** — each duty checks its own state before skipping — rather than reported as finished. A reconcile that finds everything already done writes no row, so a second run still merges nothing and posts nothing. Only one lander runs at a time, under `seats/land.lock`.
+
+**Two row classes in `seats/inbox.jsonl`.** `landed` says what was and was not done in one row: merged as which SHA, pushed or not pushed and why, closed, which issue was answered, what was dispatched or why nothing was. `land-refused` carries one of the four reasons above. Both are `state: "terminal"` — landed or refused, the work has settled and nobody is being asked for anything. Read them the way you read any other inbox row; they arrive on the same drain.
+
+`bash seats/land.selftest.sh` proves it.
+
 ### 7. Close
 
 Close the bead and drop the review-queue label in the same breath, after the integrator has satisfied `wheelhouse/INTEGRATOR.md`'s claim-move duty or its explicit no-claim-moved escape hatch. A closed bead still carrying it reads as in-flight to everyone else. `wheelhouse/GRAPH.md` says so; it is listed here because it is the step most often forgotten at the end of a long round.

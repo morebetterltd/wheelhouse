@@ -116,7 +116,7 @@ That split is the whole design. It means a project's specifics never get tangled
 | | |
 |---|---|
 | `contracts/` | the briefs, copied verbatim at install |
-| `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the bead-verdict dispatcher, the consumer-surface walk dispatcher, pruning, the bridge, recovery, and a selftest for each |
+| `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the bead-verdict dispatcher, the consumer-surface walk dispatcher, the lander that turns an APPROVE into a merge, pruning, the bridge, recovery, and a selftest for each |
 | `generated/` | specimens of what the interview writes — never copied, and drawn from an invented project so they cannot be mistaken for a starting point |
 | `runbooks/` | how to run the loop, the upgrade procedure, and the graduations to take once the loop has proven itself |
 | `examples/` | worked benches, each labelled as one project's implementation: `android-cordova/` from a real project, `http-service/` for a service-and-worker shape |
