@@ -168,6 +168,16 @@ That includes the unglamorous ones: a premise that turned out wrong, a scope cho
 
 It also includes the evidence itself, and there the same reasoning reaches one step further than most people take it. A report or a verdict that cites a file rather than pasting its contents has recorded the sentence and left the proof somewhere else — and the somewhere else, in this loop, is usually a bench output directory or a worktree, both of which are gone by the time anyone re-reads the bead. `wheelhouse/GRAPH.md`'s *Where evidence lives* states which homes qualify and in what order to do it. Stages 3 and 5 are where it applies: the report and the verdict are the two artifacts that cite.
 
+## When you need a human
+
+Anything parked on a human is a need, not a line in the commander pane. Open it with `bun seats/needs.ts open ...`, using human-facing text: what is needed, why it matters, the options, the default and when it will apply, and the consequence. Put graph ids, seat names, and source records in machine fields such as `--bead`, `--seat`, and `--source`, not in the title or body. Then keep the loop moving on work that does not depend on that answer.
+
+A commander turn may use the shorthand instead: end the final assistant message with an `@principal:` block. The Claude Code Stop hook (`bash seats/principal-sentinel.sh`) turns that block into the same durable need. A request that exists only in scrollback is a defect.
+
+The commander drains the Dispatch Office inbox for `need-answered` and `need-message` rows with `bun seats/herald.ts --drain`. Read the full thread with `bun seats/needs.ts show <id>`, act on the answer, follow up with `bun seats/needs.ts say <id> <text>` if the human needs more context, and close it with `bun seats/needs.ts close <id> --reason <reason>` when the request is resolved.
+
+For the human, the local desk is the standing surface: read `seats/run/desk.port` or run `seats/cockpit.sh --desk` and open the printed URL. `/needs` shows the open requests and reply boxes. `/board` is the human's read-only kanban; the floor remains the commander's live seat view.
+
 ## When it does not go straight through
 
 **A review goes quiet with a bench in flight.** Check the bead before you probe. A reviewer part-way through a split review has left an interim comment saying so, and that comment is the difference between a seat that owes you a wake and a seat that has died — which look identical from outside. If it is there, the next move is the collecting dispatch, not a probe; if it is not, treat the seat as quiet and read the next paragraph.
@@ -190,7 +200,7 @@ It also includes the evidence itself, and there the same reasoning reaches one s
 
 There is no fixed rhythm to prescribe. The shape that worked:
 
-- Start by reading the graph and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the herald is running (`seats/cockpit.sh --herald`) and the cockpit commander pane has launched the commander-pane fallback poll. If an inbox row reports a human answer or message, read the full need with `bun seats/needs.ts show <id>`. Deadline beads and anything blocking others first.
+- Start by reading the graph, listing open needs (`bun seats/needs.ts list`), and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the herald is running (`seats/cockpit.sh --herald`) and the cockpit commander pane has launched the commander-pane fallback poll. If an inbox row reports a human answer or message, read the full need with `bun seats/needs.ts show <id>`. Deadline beads and anything blocking others first.
 - Dispatch one bead per seat, and let the seat finish before adding another.
 - Review as soon as work lands, so the author still has the context to fix a bounce cheaply.
 - Merge in batches if you like, but confirm each tip against its reported head individually.
@@ -218,9 +228,9 @@ then collect.
 Not a transcript of the seat handoffs — those live on their beads, where
 tomorrow's dispatches will point — but the fleet-level view one screen tall:
 per-seat status (bead, state, whether tomorrow's move is `resume` or a fresh
-`spawn`), every verdict or `needs-review` bead waiting with nobody on it, and
-anything the principal decided today that has not yet become a bead or an ISA
-entry.
+`spawn`), every verdict or `needs-review` bead waiting with nobody on it, every
+open need from `bun seats/needs.ts list`, and anything the principal decided
+today that has not yet become a bead or an ISA entry.
 
 Then two separate lists, under separate headings, because collapsing them
 into one "first actions" list is what let a chore get read as the day's
@@ -276,7 +286,7 @@ decides what the work IS; the note says where to stand while reading it.
 **The order, explicitly, because reading it is not the same as doing it in
 this sequence:** recover (`bun seats/recover.ts` if this session followed a
 `/clear` or a compaction), spawn or resume every rostered seat, drain the
-Dispatch Office inbox (`bun seats/herald.ts --drain`, following any human-answer row with `bun seats/needs.ts show <id>`), dispatch every ready
+Dispatch Office inbox (`bun seats/herald.ts --drain`, following any human-answer row with `bun seats/needs.ts show <id>`), list open needs (`bun seats/needs.ts list`), dispatch every ready
 bead to a seat — and only then any commander-owned chore (machinery sync,
 selftests, upgrades, ISA edits). A chore that reads as high-priority in
 yesterday's handoff is still a chore: it waits behind the first dispatch, not

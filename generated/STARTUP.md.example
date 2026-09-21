@@ -13,7 +13,7 @@ cd ~/code/ebb
 claude
 ```
 
-The folder's `CLAUDE.md` makes this session the commander. No launcher required.
+The folder's `CLAUDE.md` makes this session the commander. No launcher required. Wire Claude Code's Stop hook to `bash seats/principal-sentinel.sh` so a final `@principal:` block becomes a durable need instead of scrollback.
 
 **If `wheelhouse/HANDOFF.md` exists, read it before anything else** — it is
 yesterday's commander writing to you: which seats to `resume` versus respawn,
@@ -50,7 +50,7 @@ bun seats/adapter.ts status          # every standing seat, liveness
 
 ## 3. Watch it
 
-The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id> ...`) and each seat's event stream lands in `seats/logs/<seat>.jsonl`. The bridge is the cockpit for watching the fleet: `seats/cockpit.sh ebb` builds (or re-attaches to — never duplicates, and re-runs respawn a missing floor pane) the tmux session `wh-ebb`, commander pane on the left and the floor — `bun seats/floor.ts`, read-only: spotlight one seat, rail of every seat's attention cues — on the right. Cockpit also owns the Dispatch Office herald: every launch verifies it, starts it when missing (`herald started: pid ...`), restarts it when dead (`herald dead: ...; restarting`), and later inbox traffic leaves `poke sent`, `poke cooldown`, or `poke not-idle` proof in `seats/logs/herald.out.log`. Keys and cue meanings are in `seats/README.md`'s "The bridge" section; `bun seats/adapter.ts status` is the no-cockpit fallback that always works, but it does not start the herald.
+The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id> ...`) and each seat's event stream lands in `seats/logs/<seat>.jsonl`. The bridge is the cockpit for watching the fleet: `seats/cockpit.sh ebb` builds (or re-attaches to — never duplicates, and re-runs respawn a missing floor pane) the tmux session `wh-ebb`, commander pane on the left and the floor — `bun seats/floor.ts`, read-only: spotlight one seat, rail of every seat's attention cues — on the right. Cockpit also owns the Dispatch Office herald and the local desk: every launch verifies them, starts them when missing (`herald started: pid ...`, `desk started: pid ...`), restarts them when dead, and writes the desk URL to `seats/run/desk.port`. Open that URL for `/needs` and the read-only `/board`; the floor is the commander's view and the board is the human's kanban. Later inbox traffic leaves `poke sent`, `poke cooldown`, or `poke not-idle` proof in `seats/logs/herald.out.log`. Keys and cue meanings are in `seats/README.md`'s "The bridge" section; `bun seats/adapter.ts status` is the no-cockpit fallback that always works, but it does not start the herald or desk.
 
 ## 4. Feed it
 
