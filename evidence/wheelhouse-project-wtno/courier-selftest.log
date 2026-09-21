@@ -1,0 +1,12 @@
+ok 1 - planted opened need sends one Telegram message and records sent
+ok 2 - allowed Telegram reply records an answered event with via telegram and choice
+ok 3 - unallowlisted sender is ignored and logged
+ok 4 - commander say pushes a threaded Telegram sendMessage
+ok 5 - transport send failure is logged with need id and courier keeps running
+ok 6 - failed outbound event is retried and records exactly one sent event after success
+ok 7 - @username allow entry waits, pairs on first inbound message, and records numeric id
+ok 8 - queued outbound need sends after username pairing
+ok 9 - courier watchdog restarts a killed courier
+ok 10 - telegram token file mode 0644 is refused
+ok 11 - canary: replacing answer with message is caught
+courier.selftest: PASS (11 checks)
