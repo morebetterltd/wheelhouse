@@ -311,9 +311,9 @@ function finalAssistantText(stdout: string, harness: HarnessName): string {
         sawStructuredMessage = true;
         finalText = eventText(event);
       } else {
-        if (event?.type !== "agent_message") continue;
+        if (event?.type !== "item.completed" || event?.item?.type !== "agent_message") continue;
         sawStructuredMessage = true;
-        finalText = eventText(event);
+        finalText = eventText(event.item);
       }
     } catch { /* ignore non-event prose and malformed JSON */ }
   }
