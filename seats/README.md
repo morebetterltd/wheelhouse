@@ -84,7 +84,7 @@ Measured on this machine with `claude --version` = `2.1.278 (Claude Code)`, a re
 
 The local desk is enough for a machine-local operator. A transport is optional machinery for reaching the human away from the machine. With no transport token configured, `bun seats/courier.ts --once` and `seats/cockpit.sh --courier` print `courier skipped: no transport configured` and exit 0; the needs ledger and desk still work.
 
-The transport contract lives in `seats/transports/transport.ts`: adapters export a `name`, `send(ev: opened|message|closed) -> {ref}`, and `poll(cursor) -> {replies, cursor}`. `seats/courier.ts` owns the local cursor at `seats/run/courier.state.json`, appends `sent` ledger events after outbound sends, and records inbound replies through the needs ledger (`answered` for open needs, human `message` for answered/closed needs). `--once` runs one scan/poll cycle, `--status` reports configured/running/skipped state, and `--drain-out` prints `seats/logs/courier.out.log` for tests and debugging.
+The transport contract lives in `seats/transports/transport.ts`: adapters export a `name`, `send(ev: opened|message|closed) -> {ref}`, and `poll(cursor) -> {replies, cursor}`. `seats/courier.ts` owns a local cursor under `seats/run/` (`courier.state.json` for Telegram, `courier.slack.state.json` for Slack), appends `sent` ledger events after outbound sends, and records inbound replies through the needs ledger (`answered` for open needs, human `message` for answered/closed needs). `--once` runs one scan/poll cycle, `--status` reports configured/running/skipped state, and `--drain-out` prints `seats/logs/courier.out.log` for tests and debugging. If both transport token files exist, set `WHEELHOUSE_TRANSPORT=telegram` or `WHEELHOUSE_TRANSPORT=slack` on each courier process to choose one explicitly.
 
 Telegram setup:
 
@@ -94,6 +94,16 @@ Telegram setup:
 4. For tests or a proxy, set `WHEELHOUSE_TELEGRAM_API_BASE`; otherwise the adapter uses `https://api.telegram.org`. `WHEELHOUSE_TELEGRAM_POLL_TIMEOUT` overrides the Bot API long-poll timeout (default 25 seconds; tests set it to 0).
 
 Reply rules: a Telegram reply to a sent need message maps to that need. A non-reply maps to the only open need when exactly one need is open. Otherwise the bot answers `reply to the message you're answering`. A reply to an open need records an answer via `telegram`; a bare option label or option number records the matching choice. A reply to an answered or closed need records a human message. Commander `needs.ts say` events are pushed as threaded Telegram messages, and closing a need pushes a one-line resolved notice.
+
+Slack setup:
+
+1. Create a Slack app/bot token with `chat:write`, `channels:history`/`groups:history` as appropriate for the target channel, and access to the channel.
+2. Put the bot token in `seats/run/slack.token` and lock it down: `chmod 600 seats/run/slack.token`. A token file with any other mode is refused. Alternatively set `WHEELHOUSE_SLACK_TOKEN` in the courier environment.
+3. Put the channel id (for example `C...` or `G...`) in `seats/run/slack.channel`, or set `WHEELHOUSE_SLACK_CHANNEL`.
+4. Put allowed Slack user ids (for example `U...`, one per line) in `seats/run/slack.allow`. Replies from other users are ignored and logged.
+5. For tests or a proxy, set `WHEELHOUSE_SLACK_API_BASE`; otherwise the adapter uses `https://slack.com/api`. The adapter sends via `chat.postMessage`, then confirms every posted timestamp by reading it back through `conversations.history` for new needs or `conversations.replies` for threaded messages before it records a `sent` event.
+
+Slack replies map by thread: a reply whose `thread_ts` matches a sent need's Slack timestamp maps to that need. A reply to an open need records an answer via `slack`; a bare option label or option number records the matching choice. A reply to an answered or closed need records a human message. Commander `needs.ts say` events and close notices are sent in the need's Slack thread.
 
 Nothing under `seats/run/` is committed: tokens, allowlists, pid files, and courier cursor state are install-local.
 
