@@ -17,8 +17,10 @@ The main files here:
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, stop-all, resume.
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
+- `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban.
 - `commander-inbox-poll.sh` — wrapper-independent commander fallback: drains the Dispatch Office inbox from inside the commander pane whenever the cursor lags.
 - `principal-sentinel.sh` — Claude Code Stop hook that turns final assistant `@principal:` lines into durable needs.
+- `courier.ts` — optional transport daemon for off-machine replies; Telegram lives under `transports/`.
 - `principal-sentinel.selftest.sh` — proves the Stop hook opens exactly the intended needs and that source dedupe works.
 - `courier.ts` — optional human transport daemon: pushes needs to Telegram and records replies back into `seats/needs.jsonl`.
 - `transports/` — transport interface and adapters. The template ships Telegram first.
@@ -583,7 +585,10 @@ bun seats/prune.ts categories
 ```bash
 bash seats/evidence-scrub.selftest.sh
 bash seats/seat-env.selftest.sh
+bash seats/needs.selftest.sh
 bash seats/desk.selftest.sh
+bash seats/principal-sentinel.selftest.sh
+bash seats/courier.selftest.sh
 bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
