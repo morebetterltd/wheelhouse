@@ -290,12 +290,13 @@ file documents only the command.
 is a disposable cache (see `contracts/SEATS.md`'s Lifecycle section for the
 named triggers: the initiative the seat was serving closed, context
 degradation such as compaction thrash or the seat arguing from stale
-assumptions, or a plain operator call). It stops the seat, discards the
-recorded session so the next spawn is cold, and respawns immediately — one
-command instead of a `stop` a human could follow with `resume` by habit and
-warm the exact context reset meant to drop. Like `stop`, it refuses loudly
-if the seat is mid-turn: never interrupt a running turn, only ever reset an
-idle one.
+assumptions, or a plain operator call). It stops the seat if it is running,
+discards the recorded session so the next spawn is cold, and respawns
+immediately — one command instead of a `stop` a
+human could follow with `resume` by habit and warm the exact context reset
+meant to drop. A stopped seat is already between turns, so `reset` still
+respawns it cold rather than refusing. Like `stop`, it refuses loudly if the
+seat is mid-turn: never interrupt a running turn, only ever reset an idle one.
 
 What the adapter is NOT: a supervisor. Nothing restarts a dead seat, meters
 quota, or retries. It runs seats; noticing them is the commander's job.
