@@ -79,12 +79,13 @@ async function buildBoard(): Promise<Board> {
     { id:"blocked-on-you", title:"Blocked on you", cards:[] },
     { id:"merged-recently", title:"Merged recently", cards:[] },
   ];
-  const add=(idx:number, c:BoardCard)=>cols[idx].cards.push(c);
-  for(const id of ready){ const i=all.get(id); if(i && !isDependencyBlocked(i)) add(0, boardCard(i,"ready","ready",i.created_at)); }
-  for(const i of await bdList(["--status","in_progress"])) if(i?.id && !isDependencyBlocked(i)) add(1, boardCard(i,"in-progress",seatFor(i.id,["worker"]) || i.assignee || "in progress",i.started_at || i.created_at));
-  for(const i of await bdList(["--label","needs-review"])) if(i?.id && !isDependencyBlocked(i)) add(2, boardCard(i,"in-review",verdictBounce(i.id) ? "sent back" : (seatFor(i.id,["reviewer","verifier"]) || "waiting for a reviewer"),i.started_at || i.created_at));
-  for(const [id,n] of openNeeds){ const i=all.get(id); if(i && !isDependencyBlocked(i)) add(3, boardCard(i,"blocked-on-you","waiting on you",n.opened.at,"/needs")); }
-  for(const i of await bdList(["--status","closed"])) if(i?.id && recentlyClosed(i) && !isDependencyBlocked(i)) add(4, boardCard(i,"merged-recently",i.assignee || "merged",i.closed_at));
+  const placed = new Set<string>();
+  const add=(idx:number, c:BoardCard, id:string)=>{ if(placed.has(id)) return; cols[idx].cards.push(c); placed.add(id); };
+  for(const [id,n] of openNeeds){ const i=all.get(id); if(i && !isDependencyBlocked(i)) add(3, boardCard(i,"blocked-on-you","waiting on you",n.opened.at,"/needs"),id); }
+  for(const i of await bdList(["--label","needs-review"])) if(i?.id && !isDependencyBlocked(i)) add(2, boardCard(i,"in-review",verdictBounce(i.id) ? "sent back" : (seatFor(i.id,["reviewer","verifier"]) || "waiting for a reviewer"),i.started_at || i.created_at),i.id);
+  for(const i of await bdList(["--status","in_progress"])) if(i?.id && !isDependencyBlocked(i)) add(1, boardCard(i,"in-progress",seatFor(i.id,["worker"]) || i.assignee || "in progress",i.started_at || i.created_at),i.id);
+  for(const id of ready){ const i=all.get(id); if(i && !isDependencyBlocked(i)) add(0, boardCard(i,"ready","ready",i.created_at),id); }
+  for(const i of await bdList(["--status","closed"])) if(i?.id && recentlyClosed(i) && !isDependencyBlocked(i)) add(4, boardCard(i,"merged-recently",i.assignee || "merged",i.closed_at),i.id);
   return { generatedAt:new Date().toISOString(), columns: cols };
 }
 async function refreshBoard(){ if(boardRefreshing) return; boardRefreshing=true; try { boardSnapshot = await buildBoard(); } catch {} finally { boardRefreshing=false; } }

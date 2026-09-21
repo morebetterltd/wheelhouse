@@ -34,7 +34,7 @@ cat > "$PROJ/seats/needs.jsonl" <<'EOF'
 EOF
 mkdir -p "$PROJ/seats/verdicts" "$PROJ/bin"
 cat > "$PROJ/seats/state.json" <<'EOF'
-{"seats":{"builder":{"role":"worker","lastBead":"demo-progress"},"reviewer-a":{"role":"reviewer","lastBead":"demo-review"},"verifier-a":{"role":"verifier","lastBead":"demo-other"}}}
+{"seats":{"builder":{"role":"worker","lastBead":"demo-progress"},"reviewer-a":{"role":"reviewer","lastBead":"demo-review"},"reviewer-finished":{"role":"reviewer","lastBead":"demo-finished"},"verifier-a":{"role":"verifier","lastBead":"demo-other"}}}
 EOF
 cat > "$PROJ/seats/verdicts/demo-bounce.md" <<'EOF'
 VERDICT: BOUNCE
@@ -54,11 +54,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ "$status" = "in_progress" ]; then cat <<'JSON'; exit 0
-[{"id":"demo-progress","title":"Build the package","status":"in_progress","priority":"P1","assignee":"fallback worker","started_at":"2026-09-20T00:00:00Z"}]
+[{"id":"demo-progress","title":"Build the package","status":"in_progress","priority":"P1","assignee":"fallback worker","started_at":"2026-09-20T00:00:00Z"},{"id":"demo-finished","title":"Finished but still in progress","status":"in_progress","priority":"P1","assignee":"worker-1","started_at":"2026-09-20T00:30:00Z","labels":["needs-review"]}]
 JSON
 fi
 if [ "$label" = "needs-review" ]; then cat <<'JSON'; exit 0
-[{"id":"demo-review","title":"Check the branch","status":"open","priority":"P2","assignee":"","created_at":"2026-09-20T01:00:00Z","labels":["needs-review"]},{"id":"demo-bounce","title":"Fix the rejected change","status":"open","priority":"P0","assignee":"","created_at":"2026-09-20T02:00:00Z","labels":["needs-review"]}]
+[{"id":"demo-review","title":"Check the branch","status":"open","priority":"P2","assignee":"","created_at":"2026-09-20T01:00:00Z","labels":["needs-review"]},{"id":"demo-bounce","title":"Fix the rejected change","status":"open","priority":"P0","assignee":"","created_at":"2026-09-20T02:00:00Z","labels":["needs-review"]},{"id":"demo-finished","title":"Finished but still in progress","status":"in_progress","priority":"P1","assignee":"worker-1","started_at":"2026-09-20T00:30:00Z","labels":["needs-review"]}]
 JSON
 fi
 if [ "$status" = "closed" ]; then cat <<'JSON'; exit 0
@@ -66,7 +66,7 @@ if [ "$status" = "closed" ]; then cat <<'JSON'; exit 0
 JSON
 fi
 cat <<'JSON'
-[{"id":"demo-ready","title":"Write the guide","status":"open","priority":"P0","created_at":"2026-09-20T03:00:00Z"},{"id":"demo-dep","title":"Hidden dependency work","status":"open","priority":"P1","created_at":"2026-09-20T04:00:00Z","blocked_by_count":1},{"id":"demo-progress","title":"Build the package","status":"in_progress","priority":"P1","assignee":"fallback worker","started_at":"2026-09-20T00:00:00Z"},{"id":"demo-review","title":"Check the branch","status":"open","priority":"P2","created_at":"2026-09-20T01:00:00Z","labels":["needs-review"]},{"id":"demo-bounce","title":"Fix the rejected change","status":"open","priority":"P0","created_at":"2026-09-20T02:00:00Z","labels":["needs-review"]},{"id":"demo-human","title":"Answer the product question","status":"open","priority":"P1","created_at":"2026-09-20T05:00:00Z"},{"id":"demo-merged","title":"Ship the button","status":"closed","priority":"P3","assignee":"integrator","closed_at":"2099-01-01T00:00:00Z"}]
+[{"id":"demo-ready","title":"Write the guide","status":"open","priority":"P0","created_at":"2026-09-20T03:00:00Z"},{"id":"demo-dep","title":"Hidden dependency work","status":"open","priority":"P1","created_at":"2026-09-20T04:00:00Z","blocked_by_count":1},{"id":"demo-progress","title":"Build the package","status":"in_progress","priority":"P1","assignee":"fallback worker","started_at":"2026-09-20T00:00:00Z"},{"id":"demo-review","title":"Check the branch","status":"open","priority":"P2","created_at":"2026-09-20T01:00:00Z","labels":["needs-review"]},{"id":"demo-bounce","title":"Fix the rejected change","status":"open","priority":"P0","created_at":"2026-09-20T02:00:00Z","labels":["needs-review"]},{"id":"demo-finished","title":"Finished but still in progress","status":"in_progress","priority":"P1","assignee":"worker-1","started_at":"2026-09-20T00:30:00Z","labels":["needs-review"]},{"id":"demo-human","title":"Answer the product question","status":"open","priority":"P1","created_at":"2026-09-20T05:00:00Z"},{"id":"demo-merged","title":"Ship the button","status":"closed","priority":"P3","assignee":"integrator","closed_at":"2099-01-01T00:00:00Z"}]
 JSON
 EOF
 chmod +x "$PROJ/bin/bd"
@@ -97,12 +97,40 @@ assert not has('Ready','Hidden dependency work')
 assert has('In progress','Build the package','builder')
 assert has('In review','Check the branch','reviewer-a')
 assert has('In review','Fix the rejected change','sent back')
+assert has('In review','Finished but still in progress','reviewer-finished')
+assert not has('In progress','Finished but still in progress')
+assert sum(1 for cards in cols.values() for c in cards if c.get('title') == 'Finished but still in progress') == 1
 assert has('Blocked on you','Answer the product question','waiting on you')
 assert cols['Blocked on you'][0].get('needHref') == '/needs'
 assert has('Merged recently','Ship the button','integrator')
 assert not has('Merged recently','Ancient merge')
 PY
 then pass "GET /api/board.json places cards in the right columns with the right seats"; else fail "board JSON did not match expected columns: $(cat "$FIX/board.json" 2>/dev/null)"; fi
+PREC_CAN="$FIX/precedence-canary.ts"; cp "$PROJ/seats/desk.ts" "$PREC_CAN"
+python3 - "$PREC_CAN" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); s=p.read_text(); old='if(placed.has(id)) return;'
+if old not in s: raise SystemExit(1)
+s=s.replace(old, '', 1)
+p.write_text(s)
+PY
+if cmp -s "$PROJ/seats/desk.ts" "$PREC_CAN"; then
+  fail "canary: could not disable board de-duplication; test proves nothing"
+else
+  mkdir -p "$FIX/preccan/seats" "$FIX/preccan/wheelhouse" "$FIX/preccan/bin"
+  cp "$PREC_CAN" "$FIX/preccan/seats/desk.ts"; cp "$NEEDS" "$FIX/preccan/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/preccan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/preccan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/preccan/seats/"; cp "$PROJ/bin/bd" "$FIX/preccan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/preccan/wheelhouse/.template-source"
+  PPREC="$(port)"; (cd "$FIX/preccan" && PATH="$FIX/preccan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/preccan" WHEELHOUSE_DESK_PORT="$PPREC" bun seats/desk.ts >/dev/null 2>&1) & PID=$!
+  for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$PPREC/api/board.json" > "$FIX/precedence-canary.json" 2>/dev/null || true; grep -q 'Finished but still in progress' "$FIX/precedence-canary.json" 2>/dev/null && break; sleep 0.1; done
+  if python3 - "$FIX/precedence-canary.json" <<'PY'
+import json, sys
+data=json.load(open(sys.argv[1])); cols={c['title']:c['cards'] for c in data['columns']}
+count=sum(1 for cards in cols.values() for c in cards if c.get('title')=='Finished but still in progress')
+assert count > 1 or any(c.get('title')=='Finished but still in progress' for c in cols.get('In progress', []))
+PY
+  then pass "canary: disabling board precedence is caught by duplicate/in-progress placement"; else fail "canary did not expose duplicate/in-progress placement: $(cat "$FIX/precedence-canary.json" 2>/dev/null)"; fi
+  [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
+fi
 if grep -q 'Write the guide' "$FIX/board.html" && grep -q 'Build the package' "$FIX/board.html" && grep -q 'sent back' "$FIX/board.html" && grep -q 'Open need' "$FIX/board.html"; then pass "GET /board renders board cards and need link"; else fail "GET /board missing expected card text"; fi
 if ! grep -Eq '<(form|button|input|textarea)([ >])' "$FIX/board.html" && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/board")" = 404 ]; then pass "board has no write controls and no POST route"; else fail "board exposed write controls or POST route"; fi
 if ! grep -Eq 'demo-[a-z0-9-]+' "$FIX/board.html"; then pass "board HTML hides namespace ids"; else fail "board HTML leaked ids: $(grep -Eo 'demo-[a-z0-9-]+' "$FIX/board.html" | sort -u | tr '\n' ' ')"; fi
