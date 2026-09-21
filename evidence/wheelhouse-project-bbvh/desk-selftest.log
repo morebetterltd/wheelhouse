@@ -1,0 +1,15 @@
+ok 1 - desk starts and writes seats/run/desk.port
+ok 2 - GET /needs renders open needs first and answered needs as history
+ok 3 - GET /needs renders options, default, consequence, and thread
+ok 4 - GET /api/needs.json returns folded needs JSON
+ok 5 - GET /api/board.json places cards in the right columns with the right seats
+ok 6 - GET /board renders board cards and need link
+ok 7 - board has no write controls and no POST route
+ok 8 - board HTML hides namespace ids
+ok 9 - HTML hides machine bead id and seat jargon
+ok 10 - POST answer appends exactly one answered event through the ledger
+ok 11 - POST message appends a human message
+ok 12 - desk listens on 127.0.0.1 only
+ok 13 - canary: rendering machine.bead is caught
+ok 14 - canary: a board copy that prints ids is caught
+desk.selftest: PASS (14 checks)
