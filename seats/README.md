@@ -20,6 +20,8 @@ The main files here:
 - `commander-inbox-poll.sh` — wrapper-independent commander fallback: drains the Dispatch Office inbox from inside the commander pane whenever the cursor lags.
 - `principal-sentinel.sh` — Claude Code Stop hook that turns final assistant `@principal:` lines into durable needs.
 - `principal-sentinel.selftest.sh` — proves the Stop hook opens exactly the intended needs and that source dedupe works.
+- `courier.ts` — optional human transport daemon: pushes needs to Telegram and records replies back into `seats/needs.jsonl`.
+- `transports/` — transport interface and adapters. The template ships Telegram first.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code. Default timeout is 15 minutes; for
   large cold workspaces that must build/test from scratch, set
@@ -67,6 +69,7 @@ Ledger event schema:
 - `message`: `{type:"message", id, at, from:"commander"|"human", via, text}`
 - `answered`: `{type:"answered", id, at, from:"human", via, text, choice?}`
 - `closed`: `{type:"closed", id, at, reason}`
+- `sent`: `{type:"sent", id, at, transport, ref}` records an outbound transport delivery and is ignored by `show`/`list` state folding.
 
 `show` and `list` fold events by id into state `open`, `answered`, or `closed`.
 
@@ -75,6 +78,22 @@ Ledger event schema:
 Wire the commander session's Stop hook to `bash seats/principal-sentinel.sh` so a commander turn can end with an `@principal:` line instead of trusting scrollback. The hook reads Claude Code's JSON stdin, respects `stop_hook_active`, and exits 0 on every path. It uses `last_assistant_message` when Claude supplies it, otherwise it reads `transcript_path` and extracts only the last top-level `type:"assistant"` record. If any line in that assistant text begins `@principal:`, the hook sends that line through the end of the assistant message to `bun seats/needs.ts open --from-stdin --source <session_id>:<assistant uuid>`. The source makes repeated Stop-hook runs for the same assistant message idempotent.
 
 Measured on this machine with `claude --version` = `2.1.278 (Claude Code)`, a real Stop-hook stdin object contained these top-level fields: `background_tasks`, `cwd`, `effort`, `hook_event_name`, `last_assistant_message`, `permission_mode`, `prompt_id`, `session_crons`, `session_id`, `stop_hook_active`, and `transcript_path`. In that capture, `last_assistant_message` was a string, `stop_hook_active` was a boolean, `effort` was an object, and `background_tasks` / `session_crons` were arrays. The transcript's last assistant row was verified to contain top-level `uuid`, `sessionId`, `type`, `timestamp`, `requestId`, plus `message.content[]` text blocks. Unverified: whether every Claude Code mode supplies `last_assistant_message`, whether Stop-hook input ever includes a message UUID directly, and whether non-print interactive turns add fields not seen in this one-shot capture.
+## Transports — optional off-machine replies
+
+The local desk is enough for a machine-local operator. A transport is optional machinery for reaching the human away from the machine. With no transport token configured, `bun seats/courier.ts --once` and `seats/cockpit.sh --courier` print `courier skipped: no transport configured` and exit 0; the needs ledger and desk still work.
+
+The transport contract lives in `seats/transports/transport.ts`: adapters export a `name`, `send(ev: opened|message|closed) -> {ref}`, and `poll(cursor) -> {replies, cursor}`. `seats/courier.ts` owns the local cursor at `seats/run/courier.state.json`, appends `sent` ledger events after outbound sends, and records inbound replies through the needs ledger (`answered` for open needs, human `message` for answered/closed needs). `--once` runs one scan/poll cycle, `--status` reports configured/running/skipped state, and `--drain-out` prints `seats/logs/courier.out.log` for tests and debugging.
+
+Telegram setup:
+
+1. Create a bot with BotFather and copy the token.
+2. Put the token in `seats/run/telegram.token` and lock it down: `chmod 600 seats/run/telegram.token`. A token file with any other mode is refused. Alternatively set `WHEELHOUSE_TELEGRAM_TOKEN` in the courier environment.
+3. Put allowed Telegram sender ids, one per line, in `seats/run/telegram.allow`. The first id is also the default private-chat target; set `WHEELHOUSE_TELEGRAM_CHAT_ID` if the target chat differs. Messages from any other sender are ignored and logged to `seats/logs/courier.out.log`.
+4. For tests or a proxy, set `WHEELHOUSE_TELEGRAM_API_BASE`; otherwise the adapter uses `https://api.telegram.org`. `WHEELHOUSE_TELEGRAM_POLL_TIMEOUT` overrides the Bot API long-poll timeout (default 25 seconds; tests set it to 0).
+
+Reply rules: a Telegram reply to a sent need message maps to that need. A non-reply maps to the only open need when exactly one need is open. Otherwise the bot answers `reply to the message you're answering`. A reply to an open need records an answer via `telegram`; a bare option label or option number records the matching choice. A reply to an answered or closed need records a human message. Commander `needs.ts say` events are pushed as threaded Telegram messages, and closing a need pushes a one-line resolved notice.
+
+Nothing under `seats/run/` is committed: tokens, allowlists, pid files, and courier cursor state are install-local.
 
 ## Host build budget (opt-in)
 
@@ -618,7 +637,7 @@ run; to clean it by hand, those pid-stamped dirs are the whole footprint.
 ## The bridge
 
 The bridge is how a human looks at the fleet: ONE tmux window per project,
-built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. Before it builds or attaches the tmux session, `cockpit.sh` starts the Dispatch Office herald (`bun seats/herald.ts`) and the local needs desk (`bun seats/desk.ts`), verifies the recorded pids on every re-run, and restarts either one if the pid is dead. The commander pane starts `seats/commander-inbox-poll.sh` automatically; it is the wrapper-independent fallback when tmux pokes cannot be delivered.
+built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. Before it builds or attaches the tmux session, `cockpit.sh` starts the Dispatch Office herald (`bun seats/herald.ts`), the local needs desk (`bun seats/desk.ts`), and the optional courier (`bun seats/courier.ts` when a transport token is configured), verifies the recorded pids on every re-run, and restarts any of them if the pid is dead. The commander pane starts `seats/commander-inbox-poll.sh` automatically; it is the wrapper-independent fallback when tmux pokes cannot be delivered.
 
 The desk is the human-facing page for `seats/needs.ts` and the read-only work board: open `seats/run/desk.port` or run `seats/cockpit.sh --desk` and visit the printed URL. It binds `127.0.0.1` by default; `WHEELHOUSE_DESK_BIND` overrides the bind address and `WHEELHOUSE_DESK_PORT` overrides the port. Without an override, the port is `42000 + fnv1a(namespace) % 1000`, where `namespace=` comes from `wheelhouse/.template-source` and falls back to the install directory name. `/needs` lists open needs first, keeps answered/closed needs as history, and posts answers/messages only through the needs ledger API. `/board` is read-only: it has no form, button, input, or POST route, polls `/api/board.json` every 5 seconds, and hides graph ids in the HTML. Its columns are Ready (`bd ready` ids joined to `bd list --json` titles), In progress (`bd list --status in_progress`, seat from a worker in `seats/state.json` whose `lastBead` matches, else assignee), In review (`bd list --label needs-review`, reviewer/verifier `lastBead`, `sent back` when `seats/verdicts/<id>.md` records BOUNCE, else `waiting for a reviewer`), Blocked on you (open needs whose `machine.bead` names work, linking back to `/needs`), and Merged recently (`bd list --status closed` rows closed in the last 48 hours). Dependency-blocked work is omitted. The commander never needs the page — the CLI, graph, and floor remain canonical for command — but the desk is the standing surface for a human who has been asked for an answer or wants the read-only board.
 
