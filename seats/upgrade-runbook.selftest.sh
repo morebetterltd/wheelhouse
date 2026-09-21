@@ -78,6 +78,17 @@ copy_installed_selftest() {
 
 command -v zsh >/dev/null 2>&1 || fail "zsh is required for this selftest"
 
+if [ "$TEMPLATE" = "$ROOT" ]; then
+  if grep -q 'remove `seats/bin`' "$TEMPLATE/runbooks/UPGRADE.md"; then
+    fail "UPGRADE.md still tells non-opt-in installs to remove seats/bin"
+  fi
+  if grep -qi 'keep .*`seats/bin`' "$TEMPLATE/runbooks/UPGRADE.md" && grep -qi 'keep .*`seats/bin`' "$TEMPLATE/seats/README.md"; then
+    pass "host budget docs keep seats/bin inert unless host-budget.json opts in"
+  else
+    fail "host budget docs do not agree that seats/bin is kept but inert without host-budget.json"
+  fi
+fi
+
 PROJ="$TMP/project"
 mkdir -p "$PROJ/wheelhouse/fleet" "$PROJ/wheelhouse/runbooks"
 git -C "$TEMPLATE" show "${BASELINE}:contracts/WORKER.md" > "$PROJ/wheelhouse/fleet/WORKER.md"
