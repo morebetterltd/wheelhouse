@@ -1,0 +1,90 @@
+import type { HarnessName } from "./harness";
+
+export interface FinalLineCandidate {
+  line: string;
+  normalized: string;
+  lineNumber: number;
+}
+
+function collectMessageText(value: unknown, out: string[]): void {
+  if (value == null) return;
+  if (typeof value === "string") { out.push(value); return; }
+  if (Array.isArray(value)) { for (const v of value) collectMessageText(v, out); return; }
+  if (typeof value === "object") {
+    const obj: any = value;
+    collectMessageText(obj.text, out);
+    collectMessageText(obj.content, out);
+  }
+}
+
+function messageRole(event: any): string | undefined {
+  return event?.message?.role ?? event?.role ?? event?.message?.author?.role ?? event?.author?.role;
+}
+
+function eventText(event: any): string {
+  const texts: string[] = [];
+  collectMessageText(event?.message?.content ?? event?.content ?? event?.message ?? event?.text, texts);
+  return texts.join("");
+}
+
+export function finalAssistantText(stdout: string, harness: HarnessName): string {
+  let finalText: string | null = null;
+  let sawStructuredMessage = false;
+  for (const raw of stdout.split(/\r?\n/)) {
+    if (!raw.trim().startsWith("{")) continue;
+    try {
+      const event = JSON.parse(raw);
+      if (harness === "pi") {
+        if (event?.type !== "message_end") continue;
+        sawStructuredMessage = true;
+        if (messageRole(event) !== "assistant") continue;
+        finalText = eventText(event);
+      } else if (harness === "claude-code") {
+        if (event?.type !== "assistant") continue;
+        sawStructuredMessage = true;
+        finalText = eventText(event);
+      } else {
+        if (event?.type !== "item.completed" || event?.item?.type !== "agent_message") continue;
+        sawStructuredMessage = true;
+        finalText = eventText(event.item);
+      }
+    } catch { /* ignore non-event prose and malformed JSON */ }
+  }
+  if (finalText !== null) return finalText;
+  return sawStructuredMessage ? "" : stdout;
+}
+
+export function finalAssistantMessageLines(stdout: string, harness: HarnessName): string[] {
+  return finalAssistantText(stdout, harness).split(/\r?\n/);
+}
+
+export function dedupeCandidates(candidates: FinalLineCandidate[]): FinalLineCandidate[] {
+  const seen = new Set<string>();
+  const out: FinalLineCandidate[] = [];
+  for (const candidate of candidates) {
+    if (seen.has(candidate.normalized)) continue;
+    seen.add(candidate.normalized);
+    out.push(candidate);
+  }
+  return out;
+}
+
+export function liveLineCandidates(stdout: string, harness: HarnessName, tag: string): FinalLineCandidate[] {
+  const out: FinalLineCandidate[] = [];
+  let inFence = false;
+  const lines = finalAssistantMessageLines(stdout, harness);
+  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^${escaped}:`);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const normalized = trimmed.replace(/^(>\s*)+/, "").trim();
+    if (re.test(normalized)) out.push({ line, normalized, lineNumber: i + 1 });
+  }
+  return dedupeCandidates(out);
+}

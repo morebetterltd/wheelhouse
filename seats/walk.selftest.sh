@@ -12,11 +12,15 @@ WALK="${1:-$HERE/walk.ts}"
 VERIFY="$(cd "$(dirname "$WALK")" && pwd)/verify.ts"
 BRIEFS="$(cd "$(dirname "$WALK")" && pwd)/briefs.ts"
 HARNESS="$(cd "$(dirname "$WALK")" && pwd)/harness.ts"
+FINAL_ASSISTANT="$(cd "$(dirname "$WALK")" && pwd)/final-assistant-message.ts"
 HOST_BUDGET_TS="$(cd "$(dirname "$WALK")" && pwd)/host-budget.ts"
+REAL_FIXTURES_DIR="$(cd "$(dirname "$WALK")" && pwd)/fixtures/verify-real"
+INCIDENT_STREAM="$(cd "$(dirname "$WALK")" && pwd -P)/../evidence/wheelhouse-project-z4b1/walk-desk-incident.out"
 SCRUB="$HERE/evidence-scrub.sh"
 [ -f "$WALK" ] || { echo "selftest: not found: $WALK" >&2; exit 2; }
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
 [ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
+[ -f "$FINAL_ASSISTANT" ] || { echo "selftest: not found: $FINAL_ASSISTANT" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 [ -x "$SCRUB" ] || { echo "selftest: not executable: $SCRUB" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
@@ -50,6 +54,10 @@ fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.s
 fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null }));
+if (process.env.STUB_STREAM_FILE) {
+  process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, 'utf8'));
+  process.exit(Number(process.env.STUB_EXIT || 0));
+}
 const reply = process.env.STUB_REPLY || '';
 const finish = () => {
   process.stdout.write(reply.replaceAll('__HOME__', process.env.HOME || '').replaceAll('__TMP__', process.cwd()));
@@ -77,6 +85,10 @@ fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.s
 fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || null }));
+if (process.env.STUB_STREAM_FILE) {
+  process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, 'utf8'));
+  process.exit(Number(process.env.STUB_EXIT || 0));
+}
 process.stdout.write(process.env.STUB_REPLY || '');
 process.exit(Number(process.env.STUB_EXIT || 0));
 STUB
@@ -90,6 +102,10 @@ fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.s
 fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null, CODEX_HOME: process.env.CODEX_HOME || null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || null }));
+if (process.env.STUB_STREAM_FILE) {
+  process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, 'utf8'));
+  process.exit(Number(process.env.STUB_EXIT || 0));
+}
 process.stdout.write(process.env.STUB_REPLY || '');
 process.exit(Number(process.env.STUB_EXIT || 0));
 STUB
@@ -101,6 +117,7 @@ build_proj(){
   cp "$WALK" "$proj/seats/walk.ts"
   cp "$VERIFY" "$proj/seats/verify.ts"
   cp "$HARNESS" "$proj/seats/harness.ts"
+  cp "$FINAL_ASSISTANT" "$proj/seats/final-assistant-message.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   cp "$SCRUB" "$proj/seats/evidence-scrub.sh"
@@ -164,7 +181,49 @@ run_case done $'consumer output __HOME__ __TMP__\nVERDICT: WALKED-DONE\n' 0 'VER
 run_case notdone $'step output __HOME__ __TMP__\nVERDICT: WALKED-NOT-DONE — failed at fixture step\n' 2 'VERDICT: WALKED-NOT-DONE'
 run_case couldnot $'blocked __HOME__ __TMP__\nVERDICT: COULD-NOT-WALK — missing fixture credential\n' 3 'VERDICT: COULD-NOT-WALK'
 run_case zero $'no verdict here __HOME__ __TMP__\n' 4 'expected exactly one'
+run_case dedup $'VERDICT: WALKED-DONE\nVERDICT: WALKED-DONE\n__HOME__ __TMP__\n' 0 'VERDICT: WALKED-DONE'
 run_case two $'VERDICT: WALKED-DONE\nVERDICT: COULD-NOT-WALK — duplicate\n__HOME__ __TMP__\n' 4 'expected exactly one'
+
+make_walk_stream_fixture(){
+  local harness="$1" source="$2" dest="$3"
+  cp "$source" "$dest"
+  case "$harness" in
+    pi) printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"VERDICT: WALKED-DONE"}]}}' >> "$dest" ;;
+    claude-code) printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"VERDICT: WALKED-DONE"}]}}' >> "$dest" ;;
+    codex) printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"VERDICT: WALKED-DONE"}}' >> "$dest" ;;
+  esac
+}
+
+run_stream_case(){
+  local name="$1" harness="$2" stream="$3"
+  local proj="$FIX/proj-stream-$name" outdir="$FIX/out-stream-$name" ns="walk-stream-$name" out rc
+  build_proj "$proj" "$ns"
+  if [ "$harness" != pi ]; then
+    bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='$harness'; j.seats.verifier.provider='$([ "$harness" = claude-code ] && printf anthropic || printf openai-codex)'; j.seats.verifier.model='stream-fixture'; j.seats.verifier.account.authRoute='$([ "$harness" = claude-code ] && printf oauth || printf env)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+  fi
+  out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STREAM_FILE="$stream" bun seats/walk.ts 'claim' --surface product:fixture --out "$outdir" 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] && pass "$name final-message stream exits WALKED-DONE" || fail "$name stream rc=$rc output=$out"
+  printf '%s\n' "$out" | grep -q 'VERDICT: WALKED-DONE' && pass "$name final-message stream prints verdict" || fail "$name stream missing verdict: $out"
+  [ -s "$outdir/walk.json" ] && grep -q '"verdict": "WALKED-DONE"' "$outdir/walk.json" && pass "$name final-message stream writes verdict file" || fail "$name stream missing verdict file: $(cat "$outdir/walk.json" 2>/dev/null)"
+}
+
+phase 'real stream wire shapes parse walk verdict from final assistant message'
+for f in pi-v3-message-end.jsonl claude-code-2.1.278-assistant.jsonl codex-0.144.0-item-completed-agent-message.jsonl; do
+  [ -f "$REAL_FIXTURES_DIR/$f" ] || { echo "selftest: missing real verifier fixture: $REAL_FIXTURES_DIR/$f" >&2; exit 2; }
+done
+pi_stream="$FIX/pi-walk-stream.jsonl"; make_walk_stream_fixture pi "$REAL_FIXTURES_DIR/pi-v3-message-end.jsonl" "$pi_stream"; run_stream_case pi pi "$pi_stream"
+claude_stream="$FIX/claude-walk-stream.jsonl"; make_walk_stream_fixture claude-code "$REAL_FIXTURES_DIR/claude-code-2.1.278-assistant.jsonl" "$claude_stream"; run_stream_case claude claude-code "$claude_stream"
+codex_stream="$FIX/codex-walk-stream.jsonl"; make_walk_stream_fixture codex "$REAL_FIXTURES_DIR/codex-0.144.0-item-completed-agent-message.jsonl" "$codex_stream"; run_stream_case codex codex "$codex_stream"
+[ -s "$INCIDENT_STREAM" ] || { echo "selftest: missing scrubbed incident stream: $INCIDENT_STREAM" >&2; exit 2; }
+incident_stream="$FIX/incident-stream.jsonl"
+"$NODE_BIN" - "$INCIDENT_STREAM" "$incident_stream" <<'NODE'
+const fs = require('fs');
+const input = fs.readFileSync(process.argv[2], 'utf8');
+if (!input.includes('VERDICT: WALKED-DONE')) process.exit(2);
+fs.writeFileSync(process.argv[3], JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: input + '\nVERDICT: WALKED-DONE' }] } }) + '\n');
+NODE
+run_stream_case incident pi "$incident_stream"
 
 phase 'host budget PATH is opt-in for verifier walks'
 proj="$FIX/proj-budget"; ns="walk-budget"; outdir="$FIX/out-budget"; build_proj "$proj" "$ns"
