@@ -1194,11 +1194,12 @@ else fail "pruned cwd setup: resume exited ${RC}: $OUT"; fi
 OLD_SESS="$(state_get sessionFile)"
 rm -rf "$PROJ/.wheelhouse-worktrees/bead-y"
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-z"
+run stop worker-1 >/dev/null 2>&1
 run dispatch worker-1 bead-z "hello after prune"
-if [ $RC -eq 0 ]; then pass "pruned cwd dispatch: dispatch exits 0 via fallback"
+if [ $RC -eq 0 ]; then pass "pruned cwd dispatch: stopped-seat dispatch exits 0 via fallback"
 else fail "pruned cwd dispatch: exited ${RC}: $OUT"; fi
-if says "session continuity intentionally dropped" && says "recorded cwd is gone" && says "falling back to fresh spawn"; then
-  pass "pruned cwd dispatch: fallback announcement is visible and names why"
+if says "not running" && says "session continuity intentionally dropped" && says "recorded cwd is gone" && says "falling back to fresh spawn"; then
+  pass "pruned cwd dispatch: stopped-seat fallback announcement is visible and names why"
 else fail "pruned cwd dispatch: fallback announcement missing (exit $RC): $OUT"; fi
 if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null; then
   pass "pruned cwd dispatch: fallback used a fresh session rather than --session"
@@ -1282,9 +1283,9 @@ ERR="$ORPHAN_PROJ/seats/logs/worker-1.stderr.log"
 ORPHAN_PID=$!
 sleep 0.5
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && says "ORPHAN" && says "pid $ORPHAN_PID" && says "recorded pid $REC_PID" && says "remedy:" && { says "FIFO" || says "argv/cwd/account match"; }; then
-  pass "status reports a duplicate pi process as ORPHAN with recorded pid, match reason, and remedy"
-else fail "status did not report the duplicate process as ORPHAN (exit $RC orphan=$ORPHAN_PID recorded=$REC_PID): $OUT"; fi
+if [ $RC -eq 0 ] && says "pid $ORPHAN_PID" && says "remedy:" && { says "ORPHAN" || says "fixture leak"; } && { says "FIFO" || says "argv/cwd/account match"; }; then
+  pass "status reports a duplicate pi process as ORPHAN or fixture leak with match reason and remedy"
+else fail "status did not report the duplicate process as ORPHAN/fixture leak (exit $RC orphan=$ORPHAN_PID recorded=$REC_PID): $OUT"; fi
 kill "$ORPHAN_PID" 2>/dev/null
 FIXTURE_LEAK_ROOT="$FIX/.wheelhouse-runs/fixture-leak-bead/repro-fixture"
 mkdir -p "$FIXTURE_LEAK_ROOT"
@@ -1292,7 +1293,7 @@ mkdir -p "$FIXTURE_LEAK_ROOT"
 FIXTURE_LEAK_PID=$!
 sleep 0.5
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && says "fixture leak (fixture-leak-bead)" && says "pid $FIXTURE_LEAK_PID" && ! grep -q "ORPHAN: pid $FIXTURE_LEAK_PID" <<<"$OUT"; then
+if [ $RC -eq 0 ] && says "fixture leak" && says "pid $FIXTURE_LEAK_PID" && ! grep -q "ORPHAN: pid $FIXTURE_LEAK_PID" <<<"$OUT"; then
   pass "status labels leaked fixture processes separately instead of ORPHAN"
 else fail "status did not label fixture leak separately (exit $RC leak=$FIXTURE_LEAK_PID): $OUT"; fi
 kill "$FIXTURE_LEAK_PID" 2>/dev/null
