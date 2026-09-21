@@ -288,24 +288,41 @@ function messageRole(event: any): string | undefined {
   return event?.message?.role ?? event?.role ?? event?.message?.author?.role ?? event?.author?.role;
 }
 
-function messageEndContent(event: any): string {
+function eventText(event: any): string {
   const texts: string[] = [];
-  collectMessageText(event?.message?.content ?? event?.content ?? event?.message, texts);
+  collectMessageText(event?.message?.content ?? event?.content ?? event?.message ?? event?.text, texts);
   return texts.join("");
 }
 
-function finalAssistantMessageLines(stdout: string): string[] {
+function finalAssistantText(stdout: string, harness: HarnessName): string {
   let finalText: string | null = null;
+  let sawStructuredMessage = false;
   for (const raw of stdout.split(/\r?\n/)) {
     if (!raw.trim().startsWith("{")) continue;
     try {
       const event = JSON.parse(raw);
-      if (event?.type !== "message_end") continue;
-      if (messageRole(event) !== "assistant") continue;
-      finalText = messageEndContent(event);
+      if (harness === "pi") {
+        if (event?.type !== "message_end") continue;
+        sawStructuredMessage = true;
+        if (messageRole(event) !== "assistant") continue;
+        finalText = eventText(event);
+      } else if (harness === "claude-code") {
+        if (event?.type !== "assistant") continue;
+        sawStructuredMessage = true;
+        finalText = eventText(event);
+      } else {
+        if (event?.type !== "agent_message") continue;
+        sawStructuredMessage = true;
+        finalText = eventText(event);
+      }
     } catch { /* ignore non-event prose and malformed JSON */ }
   }
-  return finalText === null ? [] : finalText.split(/\r?\n/);
+  if (finalText !== null) return finalText;
+  return sawStructuredMessage ? "" : stdout;
+}
+
+function finalAssistantMessageLines(stdout: string, harness: HarnessName): string[] {
+  return finalAssistantText(stdout, harness).split(/\r?\n/);
 }
 
 function dedupeCandidates(candidates: VerdictCandidate[]): VerdictCandidate[] {
@@ -319,10 +336,10 @@ function dedupeCandidates(candidates: VerdictCandidate[]): VerdictCandidate[] {
   return out;
 }
 
-function liveLineCandidates(stdout: string, tag: "VERDICT" | "PUSH"): VerdictCandidate[] {
+function liveLineCandidates(stdout: string, harness: HarnessName, tag: "VERDICT" | "PUSH"): VerdictCandidate[] {
   const out: VerdictCandidate[] = [];
   let inFence = false;
-  const lines = finalAssistantMessageLines(stdout);
+  const lines = finalAssistantMessageLines(stdout, harness);
   const re = new RegExp(`^${tag}:`);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -338,12 +355,12 @@ function liveLineCandidates(stdout: string, tag: "VERDICT" | "PUSH"): VerdictCan
   return dedupeCandidates(out);
 }
 
-function liveVerdictCandidates(stdout: string): VerdictCandidate[] {
-  return liveLineCandidates(stdout, "VERDICT");
+function liveVerdictCandidates(stdout: string, harness: HarnessName): VerdictCandidate[] {
+  return liveLineCandidates(stdout, harness, "VERDICT");
 }
 
-function livePushCandidates(stdout: string): VerdictCandidate[] {
-  return liveLineCandidates(stdout, "PUSH");
+function livePushCandidates(stdout: string, harness: HarnessName): VerdictCandidate[] {
+  return liveLineCandidates(stdout, harness, "PUSH");
 }
 
 function writeRawVerifierOutput(stdout: string): string {
@@ -939,7 +956,7 @@ function main(): void {
   // not the verifier's machine verdict. Ordinary blockquotes are still live:
   // only fences classify a line inert.
   const rawFile = writeRawVerifierOutput(stdout);
-  const verdictLines = liveVerdictCandidates(stdout);
+  const verdictLines = liveVerdictCandidates(stdout, verifierHarness);
   if (verdictLines.length === 0) {
     process.stderr.write(`--- verifier output tail ---\n${stdout.slice(-2000)}\n`);
     die(`verifier emitted no VERDICT: line outside fenced code blocks — per the brief that routes to a human, not to a verdict (raw output: ${rawFile})`);
@@ -950,7 +967,7 @@ function main(): void {
         verdictLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
     );
   }
-  const pushLines = livePushCandidates(stdout);
+  const pushLines = livePushCandidates(stdout, verifierHarness);
   if (pushLines.length === 0) {
     die(`verifier emitted no PUSH: line outside fenced code blocks — REVIEWER.md requires exactly one PUSH line beside the verdict (raw output: ${rawFile})`);
   }
