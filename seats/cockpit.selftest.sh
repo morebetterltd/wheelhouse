@@ -77,6 +77,15 @@ printf '%s\n' "poll-root=${WHEELHOUSE_COMMANDER_POLL_ROOT:-}" >> "$(dirname "$0"
 while :; do sleep 1; done
 EOF
 chmod +x "$PROJ/seats/commander-inbox-poll.sh"
+cat > "$PROJ/seats/desk-watchdog.sh" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$(dirname "$0")/run" "$(dirname "$0")/logs"
+printf '%s\n' $$ > "$(dirname "$0")/run/desk-watchdog.pid"
+printf '%s\n' "watchdog-root=${WHEELHOUSE_DESK_ROOT:-}" >> "$(dirname "$0")/logs/desk-watchdog.fixture.log"
+trap 'rm -f "$(dirname "$0")/run/desk-watchdog.pid"; exit 0' INT TERM
+while :; do sleep 1; done
+EOF
+chmod +x "$PROJ/seats/desk-watchdog.sh"
 
 run_cockpit() {
   WHEELHOUSE_TMUX_SOCKET="$SOCK" WHEELHOUSE_COCKPIT_COMMANDER_PERCENT=55 "$PROJ/seats/cockpit.sh" ratio > "$FIX/cockpit.out" 2>&1
@@ -170,10 +179,11 @@ rm -f "$PROJ/seats/run/herald.pid"
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_DESK_PORT=42321 "$PROJ/seats/cockpit.sh" --desk > "$FIX/desk-only.out" 2>&1
 DESK_ONLY_RC=$?
 DESK_ONLY_PID="$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)"
-if [ $DESK_ONLY_RC -eq 0 ] && [ -n "$DESK_ONLY_PID" ] && kill -0 "$DESK_ONLY_PID" 2>/dev/null && grep -q 'desk started: pid' "$FIX/desk-only.out" && grep -q 'http://127.0.0.1:42321/needs' "$FIX/desk-only.out"; then
-  pass "cockpit --desk starts only the desk and prints its URL"
+DESK_WATCHDOG_PID="$(cat "$PROJ/seats/run/desk-watchdog.pid" 2>/dev/null || true)"
+if [ $DESK_ONLY_RC -eq 0 ] && [ -n "$DESK_ONLY_PID" ] && kill -0 "$DESK_ONLY_PID" 2>/dev/null && [ -n "$DESK_WATCHDOG_PID" ] && kill -0 "$DESK_WATCHDOG_PID" 2>/dev/null && grep -q 'desk watchdog started: pid' "$FIX/desk-only.out" && grep -q 'desk started: pid' "$FIX/desk-only.out" && grep -q 'http://127.0.0.1:42321/needs' "$FIX/desk-only.out"; then
+  pass "cockpit --desk starts the desk, watchdog, and prints its URL"
 else
-  fail "cockpit --desk did not run standalone (rc=$DESK_ONLY_RC pid=${DESK_ONLY_PID:-none} out=$(cat "$FIX/desk-only.out" 2>/dev/null))"
+  fail "cockpit --desk did not run standalone (rc=$DESK_ONLY_RC pid=${DESK_ONLY_PID:-none} watchdog=${DESK_WATCHDOG_PID:-none} out=$(cat "$FIX/desk-only.out" 2>/dev/null))"
 fi
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_DESK_PORT=42321 "$PROJ/seats/cockpit.sh" --desk > "$FIX/desk-again.out" 2>&1
 if grep -q 'desk already running: pid' "$FIX/desk-again.out"; then pass "cockpit --desk reports already running"; else fail "cockpit --desk did not report already running: $(cat "$FIX/desk-again.out" 2>/dev/null)"; fi
