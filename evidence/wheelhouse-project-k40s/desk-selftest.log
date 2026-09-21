@@ -1,0 +1,10 @@
+ok 1 - desk starts and writes seats/run/desk.port
+ok 2 - GET /needs renders open needs first and answered needs as history
+ok 3 - GET /needs renders options, default, consequence, and thread
+ok 4 - GET /api/needs.json returns folded needs JSON
+ok 5 - HTML hides machine bead id and seat jargon
+ok 6 - POST answer appends exactly one answered event through the ledger
+ok 7 - POST message appends a human message
+ok 8 - desk listens on 127.0.0.1 only
+ok 9 - canary: rendering machine.bead is caught
+desk.selftest: PASS (9 checks)
