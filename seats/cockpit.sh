@@ -110,6 +110,58 @@ ensure_desk() {
   exit 1
 }
 
+ensure_courier() {
+  if [ ! -f "$HERE/courier.ts" ]; then
+    echo "courier skipped: no transport configured"
+    return 0
+  fi
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "STOP: bun is required to run the courier" >&2
+    exit 1
+  fi
+  mkdir -p "$HERE/run" "$HERE/logs"
+  status_out="$(cd "$ROOT" && WHEELHOUSE_COURIER_ROOT="$ROOT" bun "$HERE/courier.ts" --status 2>&1 || true)"
+  if printf '%s\n' "$status_out" | grep -q 'courier skipped: no transport configured'; then
+    echo "courier skipped: no transport configured"
+    return 0
+  fi
+  pid_file="$HERE/run/courier.pid"
+  if [ -f "$pid_file" ]; then
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if pid_alive "$old_pid"; then
+      echo "courier already running: pid $old_pid"
+      return 0
+    fi
+    echo "courier dead: pid ${old_pid:-?}; restarting"
+    rm -f "$pid_file"
+  fi
+  tmp_pid_file="$pid_file.$$"
+  rm -f "$tmp_pid_file"
+  (
+    cd "$ROOT" || exit 1
+    exec </dev/null >> "$HERE/logs/courier.out.log" 2>> "$HERE/logs/courier.stderr.log"
+    WHEELHOUSE_COURIER_ROOT="$ROOT" nohup bun "$HERE/courier.ts" &
+    courier_pid=$!
+    printf '%s\n' "$courier_pid" > "$tmp_pid_file"
+    disown "$courier_pid" 2>/dev/null || true
+  ) </dev/null >/dev/null 2>/dev/null &
+  launcher_pid=$!
+  disown "$launcher_pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "$tmp_pid_file" ] && break
+    sleep 0.05
+  done
+  if [ -s "$tmp_pid_file" ]; then mv -f "$tmp_pid_file" "$pid_file"; fi
+  new_pid="$(cat "$pid_file" 2>/dev/null || true)"
+  sleep 0.2
+  if pid_alive "$new_pid"; then
+    echo "courier started: pid $new_pid"
+    return 0
+  fi
+  echo "STOP: courier failed to start; see $HERE/logs/courier.stderr.log" >&2
+  exit 1
+}
+
 ensure_herald() {
   if [ ! -f "$HERE/herald.ts" ]; then
     echo "herald not installed beside cockpit; skipping dispatch herald"
@@ -162,6 +214,7 @@ usage() {
 usage: seats/cockpit.sh [namespace]
        seats/cockpit.sh --herald [namespace]
        seats/cockpit.sh --desk [namespace]
+       seats/cockpit.sh --courier [namespace]
        seats/cockpit.sh --pane-commander
        seats/cockpit.sh --pane-floor
 EOF
@@ -181,6 +234,10 @@ case "${1:-}" in
     ;;
   --desk)
     S="wh-${2:-$(basename "$ROOT")}" ensure_desk
+    exit 0
+    ;;
+  --courier)
+    S="wh-${2:-$(basename "$ROOT")}" ensure_courier
     exit 0
     ;;
   --pane-commander)
@@ -232,6 +289,7 @@ S="wh-$NS"
 
 ensure_herald
 ensure_desk
+ensure_courier
 DESK_URL="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
 export DESK_URL
 

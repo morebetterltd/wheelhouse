@@ -12,7 +12,8 @@ export type NeedEvent =
  | { type:"opened"; id:string; at:string; kind:string; title:string; body:string; options:Option[]; default?:string; consequence?:string; machine:{ bead?:string; seat?:string; session?:string; source?:string } }
  | { type:"message"; id:string; at:string; from:"commander"|"human"; via:string; text:string }
  | { type:"answered"; id:string; at:string; from:"human"; via:string; text:string; choice?:string }
- | { type:"closed"; id:string; at:string; reason:string };
+ | { type:"closed"; id:string; at:string; reason:string }
+ | { type:"sent"; id:string; at:string; transport:string; ref:string };
 export interface Option { label:string; text:string }
 export interface NeedFold { id:string; state:"open"|"answered"|"closed"; opened:Extract<NeedEvent,{type:"opened"}>; messages:Extract<NeedEvent,{type:"message"}>[]; answer?:Extract<NeedEvent,{type:"answered"}>; closed?:Extract<NeedEvent,{type:"closed"}> }
 function die(msg:string, code=1):never{ process.stderr.write(`STOP: ${msg}\n`); process.exit(code); }
@@ -20,7 +21,7 @@ function warn(msg:string){ process.stderr.write(`WARN: ${msg}\n`); }
 function now(){ return new Date().toISOString(); }
 export function appendEvent(ev:NeedEvent){ fs.mkdirSync(SEATS_DIR,{recursive:true}); fs.appendFileSync(LEDGER, JSON.stringify(ev)+"\n"); }
 export function readEvents():NeedEvent[]{ if(!fs.existsSync(LEDGER)) return []; const out:NeedEvent[]=[]; fs.readFileSync(LEDGER,"utf8").split(/\r?\n/).forEach((l,i)=>{ if(!l.trim()) return; try{out.push(JSON.parse(l));}catch(e:any){die(`cannot parse ${LEDGER} line ${i+1}: ${e.message}`);} }); return out; }
-export function fold(events=readEvents()):Map<string,NeedFold>{ const m=new Map<string,NeedFold>(); for(const ev of events){ if(ev.type==="opened") m.set(ev.id,{id:ev.id,state:"open",opened:ev,messages:[]}); else { const n=m.get(ev.id); if(!n) continue; if(ev.type==="message") n.messages.push(ev); else if(ev.type==="answered"){n.answer=ev; if(n.state!=="closed") n.state="answered";} else {n.closed=ev; n.state="closed";} } } return m; }
+export function fold(events=readEvents()):Map<string,NeedFold>{ const m=new Map<string,NeedFold>(); for(const ev of events){ if(ev.type==="opened") m.set(ev.id,{id:ev.id,state:"open",opened:ev,messages:[]}); else { const n=m.get(ev.id); if(!n) continue; if(ev.type==="message") n.messages.push(ev); else if(ev.type==="answered"){n.answer=ev; if(n.state!=="closed") n.state="answered";} else if(ev.type==="closed"){n.closed=ev; n.state="closed";} } } return m; }
 export function getNeed(id:string):NeedFold{ const n=fold().get(id); if(!n) die(`no need named ${id}`); return n; }
 function esc(s:string){ return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
 function namespace(){ try{ const m=fs.readFileSync(TEMPLATE_SOURCE,"utf8").match(/^namespace=(.+)$/m); if(m?.[1]?.trim()) return m[1].trim(); }catch{} return path.basename(ROOT).replace(/-[a-z0-9]{3,4}$/i, ""); }
