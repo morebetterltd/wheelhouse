@@ -57,6 +57,7 @@
  * for a judgment).
  */
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -759,6 +760,112 @@ function beadClaim(beadId: string): string {
   }
 }
 
+interface SourceDeclaration { original: string; absolute: string }
+interface SourceSnapshot { original: string; mountedAt: string; bytes: number }
+
+function sourceDeclarationLines(claim: string): string[] {
+  const lines = claim.split(/\r?\n/);
+  const out: string[] = [];
+  let inBlock = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^(?:read-only\s+)?source paths\s*\(read-only\)\s*:\s*$/i.test(trimmed) || /^read-only source paths\s*:\s*$/i.test(trimmed)) {
+      inBlock = true;
+      continue;
+    }
+    if (!inBlock) continue;
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      out.push(bullet[1].trim());
+      continue;
+    }
+    if (trimmed === "") continue;
+    break;
+  }
+  return out;
+}
+
+function parseSourceDeclarations(claim: string, repoRoot: string): SourceDeclaration[] {
+  const seen = new Set<string>();
+  const out: SourceDeclaration[] = [];
+  for (const raw of sourceDeclarationLines(claim)) {
+    const cleaned = raw.replace(/\s+#.*$/, "").trim();
+    const bad =
+      cleaned.length === 0 ? "empty" :
+      /["'`]/.test(cleaned) ? "a quote character" :
+      /\0/.test(cleaned) ? "NUL" :
+      null;
+    if (bad !== null) die(`invalid read-only source path ${JSON.stringify(raw)} (${bad}) — use an absolute path or a path relative to the branch repository, with no quotes`);
+    const abs = path.resolve(repoRoot, expandTilde(cleaned));
+    let real: string;
+    try {
+      real = fs.realpathSync(abs);
+    } catch {
+      die(`read-only source path ${JSON.stringify(cleaned)} does not exist (resolved from ${repoRoot} to ${abs})`);
+    }
+    const st = fs.statSync(real);
+    if (!st.isDirectory() && !st.isFile()) die(`read-only source path ${JSON.stringify(cleaned)} is not a file or directory: ${real}`);
+    if (seen.has(real)) continue;
+    seen.add(real);
+    out.push({ original: cleaned, absolute: real });
+  }
+  return out;
+}
+
+function chmodReadOnly(p: string): void {
+  const st = fs.lstatSync(p);
+  if (st.isDirectory()) {
+    fs.chmodSync(p, 0o555);
+    for (const name of fs.readdirSync(p)) chmodReadOnly(path.join(p, name));
+  } else if (st.isFile()) {
+    fs.chmodSync(p, 0o444);
+  } else if (st.isSymbolicLink()) {
+    return;
+  }
+}
+
+function treeBytes(p: string): number {
+  const st = fs.lstatSync(p);
+  if (st.isFile()) return st.size;
+  if (!st.isDirectory()) return 0;
+  let total = 0;
+  for (const name of fs.readdirSync(p)) total += treeBytes(path.join(p, name));
+  return total;
+}
+
+function materializeReadOnlySources(scratchCwd: string, declarations: SourceDeclaration[]): SourceSnapshot[] {
+  if (declarations.length === 0) return [];
+  // Use read-only snapshots instead of harness-specific allow flags: Claude's
+  // --add-dir has no exact Pi/Codex twin, and bind mounts need host-specific
+  // privileges. A copied, chmod-read-only tree inside the scratch worktree is
+  // visible through the same cwd/prompt path for pi, claude-code, and codex,
+  // and writes aimed at the supplied path fail without risking the original.
+  const root = path.join(scratchCwd, ".wheelhouse-verify-sources");
+  fs.mkdirSync(root, { recursive: true, mode: 0o755 });
+  const snapshots: SourceSnapshot[] = [];
+  for (const decl of declarations) {
+    const base = path.basename(decl.absolute).replace(/[^A-Za-z0-9._-]/g, "_") || "source";
+    const suffix = crypto.createHash("sha256").update(decl.absolute).digest("hex").slice(0, 12);
+    const mountedAt = path.join(root, `${base}-${suffix}`);
+    fs.cpSync(decl.absolute, mountedAt, { recursive: true, dereference: true, errorOnExist: true, force: false, preserveTimestamps: true });
+    chmodReadOnly(mountedAt);
+    snapshots.push({ original: decl.original, mountedAt, bytes: treeBytes(mountedAt) });
+  }
+  try { fs.chmodSync(root, 0o555); } catch {}
+  return snapshots;
+}
+
+function sourceAccessPromptLines(snapshots: SourceSnapshot[]): string[] {
+  if (snapshots.length === 0) return [];
+  return [
+    ``,
+    `Read-only source snapshots declared by the bead and materialized by the dispatcher:`,
+    ...snapshots.map((s) => `- ${s.original} — mounted read-only at ${s.mountedAt} (${s.bytes} bytes copied)`),
+    `Use these mounted paths when judging work that depends on source outside the branch repository.`,
+    `They are read-only snapshots: a write there should fail, and no undeclared sibling repository is mounted for this one-shot.`,
+  ];
+}
+
 function main(): void {
   const argv = process.argv.slice(2);
   const evidencePaths: string[] = [];
@@ -864,6 +971,21 @@ function main(): void {
           `be delivered — the dispatcher will refuse it as malformed.`,
         ];
 
+  const claim = beadClaim(beadId);
+  const sourceDeclarations = parseSourceDeclarations(claim, repoRoot);
+
+  // cwd is a throwaway scratch worktree, not ROOT and not a bead's
+  // worktree — construction closing the confused-writer hazard, still
+  // distinct from adapter.ts's per-bead worker seats (a worker's cwd needs
+  // to BE the bead; the verifier's cwd only needs to be A repository the
+  // branch's ref resolves from, which any worktree of this repo is). See
+  // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
+  // the full reasoning.
+  assertHostBuildLockAvailable();
+  const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
+  const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
+  const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
+
   // --- the one-shot ---------------------------------------------------------
   const prompt = [
     `You are dispatched as the EPHEMERAL verifier for bead ${beadId}.`,
@@ -873,8 +995,9 @@ function main(): void {
     `Tip SHA at dispatch: ${tip}`,
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
-    beadClaim(beadId),
+    claim,
     ...evidencePrompt,
+    ...sourcePrompt,
     ``,
     `Verify whether the bead's stated done holds at that SHA, per your brief.`,
     `Confirm the branch still resolves to the SHA above before relying on your reading.`,
@@ -889,15 +1012,6 @@ function main(): void {
 
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt);
 
-  // cwd is a throwaway scratch worktree, not ROOT and not a bead's
-  // worktree — construction closing the confused-writer hazard, still
-  // distinct from adapter.ts's per-bead worker seats (a worker's cwd needs
-  // to BE the bead; the verifier's cwd only needs to be A repository the
-  // branch's ref resolves from, which any worktree of this repo is). See
-  // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
-  // the full reasoning.
-  assertHostBuildLockAvailable();
-  const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const scratchGitDir = execFileSync("git", ["-C", scratchCwd, "rev-parse", "--git-dir"], { encoding: "utf8" }).trim();
   const startedAt = Date.now();
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
@@ -1045,6 +1159,14 @@ function main(): void {
           `is in its output below.`,
           ``,
           ...evidenceLines(evidence),
+        ]
+      : []),
+    ...(sourceSnapshots.length > 0
+      ? [
+          ``,
+          `## Read-only source snapshots`,
+          ``,
+          ...sourceSnapshots.map((s) => `- ${s.original} — mounted read-only at ${s.mountedAt} (${s.bytes} bytes copied)`),
         ]
       : []),
     ``,

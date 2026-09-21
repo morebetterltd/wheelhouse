@@ -135,6 +135,24 @@ fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: 
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+if (process.env.STUB_SOURCE_CHECK === "1") {
+  const prompt = process.argv[process.argv.length - 1] || "";
+  const match = prompt.match(/mounted read-only at (\S+)/);
+  const mounted = match?.[1] || "";
+  let readable = false, writeFailed = false, undeclaredAbsent = false, detail = "";
+  try {
+    readable = fs.readFileSync(path.join(mounted, "allowed.txt"), "utf8").includes("allowed sibling source");
+  } catch (e) { detail += `read failed: ${e.message}\n`; }
+  try {
+    fs.writeFileSync(path.join(mounted, "write-attempt.txt"), "write should fail\n");
+  } catch { writeFailed = true; }
+  undeclaredAbsent = !prompt.includes("unlisted-sibling") && !fs.existsSync(path.join(path.dirname(mounted), "unlisted-sibling"));
+  fs.writeFileSync(path.join(agentDir, "source-check.txt"), JSON.stringify({ mounted, readable, writeFailed, undeclaredAbsent, promptHasSourceSection: prompt.includes("Read-only source snapshots") }, null, 2));
+  if (!readable || !writeFailed || !undeclaredAbsent) {
+    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`source check failed\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\n`}})+"\n");
+    process.exit(0);
+  }
+}
 if (process.env.STUB_CANONICAL_WRITE_REPO) {
   const cp = require("child_process");
   const repo = process.env.STUB_CANONICAL_WRITE_REPO;
@@ -219,6 +237,16 @@ else process.stdout.write(text);
 process.exit(Number(process.env.STUB_EXIT || "0"));
 STUB
 chmod +x "$BIN/claude" "$BIN/codex"
+cat > "$BIN/bd" <<'STUB'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = show ] && [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then
+  cat "$STUB_BD_SHOW_FILE"
+  exit 0
+fi
+exit 1
+STUB
+chmod +x "$BIN/bd"
 [ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
 
 # A fixture project: verify.ts expects to live at <root>/seats/verify.ts with
@@ -336,6 +364,13 @@ run_stream() {  # $1 = JSONL stream file, remaining args pass through
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
+run_source_check() {  # $1 = bd-show file, remaining args pass through
+  local bdfile="$1"
+  shift
+  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_BD_SHOW_FILE="$bdfile" STUB_SOURCE_CHECK=1 \
+    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+  RC=$?
+}
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 VDIR="$PROJ/seats/verdicts"
@@ -394,7 +429,40 @@ else fail "umbrella layout: missing --repo did not fail against the umbrella roo
 RUN_PROJ="$PROJ"
 VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 
-phase "0b. timeout — last phase and partial verifier output are retained"
+phase "0b. bead-declared read-only source snapshots expose only named sibling source"
+ALLOWED_SIB="$FIX/allowed-sibling"
+UNLISTED_SIB="$FIX/unlisted-sibling"
+mkdir -p "$ALLOWED_SIB" "$UNLISTED_SIB"
+printf 'allowed sibling source\n' > "$ALLOWED_SIB/allowed.txt"
+printf 'unlisted sibling source\n' > "$UNLISTED_SIB/secret.txt"
+BD_SOURCE="$FIX/bd-source.txt"
+cat > "$BD_SOURCE" <<EOF
+wheelhouse-source [BUG]
+
+DESCRIPTION
+
+  Done depends on a sibling repo.
+
+  Read-only source paths:
+  - $ALLOWED_SIB
+EOF
+cat > "$REPLY" <<'EOF'
+Read the mounted source snapshot and confirmed writes fail.
+VERDICT: APPROVE
+EOF
+run_source_check "$BD_SOURCE" bead-source fleet/bead-1 worker-1 verifier
+SOURCE_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/source-check.txt"
+if [ $RC -eq 0 ] && grep -q '"readable": true' "$SOURCE_CHECK" 2>/dev/null && grep -q '"writeFailed": true' "$SOURCE_CHECK" 2>/dev/null; then
+  pass "source snapshots: verifier can read the bead-declared sibling and writes to the mounted copy fail"
+else fail "source snapshots: read/write assertion failed (exit $RC): $OUT check=$(cat "$SOURCE_CHECK" 2>/dev/null)"; fi
+if grep -q '"undeclaredAbsent": true' "$SOURCE_CHECK" 2>/dev/null; then
+  pass "source snapshots: undeclared sibling source is not mounted or named"
+else fail "source snapshots: undeclared sibling source was reachable or named: $(cat "$SOURCE_CHECK" 2>/dev/null)"; fi
+if grep -q 'Read-only source snapshots' "$PROJ/seats/verdicts/bead-source.md" 2>/dev/null && grep -q 'allowed-sibling' "$PROJ/seats/verdicts/bead-source.md" 2>/dev/null; then
+  pass "source snapshots: verdict record names the mounted read-only source snapshot"
+else fail "source snapshots: verdict record did not name source snapshot"; fi
+
+phase "0c. timeout — last phase and partial verifier output are retained"
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 300 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && says "timed out after 300ms" && says "elapsed" && says "last phase: tool bash started" && says "partial output:"; then
   pass "timeout STOP names elapsed time, last tool/phase, and partial output path"
