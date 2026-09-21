@@ -556,6 +556,7 @@ bun seats/prune.ts categories
 ```bash
 bash seats/evidence-scrub.selftest.sh
 bash seats/seat-env.selftest.sh
+bash seats/desk.selftest.sh
 bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
@@ -609,7 +610,9 @@ run; to clean it by hand, those pid-stamped dirs are the whole footprint.
 ## The bridge
 
 The bridge is how a human looks at the fleet: ONE tmux window per project,
-built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. Before it builds or attaches the tmux session, `cockpit.sh` starts the Dispatch Office herald (`bun seats/herald.ts`), verifies the recorded pid on every re-run, and restarts it if the pid is dead. The commander pane starts `seats/commander-inbox-poll.sh` automatically; it is the wrapper-independent fallback when tmux pokes cannot be delivered.
+built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. Before it builds or attaches the tmux session, `cockpit.sh` starts the Dispatch Office herald (`bun seats/herald.ts`) and the local needs desk (`bun seats/desk.ts`), verifies the recorded pids on every re-run, and restarts either one if the pid is dead. The commander pane starts `seats/commander-inbox-poll.sh` automatically; it is the wrapper-independent fallback when tmux pokes cannot be delivered.
+
+The desk is the human-facing page for `seats/needs.ts`: open `seats/run/desk.port` or run `seats/cockpit.sh --desk` and visit the printed URL. It binds `127.0.0.1` by default; `WHEELHOUSE_DESK_BIND` overrides the bind address and `WHEELHOUSE_DESK_PORT` overrides the port. Without an override, the port is `42000 + fnv1a(namespace) % 1000`, where `namespace=` comes from `wheelhouse/.template-source` and falls back to the install directory name. The page lists open needs first, keeps answered/closed needs as history, and posts answers/messages only through the needs ledger API. The commander never needs the page — the CLI and graph remain canonical — but the page is the standing surface for a human who has been asked for an answer.
 
 ```bash
 seats/cockpit.sh [namespace]     # builds (or re-attaches to) session wh-<ns>
