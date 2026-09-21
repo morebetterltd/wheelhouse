@@ -1,0 +1,19 @@
+ok 1 - planted opened need sends one Telegram message and records sent
+ok 2 - allowed Telegram reply records an answered event with via telegram and choice
+ok 3 - Telegram reply to answered-but-open need records a threaded human message
+ok 4 - closed notice is sent as the thread-ending Telegram message
+ok 5 - unallowlisted sender is ignored and logged
+ok 6 - commander say pushes a threaded Telegram sendMessage
+ok 7 - transport send failure is logged with need id and courier keeps running
+ok 8 - failed outbound event is retried and records exactly one sent event after success
+ok 9 - poll transport failure is logged and courier daemon keeps running
+ok 10 - poll transport failure recovers on a later cycle
+ok 11 - @username allow entry waits, pairs on first inbound message, and records numeric id
+ok 12 - queued outbound need sends after username pairing
+ok 13 - courier watchdog restarts a killed courier
+ok 14 - Slack opened need sends, read-confirms ts, and records sent
+ok 15 - Slack threaded allowed reply answers need and unallowlisted reply is ignored
+ok 16 - Slack ts read-back failure reports send unverified without recording sent
+ok 17 - telegram token file mode 0644 is refused
+ok 18 - canary: replacing answer with message is caught
+courier.selftest: PASS (18 checks)

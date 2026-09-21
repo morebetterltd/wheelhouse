@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { appendEvent, answerNeed, addMessage, fold, readEvents, type NeedEvent } from "./needs";
 import { NoTelegramTransport, TelegramTransport } from "./transports/telegram";
+import { NoSlackTransport, SlackTransport } from "./transports/slack";
 import type { NeedTransport } from "./transports/transport";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_COURIER_ROOT || process.env.WHEELHOUSE_NEEDS_ROOT || path.join(import.meta.dir, ".."));
@@ -18,8 +19,9 @@ const OUT_LOG = path.join(LOGS, "courier.out.log");
 type State = { offset:number; cursor?:string };
 function now(){ return new Date().toISOString(); }
 function log(line: string){ fs.mkdirSync(LOGS,{recursive:true}); fs.appendFileSync(OUT_LOG, `${now()} ${line}\n`); }
-function loadState(): State { try { const j=JSON.parse(fs.readFileSync(STATE,"utf8")); return { offset:Number(j.offset)||0, cursor:j.cursor ? String(j.cursor) : undefined }; } catch { return { offset:0 }; } }
-function saveState(s: State){ fs.mkdirSync(RUN,{recursive:true}); fs.writeFileSync(STATE, JSON.stringify(s,null,2)+"\n"); }
+function stateFile(transportName: string): string { return transportName === "telegram" ? STATE : path.join(RUN, `courier.${transportName}.state.json`); }
+function loadState(transportName: string): State { try { const j=JSON.parse(fs.readFileSync(stateFile(transportName),"utf8")); return { offset:Number(j.offset)||0, cursor:j.cursor ? String(j.cursor) : undefined }; } catch { return { offset:0 }; } }
+function saveState(transportName: string, s: State){ fs.mkdirSync(RUN,{recursive:true}); fs.writeFileSync(stateFile(transportName), JSON.stringify(s,null,2)+"\n"); }
 function completeLines(offset: number): { rows:{line:string; start:number; end:number}[]; end:number } {
   if (!fs.existsSync(LEDGER)) return { rows:[], end:offset };
   const buf=fs.readFileSync(LEDGER);
@@ -29,14 +31,21 @@ function completeLines(offset: number): { rows:{line:string; start:number; end:n
   for (const part of text.split(/(?<=\n)/)) { if (!part.endsWith("\n")) break; const line=part.replace(/\r?\n$/,""); const end=pos+Buffer.byteLength(part); if(line.trim()) rows.push({line,start:pos,end}); pos=end; }
   return { rows, end:pos };
 }
-function transport(): NeedTransport | null { try { return new TelegramTransport(ROOT); } catch(e:any) { if(e instanceof NoTelegramTransport) return null; throw e; } }
+function transport(): NeedTransport | null {
+  const forced = process.env.WHEELHOUSE_TRANSPORT;
+  if (forced === "telegram") return new TelegramTransport(ROOT);
+  if (forced === "slack") return new SlackTransport(ROOT);
+  if (forced && !["telegram","slack"].includes(forced)) throw new Error(`WHEELHOUSE_TRANSPORT must be telegram or slack, got ${forced}`);
+  try { return new SlackTransport(ROOT); } catch(e:any) { if(!(e instanceof NoSlackTransport)) throw e; }
+  try { return new TelegramTransport(ROOT); } catch(e:any) { if(e instanceof NoTelegramTransport) return null; throw e; }
+}
 function alreadySent(id: string, transport: string, refPrefix: string): boolean { return (readEvents() as any[]).some(ev => ev?.type==="sent" && ev.id===id && ev.transport===transport && String(ev.ref).startsWith(`${refPrefix}:`)); }
 function sentRef(ref: string, kind: string, start: number){ return `${kind}:${start}:${ref}`; }
 function choiceFor(needId: string, text: string): string | undefined { const n=fold().get(needId); if(!n) return undefined; const t=text.trim(); const byNum=t.match(/^\d+$/) ? n.opened.options[Number(t)-1]?.label : undefined; return byNum || n.opened.options.find(o=>o.label===t || o.text===t)?.label; }
 async function processOnce(): Promise<string> {
   const tx=transport();
   if(!tx) return "courier skipped: no transport configured";
-  const s=loadState();
+  const s=loadState(tx.name);
   const batch=completeLines(s.offset);
   let sendBlocked = false;
   for(const rec of batch.rows){
@@ -58,14 +67,14 @@ async function processOnce(): Promise<string> {
     else if(ev.type==="message" && ev.from==="commander") ok = await send("message");
     else if(ev.type==="closed") ok = await send("closed");
     if (!ok) { sendBlocked = true; break; }
-    s.offset=rec.end; saveState(s);
+    s.offset=rec.end; saveState(tx.name, s);
   }
   let polled;
   try {
     polled=await tx.poll(s.cursor);
   } catch(e:any) {
     log(`poll failed: ${e?.message ?? e}`);
-    saveState(s);
+    saveState(tx.name, s);
     return `courier scanned ${batch.rows.length} event(s), poll failed`;
   }
   s.cursor=polled.cursor;
@@ -78,7 +87,7 @@ async function processOnce(): Promise<string> {
   // Move the cursor to EOF after appending local reply events only when no outbound send is queued behind a failed transport call.
   // If a send failed, leave the offset at the unsent row so a later cycle retries it and records `sent` only after success.
   if (!sendBlocked && fs.existsSync(LEDGER)) s.offset=fs.statSync(LEDGER).size;
-  saveState(s);
+  saveState(tx.name, s);
   return `courier scanned ${batch.rows.length} event(s), ${polled.replies.length} repl${polled.replies.length===1?"y":"ies"}`;
 }
 function status(){ if(!transport()) { console.log("courier skipped: no transport configured"); return; } const pid=fs.existsSync(PID_FILE)?fs.readFileSync(PID_FILE,"utf8").trim():""; if(pid){ try{ process.kill(Number(pid),0); console.log(`courier RUNNING pid ${pid}`); return; } catch{} } console.log("courier configured but not running"); }
