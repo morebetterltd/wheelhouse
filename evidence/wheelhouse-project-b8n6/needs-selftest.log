@@ -1,0 +1,31 @@
+
+1. open/list/answer/show/close round trip
+  ok    open prints a need id
+  ok    ledger records an opened JSONL event with machine source
+  ok    list shows the open need
+  ok    say appends a commander message
+  ok    answer exits 0
+  ok    show folds opened+message+answer into answered state with choice
+  ok    close exits 0
+  ok    show folds close into closed state
+  ok    list hides closed needs by default
+  ok    list --all includes closed needs
+
+2. --from-stdin and --source dedupe
+  ok    --from-stdin opens a need from an @principal block
+  ok    --source repeat is a no-op that prints the existing id
+  ok    source dedupe appended only one opened event
+
+3. human-facing text refusals and warnings
+  ok    id-pattern refusal exits 2 and names the token
+  ok    bead-word refusal exits 2 and names the token
+  ok    rostered seat names warn but do not block
+
+4. WHEELHOUSE_NEEDS_ROOT override and JSON listing
+  ok    ledger was written under WHEELHOUSE_NEEDS_ROOT
+  ok    list --json --all prints folded JSON state
+
+5. canary — refusal removal is caught
+  ok    canary: removing the human-text refusal is caught
+
+needs.ts works on this machine.

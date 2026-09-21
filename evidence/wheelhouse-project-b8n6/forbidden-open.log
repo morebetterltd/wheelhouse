@@ -1,0 +1,3 @@
+command: bun seats/needs.ts open --title "x" --body "see wheelhouse-project-abcd"
+exit=2
+STOP: open text 2 contains install-local id token wheelhouse-project-abcd; put it in machine fields, not human-facing text
