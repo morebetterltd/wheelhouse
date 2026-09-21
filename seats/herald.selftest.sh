@@ -150,7 +150,48 @@ else
   fail "copy-truncate shrink did not reset herald offset (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
 fi
 
-rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/logs"/*.jsonl "$PROJ/seats/logs"/*.jsonl.1 2>/dev/null || true
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/logs"/*.jsonl "$PROJ/seats/logs"/*.jsonl.1 "$PROJ/seats/needs.jsonl" 2>/dev/null || true
+cat > "$PROJ/seats/needs.jsonl" <<'JSONL'
+{"type":"opened","id":"need-demo","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Lunch choice","body":"Pick lunch","options":[],"machine":{}}
+JSONL
+OUT="$(run_herald --once 2>&1)"; RC=$?
+cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
+{"type":"answered","id":"need-demo","at":"2026-09-21T00:01:00.000Z","from":"human","via":"desk","text":"Soup"}
+JSONL
+OUT="$(run_herald --once 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="need-answered" && r.seat==="principal" && r.state==="terminal" && /answered — Lunch choice/.test(r.title) && r.detail.includes("Soup") && r.detail.includes("Read it: bun seats/needs.ts show need-demo") && r.source.log==="seats/needs.jsonl" && r.source.type==="answered"')" = 1 ]; then
+  pass "human answered need appends one principal inbox row with needs.ts show command"
+else
+  fail "human answered need did not append expected row (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
+fi
+DRAIN_NEED1="$FIX/drain-need1.out"; DRAIN_NEED2="$FIX/drain-need2.out"
+run_herald --drain > "$DRAIN_NEED1"; run_herald --drain > "$DRAIN_NEED2"
+OUT="$(run_herald --once 2>&1)"; RC=$?
+if [ "$(line_count "$DRAIN_NEED1")" = 1 ] && [ ! -s "$DRAIN_NEED2" ] && [ "$(json_count 'r.class==="need-answered"')" = 1 ]; then
+  pass "need answered row drains once and does not duplicate on rescan"
+else
+  fail "need answered drain/dedup failed (drain1=$(line_count "$DRAIN_NEED1") drain2=$(wc -c < "$DRAIN_NEED2" | tr -d ' ') inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
+fi
+cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
+{"type":"message","id":"need-demo","at":"2026-09-21T00:02:00.000Z","from":"commander","via":"cli","text":"commander note"}
+JSONL
+OUT="$(run_herald --once 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 0 wake event' && [ "$(json_count 'r.detail && /commander note/.test(r.detail)')" = 0 ]; then
+  pass "commander-authored need message produces no inbox row"
+else
+  fail "commander-authored need message produced a row (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
+fi
+cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
+{"type":"message","id":"need-demo","at":"2026-09-21T00:03:00.000Z","from":"human","via":"desk","text":"More context"}
+JSONL
+OUT="$(run_herald --once 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="need-message" && r.state==="input-required" && /message — Lunch choice/.test(r.title) && r.detail.includes("More context") && r.detail.includes("Read it: bun seats/needs.ts show need-demo")')" = 1 ]; then
+  pass "human message on an answered need appends need-message input-required row"
+else
+  fail "human need message did not append expected row (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
+fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/logs"/*.jsonl "$PROJ/seats/logs"/*.jsonl.1 "$PROJ/seats/needs.jsonl" 2>/dev/null || true
 cat > "$PROJ/seats/state.json" <<'JSON'
 {"seats":{"worker-1":{"lastBead":"wheelhouse-project-xtyh","lastPrompt":"Bead wheelhouse-project-xtyh\n\nYou hold bead wheelhouse-project-xtyh. Fix herald settle detail."},"worker-2":{"lastBead":"wheelhouse-project-xtyh-fresh","lastPrompt":"Bead wheelhouse-project-xtyh-fresh\n\nFresh log prompt head must survive thinking frames."}}}
 JSON
