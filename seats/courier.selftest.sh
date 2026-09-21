@@ -12,7 +12,23 @@ command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-courier-selftest.XXXXXX")"; FIX="$(cd "$FIX" && pwd -P)"
 PASS=0; FAIL=0; SERVER_PID=""; COURIER_PID=""; WATCHDOG_PID=""
-cleanup(){ [ -n "$COURIER_PID" ] && kill "$COURIER_PID" 2>/dev/null || true; [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null || true; [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}" ""; rm -rf "$FIX"; }
+sweep_fixture_couriers(){
+  [ -n "${FIX:-}" ] || return 0
+  for pid in $(pgrep -f 'seats/courier\.ts|courier-watchdog\.sh' 2>/dev/null || true); do
+    [ -n "$pid" ] || continue
+    if lsof -p "$pid" 2>/dev/null | grep -qF "$FIX"; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+  return 0
+}
+stop_courier(){
+  [ -n "${COURIER_PID:-}" ] || return 0
+  kill "$COURIER_PID" 2>/dev/null || true
+  wait "$COURIER_PID" 2>/dev/null || true
+  COURIER_PID=""
+}
+cleanup(){ stop_courier; [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null || true; [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; sweep_fixture_couriers; selftest_cleanup_fixture_processes "${FIX:-}" ""; rm -rf "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
@@ -52,6 +68,11 @@ Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetc
   return Response.json({ok:false,description:'no route'}, {status:404});
 }});
 EOF
+}
+start_courier_daemon(){
+  local root="$1" interval="$2" err="$3"
+  (cd "$root" && exec env WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_COURIER_INTERVAL_MS="$interval" bun seats/courier.ts >/dev/null 2> "$err") &
+  COURIER_PID=$!
 }
 requests(){ python3 - <<'PY' "$FIX/requests.jsonl"
 import json,sys,os
@@ -98,24 +119,24 @@ cat > "$RETRY/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-retry","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Retry me","body":"First send fails","options":[],"machine":{}}
 EOF
 : > "$FIX/requests.jsonl"; : > "$RETRY/seats/logs/courier.out.log"; touch "$FIX/fail-send-once"
-(cd "$RETRY" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_COURIER_INTERVAL_MS=200 bun seats/courier.ts >/dev/null 2> "$FIX/retry.err") & COURIER_PID=$!
+start_courier_daemon "$RETRY" 200 "$FIX/retry.err"
 sleep 0.8
 if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'send failed need=need-retry: Bad Request: chat not found' "$RETRY/seats/logs/courier.out.log"; then pass "transport send failure is logged with need id and courier keeps running"; else fail "courier did not survive/log first send failure pid=$COURIER_PID log=$(cat "$RETRY/seats/logs/courier.out.log" 2>/dev/null) err=$(cat "$FIX/retry.err" 2>/dev/null)"; fi
 for _ in $(seq 1 30); do grep -q '"type":"sent"' "$RETRY/seats/needs.jsonl" && break; sleep 0.2; done
 sent_count="$(grep -c '"type":"sent"' "$RETRY/seats/needs.jsonl" || true)"
 if [ "$sent_count" -eq 1 ]; then pass "failed outbound event is retried and records exactly one sent event after success"; else fail "retry sent count=$sent_count ledger=$(cat "$RETRY/seats/needs.jsonl") requests=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
-kill "$COURIER_PID" 2>/dev/null || true; wait "$COURIER_PID" 2>/dev/null || true; COURIER_PID=""
+stop_courier
 POLLFAIL="$FIX/pollfail"; make_proj "$POLLFAIL"
 cat > "$POLLFAIL/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-poll","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Poll failure","body":"Keep daemon alive","options":[],"machine":{}}
 EOF
 : > "$FIX/requests.jsonl"; : > "$POLLFAIL/seats/logs/courier.out.log"; touch "$FIX/fail-poll-once"
-(cd "$POLLFAIL" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_COURIER_INTERVAL_MS=200 bun seats/courier.ts >/dev/null 2> "$FIX/pollfail.err") & COURIER_PID=$!
+start_courier_daemon "$POLLFAIL" 200 "$FIX/pollfail.err"
 sleep 0.45
 if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'poll failed: Bad Request: poll failed' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure is logged and courier daemon keeps running"; else fail "poll failure killed courier or missed log pid=$COURIER_PID log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) err=$(cat "$FIX/pollfail.err" 2>/dev/null)"; fi
 polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
 if [ "$polls" -ge 2 ] && grep -q 'courier scanned' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure recovers on a later cycle"; else fail "poll failure did not retry/recover polls=$polls log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
-kill "$COURIER_PID" 2>/dev/null || true; wait "$COURIER_PID" 2>/dev/null || true; COURIER_PID=""
+stop_courier
 PAIR="$FIX/pair"; make_proj "$PAIR"; printf '@keenan\n' > "$PAIR/seats/run/telegram.allow"
 cat > "$PAIR/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-pair","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Pair me","body":"Wait for chat","options":[],"machine":{}}
@@ -132,7 +153,7 @@ WATCH="$FIX/watch"; make_proj "$WATCH"
 cat > "$WATCH/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-watch","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Watch","body":"Restart","options":[],"machine":{}}
 EOF
-(cd "$WATCH" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_COURIER_INTERVAL_MS=100 bun seats/courier.ts >/dev/null 2>&1) & COURIER_PID=$!
+start_courier_daemon "$WATCH" 100 "$FIX/watch.err"
 printf '%s\n' "$COURIER_PID" > "$WATCH/seats/run/courier.pid"
 WHEELHOUSE_COURIER_ROOT="$WATCH" WHEELHOUSE_COURIER_WATCHDOG_SECONDS=1 "$WATCH/seats/courier-watchdog.sh" >/dev/null 2>&1 & WATCHDOG_PID=$!
 sleep 0.3; kill "$COURIER_PID" 2>/dev/null || true
@@ -140,6 +161,7 @@ NEW_PID=""
 for _ in $(seq 1 30); do NEW_PID="$(cat "$WATCH/seats/run/courier.pid" 2>/dev/null || true)"; [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$COURIER_PID" ] && kill -0 "$NEW_PID" 2>/dev/null && break; sleep 0.2; done
 if [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$COURIER_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then pass "courier watchdog restarts a killed courier"; else fail "courier watchdog did not restart old=$COURIER_PID new=$NEW_PID log=$(cat "$WATCH/seats/logs/courier.out.log" 2>/dev/null)"; fi
 kill "$WATCHDOG_PID" "$NEW_PID" 2>/dev/null || true; wait "$WATCHDOG_PID" 2>/dev/null || true; WATCHDOG_PID=""; COURIER_PID=""
+sweep_fixture_couriers
 BAD="$FIX/badmode"; make_proj "$BAD"; chmod 0644 "$BAD/seats/run/telegram.token"; cp "$PROJ/seats/needs.jsonl" "$BAD/seats/needs.jsonl"
 (cd "$BAD" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/bad.out" 2>&1; BAD_RC=$?
 if [ $BAD_RC -ne 0 ] && grep -q 'mode 0600' "$FIX/bad.out"; then pass "telegram token file mode 0644 is refused"; else fail "token mode refusal failed rc=$BAD_RC out=$(cat "$FIX/bad.out")"; fi
