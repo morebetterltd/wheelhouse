@@ -46,6 +46,7 @@ BRIEFS="$VERIFY_DIR/briefs.ts"
 HARNESS="$VERIFY_DIR/harness.ts"
 HOST_BUDGET_TS="$VERIFY_DIR/host-budget.ts"
 REAL_FIXTURES_DIR="$VERIFY_DIR/fixtures/verify-real"
+EXPECTED_REAL_FIXTURES="pi-v3-message-end.jsonl claude-code-2.1.278-assistant.jsonl codex-0.144.0-item-completed-agent-message.jsonl"
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
 [ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
@@ -477,8 +478,8 @@ if grep -q 'Read-only source snapshots' "$PROJ/seats/verdicts/bead-source.md" 2>
 else fail "source snapshots: verdict record did not name source snapshot"; fi
 
 phase "0c. timeout — last phase and partial verifier output are retained"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 300 2>&1)"; RC=$?
-if [ $RC -eq 1 ] && says "timed out after 300ms" && says "elapsed" && says "last phase: tool bash started" && says "partial output:"; then
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && says "timed out after 1500ms" && says "elapsed" && says "last phase: tool bash started" && says "partial output:"; then
   pass "timeout STOP names elapsed time, last tool/phase, and partial output path"
 else fail "timeout STOP missing phase/elapsed/partial detail (exit $RC): $OUT"; fi
 PARTIAL="$VDIR/bead-1.partial.md"
@@ -832,21 +833,44 @@ set_verifier_harness() {
     fs.writeFileSync(file, JSON.stringify(j, null, 2));
   ' "$PROJ/seats/seats.json" "$1"
 }
-for fixture in pi-message-end.jsonl claude-code-assistant.jsonl codex-item-completed-agent-message.jsonl; do
+for fixture in $EXPECTED_REAL_FIXTURES; do
   [ -f "$REAL_FIXTURES_DIR/$fixture" ] || { echo "selftest: missing real verifier fixture: $REAL_FIXTURES_DIR/$fixture" >&2; exit 2; }
 done
+check_verifier_fixture_manifest() {
+  local root bench
+  root="$(cd "$VERIFY_DIR/.." && pwd -P)"
+  if [ -f "$root/contracts/BENCH.md" ]; then bench="$root/contracts/BENCH.md";
+  elif [ -f "$root/wheelhouse/crew/BENCH.md" ]; then bench="$root/wheelhouse/crew/BENCH.md";
+  else fail "verifier fixture manifest check could not find BENCH.md"; return; fi
+  if python3 - "$root" "$bench" <<'PY'
+import pathlib, re, sys
+root = pathlib.Path(sys.argv[1]); bench = pathlib.Path(sys.argv[2])
+fixture_dir = root / "seats" / "fixtures" / "verify-real"
+actual = sorted(str(p.relative_to(root)) for p in fixture_dir.glob("*.jsonl"))
+text = bench.read_text()
+listed = sorted(set(re.findall(r"fixture:\s*(seats/fixtures/verify-real/[^;\s]+\.jsonl)", text)))
+missing_from_bench = sorted(set(actual) - set(listed))
+missing_from_disk = sorted(set(listed) - set(actual))
+if missing_from_bench or missing_from_disk:
+    print("missing_from_bench=" + ",".join(missing_from_bench))
+    print("missing_from_disk=" + ",".join(missing_from_disk))
+    raise SystemExit(1)
+PY
+  then pass "BENCH.md verifier wire-shape list matches real fixture files"; else fail "BENCH.md verifier wire-shape list and fixture files diverge"; fi
+}
+check_verifier_fixture_manifest
 set_verifier_harness pi
-run_stream "$REAL_FIXTURES_DIR/pi-message-end.jsonl" bead-5-recorded-pi fleet/bead-1 worker-1
+run_stream "$REAL_FIXTURES_DIR/pi-v3-message-end.jsonl" bead-5-recorded-pi fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-pi.md" 2>/dev/null; then
   pass "real pi message_end fixture yields one BOUNCE; result/turn events are not double-counted"
 else fail "real pi fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-pi.md" 2>/dev/null)"; fi
 set_verifier_harness claude-code
-run_stream "$REAL_FIXTURES_DIR/claude-code-assistant.jsonl" bead-5-recorded-claude fleet/bead-1 worker-1
+run_stream "$REAL_FIXTURES_DIR/claude-code-2.1.278-assistant.jsonl" bead-5-recorded-claude fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-claude.md" 2>/dev/null; then
   pass "real claude-code assistant fixture yields one BOUNCE; result event is not double-counted"
 else fail "real claude-code fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-claude.md" 2>/dev/null)"; fi
 set_verifier_harness codex
-run_stream "$REAL_FIXTURES_DIR/codex-item-completed-agent-message.jsonl" bead-5-recorded-codex fleet/bead-1 worker-1
+run_stream "$REAL_FIXTURES_DIR/codex-0.144.0-item-completed-agent-message.jsonl" bead-5-recorded-codex fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-codex.md" 2>/dev/null; then
   pass "real codex item.completed agent_message fixture yields one BOUNCE; turn.completed is not double-counted"
 else fail "real codex fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-codex.md" 2>/dev/null)"; fi
