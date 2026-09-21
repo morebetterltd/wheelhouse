@@ -249,6 +249,13 @@ STALE_RC=$?
 set +e
 if [ $STALE_RC -ne 0 ] && printf '%s\n' "$STALE_OUT" | grep -q 'worker-live' && printf '%s\n' "$STALE_OUT" | grep -q 'refusing to prune'; then pass 'prune --yes refuses a stale safe row that is now a live seat cwd'; else fail "stale live-cwd row was not refused (exit $STALE_RC): $STALE_OUT"; fi
 [ -d "$WTS/$LIVE_ID" ] && pass 'stale-scan live seat cwd remains after refused prune --yes' || fail 'stale-scan live seat cwd was removed'
+printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\nmerged-worktree\t1\t%s\t%s\tfleet/%s\t1\t1.0B\tworktree\tstale reviewed scan fixture\n' "$PROD" "$WTS/$HIST_ID" "$HIST_ID" > "$FIX/stale-session-scan.tsv"
+set +e
+SESSION_STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-session-scan.tsv" --yes --categories merged-worktree 2>&1)
+SESSION_STALE_RC=$?
+set -e
+if [ $SESSION_STALE_RC -ne 0 ] && printf '%s\n' "$SESSION_STALE_OUT" | grep -q 'worker-history' && printf '%s\n' "$SESSION_STALE_OUT" | grep -q 'session history cwd'; then pass 'prune --yes refuses a reviewed safe row that a stored session history still points at'; else fail "stale session-history row was not refused (exit $SESSION_STALE_RC): $SESSION_STALE_OUT"; fi
+[ -d "$WTS/$HIST_ID" ] && pass 'stale-scan session-history worktree remains after refused prune --yes' || fail 'stale-scan session-history worktree was removed'
 
 phase 'prune acts only on safe selected rows'
 ( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune.out" )
