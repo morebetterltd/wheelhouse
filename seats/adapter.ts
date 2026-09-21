@@ -1365,9 +1365,26 @@ async function healWedgedSeat(name: string, rec: SeatRecord, context: string): P
 }
 
 async function cmdDispatch(name: string, beadId: string, text: string, retriedWedged = false): Promise<void> {
-  let rec = requireRunning(name);
-  const sameCwdDriver = driverForRunningSeat(name, "adapter dispatch");
   const targetCwd = beadWorktreeDir(beadId);
+  let rec = readState().seats[name];
+  if (!rec) die(`no record of seat "${name}" — spawn it first`);
+  if (!pidAlive(rec.pid, rec.fifo)) {
+    requireCwdDir(targetCwd);
+    const recordedCwd = rec.cwd ?? ROOT;
+    const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
+    if (recordedCwdExists) {
+      console.log(`seat ${name}: not running; spawning in dispatch target ${targetCwd}`);
+    } else {
+      console.log(
+        `seat ${name}: not running and recorded cwd is gone: ${recordedCwd}; ` +
+          `session continuity intentionally dropped; falling back to fresh spawn in dispatch target ${targetCwd}`
+      );
+    }
+    const entry = requireSeat(name);
+    await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, null, targetCwd);
+    rec = requireRunning(name);
+  }
+  const sameCwdDriver = driverForRunningSeat(name, "adapter dispatch");
   if (seatIdleByLog(rec)) {
     try {
       const st = await sameCwdDriver.getState(rec);
