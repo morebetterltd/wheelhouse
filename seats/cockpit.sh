@@ -58,6 +58,25 @@ ensure_commander_poll() {
   echo "commander inbox poll started: pid $(cat "$poll_pid_file" 2>/dev/null || echo '?')"
 }
 
+ensure_desk_watchdog() {
+  if [ ! -x "$HERE/desk-watchdog.sh" ]; then
+    echo "desk watchdog not installed beside cockpit; skipping desk supervision"
+    return 0
+  fi
+  mkdir -p "$HERE/run" "$HERE/logs"
+  wd_pid_file="$HERE/run/desk-watchdog.pid"
+  if [ -f "$wd_pid_file" ]; then
+    wd_pid="$(cat "$wd_pid_file" 2>/dev/null || true)"
+    if pid_alive "$wd_pid"; then
+      echo "desk watchdog already running: pid $wd_pid"
+      return 0
+    fi
+    rm -f "$wd_pid_file"
+  fi
+  (cd "$ROOT" && WHEELHOUSE_DESK_ROOT="$ROOT" "$HERE/desk-watchdog.sh" >> "$HERE/logs/desk.out.log" 2>> "$HERE/logs/desk.stderr.log" & echo $! > "$wd_pid_file")
+  echo "desk watchdog started: pid $(cat "$wd_pid_file" 2>/dev/null || echo '?')"
+}
+
 ensure_desk() {
   if [ ! -f "$HERE/desk.ts" ]; then
     echo "desk not installed beside cockpit; skipping needs desk"
@@ -73,6 +92,7 @@ ensure_desk() {
     old_pid="$(cat "$pid_file" 2>/dev/null || true)"
     if pid_alive "$old_pid"; then
       desk_url="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
+      ensure_desk_watchdog
       echo "desk already running: pid $old_pid${desk_url:+ — $desk_url}"
       return 0
     fi
@@ -103,6 +123,7 @@ ensure_desk() {
   done
   desk_url="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
   if pid_alive "$new_pid"; then
+    ensure_desk_watchdog
     echo "desk started: pid $new_pid${desk_url:+ — $desk_url}"
     return 0
   fi
