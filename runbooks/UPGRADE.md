@@ -71,6 +71,10 @@ git -C "$TEMPLATE" fetch --tags origin
 git -C "$TEMPLATE" fetch origin
 git -C "$TEMPLATE" rev-parse "${TARGET:-main}" >/dev/null
 git -C "$TEMPLATE" checkout --quiet "${TARGET:-main}"
+if git -C "$TEMPLATE" rev-parse --verify --quiet "origin/${TARGET:-main}^{commit}" >/dev/null; then
+  git -C "$TEMPLATE" merge --ff-only --quiet "origin/${TARGET:-main}" \
+    || { echo "STOP: cache branch ${TARGET:-main} could not fast-forward to origin/${TARGET:-main}" >&2; exit 1; }
+fi
 [ "$BASE" = unknown ] || git -C "$TEMPLATE" cat-file -e "${BASE}^{commit}"
 sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
 grep -q '^product-repo=' wheelhouse/.template-source \
@@ -246,10 +250,10 @@ for f in "$TEMPLATE"/runbooks/*; do
 
   baseline=$(mktemp)
   if git -C "$TEMPLATE" show "${BASE:-unknown}:runbooks/$b" >"$baseline" 2>/dev/null; then
-    if diff -q "$baseline" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
-      cp -p "$f" "wheelhouse/runbooks/$b"; echo "runbook updated: $b"
-    elif diff -q "$f" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
+    if diff -q "$f" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
       echo "runbook current: $b"
+    elif diff -q "$baseline" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
+      cp -p "$f" "wheelhouse/runbooks/$b"; echo "runbook updated: $b"
     else
       echo "runbook YOURS, merge by hand: $b"
     fi
@@ -377,7 +381,14 @@ Do not split on the first occurrence of the words "this project", and do not spl
 ## 6. Record the upgrade
 
 ```bash
-sed -i.bak "s|^commit=.*|commit=$(git -C "$TEMPLATE" rev-parse "${TARGET:-main}")|" wheelhouse/.template-source
+NEW_COMMIT=$(git -C "$TEMPLATE" rev-parse HEAD)
+if [ "$BASE" != unknown ] && [ "$NEW_COMMIT" = "$BASE" ] \
+  && git -C "$TEMPLATE" rev-parse --verify --quiet "origin/${TARGET:-main}^{commit}" >/dev/null \
+  && [ "$(git -C "$TEMPLATE" rev-parse "origin/${TARGET:-main}^{commit}")" != "$BASE" ]; then
+  echo "STOP: target resolves to the baseline; the cache did not advance to origin/${TARGET:-main}" >&2
+  exit 1
+fi
+sed -i.bak "s|^commit=.*|commit=$NEW_COMMIT|" wheelhouse/.template-source
 rm -f wheelhouse/.template-source.bak
 grep -q '^upgraded=' wheelhouse/.template-source \
   && sed -i.bak "s|^upgraded=.*|upgraded=$(date -u +%Y-%m-%dT%H:%M:%SZ)|" wheelhouse/.template-source \
