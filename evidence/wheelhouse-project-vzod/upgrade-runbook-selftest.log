@@ -1,0 +1,15 @@
+ok 1 - zsh step 0 baseline reconstruction reads commit:path with braces
+ok 2 - zsh step 3 runbook loop reads real baseline and reports byte-equal files current
+From [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-vzod/.wheelhouse-runs/wheelhouse-project-vzod/tmp/wheelhouse-upgrade-selftest.fFp8N9/reused-cache-source
+   02d0a37..7d88fc0  main       -> origin/main
+ok 3 - step 1 reused cache fast-forwards local branch to origin target
+ok 4 - step 6 stale-cache guard STOPs when origin target differs from BASE
+ok 5 - step 8 broad wheelhouse add stages untracked files under wheelhouse
+ok 6 - installed-layout fixture without selftest-lib.sh fails honestly instead of passing
+ok 7 - installed-layout copied upgrade-runbook selftest uses live path= when it carries commit=
+ok 8 - installed-layout dead path= fetches commit= from reachable source= into git-excluded install-local cache
+ok 9 - installed-layout dead path= with unreachable source= refuses by named source reason
+ok 10 - installed-layout missing .template-source fails legibly with source= and commit= expectation
+ok 11 - installed-layout bad path= without source= fails legibly before raw git fatal
+ok 12 - harness switch pi -> claude-code -> pi leaves pre-field and untouched seats intact
+upgrade-runbook.selftest: PASS (12 checks)
