@@ -44,11 +44,13 @@ VERIFY="${1:-$HERE/verify.ts}"
 VERIFY_DIR="$(cd "$(dirname "$VERIFY")" && pwd)"
 BRIEFS="$VERIFY_DIR/briefs.ts"
 HARNESS="$VERIFY_DIR/harness.ts"
+FINAL_ASSISTANT="$VERIFY_DIR/final-assistant-message.ts"
 HOST_BUDGET_TS="$VERIFY_DIR/host-budget.ts"
 REAL_FIXTURES_DIR="$VERIFY_DIR/fixtures/verify-real"
 EXPECTED_REAL_FIXTURES="pi-v3-message-end.jsonl claude-code-2.1.278-assistant.jsonl codex-0.144.0-item-completed-agent-message.jsonl"
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
 [ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
+[ -f "$FINAL_ASSISTANT" ] || { echo "selftest: not found: $FINAL_ASSISTANT" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run verify.ts" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
@@ -274,6 +276,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   cp "$src" "$proj/seats/verify.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$HARNESS" "$proj/seats/harness.ts"
+  cp "$FINAL_ASSISTANT" "$proj/seats/final-assistant-message.ts"
   cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf '# Crew: Reviewer\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/REVIEWER.md"
@@ -321,6 +324,7 @@ build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.
   cp "$src" "$umb/seats/verify.ts"
   cp "$BRIEFS" "$umb/seats/briefs.ts"
   cp "$HARNESS" "$umb/seats/harness.ts"
+  cp "$FINAL_ASSISTANT" "$umb/seats/final-assistant-message.ts"
   cp "$HOST_BUDGET_TS" "$umb/seats/host-budget.ts"
   printf '# Crew: Reviewer\n\numbrella reviewer brief.\n' > "$umb/contracts/REVIEWER.md"
   cat > "$umb/seats/seats.json" <<EOF
