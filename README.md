@@ -79,6 +79,9 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 │   ├── verify.ts                dispatches the ephemeral bead-verdict pass on a finished branch
 │   ├── walk.ts                  dispatches the verifier's consumer-surface walk for an ISA claim
 │   ├── prune.ts                 scans/prunes safe worktrees and regenerable caches from reviewed scan files
+│   ├── needs.ts, desk.ts        durable human requests plus the local needs/board web desk
+│   ├── principal-sentinel.sh    Claude Code Stop hook: final @principal: blocks become needs
+│   ├── courier.ts               optional transport daemon (Telegram first) for off-machine replies
 │   ├── cockpit.sh, floor.ts     the bridge: one tmux window — commander pane left, read-only floor right
 │   ├── recover.ts               post-interruption triage: what survived, what to resume
 │   └── README.md                documents every command above; selftests sit beside each piece
@@ -101,7 +104,7 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
     └── runbooks/                running the loop, upgrading, and the graduations to take later
 ```
 
-The seats are commander-owned processes, not terminals you keep open. `seats/seat-env.sh` gives each seat its own account directory — one seat, one login — for its rostered harness (`PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME`), and from then on the adapter does everything: `bun seats/adapter.ts spawn` starts a seat with its role brief injected, `dispatch` hands it a bead, and its session survives a stop, so `resume` brings the context back warm. There is nothing to paste into a seat. To watch the fleet, `seats/cockpit.sh` builds one tmux window per project: your commander session in the left pane, and on the right the floor — a read-only view that spotlights one seat's stream and shows every seat's attention cues in a rail. Cockpit turns tmux mouse scrolling on and keeps 50,000 lines of pane history; opt out with `WHEELHOUSE_COCKPIT_MOUSE=0 seats/cockpit.sh` if you prefer native terminal selection. Scroll with the wheel, or press tmux prefix then `[` and use arrows/PageUp (`q` leaves copy mode); with mouse on, hold Option/Shift on macOS terminals to select text. Cockpit also starts/verifies/restarts the Dispatch Office herald, printing `herald started: pid ...` or the already-running/restart line; the commander pane starts `commander-inbox-poll.sh` itself as a wrapper-independent fallback. A no-cockpit `spawn`/`status` path starts seats, not that wake daemon. `seats/README.md` documents all of it.
+The seats are commander-owned processes, not terminals you keep open. `seats/seat-env.sh` gives each seat its own account directory — one seat, one login — for its rostered harness (`PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME`), and from then on the adapter does everything: `bun seats/adapter.ts spawn` starts a seat with its role brief injected, `dispatch` hands it a bead, and its session survives a stop, so `resume` brings the context back warm. There is nothing to paste into a seat. To watch the fleet, `seats/cockpit.sh` builds one tmux window per project: your commander session in the left pane, and on the right the floor — a read-only view that spotlights one seat's stream and shows every seat's attention cues in a rail. Cockpit turns tmux mouse scrolling on and keeps 50,000 lines of pane history; opt out with `WHEELHOUSE_COCKPIT_MOUSE=0 seats/cockpit.sh` if you prefer native terminal selection. Scroll with the wheel, or press tmux prefix then `[` and use arrows/PageUp (`q` leaves copy mode); with mouse on, hold Option/Shift on macOS terminals to select text. Cockpit also starts/verifies/restarts the Dispatch Office herald, the local desk (`seats/desk.ts` for `/needs` and `/board`), and the optional courier (`seats/courier.ts` when a transport is configured), printing their started/already-running/restart lines; the commander pane starts `commander-inbox-poll.sh` itself as a wrapper-independent fallback. `seats/principal-sentinel.sh` is the Claude Code Stop hook that turns a final `@principal:` block into a need. A no-cockpit `spawn`/`status` path starts seats, not those wake/desk/transport daemons. `seats/README.md` documents all of it.
 
 ## Contract, and this project
 
@@ -116,7 +119,7 @@ That split is the whole design. It means a project's specifics never get tangled
 | | |
 |---|---|
 | `contracts/` | the briefs, copied verbatim at install |
-| `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the bead-verdict dispatcher, the consumer-surface walk dispatcher, pruning, the bridge, recovery, and a selftest for each |
+| `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the bead-verdict dispatcher, the consumer-surface walk dispatcher, human needs (`needs.ts`), the local desk (`desk.ts`), the optional courier (`courier.ts`), the principal Stop hook (`principal-sentinel.sh`), pruning, the bridge, recovery, and a selftest for each |
 | `generated/` | specimens of what the interview writes — never copied, and drawn from an invented project so they cannot be mistaken for a starting point |
 | `runbooks/` | how to run the loop, the upgrade procedure, and the graduations to take once the loop has proven itself |
 | `examples/` | worked benches, each labelled as one project's implementation: `android-cordova/` from a real project, `http-service/` for a service-and-worker shape |
