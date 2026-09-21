@@ -60,7 +60,14 @@ async function processOnce(): Promise<string> {
     if (!ok) { sendBlocked = true; break; }
     s.offset=rec.end; saveState(s);
   }
-  const polled=await tx.poll(s.cursor);
+  let polled;
+  try {
+    polled=await tx.poll(s.cursor);
+  } catch(e:any) {
+    log(`poll failed: ${e?.message ?? e}`);
+    saveState(s);
+    return `courier scanned ${batch.rows.length} event(s), poll failed`;
+  }
   s.cursor=polled.cursor;
   for(const reply of polled.replies){
     const n=fold().get(reply.needRef);

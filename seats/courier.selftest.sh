@@ -43,7 +43,12 @@ Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetc
     if (fs.existsSync(failFile)) { fs.unlinkSync(failFile); return Response.json({ok:false,description:'Bad Request: chat not found'}, {status:400}); }
     return Response.json({ok:true,result:{message_id:msg,chat:{id:body.chat_id}}});
   }
-  if(u.pathname.endsWith('/getUpdates')) { append('requests.jsonl', {method:'getUpdates', body}); const updates=json('updates.json', []); fs.writeFileSync(`${dir}/updates.json`, '[]\n'); return Response.json({ok:true,result:updates}); }
+  if(u.pathname.endsWith('/getUpdates')) {
+    append('requests.jsonl', {method:'getUpdates', body});
+    const failFile=`${dir}/fail-poll-once`;
+    if (fs.existsSync(failFile)) { fs.unlinkSync(failFile); return Response.json({ok:false,description:'Bad Request: poll failed'}, {status:400}); }
+    const updates=json('updates.json', []); fs.writeFileSync(`${dir}/updates.json`, '[]\n'); return Response.json({ok:true,result:updates});
+  }
   return Response.json({ok:false,description:'no route'}, {status:404});
 }});
 EOF
@@ -99,6 +104,17 @@ if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'send failed need=need-retry: B
 for _ in $(seq 1 30); do grep -q '"type":"sent"' "$RETRY/seats/needs.jsonl" && break; sleep 0.2; done
 sent_count="$(grep -c '"type":"sent"' "$RETRY/seats/needs.jsonl" || true)"
 if [ "$sent_count" -eq 1 ]; then pass "failed outbound event is retried and records exactly one sent event after success"; else fail "retry sent count=$sent_count ledger=$(cat "$RETRY/seats/needs.jsonl") requests=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
+kill "$COURIER_PID" 2>/dev/null || true; wait "$COURIER_PID" 2>/dev/null || true; COURIER_PID=""
+POLLFAIL="$FIX/pollfail"; make_proj "$POLLFAIL"
+cat > "$POLLFAIL/seats/needs.jsonl" <<'EOF'
+{"type":"opened","id":"need-poll","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Poll failure","body":"Keep daemon alive","options":[],"machine":{}}
+EOF
+: > "$FIX/requests.jsonl"; : > "$POLLFAIL/seats/logs/courier.out.log"; touch "$FIX/fail-poll-once"
+(cd "$POLLFAIL" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_COURIER_INTERVAL_MS=200 bun seats/courier.ts >/dev/null 2> "$FIX/pollfail.err") & COURIER_PID=$!
+sleep 0.45
+if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'poll failed: Bad Request: poll failed' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure is logged and courier daemon keeps running"; else fail "poll failure killed courier or missed log pid=$COURIER_PID log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) err=$(cat "$FIX/pollfail.err" 2>/dev/null)"; fi
+polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
+if [ "$polls" -ge 2 ] && grep -q 'courier scanned' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure recovers on a later cycle"; else fail "poll failure did not retry/recover polls=$polls log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
 kill "$COURIER_PID" 2>/dev/null || true; wait "$COURIER_PID" 2>/dev/null || true; COURIER_PID=""
 PAIR="$FIX/pair"; make_proj "$PAIR"; printf '@keenan\n' > "$PAIR/seats/run/telegram.allow"
 cat > "$PAIR/seats/needs.jsonl" <<'EOF'
