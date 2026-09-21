@@ -31,12 +31,14 @@ cleanup() {
   done
   [ -n "$pids" ] && kill $pids >/dev/null 2>&1 || true
   pkill -f "$FIX/project/seats/herald.ts" >/dev/null 2>&1 || true
+  pkill -f "$FIX/project/seats/desk.ts" >/dev/null 2>&1 || true
   pkill -f "$FIX/project/seats/commander-inbox-poll.sh" >/dev/null 2>&1 || true
   sleep 0.2
   for pid in $pids; do
     kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" >/dev/null 2>&1 || true
   done
   pkill -9 -f "$FIX/project/seats/herald.ts" >/dev/null 2>&1 || true
+  pkill -9 -f "$FIX/project/seats/desk.ts" >/dev/null 2>&1 || true
   pkill -9 -f "$FIX/project/seats/commander-inbox-poll.sh" >/dev/null 2>&1 || true
   rm -rf "$FIX"
 }
@@ -52,6 +54,21 @@ cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
 cat > "$PROJ/seats/herald.ts" <<'EOF'
+setInterval(() => {}, 1000);
+EOF
+cat > "$PROJ/seats/desk.ts" <<'EOF'
+import * as fs from "node:fs";
+import * as path from "node:path";
+const root = path.resolve(process.env.WHEELHOUSE_DESK_ROOT || path.join(import.meta.dir, ".."));
+const run = path.join(root, "seats", "run");
+fs.mkdirSync(run, { recursive: true });
+if (process.argv.includes("--status")) {
+  const f = path.join(run, "desk.pid");
+  if (!fs.existsSync(f)) console.log("desk STOPPED — no pid file");
+  else console.log(`desk RUNNING pid ${fs.readFileSync(f,"utf8").trim()}`);
+  process.exit(0);
+}
+fs.writeFileSync(path.join(run, "desk.port"), `http://127.0.0.1:${process.env.WHEELHOUSE_DESK_PORT || "42042"}/needs\n`);
 setInterval(() => {}, 1000);
 EOF
 cat > "$PROJ/seats/commander-inbox-poll.sh" <<'EOF'
@@ -150,6 +167,28 @@ fi
 kill "$PIPED_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/herald.pid"
 
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_DESK_PORT=42321 "$PROJ/seats/cockpit.sh" --desk > "$FIX/desk-only.out" 2>&1
+DESK_ONLY_RC=$?
+DESK_ONLY_PID="$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)"
+if [ $DESK_ONLY_RC -eq 0 ] && [ -n "$DESK_ONLY_PID" ] && kill -0 "$DESK_ONLY_PID" 2>/dev/null && grep -q 'desk started: pid' "$FIX/desk-only.out" && grep -q 'http://127.0.0.1:42321/needs' "$FIX/desk-only.out"; then
+  pass "cockpit --desk starts only the desk and prints its URL"
+else
+  fail "cockpit --desk did not run standalone (rc=$DESK_ONLY_RC pid=${DESK_ONLY_PID:-none} out=$(cat "$FIX/desk-only.out" 2>/dev/null))"
+fi
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_DESK_PORT=42321 "$PROJ/seats/cockpit.sh" --desk > "$FIX/desk-again.out" 2>&1
+if grep -q 'desk already running: pid' "$FIX/desk-again.out"; then pass "cockpit --desk reports already running"; else fail "cockpit --desk did not report already running: $(cat "$FIX/desk-again.out" 2>/dev/null)"; fi
+kill "$DESK_ONLY_PID" 2>/dev/null || true
+sleep 0.2
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_DESK_PORT=42321 "$PROJ/seats/cockpit.sh" --desk > "$FIX/desk-restart.out" 2>&1
+DESK_RESTART_PID="$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)"
+if grep -q 'desk dead: pid' "$FIX/desk-restart.out" && grep -q 'desk started: pid' "$FIX/desk-restart.out" && [ -n "$DESK_RESTART_PID" ] && kill -0 "$DESK_RESTART_PID" 2>/dev/null; then
+  pass "cockpit --desk restarts a dead desk pid"
+else
+  fail "cockpit --desk did not restart dead pid (pid=${DESK_RESTART_PID:-none} out=$(cat "$FIX/desk-restart.out" 2>/dev/null))"
+fi
+kill "$DESK_RESTART_PID" 2>/dev/null || true
+rm -f "$PROJ/seats/run/desk.pid"
+
 PLANTED_BIN="$FIX/planted-bin"
 mkdir -p "$PLANTED_BIN"
 cat > "$PLANTED_BIN/tmux" <<'EOF'
@@ -176,6 +215,11 @@ if grep -q 'bridge built: session wh-ratio' "$FIX/cockpit.out" && [ "$(pane_coun
   pass "cockpit builds one bridge window with two panes on a private tmux socket"
 else
   fail "cockpit did not build the bridge: $(cat "$FIX/cockpit.out" 2>/dev/null) panes=$(pane_count)"
+fi
+if grep -Eq 'desk (started|already running): pid' "$FIX/cockpit.out" && opt_value wh-ratio status-right | grep -q 'desk http://127.0.0.1:42042/needs'; then
+  pass "cockpit banner/status include the desk URL"
+else
+  fail "cockpit did not expose desk URL (out=$(cat "$FIX/cockpit.out" 2>/dev/null) status=$(opt_value wh-ratio status-right 2>/dev/null))"
 fi
 if [ "$(opt_value wh-ratio mouse)" = "on" ] && [ "$(opt_value wh-ratio history-limit)" = "50000" ]; then
   pass "fresh cockpit session enables mouse and sets history-limit 50000"
