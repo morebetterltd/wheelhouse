@@ -448,6 +448,32 @@ tolerates); the commander reads the bead and restates its requirement as
 arguments — the same relationship the bead claim itself has to the
 dispatch.
 
+### Read-only source paths the bead names
+
+When a bead depends on source outside the branch repository — for example
+a sibling repository gitignored beside an install — the bead may declare a
+block in its text:
+
+```text
+Read-only source paths:
+- ../garden-docker
+- /absolute/path/to/local/source
+```
+
+`verify.ts` parses that block from `bd show`, resolves relative paths from
+the branch repository, and copies each named file or directory into
+`.wheelhouse-verify-sources/` inside the verifier's scratch worktree. The
+copy is chmod-read-only and its mounted path is printed in the one-shot
+prompt and verdict record. This is deliberately a portable read-only
+snapshot instead of a harness-specific flag: Claude Code has an `--add-dir`
+style allowlist, but Pi and Codex do not share that exact switch, and host
+bind mounts are not portable across the machines this template runs on. A
+snapshot inside the scratch cwd works the same for all three one-shot
+harnesses and protects the original source from writes aimed at the path
+the prompt supplies. Source paths not named by the bead are not mounted;
+if the reviewer needs one, the verdict routes that missing source instead
+of reaching around the dispatcher.
+
 ## Walking a consumer surface
 
 ```bash
