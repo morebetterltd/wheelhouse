@@ -30,22 +30,44 @@ function completeLines(offset: number): { rows:{line:string; start:number; end:n
   return { rows, end:pos };
 }
 function transport(): NeedTransport | null { try { return new TelegramTransport(ROOT); } catch(e:any) { if(e instanceof NoTelegramTransport) return null; throw e; } }
-function alreadySent(id: string, transport: string, refType: string): boolean { return (readEvents() as any[]).some(ev => ev?.type==="sent" && ev.id===id && ev.transport===transport && String(ev.ref).startsWith(`${refType}:`)); }
-function sentRef(ref: string, kind: string){ return `${kind}:${ref}`; }
+function alreadySent(id: string, transport: string, refPrefix: string): boolean { return (readEvents() as any[]).some(ev => ev?.type==="sent" && ev.id===id && ev.transport===transport && String(ev.ref).startsWith(`${refPrefix}:`)); }
+function sentRef(ref: string, kind: string, start: number){ return `${kind}:${start}:${ref}`; }
 function choiceFor(needId: string, text: string): string | undefined { const n=fold().get(needId); if(!n) return undefined; const t=text.trim(); const byNum=t.match(/^\d+$/) ? n.opened.options[Number(t)-1]?.label : undefined; return byNum || n.opened.options.find(o=>o.label===t || o.text===t)?.label; }
 async function processOnce(): Promise<string> {
   const tx=transport();
   if(!tx) return "courier skipped: no transport configured";
   const s=loadState();
   const batch=completeLines(s.offset);
+  let sendBlocked = false;
   for(const rec of batch.rows){
     let ev:NeedEvent; try { ev=JSON.parse(rec.line); } catch { s.offset=rec.end; continue; }
-    if(ev.type==="opened" && !alreadySent(ev.id,tx.name,"opened")) { const r=await tx.send(ev); appendEvent({type:"sent", id:ev.id, at:now(), transport:tx.name, ref:sentRef(r.ref,"opened")} as any); }
-    else if(ev.type==="message" && ev.from==="commander") { const r=await tx.send(ev); appendEvent({type:"sent", id:ev.id, at:now(), transport:tx.name, ref:sentRef(r.ref,"message")} as any); }
-    else if(ev.type==="closed") { const r=await tx.send(ev); appendEvent({type:"sent", id:ev.id, at:now(), transport:tx.name, ref:sentRef(r.ref,"closed")} as any); }
+    const send = async (kind: string) => {
+      const prefix = `${kind}:${rec.start}`;
+      if (alreadySent(ev.id, tx.name, prefix)) return true;
+      try {
+        const r=await tx.send(ev as any);
+        appendEvent({type:"sent", id:ev.id, at:now(), transport:tx.name, ref:sentRef(r.ref,kind,rec.start)} as any);
+        return true;
+      } catch(e:any) {
+        log(`send failed need=${ev.id}: ${e?.message ?? e}`);
+        return false;
+      }
+    };
+    let ok = true;
+    if(ev.type==="opened") ok = await send("opened");
+    else if(ev.type==="message" && ev.from==="commander") ok = await send("message");
+    else if(ev.type==="closed") ok = await send("closed");
+    if (!ok) { sendBlocked = true; break; }
     s.offset=rec.end; saveState(s);
   }
-  const polled=await tx.poll(s.cursor);
+  let polled;
+  try {
+    polled=await tx.poll(s.cursor);
+  } catch(e:any) {
+    log(`poll failed: ${e?.message ?? e}`);
+    saveState(s);
+    return `courier scanned ${batch.rows.length} event(s), poll failed`;
+  }
   s.cursor=polled.cursor;
   for(const reply of polled.replies){
     const n=fold().get(reply.needRef);
@@ -53,12 +75,13 @@ async function processOnce(): Promise<string> {
     if(n.state==="open") answerNeed(n.id, reply.text, tx.name, choiceFor(n.id, reply.text));
     else addMessage(n.id, reply.text, "human", tx.name);
   }
-  // Move the cursor to EOF after appending local reply events; outbound replies from humans are not sent back out.
-  if (fs.existsSync(LEDGER)) s.offset=fs.statSync(LEDGER).size;
+  // Move the cursor to EOF after appending local reply events only when no outbound send is queued behind a failed transport call.
+  // If a send failed, leave the offset at the unsent row so a later cycle retries it and records `sent` only after success.
+  if (!sendBlocked && fs.existsSync(LEDGER)) s.offset=fs.statSync(LEDGER).size;
   saveState(s);
   return `courier scanned ${batch.rows.length} event(s), ${polled.replies.length} repl${polled.replies.length===1?"y":"ies"}`;
 }
 function status(){ if(!transport()) { console.log("courier skipped: no transport configured"); return; } const pid=fs.existsSync(PID_FILE)?fs.readFileSync(PID_FILE,"utf8").trim():""; if(pid){ try{ process.kill(Number(pid),0); console.log(`courier RUNNING pid ${pid}`); return; } catch{} } console.log("courier configured but not running"); }
-async function main(){ const args=process.argv.slice(2); if(args.includes("--status")){ status(); return; } if(args.includes("--drain-out")){ if(fs.existsSync(OUT_LOG)) process.stdout.write(fs.readFileSync(OUT_LOG)); return; } try { const line=await processOnce(); console.log(line); } catch(e:any){ console.error(`STOP: ${e.message}`); process.exitCode=1; return; } if(args.includes("--once")) return; fs.mkdirSync(RUN,{recursive:true}); fs.writeFileSync(PID_FILE, `${process.pid}\n`); setInterval(()=>processOnce().then(log).catch(e=>log(`STOP: ${e.message}`)), 10000); }
+async function main(){ const args=process.argv.slice(2); if(args.includes("--status")){ status(); return; } if(args.includes("--drain-out")){ if(fs.existsSync(OUT_LOG)) process.stdout.write(fs.readFileSync(OUT_LOG)); return; } let line=""; try { line=await processOnce(); } catch(e:any){ line=`STOP: ${e.message}`; process.exitCode=1; } console.log(line); if(args.includes("--once")) return; if(process.exitCode) return; fs.mkdirSync(RUN,{recursive:true}); fs.writeFileSync(PID_FILE, `${process.pid}\n`); setInterval(()=>processOnce().then(log).catch(e=>log(`STOP: ${e.message}`)), Number(process.env.WHEELHOUSE_COURIER_INTERVAL_MS || "10000")); }
 
 if(import.meta.main) main();
