@@ -93,25 +93,43 @@ total=$(printf '%s\n' "$status" | grep -c -E ' (RUNNING|PARKED|DIED|STOPPED) ')
 ready=$(bd ready --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
 inprog=$(bd list --status in_progress --limit 0 --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
 needs_waiting=0
+unread_needs=0
 if [ -f "$HERE/needs.jsonl" ]; then
-  needs_waiting=$(bun -e '
+  need_counts=$(bun -e '
     const fs=require("fs"); const file=process.argv[1];
-    const states=new Map();
+    const needs=new Map();
+    const ensure=(id)=>{ if(!needs.has(id)) needs.set(id,{state:null,human:null,read:null}); return needs.get(id); };
     for (const line of fs.readFileSync(file,"utf8").split(/\n/)) {
       if (!line.trim()) continue;
       let ev; try { ev=JSON.parse(line); } catch { continue; }
-      if (ev.type === "opened") states.set(ev.id,"open");
-      else if (ev.type === "answered") states.set(ev.id,"answered");
-      else if (ev.type === "closed") states.set(ev.id,"closed");
+      if (!ev.id) continue;
+      const n=ensure(ev.id);
+      if (ev.type === "opened") n.state="open";
+      else if (ev.type === "message" && ev.from === "human") n.human=ev.at || "";
+      else if (ev.type === "answered") { n.state="answered"; n.human=ev.at || ""; }
+      else if (ev.type === "closed") n.state="closed";
+      else if (ev.type === "read") n.read=ev.at || "";
     }
-    console.log([...states.values()].filter(s=>s==="open").length);
-  ' "$HERE/needs.jsonl" 2>/dev/null || echo 0)
+    let open=0, unread=0;
+    for (const n of needs.values()) {
+      if (n.state === "open") open++;
+      if (n.state !== "closed" && n.human && (!n.read || n.read < n.human)) unread++;
+    }
+    console.log(`${open}|${unread}`);
+  ' "$HERE/needs.jsonl" 2>/dev/null || echo '0|0')
+  IFS='|' read -r needs_waiting unread_needs <<EOF
+$need_counts
+EOF
   case "$needs_waiting" in (*[!0-9]*|'') needs_waiting=0;; esac
+  case "$unread_needs" in (*[!0-9]*|'') unread_needs=0;; esac
 fi
 
 line="🚢 FLEET: ${live}/${total} seats live · ${ready} ready · ${inprog} in progress${herald_dead}${inbox_lag}"
 if [ "$needs_waiting" -gt 0 ] 2>/dev/null; then
   line="$line — ${needs_waiting} need(s) waiting on a human — bun seats/needs.ts list"
+fi
+if [ "$unread_needs" -gt 0 ] 2>/dev/null; then
+  line="$line — ${unread_needs} answer(s) waiting to be read — bun seats/needs.ts list --unread"
 fi
 if [ "$parked" -gt 0 ] || [ "$quota" -gt 0 ]; then
   line="$line — PARKED/QUOTA: ${quota:-0} capacity event(s). Re-probe: ${reprobe:-bun seats/adapter.ts probe <seat>}"

@@ -136,17 +136,35 @@ cat > "$PROJ/seats/needs.jsonl" <<'JSONL'
 {"type":"answered","id":"need-old","at":"2026-09-21T00:03:00.000Z","from":"human","via":"cli","text":"done"}
 JSONL
 run "$FIX/status-live" "$FIX/ready-2" ""
-if [ $RC -eq 0 ] && has "2 need(s) waiting on a human — bun seats/needs.ts list"; then
-  pass "open human needs count is visible on every gate line"
+if [ $RC -eq 0 ] && has "2 need(s) waiting on a human — bun seats/needs.ts list" && has "1 answer(s) waiting to be read — bun seats/needs.ts list --unread"; then
+  pass "open human needs and unread answers are visible on every gate line"
 else
-  fail "open needs count was not reported (rc=$RC): $OUT"
+  fail "open/unread needs count was not reported (rc=$RC): $OUT"
+fi
+cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
+{"type":"read","id":"need-old","at":"2026-09-21T00:04:00.000Z","by":"commander","via":"show"}
+JSONL
+run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && has "2 need(s) waiting on a human — bun seats/needs.ts list" && ! has "answer(s) waiting to be read"; then
+  pass "read marker after the human answer clears the unread gate line"
+else
+  fail "read marker did not clear unread gate line (rc=$RC): $OUT"
+fi
+cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
+{"type":"message","id":"need-one","at":"2026-09-21T00:05:00.000Z","from":"human","via":"desk","text":"human follow-up"}
+JSONL
+run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && has "1 answer(s) waiting to be read — bun seats/needs.ts list --unread"; then
+  pass "human message after any read marker reopens the unread gate line"
+else
+  fail "human message did not create unread gate line (rc=$RC): $OUT"
 fi
 : > "$PROJ/seats/needs.jsonl"
 run "$FIX/status-live" "$FIX/ready-2" ""
-if [ $RC -eq 0 ] && ! has "need(s) waiting on a human"; then
-  pass "zero human needs is silent"
+if [ $RC -eq 0 ] && ! has "need(s) waiting on a human" && ! has "answer(s) waiting to be read"; then
+  pass "zero human needs and unread answers is silent"
 else
-  fail "zero needs should be silent (rc=$RC): $OUT"
+  fail "zero needs/unread should be silent (rc=$RC): $OUT"
 fi
 rm -f "$PROJ/seats/needs.jsonl"
 
