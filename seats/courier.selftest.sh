@@ -7,6 +7,7 @@ COURIER="$HERE/courier.ts"
 WATCHDOG="$HERE/courier-watchdog.sh"
 NEEDS="$HERE/needs.ts"
 TELEGRAM="$HERE/transports/telegram.ts"
+SLACK="$HERE/transports/slack.ts"
 TRANSPORT="$HERE/transports/transport.ts"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
@@ -39,7 +40,7 @@ PY
 }
 make_proj(){
   local p="$1"; mkdir -p "$p/seats/transports" "$p/seats/run" "$p/seats/logs" "$p/wheelhouse"
-  cp "$COURIER" "$p/seats/courier.ts"; [ -f "$WATCHDOG" ] && cp "$WATCHDOG" "$p/seats/courier-watchdog.sh" && chmod +x "$p/seats/courier-watchdog.sh"; cp "$NEEDS" "$p/seats/needs.ts"; cp "$TELEGRAM" "$p/seats/transports/telegram.ts"; cp "$TRANSPORT" "$p/seats/transports/transport.ts"
+  cp "$COURIER" "$p/seats/courier.ts"; [ -f "$WATCHDOG" ] && cp "$WATCHDOG" "$p/seats/courier-watchdog.sh" && chmod +x "$p/seats/courier-watchdog.sh"; cp "$NEEDS" "$p/seats/needs.ts"; cp "$TELEGRAM" "$p/seats/transports/telegram.ts"; cp "$SLACK" "$p/seats/transports/slack.ts"; cp "$TRANSPORT" "$p/seats/transports/transport.ts"
   printf 'namespace=demo\n' > "$p/wheelhouse/.template-source"
   printf 'TESTTOKEN\n' > "$p/seats/run/telegram.token"; chmod 600 "$p/seats/run/telegram.token"
   printf '111\n' > "$p/seats/run/telegram.allow"
@@ -64,6 +65,23 @@ Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetc
     const failFile=`${dir}/fail-poll-once`;
     if (fs.existsSync(failFile)) { fs.unlinkSync(failFile); return Response.json({ok:false,description:'Bad Request: poll failed'}, {status:400}); }
     const updates=json('updates.json', []); fs.writeFileSync(`${dir}/updates.json`, '[]\n'); return Response.json({ok:true,result:updates});
+  }
+  if(u.pathname.endsWith('/chat.postMessage')) {
+    msg++; const ts=`1790000000.${String(msg).padStart(6,'0')}`; append('requests.jsonl', {method:'chat.postMessage', body, ts});
+    if (!fs.existsSync(`${dir}/fail-slack-readback`)) append('slack-messages.jsonl', {ts, channel:body.channel, user:'BOT', text:body.text, thread_ts:body.thread_ts});
+    return Response.json({ok:true,channel:body.channel,ts,message:{ts,text:body.text}});
+  }
+  if(u.pathname.endsWith('/conversations.history')) {
+    append('requests.jsonl', {method:'conversations.history', body});
+    const rows = [] as any[];
+    for (const name of ['slack-messages.jsonl','slack-updates.jsonl']) if (fs.existsSync(`${dir}/${name}`)) for (const line of fs.readFileSync(`${dir}/${name}`,'utf8').split(/\n/)) if (line.trim()) rows.push(JSON.parse(line));
+    return Response.json({ok:true,messages:rows.filter(m => !body.oldest || Number(m.ts) > Number(body.oldest)).sort((a,b)=>Number(b.ts)-Number(a.ts))});
+  }
+  if(u.pathname.endsWith('/conversations.replies')) {
+    append('requests.jsonl', {method:'conversations.replies', body});
+    const rows = [] as any[];
+    for (const name of ['slack-messages.jsonl','slack-updates.jsonl']) if (fs.existsSync(`${dir}/${name}`)) for (const line of fs.readFileSync(`${dir}/${name}`,'utf8').split(/\n/)) if (line.trim()) rows.push(JSON.parse(line));
+    return Response.json({ok:true,messages:rows.filter(m => String(m.ts)===String(body.ts) || String(m.thread_ts||'')===String(body.ts)).sort((a,b)=>Number(a.ts)-Number(b.ts))});
   }
   return Response.json({ok:false,description:'no route'}, {status:404});
 }});
@@ -171,6 +189,33 @@ for _ in $(seq 1 30); do NEW_PID="$(cat "$WATCH/seats/run/courier.pid" 2>/dev/nu
 if [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$COURIER_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then pass "courier watchdog restarts a killed courier"; else fail "courier watchdog did not restart old=$COURIER_PID new=$NEW_PID log=$(cat "$WATCH/seats/logs/courier.out.log" 2>/dev/null)"; fi
 kill "$WATCHDOG_PID" "$NEW_PID" 2>/dev/null || true; wait "$WATCHDOG_PID" 2>/dev/null || true; WATCHDOG_PID=""; COURIER_PID=""
 sweep_fixture_couriers
+
+SLACKPROJ="$FIX/slack"; make_proj "$SLACKPROJ"; rm -f "$SLACKPROJ/seats/run/telegram.token"; printf '%s\n' 'TESTTOKEN' > "$SLACKPROJ/seats/run/slack.token"; chmod 600 "$SLACKPROJ/seats/run/slack.token"; printf '%s\n' 'C123' > "$SLACKPROJ/seats/run/slack.channel"; printf '%s\n' 'U111' > "$SLACKPROJ/seats/run/slack.allow"
+cat > "$SLACKPROJ/seats/needs.jsonl" <<'EOF'
+{"type":"opened","id":"need-slack","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Slack approve","body":"Ship on Slack?","options":[{"label":"Y","text":"Yes"}],"machine":{}}
+EOF
+: > "$FIX/requests.jsonl"; : > "$FIX/slack-messages.jsonl"; : > "$FIX/slack-updates.jsonl"
+(cd "$SLACKPROJ" && WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" bun seats/courier.ts --once) > "$FIX/slack1.out" 2> "$FIX/slack1.err"
+if grep -q '"method":"chat.postMessage"' "$FIX/requests.jsonl" && grep -q 'Slack approve' "$FIX/requests.jsonl" && grep -q '"method":"conversations.history"' "$FIX/requests.jsonl" && grep -q '"transport":"slack"' "$SLACKPROJ/seats/needs.jsonl"; then pass "Slack opened need sends, read-confirms ts, and records sent"; else fail "slack send/confirm failed out=$(cat "$FIX/slack1.out" "$FIX/slack1.err" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null) ledger=$(cat "$SLACKPROJ/seats/needs.jsonl")"; fi
+SLACK_THREAD_TS="$(python3 - <<'PY' "$SLACKPROJ/seats/needs.jsonl"
+import json,sys
+for line in open(sys.argv[1]):
+    ev=json.loads(line)
+    if ev.get('type')=='sent' and ev.get('transport')=='slack':
+        print(ev['ref'].split(':')[-1])
+        break
+PY
+)"
+printf '%s\n' "{\"ts\":\"1790000001.000000\",\"channel\":\"C123\",\"user\":\"U111\",\"text\":\"Y\",\"thread_ts\":\"$SLACK_THREAD_TS\"}" "{\"ts\":\"1790000002.000000\",\"channel\":\"C123\",\"user\":\"U999\",\"text\":\"ignored\",\"thread_ts\":\"$SLACK_THREAD_TS\"}" > "$FIX/slack-updates.jsonl"
+(cd "$SLACKPROJ" && WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" bun seats/courier.ts --once) > "$FIX/slack2.out" 2> "$FIX/slack2.err"
+if grep -q '"type":"answered"' "$SLACKPROJ/seats/needs.jsonl" && grep -q '"via":"slack"' "$SLACKPROJ/seats/needs.jsonl" && grep -q '"choice":"Y"' "$SLACKPROJ/seats/needs.jsonl" && grep -q 'ignored slack sender U999' "$SLACKPROJ/seats/logs/courier.out.log"; then pass "Slack threaded allowed reply answers need and unallowlisted reply is ignored"; else fail "slack reply handling failed ledger=$(cat "$SLACKPROJ/seats/needs.jsonl") log=$(cat "$SLACKPROJ/seats/logs/courier.out.log" 2>/dev/null) out=$(cat "$FIX/slack2.out" "$FIX/slack2.err" 2>/dev/null)"; fi
+SLACKBAD="$FIX/slackbad"; make_proj "$SLACKBAD"; rm -f "$SLACKBAD/seats/run/telegram.token"; printf '%s\n' 'TESTTOKEN' > "$SLACKBAD/seats/run/slack.token"; chmod 600 "$SLACKBAD/seats/run/slack.token"; printf '%s\n' 'C123' > "$SLACKBAD/seats/run/slack.channel"; printf '%s\n' 'U111' > "$SLACKBAD/seats/run/slack.allow"
+cat > "$SLACKBAD/seats/needs.jsonl" <<'EOF'
+{"type":"opened","id":"need-slackbad","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"No readback","body":"Should not mark sent","options":[],"machine":{}}
+EOF
+: > "$FIX/requests.jsonl"; : > "$FIX/slack-messages.jsonl"; touch "$FIX/fail-slack-readback"
+(cd "$SLACKBAD" && WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" bun seats/courier.ts --once) > "$FIX/slackbad.out" 2>&1; SLACKBAD_RC=$?; rm -f "$FIX/fail-slack-readback"
+if [ $SLACKBAD_RC -eq 0 ] && grep -q 'slack send unverified' "$SLACKBAD/seats/logs/courier.out.log" && ! grep -q '"type":"sent"' "$SLACKBAD/seats/needs.jsonl"; then pass "Slack ts read-back failure reports send unverified without recording sent"; else fail "slack unverified send was not reported rc=$SLACKBAD_RC out=$(cat "$FIX/slackbad.out") log=$(cat "$SLACKBAD/seats/logs/courier.out.log" 2>/dev/null) ledger=$(cat "$SLACKBAD/seats/needs.jsonl")"; fi
 BAD="$FIX/badmode"; make_proj "$BAD"; chmod 0644 "$BAD/seats/run/telegram.token"; cp "$PROJ/seats/needs.jsonl" "$BAD/seats/needs.jsonl"
 (cd "$BAD" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/bad.out" 2>&1; BAD_RC=$?
 if [ $BAD_RC -ne 0 ] && grep -q 'mode 0600' "$FIX/bad.out"; then pass "telegram token file mode 0644 is refused"; else fail "token mode refusal failed rc=$BAD_RC out=$(cat "$FIX/bad.out")"; fi
