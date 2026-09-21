@@ -273,33 +273,56 @@ interface VerdictCandidate {
   lineNumber: number;
 }
 
-function collectJsonText(value: unknown, out: string[]): void {
+function collectMessageText(value: unknown, out: string[]): void {
   if (value === null || value === undefined) return;
   if (typeof value === "string") { out.push(value); return; }
-  if (Array.isArray(value)) { for (const v of value) collectJsonText(v, out); return; }
+  if (Array.isArray(value)) { for (const v of value) collectMessageText(v, out); return; }
   if (typeof value === "object") {
     const obj: any = value;
-    for (const key of ["text", "result", "message", "content", "delta", "output"]) collectJsonText(obj[key], out);
+    collectMessageText(obj.text, out);
+    collectMessageText(obj.content, out);
   }
 }
 
-function jsonStreamTextLines(stdout: string): string[] {
-  const lines: string[] = [];
+function messageRole(event: any): string | undefined {
+  return event?.message?.role ?? event?.role ?? event?.message?.author?.role ?? event?.author?.role;
+}
+
+function messageEndContent(event: any): string {
+  const texts: string[] = [];
+  collectMessageText(event?.message?.content ?? event?.content ?? event?.message, texts);
+  return texts.join("");
+}
+
+function finalAssistantMessageLines(stdout: string): string[] {
+  let finalText: string | null = null;
   for (const raw of stdout.split(/\r?\n/)) {
     if (!raw.trim().startsWith("{")) continue;
     try {
-      const texts: string[] = [];
-      collectJsonText(JSON.parse(raw), texts);
-      for (const text of texts) for (const line of text.split(/\r?\n/)) lines.push(line);
-    } catch { /* raw verifier prose is handled by liveLineCandidates below */ }
+      const event = JSON.parse(raw);
+      if (event?.type !== "message_end") continue;
+      if (messageRole(event) !== "assistant") continue;
+      finalText = messageEndContent(event);
+    } catch { /* ignore non-event prose and malformed JSON */ }
   }
-  return lines;
+  return finalText === null ? [] : finalText.split(/\r?\n/);
+}
+
+function dedupeCandidates(candidates: VerdictCandidate[]): VerdictCandidate[] {
+  const seen = new Set<string>();
+  const out: VerdictCandidate[] = [];
+  for (const candidate of candidates) {
+    if (seen.has(candidate.normalized)) continue;
+    seen.add(candidate.normalized);
+    out.push(candidate);
+  }
+  return out;
 }
 
 function liveLineCandidates(stdout: string, tag: "VERDICT" | "PUSH"): VerdictCandidate[] {
   const out: VerdictCandidate[] = [];
   let inFence = false;
-  const lines = [...stdout.split("\n"), ...jsonStreamTextLines(stdout)];
+  const lines = finalAssistantMessageLines(stdout);
   const re = new RegExp(`^${tag}:`);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -312,7 +335,7 @@ function liveLineCandidates(stdout: string, tag: "VERDICT" | "PUSH"): VerdictCan
     const normalized = trimmed.replace(/^(>\s*)+/, "").trim();
     if (re.test(normalized)) out.push({ line, normalized, lineNumber: i + 1 });
   }
-  return out;
+  return dedupeCandidates(out);
 }
 
 function liveVerdictCandidates(stdout: string): VerdictCandidate[] {
