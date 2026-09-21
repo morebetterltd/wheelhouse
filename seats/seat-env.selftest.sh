@@ -69,7 +69,19 @@ BIN="$FIX/bin"
 PROJECT="$FIX/project"
 mkdir -p "$HOME_FIX" "$BIN" "$PROJECT/seats" "$FIX/emptybin" "$FIX/node-only-bin"
 printf '#!/bin/sh\nexit 0\n' > "$BIN/pi"
-printf '#!/bin/sh\nexit 0\n' > "$BIN/claude"
+cat > "$BIN/claude" <<'STUB'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ] && [ "${3:-}" = --json ]; then
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ -f "$CLAUDE_CONFIG_DIR/credentials.json" ]; then
+    printf '{"loggedIn":true,"authMethod":"oauth"}\n'
+    exit 0
+  fi
+  printf '{"loggedIn":false,"authMethod":"none"}\n'
+  exit 1
+fi
+exit 0
+STUB
 chmod +x "$BIN/pi" "$BIN/claude"
 ln -s "$(command -v node)" "$FIX/node-only-bin/node"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):/usr/bin:/bin"
@@ -239,6 +251,19 @@ else fail "claude-code: trust record missing or wrong: $(cat "$CLAUDE_CFG" 2>/de
 if says "export CLAUDE_CONFIG_DIR=\"$HOME_FIX/.pi-seats-alpha/worker-claude\"" && ! says "PI_CODING_AGENT_DIR"; then
   pass "claude-code: export line uses CLAUDE_CONFIG_DIR"
 else fail "claude-code: export line wrong: $OUT"; fi
+if says "CLAUDE_CONFIG_DIR=\"$HOME_FIX/.pi-seats-alpha/worker-claude\" claude auth login --claudeai"; then
+  pass "claude-code: trust-only fresh seat still prints the Claude subscription login line"
+else fail "claude-code: trust-only fresh seat did not print login line: $OUT"; fi
+CLAUDE_BEFORE="$FIX/claude-before.json"
+cp "$CLAUDE_CFG" "$CLAUDE_BEFORE"
+printf '{"fixture":"logged-in"}\n' > "$HOME_FIX/.pi-seats-alpha/worker-claude/credentials.json"
+run alpha worker-claude "$PROJECT"
+if [ $RC -eq 0 ] && says "verified Claude Code login" && ! says "claude auth login --claudeai"; then
+  pass "claude-code: credential probe suppresses the login line for a logged-in seat"
+else fail "claude-code: logged-in probe did not suppress login line (exit $RC): $OUT"; fi
+if cmp -s "$CLAUDE_CFG" "$CLAUDE_BEFORE"; then
+  pass "claude-code: rerun for logged-in seat leaves trust record byte-identical"
+else fail "claude-code: logged-in rerun rewrote .claude.json"; fi
 
 phase "2. idempotency"
 cp "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before"
