@@ -1,0 +1,18 @@
+ok 1 - desk starts and writes seats/run/desk.port
+ok 2 - GET /needs renders open needs first and answered needs as history
+ok 3 - GET /needs renders options, default, consequence, and thread
+ok 4 - GET /api/needs.json returns folded needs JSON
+ok 5 - GET /api/board.json places cards in the right columns with the right seats
+ok 6 - canary: disabling board precedence is caught by duplicate/in-progress placement
+ok 7 - GET /board renders board cards and need link
+ok 8 - board has no write controls and no POST route
+ok 9 - board HTML hides namespace ids
+ok 10 - HTML hides machine bead id and seat jargon
+ok 11 - POST answer appends exactly one answered event through the ledger
+ok 12 - POST message appends a human message
+ok 13 - desk listens on 127.0.0.1 only
+ok 14 - slow bd refresh never runs in a request: /needs answers in under 1s and desk survives
+ok 15 - desk watchdog restarts a killed desk and records the restart
+ok 16 - canary: rendering machine.bead is caught
+ok 17 - canary: a board copy that prints ids is caught
+desk.selftest: PASS (17 checks)
