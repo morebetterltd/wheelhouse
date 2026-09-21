@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a0c41a-530b-75f1-8617-28158a52a14c"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"VERDICT: BOUNCE — codex real fixture\nPUSH: NOT CONSIDERED — fixture"}}
+{"type":"turn.completed","usage":{"input_tokens":23226,"cached_input_tokens":10624,"output_tokens":26,"reasoning_output_tokens":0}}
