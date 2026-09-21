@@ -1,0 +1,7 @@
+ok 1 - assistant @principal sentinel opens exactly one need with title and source
+ok 2 - same assistant message opens nothing new because source is deduped
+ok 3 - @principal inside tool_result opens nothing
+ok 4 - assistant message without sentinel opens nothing
+ok 5 - stop_hook_active=true opens nothing
+ok 6 - canary: disabled sentinel detection is caught by the opened-event check
+principal-sentinel.selftest: PASS (6 checks)
