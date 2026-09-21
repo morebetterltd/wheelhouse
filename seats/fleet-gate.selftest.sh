@@ -128,7 +128,29 @@ else
 fi
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/logs/herald.out.log"
 
-phase "6. graceful degrade — bd absent: silent, exit 0"
+phase "6. open needs — count line names the needs list command"
+cat > "$PROJ/seats/needs.jsonl" <<'JSONL'
+{"type":"opened","id":"need-one","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"One","body":"One","options":[],"machine":{}}
+{"type":"opened","id":"need-two","at":"2026-09-21T00:01:00.000Z","kind":"question","title":"Two","body":"Two","options":[],"machine":{}}
+{"type":"opened","id":"need-old","at":"2026-09-21T00:02:00.000Z","kind":"question","title":"Old","body":"Old","options":[],"machine":{}}
+{"type":"answered","id":"need-old","at":"2026-09-21T00:03:00.000Z","from":"human","via":"cli","text":"done"}
+JSONL
+run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && has "2 need(s) waiting on a human — bun seats/needs.ts list"; then
+  pass "open human needs count is visible on every gate line"
+else
+  fail "open needs count was not reported (rc=$RC): $OUT"
+fi
+: > "$PROJ/seats/needs.jsonl"
+run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && ! has "need(s) waiting on a human"; then
+  pass "zero human needs is silent"
+else
+  fail "zero needs should be silent (rc=$RC): $OUT"
+fi
+rm -f "$PROJ/seats/needs.jsonl"
+
+phase "7. graceful degrade — bd absent: silent, exit 0"
 run "$FIX/status-stopped" "$FIX/ready-2" ""
 NOBD_OUT="$(cd "$PROJ" && env PATH="/usr/bin:/bin" \
   FIXTURE_STATUS_FILE="$FIX/status-stopped" bash seats/fleet-gate.sh 2>&1)"

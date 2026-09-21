@@ -28,6 +28,7 @@ const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import
 const SEATS_DIR = path.join(ROOT, "seats");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
 const INBOX = path.join(SEATS_DIR, "inbox.jsonl");
+const NEEDS_LEDGER = path.join(SEATS_DIR, "needs.jsonl");
 const HERALD_OUT_LOG = path.join(LOG_DIR, "herald.out.log");
 const DRAIN_CURSOR = path.join(SEATS_DIR, "inbox.cursor");
 const DRAIN_SEEN = path.join(SEATS_DIR, "inbox.seen.json");
@@ -50,11 +51,12 @@ const DISTRESS_RE = /(?:\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|atio
 const STOP_DISTRESS_RE = /\bSTOP\b/;
 const SENTINEL_RE = /^\s*@commander\s*:/im;
 
-type WakeClass = "settle" | "distress" | "sentinel" | "verdict-not-posted";
+type WakeClass = "settle" | "distress" | "sentinel" | "verdict-not-posted" | "need-answered" | "need-message";
 type A2AState = "terminal" | "input-required" | "failed";
 
 interface HeraldState {
   logs: Record<string, { offset: number }>;
+  needs?: { offset: number };
   seen: string[];
   lastPokedInboxSize?: number;
   lastPokedByPane?: Record<string, number>;
@@ -90,7 +92,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {} };
+    return { logs: parsed.logs ?? {}, needs: parsed.needs, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {} };
   } catch (e: any) {
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
@@ -405,6 +407,75 @@ function eventId(relLog: string, offset: number, line: string, candidate: Candid
     .digest("hex");
 }
 
+function needTitles(): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!fs.existsSync(NEEDS_LEDGER)) return out;
+  for (const line of fs.readFileSync(NEEDS_LEDGER, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const ev = JSON.parse(line);
+      if (ev?.type === "opened" && typeof ev.id === "string") out.set(ev.id, String(ev.title ?? ev.id));
+    } catch { /* parse errors are for needs.ts to report; herald skips malformed rows */ }
+  }
+  return out;
+}
+
+function needCandidate(ev: any, titles: Map<string, string>): Candidate | null {
+  if (!ev || typeof ev.id !== "string") return null;
+  if (ev.type === "answered" && ev.from === "human") {
+    const title = titles.get(ev.id) ?? ev.id;
+    return { eventClass: "need-answered", state: "terminal", title: `answered — ${title}`, detail: truncate(`${String(ev.text ?? "")}\nRead it: bun seats/needs.ts show ${ev.id}`, 1200), sourceType: "answered" };
+  }
+  if (ev.type === "message" && ev.from === "human") {
+    const title = titles.get(ev.id) ?? ev.id;
+    return { eventClass: "need-message", state: "input-required", title: `message — ${title}`, detail: truncate(`${String(ev.text ?? "")}\nRead it: bun seats/needs.ts show ${ev.id}`, 1200), sourceType: "message" };
+  }
+  return null;
+}
+
+function scanNeeds(state: HeraldState, seen: Set<string>): number {
+  if (!fs.existsSync(NEEDS_LEDGER)) return 0;
+  const rel = path.relative(ROOT, NEEDS_LEDGER);
+  if (!state.needs) {
+    state.needs = { offset: fs.statSync(NEEDS_LEDGER).size };
+    writeState(state);
+    return 0;
+  }
+  const prior = state.needs.offset;
+  const titles = needTitles();
+  let appended = 0;
+  const batch = readCompleteLines(NEEDS_LEDGER, prior, (rec) => {
+    let ev: any;
+    try { ev = JSON.parse(rec.line); } catch { state.needs = { offset: rec.endOffset }; writeState(state); return; }
+    const candidate = needCandidate(ev, titles);
+    if (candidate) {
+      const id = eventId(rel, rec.offset, rec.line, candidate);
+      if (!seen.has(id)) {
+        seen.add(id);
+        appendInbox({
+          id,
+          at: new Date().toISOString(),
+          seat: "principal",
+          class: candidate.eventClass,
+          state: candidate.state,
+          title: candidate.title,
+          detail: candidate.detail,
+          source: { log: rel, offset: rec.offset, type: candidate.sourceType ?? null },
+        });
+        appended++;
+      }
+    }
+    state.needs = { offset: rec.endOffset };
+    state.seen = Array.from(seen).slice(-MAX_SEEN);
+    writeState(state);
+  });
+  if (batch.linesRead === 0 && batch.offset !== prior) {
+    state.needs = { offset: batch.offset };
+    writeState(state);
+  }
+  return appended;
+}
+
 function tmuxArgs(args: string[]): string[] {
   return TMUX_SOCKET ? ["-L", TMUX_SOCKET, ...args] : args;
 }
@@ -576,6 +647,7 @@ function scanOnce(): number {
       writeState(state);
     }
   }
+  appended += scanNeeds(state, seen);
   pokeCommanderIfSafe(state);
   return appended;
 }

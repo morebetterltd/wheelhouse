@@ -8,20 +8,20 @@ const LEDGER = path.join(SEATS_DIR, "needs.jsonl");
 const ROSTER = path.join(SEATS_DIR, "seats.json");
 const TEMPLATE_SOURCE = path.join(ROOT, "wheelhouse", ".template-source");
 const VALID_KINDS = new Set(["question", "approval", "notify", "task"]);
-type NeedEvent =
+export type NeedEvent =
  | { type:"opened"; id:string; at:string; kind:string; title:string; body:string; options:Option[]; default?:string; consequence?:string; machine:{ bead?:string; seat?:string; session?:string; source?:string } }
  | { type:"message"; id:string; at:string; from:"commander"|"human"; via:string; text:string }
  | { type:"answered"; id:string; at:string; from:"human"; via:string; text:string; choice?:string }
  | { type:"closed"; id:string; at:string; reason:string };
-interface Option { label:string; text:string }
-interface NeedFold { id:string; state:"open"|"answered"|"closed"; opened:Extract<NeedEvent,{type:"opened"}>; messages:Extract<NeedEvent,{type:"message"}>[]; answer?:Extract<NeedEvent,{type:"answered"}>; closed?:Extract<NeedEvent,{type:"closed"}> }
+export interface Option { label:string; text:string }
+export interface NeedFold { id:string; state:"open"|"answered"|"closed"; opened:Extract<NeedEvent,{type:"opened"}>; messages:Extract<NeedEvent,{type:"message"}>[]; answer?:Extract<NeedEvent,{type:"answered"}>; closed?:Extract<NeedEvent,{type:"closed"}> }
 function die(msg:string, code=1):never{ process.stderr.write(`STOP: ${msg}\n`); process.exit(code); }
 function warn(msg:string){ process.stderr.write(`WARN: ${msg}\n`); }
 function now(){ return new Date().toISOString(); }
-function appendEvent(ev:NeedEvent){ fs.mkdirSync(SEATS_DIR,{recursive:true}); fs.appendFileSync(LEDGER, JSON.stringify(ev)+"\n"); }
-function readEvents():NeedEvent[]{ if(!fs.existsSync(LEDGER)) return []; const out:NeedEvent[]=[]; fs.readFileSync(LEDGER,"utf8").split(/\r?\n/).forEach((l,i)=>{ if(!l.trim()) return; try{out.push(JSON.parse(l));}catch(e:any){die(`cannot parse ${LEDGER} line ${i+1}: ${e.message}`);} }); return out; }
-function fold(events=readEvents()):Map<string,NeedFold>{ const m=new Map<string,NeedFold>(); for(const ev of events){ if(ev.type==="opened") m.set(ev.id,{id:ev.id,state:"open",opened:ev,messages:[]}); else { const n=m.get(ev.id); if(!n) continue; if(ev.type==="message") n.messages.push(ev); else if(ev.type==="answered"){n.answer=ev; if(n.state!=="closed") n.state="answered";} else {n.closed=ev; n.state="closed";} } } return m; }
-function getNeed(id:string):NeedFold{ const n=fold().get(id); if(!n) die(`no need named ${id}`); return n; }
+export function appendEvent(ev:NeedEvent){ fs.mkdirSync(SEATS_DIR,{recursive:true}); fs.appendFileSync(LEDGER, JSON.stringify(ev)+"\n"); }
+export function readEvents():NeedEvent[]{ if(!fs.existsSync(LEDGER)) return []; const out:NeedEvent[]=[]; fs.readFileSync(LEDGER,"utf8").split(/\r?\n/).forEach((l,i)=>{ if(!l.trim()) return; try{out.push(JSON.parse(l));}catch(e:any){die(`cannot parse ${LEDGER} line ${i+1}: ${e.message}`);} }); return out; }
+export function fold(events=readEvents()):Map<string,NeedFold>{ const m=new Map<string,NeedFold>(); for(const ev of events){ if(ev.type==="opened") m.set(ev.id,{id:ev.id,state:"open",opened:ev,messages:[]}); else { const n=m.get(ev.id); if(!n) continue; if(ev.type==="message") n.messages.push(ev); else if(ev.type==="answered"){n.answer=ev; if(n.state!=="closed") n.state="answered";} else {n.closed=ev; n.state="closed";} } } return m; }
+export function getNeed(id:string):NeedFold{ const n=fold().get(id); if(!n) die(`no need named ${id}`); return n; }
 function esc(s:string){ return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
 function namespace(){ try{ const m=fs.readFileSync(TEMPLATE_SOURCE,"utf8").match(/^namespace=(.+)$/m); if(m?.[1]?.trim()) return m[1].trim(); }catch{} return path.basename(ROOT).replace(/-[a-z0-9]{3,4}$/i, ""); }
 function humanTextGuard(text:string, where:string){ const id=text.match(new RegExp(`\\b${esc(namespace())}-[a-z0-9]{3,4}\\b`,"i"))?.[0]; if(id) die(`${where} contains install-local id token ${id}; put it in machine fields, not human-facing text`,2); const bead=text.match(/\bbead\b/i)?.[0]; if(bead) die(`${where} contains forbidden human-facing token ${bead}; say “need”, “request”, or use the machine bead field`,2); }
@@ -38,4 +38,4 @@ function cmdAnswer(argv:string[]){ const {pos,flags}=parseArgs(argv); const [id,
 function cmdClose(argv:string[]){ const {pos,flags}=parseArgs(argv); const id=pos[0]; if(!id) die("usage: needs.ts close <id> [--reason <r>]",2); getNeed(id); appendEvent({type:"closed",id,at:now(),reason:one(flags,"reason")??"closed"}); console.log(id); }
 function cmdShow(argv:string[]){ const {pos}=parseArgs(argv); console.log(JSON.stringify(getNeed(pos[0]??""),null,2)); }
 function cmdList(argv:string[]){ const {bools}=parseArgs(argv); let needs=Array.from(fold().values()); if(!bools.has("all")) needs=needs.filter(n=>n.state!=="closed"); needs.sort((a,b)=>(a.state==="open"?0:1)-(b.state==="open"?0:1)||b.opened.at.localeCompare(a.opened.at)); if(bools.has("json")) console.log(JSON.stringify(needs,null,2)); else for(const n of needs) console.log(`${n.id} ${n.state} ${n.opened.kind} — ${n.opened.title}${n.answer?` answer=${n.answer.text}`:""}`); }
-const [cmd,...rest]=process.argv.slice(2); if(cmd==="open") cmdOpen(rest); else if(cmd==="say") cmdSay(rest); else if(cmd==="answer") cmdAnswer(rest); else if(cmd==="show") cmdShow(rest); else if(cmd==="list") cmdList(rest); else if(cmd==="close") cmdClose(rest); else die("usage: needs.ts open|say|answer|show|list|close ...",2);
+if (import.meta.main) { const [cmd,...rest]=process.argv.slice(2); if(cmd==="open") cmdOpen(rest); else if(cmd==="say") cmdSay(rest); else if(cmd==="answer") cmdAnswer(rest); else if(cmd==="show") cmdShow(rest); else if(cmd==="list") cmdList(rest); else if(cmd==="close") cmdClose(rest); else die("usage: needs.ts open|say|answer|show|list|close ...",2); }
