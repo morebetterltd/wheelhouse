@@ -5,12 +5,13 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 DESK="$HERE/desk.ts"
 NEEDS="$HERE/needs.ts"
+WATCHDOG="$HERE/desk-watchdog.sh"
 [ -f "$DESK" ] || { echo "selftest: missing $DESK" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-desk-selftest.XXXXXX")"; FIX="$(cd "$FIX" && pwd -P)"
-PASS=0; FAIL=0; PID=""
-cleanup(){ [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+PASS=0; FAIL=0; PID=""; WATCHDOG_PID=""
+cleanup(){ [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
@@ -20,7 +21,7 @@ s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
 PY
 }
 PROJ="$FIX/proj"; mkdir -p "$PROJ/seats" "$PROJ/wheelhouse"
-cp "$DESK" "$PROJ/seats/desk.ts"; cp "$NEEDS" "$PROJ/seats/needs.ts"
+cp "$DESK" "$PROJ/seats/desk.ts"; cp "$NEEDS" "$PROJ/seats/needs.ts"; [ -f "$WATCHDOG" ] && cp "$WATCHDOG" "$PROJ/seats/desk-watchdog.sh" && chmod +x "$PROJ/seats/desk-watchdog.sh"
 cat > "$PROJ/wheelhouse/.template-source" <<'EOF'
 namespace=demo
 EOF
@@ -41,6 +42,7 @@ EOF
 cat > "$PROJ/bin/bd" <<'EOF'
 #!/usr/bin/env bash
 set -eu
+[ -n "${WHEELHOUSE_STUB_BD_SLEEP:-}" ] && sleep "$WHEELHOUSE_STUB_BD_SLEEP"
 if [ "${1:-}" = "ready" ]; then printf 'demo-ready\ndemo-dep\n'; exit 0; fi
 if [ "${1:-}" != "list" ]; then exit 1; fi
 status=""; label=""
@@ -76,6 +78,11 @@ if grep -q 'Choose lunch' "$FIX/needs.html" && grep -q 'Old question' "$FIX/need
 if grep -q 'A; applies after noon' "$FIX/needs.html" && grep -q 'We order the default' "$FIX/needs.html" && grep -q 'Soup' "$FIX/needs.html" && grep -q 'Please choose' "$FIX/needs.html"; then pass "GET /needs renders options, default, consequence, and thread"; else fail "GET /needs missing need details"; fi
 curl -fsS "http://127.0.0.1:$P/api/needs.json" > "$FIX/needs.json" || fail "GET /api/needs.json failed"
 if grep -q '"id":"need-open"' "$FIX/needs.json" && grep -q '"state":"open"' "$FIX/needs.json"; then pass "GET /api/needs.json returns folded needs JSON"; else fail "GET /api/needs.json missing folded need"; fi
+for _ in $(seq 1 80); do
+  curl -fsS "http://127.0.0.1:$P/api/board.json" > "$FIX/board.json" 2>/dev/null || true
+  grep -q 'Write the guide' "$FIX/board.json" 2>/dev/null && break
+  sleep 0.1
+done
 curl -fsS "http://127.0.0.1:$P/board" > "$FIX/board.html" || fail "GET /board failed"
 curl -fsS "http://127.0.0.1:$P/api/board.json" > "$FIX/board.json" || fail "GET /api/board.json failed"
 if python3 - "$FIX/board.json" <<'PY'
@@ -110,7 +117,28 @@ if command -v lsof >/dev/null 2>&1; then
   LSOF="$(lsof -nP -iTCP:$P -sTCP:LISTEN 2>/dev/null || true)"
   if printf '%s\n' "$LSOF" | grep -q "127.0.0.1:$P" && ! printf '%s\n' "$LSOF" | grep -q "\*:$P\|0.0.0.0:$P"; then pass "desk listens on 127.0.0.1 only"; else fail "desk bind was not localhost-only: $LSOF"; fi
 else echo "ok $((PASS+1)) - SKIP lsof not available"; PASS=$((PASS+1)); fi
-kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; PID=""
+SLOW="$FIX/slowproj"; mkdir -p "$SLOW"; cp -R "$PROJ/seats" "$SLOW/seats"; mkdir -p "$SLOW/wheelhouse" "$SLOW/bin"; cp "$PROJ/wheelhouse/.template-source" "$SLOW/wheelhouse/.template-source"; cp "$PROJ/bin/bd" "$SLOW/bin/bd"
+PSLOW="$(port)"; (cd "$SLOW" && PATH="$SLOW/bin:$PATH" WHEELHOUSE_STUB_BD_SLEEP=2 WHEELHOUSE_DESK_BOARD_REFRESH_MS=100 WHEELHOUSE_DESK_ROOT="$SLOW" WHEELHOUSE_DESK_PORT="$PSLOW" bun seats/desk.ts >/dev/null 2> "$FIX/slow-desk.err") & SLOW_PID=$!
+for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$PSLOW/board" >/dev/null 2>&1 && break; sleep 0.1; done
+NEEDS_MS="$(python3 - "http://127.0.0.1:$PSLOW/needs" "$FIX/slow-needs.html" <<'PY'
+import sys, time, urllib.request
+start=time.time(); urllib.request.urlretrieve(sys.argv[1], sys.argv[2]); print(int((time.time()-start)*1000))
+PY
+)"
+if [ "$NEEDS_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd refresh never runs in a request: /needs answers in under 1s and desk survives"; else fail "slow bd blocked /needs or killed desk (ms=$NEEDS_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
+kill "$SLOW_PID" 2>/dev/null || true; wait "$SLOW_PID" 2>/dev/null || true
+WHEELHOUSE_DESK_ROOT="$PROJ" WHEELHOUSE_DESK_WATCHDOG_SECONDS=1 "$PROJ/seats/desk-watchdog.sh" > "$FIX/watchdog.out" 2> "$FIX/watchdog.err" & WATCHDOG_PID=$!
+sleep 0.5
+OLD_PID="$PID"; kill "$OLD_PID" 2>/dev/null || true
+NEW_PID=""
+for _ in $(seq 1 60); do
+  NEW_PID="$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)"
+  if [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$OLD_PID" ] && kill -0 "$NEW_PID" 2>/dev/null && curl -fsS "http://127.0.0.1:$P/needs" > "$FIX/restarted-needs.html" 2>/dev/null; then break; fi
+  sleep 0.5
+done
+if [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$OLD_PID" ] && kill -0 "$NEW_PID" 2>/dev/null && grep -q 'desk restarted: pid' "$PROJ/seats/logs/desk.stderr.log"; then pass "desk watchdog restarts a killed desk and records the restart"; else fail "desk watchdog did not restart within 30s (old=$OLD_PID new=$NEW_PID out=$(cat "$FIX/watchdog.out" 2>/dev/null) err=$(cat "$PROJ/seats/logs/desk.stderr.log" 2>/dev/null))"; fi
+kill "$WATCHDOG_PID" 2>/dev/null || true; wait "$WATCHDOG_PID" 2>/dev/null || true; WATCHDOG_PID=""
+PID="$NEW_PID"; kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; PID=""
 CAN="$FIX/canary.ts"; cp "$PROJ/seats/desk.ts" "$CAN"
 python3 - "$CAN" <<'PY'
 from pathlib import Path
@@ -139,7 +167,7 @@ else
   mkdir -p "$FIX/boardcan/seats" "$FIX/boardcan/wheelhouse" "$FIX/boardcan/bin"
   cp "$BOARD_CAN" "$FIX/boardcan/seats/desk.ts"; cp "$NEEDS" "$FIX/boardcan/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/boardcan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/boardcan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/boardcan/seats/"; cp "$PROJ/bin/bd" "$FIX/boardcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/boardcan/wheelhouse/.template-source"
   P3="$(port)"; (cd "$FIX/boardcan" && PATH="$FIX/boardcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/boardcan" WHEELHOUSE_DESK_PORT="$P3" bun seats/desk.ts >/dev/null 2>&1) & PID=$!
-  for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$P3/board" > "$FIX/board-canary.html" 2>/dev/null && break; sleep 0.1; done
+  for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P3/board" > "$FIX/board-canary.html" 2>/dev/null || true; grep -q 'demo-ready' "$FIX/board-canary.html" 2>/dev/null && break; sleep 0.1; done
   if grep -q 'demo-ready' "$FIX/board-canary.html"; then pass "canary: a board copy that prints ids is caught"; else fail "canary did not expose board id leak"; fi
   [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
 fi
