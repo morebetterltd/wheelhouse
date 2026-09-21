@@ -1,0 +1,6 @@
+manual scratch herald need check
+need=need-r322
+initial herald --once: herald: appended 0 wake event(s)
+after needs.ts answer: herald: appended 1 wake event(s)
+drain row contained: class=need-answered, seat=principal, state=terminal, title="answered — Manual answer", detail="Manual yes\nRead it: bun seats/needs.ts show need-r322", source.log=seats/needs.jsonl, source.type=answered
+needs.ts show contained: "state": "answered" and "text": "Manual yes"

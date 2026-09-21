@@ -15,7 +15,7 @@ So when you read a stage below, the question is never "was that passed along cor
 - The roles exist. One person may hold several — commander and integrator are commonly the same, and a solo principal can hold all of them at different moments. What must not happen is one person being both author and reviewer of the same change; `wheelhouse/crew/REVIEWER.md` forbids it and it is the one merge that cannot be recovered by care. A solo install, where one human holds every role, closes that gap the way the next section describes.
 - The work graph is initialised and `bd ready` lists something.
 - Cockpit turns tmux mouse scrolling on and keeps 50,000 lines of pane history; opt out with `WHEELHOUSE_COCKPIT_MOUSE=0 seats/cockpit.sh` if you prefer native terminal selection. Scroll with the wheel, or press tmux prefix then `[` and use arrows/PageUp (`q` leaves copy mode); with mouse on, hold Option/Shift on macOS terminals to select text.
-- The commander drains the Dispatch Office inbox at session start with `bun seats/herald.ts --drain`, after every dispatch, and whenever the herald pokes with the constant phrase `check the fleet inbox`. `cockpit.sh --pane-commander` starts the wrapper-independent fallback poll inside the commander pane automatically. The poke is only a wake-up hint; correctness never depends on it, because the inbox is durable and the self-poll drains anything a tmux prompt-shape check or wrapper-delivered `send-keys` missed.
+- The commander drains the Dispatch Office inbox at session start with `bun seats/herald.ts --drain`, after every dispatch, and whenever the herald pokes with the constant phrase `check the fleet inbox`. Human answers to needs arrive as inbox rows too; read the full thread with the row's `bun seats/needs.ts show <id>` command. `cockpit.sh --pane-commander` starts the wrapper-independent fallback poll inside the commander pane automatically. The poke is only a wake-up hint; correctness never depends on it, because the inbox is durable and the self-poll drains anything a tmux prompt-shape check or wrapper-delivered `send-keys` missed.
 - You know whether `wheelhouse/crew/bench.sh` is the shipped stub or a real bench. If it is the stub, no verdict may claim the software runs, and that is deliberate. See `wheelhouse/crew/BENCH.md`.
 
 ## When one human holds every seat
@@ -190,7 +190,7 @@ It also includes the evidence itself, and there the same reasoning reaches one s
 
 There is no fixed rhythm to prescribe. The shape that worked:
 
-- Start by reading the graph and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the herald is running (`seats/cockpit.sh --herald`) and the cockpit commander pane has launched the commander-pane fallback poll. Deadline beads and anything blocking others first.
+- Start by reading the graph and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the herald is running (`seats/cockpit.sh --herald`) and the cockpit commander pane has launched the commander-pane fallback poll. If an inbox row reports a human answer or message, read the full need with `bun seats/needs.ts show <id>`. Deadline beads and anything blocking others first.
 - Dispatch one bead per seat, and let the seat finish before adding another.
 - Review as soon as work lands, so the author still has the context to fix a bounce cheaply.
 - Merge in batches if you like, but confirm each tip against its reported head individually.
@@ -276,7 +276,7 @@ decides what the work IS; the note says where to stand while reading it.
 **The order, explicitly, because reading it is not the same as doing it in
 this sequence:** recover (`bun seats/recover.ts` if this session followed a
 `/clear` or a compaction), spawn or resume every rostered seat, drain the
-Dispatch Office inbox (`bun seats/herald.ts --drain`), dispatch every ready
+Dispatch Office inbox (`bun seats/herald.ts --drain`, following any human-answer row with `bun seats/needs.ts show <id>`), dispatch every ready
 bead to a seat — and only then any commander-owned chore (machinery sync,
 selftests, upgrades, ISA edits). A chore that reads as high-priority in
 yesterday's handoff is still a chore: it waits behind the first dispatch, not
