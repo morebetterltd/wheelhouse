@@ -48,7 +48,10 @@ exact `bun seats/prune.ts prune ...` command, and deletes nothing unless
 `auto_prune` is true.
 
 The template ships `seats/bin/cargo` and `seats/bin/dotnet` as symlinks to one
-plain-bash shim. The frozen host contract is:
+plain-bash shim. Keep `seats/bin` even when a fleet does not opt in: without
+`seats/host-budget.json` it is inert because PATH is not rewritten, and the
+selftests use the shipped shims to prove the opt-in path still works. The frozen
+host contract is:
 
 - blocking `flock(2)` on `~/.cache/wheelhouse-build.lock` by default, held for the
   whole tool invocation by Perl's standard `Fcntl` binding (car fleets that
