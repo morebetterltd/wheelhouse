@@ -28,8 +28,12 @@ EOF
 cat > "$PROJ/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-open","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Choose lunch","body":"Pick a meal","options":[{"label":"A","text":"Soup"},{"label":"B","text":"Salad"}],"default":"A; applies after noon","consequence":"We order the default.","machine":{"bead":"demo-ab12","seat":"worker-1"}}
 {"type":"message","id":"need-open","at":"2026-09-21T00:01:00.000Z","from":"commander","via":"cli","text":"Please choose."}
-{"type":"opened","id":"need-old","at":"2026-09-20T00:00:00.000Z","kind":"question","title":"Old question","body":"Already answered","options":[],"machine":{}}
+{"type":"opened","id":"need-old","at":"2026-09-20T00:00:00.000Z","kind":"question","title":"Old question","body":"Already answered","options":[{"label":"Run","text":"Run the login line"}],"machine":{}}
 {"type":"answered","id":"need-old","at":"2026-09-20T00:02:00.000Z","from":"human","via":"cli","text":"done"}
+{"type":"message","id":"need-old","at":"2026-09-20T00:03:00.000Z","from":"commander","via":"cli","text":"Please do the second step."}
+{"type":"opened","id":"need-closed","at":"2026-09-19T00:00:00.000Z","kind":"question","title":"Closed question","body":"Already complete","options":[{"label":"Done","text":"Done"}],"machine":{}}
+{"type":"answered","id":"need-closed","at":"2026-09-19T00:02:00.000Z","from":"human","via":"cli","text":"done"}
+{"type":"closed","id":"need-closed","at":"2026-09-19T00:03:00.000Z","reason":"complete"}
 {"type":"opened","id":"need-board","at":"2026-09-21T00:03:00.000Z","kind":"question","title":"Approve deploy","body":"Need a human decision","options":[],"machine":{"bead":"demo-human"}}
 EOF
 mkdir -p "$PROJ/seats/verdicts" "$PROJ/bin"
@@ -74,7 +78,16 @@ P="$(port)"
 (cd "$PROJ" && PATH="$PROJ/bin:$PATH" WHEELHOUSE_DESK_ROOT="$PROJ" WHEELHOUSE_DESK_PORT="$P" bun seats/desk.ts > "$FIX/desk.out" 2> "$FIX/desk.err") & PID=$!
 for _ in $(seq 1 50); do [ -s "$PROJ/seats/run/desk.port" ] && curl -fsS "http://127.0.0.1:$P/needs" > "$FIX/needs.html" 2>/dev/null && break; sleep 0.1; done
 if kill -0 "$PID" 2>/dev/null && grep -q "http://127.0.0.1:$P/needs" "$PROJ/seats/run/desk.port"; then pass "desk starts and writes seats/run/desk.port"; else fail "desk did not start: $(cat "$FIX/desk.err" 2>/dev/null)"; fi
-if grep -q 'Choose lunch' "$FIX/needs.html" && grep -q 'Old question' "$FIX/needs.html" && [ "$(grep -n 'Choose lunch\|Old question' "$FIX/needs.html" | head -1 | grep -c 'Choose lunch')" = 1 ]; then pass "GET /needs renders open needs first and answered needs as history"; else fail "GET /needs did not render open/history correctly"; fi
+if python3 - "$FIX/needs.html" <<'PY'
+import re, sys
+html=open(sys.argv[1]).read()
+assert 'Choose lunch' in html and 'Old question' in html and 'Closed question' in html
+assert html.index('Choose lunch') < html.index('Old question') < html.index('History') < html.index('Closed question')
+assert 'action="/api/needs/need-old/answer"' in html and 'action="/api/needs/need-old/message"' in html and 'Run the login line' in html
+assert 'Please do the second step.' in html
+assert 'action="/api/needs/need-closed/answer"' not in html and 'action="/api/needs/need-closed/message"' not in html
+PY
+then pass "GET /needs keeps answered needs open below unanswered ones and closed needs as history"; else fail "GET /needs did not render answered/closed sections correctly"; fi
 if grep -q 'A; applies after noon' "$FIX/needs.html" && grep -q 'We order the default' "$FIX/needs.html" && grep -q 'Soup' "$FIX/needs.html" && grep -q 'Please choose' "$FIX/needs.html"; then pass "GET /needs renders options, default, consequence, and thread"; else fail "GET /needs missing need details"; fi
 curl -fsS "http://127.0.0.1:$P/api/needs.json" > "$FIX/needs.json" || fail "GET /api/needs.json failed"
 if grep -q '"id":"need-open"' "$FIX/needs.json" && grep -q '"state":"open"' "$FIX/needs.json"; then pass "GET /api/needs.json returns folded needs JSON"; else fail "GET /api/needs.json missing folded need"; fi
@@ -141,6 +154,11 @@ after="$(grep -c '"type":"answered"' "$PROJ/seats/needs.jsonl")"
 if [ $((after-before)) -eq 1 ] && tail -1 "$PROJ/seats/needs.jsonl" | grep -q '"via":"desk"' && tail -1 "$PROJ/seats/needs.jsonl" | grep -q '"choice":"B"'; then pass "POST answer appends exactly one answered event through the ledger"; else fail "POST answer ledger wrong"; fi
 curl -fsS -X POST -d 'text=Thanks' "http://127.0.0.1:$P/api/needs/need-open/message" >/dev/null || fail "POST message failed"
 if tail -1 "$PROJ/seats/needs.jsonl" | grep -q '"type":"message"' && tail -1 "$PROJ/seats/needs.jsonl" | grep -q '"from":"human"'; then pass "POST message appends a human message"; else fail "POST message ledger wrong"; fi
+(cd "$PROJ" && WHEELHOUSE_NEEDS_ROOT="$PROJ" bun seats/needs.ts say need-old 'Commander follow-up visible on desk' >/dev/null) || fail "commander say failed"
+curl -fsS "http://127.0.0.1:$P/needs" > "$FIX/needs-after-say.html" || fail "GET /needs after commander say failed"
+if grep -q 'Commander follow-up visible on desk' "$FIX/needs-after-say.html"; then pass "commander say on answered need shows in the thread"; else fail "commander say missing from answered thread"; fi
+curl -fsS -X POST -d 'text=Human follow-up after answer' "http://127.0.0.1:$P/api/needs/need-old/message" >/dev/null || fail "POST answered-need follow-up failed"
+if tail -1 "$PROJ/seats/needs.jsonl" | grep -q '"type":"message"' && tail -1 "$PROJ/seats/needs.jsonl" | grep -q '"from":"human"' && WHEELHOUSE_NEEDS_ROOT="$PROJ" bun "$PROJ/seats/needs.ts" list --unread | grep -q 'need-old'; then pass "answered need accepts human follow-up and re-arms unread listing"; else fail "answered follow-up did not record/re-arm unread ledger=$(tail -5 "$PROJ/seats/needs.jsonl")"; fi
 if command -v lsof >/dev/null 2>&1; then
   LSOF="$(lsof -nP -iTCP:$P -sTCP:LISTEN 2>/dev/null || true)"
   if printf '%s\n' "$LSOF" | grep -q "127.0.0.1:$P" && ! printf '%s\n' "$LSOF" | grep -q "\*:$P\|0.0.0.0:$P"; then pass "desk listens on 127.0.0.1 only"; else fail "desk bind was not localhost-only: $LSOF"; fi
@@ -167,14 +185,34 @@ done
 if [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$OLD_PID" ] && kill -0 "$NEW_PID" 2>/dev/null && grep -q 'desk restarted: pid' "$PROJ/seats/logs/desk.stderr.log"; then pass "desk watchdog restarts a killed desk and records the restart"; else fail "desk watchdog did not restart within 30s (old=$OLD_PID new=$NEW_PID out=$(cat "$FIX/watchdog.out" 2>/dev/null) err=$(cat "$PROJ/seats/logs/desk.stderr.log" 2>/dev/null))"; fi
 kill "$WATCHDOG_PID" 2>/dev/null || true; wait "$WATCHDOG_PID" 2>/dev/null || true; WATCHDOG_PID=""
 PID="$NEW_PID"; kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; PID=""
+ANSWERED_CAN="$FIX/answered-canary.ts"; cp "$PROJ/seats/desk.ts" "$ANSWERED_CAN"
+python3 - "$ANSWERED_CAN" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); s=p.read_text(); old='const active = n.state !== "closed";'
+if old not in s: raise SystemExit(1)
+s=s.replace(old, 'const active = n.state === "open";', 1)
+p.write_text(s)
+PY
+if cmp -s "$PROJ/seats/desk.ts" "$ANSWERED_CAN"; then
+  fail "canary: could not make answered needs inactive; test proves nothing"
+else
+  mkdir -p "$FIX/answeredcan/seats" "$FIX/answeredcan/wheelhouse"
+  cp "$ANSWERED_CAN" "$FIX/answeredcan/seats/desk.ts"; cp "$NEEDS" "$FIX/answeredcan/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/answeredcan/seats/needs.jsonl"
+  PANS="$(port)"; (cd "$FIX/answeredcan" && WHEELHOUSE_DESK_ROOT="$FIX/answeredcan" WHEELHOUSE_DESK_PORT="$PANS" bun seats/desk.ts >/dev/null 2>&1) & PID=$!
+  for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$PANS/needs" > "$FIX/answered-canary.html" 2>/dev/null && break; sleep 0.1; done
+  if ! grep -q 'action="/api/needs/need-old/message"' "$FIX/answered-canary.html"; then pass "canary: making answered needs inactive removes controls and is caught"; else fail "canary did not remove answered controls"; fi
+  [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
+fi
 CAN="$FIX/canary.ts"; cp "$PROJ/seats/desk.ts" "$CAN"
 python3 - "$CAN" <<'PY'
 from pathlib import Path
-p=Path(__import__('sys').argv[1]); s=p.read_text(); old='${n.opened.options.length?`<form'
+p=Path(__import__('sys').argv[1]); s=p.read_text(); old='${active && n.opened.options.length?`<form'
 if old not in s: raise SystemExit(1)
 s=s.replace('<p>${esc(n.opened.body)}</p>', '<p>${esc(n.opened.body)}</p><p>${esc(n.opened.machine.bead)}</p>', 1)
 p.write_text(s)
 PY
+if cmp -s "$PROJ/seats/desk.ts" "$CAN"; then fail "canary: could not make needs page print machine.bead; test proves nothing"; fi
 mkdir -p "$FIX/canproj/seats" "$FIX/canproj/wheelhouse"; cp "$CAN" "$FIX/canproj/seats/desk.ts"; cp "$NEEDS" "$FIX/canproj/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/canproj/seats/needs.jsonl"
 P2="$(port)"; (cd "$FIX/canproj" && WHEELHOUSE_DESK_ROOT="$FIX/canproj" WHEELHOUSE_DESK_PORT="$P2" bun seats/desk.ts >/dev/null 2>&1) & PID=$!
 for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$P2/needs" > "$FIX/canary.html" 2>/dev/null && break; sleep 0.1; done
