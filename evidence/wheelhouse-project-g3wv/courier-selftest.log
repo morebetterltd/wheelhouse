@@ -1,0 +1,9 @@
+ok 1 - planted opened need sends one Telegram message and records sent
+ok 2 - allowed Telegram reply records an answered event with via telegram and choice
+ok 3 - Telegram reply to answered-but-open need records a threaded human message
+ok 4 - closed notice is sent as the thread-ending Telegram message
+ok 5 - unallowlisted sender is ignored and logged
+ok 6 - commander say pushes a threaded Telegram sendMessage
+ok 7 - telegram token file mode 0644 is refused
+ok 8 - canary: replacing answer with message is caught
+courier.selftest: PASS (8 checks)
