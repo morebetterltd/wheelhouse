@@ -1,0 +1,16 @@
+claude --version: 2.1.278 (Claude Code)
+hook input top-level fields: background_tasks, cwd, effort, hook_event_name, last_assistant_message, permission_mode, prompt_id, session_crons, session_id, stop_hook_active, transcript_path
+background_tasks: array len=0
+cwd: string len=189
+effort: object keys=level
+hook_event_name: string len=4
+last_assistant_message: string len=16
+permission_mode: string len=17
+prompt_id: string len=36
+session_crons: array len=0
+session_id: string len=36
+stop_hook_active: bool value=False
+transcript_path: string len=270
+unverified: every Claude Code mode supplies last_assistant_message
+unverified: Stop-hook input directly supplies assistant message uuid
+unverified: interactive non-print turns do not add fields

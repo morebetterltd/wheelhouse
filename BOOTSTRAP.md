@@ -435,7 +435,14 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
       "hooks": [ { "type": "command", "command": "bash seats/fleet-gate.sh" } ] } ] } }
   ```
 
-  It degrades to silence and exit 0 when `bd`, `bun`, or `seats/adapter.ts` aren't available — a roster with no seats yet provisioned still gets a harmless `0/0 seats live` line rather than an error, so wiring it now, before step 4's seats exist, is safe. Verify it prints once the wiring is in: `bash seats/fleet-gate.sh` from the project root.
+  Wire the companion Stop hook that turns final assistant `@principal:` lines into durable needs:
+
+  ```json
+  { "hooks": { "Stop": [ { "matcher": "",
+      "hooks": [ { "type": "command", "command": "bash seats/principal-sentinel.sh" } ] } ] } }
+  ```
+
+  It degrades to silence and exit 0 when `bd`, `bun`, or `seats/adapter.ts` aren't available — a roster with no seats yet provisioned still gets a harmless `0/0 seats live` line rather than an error, so wiring it now, before step 4's seats exist, is safe. Verify it prints once the wiring is in: `bash seats/fleet-gate.sh` from the project root. The Stop hook degrades to silence and exit 0 when `bun`, `seats/needs.ts`, or the Claude transcript are absent; verify it with `bash seats/principal-sentinel.selftest.sh`.
 - Write `wheelhouse/ISA.md` using `INTENT.md` as the grammar spec: the goal from Q3, empty claims, empty decisions, any anti-claims stated, and one install Decision quoting the autonomy directive verbatim: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done." **Do not invent claims.** An ISA with fabricated claims is worse than an empty one.
 - Write `wheelhouse/STARTUP.md`: this project's cold-start card. It is what step 6 and the commander point at when it is time to actually start a session, so its job is to resolve rather than to restate — the seat MECHANICS live in `wheelhouse/fleet/SEATS.md`'s "Running a seat" paragraph and in `seats/README.md`, identically in every project, and this file is where those mechanics meet this project's real namespace and real seat names. Make it at least as complete as `generated/STARTUP.md.example`: a title and one-paragraph durability note, the minimum viable fleet if this project has one, the four operating sections below, and the shutdown section. None are optional:
 
