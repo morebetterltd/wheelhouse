@@ -18,6 +18,8 @@ The main files here:
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
 - `commander-inbox-poll.sh` — wrapper-independent commander fallback: drains the Dispatch Office inbox from inside the commander pane whenever the cursor lags.
+- `principal-sentinel.sh` — Claude Code Stop hook that turns final assistant `@principal:` lines into durable needs.
+- `principal-sentinel.selftest.sh` — proves the Stop hook opens exactly the intended needs and that source dedupe works.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code. Default timeout is 15 minutes; for
   large cold workspaces that must build/test from scratch, set
@@ -45,7 +47,7 @@ fixtures and tools, the same way the herald has `WHEELHOUSE_HERALD_ROOT`.
 
 Subcommands:
 
-- `bun seats/needs.ts open --title <t> --body <b> [--option "<label>: <text>"]... [--default "<label>; applies <when>"] [--consequence <c>] [--kind question|approval|notify|task] [--bead <id>] [--seat <name>] [--source <opaque>] [--from-stdin]` opens a need and prints its `need-xxxx` id. `--from-stdin` reads an `@principal:` block: the first line must begin `@principal:`, the text after it becomes the title, and the remaining lines become the body. `--source` de-duplicates repeat opens: if an open or answered need with that source already exists, the command appends nothing and prints the existing id.
+- `bun seats/needs.ts open --title <t> --body <b> [--option "<label>: <text>"]... [--default "<label>; applies <when>"] [--consequence <c>] [--kind question|approval|notify|task] [--bead <id>] [--seat <name>] [--source <opaque>] [--from-stdin]` opens a need and prints its `need-xxxx` id. `--from-stdin` reads an `@principal:` block: the first line must begin `@principal:`, the text after it becomes the title, and the remaining lines become the body; if there are no remaining lines, the body repeats the title so one-line sentinel requests are valid. `--source` de-duplicates repeat opens: if an open or answered need with that source already exists, the command appends nothing and prints the existing id.
 - `bun seats/needs.ts say <id> <text>` appends a commander message for the human.
 - `bun seats/needs.ts answer <id> <text> [--via desk|cli|<transport>]` records a human answer. If `<text>` equals an option label or option text, the folded state records `choice` as that label.
 - `bun seats/needs.ts show <id>` prints the folded JSON state for one need.
@@ -67,6 +69,12 @@ Ledger event schema:
 - `closed`: `{type:"closed", id, at, reason}`
 
 `show` and `list` fold events by id into state `open`, `answered`, or `closed`.
+
+### Claude Code Stop hook for `@principal:`
+
+Wire the commander session's Stop hook to `bash seats/principal-sentinel.sh` so a commander turn can end with an `@principal:` line instead of trusting scrollback. The hook reads Claude Code's JSON stdin, respects `stop_hook_active`, and exits 0 on every path. It uses `last_assistant_message` when Claude supplies it, otherwise it reads `transcript_path` and extracts only the last top-level `type:"assistant"` record. If any line in that assistant text begins `@principal:`, the hook sends that line through the end of the assistant message to `bun seats/needs.ts open --from-stdin --source <session_id>:<assistant uuid>`. The source makes repeated Stop-hook runs for the same assistant message idempotent.
+
+Measured on this machine with `claude --version` = `2.1.278 (Claude Code)`, a real Stop-hook stdin object contained these top-level fields: `background_tasks`, `cwd`, `effort`, `hook_event_name`, `last_assistant_message`, `permission_mode`, `prompt_id`, `session_crons`, `session_id`, `stop_hook_active`, and `transcript_path`. In that capture, `last_assistant_message` was a string, `stop_hook_active` was a boolean, `effort` was an object, and `background_tasks` / `session_crons` were arrays. The transcript's last assistant row was verified to contain top-level `uuid`, `sessionId`, `type`, `timestamp`, `requestId`, plus `message.content[]` text blocks. Unverified: whether every Claude Code mode supplies `last_assistant_message`, whether Stop-hook input ever includes a message UUID directly, and whether non-print interactive turns add fields not seen in this one-shot capture.
 
 ## Host build budget (opt-in)
 
