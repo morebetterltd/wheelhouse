@@ -41,9 +41,11 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
-BRIEFS="$(cd "$(dirname "$VERIFY")" && pwd)/briefs.ts"
-HARNESS="$(cd "$(dirname "$VERIFY")" && pwd)/harness.ts"
-HOST_BUDGET_TS="$(cd "$(dirname "$VERIFY")" && pwd)/host-budget.ts"
+VERIFY_DIR="$(cd "$(dirname "$VERIFY")" && pwd)"
+BRIEFS="$VERIFY_DIR/briefs.ts"
+HARNESS="$VERIFY_DIR/harness.ts"
+HOST_BUDGET_TS="$VERIFY_DIR/host-budget.ts"
+REAL_FIXTURES_DIR="$VERIFY_DIR/fixtures/verify-real"
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
 [ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
@@ -225,8 +227,8 @@ if (process.env.STUB_STREAM_FILE) {
 }
 const streamRequested = process.argv.includes("--json");
 if (streamRequested) {
-  process.stdout.write(JSON.stringify({type:"agent_message",message:text})+"\n");
-  process.stdout.write(JSON.stringify({type:"task_complete",summary:text})+"\n");
+  process.stdout.write(JSON.stringify({type:"item.completed",item:{type:"agent_message",text}})+"\n");
+  process.stdout.write(JSON.stringify({type:"turn.completed",usage:{}})+"\n");
 } else process.stdout.write(text);
 process.exit(Number(process.env.STUB_EXIT || "0"));
 STUB
@@ -762,36 +764,24 @@ set_verifier_harness() {
     fs.writeFileSync(file, JSON.stringify(j, null, 2));
   ' "$PROJ/seats/seats.json" "$1"
 }
-node > "$FIX/recorded-pi-message-end.jsonl" <<'NODE'
-const final = "Recorded Pi message_end fixture.\nVERDICT: BOUNCE — pi recorded fixture\nPUSH: NOT CONSIDERED — fixture\n";
-process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:final}})+"\n");
-process.stdout.write(JSON.stringify({type:"result",result:final})+"\n");
-NODE
+for fixture in pi-message-end.jsonl claude-code-assistant.jsonl codex-item-completed-agent-message.jsonl; do
+  [ -f "$REAL_FIXTURES_DIR/$fixture" ] || { echo "selftest: missing real verifier fixture: $REAL_FIXTURES_DIR/$fixture" >&2; exit 2; }
+done
 set_verifier_harness pi
-run_stream "$FIX/recorded-pi-message-end.jsonl" bead-5-recorded-pi fleet/bead-1 worker-1
+run_stream "$REAL_FIXTURES_DIR/pi-message-end.jsonl" bead-5-recorded-pi fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-pi.md" 2>/dev/null; then
-  pass "recorded pi message_end fixture yields one BOUNCE; result event is not double-counted"
-else fail "recorded pi fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-pi.md" 2>/dev/null)"; fi
-node > "$FIX/recorded-claude-stream.jsonl" <<'NODE'
-const final = "Recorded Claude Code stream-json fixture.\nVERDICT: BOUNCE — claude recorded fixture\nPUSH: NOT CONSIDERED — fixture\n";
-process.stdout.write(JSON.stringify({type:"assistant",message:{role:"assistant",content:[{type:"text",text:final}]}})+"\n");
-process.stdout.write(JSON.stringify({type:"result",subtype:"success",result:final})+"\n");
-NODE
+  pass "real pi message_end fixture yields one BOUNCE; result/turn events are not double-counted"
+else fail "real pi fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-pi.md" 2>/dev/null)"; fi
 set_verifier_harness claude-code
-run_stream "$FIX/recorded-claude-stream.jsonl" bead-5-recorded-claude fleet/bead-1 worker-1
+run_stream "$REAL_FIXTURES_DIR/claude-code-assistant.jsonl" bead-5-recorded-claude fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-claude.md" 2>/dev/null; then
-  pass "recorded claude-code assistant fixture yields one BOUNCE; result event is not double-counted"
-else fail "recorded claude-code fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-claude.md" 2>/dev/null)"; fi
-node > "$FIX/recorded-codex-stream.jsonl" <<'NODE'
-const final = "Recorded Codex agent_message fixture.\nVERDICT: BOUNCE — codex recorded fixture\nPUSH: NOT CONSIDERED — fixture\n";
-process.stdout.write(JSON.stringify({type:"agent_message",message:final})+"\n");
-process.stdout.write(JSON.stringify({type:"task_complete",summary:final})+"\n");
-NODE
+  pass "real claude-code assistant fixture yields one BOUNCE; result event is not double-counted"
+else fail "real claude-code fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-claude.md" 2>/dev/null)"; fi
 set_verifier_harness codex
-run_stream "$FIX/recorded-codex-stream.jsonl" bead-5-recorded-codex fleet/bead-1 worker-1
+run_stream "$REAL_FIXTURES_DIR/codex-item-completed-agent-message.jsonl" bead-5-recorded-codex fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-codex.md" 2>/dev/null; then
-  pass "recorded codex agent_message fixture yields one BOUNCE; summary event is not double-counted"
-else fail "recorded codex fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-codex.md" 2>/dev/null)"; fi
+  pass "real codex item.completed agent_message fixture yields one BOUNCE; turn.completed is not double-counted"
+else fail "real codex fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-codex.md" 2>/dev/null)"; fi
 set_verifier_harness pi
 cat > "$REPLY" <<'EOF'
 VERDICT: APPROVE
