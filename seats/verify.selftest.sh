@@ -165,6 +165,10 @@ if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
   text = text.replaceAll("__PINNED__", pinned).replaceAll("__MOVED__", moved);
 }
 const streamRequested = process.argv.includes("--mode") && process.argv[process.argv.indexOf("--mode") + 1] === "json";
+if (process.env.STUB_STREAM_FILE) {
+  process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, "utf8"));
+  process.exit(Number(process.env.STUB_EXIT || 0));
+}
 if (process.env.STUB_STALL === "1") {
   // Match real pi behavior: without --mode json, a stalled one-shot emits no
   // JSON events before timeout, so this selftest catches a missing stream flag.
@@ -174,7 +178,7 @@ if (process.env.STUB_STALL === "1") {
   setTimeout(() => {}, 10000);
 } else {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
-  if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{content:text}})+"\n");
+  if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n");
   else process.stdout.write(text);
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
@@ -193,7 +197,7 @@ fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
 const text = reply ? fs.readFileSync(reply, "utf8") : "";
 const streamRequested = process.argv.includes("--output-format") && process.argv[process.argv.indexOf("--output-format") + 1] === "stream-json";
-if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{content:text}})+"\n");
+if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n");
 else process.stdout.write(text);
 process.exit(Number(process.env.STUB_EXIT || "0"));
 STUB
@@ -210,7 +214,7 @@ fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
 const text = reply ? fs.readFileSync(reply, "utf8") : "";
 const streamRequested = process.argv.includes("--json");
-if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{content:text}})+"\n");
+if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n");
 else process.stdout.write(text);
 process.exit(Number(process.env.STUB_EXIT || "0"));
 STUB
@@ -322,6 +326,13 @@ run() {   # runs verify.ts in the fixture; args pass through
 }
 run_without_default_push() {
   OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SUPPRESS_DEFAULT_PUSH=1 \
+    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+  RC=$?
+}
+run_stream() {  # $1 = JSONL stream file, remaining args pass through
+  local stream="$1"
+  shift
+  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STREAM_FILE="$stream" \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
@@ -702,14 +713,41 @@ run bead-5-fenced fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q "verdict: APPROVE" "$VDIR/bead-5-fenced.md" 2>/dev/null; then
   pass "fenced VERDICT quote plus one live verdict is accepted"
 else fail "fenced verdict quote was not inert (exit $RC): $OUT"; fi
+node > "$FIX/final-message-only.jsonl" <<'NODE'
+const reviewer = "The reviewer contract says: VERDICT: APPROVE — at pinned tip <sha>; branch has since moved to <new-tip> (<N> commits appended, history unrewritten)\nPUSH: APPROVE origin — verified: quoted only";
+const final = "Tool result was a quote, not the verdict.\nVERDICT: BOUNCE — reviewed tip fixture\nPUSH: NOT CONSIDERED — fixture\n";
+process.stdout.write(JSON.stringify({type:"tool_execution_result",toolName:"read",result:reviewer})+"\n");
+process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:final}})+"\n");
+NODE
+run_stream "$FIX/final-message-only.jsonl" bead-5-tool-quote fleet/bead-1 worker-1
+if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-tool-quote.md" 2>/dev/null; then
+  pass "tool-result REVIEWER.md verdict quote is ignored; final assistant BOUNCE writes a verdict file"
+else fail "tool-result verdict quote was not ignored (exit $RC): $OUT file=$(cat "$VDIR/bead-5-tool-quote.md" 2>/dev/null)"; fi
+node > "$FIX/text-end-duplicate.jsonl" <<'NODE'
+const final = "VERDICT: APPROVE\nPUSH: NOT CONSIDERED — fixture\n";
+process.stdout.write(JSON.stringify({type:"text_end",text:final})+"\n");
+process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:final}})+"\n");
+NODE
+run_stream "$FIX/text-end-duplicate.jsonl" bead-5-identical-duplicate fleet/bead-1 worker-1
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q "verdict: APPROVE" "$VDIR/bead-5-identical-duplicate.md" 2>/dev/null; then
+  pass "identical verdict line in text_end and message_end is accepted once"
+else fail "identical streamed duplicate verdict was not accepted once (exit $RC): $OUT"; fi
+node > "$FIX/final-conflict.jsonl" <<'NODE'
+const final = "VERDICT: APPROVE\nwait, actually:\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED — fixture\n";
+process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:final}})+"\n");
+NODE
+run_stream "$FIX/final-conflict.jsonl" bead-5-final-conflict fleet/bead-1 worker-1
+if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
+  pass "two genuinely different verdicts in the final assistant message still STOP"
+else fail "final-message conflicting verdicts did not STOP (exit $RC): $OUT"; fi
 cat > "$REPLY" <<'EOF'
 VERDICT: APPROVE
 wait, actually:
 VERDICT: BOUNCE
 EOF
 run_without_default_push bead-5 fleet/bead-1 worker-1
-if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 3: VERDICT: APPROVE" && says "line 5: VERDICT: BOUNCE"; then
-  pass "two conflicting live VERDICT: lines exit 1 and print both json-stream candidates"
+if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
+  pass "two conflicting live VERDICT: lines exit 1 and print both final-message candidates"
 else fail "ambiguous double verdict not refused with candidates (exit $RC): $OUT"; fi
 if grep -q '"type":"message_end"' "$VDIR/.raw.md" 2>/dev/null && grep -q 'VERDICT: APPROVE' "$VDIR/.raw.md" && grep -q 'VERDICT: BOUNCE' "$VDIR/.raw.md"; then
   pass "ambiguous double verdict writes raw json stdout to seats/verdicts/.raw.md before STOP"
