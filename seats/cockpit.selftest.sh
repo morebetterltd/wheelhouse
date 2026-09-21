@@ -189,6 +189,14 @@ fi
 kill "$DESK_RESTART_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/desk.pid"
 
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" "$PROJ/seats/cockpit.sh" --courier > "$FIX/courier-skip.out" 2>&1
+COURIER_SKIP_RC=$?
+if [ $COURIER_SKIP_RC -eq 0 ] && grep -q 'courier skipped: no transport configured' "$FIX/courier-skip.out"; then
+  pass "cockpit --courier skips cleanly when no transport is configured"
+else
+  fail "cockpit --courier did not skip cleanly (rc=$COURIER_SKIP_RC out=$(cat "$FIX/courier-skip.out" 2>/dev/null))"
+fi
+
 PLANTED_BIN="$FIX/planted-bin"
 mkdir -p "$PLANTED_BIN"
 cat > "$PLANTED_BIN/tmux" <<'EOF'
