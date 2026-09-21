@@ -58,6 +58,58 @@ ensure_commander_poll() {
   echo "commander inbox poll started: pid $(cat "$poll_pid_file" 2>/dev/null || echo '?')"
 }
 
+ensure_desk() {
+  if [ ! -f "$HERE/desk.ts" ]; then
+    echo "desk not installed beside cockpit; skipping needs desk"
+    return 0
+  fi
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "STOP: bun is required to run the needs desk" >&2
+    exit 1
+  fi
+  mkdir -p "$HERE/run" "$HERE/logs"
+  pid_file="$HERE/run/desk.pid"
+  if [ -f "$pid_file" ]; then
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if pid_alive "$old_pid"; then
+      desk_url="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
+      echo "desk already running: pid $old_pid${desk_url:+ — $desk_url}"
+      return 0
+    fi
+    echo "desk dead: pid ${old_pid:-?}; restarting"
+    rm -f "$pid_file"
+  fi
+  tmp_pid_file="$pid_file.$$"
+  rm -f "$tmp_pid_file"
+  (
+    cd "$ROOT" || exit 1
+    exec </dev/null >> "$HERE/logs/desk.out.log" 2>> "$HERE/logs/desk.stderr.log"
+    WHEELHOUSE_DESK_ROOT="$ROOT" nohup bun "$HERE/desk.ts" &
+    desk_pid=$!
+    printf '%s\n' "$desk_pid" > "$tmp_pid_file"
+    disown "$desk_pid" 2>/dev/null || true
+  ) </dev/null >/dev/null 2>/dev/null &
+  launcher_pid=$!
+  disown "$launcher_pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "$tmp_pid_file" ] && break
+    sleep 0.05
+  done
+  if [ -s "$tmp_pid_file" ]; then mv -f "$tmp_pid_file" "$pid_file"; fi
+  new_pid="$(cat "$pid_file" 2>/dev/null || true)"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "$HERE/run/desk.port" ] && pid_alive "$new_pid" && break
+    sleep 0.1
+  done
+  desk_url="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
+  if pid_alive "$new_pid"; then
+    echo "desk started: pid $new_pid${desk_url:+ — $desk_url}"
+    return 0
+  fi
+  echo "STOP: desk failed to start; see $HERE/logs/desk.stderr.log" >&2
+  exit 1
+}
+
 ensure_herald() {
   if [ ! -f "$HERE/herald.ts" ]; then
     echo "herald not installed beside cockpit; skipping dispatch herald"
@@ -109,6 +161,7 @@ usage() {
   cat >&2 <<EOF
 usage: seats/cockpit.sh [namespace]
        seats/cockpit.sh --herald [namespace]
+       seats/cockpit.sh --desk [namespace]
        seats/cockpit.sh --pane-commander
        seats/cockpit.sh --pane-floor
 EOF
@@ -126,6 +179,10 @@ case "${1:-}" in
     S="wh-${2:-$(basename "$ROOT")}" ensure_herald
     exit 0
     ;;
+  --desk)
+    S="wh-${2:-$(basename "$ROOT")}" ensure_desk
+    exit 0
+    ;;
   --pane-commander)
     ensure_commander_poll
     cat <<EOF
@@ -134,6 +191,7 @@ case "${1:-}" in
   │ This is the commander's seat. Launch your interactive         │
   │ commander here yourself — the cockpit never does it for you.  │
   │ cockpit has started commander-inbox-poll.sh for this pane.    │
+  │ Needs desk: ${DESK_URL:-not started}                          │
   │                                                               │
   │     cd $ROOT
   │     claude                                                    │
@@ -173,6 +231,9 @@ NS="${1:-$(basename "$ROOT")}"
 S="wh-$NS"
 
 ensure_herald
+ensure_desk
+DESK_URL="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
+export DESK_URL
 
 attach() {
   if [ ! -t 0 ]; then
@@ -252,9 +313,9 @@ install_resize_hook
 # Status bar: project on the left, the key hints on the right.
 tmx set-option -t "$S" status on
 tmx set-option -t "$S" status-left-length 30
-tmx set-option -t "$S" status-right-length 60
+tmx set-option -t "$S" status-right-length 100
 tmx set-option -t "$S" status-left "[$S] "
-tmx set-option -t "$S" status-right "1-9 pin  0 status  f follow  o/q overview"
+tmx set-option -t "$S" status-right "desk ${DESK_URL:-?}  1-9 pin  0 status  f follow  o/q overview"
 install_session_options
 
 # Land focus on the commander pane.

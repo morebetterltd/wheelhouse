@@ -1,0 +1,8 @@
+manual desk check on scratch install
+manual_port=59478
+need=need-0vdu
+page contained: Manual desk check
+needs.ts show after POST contained:
+  "state": "answered"
+  "text": "yes"
+  "choice": "Y"
