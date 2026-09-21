@@ -144,6 +144,18 @@ The matching reviewer verdict is `VERDICT: APPROVE — NOT BENCHED: <gap>;
 expires=YYYY-MM-DD` or `...; target=<coverage target>`. An expired declaration
 is a funding/scope nudge, not an automatic failure, but it must be visible at
 the gate.
+
+### Verifier wire shapes covered
+
+For verifier parser coverage, list each real captured stream fixture the bench
+covers. Each entry names the harness, fixture file, binary version captured from,
+and capture date. A verifier wire shape not listed here is NOT BENCHED by
+definition; reviewer verdicts say that on the `VERDICT:` line when approving a
+change that relies on an unlisted shape.
+
+- harness: pi; fixture: seats/fixtures/verify-real/pi-v3-message-end.jsonl; binary version: Pi stream schema version 3; capture date: 2026-09-21
+- harness: claude-code; fixture: seats/fixtures/verify-real/claude-code-2.1.278-assistant.jsonl; binary version: Claude Code 2.1.278; capture date: 2026-09-21
+- harness: codex; fixture: seats/fixtures/verify-real/codex-0.144.0-item-completed-agent-message.jsonl; binary version: Codex 0.144.0; capture date: 2026-09-21
 -->
 
 ### Prerequisites
