@@ -14,10 +14,26 @@ function tokenFrom(root: string): string {
   if (mode !== 0o600) throw new Error(`telegram token file must be mode 0600, got ${mode.toString(8)}`);
   return fs.readFileSync(f, "utf8").trim();
 }
+function allowFile(root: string): string { return path.join(root, "seats", "run", "telegram.allow"); }
+function allowEntries(root: string): string[] {
+  const f = allowFile(root);
+  if (!fs.existsSync(f)) return [];
+  return fs.readFileSync(f,"utf8").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+}
 function allowedFrom(root: string): Set<string> {
-  const f = path.join(root, "seats", "run", "telegram.allow");
-  if (!fs.existsSync(f)) return new Set();
-  return new Set(fs.readFileSync(f,"utf8").split(/\r?\n/).map(s=>s.trim()).filter(Boolean));
+  const out = new Set<string>();
+  for (const line of allowEntries(root)) for (const part of line.split(/\s+/)) if (part && !part.startsWith("@")) out.add(part);
+  return out;
+}
+function allowedUsernames(root: string): Set<string> {
+  const out = new Set<string>();
+  for (const line of allowEntries(root)) for (const part of line.split(/\s+/)) if (part.startsWith("@")) out.add(part.toLowerCase());
+  return out;
+}
+function appendPairing(root: string, username: string, id: string){
+  const f = allowFile(root); fs.mkdirSync(path.dirname(f), { recursive:true });
+  const lines = allowEntries(root);
+  if (!lines.some(l => l.split(/\s+/).includes(id))) fs.appendFileSync(f, `${username} ${id}\n`);
 }
 function log(root: string, line: string){ const dir=path.join(root,"seats","logs"); fs.mkdirSync(dir,{recursive:true}); fs.appendFileSync(path.join(dir,"courier.out.log"), `${new Date().toISOString()} ${line}\n`); }
 function sentRefByNeed(): Map<string,string> { const m=new Map<string,string>(); for(const ev of readEvents() as any[]){ if(ev?.type==="sent" && ev.transport==="telegram" && typeof ev.id==="string" && typeof ev.ref==="string") m.set(ev.id, ev.ref); } return m; }
@@ -31,13 +47,15 @@ export class TelegramTransport implements NeedTransport {
   allow: Set<string>;
   apiBase: string;
   chatId: string;
+  usernames: Set<string>;
   constructor(root: string){
     this.root = root;
     this.token = tokenFrom(root);
     this.allow = allowedFrom(root);
+    this.usernames = allowedUsernames(root);
     this.apiBase = (process.env.WHEELHOUSE_TELEGRAM_API_BASE || "https://api.telegram.org").replace(/\/$/, "");
-    this.chatId = process.env.WHEELHOUSE_TELEGRAM_CHAT_ID || Array.from(this.allow)[0] || "";
-    if (!this.chatId) throw new Error("telegram.allow must name at least one chat/user id or set WHEELHOUSE_TELEGRAM_CHAT_ID");
+    this.chatId = process.env.WHEELHOUSE_TELEGRAM_CHAT_ID || Array.from(this.allow)[0] || Array.from(this.usernames)[0] || "";
+    if (!this.chatId) throw new Error("telegram.allow must name at least one chat/user id or @username, or set WHEELHOUSE_TELEGRAM_CHAT_ID");
   }
   endpoint(method: string): string { return `${this.apiBase}/bot${this.token}/${method}`; }
   async call(method: string, body: any): Promise<any> {
@@ -54,10 +72,12 @@ export class TelegramTransport implements NeedTransport {
   async send(ev: OutboundNeedEvent): Promise<{ref:string}> {
     const sent = sentRefByNeed();
     const prior = sent.get(ev.id);
-    const body:any = { chat_id:this.chatId, text:this.text(ev) };
+    const chat = this.chatId.startsWith("@") ? Array.from(this.allow)[0] : this.chatId;
+    if (!chat) throw new Error(`waiting for ${this.chatId} to message the bot`);
+    const body:any = { chat_id:chat, text:this.text(ev) };
     if (prior && ev.type !== "opened") body.reply_to_message_id = Number(prior.split(":").pop());
     const result = await this.call("sendMessage", body);
-    return { ref: `${result.chat?.id ?? this.chatId}:${result.message_id}` };
+    return { ref: `${result.chat?.id ?? chat}:${result.message_id}` };
   }
   async poll(cursor?: string): Promise<TransportPollResult> {
     const body:any = { timeout: Number(process.env.WHEELHOUSE_TELEGRAM_POLL_TIMEOUT || "25") };
@@ -71,6 +91,13 @@ export class TelegramTransport implements NeedTransport {
       const msg = upd.message;
       if (!msg || typeof msg.text !== "string") continue;
       const from = String(msg.from?.id ?? "");
+      const username = msg.from?.username ? `@${String(msg.from.username).replace(/^@/, "")}`.toLowerCase() : "";
+      if (username && this.usernames.has(username) && from && !this.allow.has(from)) {
+        appendPairing(this.root, username, from);
+        this.allow.add(from);
+        if (this.chatId === username || this.chatId.startsWith("@")) this.chatId = from;
+        log(this.root, `paired ${username} -> ${from}`);
+      }
       if (this.allow.size && !this.allow.has(from)) { log(this.root, `ignored telegram sender ${from || "unknown"}`); continue; }
       let needRef = "";
       const replyId = msg.reply_to_message?.message_id;

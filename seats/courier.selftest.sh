@@ -4,14 +4,15 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 COURIER="$HERE/courier.ts"
+WATCHDOG="$HERE/courier-watchdog.sh"
 NEEDS="$HERE/needs.ts"
 TELEGRAM="$HERE/transports/telegram.ts"
 TRANSPORT="$HERE/transports/transport.ts"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-courier-selftest.XXXXXX")"; FIX="$(cd "$FIX" && pwd -P)"
-PASS=0; FAIL=0; SERVER_PID=""
-cleanup(){ [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}" ""; rm -rf "$FIX"; }
+PASS=0; FAIL=0; SERVER_PID=""; COURIER_PID=""; WATCHDOG_PID=""
+cleanup(){ [ -n "$COURIER_PID" ] && kill "$COURIER_PID" 2>/dev/null || true; [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null || true; [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}" ""; rm -rf "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
@@ -22,7 +23,7 @@ PY
 }
 make_proj(){
   local p="$1"; mkdir -p "$p/seats/transports" "$p/seats/run" "$p/seats/logs" "$p/wheelhouse"
-  cp "$COURIER" "$p/seats/courier.ts"; cp "$NEEDS" "$p/seats/needs.ts"; cp "$TELEGRAM" "$p/seats/transports/telegram.ts"; cp "$TRANSPORT" "$p/seats/transports/transport.ts"
+  cp "$COURIER" "$p/seats/courier.ts"; [ -f "$WATCHDOG" ] && cp "$WATCHDOG" "$p/seats/courier-watchdog.sh" && chmod +x "$p/seats/courier-watchdog.sh"; cp "$NEEDS" "$p/seats/needs.ts"; cp "$TELEGRAM" "$p/seats/transports/telegram.ts"; cp "$TRANSPORT" "$p/seats/transports/transport.ts"
   printf 'namespace=demo\n' > "$p/wheelhouse/.template-source"
   printf 'TESTTOKEN\n' > "$p/seats/run/telegram.token"; chmod 600 "$p/seats/run/telegram.token"
   printf '111\n' > "$p/seats/run/telegram.allow"
@@ -36,7 +37,12 @@ function json(path:string, fallback:any){ try { return JSON.parse(fs.readFileSyn
 function append(path:string, row:any){ fs.appendFileSync(`${dir}/${path}`, JSON.stringify(row)+"\n"); }
 Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
   const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : {};
-  if(u.pathname.endsWith('/sendMessage')) { msg++; append('requests.jsonl', {method:'sendMessage', body}); return Response.json({ok:true,result:{message_id:msg,chat:{id:body.chat_id}}}); }
+  if(u.pathname.endsWith('/sendMessage')) {
+    msg++; append('requests.jsonl', {method:'sendMessage', body});
+    const failFile=`${dir}/fail-send-once`;
+    if (fs.existsSync(failFile)) { fs.unlinkSync(failFile); return Response.json({ok:false,description:'Bad Request: chat not found'}, {status:400}); }
+    return Response.json({ok:true,result:{message_id:msg,chat:{id:body.chat_id}}});
+  }
   if(u.pathname.endsWith('/getUpdates')) { append('requests.jsonl', {method:'getUpdates', body}); const updates=json('updates.json', []); fs.writeFileSync(`${dir}/updates.json`, '[]\n'); return Response.json({ok:true,result:updates}); }
   return Response.json({ok:false,description:'no route'}, {status:404});
 }});
@@ -82,6 +88,42 @@ printf '%s
 ' '{"type":"message","id":"need-one","at":"2026-09-21T00:03:00.000Z","from":"commander","via":"cli","text":"Extra context"}' >> "$PROJ/seats/needs.jsonl"
 (cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
 if tail -20 "$FIX/requests.jsonl" | grep -q 'Extra context' && tail -20 "$FIX/requests.jsonl" | grep -q '"reply_to_message_id":1'; then pass "commander say pushes a threaded Telegram sendMessage"; else fail "commander say was not threaded req=$(tail -20 "$FIX/requests.jsonl")"; fi
+RETRY="$FIX/retry"; make_proj "$RETRY"
+cat > "$RETRY/seats/needs.jsonl" <<'EOF'
+{"type":"opened","id":"need-retry","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Retry me","body":"First send fails","options":[],"machine":{}}
+EOF
+: > "$FIX/requests.jsonl"; : > "$RETRY/seats/logs/courier.out.log"; touch "$FIX/fail-send-once"
+(cd "$RETRY" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_COURIER_INTERVAL_MS=200 bun seats/courier.ts >/dev/null 2> "$FIX/retry.err") & COURIER_PID=$!
+sleep 0.8
+if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'send failed need=need-retry: Bad Request: chat not found' "$RETRY/seats/logs/courier.out.log"; then pass "transport send failure is logged with need id and courier keeps running"; else fail "courier did not survive/log first send failure pid=$COURIER_PID log=$(cat "$RETRY/seats/logs/courier.out.log" 2>/dev/null) err=$(cat "$FIX/retry.err" 2>/dev/null)"; fi
+for _ in $(seq 1 30); do grep -q '"type":"sent"' "$RETRY/seats/needs.jsonl" && break; sleep 0.2; done
+sent_count="$(grep -c '"type":"sent"' "$RETRY/seats/needs.jsonl" || true)"
+if [ "$sent_count" -eq 1 ]; then pass "failed outbound event is retried and records exactly one sent event after success"; else fail "retry sent count=$sent_count ledger=$(cat "$RETRY/seats/needs.jsonl") requests=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
+kill "$COURIER_PID" 2>/dev/null || true; wait "$COURIER_PID" 2>/dev/null || true; COURIER_PID=""
+PAIR="$FIX/pair"; make_proj "$PAIR"; printf '@keenan\n' > "$PAIR/seats/run/telegram.allow"
+cat > "$PAIR/seats/needs.jsonl" <<'EOF'
+{"type":"opened","id":"need-pair","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Pair me","body":"Wait for chat","options":[],"machine":{}}
+EOF
+cat > "$FIX/updates.json" <<'EOF'
+[{"update_id":30,"message":{"message_id":70,"date":1790000003,"chat":{"id":222},"from":{"id":222,"username":"keenan"},"text":"hello"}}]
+EOF
+: > "$FIX/requests.jsonl"
+(cd "$PAIR" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
+if grep -q '@keenan 222' "$PAIR/seats/run/telegram.allow" && grep -q 'paired @keenan -> 222' "$PAIR/seats/logs/courier.out.log" && grep -q 'waiting for @keenan to message the bot' "$PAIR/seats/logs/courier.out.log"; then pass "@username allow entry waits, pairs on first inbound message, and records numeric id"; else fail "pairing failed allow=$(cat "$PAIR/seats/run/telegram.allow") log=$(cat "$PAIR/seats/logs/courier.out.log" 2>/dev/null)"; fi
+(cd "$PAIR" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
+if grep -q '"type":"sent"' "$PAIR/seats/needs.jsonl"; then pass "queued outbound need sends after username pairing"; else fail "paired outbound did not send ledger=$(cat "$PAIR/seats/needs.jsonl") req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
+WATCH="$FIX/watch"; make_proj "$WATCH"
+cat > "$WATCH/seats/needs.jsonl" <<'EOF'
+{"type":"opened","id":"need-watch","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Watch","body":"Restart","options":[],"machine":{}}
+EOF
+(cd "$WATCH" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_COURIER_INTERVAL_MS=100 bun seats/courier.ts >/dev/null 2>&1) & COURIER_PID=$!
+printf '%s\n' "$COURIER_PID" > "$WATCH/seats/run/courier.pid"
+WHEELHOUSE_COURIER_ROOT="$WATCH" WHEELHOUSE_COURIER_WATCHDOG_SECONDS=1 "$WATCH/seats/courier-watchdog.sh" >/dev/null 2>&1 & WATCHDOG_PID=$!
+sleep 0.3; kill "$COURIER_PID" 2>/dev/null || true
+NEW_PID=""
+for _ in $(seq 1 30); do NEW_PID="$(cat "$WATCH/seats/run/courier.pid" 2>/dev/null || true)"; [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$COURIER_PID" ] && kill -0 "$NEW_PID" 2>/dev/null && break; sleep 0.2; done
+if [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$COURIER_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then pass "courier watchdog restarts a killed courier"; else fail "courier watchdog did not restart old=$COURIER_PID new=$NEW_PID log=$(cat "$WATCH/seats/logs/courier.out.log" 2>/dev/null)"; fi
+kill "$WATCHDOG_PID" "$NEW_PID" 2>/dev/null || true; wait "$WATCHDOG_PID" 2>/dev/null || true; WATCHDOG_PID=""; COURIER_PID=""
 BAD="$FIX/badmode"; make_proj "$BAD"; chmod 0644 "$BAD/seats/run/telegram.token"; cp "$PROJ/seats/needs.jsonl" "$BAD/seats/needs.jsonl"
 (cd "$BAD" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/bad.out" 2>&1; BAD_RC=$?
 if [ $BAD_RC -ne 0 ] && grep -q 'mode 0600' "$FIX/bad.out"; then pass "telegram token file mode 0644 is refused"; else fail "token mode refusal failed rc=$BAD_RC out=$(cat "$FIX/bad.out")"; fi

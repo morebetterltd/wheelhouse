@@ -131,6 +131,25 @@ ensure_desk() {
   exit 1
 }
 
+ensure_courier_watchdog() {
+  if [ ! -x "$HERE/courier-watchdog.sh" ]; then
+    echo "courier watchdog not installed beside cockpit; skipping courier supervision"
+    return 0
+  fi
+  mkdir -p "$HERE/run" "$HERE/logs"
+  wd_pid_file="$HERE/run/courier-watchdog.pid"
+  if [ -f "$wd_pid_file" ]; then
+    wd_pid="$(cat "$wd_pid_file" 2>/dev/null || true)"
+    if pid_alive "$wd_pid"; then
+      echo "courier watchdog already running: pid $wd_pid"
+      return 0
+    fi
+    rm -f "$wd_pid_file"
+  fi
+  (cd "$ROOT" && WHEELHOUSE_COURIER_ROOT="$ROOT" "$HERE/courier-watchdog.sh" >> "$HERE/logs/courier.out.log" 2>> "$HERE/logs/courier.stderr.log" & echo $! > "$wd_pid_file")
+  echo "courier watchdog started: pid $(cat "$wd_pid_file" 2>/dev/null || echo '?')"
+}
+
 ensure_courier() {
   if [ ! -f "$HERE/courier.ts" ]; then
     echo "courier skipped: no transport configured"
@@ -150,6 +169,7 @@ ensure_courier() {
   if [ -f "$pid_file" ]; then
     old_pid="$(cat "$pid_file" 2>/dev/null || true)"
     if pid_alive "$old_pid"; then
+      ensure_courier_watchdog
       echo "courier already running: pid $old_pid"
       return 0
     fi
@@ -176,6 +196,7 @@ ensure_courier() {
   new_pid="$(cat "$pid_file" 2>/dev/null || true)"
   sleep 0.2
   if pid_alive "$new_pid"; then
+    ensure_courier_watchdog
     echo "courier started: pid $new_pid"
     return 0
   fi
