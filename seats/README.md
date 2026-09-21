@@ -16,6 +16,7 @@ The main files here:
   project root, and prints the export line and the one-time credential flow.
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, stop-all, resume.
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
+- `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
 - `commander-inbox-poll.sh` — wrapper-independent commander fallback: drains the Dispatch Office inbox from inside the commander pane whenever the cursor lags.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code. Default timeout is 15 minutes; for
@@ -33,6 +34,39 @@ REPL or by an operator placing an api_key entry; it never enters git. The
 roster is safe to commit precisely because it records only names, paths,
 optional non-secret human labels, and optional auth-route names; the moment a
 credential appears in it, that stops being true.
+
+## Needs — what the commander asks of a human
+
+`seats/needs.ts` is the only writer for `seats/needs.jsonl`, an append-only
+JSONL ledger for requests that need a principal or other human. It mirrors the
+herald inbox shape: one JSON object per line, never edited in place, ignored by
+git. `WHEELHOUSE_NEEDS_ROOT=/path/to/install` overrides the install root for
+fixtures and tools, the same way the herald has `WHEELHOUSE_HERALD_ROOT`.
+
+Subcommands:
+
+- `bun seats/needs.ts open --title <t> --body <b> [--option "<label>: <text>"]... [--default "<label>; applies <when>"] [--consequence <c>] [--kind question|approval|notify|task] [--bead <id>] [--seat <name>] [--source <opaque>] [--from-stdin]` opens a need and prints its `need-xxxx` id. `--from-stdin` reads an `@principal:` block: the first line must begin `@principal:`, the text after it becomes the title, and the remaining lines become the body. `--source` de-duplicates repeat opens: if an open or answered need with that source already exists, the command appends nothing and prints the existing id.
+- `bun seats/needs.ts say <id> <text>` appends a commander message for the human.
+- `bun seats/needs.ts answer <id> <text> [--via desk|cli|<transport>]` records a human answer. If `<text>` equals an option label or option text, the folded state records `choice` as that label.
+- `bun seats/needs.ts show <id>` prints the folded JSON state for one need.
+- `bun seats/needs.ts list [--json] [--all]` lists needs, open first and newest first. Closed needs are hidden unless `--all` is present; `--json` prints folded JSON instead of one-line summaries.
+- `bun seats/needs.ts close <id> [--reason <r>]` appends a close event.
+
+Human-facing outbound text must be written for humans, not for the work graph:
+`open` refuses (exit 2) title/body/options/default/consequence containing this
+install's `<namespace>-xxxx` id shape or the word `bead` (case-insensitive).
+Use the machine fields (`--bead`, `--seat`, `--source`) for graph identifiers.
+If human text mentions a rostered seat name, `open` warns but still records the
+need.
+
+Ledger event schema:
+
+- `opened`: `{type:"opened", id, at, kind, title, body, options[], default?, consequence?, machine:{bead?, seat?, session?, source?}}`
+- `message`: `{type:"message", id, at, from:"commander"|"human", via, text}`
+- `answered`: `{type:"answered", id, at, from:"human", via, text, choice?}`
+- `closed`: `{type:"closed", id, at, reason}`
+
+`show` and `list` fold events by id into state `open`, `answered`, or `closed`.
 
 ## Host build budget (opt-in)
 

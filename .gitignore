@@ -7,6 +7,7 @@ seats/logs/
 seats/state.json
 seats/herald.state.json
 seats/inbox.jsonl
+seats/needs.jsonl
 seats/inbox.cursor
 seats/inbox.seen.json
 seats/run/
