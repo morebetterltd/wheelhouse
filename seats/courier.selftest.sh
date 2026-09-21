@@ -71,6 +71,15 @@ cat > "$FIX/updates.json" <<'EOF'
 EOF
 (cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/once2.out" 2> "$FIX/once2.err"
 if grep -q '"type":"answered"' "$PROJ/seats/needs.jsonl" && grep -q '"via":"telegram"' "$PROJ/seats/needs.jsonl" && grep -q '"choice":"A"' "$PROJ/seats/needs.jsonl"; then pass "allowed Telegram reply records an answered event with via telegram and choice"; else fail "reply did not answer ledger=$(cat "$PROJ/seats/needs.jsonl") out=$(cat "$FIX/once2.out" "$FIX/once2.err" 2>/dev/null)"; fi
+cat > "$FIX/updates.json" <<'EOF'
+[{"update_id":12,"message":{"message_id":52,"date":1790000001,"chat":{"id":111},"from":{"id":111},"text":"follow-up","reply_to_message":{"message_id":1}}}]
+EOF
+(cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
+if grep -q '"type":"message"' "$PROJ/seats/needs.jsonl" && grep -q '"from":"human"' "$PROJ/seats/needs.jsonl" && grep -q 'follow-up' "$PROJ/seats/needs.jsonl"; then pass "Telegram reply to answered-but-open need records a threaded human message"; else fail "answered follow-up did not become message ledger=$(cat "$PROJ/seats/needs.jsonl")"; fi
+printf '%s
+' '{"type":"closed","id":"need-one","at":"2026-09-21T00:02:00.000Z","reason":"complete"}' >> "$PROJ/seats/needs.jsonl"
+(cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
+if tail -20 "$FIX/requests.jsonl" | grep -q 'Resolved: complete'; then pass "closed notice is sent as the thread-ending Telegram message"; else fail "closed notice missing req=$(tail -20 "$FIX/requests.jsonl")"; fi
 before_ans="$(count_ledger '"type":"answered"')"
 cat > "$FIX/updates.json" <<'EOF'
 [{"update_id":11,"message":{"message_id":51,"date":1790000001,"chat":{"id":999},"from":{"id":999},"text":"B","reply_to_message":{"message_id":1}}}]
