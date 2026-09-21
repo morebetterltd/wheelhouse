@@ -273,6 +273,25 @@ else
   note "skip    trust.json (harness=$harness does not use Pi trust.json)"
 fi
 
+if [ "$harness" = "claude-code" ]; then
+  claude_config_file="$seat_dir/.claude.json"
+  "$json_runtime" -e '
+    const fs = require("fs");
+    const file = process.argv[1], root = process.argv[2];
+    let data = {};
+    if (fs.existsSync(file)) {
+      try { data = JSON.parse(fs.readFileSync(file, "utf8") || "{}"); }
+      catch (e) { process.stderr.write(`STOP: ${file} exists but is not valid JSON; refusing to rewrite Claude Code config\n`); process.exit(1); }
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) data = {};
+    if (!data.projects || typeof data.projects !== "object" || Array.isArray(data.projects)) data.projects = {};
+    if (!data.projects[root] || typeof data.projects[root] !== "object" || Array.isArray(data.projects[root])) data.projects[root] = {};
+    data.projects[root].hasTrustDialogAccepted = true;
+    fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+  ' "$claude_config_file" "$root" || exit $?
+  note "wrote   $claude_config_file (pre-accepts Claude Code trust for $root)"
+fi
+
 # --- auth --------------------------------------------------------------------
 # auth.json is written by the operator's credential step, not by this script:
 # OAuth via `/login` inside the interactive Pi REPL writes it, and api_key file
