@@ -282,15 +282,36 @@ else fail "reset's respawned seat env.json was $(cat "${ARGV%argv.json}env.json"
 run stop worker-1
 
 phase "3. reset on a seat that is not running"
+STOPPED_SESS_BEFORE="$(state_get sessionFile)"
 run reset worker-1
-if [ $RC -ne 0 ] && says "not running"; then
-  pass "reset on a stopped seat is refused the same way dispatch/steer are"
-else fail "reset on a stopped seat did not refuse (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "reset" && says "respawned cold"; then
+  pass "reset on a stopped seat exits 0 and respawns cold"
+else fail "reset on a stopped seat did not respawn cold (exit $RC): $OUT"; fi
+STOPPED_PID_AFTER="$(state_get pid)"
+if [ -n "$STOPPED_PID_AFTER" ] && kill -0 "$STOPPED_PID_AFTER" 2>/dev/null; then
+  pass "reset on a stopped seat leaves the seat running"
+else fail "reset on a stopped seat did not leave a live process (pid $STOPPED_PID_AFTER): $OUT"; fi
+STOPPED_SESS_AFTER="$(state_get sessionFile)"
+if [ -n "$STOPPED_SESS_AFTER" ] && [ "$STOPPED_SESS_AFTER" != "$STOPPED_SESS_BEFORE" ]; then
+  pass "reset on a stopped seat discards the stored session"
+else fail "reset on a stopped seat kept the stopped session — the cache was not discarded"; fi
+if ! grep -q '"--session"' "$ARGV" 2>/dev/null; then
+  pass "reset on a stopped seat uses a cold spawn, not --session"
+else fail "reset on a stopped seat still attached --session — reset did not go cold"; fi
+run stop worker-1 >/dev/null 2>&1
 
 phase "4. canary — can the mid-turn check detect a reset with the refusal removed?"
 CAN="$FIX/can-a"
 build_proj "$CAN" can-a
-sed 's|^  if (st.data?.isStreaming) {$|  if (false \&\& st.data?.isStreaming) {|' "$ADAPTER" > "$CAN/seats/adapter.ts"
+env ADAPTER="$ADAPTER" CAN_ADAPTER="$CAN/seats/adapter.ts" python3 - <<'PY'
+import os
+from pathlib import Path
+src = Path(os.environ["ADAPTER"]).read_text()
+old = "    if (st.data?.isStreaming) {\n"
+if old not in src:
+    raise SystemExit("canary: could not find exact isStreaming refusal line")
+Path(os.environ["CAN_ADAPTER"]).write_text(src.replace(old, "    if (false && st.data?.isStreaming) {\n", 1))
+PY
 if cmp -s "$ADAPTER" "$CAN/seats/adapter.ts"; then
   fail "canary: could not cut the isStreaming refusal — the line no longer matches, so the canary proves nothing"
 else

@@ -1,0 +1,25 @@
+
+1. reset refuses a seat mid-turn
+  ok    mid-turn: reset refuses a seat that is mid-turn
+  ok    mid-turn: the seat is left running untouched by a refused reset
+  ok    mid-turn: session record is unchanged by a refused reset
+
+2. reset on an idle seat: stop, discard session, cold respawn
+  ok    reset exits 0 on an idle seat
+  ok    reset relaunched the seat under a new pid
+  ok    reset's respawn produced a fresh session file, not the old one
+  ok    the discarded session file is left on disk, not deleted
+  ok    the post-reset spawn did not pass --session — it came back cold
+  ok    reset's cold respawn carries BEADS_ACTOR=worker-1, with no operator export
+
+3. reset on a seat that is not running
+  FAIL  reset on a stopped seat did not refuse (exit 0): seat worker-1: pid 6243, session 4ba29df1-3e80-473e-a760-702bc8dc7f53
+  events -> [tmpdir]/wheelhouse-reset-selftest.99409.OyA81L/proj/seats/logs/worker-1.jsonl
+seat worker-1: reset — session discarded, respawned cold
+
+4. canary — can the mid-turn check detect a reset with the refusal removed?
+  FAIL  canary: a reset with its mid-turn refusal cut PASSED — this check proves nothing
+
+3 check(s) failed.
+If the failures are in phases 1-3, reset broke. If a failure is in the
+canary, fix this test first.
