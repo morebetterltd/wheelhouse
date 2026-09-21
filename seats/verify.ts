@@ -65,6 +65,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness } from "./harness";
+import { liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -268,99 +269,11 @@ export function die(msg: string): never {
   process.exit(1);
 }
 
-interface VerdictCandidate {
-  line: string;
-  normalized: string;
-  lineNumber: number;
-}
-
-function collectMessageText(value: unknown, out: string[]): void {
-  if (value === null || value === undefined) return;
-  if (typeof value === "string") { out.push(value); return; }
-  if (Array.isArray(value)) { for (const v of value) collectMessageText(v, out); return; }
-  if (typeof value === "object") {
-    const obj: any = value;
-    collectMessageText(obj.text, out);
-    collectMessageText(obj.content, out);
-  }
-}
-
-function messageRole(event: any): string | undefined {
-  return event?.message?.role ?? event?.role ?? event?.message?.author?.role ?? event?.author?.role;
-}
-
-function eventText(event: any): string {
-  const texts: string[] = [];
-  collectMessageText(event?.message?.content ?? event?.content ?? event?.message ?? event?.text, texts);
-  return texts.join("");
-}
-
-function finalAssistantText(stdout: string, harness: HarnessName): string {
-  let finalText: string | null = null;
-  let sawStructuredMessage = false;
-  for (const raw of stdout.split(/\r?\n/)) {
-    if (!raw.trim().startsWith("{")) continue;
-    try {
-      const event = JSON.parse(raw);
-      if (harness === "pi") {
-        if (event?.type !== "message_end") continue;
-        sawStructuredMessage = true;
-        if (messageRole(event) !== "assistant") continue;
-        finalText = eventText(event);
-      } else if (harness === "claude-code") {
-        if (event?.type !== "assistant") continue;
-        sawStructuredMessage = true;
-        finalText = eventText(event);
-      } else {
-        if (event?.type !== "item.completed" || event?.item?.type !== "agent_message") continue;
-        sawStructuredMessage = true;
-        finalText = eventText(event.item);
-      }
-    } catch { /* ignore non-event prose and malformed JSON */ }
-  }
-  if (finalText !== null) return finalText;
-  return sawStructuredMessage ? "" : stdout;
-}
-
-function finalAssistantMessageLines(stdout: string, harness: HarnessName): string[] {
-  return finalAssistantText(stdout, harness).split(/\r?\n/);
-}
-
-function dedupeCandidates(candidates: VerdictCandidate[]): VerdictCandidate[] {
-  const seen = new Set<string>();
-  const out: VerdictCandidate[] = [];
-  for (const candidate of candidates) {
-    if (seen.has(candidate.normalized)) continue;
-    seen.add(candidate.normalized);
-    out.push(candidate);
-  }
-  return out;
-}
-
-function liveLineCandidates(stdout: string, harness: HarnessName, tag: "VERDICT" | "PUSH"): VerdictCandidate[] {
-  const out: VerdictCandidate[] = [];
-  let inFence = false;
-  const lines = finalAssistantMessageLines(stdout, harness);
-  const re = new RegExp(`^${tag}:`);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-    if (trimmed.startsWith("```")) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    const normalized = trimmed.replace(/^(>\s*)+/, "").trim();
-    if (re.test(normalized)) out.push({ line, normalized, lineNumber: i + 1 });
-  }
-  return dedupeCandidates(out);
-}
-
-function liveVerdictCandidates(stdout: string, harness: HarnessName): VerdictCandidate[] {
+function liveVerdictCandidates(stdout: string, harness: HarnessName): FinalLineCandidate[] {
   return liveLineCandidates(stdout, harness, "VERDICT");
 }
 
-function livePushCandidates(stdout: string, harness: HarnessName): VerdictCandidate[] {
+function livePushCandidates(stdout: string, harness: HarnessName): FinalLineCandidate[] {
   return liveLineCandidates(stdout, harness, "PUSH");
 }
 

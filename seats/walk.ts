@@ -23,7 +23,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { die, expandTilde, makeScratchCwd, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
-import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness } from "./harness";
+import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
+import { liveLineCandidates } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -224,14 +225,14 @@ function buildSurfaceInstructions(kind: string, spec: string, baseline: string |
   ];
 }
 
-function parseWalkVerdict(stdout: string): { verdict: WalkVerdict; detail: string; line: string } {
-  const lines = stdout.split("\n").filter((l) => /^VERDICT:/.test(l.trim()));
+function parseWalkVerdict(stdout: string, harness: HarnessName): { verdict: WalkVerdict; detail: string; line: string } {
+  const lines = liveLineCandidates(stdout, harness, "VERDICT");
   if (lines.length !== 1) {
     process.stderr.write(`--- walk output tail ---\n${stdout.slice(-2000)}\n`);
-    process.stderr.write(`STOP: walker emitted ${lines.length} VERDICT lines — expected exactly one\n`);
+    process.stderr.write(`STOP: walker emitted ${lines.length} distinct VERDICT lines in the final assistant message — expected exactly one\n`);
     process.exit(4);
   }
-  const line = lines[0].trim();
+  const line = lines[0].normalized;
   const m = line.match(/^VERDICT:\s*(WALKED-DONE|WALKED-NOT-DONE|COULD-NOT-WALK)(?:\s*[—-]{1,2}\s*(\S.*))?$/);
   if (!m) {
     process.stderr.write(`STOP: malformed walk verdict line: ${JSON.stringify(line)}\n`);
@@ -468,7 +469,7 @@ function main(): void {
     refuse(`${oneShot.bin} exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}" — transcript: ${transcriptRel}`);
   }
 
-  const parsed = parseWalkVerdict(stdout);
+  const parsed = parseWalkVerdict(stdout, verifierHarness);
   fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel, guiGuard, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
 
   console.log(parsed.line);
