@@ -157,7 +157,7 @@ If this project has heavy builds or tests (Rust, C++, dotnet, large JS) and the 
    }
    ```
 
-If the project does not opt in, do not write `seats/host-budget.json`; remove `seats/bin` if this upgrade copied it but the install is intentionally staying out of the host budget.
+If the project does not opt in, do not write `seats/host-budget.json`; keep the shipped `seats/bin` directory. It is template-owned machinery and inert unless `seats/host-budget.json` exists, and the selftests use it to prove the opt-in path still works.
 
 If this project already had Pi seats, open `seats/seats.json` now and inspect every carried seat. Current rosters may record two fields older Pi rosters do not: `account.authRoute`, which is the credential route (`oauth`, `api_key`, or `env`) that gave the seat its identity, and `shadow`, which is a boolean only for intentional mirror seats. Back-fill `account.authRoute` for each carried seat from the route you actually use — OAuth `/login` for `openai-codex` subscription accounts, a file-backed provider entry in that seat's `auth.json` for `api_key`, or an exported provider env var for `env` — and do not record any credential material. Then read the JSON and probe every seat so both syntax and route are checked by the copied machinery:
 
