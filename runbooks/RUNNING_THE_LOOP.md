@@ -174,7 +174,9 @@ Anything parked on a human is a need, not a line in the commander pane. Open it 
 
 A commander turn may use the shorthand instead: end the final assistant message with an `@principal:` block. The Claude Code Stop hook (`bash seats/principal-sentinel.sh`) turns that block into the same durable need. A request that exists only in scrollback is a defect.
 
-The commander drains the Dispatch Office inbox for `need-answered` and `need-message` rows with `bun seats/herald.ts --drain`. Read the full thread with `bun seats/needs.ts show <id>`, act on the answer, follow up with `bun seats/needs.ts say <id> <text>` if the human needs more context, and close it with `bun seats/needs.ts close <id> --reason <reason>` when the request is resolved.
+The commander drains the Dispatch Office inbox for `need-answered` and `need-message` rows with `bun seats/herald.ts --drain`. Read the full thread with `bun seats/needs.ts show <id>`; `show` marks that need read and clears the fleet-gate line that says `N answer(s) waiting to be read — bun seats/needs.ts list --unread` once every human answer/message has been read. Act on the answer, follow up with `bun seats/needs.ts say <id> <text>` if the human needs more context, and close it with `bun seats/needs.ts close <id> --reason <reason>` when the request is resolved.
+
+`commander-inbox-poll.sh` still drains need rows instead of leaving the inbox cursor behind: the inbox also carries settle/distress rows, so letting it lag forever would make every pane poll replay stale traffic. After a drain it reprints the unread-needs phrase, and `fleet-gate.sh` recomputes the same phrase on every commander turn from `seats/needs.jsonl`, independent of whether the inbox row was drained.
 
 For the human, the local desk is the standing surface: read `seats/run/desk.port` or run `seats/cockpit.sh --desk` and open the printed URL. `/needs` shows the open requests and reply boxes. `/board` is the human's read-only kanban; the floor remains the commander's live seat view.
 
