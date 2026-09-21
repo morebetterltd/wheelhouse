@@ -1290,6 +1290,8 @@ async function cmdResume(name: string): Promise<void> {
  * but a bare `resume` would reattach the exact context reset means to drop,
  * so this is the one path that stops, forgets, and comes back cold as a
  * single command instead of a ritual two operators could get wrong two ways.
+ * A stopped seat is already between turns, so reset still discards its stored
+ * session and respawns cold rather than refusing.
  *
  * Refuses loudly if the seat is mid-turn — the same rule stop's SIGTERM
  * documentation already states (Lifecycle: never stop a seat mid-turn, a
