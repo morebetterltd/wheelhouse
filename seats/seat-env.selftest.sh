@@ -69,7 +69,8 @@ BIN="$FIX/bin"
 PROJECT="$FIX/project"
 mkdir -p "$HOME_FIX" "$BIN" "$PROJECT/seats" "$FIX/emptybin" "$FIX/node-only-bin"
 printf '#!/bin/sh\nexit 0\n' > "$BIN/pi"
-chmod +x "$BIN/pi"
+printf '#!/bin/sh\nexit 0\n' > "$BIN/claude"
+chmod +x "$BIN/pi" "$BIN/claude"
 ln -s "$(command -v node)" "$FIX/node-only-bin/node"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):/usr/bin:/bin"
 
@@ -105,6 +106,11 @@ cat > "$PROJECT/seats/seats.json" <<'EOF'
       "role": "worker",
       "shadow": "yes",
       "account": { "dir": "~/.pi-seats-alpha/worker-shadow-bad" }
+    },
+    "worker-claude": {
+      "role": "worker",
+      "harness": "claude-code",
+      "account": { "dir": "~/.pi-seats-alpha/worker-claude", "authRoute": "oauth" }
     }
   }
 }
@@ -221,6 +227,18 @@ run alpha worker-shadow-bad "$PROJECT"
 if [ $RC -ne 0 ] && says "invalid shadow" && says "\"yes\"" && says "boolean true or false"; then
   pass "shadow present-invalid: STOPs naming the offending value and boolean requirement"
 else fail "shadow present-invalid did not STOP as expected (exit $RC): $OUT"; fi
+
+phase "1e. claude-code workspace trust"
+run alpha worker-claude "$PROJECT"
+CLAUDE_CFG="$HOME_FIX/.pi-seats-alpha/worker-claude/.claude.json"
+if [ $RC -eq 0 ] && [ -s "$CLAUDE_CFG" ]; then pass "claude-code: provisioning writes .claude.json"
+else fail "claude-code: provisioning failed or did not write .claude.json (exit $RC): $OUT"; fi
+if node -e 'const fs=require("fs"); const file=process.argv[1], root=process.argv[2]; const j=JSON.parse(fs.readFileSync(file,"utf8")); process.exit(j.projects?.[root]?.hasTrustDialogAccepted === true ? 0 : 1)' "$CLAUDE_CFG" "$PROJECT"; then
+  pass "claude-code: projects[root].hasTrustDialogAccepted is true"
+else fail "claude-code: trust record missing or wrong: $(cat "$CLAUDE_CFG" 2>/dev/null)"; fi
+if says "export CLAUDE_CONFIG_DIR=\"$HOME_FIX/.pi-seats-alpha/worker-claude\"" && ! says "PI_CODING_AGENT_DIR"; then
+  pass "claude-code: export line uses CLAUDE_CONFIG_DIR"
+else fail "claude-code: export line wrong: $OUT"; fi
 
 phase "2. idempotency"
 cp "$HOME_FIX/.pi-seats-alpha/.project" "$FIX/project-before"
