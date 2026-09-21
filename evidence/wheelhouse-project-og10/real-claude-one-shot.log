@@ -1,0 +1,8 @@
+source_account_dir=[home]/.pi-seats-releaf/reviewer (existing claude-code account dir used directly for real one-shot)
+verify_rc=1
+-- verify output --
+STOP: verifier emitted 2 live VERDICT: lines outside fenced code blocks — ambiguous, refusing to pick one (raw output: [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-og10/.wheelhouse-runs/wheelhouse-project-og10/real-claude/proj/seats/verdicts/.raw.md). Candidates:
+      line 1051: VERDICT: BOUNCE — the claude-code one-shot still ends with `STOP: verifier emitted 2 live VERDICT: lines`, so "runs to a verdict" is not met at pinned tip 98a5aacdd1ad57088151dfff1d207dfda185311f
+      line 1082: VERDICT: BOUNCE — the claude-code one-shot still ends with `STOP: verifier emitted 2 live VERDICT: lines`, so "runs to a verdict" is not met at pinned tip 98a5aacdd1ad57088151dfff1d207dfda185311f
+-- forbidden-line scan --
+forbidden_lines=absent

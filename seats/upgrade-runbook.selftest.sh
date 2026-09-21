@@ -84,6 +84,9 @@ git -C "$TEMPLATE" show "${BASELINE}:contracts/WORKER.md" > "$PROJ/wheelhouse/fl
 for b in PROMOTION.md RUNNING_THE_LOOP.md UPGRADE.md; do
   git -C "$TEMPLATE" show "${BASELINE}:runbooks/$b" > "$PROJ/wheelhouse/runbooks/$b"
 done
+# One runbook is already byte-equal to the target, so step 3 must report it
+# current rather than "updated" after copying identical bytes.
+cp "$TEMPLATE/runbooks/UPGRADE.md" "$PROJ/wheelhouse/runbooks/UPGRADE.md"
 
 STEP0_OUT=$(zsh -c '
 set -e
@@ -118,10 +121,10 @@ for f in "$TEMPLATE"/runbooks/*; do
 
   baseline=$(mktemp)
   if git -C "$TEMPLATE" show "${BASE:-unknown}:runbooks/$b" >"$baseline" 2>/dev/null; then
-    if diff -q "$baseline" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
-      cp -p "$f" "wheelhouse/runbooks/$b"; echo "runbook updated: $b"
-    elif diff -q "$f" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
+    if diff -q "$f" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
       echo "runbook current: $b"
+    elif diff -q "$baseline" "wheelhouse/runbooks/$b" >/dev/null 2>&1; then
+      cp -p "$f" "wheelhouse/runbooks/$b"; echo "runbook updated: $b"
     else
       echo "runbook YOURS, merge by hand: $b"
     fi
@@ -132,10 +135,75 @@ for f in "$TEMPLATE"/runbooks/*; do
 done
 ' zsh "$TEMPLATE" "$PROJ" "$BASELINE")
 printf '%s\n' "$STEP3_OUT" | grep -q 'baseline unreadable' && fail "zsh step 3 reported baseline unreadable on a healthy baseline: $STEP3_OUT"
-for b in PROMOTION.md RUNNING_THE_LOOP.md UPGRADE.md; do
+for b in PROMOTION.md RUNNING_THE_LOOP.md; do
   printf '%s\n' "$STEP3_OUT" | grep -Eq "runbook updated: $b" || fail "zsh step 3 did not update ${b}: $STEP3_OUT"
 done
-pass "zsh step 3 runbook loop reads real baseline for every runbook"
+printf '%s\n' "$STEP3_OUT" | grep -Eq "runbook current: UPGRADE.md" || fail "zsh step 3 did not report byte-equal UPGRADE.md as current: $STEP3_OUT"
+pass "zsh step 3 runbook loop reads real baseline and reports byte-equal files current"
+
+REMOTE_SRC="$TMP/reused-cache-source"
+CACHE_REUSED="$TMP/reused-cache"
+mkdir -p "$REMOTE_SRC"
+git -C "$REMOTE_SRC" init -b main >/dev/null
+printf 'old\n' > "$REMOTE_SRC/template.txt"
+git -C "$REMOTE_SRC" add template.txt
+git -C "$REMOTE_SRC" -c user.email=selftest@local -c user.name=selftest commit -q -m old
+OLD_COMMIT=$(git -C "$REMOTE_SRC" rev-parse HEAD)
+git clone --quiet "$REMOTE_SRC" "$CACHE_REUSED"
+printf 'new\n' > "$REMOTE_SRC/template.txt"
+git -C "$REMOTE_SRC" add template.txt
+git -C "$REMOTE_SRC" -c user.email=selftest@local -c user.name=selftest commit -q -m new
+NEW_COMMIT=$(git -C "$REMOTE_SRC" rev-parse HEAD)
+STEP1_REUSED_OUT=$(zsh -c '
+set -e
+TEMPLATE=$1
+TARGET=main
+git -C "$TEMPLATE" fetch --tags origin
+git -C "$TEMPLATE" fetch origin
+git -C "$TEMPLATE" rev-parse "${TARGET:-main}" >/dev/null
+git -C "$TEMPLATE" checkout --quiet "${TARGET:-main}"
+if git -C "$TEMPLATE" rev-parse --verify --quiet "origin/${TARGET:-main}^{commit}" >/dev/null; then
+  git -C "$TEMPLATE" merge --ff-only --quiet "origin/${TARGET:-main}" \
+    || { echo "STOP: cache branch ${TARGET:-main} could not fast-forward to origin/${TARGET:-main}" >&2; exit 1; }
+fi
+git -C "$TEMPLATE" rev-parse HEAD
+' zsh "$CACHE_REUSED")
+[ "$STEP1_REUSED_OUT" = "$NEW_COMMIT" ] || fail "step 1 reused cache stayed stale (old=$OLD_COMMIT new=$NEW_COMMIT got=$STEP1_REUSED_OUT)"
+pass "step 1 reused cache fast-forwards local branch to origin target"
+
+STEP6_PROJ="$TMP/step6-stop"
+mkdir -p "$STEP6_PROJ/wheelhouse"
+cat > "$STEP6_PROJ/wheelhouse/.template-source" <<EOF
+source=$REMOTE_SRC
+commit=$OLD_COMMIT
+path=$CACHE_REUSED
+EOF
+# Simulate the exact stale-cache condition step 6 must catch: HEAD/TARGET are
+# still BASE while origin/main resolves to a newer commit.
+git -C "$CACHE_REUSED" checkout --quiet main
+git -C "$CACHE_REUSED" reset --hard --quiet "$OLD_COMMIT"
+git -C "$CACHE_REUSED" fetch --quiet origin
+set +e
+STEP6_STOP_OUT=$(cd "$STEP6_PROJ" && TEMPLATE="$CACHE_REUSED" BASE="$OLD_COMMIT" TARGET=main zsh -c '
+set -e
+NEW_COMMIT=$(git -C "$TEMPLATE" rev-parse HEAD)
+if [ "$BASE" != unknown ] && [ "$NEW_COMMIT" = "$BASE" ] \
+  && git -C "$TEMPLATE" rev-parse --verify --quiet "origin/${TARGET:-main}^{commit}" >/dev/null \
+  && [ "$(git -C "$TEMPLATE" rev-parse "origin/${TARGET:-main}^{commit}")" != "$BASE" ]; then
+  echo "STOP: target resolves to the baseline; the cache did not advance to origin/${TARGET:-main}" >&2
+  exit 1
+fi
+sed -i.bak "s|^commit=.*|commit=$NEW_COMMIT|" wheelhouse/.template-source
+' 2>&1)
+STEP6_STOP_RC=$?
+set -e
+if [ "$STEP6_STOP_RC" -eq 1 ] && printf '%s\n' "$STEP6_STOP_OUT" | grep -q 'target resolves to the baseline; the cache did not advance'; then
+  pass "step 6 stale-cache guard STOPs when origin target differs from BASE"
+else
+  fail "step 6 stale-cache guard did not STOP (rc=$STEP6_STOP_RC): $STEP6_STOP_OUT"
+fi
+
+git -C "$CACHE_REUSED" reset --hard --quiet "$NEW_COMMIT"
 
 GITPROJ="$TMP/gitproj"
 mkdir -p "$GITPROJ/wheelhouse/evidence-dir" "$GITPROJ/seats"
