@@ -305,13 +305,31 @@ auth_is_identity() {
   [ -n "$(tr -d '{}[:space:]' < "$auth_file" 2>/dev/null)" ]
 }
 
+# Measured on Claude Code 2.1.278: `claude auth status --json` exits non-zero
+# for an unlogged-in config dir, but still prints JSON with `loggedIn:false`.
+# The trust record `.claude.json` is not a credential store; only this probe's
+# `loggedIn:true` means the seat has a Claude Code identity.
+claude_logged_in() {
+  [ -n "$json_runtime" ] || return 1
+  status_json="$(CLAUDE_CONFIG_DIR="$seat_dir" claude auth status --json 2>/dev/null || true)"
+  [ -n "$status_json" ] || return 1
+  printf '%s' "$status_json" | "$json_runtime" -e '
+    const fs = require("fs");
+    let body = "";
+    try { body = fs.readFileSync(0, "utf8"); } catch {}
+    try { process.exit(JSON.parse(body).loggedIn === true ? 0 : 1); }
+    catch { process.exit(1); }
+  '
+}
+
 login_needed=1
 case "$harness" in
   claude-code)
-    claude_auth_file="$seat_dir/.claude.json"
-    if [ -s "$claude_auth_file" ]; then
+    if [ "$auth_route" = "default" ]; then
       login_needed=0
-      note "exists  $claude_auth_file — this Claude Code seat is already logged in; not printing a login command"
+    elif claude_logged_in; then
+      login_needed=0
+      note "verified Claude Code login for $seat_dir with claude auth status --json; not printing a login command"
     fi
     ;;
   codex)

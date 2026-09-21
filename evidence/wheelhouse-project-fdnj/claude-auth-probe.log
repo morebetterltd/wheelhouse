@@ -1,0 +1,13 @@
+claude --version:
+2.1.278 (Claude Code)
+
+empty CLAUDE_CONFIG_DIR auth status --json:
+{
+  "loggedIn": false,
+  "authMethod": "none",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-fdnj/.wheelhouse-runs/wheelhouse-project-fdnj/probe/claude-empty/projects",
+  "configDirectory": "[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/wheelhouse-project-fdnj/.wheelhouse-runs/wheelhouse-project-fdnj/probe/claude-empty"
+}
+auth_status_rc=1
