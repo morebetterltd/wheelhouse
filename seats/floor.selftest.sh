@@ -30,6 +30,7 @@ set -uo pipefail   # deliberately not -e: sabotaged runs are meant to differ
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FLOOR="${1:-$HERE/floor.ts}"
 COCKPIT="$HERE/cockpit.sh"
+BRIDGE_GUARD="$HERE/bridge-guard.sh"
 [ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run floor.ts" >&2; exit 2; }
 
@@ -63,6 +64,7 @@ PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats/logs" "$FIX/bin"
 cp "$FLOOR" "$PROJ/seats/floor.ts"
 [ -f "$COCKPIT" ] && cp "$COCKPIT" "$PROJ/seats/cockpit.sh" && chmod +x "$PROJ/seats/cockpit.sh"
+[ -f "$BRIDGE_GUARD" ] && cp "$BRIDGE_GUARD" "$PROJ/seats/bridge-guard.sh" && chmod +x "$PROJ/seats/bridge-guard.sh"
 
 # Stub bd: two ready beads, so idle-with-ready-work has work to point at.
 cat > "$FIX/bin/bd" <<'EOF'
