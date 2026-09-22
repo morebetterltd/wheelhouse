@@ -147,6 +147,10 @@ fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
 // lets the selftest see what the OS-level cwd actually was, not what the
 // adapter merely printed.
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+if (process.env.STUB_FORCE_LIVE_CWD) {
+  fs.mkdirSync(process.env.STUB_FORCE_LIVE_CWD, { recursive: true });
+  process.chdir(process.env.STUB_FORCE_LIVE_CWD);
+}
 // Same construction argument for BEADS_ACTOR: the adapter is supposed to set
 // it in OUR process env directly (not rely on an operator export reaching
 // us), so record what we actually got, not what anyone claims to have set.
@@ -905,6 +909,29 @@ LARGE_PROMPT="$(node -e 'process.stdout.write("L".repeat(70 * 1024))')"
 run dispatch worker-1 bead-x "$LARGE_PROMPT"
 if [ $RC -eq 0 ]; then pass "dispatch writes and acks a prompt larger than 64 KB"
 else fail "large dispatch did not ack (exit $RC): $OUT"; fi
+
+mkdir -p "$PROJ/.wheelhouse-worktrees/bead-symlink-real"
+ln -s "bead-symlink-real" "$PROJ/.wheelhouse-worktrees/bead-symlink"
+SYMLINK_TARGET="$PROJ/.wheelhouse-worktrees/bead-symlink"
+run dispatch worker-1 bead-symlink "hello symlinked worktree"
+if [ $RC -eq 0 ] && [ "$(state_get cwd)" = "$SYMLINK_TARGET" ] && wait_for "$LOG" 'echo: Bead bead-symlink' 5; then
+  pass "symlinked worktree dispatch records the requested symlink path and is not refused"
+else fail "symlinked worktree dispatch failed or stored the wrong cwd (exit $RC): $OUT state_cwd=$(state_get cwd)"; fi
+SYMLINK_PID_BEFORE="$(state_get pid)"
+run dispatch worker-1 bead-symlink "hello symlinked worktree again"
+if [ $RC -eq 0 ] && [ "$(state_get pid)" = "$SYMLINK_PID_BEFORE" ]; then
+  pass "symlinked worktree second dispatch to the same task is treated as the same cwd"
+else fail "symlinked worktree second dispatch relaunched/refused (exit $RC before=$SYMLINK_PID_BEFORE after=$(state_get pid)): $OUT"; fi
+
+NEG_CWD_PROJ="$FIX/live-cwd-negative-proj"
+build_proj "$NEG_CWD_PROJ" live-cwd-negative
+mkdir -p "$NEG_CWD_PROJ/.wheelhouse-worktrees/guard-bead" "$FIX/genuinely-different-live-cwd"
+RUN_PROJ="$NEG_CWD_PROJ"; STATE="$NEG_CWD_PROJ/seats/state.json"; LOG="$NEG_CWD_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-live-cwd-negative/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-live-cwd-negative/worker-1/cwd.txt"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_FORCE_LIVE_CWD="$FIX/genuinely-different-live-cwd" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 guard-bead 2>&1)"; RC=$?
+if [ $RC -ne 0 ] && says "has live cwd" && says "not requested cwd"; then
+  pass "genuinely different live cwd still trips the post-launch guard"
+else fail "genuinely different live cwd did not trip the guard (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-missing-session"
 rm -f "$SESS"
