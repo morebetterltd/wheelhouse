@@ -503,7 +503,7 @@ function configuredIdleRegex(): RegExp | null {
 function paneTextHasActiveMarkers(paneText: string): boolean {
   return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(paneText)
     || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(paneText)
-    || /\b(esc to interrupt|running tool|tool running|thinking|working)\b/i.test(paneText);
+    || /\besc to interrupt\b/i.test(paneText);
 }
 
 function paneTextLooksIdleClaude(paneText: string): boolean {
@@ -536,28 +536,26 @@ function captureCommanderPane(): { command: string; text: string; stableText: st
   return { command, text, stableText: stablePaneText(text) };
 }
 
+let lastCommanderPaneStableForPoke = false;
+let lastCommanderPaneHadActiveMarkersForPoke = true;
+
 function commanderPaneIdleClaude(): boolean {
+  lastCommanderPaneStableForPoke = false;
+  lastCommanderPaneHadActiveMarkersForPoke = true;
   if (!TMUX_PANE) return false;
   try {
     const first = captureCommanderPane();
     if (!first || !["claude", "node", "bun"].includes(first.command)) return false;
-    if (!paneTextLooksIdleClaude(first.text)) return false;
     sleepSync(POKE_STABILITY_MS);
     const second = captureCommanderPane();
     if (!second || second.command !== first.command) return false;
-    return second.stableText === first.stableText && paneTextLooksIdleClaude(second.text);
+    lastCommanderPaneStableForPoke = second.stableText === first.stableText;
+    lastCommanderPaneHadActiveMarkersForPoke = paneTextHasActiveMarkers(first.text) || paneTextHasActiveMarkers(second.text);
+    return lastCommanderPaneStableForPoke && !lastCommanderPaneHadActiveMarkersForPoke && paneTextLooksIdleClaude(first.text) && paneTextLooksIdleClaude(second.text);
   } catch {
+    lastCommanderPaneStableForPoke = false;
+    lastCommanderPaneHadActiveMarkersForPoke = true;
     return false;
-  }
-}
-
-function commanderPaneHasActiveMarkers(): boolean {
-  if (!TMUX_PANE) return true;
-  try {
-    const pane = captureCommanderPane();
-    return !pane || paneTextHasActiveMarkers(pane.text);
-  } catch {
-    return true;
   }
 }
 
@@ -574,7 +572,7 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
   const idle = commanderPaneIdleClaude();
   const firstDeferred = state.firstDeferredAtByPane?.[TMUX_PANE] ?? 0;
-  const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && !commanderPaneHasActiveMarkers();
+  const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && lastCommanderPaneStableForPoke && !lastCommanderPaneHadActiveMarkersForPoke;
   if (!idle && !escalated) {
     const first = firstDeferred || Date.now();
     state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [TMUX_PANE]: first };

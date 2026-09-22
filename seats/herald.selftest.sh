@@ -331,13 +331,20 @@ if ! grep -q 'malicious\|rm -rf\|please type' "$SEND_LOG" 2>/dev/null; then pass
 else fail "seat text leaked into send-keys: $(cat "$SEND_LOG")"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
-printf 'settled but wrapper not idle\n' > "$FIX/wrapper-not-idle.txt"
+printf '%s\n' '{"type":"agent_end","messages":["idle prose working thinking settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-with-prose-working-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "idle prompt with working/thinking prose receives a poke"
+else fail "idle prompt with working/thinking prose was misclassified busy (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf 'settled but wrapper not idle; commander prose says still working and thinking\n' > "$FIX/wrapper-not-idle.txt"
 printf '%s\n' '{"type":"agent_end","messages":["escalate settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
 OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
 node -e 'const fs=require("fs"); const f=process.argv[1]; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.firstDeferredAtByPane={"wh-demo:bridge.0":1}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")' "$PROJ/seats/herald.state.json"
 OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC2=$?
-if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke escalated .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "deferred poke escalates after bounded window once active markers are clear"
+if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke escalated .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "deferred poke escalates after bounded window when stable pane text has bare working/thinking prose"
 else fail "deferred poke did not escalate (rc=$RC/$RC2 out=$OUT/$OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
