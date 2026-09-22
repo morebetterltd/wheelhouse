@@ -50,11 +50,21 @@ export function finalAssistantText(stdout: string, harness: HarnessName): string
         if (event?.type === "message_update") {
           sawStructuredMessage = true;
           const ev = event.assistantMessageEvent ?? event.delta ?? event;
-          const delta = typeof ev?.delta === "string" ? ev.delta : "";
-          const content = typeof ev?.content === "string" ? ev.content : "";
+          const evType = typeof ev?.type === "string" ? ev.type : "";
+          const delta = evType === "text_delta" && typeof ev?.delta === "string" ? ev.delta : "";
+          const content = evType === "text_end" && typeof ev?.content === "string" ? ev.content : "";
           if (delta) piStreamText += delta;
           if (content) piStreamText = content;
           if (piStreamText && (piCurrentRole === "assistant" || event.assistantMessageEvent)) finalText = piStreamText;
+          continue;
+        }
+        if (event?.type === "text_delta" || event?.type === "text_end") {
+          sawStructuredMessage = true;
+          const delta = event.type === "text_delta" && typeof event?.delta === "string" ? event.delta : "";
+          const content = event.type === "text_end" ? (typeof event?.text === "string" ? event.text : typeof event?.content === "string" ? event.content : "") : "";
+          if (delta) piStreamText += delta;
+          if (content) piStreamText = content;
+          if (piStreamText && (!piCurrentRole || piCurrentRole === "assistant")) finalText = piStreamText;
           continue;
         }
         if (event?.type !== "message_end" && event?.type !== "turn_end") continue;

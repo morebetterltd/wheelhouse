@@ -835,6 +835,15 @@ run_stream "$FIX/pi-user-echo-streamed-assistant.jsonl" bead-5-pi-user-echo-stre
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q "verdict: APPROVE — streamed assistant fixture" "$VDIR/bead-5-pi-user-echo-streamed.md" 2>/dev/null; then
   pass "pi user prompt echo plus streamed assistant deltas yields exactly one VERDICT candidate"
 else fail "pi user prompt echo/streamed assistant fixture did not yield one APPROVE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-pi-user-echo-streamed.md" 2>/dev/null)"; fi
+node > "$FIX/pi-thinking-toolcall-dies.jsonl" <<'NODE'
+process.stdout.write(JSON.stringify({type:"message_start",message:{role:"assistant",content:[]}})+"\n");
+process.stdout.write(JSON.stringify({type:"message_update",assistantMessageEvent:{type:"thinking_delta",contentIndex:0,delta:"VERDICT: APPROVE — thinking is not final text\n"}})+"\n");
+process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:[],stopReason:"tool_use"}})+"\n");
+NODE
+run_stream "$FIX/pi-thinking-toolcall-dies.jsonl" bead-5-thinking-toolcall-dies fleet/bead-1 worker-1
+if [ $RC -eq 1 ] && says "no VERDICT" && [ ! -f "$VDIR/bead-5-thinking-toolcall-dies.md" ]; then
+  pass "pi thinking/tool-call stream yields zero live verdict candidates and STOPs"
+else fail "pi thinking/tool-call stream leaked a verdict candidate (exit $RC): $OUT file=$(cat "$VDIR/bead-5-thinking-toolcall-dies.md" 2>/dev/null)"; fi
 node > "$FIX/text-end-duplicate.jsonl" <<'NODE'
 const final = "VERDICT: APPROVE\nPUSH: NOT CONSIDERED — fixture\n";
 process.stdout.write(JSON.stringify({type:"text_end",text:final})+"\n");
