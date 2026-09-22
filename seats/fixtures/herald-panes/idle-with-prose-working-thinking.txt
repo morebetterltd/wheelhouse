@@ -1,0 +1,4 @@
+commander summary: two seats are still working; another is thinking through evidence.
+No live status line is present; this is ordinary scrollback prose.
+❯
+LifeOS status footer
