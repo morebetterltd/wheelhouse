@@ -62,11 +62,13 @@ LIVE_ID=$(cd "$ROOT" && bd create 'closed live cwd anchor' --json | bun -e 'let 
 HIST_ID=$(cd "$ROOT" && bd create 'closed session history anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 STALE_ID=$(cd "$ROOT" && bd create 'closed stale branch no worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 UNMERGED_ID=$(cd "$ROOT" && bd create 'closed unmerged branch must survive' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
+GOAL_CHILD_ID=$(cd "$ROOT" && bd create 'closed child merged only to goal branch' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 cd "$ROOT" && bd close "$CLOSED_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$LIVE_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$HIST_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$STALE_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$UNMERGED_ID" >/dev/null 2>&1
+cd "$ROOT" && bd close "$GOAL_CHILD_ID" >/dev/null 2>&1
 
 make_closed_worktree(){
   local id="$1" msg="$2"
@@ -91,6 +93,19 @@ printf 'unmerged work\n' >> "$WTS/$UNMERGED_ID/app.txt"
 git -C "$WTS/$UNMERGED_ID" add app.txt
 git -C "$WTS/$UNMERGED_ID" commit -q -m 'unmerged work'
 git -C "$PROD" push -q origin "fleet/$UNMERGED_ID"
+
+git -C "$PROD" checkout -q -b fleet/goal-x main
+git -C "$PROD" push -q -u origin fleet/goal-x
+git -C "$PROD" checkout -q main
+git -C "$PROD" worktree add -q -b "fleet/$GOAL_CHILD_ID" "$WTS/$GOAL_CHILD_ID" main
+printf 'goal child work\n' >> "$WTS/$GOAL_CHILD_ID/app.txt"
+git -C "$WTS/$GOAL_CHILD_ID" add app.txt
+git -C "$WTS/$GOAL_CHILD_ID" commit -q -m 'goal child work'
+git -C "$PROD" checkout -q fleet/goal-x
+git -C "$PROD" merge -q --no-ff "fleet/$GOAL_CHILD_ID" -m 'merge goal child work'
+git -C "$PROD" push -q origin fleet/goal-x
+git -C "$PROD" push -q origin "fleet/$GOAL_CHILD_ID"
+git -C "$PROD" checkout -q main
 
 git -C "$PROD" worktree add -q -b "fleet/$OPEN_ID" "$WTS/$OPEN_ID" main
 mkdir -p "$ROOT/seats/logs" "$ROOT/seats/sessions"
@@ -181,6 +196,17 @@ SCAN="$FIX/scan.tsv"
 if awk -F '\t' -v p="$WTS/$CLOSED_ID" '$1=="merged-worktree" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed merged clean worktree is safe merged-worktree'; else fail "closed merged worktree row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v b="fleet/$STALE_ID" '$1=="stale-branch" && $2=="1" && $5==b && $6=="0" && $7=="0.0B" {found=1} END{exit found?0:1}' "$SCAN"; then pass 'safe stale-branch reports zero reclaimed size'; else fail "stale-branch zero-size row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $5 ~ /^fleet\// && $9 ~ /not both merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed but unmerged fleet worktree is needs-review'; else fail "unmerged branch guard row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$GOAL_CHILD_ID" '$1=="needs-review" && $2=="0" && $4==p && $5 ~ /^fleet\// && $9 ~ /not both merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'goal-branch child is needs-review before integration-refs.txt exists'; else fail "goal child before integration-refs row missing:\n$(cat "$SCAN")"; fi
+cat > "$ROOT/seats/integration-refs.txt" <<'EOF'
+# extra integration branches for this install
+
+fleet/goal-x
+fleet/never-created
+EOF
+( cd "$ROOT" && bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan with integration-refs failed" >&2; exit 2; }
+if awk -F '\t' -v p="$WTS/$GOAL_CHILD_ID" '$1=="merged-worktree" && $2=="1" && $4==p && $5 ~ /^fleet\// {found=1} END{exit found?0:1}' "$SCAN"; then pass 'goal-branch child becomes safe merged-worktree when its goal branch is listed'; else fail "goal child merged-worktree row missing after integration-refs:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v b="fleet/goal-x" '$1=="needs-review" && $2=="0" && $5==b && $9 ~ /listed integration ref/ {found=1} $1=="stale-branch" && $5==b {bad=1} END{exit found && !bad ? 0 : 1}' "$SCAN"; then pass 'listed goal branch is needs-review, never stale-branch'; else fail "listed goal branch guard row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /not both merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'listed goal ref does not widen matching to unrelated fleet branches'; else fail "unrelated unmerged branch was widened by integration-refs:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$OPEN_ID" '$1=="seat-anchor" && $2=="0" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'seat cwd is classified as non-prunable seat-anchor'; else fail "seat-anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$LIVE_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /live cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'live lsof cwd beats stale state.json cwd and is a seat-anchor'; else fail "live cwd seat-anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$HIST_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /session history cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'session history cwd is a non-prunable seat-anchor'; else fail "session history seat-anchor row missing:\n$(cat "$SCAN")"; fi
@@ -258,6 +284,7 @@ phase 'prune acts only on safe selected rows'
 ( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune.out" )
 if [ ! -e "$WTS/$CLOSED_ID" ] && ! git -C "$PROD" worktree list --porcelain | grep -qF "$WTS/$CLOSED_ID"; then pass 'safe merged worktree removed by git worktree remove'; else fail 'safe merged worktree still exists or is registered'; fi
 if ! git -C "$PROD" branch --list "fleet/$CLOSED_ID" | grep -q . && grep -q "PRUNED branch merged-worktree fleet/$CLOSED_ID" "$FIX/prune.out"; then pass 'safe merged worktree prune also deletes its merged branch in the same pass'; else fail "merged worktree branch survived same-pass prune: $(git -C "$PROD" branch --list "fleet/$CLOSED_ID") output=$(cat "$FIX/prune.out")"; fi
+if [ ! -e "$WTS/$GOAL_CHILD_ID" ] && ! git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID" | grep -q . && grep -q "PRUNED branch merged-worktree fleet/$GOAL_CHILD_ID" "$FIX/prune.out" && git -C "$PROD" branch --list fleet/goal-x | grep -q .; then pass 'goal-branch merged worktree prunes child branch while listed goal branch survives'; else fail "goal-branch prune outcome wrong: child_dir=$([ -e "$WTS/$GOAL_CHILD_ID" ] && echo present || echo gone) child_branch=$(git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID") goal_branch=$(git -C "$PROD" branch --list fleet/goal-x) output=$(cat "$FIX/prune.out")"; fi
 if git -C "$PROD" branch --list "fleet/$UNMERGED_ID" | grep -q .; then pass 'unmerged fleet branch is not deleted by merged-worktree prune path'; else fail 'unmerged fleet branch was deleted'; fi
 [ ! -e "$WTS/orphaned-checkout" ] && pass 'safe orphaned checkout removed' || fail 'orphaned checkout still exists'
 [ ! -e "$PROD/.wheelhouse-build" ] && pass 'safe build cache removed' || fail 'build cache still exists'
@@ -278,7 +305,7 @@ OPEN_TMP_AFTER=$(shasum -a 256 "$OPEN_TMP/file.txt" | awk '{print $1}')
 [ "$OPEN_RUNS_BEFORE" = "$OPEN_RUNS_AFTER" ] && pass 'open bead runs scratch remains byte-identical' || fail 'open bead runs scratch changed'
 [ "$OPEN_TMP_BEFORE" = "$OPEN_TMP_AFTER" ] && pass 'open bead tmp scratch remains byte-identical' || fail 'open bead tmp scratch changed'
 if ! grep -q 'delete OPEN-UDID' "$FIX/xcrun.log"; then pass 'open bead simulator is not deleted'; else fail "open bead simulator was deleted: $(cat "$FIX/xcrun.log")"; fi
-if grep -q 'prune summary: touched=10' "$FIX/prune.out" && grep -q 'reclaimed_bytes=' "$FIX/prune.out"; then pass 'prune summary reports ten touched rows and reclaimed bytes'; else fail "unexpected prune summary: $(cat "$FIX/prune.out")"; fi
+if grep -q 'prune summary: touched=11' "$FIX/prune.out" && grep -q 'reclaimed_bytes=' "$FIX/prune.out"; then pass 'prune summary reports eleven touched rows and reclaimed bytes'; else fail "unexpected prune summary: $(cat "$FIX/prune.out")"; fi
 
 if [ "$FAILED" -eq 0 ]; then
   echo 'prune.selftest: PASS'
