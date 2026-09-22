@@ -69,6 +69,7 @@ Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetc
     maxActivePolls = Math.max(maxActivePolls, activePolls);
     fs.writeFileSync(`${dir}/max-poll-active`, String(maxActivePolls));
     append('requests.jsonl', {method:'getUpdates', body, active:activePolls});
+    if (fs.existsSync(`${dir}/hang-poll`)) await new Promise(() => {});
     try {
       const ms = delayMs();
       if (ms > 0) await sleep(ms);
@@ -187,6 +188,15 @@ max_active="$(cat "$FIX/max-poll-active" 2>/dev/null || echo 0)"
 overlap_polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
 if [ "$max_active" = 1 ] && [ "$overlap_polls" -ge 2 ]; then pass "courier interval skips ticks while a long poll is in flight"
 else fail "courier overlapped long polls or did not poll enough max_active=$max_active polls=$overlap_polls req=$(cat "$FIX/requests.jsonl" 2>/dev/null) err=$(cat "$FIX/overlap.err" 2>/dev/null)"; fi
+HANG="$FIX/hang"; make_proj "$HANG"
+: > "$FIX/requests.jsonl"; : > "$HANG/seats/logs/courier.out.log"; touch "$FIX/hang-poll"
+WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS=200 start_courier_daemon "$HANG" 100 "$FIX/hang.err"
+sleep 0.9
+stop_courier
+rm -f "$FIX/hang-poll"
+hang_polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
+if [ "$hang_polls" -ge 2 ] && grep -q 'STOP: poll failed: telegram getUpdates timed out after 200ms' "$HANG/seats/logs/courier.out.log"; then pass "hung Telegram poll aborts with a named STOP and the next tick polls again"
+else fail "hung Telegram poll did not abort/retry hang_polls=$hang_polls log=$(cat "$HANG/seats/logs/courier.out.log" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null) err=$(cat "$FIX/hang.err" 2>/dev/null)"; fi
 PAIR="$FIX/pair"; make_proj "$PAIR"; printf '@keenan\n' > "$PAIR/seats/run/telegram.allow"
 cat > "$PAIR/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-pair","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Pair me","body":"Wait for chat","options":[],"machine":{}}

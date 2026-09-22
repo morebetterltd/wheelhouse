@@ -31,6 +31,19 @@ function allowedFrom(root: string): Set<string> {
 function log(root: string, line: string){ const dir=path.join(root,"seats","logs"); fs.mkdirSync(dir,{recursive:true}); fs.appendFileSync(path.join(dir,"courier.out.log"), `${new Date().toISOString()} ${line}\n`); }
 function slackRefs(): Map<string,string> { const m=new Map<string,string>(); for(const ev of readEvents() as any[]){ if(ev?.type==="sent" && ev.transport==="slack" && typeof ev.id==="string" && typeof ev.ref==="string") m.set(ev.id, ev.ref); } return m; }
 function needByThreadTs(): Map<string,string> { const m=new Map<string,string>(); for(const [id,ref] of slackRefs()) { const parts=ref.split(":"); const ts=parts[parts.length-1]; if(ts) m.set(ts,id); } return m; }
+function abortMs(): number { const n=Number(process.env.WHEELHOUSE_SLACK_FETCH_ABORT_MS || "10000"); return Number.isFinite(n) && n > 0 ? n : 10000; }
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, label: string): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e: any) {
+    if (e?.name === "AbortError") throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export class SlackTransport implements NeedTransport {
   name = "slack";
@@ -48,7 +61,8 @@ export class SlackTransport implements NeedTransport {
   }
   endpoint(method: string): string { return `${this.apiBase}/${method}`; }
   async call(method: string, body: any): Promise<any> {
-    const res = await fetch(this.endpoint(method), { method:"POST", headers:{"content-type":"application/json", "authorization":`Bearer ${this.token}`}, body:JSON.stringify(body) });
+    const timeoutMs = abortMs();
+    const res = await fetchWithTimeout(this.endpoint(method), { method:"POST", headers:{"content-type":"application/json", "authorization":`Bearer ${this.token}`}, body:JSON.stringify(body) }, timeoutMs, `slack ${method}`);
     const json:any = await res.json().catch(()=>({ok:false, error:`HTTP ${res.status}`}));
     if (!res.ok || json.ok === false) throw new Error(json.error || json.description || `slack ${method} failed`);
     return json;
