@@ -8,7 +8,7 @@ Copied byte-for-byte into every project. Do not edit this section.
 
 ### Ideal outcome
 
-The bead's stated outcome is verifiably true in your worktree, committed on a branch named `fleet/<bead-id>`, with a final report listing what changed, the tool evidence that the done holds, and anything you discovered that the bead's author got wrong.
+The bead's stated outcome is verifiably true in your worktree, committed on a branch named `fleet/<bead-id>`, branched from the integration branch the bead's `Integration: fleet/<goal-slug>` line names, or from the target named in this file's project half when there is no such line, with a final report listing what changed, the tool evidence that the done holds, and anything you discovered that the bead's author got wrong.
 
 ### Constraints
 
@@ -48,7 +48,7 @@ The bead's stated outcome is verifiably true in your worktree, committed on a br
 
 Report to whoever dispatched you, with evidence, BEFORE going idle. Finishing silently is the known failure mode this contract exists to prevent.
 
-The report goes on the bead itself as a comment (for example, `bd comment <bead-id> --file report.md` or `bd comment <bead-id> --stdin`), then the worker adds the review-queue label (`bd update <bead-id> --add-label needs-review`). The report names the branch, the head, what changed, and the command output proving the done holds. A worker NEVER closes the bead: close belongs to the commander/integrator after review and merge, and closing before review hides the gate rather than satisfying it.
+The report goes on the bead itself as a comment (for example, `bd comment <bead-id> --file report.md` or `bd comment <bead-id> --stdin`), then the worker adds the review-queue label (`bd update <bead-id> --add-label needs-review`). The report names the branch, the base the branch was cut from — the branch named by `Integration: fleet/<goal-slug>` when present, otherwise the default target — the head, what changed, and the command output proving the done holds. A worker NEVER closes the bead: close belongs to the commander/integrator after review and merge, and closing before review hides the gate rather than satisfying it.
 
 If you need commander input before the final report, write a line in your own output beginning exactly `@commander: `. Then either pause at a safe point or continue with the assumptions you name there. Do not rely on a private message to wake the commander; the herald watches seat output for that sentinel and writes the durable wake to the inbox.
 
