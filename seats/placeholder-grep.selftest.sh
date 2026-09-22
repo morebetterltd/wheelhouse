@@ -42,8 +42,7 @@ run_binary_leg() {
   old="$PWD"
   cd "$INSTALL" || { fail "could not cd to install fixture: $INSTALL"; return; }
   set +e
-  out="$(run_placeholder_check)"
-  rc=$?
+  rc=0; out="$(run_placeholder_check)" || rc=$?
   set -e
   cd "$old" || exit 2
   if [ "$rc" -eq 1 ] && [ -z "$out" ]; then
@@ -61,8 +60,7 @@ run_text_leg() {
   old="$PWD"
   cd "$INSTALL" || { fail "could not cd to install fixture: $INSTALL"; return; }
   set +e
-  out="$(run_placeholder_check)"
-  rc=$?
+  rc=0; out="$(run_placeholder_check)" || rc=$?
   set -e
   cd "$old" || exit 2
   if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q 'wheelhouse/CLAIM.md:1:this is a real {{TEXT_PLACEHOLDER}}'; then

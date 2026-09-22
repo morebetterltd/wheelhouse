@@ -372,7 +372,7 @@ build_proj "$PROJ" alpha
 # for the wrong reason — the operator-export mechanism working, not the
 # adapter setting it — so it is stripped before every `run`, and phase 1's
 # override case sets WHEELHOUSE_BEADS_ACTOR_WORKER_1 explicitly instead.
-run() { OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
+run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
@@ -554,22 +554,22 @@ env HOME="$HOME_FIX" bun -e '
 AUTHROUTE_ENV_DIR="$HOME_FIX/.pi-seats-authroute-env/worker-1"
 rm -f "$AUTHROUTE_ENV_DIR/auth.json"
 RUN_PROJ="$AUTHROUTE_ENV_PROJ"; STATE="$AUTHROUTE_ENV_PROJ/seats/state.json"; LOG="$AUTHROUTE_ENV_PROJ/seats/logs/worker-1.jsonl"; ARGV="$AUTHROUTE_ENV_DIR/argv.json"; CWD_FILE="$AUTHROUTE_ENV_DIR/cwd.txt"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" PI_CODING_AGENT_DIR="$AUTHROUTE_ENV_DIR" OPENAI_API_KEY='fixture-openai-key' pi -p --no-session --provider openai --model gpt-fixture 'Reply with exactly OK.' 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" PI_CODING_AGENT_DIR="$AUTHROUTE_ENV_DIR" OPENAI_API_KEY='fixture-openai-key' pi -p --no-session --provider openai --model gpt-fixture 'Reply with exactly OK.' 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$OUT" = "OK" ]; then pass "authRoute env: direct pi probe succeeds with only OPENAI_API_KEY and no auth.json"
 else fail "authRoute env: direct pi probe failed without auth.json (exit $RC): $OUT"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" probe worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" probe worker-1 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$OUT" = "OK" ]; then pass "authRoute env: adapter probe exits 0 without auth.json"
 else fail "authRoute env: adapter probe failed without auth.json (exit $RC): $OUT"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "authRoute env: adapter spawn exits 0 without auth.json"
 else fail "authRoute env: adapter spawn failed without auth.json (exit $RC): $OUT"; fi
 mkdir -p "$AUTHROUTE_ENV_PROJ/.wheelhouse-worktrees/env-bead"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 env-bead 'hello env route' 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 env-bead 'hello env route' 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && wait_for "$LOG" 'echo: Bead env-bead' 5; then pass "authRoute env: adapter dispatch succeeds without auth.json"
 else fail "authRoute env: adapter dispatch failed without auth.json (exit $RC): $OUT"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)" || RC=$?
 printf '{"openai":{"type":"env"}}\n' > "$AUTHROUTE_ENV_DIR/auth.json"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
 if [ $RC -ne 0 ] && says "authRoute=env" && says "auth.json" && says "shadows"; then
   pass "authRoute env: an auth.json env stub is forbidden instead of shadowing a valid env key"
 else fail "authRoute env: auth.json env stub was not refused as a shadowing hazard (exit $RC): $OUT"; fi
@@ -712,11 +712,11 @@ STATE_MTIME_AFTER="$(stat -f %m "$STATE")"
 if [ "$STATE_MTIME_AFTER" = "$STATE_MTIME_BEFORE" ]; then
   pass "capacity: rescanning the same quota marker does not rewrite state.json"
 else fail "capacity: status rewrote state.json without a marker change ($STATE_MTIME_BEFORE -> $STATE_MTIME_AFTER)"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" NO_COLOR=1 bun "$RUN_PROJ/seats/floor.ts" --once --pin 0 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" NO_COLOR=1 bun "$RUN_PROJ/seats/floor.ts" --once --pin 0 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
   pass "capacity: floor row surfaces PARKED/QUOTA and the re-probe command"
 else fail "capacity: floor did not surface PARKED/QUOTA (exit $RC): $OUT"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$RUN_PROJ/seats/fleet-gate.sh" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$RUN_PROJ/seats/fleet-gate.sh" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
   pass "capacity: fleet-gate surfaces PARKED/QUOTA and the re-probe command"
 else fail "capacity: fleet-gate did not surface PARKED/QUOTA (exit $RC): $OUT"; fi
@@ -840,7 +840,7 @@ else fail "spawning an already-running seat did not stop (exit $RC)"; fi
 
 phase "1b. BEADS_ACTOR override — WHEELHOUSE_BEADS_ACTOR_<SEAT> beats the seat name"
 run stop worker-1
-OUT="$(env -u BEADS_ACTOR WHEELHOUSE_BEADS_ACTOR_WORKER_1=custom-actor HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR WHEELHOUSE_BEADS_ACTOR_WORKER_1=custom-actor HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "spawn with the override env var exits 0"
 else fail "spawn with the override env var exited ${RC}: $OUT"; fi
 if grep -q '"BEADS_ACTOR":"custom-actor"' "${ARGV%argv.json}env.json" 2>/dev/null; then
@@ -862,7 +862,7 @@ else fail "probe prompt was not the fixed liveness turn: $(cat "${ARGV%argv.json
 if [ ! -d "$PROJ/.wheelhouse-worktrees" ]; then
   pass "probe did not require or create a bead worktree"
 else fail "probe created or required a bead worktree directory"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PROBE_FAIL='HTTP 429 quota exhausted' bun "$RUN_PROJ/seats/adapter.ts" probe worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PROBE_FAIL='HTTP 429 quota exhausted' bun "$RUN_PROJ/seats/adapter.ts" probe worker-1 2>&1)" || RC=$?
 if [ $RC -eq 23 ] && [ "$OUT" = "HTTP 429 quota exhausted" ]; then
   pass "probe failure preserves the provider error verbatim and exit status"
 else fail "probe failure was not verbatim (exit $RC): $OUT"; fi
@@ -927,7 +927,7 @@ NEG_CWD_PROJ="$FIX/live-cwd-negative-proj"
 build_proj "$NEG_CWD_PROJ" live-cwd-negative
 mkdir -p "$NEG_CWD_PROJ/.wheelhouse-worktrees/guard-bead" "$FIX/genuinely-different-live-cwd"
 RUN_PROJ="$NEG_CWD_PROJ"; STATE="$NEG_CWD_PROJ/seats/state.json"; LOG="$NEG_CWD_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-live-cwd-negative/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-live-cwd-negative/worker-1/cwd.txt"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_FORCE_LIVE_CWD="$FIX/genuinely-different-live-cwd" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 guard-bead 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_FORCE_LIVE_CWD="$FIX/genuinely-different-live-cwd" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 guard-bead 2>&1)" || RC=$?
 if [ $RC -ne 0 ] && says "has live cwd" && says "not requested cwd"; then
   pass "genuinely different live cwd still trips the post-launch guard"
 else fail "genuinely different live cwd did not trip the guard (exit $RC): $OUT"; fi
@@ -935,18 +935,18 @@ RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1
 
 mkdir -p "$PROJ/.wheelhouse-worktrees/bead-missing-session"
 rm -f "$SESS"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-missing-session "missing session file keeps pi continuity" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-missing-session "missing session file keeps pi continuity" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -Fq -- "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null && ! says "session continuity intentionally dropped"; then
   pass "pi missing recorded session file still relaunches with the recorded --session path"
 else fail "pi missing recorded session file did not preserve --session (exit $RC): $OUT argv=$(cat "$ARGV" 2>/dev/null)"; fi
 LOG_MARK=$(wc -c < "$LOG" | tr -d ' ')
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_EVENT_STRING_BYTES=1024 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "TOOLBIG payload" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_EVENT_STRING_BYTES=1024 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "TOOLBIG payload" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes' 5 && grep -q 'wheelhouse log truncated' "$LOG"; then
   pass "tool_execution_update payload is trimmed in the seat log with byte count noted"
 else fail "tool_execution_update payload was not trimmed (exit $RC): $OUT"; fi
 
 printf '%s\n' '{"type":"filler","text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}' '{"type":"agent_end","messages":[]}' >> "$LOG"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "last-event agent_end" && [ -s "$LOG.1" ] && [ ! -s "$LOG" ]; then
   pass "live settled log past cap is copy-truncated without renaming the writer away"
 else fail "live settled log was not copy-truncated as expected (exit $RC): $OUT current=$(wc -c < "$LOG" 2>/dev/null || echo missing) archive=$(wc -c < "$LOG.1" 2>/dev/null || echo missing)"; fi
@@ -964,13 +964,13 @@ if [ $RC -eq 0 ] && [ "$(state_get pid)" = "$ANSWERING_PID_BEFORE" ] && ! says "
 else fail "answering idle seat was relaunched or diagnosed wedged (exit $RC): before=$ANSWERING_PID_BEFORE after=$(state_get pid) out=$OUT"; fi
 WEDGED_AGENT_DIR="${ARGV%argv.json}"
 touch "$WEDGED_AGENT_DIR/ignore-get-state"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WEDGED_GET_STATE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WEDGED_GET_STATE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -q 'worker-1.*WEDGED' <<<"$OUT" && says 'remedy: bun seats/adapter.ts stop worker-1; bun seats/adapter.ts resume worker-1'; then
   pass "status renders an idle get_state-timeout seat as WEDGED with remedy"
 else fail "status did not render WEDGED/remedy for ignored get_state (exit $RC): $OUT"; fi
 WEDGED_PID_BEFORE="$(state_get pid)"
 WEDGED_SESSION_BEFORE="$(state_get sessionFile)"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "wedged seat self-heals" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "wedged seat self-heals" 2>&1)" || RC=$?
 WEDGED_PID_AFTER="$(state_get pid)"
 if [ $RC -eq 0 ] && says "WEDGED" && says "stopping and resuming" && says "retrying dispatch once" && [ "$WEDGED_PID_AFTER" != "$WEDGED_PID_BEFORE" ]; then
   pass "dispatch self-heals an idle get_state timeout by stop+resume and retry"
@@ -989,7 +989,7 @@ build_proj "$LATE_PROJ" late-ack
 mkdir -p "$LATE_PROJ/.wheelhouse-worktrees/old-bead" "$LATE_PROJ/.wheelhouse-worktrees/new-bead"
 RUN_PROJ="$LATE_PROJ"; STATE="$LATE_PROJ/seats/state.json"; LOG="$LATE_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-late-ack/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-late-ack/worker-1/cwd.txt"
 run spawn worker-1 old-bead
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack fixture" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack fixture" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "prompt delivered, ack late" && says "new-bead"; then pass "late prompt ack after delivery exits 0 with warning"
 else fail "late prompt ack dispatch did not warn/succeed (exit $RC): $OUT"; fi
 if [ "$(state_get lastBead)" = "new-bead" ] && grep -q 'Bead new-bead' "$LOG" 2>/dev/null; then
@@ -1002,7 +1002,7 @@ build_proj "$NO_DELIVERY_PROJ" no-delivery
 mkdir -p "$NO_DELIVERY_PROJ/.wheelhouse-worktrees/old-bead" "$NO_DELIVERY_PROJ/.wheelhouse-worktrees/new-bead"
 RUN_PROJ="$NO_DELIVERY_PROJ"; STATE="$NO_DELIVERY_PROJ/seats/state.json"; LOG="$NO_DELIVERY_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-no-delivery/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-no-delivery/worker-1/cwd.txt"
 run spawn worker-1 old-bead
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)" || RC=$?
 if [ $RC -ne 0 ] && says "timed out after 200ms waiting for prompt response" && ! says "prompt delivered, ack late"; then pass "late prompt ack without delivery remains a STOP"
 else fail "late prompt ack without delivery did not STOP (exit $RC): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
@@ -1011,11 +1011,11 @@ FIFO_TIMEOUT_PROJ="$FIX/fifo-timeout-proj"
 build_proj "$FIFO_TIMEOUT_PROJ" fifo-timeout
 mkdir -p "$FIFO_TIMEOUT_PROJ/.wheelhouse-worktrees/old-bead" "$FIFO_TIMEOUT_PROJ/.wheelhouse-worktrees/new-bead"
 RUN_PROJ="$FIFO_TIMEOUT_PROJ"; STATE="$FIFO_TIMEOUT_PROJ/seats/state.json"; LOG="$FIFO_TIMEOUT_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-fifo-timeout/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-fifo-timeout/worker-1/cwd.txt"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PAUSE_STDIN_AFTER_GET_STATE_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PAUSE_STDIN_AFTER_GET_STATE_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "fifo timeout setup: spawn exits 0 with a live paused seat"
 else fail "fifo timeout setup spawn failed (exit $RC): $OUT"; fi
 HUGE_PROMPT="$(node -e 'process.stdout.write("H".repeat(128 * 1024))')"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_FIFO_WRITE_MS=200 WHEELHOUSE_PROMPT_ACK_MS=1000 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "$HUGE_PROMPT" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_FIFO_WRITE_MS=200 WHEELHOUSE_PROMPT_ACK_MS=1000 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "$HUGE_PROMPT" 2>&1)" || RC=$?
 if [ $RC -ne 0 ] && says "prompt not delivered (partial FIFO write?)"; then pass "fifo write timeout names possible partial FIFO write"
 else fail "fifo write timeout did not report partial FIFO write (exit $RC): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
@@ -1027,11 +1027,11 @@ PINPROJ="$FIX/pinproj"
 build_proj "$PINPROJ" pin
 mkdir -p "$PINPROJ/.wheelhouse-worktrees/bead-a" "$PINPROJ/.wheelhouse-worktrees/bead-b"
 RUN_PROJ="$PINPROJ"; STATE="$PINPROJ/seats/state.json"; LOG="$PINPROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-pin/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-pin/worker-1/cwd.txt"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 bead-a 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 bead-a 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "pinned-cwd setup spawn exits 0"
 else fail "pinned-cwd setup spawn exited ${RC}: $OUT"; fi
 PIN_SESS_BEFORE="$(state_get sessionFile)"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-b "hello pinned" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-b "hello pinned" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "starting a fresh session"; then pass "pinned-cwd cross-bead dispatch drops session continuity and says so"
 else fail "pinned-cwd dispatch did not fresh-start as specified (exit $RC): $OUT"; fi
 if [ "$(state_get sessionFile)" != "$PIN_SESS_BEFORE" ] && ! grep -q "\"--session\",\"$PIN_SESS_BEFORE\"" "$ARGV" 2>/dev/null; then
@@ -1063,7 +1063,7 @@ run dispatch worker-1 bead-mid "SLOW deliberately abandoned"
 if [ $RC -eq 0 ]; then pass "force setup dispatch exits 0"
 else fail "force setup dispatch exited ${RC}: $OUT"; fi
 PID_FORCE_BEFORE="$(state_get pid)"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_DISPATCH_FORCE=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-force "forced escape" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_DISPATCH_FORCE=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-force "forced escape" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "WHEELHOUSE_DISPATCH_FORCE=1" && says "deliberately abandoning mid-turn bead bead-mid" && says "bead-force"; then
   pass "force escape announces deliberate abandonment and dispatches the new bead"
 else fail "force escape did not announce and dispatch (exit $RC): $OUT"; fi
@@ -1094,7 +1094,7 @@ with p.open('wb') as f:
     f.write(b'{"type":"agent_end"}\n')
 PY
 bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-big']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BIGLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "worker-big" && says "last-event agent_end"; then pass "status reads last event from a synthetic >2GB sparse log without full-file parsing"
 else fail "status did not survive synthetic >2GB log (exit $RC): $OUT"; fi
 BADLOG="$PROJ/seats/logs/worker-badlog.jsonl"
@@ -1106,17 +1106,17 @@ with p.open('wb') as f:
     f.write(b'not json at tail but process is alive\n')
 PY
 bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-badlog']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BADLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "worker-badlog" && says "RUNNING" && says "log too large to parse"; then pass "oversize unparsable log keeps live seat visible with log-too-large marker"
 else fail "oversize unparsable log aborted or hid live seat (exit $RC): $OUT"; fi
 ROTLOG="$PROJ/seats/logs/worker-rotate.jsonl"
 printf '{"type":"agent_start"}\n' > "$ROTLOG"
 bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-rotate']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$ROTLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=1 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=1 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ -f "$ROTLOG" ] && [ ! -f "$ROTLOG.1" ]; then pass "rotation refuses mid-turn logs whose last event is not agent_settled/agent_end"
 else fail "rotation moved an unsettled log (exit $RC): $OUT"; fi
 printf '{"type":"agent_end"}\n' >> "$ROTLOG"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=1 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=1 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ -f "$ROTLOG.1" ] && [ -f "$ROTLOG" ]; then pass "rotation runs after agent_settled/agent_end and keeps current log present"
 else fail "rotation did not archive settled oversize log (exit $RC): $OUT"; fi
 mv "$FIX/state-before-big.json" "$STATE"
@@ -1208,7 +1208,7 @@ run resume worker-1
 if [ $RC -eq 0 ] && says "STALLED" && says "cut off during a tool call"; then pass "resume detects the unfinished tool call and marks the seat STALLED"; else fail "resume did not surface mid-tool cutoff (rc=$RC): $OUT"; fi
 run status
 if [ $RC -eq 0 ] && says "STALLED" && says "last-event agent_settled"; then pass "status renders resumed mid-tool cutoff as STALLED, not RUNNING"; else fail "status did not render STALLED after mid-tool resume (rc=$RC): $OUT"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/herald.ts" --once 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/herald.ts" --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -q '"class":"settle"' "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null && grep -q '"state":"stalled"' "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null; then
   pass "herald appends a settle/stalled inbox row for the resumed cutoff"
 else fail "herald did not append settle/stalled row (rc=$RC out=$OUT inbox=$(cat "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null))"; fi
@@ -1264,7 +1264,7 @@ build_proj "$CLEAN_PROJ" cleanup
 RUN_PROJ="$CLEAN_PROJ"; STATE="$CLEAN_PROJ/seats/state.json"; LOG="$CLEAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cleanup/worker-1/argv.json"
 run spawn worker-1
 run stop worker-1 >/dev/null 2>&1
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_STALL_ONCE=2000 STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_STALL_ONCE=2000 STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)" || RC=$?
 CLEAN_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | head -1)"
 if [ $RC -ne 0 ] && says "launch-only cleanup" && says "SIGKILL" && [ -n "$CLEAN_PID" ] && ! kill -0 "$CLEAN_PID" 2>/dev/null; then
   pass "launch readiness timeout kills only the newly spawned unready pid before STOP"
@@ -1275,7 +1275,7 @@ else fail "launch cleanup changed the stopped state record (pid=$(state_get pid)
 FAIL_PROJ="$FIX/getstate-fail-proj"
 build_proj "$FAIL_PROJ" getstatefail
 RUN_PROJ="$FAIL_PROJ"; STATE="$FAIL_PROJ/seats/state.json"; LOG="$FAIL_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-getstatefail/worker-1/argv.json"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_FAIL_ONCE='fixture get_state failure' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_FAIL_ONCE='fixture get_state failure' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
 FAIL_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | head -1)"
 if [ $RC -ne 0 ] && says "get_state failed on fresh seat" && says "launch-only cleanup" && [ -n "$FAIL_PID" ] && ! kill -0 "$FAIL_PID" 2>/dev/null; then
   pass "launch get_state success:false kills the spawned child before STOP"
@@ -1284,16 +1284,16 @@ if state_get lastLaunchFailure | grep -q 'fixture get_state failure'; then
   pass "launch get_state success:false records lastLaunchFailure in state.json"
 else fail "get_state success:false did not record lastLaunchFailure: $(cat "$STATE" 2>/dev/null)"; fi
 RUN_PROJ="$CLEAN_PROJ"; STATE="$CLEAN_PROJ/seats/state.json"; LOG="$CLEAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cleanup/worker-1/argv.json"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && ! says "ORPHAN"; then pass "status reports zero orphans after launch cleanup"
 else fail "status found an orphan after cleanup (exit $RC): $OUT"; fi
 
 CHILD_PROJ="$FIX/child-proj"
 build_proj "$CHILD_PROJ" child
 RUN_PROJ="$CHILD_PROJ"; STATE="$CHILD_PROJ/seats/state.json"; LOG="$CHILD_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-child/worker-1/argv.json"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SPAWN_MATCHING_CHILD=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SPAWN_MATCHING_CHILD=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
 CHILD_PID="$(cat "$HOME_FIX/.pi-seats-child/worker-1/matching-child.pid" 2>/dev/null || true)"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null && ! says "ORPHAN"; then
   pass "status does not flag a live child of the recorded seat as ORPHAN"
 else fail "status flagged a recorded seat child as orphan or child missing (exit $RC child=${CHILD_PID:-none}): $OUT"; fi
@@ -1309,7 +1309,7 @@ ERR="$ORPHAN_PROJ/seats/logs/worker-1.stderr.log"
 ( env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" PI_CODING_AGENT_DIR="$HOME_FIX/.pi-seats-orphan/worker-1" BEADS_ACTOR=worker-1 bash -c "cd '$ORPHAN_PROJ' && exec -a 'pi --mode rpc duplicate $HOME_FIX/.pi-seats-orphan/worker-1 $ORPHAN_PROJ' sleep 1000" 0<> "$FIFO" >> "$LOG" 2>> "$ERR" ) &
 ORPHAN_PID=$!
 sleep 0.5
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "pid $ORPHAN_PID" && says "remedy:" && { says "ORPHAN" || says "fixture leak"; } && { says "FIFO" || says "argv/cwd/account match"; }; then
   pass "status reports a duplicate pi process as ORPHAN or fixture leak with match reason and remedy"
 else fail "status did not report the duplicate process as ORPHAN/fixture leak (exit $RC orphan=$ORPHAN_PID recorded=$REC_PID): $OUT"; fi
@@ -1319,7 +1319,7 @@ mkdir -p "$FIXTURE_LEAK_ROOT"
 ( env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bash -c "cd '$FIXTURE_LEAK_ROOT' && exec -a 'pi --mode rpc fixture-leak $HOME_FIX/.pi-seats-orphan/worker-1 $ORPHAN_PROJ $FIXTURE_LEAK_ROOT' sleep 1000" ) &
 FIXTURE_LEAK_PID=$!
 sleep 0.5
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "fixture leak" && says "pid $FIXTURE_LEAK_PID" && ! grep -q "ORPHAN: pid $FIXTURE_LEAK_PID" <<<"$OUT"; then
   pass "status labels leaked fixture processes separately instead of ORPHAN"
 else fail "status did not label fixture leak separately (exit $RC leak=$FIXTURE_LEAK_PID): $OUT"; fi
@@ -1331,7 +1331,7 @@ build_proj "$STEER_PROJ" steer-slow
 RUN_PROJ="$STEER_PROJ"; STATE="$STEER_PROJ/seats/state.json"; LOG="$STEER_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-steer-slow/worker-1/argv.json"
 run spawn worker-1
 printf '2000\n' > "$HOME_FIX/.pi-seats-steer-slow/worker-1/stall-next-get-state"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=300 bun "$RUN_PROJ/seats/adapter.ts" steer worker-1 'queued from slow state' 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=300 bun "$RUN_PROJ/seats/adapter.ts" steer worker-1 'queued from slow state' 2>&1)" || RC=$?
 COMMANDS="$HOME_FIX/.pi-seats-steer-slow/worker-1/commands.jsonl"
 if [ $RC -eq 0 ] && says "queued steer" && grep -q '"streamingBehavior":"steer"' "$COMMANDS" 2>/dev/null && grep -q 'queued from slow state' "$COMMANDS" 2>/dev/null; then
   pass "slow get_state steer queues prompt with streamingBehavior=steer instead of losing text"
@@ -1356,7 +1356,7 @@ env HOME="$HOME_FIX" PROJ="$STATUS_COST_PROJ" ME="$$" bun -e '
 '
 RUN_PROJ="$STATUS_COST_PROJ"; STATE="$STATUS_COST_PROJ/seats/state.json"
 START_MS="$(node -e 'console.log(Date.now())')"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=0 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=0 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 END_MS="$(node -e 'console.log(Date.now())')"
 ELAPSED_MS=$((END_MS - START_MS))
 if [ $RC -eq 0 ] && [ "$ELAPSED_MS" -lt 2000 ]; then pass "status cost: 6 fixture seats and no candidates completes under 2s (${ELAPSED_MS}ms)"
@@ -1415,7 +1415,7 @@ if [ $DOTNET_RC -eq 0 ] && grep -q 'args=build -maxcpucount:8 node_reuse=1 guard
   pass "host budget: dotnet real tool sees -maxcpucount:8 and MSBUILDDISABLENODEREUSE=1"
 else fail "host budget: dotnet caps/env missing rc=$DOTNET_RC log=$(cat "$FIX/host-budget-dotnet.log" 2>/dev/null)"; fi
 FAKE_PERL_DIR="$FIX/fake-perl"; mkdir -p "$FAKE_PERL_DIR"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FAKE_PERL_DIR/perl"; chmod +x "$FAKE_PERL_DIR/perl"
-PRIM_OUT="$(STUB_CARGO_LOG="$FIX/no-primitive.log" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$FAKE_PERL_DIR:$BIN:/usr/bin:/bin" "$BUDGET_PROJ/seats/bin/cargo" no-primitive 2>&1)"; PRIM_RC=$?
+PRIM_RC=0; PRIM_OUT="$(STUB_CARGO_LOG="$FIX/no-primitive.log" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$FAKE_PERL_DIR:$BIN:/usr/bin:/bin" "$BUDGET_PROJ/seats/bin/cargo" no-primitive 2>&1)" || PRIM_RC=$?
 if [ $PRIM_RC -eq 127 ] && printf '%s\n' "$PRIM_OUT" | grep -q 'STOP: host-build-shim needs a crash-safe flock(2) primitive' && printf '%s\n' "$PRIM_OUT" | grep -q 'Refusing mkdir locks'; then
   pass "host budget: missing lock primitive fails with actionable STOP"
 else fail "host budget: missing lock primitive was not actionable rc=$PRIM_RC: $PRIM_OUT"; fi
@@ -1429,12 +1429,12 @@ if wait_for "$HOST_KILL_LOG" 'args=hold' 5; then
   if [ $AFTER_RC -eq 0 ] && grep -q 'args=after-kill' "$HOST_KILL_LOG" 2>/dev/null; then pass "host budget: real flock(2) primitive releases lock after SIGKILLed holder"
   else fail "host budget: next build did not acquire after killed holder rc=$AFTER_RC log=$(cat "$HOST_KILL_LOG" 2>/dev/null)"; fi
 else fail "host budget: killed-holder setup never acquired lock: $(cat "$HOST_KILL_LOG" 2>/dev/null)"; fi
-CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/no-parity-dir" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)"; CONTRACT_RC=$?
+CONTRACT_RC=0; CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/no-parity-dir" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)" || CONTRACT_RC=$?
 if [ $CONTRACT_RC -eq 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep -q 'lock=.*/.cache/wheelhouse-build.lock jobs=8 test_threads=4 reentry=WHEELHOUSE_BUILD_LOCK_HELD' && printf '%s\n' "$CONTRACT_OUT" | grep -q 'parity=ok scanned='; then
   pass "host budget: cargo --contract prints lock/jobs/test_threads/reentry and parity scan result"
 else fail "host budget: cargo --contract mismatch rc=$CONTRACT_RC: $CONTRACT_OUT"; fi
 BAD_PARITY="$FIX/parity/fleet-x"; mkdir -p "$BAD_PARITY"; printf '#!/usr/bin/env bash\nprintf "tool=cargo lock=/other jobs=99 test_threads=9 reentry=OTHER\\n"\n' > "$BAD_PARITY/cargo"; chmod +x "$BAD_PARITY/cargo"
-CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/parity" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)"; CONTRACT_RC=$?
+CONTRACT_RC=0; CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/parity" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)" || CONTRACT_RC=$?
 if [ $CONTRACT_RC -ne 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep -q 'parity=mismatch'; then pass "host budget: --contract parity scan reports mismatched fleet shims"
 else fail "host budget: parity mismatch not reported rc=$CONTRACT_RC: $CONTRACT_OUT"; fi
 
@@ -1473,18 +1473,18 @@ EOF
   chmod +x "$fakebin/bun"
 }
 CAP_UNDER="$FIX/host-budget-cap-under"; build_proj "$CAP_UNDER" cap-under; setup_worktree_cap_repo "$CAP_UNDER" 9 false
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_UNDER/fakebin:$RUN_PATH" bun "$CAP_UNDER/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_UNDER/fakebin:$RUN_PATH" bun "$CAP_UNDER/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && ! printf '%s\n' "$OUT" | grep -q 'HOST-BUDGET worktree cap'; then pass "host budget worktree cap: under cap is silent"
 else fail "host budget worktree cap: under cap printed or failed rc=$RC: $OUT"; fi
 CAP_OVER="$FIX/host-budget-cap-over"; build_proj "$CAP_OVER" cap-over; setup_worktree_cap_repo "$CAP_OVER" 1 false
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_OVER/fakebin:$RUN_PATH" bun "$CAP_OVER/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_OVER/fakebin:$RUN_PATH" bun "$CAP_OVER/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'HOST-BUDGET worktree cap exceeded' && printf '%s\n' "$OUT" | grep -q 'HOST-BUDGET safe merged-worktree' && printf '%s\n' "$OUT" | grep -q 'bun seats/prune.ts prune --from-file seats/logs/prune-worktree-cap-scan.json --yes --categories merged-worktree'; then pass "host budget worktree cap: over cap reports safe rows and exact prune command"
 else fail "host budget worktree cap: over cap report missing rc=$RC: $OUT"; fi
 CAP_AUTO="$FIX/host-budget-cap-auto"; build_proj "$CAP_AUTO" cap-auto; setup_worktree_cap_repo "$CAP_AUTO" 1 true
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_AUTO/fakebin:$RUN_PATH" bun "$CAP_AUTO/seats/adapter.ts" status 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_AUTO/fakebin:$RUN_PATH" bun "$CAP_AUTO/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'PRUNED worktree merged-worktree' && [ ! -e "$CAP_AUTO/.wheelhouse-worktrees/closed" ]; then pass "host budget worktree cap: auto_prune removes a safe merged worktree"
 else fail "host budget worktree cap: auto_prune failed rc=$RC out=$OUT exists=$(test -e "$CAP_AUTO/.wheelhouse-worktrees/closed" && echo yes || echo no)"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)" || RC=$?
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
 phase "8. canary — can these checks detect a broken adapter?"
@@ -1571,7 +1571,7 @@ else
 }
 EOF
   REAL_PATH="$(dirname "$REAL_PI"):$(dirname "$(command -v bun)"):/usr/bin:/bin"
-  rrun() { OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=90000 bun "$RPROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
+  rrun() { RC=0; OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=90000 bun "$RPROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
   RSTATE="$RPROJ/seats/state.json"
   RLOG="$RPROJ/seats/logs/worker-1.jsonl"
   rstate_get() { bun -e "const s=require('$RSTATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }

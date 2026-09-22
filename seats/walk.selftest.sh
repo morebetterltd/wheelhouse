@@ -154,8 +154,7 @@ run_case(){
   local name="$1" reply="$2" expect_rc="$3" expect_text="$4"
   local proj="$FIX/proj-$name" out="$FIX/out-$name" ns="walk-$name" got rc transcript metadata argv prompt
   build_proj "$proj" "$ns"
-  got=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY="$reply" bun seats/walk.ts 'claim text' --surface product:'echo product' --out "$out" 2>&1)
-  rc=$?
+  rc=0; got=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY="$reply" bun seats/walk.ts 'claim text' --surface product:'echo product' --out "$out" 2>&1) || rc=$?
   if [ "$rc" -eq "$expect_rc" ]; then pass "$name exit $rc"; else fail "$name exit got $rc expected $expect_rc: $got"; fi
   if printf '%s\n' "$got" | grep -qF "$expect_text"; then pass "$name printed $expect_text"; else fail "$name missing $expect_text: $got"; fi
   transcript="$out/transcript.txt"
@@ -201,8 +200,7 @@ run_stream_case(){
   if [ "$harness" != pi ]; then
     bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='$harness'; j.seats.verifier.provider='$([ "$harness" = claude-code ] && printf anthropic || printf openai-codex)'; j.seats.verifier.model='stream-fixture'; j.seats.verifier.account.authRoute='$([ "$harness" = claude-code ] && printf oauth || printf env)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
   fi
-  out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STREAM_FILE="$stream" bun seats/walk.ts 'claim' --surface product:fixture --out "$outdir" 2>&1)
-  rc=$?
+  rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STREAM_FILE="$stream" bun seats/walk.ts 'claim' --surface product:fixture --out "$outdir" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] && pass "$name final-message stream exits WALKED-DONE" || fail "$name stream rc=$rc output=$out"
   printf '%s\n' "$out" | grep -q 'VERDICT: WALKED-DONE' && pass "$name final-message stream prints verdict" || fail "$name stream missing verdict: $out"
   [ -s "$outdir/walk.json" ] && grep -q '"verdict": "WALKED-DONE"' "$outdir/walk.json" && pass "$name final-message stream writes verdict file" || fail "$name stream missing verdict file: $(cat "$outdir/walk.json" 2>/dev/null)"
@@ -229,22 +227,19 @@ phase 'host budget PATH is opt-in for verifier walks'
 proj="$FIX/proj-budget"; ns="walk-budget"; outdir="$FIX/out-budget"; build_proj "$proj" "$ns"
 mkdir -p "$proj/seats/bin"
 printf '{"enabled":true}\n' > "$proj/seats/host-budget.json"
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$outdir" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$outdir" 2>&1) || rc=$?
 [ "$rc" -eq 0 ] && pass 'host-budget walk exits 0' || fail "host-budget walk rc=$rc output=$out"
 if grep -q "$proj/seats/bin" "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null; then pass 'host budget enabled: walk PATH includes project seats/bin'; else fail "host budget enabled: walk PATH missing seats/bin: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
 
 phase 'mixed harness verifier walks use the selected driver'
 proj="$FIX/proj-mixed-walk"; ns="walk-mixed"; build_proj "$proj" "$ns"
 bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-claude" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-claude" 2>&1) || rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'claude-code walk one-shot uses claude driver environment, not pi'; else fail "claude-code walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
 if grep -q '"--output-format","stream-json"' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q '"--verbose"' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot requests stream-json output with --verbose'; else fail "claude-code walk one-shot missing stream-json/--verbose argv: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
 bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/env.json"
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-codex" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-codex" 2>&1) || rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'codex walk one-shot uses codex driver environment, not pi'; else fail "codex walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
 if grep -q 'Fixture walker brief' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'codex walk one-shot carries verifier brief and measured-safe exec flags'; else fail "codex walk one-shot missing brief or safe flags: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
 
@@ -253,8 +248,7 @@ imgdir="$FIX/images-overbudget"
 mkdir -p "$imgdir"
 "$NODE_BIN" -e 'const fs=require("fs"), b=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lJxvVgAAAABJRU5ErkJggg==","base64"); for (let i=1;i<=5;i++) fs.writeFileSync(process.argv[1]+`/shot-${i}.png`, b);' "$imgdir"
 proj="$FIX/proj-images"; ns="walk-images"; build_proj "$proj" "$ns"
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_IMAGE_SOURCE_DIR="$imgdir" WHEELHOUSE_WALK_IMAGE_MAX_CONTEXT=2 STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-images" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_IMAGE_SOURCE_DIR="$imgdir" WHEELHOUSE_WALK_IMAGE_MAX_CONTEXT=2 STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-images" 2>&1) || rc=$?
 [ "$rc" -eq 0 ] && pass 'image-budget walk exits 0' || fail "image-budget rc=$rc output=$out"
 full_count=$(find "$FIX/out-images/screen-captures/full-size" -type f -name '*.png' | wc -l | tr -d ' ')
 context_count=$(find "$FIX/out-images/screen-captures/context" -type f -name '*.jpg' | wc -l | tr -d ' ')
@@ -266,8 +260,7 @@ if grep -q 'Image budget for screen captures' "$prompt" && grep -q 'downscaled t
 
 phase 'GUI window-list guard refuses an obscured target before spawn'
 proj="$FIX/proj-gui"; ns="walk-gui"; build_proj "$proj" "$ns"
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_JSON='[{"title":"Fixture Device","frontmost":true,"obscuredBy":"Bench Simulator Clone"}]' STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:gui:Fixture --out "$FIX/out-gui" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_JSON='[{"title":"Fixture Device","frontmost":true,"obscuredBy":"Bench Simulator Clone"}]' STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:gui:Fixture --out "$FIX/out-gui" 2>&1) || rc=$?
 [ "$rc" -eq 3 ] && pass 'obscured GUI target exits COULD-NOT-WALK (3)' || fail "obscured GUI target rc=$rc output=$out"
 printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep -q 'obscured by Bench Simulator Clone' && pass 'obscured GUI target names the obscuring window' || fail "obscured GUI target did not name the blocker: $out"
 [ ! -f "$HOME_FIX/.pi-seats-$ns/verifier/cwd.txt" ] && pass 'obscured GUI target does not spawn the verifier seat' || fail 'obscured GUI target spawned stub pi before the guard'
@@ -280,8 +273,7 @@ for case in failcmd malformed wrongshape; do
     malformed) cmd='printf "not json"'; want='window-list command malformed JSON';;
     wrongshape) cmd='printf "{\\\"notWindows\\\":[]}"'; want='returned wrong shape';;
   esac
-  out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_COMMAND="$cmd" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:gui:Fixture --out "$outdir" 2>&1)
-  rc=$?
+  rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_COMMAND="$cmd" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:gui:Fixture --out "$outdir" 2>&1) || rc=$?
   [ "$rc" -eq 3 ] && pass "GUI command $case exits COULD-NOT-WALK (3)" || fail "GUI command $case rc=$rc output=$out"
   printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep -q "$want" && pass "GUI command $case names the window-list failure" || fail "GUI command $case did not name failure '$want': $out"
   [ -s "$outdir/walk.json" ] && grep -q "$want" "$outdir/walk.json" && pass "GUI command $case writes walk.json with reason" || fail "GUI command $case walk.json missing reason: $(cat "$outdir/walk.json" 2>/dev/null)"
@@ -289,8 +281,7 @@ for case in failcmd malformed wrongshape; do
 done
 
 proj="$FIX/proj-nongui"; ns="walk-nongui"; build_proj "$proj" "$ns"
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_JSON='not-json-if-read' STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface install:README.md --out "$FIX/out-nongui" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_JSON='not-json-if-read' STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface install:README.md --out "$FIX/out-nongui" 2>&1) || rc=$?
 [ "$rc" -eq 0 ] && pass 'non-GUI install surface does not consult the injected window list' || fail "non-GUI install consulted the window list or otherwise failed (rc=$rc): $out"
 if grep -q '"mode": "not-gui"' "$FIX/out-nongui/walk.json"; then pass 'walk.json records not-gui mode for non-GUI surfaces'; else fail "non-GUI walk.json missing not-gui mode: $(cat "$FIX/out-nongui/walk.json" 2>/dev/null)"; fi
 
@@ -300,8 +291,7 @@ STDIN_FIFO="$FIX/stdin-open.fifo"
 mkfifo "$STDIN_FIFO"
 exec 9<> "$STDIN_FIFO"
 start_ms=$(node -e 'console.log(Date.now())')
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=3000 STUB_READ_STDIN_TO_EOF=1 STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-stdin" < "$STDIN_FIFO" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=3000 STUB_READ_STDIN_TO_EOF=1 STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-stdin" < "$STDIN_FIFO" 2>&1) || rc=$?
 end_ms=$(node -e 'console.log(Date.now())')
 exec 9>&-
 elapsed_ms=$((end_ms - start_ms))
@@ -311,24 +301,21 @@ printf '%s\n' "$out" | grep -q 'VERDICT: WALKED-DONE' && pass 'stdin-reading ver
 
 phase 'timeout names phase and honors per-walk budget env'
 proj="$FIX/proj-timeout"; ns="walk-timeout"; build_proj "$proj" "$ns"
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=200 STUB_SLEEP_MS=1000 STUB_REPLY=$'working before timeout\nVERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-timeout" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=200 STUB_SLEEP_MS=1000 STUB_REPLY=$'working before timeout\nVERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-timeout" 2>&1) || rc=$?
 [ "$rc" -eq 3 ] && pass 'timeout exits as COULD-NOT-WALK (3)' || fail "timeout rc=$rc output=$out"
 printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK — timed out after 200ms during run verifier walk' && pass 'timeout verdict names budget and phase' || fail "timeout did not name budget/phase: $out"
 if grep -q '"phase": "run verifier walk"' "$FIX/out-timeout/walk.json" && grep -q 'timed out after 200ms during run verifier walk' "$FIX/out-timeout/walk.json"; then pass 'timeout metadata records phase'; else fail "timeout metadata missing phase: $(cat "$FIX/out-timeout/walk.json" 2>/dev/null)"; fi
 
 phase 'upgrade surface requires baseline'
 proj="$FIX/proj-upgrade"; ns="walk-upgrade"; build_proj "$proj" "$ns"
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface upgrade:runbooks/UPGRADE.md --out "$FIX/out-upgrade" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface upgrade:runbooks/UPGRADE.md --out "$FIX/out-upgrade" 2>&1) || rc=$?
 [ "$rc" -eq 1 ] && pass 'upgrade without baseline exits 1' || fail "upgrade without baseline rc=$rc output=$out"
 printf '%s\n' "$out" | grep -q -- 'requires --baseline' && pass 'upgrade baseline refusal named' || fail "upgrade baseline refusal missing: $out"
 
 phase 'credential refusal distinct and no live pi required'
 proj="$FIX/proj-refuse"; ns="walk-refuse"; build_proj "$proj" "$ns"
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
-out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-refuse" 2>&1)
-rc=$?
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-refuse" 2>&1) || rc=$?
 [ "$rc" -eq 5 ] && pass 'missing credential exits 5' || fail "missing credential rc=$rc output=$out"
 [ ! -f "$HOME_FIX/.pi-seats-$ns/verifier/cwd.txt" ] && pass 'missing credential did not spawn stub pi' || fail 'missing credential spawned stub pi'
 

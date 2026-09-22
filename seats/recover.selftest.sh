@@ -219,8 +219,8 @@ printf '{"stub":"identity"}\n' > "$SEATDIR/auth.json"
 STATE="$PROJ/seats/state.json"
 ARGV="$SEATDIR/argv.json"
 
-adapter_run() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
-recover_run() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/recover.ts" 2>&1)"; RC=$?; }
+adapter_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+recover_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/recover.ts" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seat_line() { printf '%s\n' "$OUT" | grep "^$1 "; }
 state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
@@ -268,7 +268,7 @@ if says "removed orphaned FIFO: $PROJ/seats/run/worker-1.stdin"; then
 else fail "orphaned FIFO of the killed seat not cleaned: $OUT"; fi
 
 RESUME_CMD="$(printf '%s\n' "$OUT" | sed -n 's/^  resume: \(.*\)   #.*$/\1/p' | head -1)"
-OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" sh -c "$RESUME_CMD" 2>&1)"; RC=$?
+RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" sh -c "$RESUME_CMD" 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "the printed resume command runs clean"
 else fail "printed resume command failed (exit $RC): $OUT"; fi
 if grep -q "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null; then
@@ -416,7 +416,7 @@ else
 { "seats": { "w": { "pid": $DEADPID, "fifo": "$CAN_A/seats/run/w.stdin", "sessionFile": "$CAN_A/sess-a.jsonl", "lastBead": "bead-a" } } }
 EOF
   mkfifo "$CAN_A/seats/run/w.stdin"
-  OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$CAN_A/seats/recover.ts" 2>&1)"; RC=$?
+  RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$CAN_A/seats/recover.ts" 2>&1)" || RC=$?
   if [ $RC -ne 0 ]; then
     fail "canary: sabotaged recover crashed (exit $RC) instead of running — inconclusive: $OUT"
   elif [ -p "$CAN_A/seats/run/w.stdin" ]; then
@@ -441,11 +441,11 @@ EOF
   tail -f "$CAN_B/sess-b.jsonl" >/dev/null 2>&1 & TAIL_PID=$!; disown 2>/dev/null || true
   sleep 0.2
   # the REAL recover must refuse: a live process HOLDS the session file open
-  OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$CAN_B/seats/recover.ts" 2>&1)"; RC=$?
+  RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$CAN_B/seats/recover.ts" 2>&1)" || RC=$?
   if [ $RC -eq 0 ] && says "REFUSED double-resume"; then
     pass "real recover refuses when a live process holds the session file open (fd path, not argv)"
   else fail "real recover did not refuse the attached session (exit $RC): $OUT"; fi
-  OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$CAN_B/seats/recover.sabotaged.ts" 2>&1)"; RC=$?
+  RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$CAN_B/seats/recover.sabotaged.ts" 2>&1)" || RC=$?
   if [ $RC -ne 0 ]; then
     fail "canary: sabotaged recover crashed (exit $RC) instead of running — inconclusive: $OUT"
   elif says "resume ghost" && ! says "REFUSED double-resume"; then

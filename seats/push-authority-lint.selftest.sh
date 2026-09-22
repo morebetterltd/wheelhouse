@@ -57,7 +57,7 @@ cat > "$GOOD/seats/verdicts/good.md" <<'MD'
 VERDICT: APPROVE
 PUSH:    OK — INTEGRATOR.md records standing authority to push main after merge.
 MD
-OUT="$($LINT "$GOOD" 2>&1)"; RC=$?
+RC=0; OUT="$($LINT "$GOOD" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'push-authority-lint: PASS (grant=1, verdicts=1)'; then pass "grant plus authority-citing PUSH line passes"
 else fail "good verdict failed (rc=$RC): $OUT"; fi
 
@@ -66,7 +66,7 @@ cat > "$BAD/seats/verdicts/bad.md" <<'MD'
 VERDICT: APPROVE
 PUSH:    HOLD — pushing is principal-only on this project.
 MD
-OUT="$($LINT "$BAD" 2>&1)"; RC=$?
+RC=0; OUT="$($LINT "$BAD" 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'FAIL push-authority: .*contradicts INTEGRATOR.md project push grant'; then pass "planted negative: principal-only PUSH line fails when project grants push"
 else fail "planted principal-only verdict was not caught (rc=$RC): $OUT"; fi
 
@@ -74,7 +74,7 @@ MISSING="$FIX/missing"; mkproj "$MISSING" grant
 cat > "$MISSING/seats/verdicts/missing.md" <<'MD'
 VERDICT: APPROVE
 MD
-OUT="$($LINT "$MISSING" 2>&1)"; RC=$?
+RC=0; OUT="$($LINT "$MISSING" 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'requires exactly one'; then pass "missing PUSH line fails lint"
 else fail "missing PUSH line was not caught (rc=$RC): $OUT"; fi
 
@@ -83,7 +83,7 @@ cat > "$NOGRANT/seats/verdicts/hold.md" <<'MD'
 VERDICT: APPROVE
 PUSH:    HOLD — pushing is principal-only on this project.
 MD
-OUT="$($LINT "$NOGRANT" 2>&1)"; RC=$?
+RC=0; OUT="$($LINT "$NOGRANT" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'push-authority-lint: PASS (grant=0, verdicts=1)'; then pass "principal-only PUSH line is not flagged when no project grant is recorded"
 else fail "no-grant verdict should not fail this lint (rc=$RC): $OUT"; fi
 

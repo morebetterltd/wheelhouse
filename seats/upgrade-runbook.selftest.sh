@@ -248,8 +248,7 @@ namespace=fixture
 EOF
   cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$INSTALL_NO_LIB/seats/upgrade-runbook.selftest.sh"
   set +e
-  NO_LIB_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_NO_LIB/seats/upgrade-runbook.selftest.sh" 2>&1)
-  NO_LIB_RC=$?
+  NO_LIB_RC=0; NO_LIB_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_NO_LIB/seats/upgrade-runbook.selftest.sh" 2>&1) || NO_LIB_RC=$?
   set -e
   if [ "$NO_LIB_RC" -eq 127 ] && printf '%s\n' "$NO_LIB_OUT" | grep -q 'selftest-lib.sh'; then
     pass "installed-layout fixture without selftest-lib.sh fails honestly instead of passing"
@@ -307,8 +306,7 @@ path=$TMP/dead-template-path
 namespace=fixture
 EOF
   set +e
-  DEAD_UNREACHABLE_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_DEAD_UNREACHABLE/seats/upgrade-runbook.selftest.sh" 2>&1)
-  DEAD_UNREACHABLE_RC=$?
+  DEAD_UNREACHABLE_RC=0; DEAD_UNREACHABLE_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_DEAD_UNREACHABLE/seats/upgrade-runbook.selftest.sh" 2>&1) || DEAD_UNREACHABLE_RC=$?
   set -e
   if [ "$DEAD_UNREACHABLE_RC" -eq 42 ] && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep -q 'REFUSED template source: source=' && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep -q 'unreachable'; then
     pass "installed-layout dead path= with unreachable source= refuses by named source reason"
@@ -321,8 +319,7 @@ EOF
   git -C "$INSTALL_MISSING" init -b main >/dev/null
   copy_installed_selftest "$INSTALL_MISSING/seats"
   set +e
-  MISSING_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_MISSING/seats/upgrade-runbook.selftest.sh" 2>&1)
-  MISSING_RC=$?
+  MISSING_RC=0; MISSING_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_MISSING/seats/upgrade-runbook.selftest.sh" 2>&1) || MISSING_RC=$?
   set -e
   if [ "$MISSING_RC" -eq 42 ] && printf '%s\n' "$MISSING_OUT" | grep -q 'wheelhouse/.template-source missing' && printf '%s\n' "$MISSING_OUT" | grep -q 'source= and commit='; then
     pass "installed-layout missing .template-source fails legibly with source= and commit= expectation"
@@ -336,8 +333,7 @@ EOF
   copy_installed_selftest "$INSTALL_BAD/seats"
   printf 'path=%s\ncommit=%s\n' "$TMP/not-a-template-repo" "$BASELINE" > "$INSTALL_BAD/wheelhouse/.template-source"
   set +e
-  BAD_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh" 2>&1)
-  BAD_RC=$?
+  BAD_RC=0; BAD_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh" 2>&1) || BAD_RC=$?
   set -e
   if [ "$BAD_RC" -eq 42 ] && printf '%s\n' "$BAD_OUT" | grep -q 'has no source= line' && printf '%s\n' "$BAD_OUT" | grep -q 'path='; then
     pass "installed-layout bad path= without source= fails legibly before raw git fatal"
@@ -394,8 +390,22 @@ let buf=''; process.stdin.on('data',c=>{buf+=c;let i;while((i=buf.indexOf('\n'))
 process.on('SIGTERM',()=>process.exit(0));
 CLAUDESTUB
 chmod +x "$HARNESS_BIN/claude"
-hrun(){ HOUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$HARNESS_PROJ/seats/adapter.ts" "$@" 2>&1); HRC=$?; }
+hrun(){ HRC=0; HOUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" WHEELHOUSE_RPC_TIMEOUT_MS=5000 "${HRUN_ADAPTER_CMD:-bun}" "$HARNESS_PROJ/seats/adapter.ts" "$@" 2>&1) || HRC=$?; }
 hstate(){ env HOME="$HARNESS_HOME" node -e "const s=require(process.argv[1]).seats[process.argv[2]]||{}; process.stdout.write(String(s[process.argv[3]]??''));" "$HARNESS_PROJ/seats/state.json" "$1" "$2"; }
+cat > "$HARNESS_BIN/fail-command" <<'FAILCMD'
+#!/usr/bin/env bash
+exit 1
+FAILCMD
+chmod +x "$HARNESS_BIN/fail-command"
+set +e
+HRUN_CANARY_OUT=$(set -e; HRUN_ADAPTER_CMD="$HARNESS_BIN/fail-command"; hrun probe worker-a; [ "$HRC" -eq 0 ] || fail "hrun canary surfaced failing adapter command: $HOUT")
+HRUN_CANARY_RC=$?
+set -e
+if [ "$HRUN_CANARY_RC" -eq 1 ] && printf '%s\n' "$HRUN_CANARY_OUT" | grep -q '^not ok '; then
+  pass "hrun reports failing adapter commands with a not ok line"
+else
+  fail "hrun canary did not emit a not ok line for a failing adapter command (rc=$HRUN_CANARY_RC): $HRUN_CANARY_OUT"
+fi
 # Pre-field roster: absent harness means pi and needs no edit.
 hrun probe worker-b; [ "$HRC" -eq 0 ] || fail "pre-field roster without harness failed pi probe: $HOUT"
 hrun spawn worker-a; [ "$HRC" -eq 0 ] || fail "worker-a initial pi spawn failed: $HOUT"
