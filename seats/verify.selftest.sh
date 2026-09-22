@@ -810,6 +810,20 @@ run_stream "$FIX/final-message-only.jsonl" bead-5-tool-quote fleet/bead-1 worker
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-tool-quote.md" 2>/dev/null; then
   pass "tool-result REVIEWER.md verdict quote is ignored; final assistant BOUNCE writes a verdict file"
 else fail "tool-result verdict quote was not ignored (exit $RC): $OUT file=$(cat "$VDIR/bead-5-tool-quote.md" 2>/dev/null)"; fi
+node > "$FIX/pi-user-echo-streamed-assistant.jsonl" <<'NODE'
+const prompt = "Prompt examples must be ignored:\nVERDICT: APPROVE — at pinned tip <sha>; branch has since moved\nPUSH: APPROVE origin — verified: example only";
+process.stdout.write(JSON.stringify({type:"message_start",message:{role:"user",content:[{type:"text",text:prompt}]}})+"\n");
+process.stdout.write(JSON.stringify({type:"message_end",message:{role:"user",content:[{type:"text",text:prompt}]}})+"\n");
+process.stdout.write(JSON.stringify({type:"message_start",message:{role:"assistant",content:[]}})+"\n");
+process.stdout.write(JSON.stringify({type:"message_update",assistantMessageEvent:{type:"text_delta",contentIndex:0,delta:"VERDICT: APPROVE — streamed assistant fixture\n"}})+"\n");
+process.stdout.write(JSON.stringify({type:"message_update",assistantMessageEvent:{type:"text_delta",contentIndex:0,delta:"PUSH: NOT CONSIDERED — fixture\n"}})+"\n");
+process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:[]}})+"\n");
+process.stdout.write(JSON.stringify({type:"turn_end",message:{role:"assistant",content:[]}})+"\n");
+NODE
+run_stream "$FIX/pi-user-echo-streamed-assistant.jsonl" bead-5-pi-user-echo-streamed fleet/bead-1 worker-1
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q "verdict: APPROVE — streamed assistant fixture" "$VDIR/bead-5-pi-user-echo-streamed.md" 2>/dev/null; then
+  pass "pi user prompt echo plus streamed assistant deltas yields exactly one VERDICT candidate"
+else fail "pi user prompt echo/streamed assistant fixture did not yield one APPROVE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-pi-user-echo-streamed.md" 2>/dev/null)"; fi
 node > "$FIX/text-end-duplicate.jsonl" <<'NODE'
 const final = "VERDICT: APPROVE\nPUSH: NOT CONSIDERED — fixture\n";
 process.stdout.write(JSON.stringify({type:"text_end",text:final})+"\n");

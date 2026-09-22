@@ -12,6 +12,7 @@ function collectMessageText(value: unknown, out: string[]): void {
   if (Array.isArray(value)) { for (const v of value) collectMessageText(v, out); return; }
   if (typeof value === "object") {
     const obj: any = value;
+    if (typeof obj.role === "string" && obj.role !== "assistant") return;
     collectMessageText(obj.text, out);
     collectMessageText(obj.content, out);
   }
@@ -30,15 +31,40 @@ function eventText(event: any): string {
 export function finalAssistantText(stdout: string, harness: HarnessName): string {
   let finalText: string | null = null;
   let sawStructuredMessage = false;
+  let piCurrentRole: string | undefined;
+  let piStreamText = "";
   for (const raw of stdout.split(/\r?\n/)) {
     if (!raw.trim().startsWith("{")) continue;
     try {
       const event = JSON.parse(raw);
       if (harness === "pi") {
-        if (event?.type !== "message_end") continue;
+        if (event?.type === "message_start") {
+          sawStructuredMessage = true;
+          piCurrentRole = messageRole(event);
+          if (piCurrentRole === "assistant") {
+            piStreamText = eventText(event);
+            if (piStreamText) finalText = piStreamText;
+          }
+          continue;
+        }
+        if (event?.type === "message_update") {
+          sawStructuredMessage = true;
+          const ev = event.assistantMessageEvent ?? event.delta ?? event;
+          const delta = typeof ev?.delta === "string" ? ev.delta : "";
+          const content = typeof ev?.content === "string" ? ev.content : "";
+          if (delta) piStreamText += delta;
+          if (content) piStreamText = content;
+          if (piStreamText && (piCurrentRole === "assistant" || event.assistantMessageEvent)) finalText = piStreamText;
+          continue;
+        }
+        if (event?.type !== "message_end" && event?.type !== "turn_end") continue;
         sawStructuredMessage = true;
-        if (messageRole(event) !== "assistant") continue;
-        finalText = eventText(event);
+        const role = messageRole(event);
+        if (role !== "assistant") continue;
+        piCurrentRole = role;
+        const text = eventText(event);
+        if (text) finalText = text;
+        else if (piStreamText) finalText = piStreamText;
       } else if (harness === "claude-code") {
         if (event?.type !== "assistant") continue;
         sawStructuredMessage = true;
