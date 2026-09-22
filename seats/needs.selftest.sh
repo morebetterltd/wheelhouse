@@ -24,7 +24,7 @@ cat > "$ROOT/seats/seats.json" <<'JSON'
 { "seats": { "worker-1": { "role": "worker" }, "reviewer": { "role": "verifier" } } }
 JSON
 RUN_SCRIPT="$SCRIPT"
-run(){ OUT="$(WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" "$@" 2>&1)"; RC=$?; }
+run(){ RC=0; OUT="$(WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" "$@" 2>&1)" || RC=$?; }
 says(){ case "$OUT" in *"$1"*) return 0;; *) return 1;; esac; }
 json(){ WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" "$@"; }
 phase "1. open/list/answer/show/close round trip"
@@ -44,9 +44,9 @@ SHOW="$(json show "$NEED")"; if printf '%s\n' "$SHOW" | grep -q '"state": "close
 run list; if [ $RC -eq 0 ] && ! says "$NEED"; then pass "list hides closed needs by default"; else fail "closed need appeared without --all: $OUT"; fi
 run list --all; if [ $RC -eq 0 ] && says "$NEED closed"; then pass "list --all includes closed needs"; else fail "list --all missed closed need: $OUT"; fi
 phase "2. --from-stdin and --source dedupe"
-OUT="$(printf '@principal: Need the invoice total\nPlease answer with the final total.\n' | WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" open --from-stdin --source invoice-total 2>&1)"; RC=$?
+RC=0; OUT="$(printf '@principal: Need the invoice total\nPlease answer with the final total.\n' | WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" open --from-stdin --source invoice-total 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [[ "$OUT" =~ ^need-[a-z0-9]{4}$ ]]; then NEED2="$OUT"; pass "--from-stdin opens a need from an @principal block"; else NEED2=""; fail "--from-stdin failed (rc=$RC): $OUT"; fi
-OUT2="$(printf '@principal: Need the invoice total again\nDifferent body should dedupe.\n' | WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" open --from-stdin --source invoice-total 2>&1)"; RC=$?
+RC=0; OUT2="$(printf '@principal: Need the invoice total again\nDifferent body should dedupe.\n' | WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" open --from-stdin --source invoice-total 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$OUT2" = "$NEED2" ]; then pass "--source repeat is a no-op that prints the existing id"; else fail "--source did not dedupe (rc=$RC first=$NEED2 second=$OUT2)"; fi
 COUNT="$(grep -c '"source":"invoice-total"' "$ROOT/seats/needs.jsonl" || true)"; [ "$COUNT" -eq 1 ] && pass "source dedupe appended only one opened event" || fail "source dedupe wrote $COUNT opened events"
 phase "3. human-facing text refusals and warnings"

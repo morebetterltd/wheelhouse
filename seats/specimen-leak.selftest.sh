@@ -65,8 +65,7 @@ run_current_leg() {
   old="$PWD"
   cd "$install" || { fail "could not cd to current install fixture: $install"; return; }
   set +e
-  out="$(run_grep)"
-  rc=$?
+  rc=0; out="$(run_grep)" || rc=$?
   set -e
   cd "$old" || exit 2
   if [ "$rc" -eq 1 ]; then
@@ -86,8 +85,7 @@ run_planted_leg() {
   old="$PWD"
   cd "$planted" || { fail "could not cd to planted fixture: $planted"; return; }
   set +e
-  out="$(run_grep)"
-  rc=$?
+  rc=0; out="$(run_grep)" || rc=$?
   set -e
   cd "$old" || exit 2
   if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -Eq 'Ebb|Tideline'; then
@@ -104,8 +102,7 @@ run_negative_control() {
   printf '\n' | scrub
   say 'specimen-leak selftest: negative control — planted specimen with forced miss'
   set +e
-  out="$(WHEELHOUSE_SPECIMEN_LEAK_FORCE_MISS=1 bash "$0" 2>&1)"
-  rc=$?
+  rc=0; out="$(WHEELHOUSE_SPECIMEN_LEAK_FORCE_MISS=1 bash "$0" 2>&1)" || rc=$?
   set -e
   if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'FAIL  prescribed grep missed planted specimen copy'; then
     pass "forced-miss planted specimen exits non-zero and prints FAIL"
