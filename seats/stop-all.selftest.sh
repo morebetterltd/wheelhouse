@@ -26,10 +26,10 @@ FIX=""
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
-cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null; [ -n "$FIX" ] && rm -rf "$FIX"; }
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null; [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-stop-all-selftest.$$.XXXXXX")"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-stop-all-selftest.$$.XXXXXX")" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"; BIN="$FIX/bin"; mkdir -p "$HOME_FIX" "$BIN"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"

@@ -13,10 +13,10 @@ FAILED=0; FIX=""
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
-cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}"; [ -n "$FIX" ] && rm -rf "$FIX"; return 0; }
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}"; [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"; return 0; }
 trap cleanup EXIT INT TERM
 mkdir -p "${TMPDIR:-/tmp}"
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-needs-selftest.$$.XXXXXX")" || exit 2
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-needs-selftest.$$.XXXXXX")" || exit 2
 FIX="$(cd "$FIX" && pwd -P)" || exit 2
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats" "$ROOT/wheelhouse"
 printf 'namespace=wheelhouse-project\n' > "$ROOT/wheelhouse/.template-source"
