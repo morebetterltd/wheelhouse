@@ -61,7 +61,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness } from "./harness";
@@ -75,6 +75,7 @@ const VERDICTS_DIR = path.join(SEATS_DIR, "verdicts");
 
 // One-shot verification reads a diff and maybe runs a bench; give it room.
 const DEFAULT_TIMEOUT_MS = 900000;
+const DEFAULT_FIRST_OUTPUT_TIMEOUT_MS = 120000;
 
 function hostBuildLockPath(): string {
   return process.env.WHEELHOUSE_BUILD_LOCK || path.join(os.homedir(), ".cache", "wheelhouse-build.lock");
@@ -370,6 +371,65 @@ function writePartialVerifierOutput(beadId: string, stdout: string, stderr: stri
     ``,
   ].join("\n"));
   return partialFile;
+}
+
+interface OneShotRunResult {
+  stdout: string;
+  stderr: string;
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error?: Error & { code?: string };
+}
+
+function runOneShot(
+  bin: string,
+  args: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; maxBuffer: number }
+): Promise<OneShotRunResult> {
+  return new Promise((resolve) => {
+    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"] });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let done = false;
+    let sawOutput = false;
+    const out = () => Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8");
+    const err = () => Buffer.concat(stderrChunks, stderrBytes).toString("utf8");
+    const finish = (result: Partial<OneShotRunResult>) => {
+      if (done) return;
+      done = true;
+      clearTimeout(totalTimer);
+      clearTimeout(firstOutputTimer);
+      resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error });
+    };
+    const killFor = (code: string, message: string) => {
+      const error: Error & { code?: string } = new Error(message);
+      error.code = code;
+      try { child.kill("SIGTERM"); } catch {}
+      setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 1000).unref?.();
+      finish({ error });
+    };
+    const totalTimer = setTimeout(() => killFor("ETIMEDOUT", `timed out after ${opts.timeoutMs}ms`), opts.timeoutMs);
+    const firstOutputTimer = setTimeout(() => {
+      if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT", `no verifier output within ${opts.firstOutputTimeoutMs}ms`);
+    }, opts.firstOutputTimeoutMs);
+    const collect = (chunks: Buffer[], current: () => number, setBytes: (n: number) => void, chunk: Buffer) => {
+      sawOutput = true;
+      clearTimeout(firstOutputTimer);
+      const next = current() + chunk.length;
+      if (next > opts.maxBuffer) {
+        killFor("ERR_CHILD_PROCESS_STDIO_MAXBUFFER", `verifier output exceeded ${opts.maxBuffer} bytes`);
+        return;
+      }
+      chunks.push(chunk);
+      setBytes(next);
+    };
+    child.stdout?.on("data", (chunk: Buffer) => collect(stdoutChunks, () => stdoutBytes, (n) => { stdoutBytes = n; }, chunk));
+    child.stderr?.on("data", (chunk: Buffer) => collect(stderrChunks, () => stderrBytes, (n) => { stderrBytes = n; }, chunk));
+    child.on("error", (error: Error & { code?: string }) => finish({ error }));
+    child.on("close", (status, signal) => finish({ status, signal }));
+  });
 }
 
 export function expandTilde(p: string): string {
@@ -796,11 +856,12 @@ function sourceAccessPromptLines(snapshots: SourceSnapshot[]): string[] {
   ];
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const evidencePaths: string[] = [];
   let repoArg: string | undefined;
   let timeoutArg: string | undefined;
+  let firstOutputTimeoutArg: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--evidence") {
@@ -813,6 +874,9 @@ function main(): void {
     } else if (argv[i] === "--timeout-ms") {
       timeoutArg = argv[++i];
       if (!timeoutArg || !/^\d+$/.test(timeoutArg)) die("--timeout-ms requires a positive integer millisecond budget");
+    } else if (argv[i] === "--first-output-timeout-ms") {
+      firstOutputTimeoutArg = argv[++i];
+      if (!firstOutputTimeoutArg || !/^\d+$/.test(firstOutputTimeoutArg)) die("--first-output-timeout-ms requires a positive integer millisecond budget");
     } else {
       positional.push(argv[i]);
     }
@@ -824,6 +888,7 @@ function main(): void {
     die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>]");
   }
   const timeoutMs = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || timeoutArg || DEFAULT_TIMEOUT_MS);
+  const firstOutputTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || firstOutputTimeoutArg || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
   if (verifierArg) validateSegment("seat name", verifierArg);
@@ -951,19 +1016,23 @@ function main(): void {
     GIT_DIR: path.resolve(scratchCwd, scratchGitDir),
     GIT_WORK_TREE: scratchCwd,
   });
-  const res = spawnSync(oneShot.bin, oneShot.args, {
+  const res = await runOneShot(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
     env,
-    encoding: "utf8",
-    timeout: timeoutMs,
+    timeoutMs,
+    firstOutputTimeoutMs,
     maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
   });
   const elapsedMs = Date.now() - startedAt;
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
 
   if (res.error) {
+    if ((res.error as any).code === "WHEELHOUSE_FIRST_OUTPUT_TIMEOUT") {
+      const phase = lastVerifierPhase(stdout);
+      const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, firstOutputTimeoutMs);
+      die(`verifier emitted no stdout/stderr within ${firstOutputTimeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial}). This is a first-output deadline, not the full verify timeout; retry with --first-output-timeout-ms <ms> if the verifier is legitimately silent that long.`);
+    }
     if ((res.error as any).code === "ETIMEDOUT") {
       const phase = lastVerifierPhase(stdout);
       const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, timeoutMs);
@@ -1119,4 +1188,4 @@ function main(): void {
   process.exit(verdict === "APPROVE" ? 0 : verdict === "BOUNCE" ? 2 : 3);
 }
 
-if (import.meta.main) main();
+if (import.meta.main) main().catch((e) => die(e?.message ?? String(e)));
