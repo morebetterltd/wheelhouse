@@ -827,6 +827,15 @@ function requireCwdDir(cwd: string): string {
   return cwd;
 }
 
+function samePath(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
 function processCwd(pid: number): string | null {
   for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
     try {
@@ -922,7 +931,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
 
   const requestedCwd = path.resolve(cwd);
   const liveCwd = processCwd(pid);
-  if (liveCwd && liveCwd !== requestedCwd) {
+  if (liveCwd && !samePath(liveCwd, requestedCwd)) {
     const cleanup = await terminateSpawnedOnly(pid);
     if (sessionFile && !retriedFresh) {
       console.log(
@@ -942,7 +951,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
     roleBrief: brief,
-    cwd: liveCwd ?? requestedCwd,
+    cwd: requestedCwd,
     fifo,
     log,
     sessionId: st.data?.sessionId ?? null,
@@ -1082,7 +1091,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
     role: entry.role,
     roleBrief: brief,
     roleBriefHash,
-    cwd: liveCwd ?? requestedCwd,
+    cwd: requestedCwd,
     fifo,
     log,
     sessionId: st.data?.sessionId ?? null,
@@ -1155,7 +1164,7 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
-  state.seats[name] = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: liveCwd ?? requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model, ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}) };
+  state.seats[name] = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model, ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}) };
   writeState(state); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`); console.log(`  events -> ${log}`);
 }
 function codexProbe(name: string, entry: SeatEntry): void {
@@ -1400,7 +1409,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, retriedWe
       die(`get_state failed while checking idle seat "${name}" before dispatch: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
     }
   }
-  if (rec.cwd !== targetCwd) {
+  if (!samePath(rec.cwd, targetCwd)) {
     // Construction, not prompt discipline: a seat handed a DIFFERENT bead
     // than the one it is sitting in gets stopped and relaunched attached to
     // its own session, but rooted in the new bead's worktree, before the
