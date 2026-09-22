@@ -54,7 +54,7 @@ The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id
 
 ## 4. Feed it
 
-Speak backlog items to the commander in plain language. It files them as described tasks in the graph; the fleet claims them; workers report done on the task record with comments and the `needs-review` label without closing; the reviewer gates branches with bench evidence; and only the commander/integrator closes after merge per this project's merge policy. Commander prose keeps using human task, intent, and outcome names rather than `bead`, bare namespace ids, or mannered filler. Before the first ISA claim closes on a consumer surface, run the verifier walker with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out evidence/<task>/<surface-walk> --verifier verifier` and cite the verdict plus transcript, or write `Not walked:` on the claim.
+Speak backlog items to the commander in plain language. It files them as described tasks in the graph; the fleet claims them; workers report done on the task record with comments and the `needs-review` label without closing; the reviewer gates branches with bench evidence; and only the commander/integrator closes after merge per this project's merge policy. Work decomposed from the ISA Goal lands on its goal branch and closes there; only the outcome-group PR touches main. Commander prose keeps using human task, intent, and outcome names rather than `bead`, bare namespace ids, or mannered filler. Before the first ISA claim closes on a consumer surface, run the verifier walker with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out evidence/<task>/<surface-walk> --verifier verifier` and cite the verdict plus transcript, or write `Not walked:` on the claim.
 
 ## Shutdown
 
