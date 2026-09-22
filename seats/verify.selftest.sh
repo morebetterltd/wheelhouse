@@ -192,7 +192,9 @@ if (process.env.STUB_STREAM_FILE) {
   process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, "utf8"));
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
-if (process.env.STUB_STALL === "1") {
+if (process.env.STUB_SILENT === "1") {
+  setTimeout(() => {}, 10000);
+} else if (process.env.STUB_STALL === "1") {
   // Match real pi behavior: without --mode json, a stalled one-shot emits no
   // JSON events before timeout, so this selftest catches a missing stream flag.
   if (streamRequested) {
@@ -491,6 +493,15 @@ if [ -s "$PARTIAL" ] && grep -q '## seat tool-call/event log tail' "$PARTIAL" &&
   pass "timeout keeps partial pi output and event-log tail at seats/verdicts/<bead>.partial.md"
 else fail "timeout partial file missing event-log tail or streamed tool output: $(cat "$PARTIAL" 2>/dev/null)"; fi
 rm -f "$PARTIAL"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$RUN_PROJ/seats/verify.ts" bead-silent fleet/bead-1 worker-1 verifier --timeout-ms 5000 --first-output-timeout-ms 300 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && says "verifier emitted no stdout/stderr within 300ms" && says "first-output deadline" && says "--first-output-timeout-ms"; then
+  pass "silent verifier stops on the first-output deadline with an actionable reason"
+else fail "silent verifier did not stop on first-output deadline (exit $RC): $OUT"; fi
+SILENT_PARTIAL="$VDIR/bead-silent.partial.md"
+if [ -s "$SILENT_PARTIAL" ] && grep -q 'last_phase: spawned verifier; waiting for output' "$SILENT_PARTIAL"; then
+  pass "silent verifier first-output STOP retains a partial output record"
+else fail "silent verifier partial output missing: $(cat "$SILENT_PARTIAL" 2>/dev/null)"; fi
+rm -f "$SILENT_PARTIAL"
 
 phase "1. APPROVE — verdict parsed, recorded, exit 0, and what was launched"
 cat > "$REPLY" <<EOF
