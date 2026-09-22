@@ -28,6 +28,7 @@ PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats" "$PROJ/bin"
 cp "$GATE" "$PROJ/seats/fleet-gate.sh"
 chmod +x "$PROJ/seats/fleet-gate.sh"
+( cd "$PROJ" && git init -q && git remote add origin git@github.com:fixture-owner/fixture-product.git )
 
 # Stub adapter.ts: prints whatever file $FIXTURE_STATUS_FILE points at for
 # `status`, so one stub serves every phase without touching real seats.
@@ -46,11 +47,24 @@ cat > "$PROJ/bin/bd" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
   "ready --json") f="${FIXTURE_READY_FILE:-}"; [ -n "$f" ] && cat "$f" || echo '[]'; ;;
-  "list --status") f="${FIXTURE_INPROG_FILE:-}"; [ -n "$f" ] && cat "$f" || echo '[]'; ;;
+  "list --status")
+    case "${3:-}" in
+      open) f="${FIXTURE_OPEN_FILE:-}"; [ -n "$f" ] && cat "$f" || echo '[]' ;;
+      in_progress) f="${FIXTURE_INPROG_FILE:-}"; [ -n "$f" ] && cat "$f" || echo '[]' ;;
+      *) echo '[]' ;;
+    esac ;;
   *) echo '[]' ;;
 esac
 STUB
 chmod +x "$PROJ/bin/bd"
+cat > "$PROJ/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = issue ] && [ "${2:-}" = list ]; then
+  f="${FIXTURE_GH_ISSUES_FILE:-}"
+  [ -n "$f" ] && cat "$f"
+fi
+STUB
+chmod +x "$PROJ/bin/gh"
 
 STOPPED_2="worker-a       STOPPED  stopped     last-event -
 worker-b       STOPPED  stopped     last-event -
@@ -64,6 +78,7 @@ READY_0='[]'
 run() {
   OUT="$(cd "$PROJ" && env PATH="$PROJ/bin:$PATH" \
     FIXTURE_STATUS_FILE="${1:-}" FIXTURE_READY_FILE="${2:-}" FIXTURE_INPROG_FILE="${3:-}" \
+    FIXTURE_OPEN_FILE="${FIXTURE_OPEN_FILE:-}" FIXTURE_GH_ISSUES_FILE="${FIXTURE_GH_ISSUES_FILE:-}" \
     bash seats/fleet-gate.sh 2>&1)"
   RC=$?
 }
@@ -168,7 +183,25 @@ else
 fi
 rm -f "$PROJ/seats/needs.jsonl"
 
-phase "7. graceful degrade — bd absent: silent, exit 0"
+phase "7. GitHub issues — untraced open issues are listed, traced issues are silent"
+printf '%s\n' 'https://github.com/fixture-owner/fixture-product/issues/41' 'https://github.com/fixture-owner/fixture-product/issues/42' > "$FIX/gh-open-issues"
+printf '%s\n' '[{"id":"proj-traced","description":"Trace: https://github.com/fixture-owner/fixture-product/issues/41"}]' > "$FIX/open-traced-one"
+FIXTURE_GH_ISSUES_FILE="$FIX/gh-open-issues" FIXTURE_OPEN_FILE="$FIX/open-traced-one" run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && has "1 GITHUB ISSUE(S) NOT ON THE BOARD: #42" && has "Triage into beads (Trace: <issue url>)"; then
+  pass "untraced open GitHub issue is listed on the fleet gate line"
+else
+  fail "untraced GitHub issue was not listed (rc=$RC): $OUT"
+fi
+printf '%s\n' '[{"id":"proj-traced-41","description":"Trace: https://github.com/fixture-owner/fixture-product/issues/41"},{"id":"proj-traced-42","description":"Trace: https://github.com/fixture-owner/fixture-product/issues/42"}]' > "$FIX/open-traced-all"
+FIXTURE_GH_ISSUES_FILE="$FIX/gh-open-issues" FIXTURE_OPEN_FILE="$FIX/open-traced-all" run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && ! has "GITHUB ISSUE(S) NOT ON THE BOARD"; then
+  pass "all open GitHub issues traced by open beads leaves the gate line silent"
+else
+  fail "traced GitHub issues should be silent (rc=$RC): $OUT"
+fi
+unset FIXTURE_GH_ISSUES_FILE FIXTURE_OPEN_FILE
+
+phase "8. graceful degrade — bd absent: silent, exit 0"
 run "$FIX/status-stopped" "$FIX/ready-2" ""
 NOBD_OUT="$(cd "$PROJ" && env PATH="/usr/bin:/bin" \
   FIXTURE_STATUS_FILE="$FIX/status-stopped" bash seats/fleet-gate.sh 2>&1)"
@@ -179,7 +212,7 @@ else
   fail "no bd on PATH should be silent+0 (rc=$NOBD_RC): $NOBD_OUT"
 fi
 
-phase "7. graceful degrade — adapter.ts absent: silent, exit 0"
+phase "9. graceful degrade — adapter.ts absent: silent, exit 0"
 rm "$PROJ/seats/adapter.ts"
 run "" "$FIX/ready-2" ""
 if [ $RC -eq 0 ] && [ -z "$OUT" ]; then
