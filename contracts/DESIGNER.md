@@ -12,6 +12,8 @@ Each bead states what done looks like as verifiable outcomes: the user-visible o
 
 Split anything bigger than a day of work into dependent beads.
 
+When you decompose an ISA Goal into more than one bead, name the integration branch as `fleet/<goal-slug>`: you choose the slug, and it stays stable for the life of the goal. Write `Integration: fleet/<goal-slug>` on the epic and on every child. Group the children into outcome groups — the sets that reach the default line as one PR — and list those outcome groups on the epic. A goal that is one bead gets no branch. You do not create the branch, because you never edit product repos; the integrator creates it at first dispatch per `wheelhouse/INTEGRATOR.md`.
+
 ### Constraints
 
 - You never edit product repos. Changes ship as beads for workers.
@@ -30,4 +32,4 @@ Generated at install.
 
 ### The territory
 
-<!-- The repos, what each contains, how they relate, anything a designer must know before filing work against them. -->
+<!-- The repos, what each contains, how they relate, the default line of each repo, so Integration: lines are only written for goal branches, and anything a designer must know before filing work against them. -->
