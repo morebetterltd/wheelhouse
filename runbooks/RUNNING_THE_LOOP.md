@@ -61,7 +61,7 @@ The commander reads `wheelhouse/ISA.md`'s Goal before choosing what to send next
 
 Defined work is ready work: once something is described as a bead, the commander dispatches it immediately, never waiting for the principal's explicit go. Signals become defined work the same way: when the principal, the ISA Goal, an open Claim's falsifier, a Decision, or a backlog direction points at a verifiable next step, the commander files the bead and dispatches it without asking whether to create or start it. Holding work is the exception, and it is expressed IN the graph — a blocking kickoff-gate bead — or by the per-action reserved list the project records in `wheelhouse/INTEGRATOR.md`. A commander that waits to be poked ruins the magic of an autonomous fleet. One seat carries one bead until the turn settles; adapter dispatch refuses a cross-bead handoff to a mid-turn seat unless the commander sets the explicit force escape for an abandoned turn.
 
-The commander names the bead, the repository, and — if it points at any existing commit or branch — **a way to read it that changes nothing**. `wheelhouse/crew/REVIEWER.md` carries the rule and why the wording is what it is; the short version is that a dispatch naming a bare identifier makes the receiver find somewhere to open it, and the somewhere they choose may be someone else's working tree.
+The commander names the bead, the repository, the base branch — the branch named by the `Integration:` line or the default line — and, if it points at any existing commit or branch, **a way to read it that changes nothing**. `wheelhouse/crew/REVIEWER.md` carries the rule and why the wording is what it is; the short version is that a dispatch naming a bare identifier makes the receiver find somewhere to open it, and the somewhere they choose may be someone else's working tree.
 
 Say what "done" is if the bead does not already. If the receiver has to reconstruct it, they will reconstruct a version.
 
@@ -133,6 +133,8 @@ A BOUNCE lists each defect as its own point: what is wrong, where, and what done
 
 The same contract carries the claim-move duty: update `wheelhouse/ISA.md`'s Claims with the merge, or state on the bead why no claim moved. Do not duplicate that rule here; this stage points at the contract that owns it.
 
+For a goal branch bead, the merge target is the branch its record names; the tip comparison is unchanged. The daily main-to-goal sync and its SHA go on the epic, and the group PR opens only after the verifier walk. Per-bead work is unchanged. `wheelhouse/INTEGRATOR.md`'s `### Two integration modes` owns the rule.
+
 Before closing any ISA claim whose surface a consumer touches, walk the surface the claim names:
 
 ```bash
@@ -157,7 +159,7 @@ When publishing a reviewed tip by object id, force Git to resolve the token as a
 
 ### 7. Close
 
-Close the bead and drop the review-queue label in the same breath, after the integrator has satisfied `wheelhouse/INTEGRATOR.md`'s claim-move duty or its explicit no-claim-moved escape hatch. A closed bead still carrying it reads as in-flight to everyone else. `wheelhouse/GRAPH.md` says so; it is listed here because it is the step most often forgotten at the end of a long round.
+Close the bead and drop the review-queue label in the same breath, when its reviewed tip is on the integration branch its record names and after the integrator has satisfied `wheelhouse/INTEGRATOR.md`'s claim-move duty or its explicit no-claim-moved escape hatch. A closed bead still carrying it reads as in-flight to everyone else. `wheelhouse/GRAPH.md` says so; it is listed here because it is the step most often forgotten at the end of a long round.
 
 Then prune the closed bead's scratch, using the canonical tool rather than hand-removing paths: run `bun seats/prune.ts scan > <reviewed-scan>` from the install root, inspect rows for the bead, reset or stop any idle seat sessions still rooted in worktrees you intend to remove (or let the adapter-owned prune safety from the seat-cwd-truth fix mark live seat cwd rows unsafe), and act only on safe rows with `bun seats/prune.ts prune --from-file <reviewed-scan> --yes --categories bead-runs,bead-tmp,bead-simulator,xctest-devices`. If this install opted into the host build budget, include the worktree cap in the same end-of-day check: `seats/host-budget.json` may set `max_worktrees` (default `24`), and the next settled-seat status will print safe `merged-worktree` rows plus the exact prune command when the cap is exceeded. This is also a weekly commander tick fleet-wide: run a scan, review it, and prune safe closed-bead scratch plus any other reviewed safe categories. Open or in-progress bead scratch must remain `needs-review`, not removed by age or by name.
 
@@ -336,6 +338,7 @@ The obligations live with the roles, and duplicating them here would let the two
 | what a worker owes and how to report it | `wheelhouse/fleet/WORKER.md` |
 | what a verdict must contain, and reading a branch safely | `wheelhouse/crew/REVIEWER.md` |
 | what a verdict authorises, confirming what you merged, and moving Claims with a merge | `wheelhouse/INTEGRATOR.md` |
+| which line a bead integrates into, and when it closes | `wheelhouse/INTEGRATOR.md` + `wheelhouse/GRAPH.md` |
 | how work state is tracked, the review queue, and where cited evidence must live | `wheelhouse/GRAPH.md` |
 | what a bench must satisfy | `wheelhouse/crew/BENCH.md` |
 | seats, the roster, and running them | `wheelhouse/fleet/SEATS.md`, commands in `seats/README.md` |
