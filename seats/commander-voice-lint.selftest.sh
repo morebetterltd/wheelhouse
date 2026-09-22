@@ -10,8 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 LINT="$SCRIPT_DIR/commander-voice-lint.sh"
 [ -x "$LINT" ] || { echo "selftest: not executable: $LINT" >&2; exit 2; }
 
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-commander-voice-lint-selftest.XXXXXX")"
-cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-commander-voice-lint-selftest.XXXXXX")" || exit 2
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 PASS=0
 FAIL=0

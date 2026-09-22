@@ -14,8 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 COCKPIT="$HERE/cockpit.sh"
 [ -x "$COCKPIT" ] || { echo "selftest: not executable: $COCKPIT" >&2; exit 2; }
 
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")"
-FIX="$(cd "$FIX" && pwd -P)"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")" || exit 2
 SOCK="wheelhouse-cockpit-selftest.$$"
 PASS=0
 FAIL=0
@@ -40,7 +39,7 @@ cleanup() {
   pkill -9 -f "$FIX/project/seats/herald.ts" >/dev/null 2>&1 || true
   pkill -9 -f "$FIX/project/seats/desk.ts" >/dev/null 2>&1 || true
   pkill -9 -f "$FIX/project/seats/commander-inbox-poll.sh" >/dev/null 2>&1 || true
-  rm -rf "$FIX"
+  selftest_remove_fixture_dir "$FIX"
 }
 trap cleanup EXIT INT TERM
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
@@ -99,6 +98,19 @@ window_width() { tmux -L "$SOCK" display-message -p -t 'wh-ratio:bridge' '#{wind
 pane_count() { tmux -L "$SOCK" list-panes -t 'wh-ratio:bridge' 2>/dev/null | wc -l | tr -d ' '; }
 opt_value() { tmux -L "$SOCK" show-options -v -t "$1" "$2"; }
 session_exists() { tmux -L "$SOCK" has-session -t "=$1" >/dev/null 2>&1; }
+
+CANARY_CWD="$FIX/bad-tmpdir-canary"
+mkdir -p "$CANARY_CWD"
+printf 'sentinel\n' > "$CANARY_CWD/sentinel.txt"
+set +e
+CANARY_OUT="$(cd "$CANARY_CWD" && TMPDIR=/nonexistent WHEELHOUSE_COCKPIT_MKTEMP_CANARY=0 bash "$HERE/cockpit.selftest.sh" 2>&1)"
+CANARY_RC=$?
+set -u
+if [ "$CANARY_RC" -ne 0 ] && [ -f "$CANARY_CWD/sentinel.txt" ] && printf '%s\n' "$CANARY_OUT" | grep -q 'STOP: mktemp failed for fixture template'; then
+  pass "bad TMPDIR stops before cleanup and preserves caller cwd sentinel"
+else
+  fail "bad TMPDIR canary failed (rc=$CANARY_RC sentinel=$([ -f "$CANARY_CWD/sentinel.txt" ] && echo present || echo missing) out=$CANARY_OUT)"
+fi
 
 attach_at_152() {
   # Drive a real tmux client of a known size instead of relying on the tool

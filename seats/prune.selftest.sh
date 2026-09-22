@@ -25,10 +25,10 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
 
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-prune-selftest.XXXXXX")"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-prune-selftest.XXXXXX")" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 TMP_SCRATCH=()
-cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX" ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; rm -rf ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
 trap cleanup EXIT INT TERM
 export HOME="$FIX/home"
 mkdir -p "$HOME"

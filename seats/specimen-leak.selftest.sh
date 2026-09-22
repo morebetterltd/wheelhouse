@@ -24,8 +24,8 @@ pass() { printf '  ok    %s\n' "$*" | scrub; }
 fail() { printf '  FAIL  %s\n' "$*" | scrub; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*" | scrub; SKIPPED=$((SKIPPED + 1)); }
 
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-specimen-leak.XXXXXX")"
-cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-specimen-leak.XXXXXX")" || exit 2
+cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 
 PATTERN='Ebb|ebb|Tideline|tideline|cordova|headless emulator|app-review|com\.example\.app|learn what a good one looks like|take it when the reviewer starts waiting'

@@ -69,7 +69,7 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
-cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && rm -rf "$FIX"; return 0; }
+cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"; return 0; }
 trap cleanup EXIT INT TERM
 
 # --- fixture -----------------------------------------------------------------
@@ -112,7 +112,7 @@ sweep_stale_fixtures() {
 }
 sweep_stale_fixtures
 
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
