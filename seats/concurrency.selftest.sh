@@ -224,7 +224,7 @@ PROJ="$FIX/proj"
 build_proj "$PROJ" alpha
 RUN_PROJ="$PROJ"
 
-run() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
+run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 state_get() {   # $1 = seat, $2 = field  (reads $RUN_PROJ's state.json)
   env HOME="$HOME_FIX" bun -e "const s=require('$RUN_PROJ/seats/state.json');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"
@@ -485,7 +485,7 @@ else
 }
 EOF
   REAL_PATH="$(dirname "$REAL_PI"):$(dirname "$(command -v bun)"):/usr/bin:/bin"
-  rrun() { OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=90000 bun "$RPROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
+  rrun() { RC=0; OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=90000 bun "$RPROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
   RLOG_A="$RPROJ/seats/logs/worker-a.jsonl"
   RLOG_B="$RPROJ/seats/logs/worker-b.jsonl"
 

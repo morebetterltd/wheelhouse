@@ -204,7 +204,7 @@ build_proj "$PROJ" alpha
 # BEADS_ACTOR unset on purpose, same reasoning as adapter.selftest.sh: reset
 # must set it in the cold-respawned seat's own env by construction, not by
 # forwarding whatever this shell happened to have.
-run() { OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
+run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 

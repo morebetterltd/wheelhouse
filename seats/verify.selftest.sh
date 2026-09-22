@@ -482,7 +482,7 @@ if grep -q 'Read-only source snapshots' "$PROJ/seats/verdicts/bead-source.md" 2>
 else fail "source snapshots: verdict record did not name source snapshot"; fi
 
 phase "0c. timeout — last phase and partial verifier output are retained"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && says "timed out after 1500ms" && says "elapsed" && says "last phase: tool bash started" && says "partial output:"; then
   pass "timeout STOP names elapsed time, last tool/phase, and partial output path"
 else fail "timeout STOP missing phase/elapsed/partial detail (exit $RC): $OUT"; fi
@@ -644,7 +644,7 @@ cat > "$REPLY" <<'EOF'
 Env-route verifier checked.
 VERDICT: APPROVE
 EOF
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" OPENAI_API_KEY=fixture-key bun "$RUN_PROJ/seats/verify.ts" bead-env fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" OPENAI_API_KEY=fixture-key bun "$RUN_PROJ/seats/verify.ts" bead-env fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then pass "account.authRoute=env verifier runs with exported provider env var and no auth.json"
 else fail "account.authRoute=env verifier was refused (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
@@ -667,7 +667,7 @@ LOCK="$FIX/verify-budget.lock"
 perl -MFcntl=:flock -e 'open(my $fh, ">>", $ARGV[0]) or die $!; flock($fh, LOCK_EX) or die $!; sleep 10' "$LOCK" &
 LOCK_PID=$!
 sleep 0.2
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" WHEELHOUSE_BUILD_LOCK="$LOCK" bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" WHEELHOUSE_BUILD_LOCK="$LOCK" bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 2>&1)" || RC=$?
 kill "$LOCK_PID" 2>/dev/null || true
 wait "$LOCK_PID" 2>/dev/null || true
 if [ $RC -eq 1 ] && says "host build lock is held by another bead" && says "timeout-ms is not spent queued"; then

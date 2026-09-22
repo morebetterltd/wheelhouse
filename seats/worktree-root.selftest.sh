@@ -114,7 +114,7 @@ git -C "$PROJ" add README.md
 git -C "$PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m init
 
 phase "single-repo worktree root agreement"
-OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$PROJ/seats/seat-env.sh" nyff worker-1 "$PROJ" 2>&1)"; RC=$?
+RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$PROJ/seats/seat-env.sh" nyff worker-1 "$PROJ" 2>&1)" || RC=$?
 TRUST="$HOME_FIX/.pi-seats-nyff/worker-1/trust.json"
 if [ $RC -eq 0 ] && [ -s "$TRUST" ]; then pass "seat-env writes the Pi trust grant"; else fail "seat-env failed (exit $RC): $OUT"; fi
 TRUST_ROOT="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(Object.keys(j).find(k=>j[k]===true)||"")' "$TRUST" 2>/dev/null)"
@@ -127,9 +127,9 @@ fi
 printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-nyff/worker-1/auth.json"
 
 mkdir -p "$WORKTREE_ROOT/bead-a"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" spawn worker-1 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "fixture seat spawns"; else fail "spawn failed (exit $RC): $OUT"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" dispatch worker-1 bead-a "hello from worktree root selftest" 2>&1)"; RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" dispatch worker-1 bead-a "hello from worktree root selftest" 2>&1)" || RC=$?
 CWD_FILE="$HOME_FIX/.pi-seats-nyff/worker-1/cwd.txt"
 if [ $RC -eq 0 ] && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$WORKTREE_ROOT/bead-a" ]; then
   pass "adapter dispatch uses <root>/.wheelhouse-worktrees/<bead>"
@@ -138,7 +138,7 @@ else
 fi
 
 mkdir -p "$WORKTREE_ROOT/orphan-a"
-SCAN="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/prune.ts" scan --root "$PROJ" --format json 2>&1)"; RC=$?
+RC=0; SCAN="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/prune.ts" scan --root "$PROJ" --format json 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && node -e 'const rows=JSON.parse(process.argv[1]); const want=process.argv[2]; if (!rows.some(r => r.category === "orphaned-worktree" && r.path === want)) process.exit(1)' "$SCAN" "$WORKTREE_ROOT/orphan-a"; then
   pass "prune scans the same <root>/.wheelhouse-worktrees directory"
 else

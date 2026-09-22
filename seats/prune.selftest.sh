@@ -234,8 +234,7 @@ printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treas
 ( cd "$MID" && bun seats/prune.ts prune --from-file "$FIX/mid-scan.tsv" > "$FIX/mid-dry.out" )
 [ -d "$MID/product/.wheelhouse-build" ] && pass 'mid-turn seat still allows dry-run scan/prune preview' || fail 'mid-turn dry-run removed cache'
 set +e
-MID_OUT=$(cd "$MID" && bun seats/prune.ts prune --from-file "$FIX/mid-scan.tsv" --yes 2>&1)
-MID_RC=$?
+MID_RC=0; MID_OUT=$(cd "$MID" && bun seats/prune.ts prune --from-file "$FIX/mid-scan.tsv" --yes 2>&1) || MID_RC=$?
 set +e
 if [ $MID_RC -ne 0 ] && printf '%s\n' "$MID_OUT" | grep -q 'worker-busy' && printf '%s\n' "$MID_OUT" | grep -q 'mid-turn'; then pass 'prune --yes STOPs naming the mid-turn seat'; else fail "mid-turn prune did not STOP as specified (exit $MID_RC): $MID_OUT"; fi
 [ -d "$MID/product/.wheelhouse-build" ] && pass 'mid-turn guarded cache remains after refused prune --yes' || fail 'mid-turn guarded cache was removed'
@@ -244,15 +243,13 @@ kill "$MID_PID" >/dev/null 2>&1 || true
 phase 'prune --yes rechecks live seat anchors from reviewed scan files'
 printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\norphaned-worktree\t1\t%s\t%s\t\t1\t1.0B\trm\tstale reviewed scan fixture\n' "$ROOT" "$WTS/$LIVE_ID" > "$FIX/stale-live-scan.tsv"
 set +e
-STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-live-scan.tsv" --yes --categories orphaned-worktree 2>&1)
-STALE_RC=$?
+STALE_RC=0; STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-live-scan.tsv" --yes --categories orphaned-worktree 2>&1) || STALE_RC=$?
 set +e
 if [ $STALE_RC -ne 0 ] && printf '%s\n' "$STALE_OUT" | grep -q 'worker-live' && printf '%s\n' "$STALE_OUT" | grep -q 'refusing to prune'; then pass 'prune --yes refuses a stale safe row that is now a live seat cwd'; else fail "stale live-cwd row was not refused (exit $STALE_RC): $STALE_OUT"; fi
 [ -d "$WTS/$LIVE_ID" ] && pass 'stale-scan live seat cwd remains after refused prune --yes' || fail 'stale-scan live seat cwd was removed'
 printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\nmerged-worktree\t1\t%s\t%s\tfleet/%s\t1\t1.0B\tworktree\tstale reviewed scan fixture\n' "$PROD" "$WTS/$HIST_ID" "$HIST_ID" > "$FIX/stale-session-scan.tsv"
 set +e
-SESSION_STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-session-scan.tsv" --yes --categories merged-worktree 2>&1)
-SESSION_STALE_RC=$?
+SESSION_STALE_RC=0; SESSION_STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-session-scan.tsv" --yes --categories merged-worktree 2>&1) || SESSION_STALE_RC=$?
 set -e
 if [ $SESSION_STALE_RC -ne 0 ] && printf '%s\n' "$SESSION_STALE_OUT" | grep -q 'worker-history' && printf '%s\n' "$SESSION_STALE_OUT" | grep -q 'session history cwd'; then pass 'prune --yes refuses a reviewed safe row that a stored session history still points at'; else fail "stale session-history row was not refused (exit $SESSION_STALE_RC): $SESSION_STALE_OUT"; fi
 [ -d "$WTS/$HIST_ID" ] && pass 'stale-scan session-history worktree remains after refused prune --yes' || fail 'stale-scan session-history worktree was removed'

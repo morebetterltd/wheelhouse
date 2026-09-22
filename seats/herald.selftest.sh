@@ -105,7 +105,7 @@ SEND_LOG="$FIX/send-keys.log"
 
 printf '%s\n' '{"type":"agent_end","messages":["rename retry settle"],"timestamp":"2026-09-10T00:00:00Z"}' > "$PROJ/seats/logs/rename-retry.jsonl"
 seed_log_cursor rename-retry.jsonl 0
-OUT="$(WHEELHOUSE_TEST_DELETE_HERALD_TMP=1 run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_TEST_DELETE_HERALD_TMP=1 run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'herald state rename ENOENT; retrying once' && [ "$(json_count 'r.class==="settle" && /rename retry settle/.test(r.detail)')" = 1 ]; then
   pass "state tmp rename ENOENT is retried once and the herald survives"
 else
@@ -120,7 +120,7 @@ rm -f "$PROJ/seats/logs/rename-retry.jsonl" "$PROJ/seats/herald.state.json" "$PR
 
 node -e 'const fs=require("fs"); const file=process.argv[1]; const line=JSON.stringify({type:"agent_end",messages:["historical settle"]})+"\n"; let out=""; while (Buffer.byteLength(out)<3*1024*1024) out+=line; fs.writeFileSync(file,out)' "$PROJ/seats/logs/preexisting-large.jsonl"
 PREEXISTING_SIZE="$(wc -c < "$PROJ/seats/logs/preexisting-large.jsonl" | tr -d ' ')"
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 STATE_OFFSET="$(node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log(s.logs["seats/logs/preexisting-large.jsonl"]?.offset ?? "missing")' "$PROJ/seats/herald.state.json" 2>/dev/null || echo missing)"
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 0 wake event' && [ "$(line_count "$PROJ/seats/inbox.jsonl")" = 0 ] && [ "$STATE_OFFSET" = "$PREEXISTING_SIZE" ]; then
   pass "pre-existing large cursorless log starts at EOF and yields zero stale events"
@@ -128,7 +128,7 @@ else
   fail "cursorless large log was replayed or not cursorized (rc=$RC out=$OUT inbox=$(line_count "$PROJ/seats/inbox.jsonl") state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo missing))"
 fi
 node -e 'const fs=require("fs"); const file=process.argv[1]; const filler=JSON.stringify({type:"agent_start",message:"x".repeat(5000)})+"\n"; let out=""; while (Buffer.byteLength(out)<3*1024*1024) out+=filler; out+=JSON.stringify({type:"agent_end",messages:["incremental tail settle"]})+"\n"; fs.appendFileSync(file,out)' "$PROJ/seats/logs/preexisting-large.jsonl"
-OUT="$(WHEELHOUSE_HERALD_READ_CHUNK_BYTES=4096 run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_READ_CHUNK_BYTES=4096 run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="settle" && /incremental tail settle/.test(r.detail)')" = 1 ]; then
   pass "large log tail is read incrementally with a small chunk bound"
 else
@@ -143,7 +143,7 @@ seed_log_cursor copytruncate.jsonl "$COPYTRUNC_OLD_SIZE"
 cp "$COPYTRUNC_LOG" "$COPYTRUNC_LOG.1"
 : > "$COPYTRUNC_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["after copytruncate"]}' > "$COPYTRUNC_LOG"
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="settle" && /after copytruncate/.test(r.detail)')" = 1 ]; then
   pass "copy-truncate shrink resets the saved offset and herald reads the new current log"
 else
@@ -154,11 +154,11 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.se
 cat > "$PROJ/seats/needs.jsonl" <<'JSONL'
 {"type":"opened","id":"need-demo","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Lunch choice","body":"Pick lunch","options":[],"machine":{}}
 JSONL
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
 {"type":"answered","id":"need-demo","at":"2026-09-21T00:01:00.000Z","from":"human","via":"desk","text":"Soup"}
 JSONL
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="need-answered" && r.seat==="principal" && r.state==="terminal" && /answered — Lunch choice/.test(r.title) && r.detail.includes("Soup") && r.detail.includes("Read it: bun seats/needs.ts show need-demo") && r.source.log==="seats/needs.jsonl" && r.source.type==="answered"')" = 1 ]; then
   pass "human answered need appends one principal inbox row with needs.ts show command"
 else
@@ -166,7 +166,7 @@ else
 fi
 DRAIN_NEED1="$FIX/drain-need1.out"; DRAIN_NEED2="$FIX/drain-need2.out"
 run_herald --drain > "$DRAIN_NEED1"; run_herald --drain > "$DRAIN_NEED2"
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 if [ "$(line_count "$DRAIN_NEED1")" = 1 ] && [ ! -s "$DRAIN_NEED2" ] && [ "$(json_count 'r.class==="need-answered"')" = 1 ]; then
   pass "need answered row drains once and does not duplicate on rescan"
 else
@@ -175,7 +175,7 @@ fi
 cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
 {"type":"message","id":"need-demo","at":"2026-09-21T00:02:00.000Z","from":"commander","via":"cli","text":"commander note"}
 JSONL
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 0 wake event' && [ "$(json_count 'r.detail && /commander note/.test(r.detail)')" = 0 ]; then
   pass "commander-authored need message produces no inbox row"
 else
@@ -184,7 +184,7 @@ fi
 cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
 {"type":"message","id":"need-demo","at":"2026-09-21T00:03:00.000Z","from":"human","via":"desk","text":"More context"}
 JSONL
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="need-message" && r.state==="input-required" && /message — Lunch choice/.test(r.title) && r.detail.includes("More context") && r.detail.includes("Read it: bun seats/needs.ts show need-demo")')" = 1 ]; then
   pass "human message on an answered need appends need-message input-required row"
 else
@@ -200,7 +200,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"
 printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"**Planning**","thinkingSignature":"fresh-signature"}]}]}' > "$PROJ/seats/logs/worker-2.jsonl"
 seed_log_cursor worker-1.jsonl 0
 seed_log_cursor worker-2.jsonl 0
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 2 wake event' && [ "$(json_count 'r.class==="settle" && r.seat==="worker-1" && /wheelhouse-project-xtyh/.test(r.title) && /You hold bead wheelhouse-project-xtyh/.test(r.detail)')" = 1 ] && [ "$(json_count 'r.class==="settle" && r.seat==="worker-2" && /wheelhouse-project-xtyh-fresh/.test(r.title) && /Fresh log prompt head/.test(r.detail)')" = 1 ]; then
   pass "settle rows use state.json prompt head for rotated and fresh current logs"
 else
@@ -222,7 +222,7 @@ cat > "$PROJ/seats/logs/reviewer-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"Review complete.\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED"}]}]}
 JSONL
 seed_log_cursor reviewer-1.jsonl 0
-OUT="$(BD_SHOW_DIR="$FIX/bd-show" BD_COMMENT_DIR="$FIX/bd-comments" PATH="$FIX/bin:$PATH" run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(BD_SHOW_DIR="$FIX/bd-show" BD_COMMENT_DIR="$FIX/bd-comments" PATH="$FIX/bin:$PATH" run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$(json_count 'r.class==="verdict-not-posted" && r.seat==="reviewer-1" && /VERDICT: APPROVE/.test(r.detail)')" = 1 ] && grep -q '^relayed by adapter:' "$FIX/bd-comments/bead-review.comment" 2>/dev/null && grep -q 'VERDICT: APPROVE' "$FIX/bd-comments/bead-review.comment"; then
   pass "unposted reviewer verdict is relayed to the bead and heralded"
 else
@@ -252,7 +252,7 @@ cat "$ROOT/seats/fixtures/herald-events/agent-end-normal-stop.json"
 } > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
 
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 7 wake event'; then pass "captures settle, distress, sentinel, and non-retried error events without retry wakes"
 else fail "herald --once did not capture exactly seven events (rc=$RC): $OUT"; fi
 
@@ -280,7 +280,7 @@ if [ "$(json_count 'r.class==="sentinel" && /tool output|legacy event shape/.tes
 else fail "quoted @commander text reached sentinel"; fi
 
 BEFORE="$(line_count "$PROJ/seats/inbox.jsonl")"
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 AFTER="$(line_count "$PROJ/seats/inbox.jsonl")"
 if [ $RC -eq 0 ] && [ "$BEFORE" = "$AFTER" ]; then pass "dedup/cursor prevents duplicate inbox appends on a re-scan"
 else fail "re-scan appended duplicates (before=$BEFORE after=$AFTER rc=$RC out=$OUT)"; fi
@@ -319,7 +319,7 @@ cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 JSONL
 seed_log_cursor worker-1.jsonl 0
 POKE_LOG="$PROJ/seats/logs/herald.out.log"
-OUT="$(FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -qx -- '-t wh-demo:bridge.0 check the fleet inbox Enter' "$SEND_LOG"; then
   pass "fixture idle Claude UI receives exactly one constant-phrase poke"
 else
@@ -333,7 +333,7 @@ else fail "seat text leaked into send-keys: $(cat "$SEND_LOG")"; fi
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["idle prose working thinking settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-with-prose-working-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-with-prose-working-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "idle prompt with working/thinking prose receives a poke"
 else fail "idle prompt with working/thinking prose was misclassified busy (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
@@ -341,9 +341,9 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$PO
 printf 'settled but wrapper not idle; commander prose says still working and thinking\n' > "$FIX/wrapper-not-idle.txt"
 printf '%s\n' '{"type":"agent_end","messages":["escalate settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 node -e 'const fs=require("fs"); const f=process.argv[1]; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.firstDeferredAtByPane={"wh-demo:bridge.0":1}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")' "$PROJ/seats/herald.state.json"
-OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC2=$?
+RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC2=$?
 if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke escalated .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "deferred poke escalates after bounded window when stable pane text has bare working/thinking prose"
 else fail "deferred poke did not escalate (rc=$RC/$RC2 out=$OUT/$OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none))"; fi
 
@@ -353,7 +353,7 @@ printf 'stable transcript\n❯\nLifeOS status repaint 2 tokens=11\n' > "$FIX/rep
 printf '%s\n' '{"type":"agent_end","messages":["repaint settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
 SEQ_STATE="$FIX/repaint.seq"
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_SEQUENCE="$FIX/repaint-1.txt:$FIX/repaint-2.txt" FAKE_TMUX_SEQUENCE_STATE="$SEQ_STATE" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_SEQUENCE="$FIX/repaint-1.txt:$FIX/repaint-2.txt" FAKE_TMUX_SEQUENCE_STATE="$SEQ_STATE" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "repainting trailing status line is stripped for stability and idle poke lands"
 else fail "repainting status fixture did not pass stability (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
@@ -365,26 +365,26 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$PO
 } > "$FIX/wide-mid-turn.txt"
 printf '%s\n' '{"type":"agent_end","messages":["wide mid turn settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wide-mid-turn.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wide-mid-turn.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "wide capture sees spinner above prompt and classifies mid-turn pane not idle"
 else fail "wide mid-turn fixture was considered idle (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["post-fixture settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 [ $RC -eq 0 ] || fail "post-fixture reset failed (rc=$RC out=$OUT)"
 
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"response","command":"prompt","success":false,"error":"usage limit reached while commander was busy"}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "busy commander pane defers a distress poke without sending"
 else fail "busy pane did not defer distress poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$AFTER_SENDS" = "$((BEFORE_SENDS+1))" ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "deferred distress poke is delivered once the commander pane is idle"
 else fail "deferred distress poke was not delivered on idle retry (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
@@ -393,7 +393,7 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["cooldown suppressed"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-OUT="$(FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=cooldown .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "per-pane cooldown defers a second immediate poke"
 else fail "cooldown did not defer second poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
@@ -403,7 +403,7 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["cooldown expired"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$AFTER_SENDS" = "$((BEFORE_SENDS+1))" ]; then pass "per-pane cooldown allows a later poke after the tunable interval"
 else fail "cooldown did not allow later poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
@@ -412,7 +412,7 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done again"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bash FAKE_TMUX_CAPTURE='$ ' FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bash FAKE_TMUX_CAPTURE='$ ' FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ]; then pass "pane-state gate prevents poke into a bare shell"
 else fail "bare shell received a poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null))"; fi
@@ -421,7 +421,7 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done chevron shell"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bash FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/bare-shell-chevron.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bash FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/bare-shell-chevron.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "allowlist gate classifies a ❯-prompt bare shell not-idle and defers without poking"
 else fail "❯-prompt bare shell received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
@@ -431,7 +431,7 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
 SEQ_STATE="$FIX/capture-seq.idx"
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_SEQUENCE="$ROOT/seats/fixtures/herald-panes/between-tool-calls.txt:$ROOT/seats/fixtures/herald-panes/tool-running.txt" FAKE_TMUX_SEQUENCE_STATE="$SEQ_STATE" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_SEQUENCE="$ROOT/seats/fixtures/herald-panes/between-tool-calls.txt:$ROOT/seats/fixtures/herald-panes/tool-running.txt" FAKE_TMUX_SEQUENCE_STATE="$SEQ_STATE" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "between-tool-calls Claude UI is unstable across the idle window and deferred without poking"
 else fail "between-tool-calls fixture received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
@@ -440,7 +440,7 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done third"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "fixture mid-turn Claude UI is logged deferred/not-idle and not poked"
 else fail "mid-turn Claude received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
@@ -449,7 +449,7 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done fourth"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/tool-running.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/tool-running.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ]; then pass "fixture tool-running Claude UI is not poked"
 else fail "tool-running Claude received a poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null))"; fi
@@ -457,7 +457,7 @@ else fail "tool-running Claude received a poke (before=$BEFORE_SENDS after=$AFTE
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done fifth"]}
 JSONL
-OUT="$(run_herald --once 2>&1)"; RC=$?
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -q 'poke dropped .*reason=no-pane ' "$POKE_LOG" 2>/dev/null; then pass "poke attempt with no configured pane is logged dropped/no-pane"
 else fail "no-pane poke attempt was not logged dropped/no-pane (rc=$RC out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
@@ -467,7 +467,7 @@ cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["wrapper idle settle"]}
 JSONL
 seed_log_cursor worker-1.jsonl 0
-OUT="$(WHEELHOUSE_HERALD_IDLE_RE='lifeos wrapper ready>' WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_IDLE_RE='lifeos wrapper ready>' WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -qx -- '-t wh-demo:bridge.0 check the fleet inbox Enter' "$SEND_LOG"; then pass "wrapper-shaped idle prompt matched by WHEELHOUSE_HERALD_IDLE_RE receives the constant poke"
 else fail "wrapper idle prompt was not accepted by configured regex (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
@@ -477,8 +477,8 @@ cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["fallback settle"]}
 JSONL
 seed_log_cursor worker-1.jsonl 0
-OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-never-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)"; RC=$?
-POLL_OUT="$(cp "$ROOT/seats/herald.ts" "$PROJ/seats/herald.ts" && WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$ROOT/seats/commander-inbox-poll.sh" --once 2>&1)"; POLL_RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-never-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+POLL_RC=0; POLL_OUT="$(cp "$ROOT/seats/herald.ts" "$PROJ/seats/herald.ts" && WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$ROOT/seats/commander-inbox-poll.sh" --once 2>&1)" || POLL_RC=$?
 if [ $RC -eq 0 ] && [ "$POLL_RC" -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke deferred .*reason=not-idle' "$POKE_LOG" 2>/dev/null && printf '%s\n' "$POLL_OUT" | grep -q 'check the fleet inbox' && printf '%s\n' "$POLL_OUT" | grep -q 'fallback settle' && [ "$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo 0)" = "$(wc -c < "$PROJ/seats/inbox.jsonl" | tr -d ' ')" ]; then
   pass "fallback poll drains pending inbox without matching the wrapper prompt or sending tmux keys"
 else

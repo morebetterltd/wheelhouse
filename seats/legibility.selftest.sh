@@ -287,10 +287,10 @@ STATE="$PROJ/seats/state.json"
 VDIR="$PROJ/seats/verdicts"
 REPLY="$FIX/reply.txt"
 
-arun()   { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
-vrun()   { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$PROJ/seats/verify.ts" "$@" 2>&1)"; RC=$?; }
+arun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+vrun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$PROJ/seats/verify.ts" "$@" 2>&1)" || RC=$?; }
 render() { local f="${1:-$PROJ/seats/floor.ts}"; shift 2>/dev/null
-           OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS="${COLS:-160}" LINES=70 NO_COLOR=1 bun "$f" --once "$@" 2>&1)"; RC=$?; }
+           RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS="${COLS:-160}" LINES=70 NO_COLOR=1 bun "$f" --once "$@" 2>&1)" || RC=$?; }
 says()   { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seatline(){ printf '%s\n' "$OUT" | grep "$1"; }   # every frame line naming the seat
 state_get(){ env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"; }

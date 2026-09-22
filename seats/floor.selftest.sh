@@ -220,8 +220,7 @@ node -e 'const fs=require("fs"); const [rosterFile,stateFile,fix,log]=process.ar
 RUN_PATH="$FIX/bin:$(dirname "$(command -v bun)"):/usr/bin:/bin"
 render() { # floor-file args...
   local f="$1"; shift
-  OUT="$(env PATH="$RUN_PATH" COLUMNS=180 LINES=70 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$f" --once "$@" 2>&1)"
-  RC=$?
+  RC=0; OUT="$(env PATH="$RUN_PATH" COLUMNS=180 LINES=70 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$f" --once "$@" 2>&1)" || RC=$?
 }
 has() { printf '%s\n' "$OUT" | grep -q "$1"; }
 
@@ -386,7 +385,7 @@ elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
   skip "cockpit.sh not found beside floor.ts — leg not run"
 else
   SOCK="whfloor$$"
-  crun() { OUT="$(env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null 2>&1)"; RC=$?; }
+  crun() { RC=0; OUT="$(env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null 2>&1)" || RC=$?; }
   crun
   [ $RC -eq 0 ] && has "bridge built" && pass "first run builds the bridge" || fail "first run: rc=${RC}: $OUT"
   if tmux -L "$SOCK" has-session -t "=wh-tfix" 2>/dev/null; then pass "session wh-tfix exists"
