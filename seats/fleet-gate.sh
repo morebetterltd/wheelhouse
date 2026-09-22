@@ -92,6 +92,28 @@ total=$(printf '%s\n' "$status" | grep -c -E ' (RUNNING|PARKED|DIED|STOPPED) ')
 # own shape) or compact (everything on one line, as fixtures may write it).
 ready=$(bd ready --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
 inprog=$(bd list --status in_progress --limit 0 --json 2>/dev/null | grep -o '"id"' | wc -l | tr -d ' ')
+github_repo_from_remote() {
+  sed -E 's#.*github\.com[:/]##; s#\.git$##'
+}
+product_repo_root() {
+  local source_file="$ROOT/wheelhouse/.template-source" raw candidate
+  if [ -f "$source_file" ]; then
+    raw="$(sed -n 's/^product-repo=//p; s/^product-repos=//p; s/^product_repo=//p; s/^product_repos=//p; s/^repo=//p; s/^repos=//p' "$source_file" 2>/dev/null | tr ',:' '\n\n' | sed '/^[[:space:]]*$/d' | head -1)"
+    if [ -n "$raw" ]; then
+      case "$raw" in /*) candidate="$raw" ;; *) candidate="$ROOT/$raw" ;; esac
+      if git -C "$candidate" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git -C "$candidate" rev-parse --show-toplevel 2>/dev/null && return 0
+      fi
+    fi
+  fi
+  if [ -d "$ROOT/template" ] && git -C "$ROOT/template" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$ROOT/template" rev-parse --show-toplevel 2>/dev/null && return 0
+  elif git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null && return 0
+  fi
+  return 1
+}
+
 needs_waiting=0
 unread_needs=0
 if [ -f "$HERE/needs.jsonl" ]; then
@@ -124,7 +146,37 @@ EOF
   case "$unread_needs" in (*[!0-9]*|'') unread_needs=0;; esac
 fi
 
-line="🚢 FLEET: ${live}/${total} seats live · ${ready} ready · ${inprog} in progress${herald_dead}${inbox_lag}"
+# Open GitHub issues on the product repo that no open bead traces yet. Consumer
+# fleets file template defects there, and a commander that only reads `bd ready`
+# never sees them (Keenan, 2026-09-22: "make sure you're watching there for work
+# whenever you're active"). A bead traces an issue by carrying its URL in its
+# body (GRAPH.md's `Trace:` line). Degrades to silence without gh, a remote,
+# or network; never delays the turn more than one gh call.
+untriaged=""
+if command -v gh >/dev/null 2>&1; then
+  product_root="$(product_repo_root 2>/dev/null || true)"
+  if [ -n "$product_root" ]; then
+    repo="$(git -C "$product_root" remote get-url origin 2>/dev/null | github_repo_from_remote)"
+    if [ -n "$repo" ]; then
+      open_urls="$(gh issue list -R "$repo" --state open --limit 100 --json url --jq '.[].url' 2>/dev/null || true)"
+      if [ -n "$open_urls" ]; then
+        traced="$(bd list --status open --limit 0 --json 2>/dev/null; bd list --status in_progress --limit 0 --json 2>/dev/null)"
+        n=0; missing=""
+        while IFS= read -r u; do
+          [ -n "$u" ] || continue
+          if ! printf '%s' "$traced" | grep -qF "$u"; then n=$((n+1)); missing="$missing #${u##*/}"; fi
+        done <<EOF
+$open_urls
+EOF
+        if [ "$n" -gt 0 ]; then
+          untriaged=" — ${n} GITHUB ISSUE(S) NOT ON THE BOARD:${missing}. Triage into beads (Trace: <issue url>) before anything else: gh issue view -R $repo <n>"
+        fi
+      fi
+    fi
+  fi
+fi
+
+line="🚢 FLEET: ${live}/${total} seats live · ${ready} ready · ${inprog} in progress${herald_dead}${inbox_lag}${untriaged}"
 if [ "$needs_waiting" -gt 0 ] 2>/dev/null; then
   line="$line — ${needs_waiting} need(s) waiting on a human — bun seats/needs.ts list"
 fi
