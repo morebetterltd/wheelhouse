@@ -351,6 +351,7 @@ attach() {
 }
 
 QSELF="$(printf '%q' "$SELF")"
+QBRIDGE_GUARD="$(printf '%q' "$HERE/bridge-guard.sh")"
 COMMANDER_PANE_PERCENT="${WHEELHOUSE_COCKPIT_COMMANDER_PERCENT:-55}"
 
 install_session_options() {
@@ -360,6 +361,10 @@ install_session_options() {
   else
     tmx set-option -t "$S" mouse on
   fi
+  # Bridge stays two panes: a harness that splits subagent panes into the
+  # current window (Claude Code teammateMode auto) gets each one moved to its
+  # own window instead. See seats/bridge-guard.sh.
+  tmx set-hook -t "$S" after-split-window "run-shell 'WHEELHOUSE_TMUX_SOCKET=${WHEELHOUSE_TMUX_SOCKET:-} bash $QBRIDGE_GUARD $S $COMMANDER_PANE_PERCENT'"
 }
 
 install_resize_hook() {
