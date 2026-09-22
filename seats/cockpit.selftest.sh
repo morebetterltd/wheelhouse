@@ -12,7 +12,9 @@ command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 COCKPIT="$HERE/cockpit.sh"
+BRIDGE_GUARD="$HERE/bridge-guard.sh"
 [ -x "$COCKPIT" ] || { echo "selftest: not executable: $COCKPIT" >&2; exit 2; }
+[ -x "$BRIDGE_GUARD" ] || { echo "selftest: not executable: $BRIDGE_GUARD" >&2; exit 2; }
 
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")"
 FIX="$(cd "$FIX" && pwd -P)"
@@ -49,7 +51,8 @@ fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 PROJ="$FIX/project"
 mkdir -p "$PROJ/seats" "$PROJ/contracts"
 cp "$COCKPIT" "$PROJ/seats/cockpit.sh"
-chmod +x "$PROJ/seats/cockpit.sh"
+cp "$BRIDGE_GUARD" "$PROJ/seats/bridge-guard.sh"
+chmod +x "$PROJ/seats/cockpit.sh" "$PROJ/seats/bridge-guard.sh"
 cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
@@ -98,6 +101,7 @@ pane_width() { tmux -L "$SOCK" display-message -p -t "wh-ratio:bridge.$1" '#{pan
 window_width() { tmux -L "$SOCK" display-message -p -t 'wh-ratio:bridge' '#{window_width}'; }
 pane_count() { tmux -L "$SOCK" list-panes -t 'wh-ratio:bridge' 2>/dev/null | wc -l | tr -d ' '; }
 opt_value() { tmux -L "$SOCK" show-options -v -t "$1" "$2"; }
+hook_value() { tmux -L "$SOCK" show-hooks -t "$1" "$2" 2>/dev/null || true; }
 session_exists() { tmux -L "$SOCK" has-session -t "=$1" >/dev/null 2>&1; }
 
 attach_at_152() {
@@ -244,6 +248,32 @@ if [ "$(opt_value wh-ratio mouse)" = "on" ] && [ "$(opt_value wh-ratio history-l
 else
   fail "fresh cockpit options wrong: mouse=$(opt_value wh-ratio mouse) history=$(opt_value wh-ratio history-limit)"
 fi
+if hook_value wh-ratio after-split-window | grep -q 'bridge-guard.sh'; then
+  pass "fresh cockpit session installs the bridge guard split hook"
+else
+  fail "fresh cockpit session missing bridge guard hook: $(hook_value wh-ratio after-split-window)"
+fi
+
+GUARD_IDLE_OUT="$(WHEELHOUSE_TMUX_SOCKET="$SOCK" bash "$PROJ/seats/bridge-guard.sh" wh-ratio 55 2>&1)"
+GUARD_IDLE_RC=$?
+if [ $GUARD_IDLE_RC -eq 0 ] && [ -z "$GUARD_IDLE_OUT" ] && [ "$(pane_count)" = 2 ]; then
+  pass "bridge guard is silent and idempotent when bridge already has two panes"
+else
+  fail "bridge guard was not silent/idempotent at two panes (rc=$GUARD_IDLE_RC panes=$(pane_count) out=$GUARD_IDLE_OUT)"
+fi
+
+HOOK_BEFORE_WINDOWS="$(tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | wc -l | tr -d ' ')"
+tmux -L "$SOCK" split-window -h -t 'wh-ratio:bridge.0' 'sleep 1000' >/dev/null 2>&1 || fail "fixture split into bridge failed"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  [ "$(pane_count)" = 2 ] && [ "$(tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | wc -l | tr -d ' ')" -gt "$HOOK_BEFORE_WINDOWS" ] && break
+  sleep 0.1
+done
+HOOK_AFTER_WINDOWS="$(tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | wc -l | tr -d ' ')"
+if [ "$(pane_count)" = 2 ] && [ "$HOOK_AFTER_WINDOWS" -gt "$HOOK_BEFORE_WINDOWS" ] && tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | grep -q '^agent-'; then
+  pass "bridge guard moves a third bridge pane into its own window"
+else
+  fail "bridge guard did not restore bridge after split (before_windows=$HOOK_BEFORE_WINDOWS after_windows=$HOOK_AFTER_WINDOWS panes=$(pane_count) windows=$(tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | tr '\n' ' '))"
+fi
 
 if attach_at_152; then
   CW="$(pane_width 0 2>/dev/null || echo missing)"; FW="$(pane_width 1 2>/dev/null || echo missing)"; WW="$(window_width 2>/dev/null || echo missing)"; PC="$(pane_count)"
@@ -271,6 +301,11 @@ if [ "$(opt_value wh-ratio mouse)" = "on" ] && [ "$(opt_value wh-ratio history-l
   pass "cockpit re-run leaves mouse/history options idempotently set"
 else
   fail "re-run cockpit options wrong: mouse=$(opt_value wh-ratio mouse) history=$(opt_value wh-ratio history-limit)"
+fi
+if hook_value wh-ratio after-split-window | grep -q 'bridge-guard.sh'; then
+  pass "cockpit re-run keeps the bridge guard split hook installed"
+else
+  fail "re-run cockpit missing bridge guard hook: $(hook_value wh-ratio after-split-window)"
 fi
 
 run_cockpit_no_mouse
