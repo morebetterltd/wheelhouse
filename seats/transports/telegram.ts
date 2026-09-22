@@ -39,6 +39,24 @@ function log(root: string, line: string){ const dir=path.join(root,"seats","logs
 function sentRefByNeed(): Map<string,string> { const m=new Map<string,string>(); for(const ev of readEvents() as any[]){ if(ev?.type==="sent" && ev.transport==="telegram" && typeof ev.id==="string" && typeof ev.ref==="string") m.set(ev.id, ev.ref); } return m; }
 function needByMessageId(): Map<string,string> { const m=new Map<string,string>(); for(const [id,ref] of sentRefByNeed()) { const msg=ref.split(":").pop(); if(msg) m.set(msg,id); } return m; }
 function openNeedIds(): string[] { return Array.from(fold().values()).filter(n=>n.state==="open").map(n=>n.id); }
+function abortMs(method: string, body: any): number {
+  const override = Number(process.env.WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS || "0");
+  if (Number.isFinite(override) && override > 0) return override;
+  if (method === "getUpdates") return (Number(body?.timeout ?? 25) * 1000) + 10000;
+  return 10000;
+}
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, label: string): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e: any) {
+    if (e?.name === "AbortError") throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export class TelegramTransport implements NeedTransport {
   name = "telegram";
@@ -59,7 +77,8 @@ export class TelegramTransport implements NeedTransport {
   }
   endpoint(method: string): string { return `${this.apiBase}/bot${this.token}/${method}`; }
   async call(method: string, body: any): Promise<any> {
-    const res = await fetch(this.endpoint(method), { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body) });
+    const timeoutMs = abortMs(method, body);
+    const res = await fetchWithTimeout(this.endpoint(method), { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body) }, timeoutMs, `telegram ${method}`);
     const json:any = await res.json().catch(()=>({ok:false, description:`HTTP ${res.status}`}));
     if (!res.ok || json.ok === false) throw new Error(json.description || `telegram ${method} failed`);
     return json.result;
