@@ -12,6 +12,14 @@ Copied byte-for-byte into every project. Do not edit this section.
 
 The shipped default is autonomy all the way through the install's definition of done. Principal directive, 2026-09-02: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done." A fleet creates work from signals it is pointed at, starts it, reviews it, merges it, pushes it, opens and merges PRs, and deploys where the project has automated deployment authority. Asking permission to create, start, merge, push, or finish work is a defect unless the action is on this install's reserved list or the work has reached a genuine fork in product intent where two readings lead to different work. In those two cases, interrupt the principal once by opening a need (`bun seats/needs.ts open ...`) written for a human: what is needed, why it matters, the options, the default and when it will apply, and the consequence. A request that exists only in the commander pane is a defect; keep everything else moving.
 
+### Two integration modes
+
+The bead's record names the line you integrate to. A bead integrates into a goal branch only when both facts are on that record: its `Trace:` line names an ISA Goal, or an epic bead that names one, and the record carries the literal line `Integration: fleet/<goal-slug>`. The grammar for that line belongs to `wheelhouse/GRAPH.md`; the designer writes it under `wheelhouse/crew/DESIGNER.md`. Every other bead — GitHub issue, chat request, one-off, observed defect, maintenance, or a goal-looking title without that line — integrates into the install's default line per bead, exactly as today. No `Integration:` line means per-bead mode. Do not infer a goal branch from a slug, a title, or a cluster of related names.
+
+A goal branch is an integration line, not an unreviewed staging pile. At the goal's first dispatch, create `fleet/<goal-slug>` from the default line's current tip and push it to the remote before any worker branches from it; restart survival requires the branch to live on origin, and the epic names it. In the same breath, add that branch name to `seats/integration-refs.txt` so `seats/prune.ts` treats it as an integration ref. The reviewer gates every merge into the goal branch exactly as into the default line: APPROVE with evidence, and the branch tip compared to the reported head. The duty in `### Confirm what you actually integrated` applies unchanged. Merge the default line into the goal branch at least daily and before every group PR, and record each sync's SHA on the epic. Before a group PR, the verifier walks the goal branch's real build against the surfaces named in `wheelhouse/crew/VERIFIER.md`'s project half. The goal branch reaches the default line as one PR per outcome group the designer named on the epic, or once at the end of the goal. Project CI runs on the group PR, not per bead.
+
+A child closes when its reviewed tip is on the goal branch; `wheelhouse/GRAPH.md` owns that close semantics. The epic closes when the last group PR merges to the default line, citing that default-line SHA. Remove the branch from `seats/integration-refs.txt` at that close.
+
 ### Confirm what you actually integrated
 
 The worker reports a head. Your job is to establish that the head you integrated is that one, by comparing refs rather than by reading output.
@@ -25,6 +33,8 @@ This is the other half of the worker's obligation to report a head that is the b
 A merge that changes what is true of the project is not integrated until `wheelhouse/ISA.md`'s Claims move with it. Append or amend a claim citing the merged tip and the evidence home named by `wheelhouse/GRAPH.md`'s *Where evidence lives*, and if the claim names a consumer surface, either cite the verifier walk of that surface or carry the explicit not-walked statement `INTENT.md` permits. A silent claim on a consumer-surface change — neither walked nor marked not-walked — is an integration defect, because a later reader cannot tell whether the surface was exercised or skipped.
 
 The honest escape hatch is explicit because without it the duty will be ignored wholesale: if the merge changes no claim, state that on the bead and say why — for example, `no claim moved, because this was a refactor` or `no claim moved, because this was a documentation-only fix`. Silence is not the escape hatch. These duties attach to the integrating function, whether the integrator is a person, a standing session, or CI.
+
+A goal-branch merge moves claims too, but it names the line honestly. A claim moved by that merge cites the goal-branch tip and carries the literal marker `[GOAL-BRANCH fleet/<goal-slug>]` until the group PR merges to the default line; then amend the claim to cite the default-line SHA and drop the marker. Consumer-surface claims still cite a walk or say not-walked. This resolves the conflict with the sentence above: "citing the merged tip" assumed the merged tip was already on the shared line, and goal-branch mode makes that false until the group PR lands. Holding claims until the group PR is the rejected alternative, because it would leave the ISA lagging the fleet for the whole goal.
 
 ### Dispatch so that nobody has to disturb anyone
 
@@ -66,6 +76,10 @@ A verdict authorises what it states and nothing adjacent to it. Before anything 
 ## This project
 
 Generated at install.
+
+### Goal branches in flight
+
+<!-- List each goal branch, its epic, its outcome groups, and the last default-line sync SHA. `seats/integration-refs.txt` is the machine-readable copy. -->
 
 ### Who integrates
 
