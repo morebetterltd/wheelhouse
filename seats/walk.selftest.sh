@@ -34,10 +34,10 @@ FIX=""
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
-cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && rm -rf "$FIX"; }
+cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-walk-selftest.$$.XXXXXX")"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-walk-selftest.$$.XXXXXX")" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"

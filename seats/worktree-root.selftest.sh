@@ -4,6 +4,8 @@
 
 set -uo pipefail
 
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ADAPTER="$HERE/adapter.ts"
 PRUNE="$HERE/prune.ts"
@@ -23,13 +25,13 @@ done
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
 command -v node >/dev/null 2>&1 || { echo "selftest: node is required" >&2; exit 2; }
 
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-worktree-root-selftest.$$.XXXXXX")"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-worktree-root-selftest.$$.XXXXXX")" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 PROJ="$FIX/project"
 RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$(command -v node)"):/usr/bin:/bin"
-cleanup() { pkill -f "$FIX" 2>/dev/null || true; rm -rf "$FIX"; }
+cleanup() { pkill -f "$FIX" 2>/dev/null || true; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 mkdir -p "$HOME_FIX" "$BIN" "$PROJ/seats" "$PROJ/contracts"
 

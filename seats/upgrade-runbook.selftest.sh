@@ -62,8 +62,8 @@ template_root() {
   printf '%s\n' "$ROOT"
 }
 TEMPLATE=$(template_root)
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX")
-cleanup(){ selftest_cleanup_fixture_processes "${TMP:-}" "${SOCK:-}"; rm -rf "$TMP"; }
+TMP=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX") || exit 2
+cleanup(){ selftest_cleanup_fixture_processes "${TMP:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$TMP"; }
 trap cleanup EXIT
 
 PASS=0
@@ -250,7 +250,7 @@ EOF
   set +e
   NO_LIB_RC=0; NO_LIB_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_NO_LIB/seats/upgrade-runbook.selftest.sh" 2>&1) || NO_LIB_RC=$?
   set -e
-  if [ "$NO_LIB_RC" -eq 127 ] && printf '%s\n' "$NO_LIB_OUT" | grep -q 'selftest-lib.sh'; then
+  if [ "$NO_LIB_RC" -ne 0 ] && printf '%s\n' "$NO_LIB_OUT" | grep -q 'selftest-lib.sh'; then
     pass "installed-layout fixture without selftest-lib.sh fails honestly instead of passing"
   else
     fail "installed-layout fixture without selftest-lib.sh was not caught (rc=$NO_LIB_RC): $NO_LIB_OUT"
