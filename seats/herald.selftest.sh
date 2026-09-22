@@ -13,7 +13,7 @@ command -v node >/dev/null 2>&1 || { echo "selftest: node is required" >&2; exit
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-herald-selftest.XXXXXX")"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-herald-selftest.XXXXXX")" || exit 2
 PASS=0
 FAIL=0
 
@@ -21,7 +21,7 @@ cleanup() {
   selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   if [ -n "${DAEMON_PID:-}" ]; then kill "$DAEMON_PID" 2>/dev/null || true; fi
   if [ -n "${REVIVED_PID:-}" ]; then kill "$REVIVED_PID" 2>/dev/null || true; fi
-  rm -rf "$FIX"
+  selftest_remove_fixture_dir "$FIX"
 }
 trap cleanup EXIT INT TERM
 

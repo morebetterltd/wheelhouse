@@ -97,13 +97,13 @@ cleanup() {
   [ -n "$SPOOF_PID" ] && kill "$SPOOF_PID" 2>/dev/null
   [ -n "$PROBE_PID" ] && kill -9 "$PROBE_PID" 2>/dev/null
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null
-  [ -n "$FIX" ] && rm -rf "$FIX"
+  [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
 trap cleanup EXIT INT TERM
 
 # --- fixture -----------------------------------------------------------------
-FIX="$(mktemp -d)"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-recover-selftest.$$.XXXXXX")" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"

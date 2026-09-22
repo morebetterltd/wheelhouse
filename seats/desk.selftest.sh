@@ -9,9 +9,9 @@ WATCHDOG="$HERE/desk-watchdog.sh"
 [ -f "$DESK" ] || { echo "selftest: missing $DESK" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-desk-selftest.XXXXXX")"; FIX="$(cd "$FIX" && pwd -P)"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-desk-selftest.XXXXXX")" || exit 2
 PASS=0; FAIL=0; PID=""; WATCHDOG_PID=""
-cleanup(){ [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; rm -rf "$FIX"; }
+cleanup(){ [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }

@@ -1,15 +1,17 @@
 #!/bin/bash
 set +e
 
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
 SCRIPT="$(cd "$(dirname "$0")" && pwd)/principal-sentinel.sh"
 NEEDS="$(cd "$(dirname "$0")" && pwd)/needs.ts"
-FIX="${TMPDIR:-/tmp}/wheelhouse-principal-sentinel-selftest.$$"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-principal-sentinel-selftest.$$.XXXXXX")" || exit 2
 FAILED=0
 PASSED=0
 
 pass(){ PASSED=$((PASSED+1)); echo "ok $PASSED - $1"; }
 fail(){ FAILED=$((FAILED+1)); echo "not ok $((PASSED+FAILED)) - $1"; }
-finish(){ rm -rf "$FIX"; if [ "$FAILED" -eq 0 ]; then echo "principal-sentinel.selftest: PASS ($PASSED checks)"; exit 0; else echo "principal-sentinel.selftest: FAIL ($FAILED failure(s), $PASSED pass(es))"; exit 1; fi; }
+finish(){ selftest_remove_fixture_dir "$FIX"; if [ "$FAILED" -eq 0 ]; then echo "principal-sentinel.selftest: PASS ($PASSED checks)"; exit 0; else echo "principal-sentinel.selftest: FAIL ($FAILED failure(s), $PASSED pass(es))"; exit 1; fi; }
 trap finish EXIT
 
 mkdir -p "$FIX/proj/seats" "$FIX/proj/wheelhouse"

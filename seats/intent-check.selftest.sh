@@ -7,8 +7,8 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 CHECK="$SCRIPT_DIR/intent-check.sh"
 TMPBASE=${TMPDIR:-/tmp}
-FIXTURE=$(mktemp -d "$TMPBASE/wheelhouse-intent-check-selftest.$$.XXXXXX")
-cleanup(){ selftest_cleanup_fixture_processes "${FIXTURE:-}" "${SOCK:-}"; rm -rf "$FIXTURE"; }
+FIXTURE=$(selftest_make_fixture_dir "$TMPBASE/wheelhouse-intent-check-selftest.$$.XXXXXX") || exit 2
+cleanup(){ selftest_cleanup_fixture_processes "${FIXTURE:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIXTURE"; }
 trap cleanup EXIT HUP INT TERM
 
 pass_count=0
