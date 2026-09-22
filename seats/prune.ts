@@ -11,6 +11,11 @@
  * with --yes. Rows marked needs-review or seat-anchor are never acted on.
  * Scratch cleanup is closed-bead-only: bead-named scratch for open or
  * in-progress beads is emitted as needs-review and never pruned.
+ * Extra integration refs may be listed in seats/integration-refs.txt, one ref
+ * per line. Blank lines and # comments are ignored. These install-owned refs
+ * match containing refs exactly by branch name (ref === listed or
+ * ref.endsWith("/" + listed), e.g. fleet/goal-x and origin/fleet/goal-x);
+ * listing fleet/goal-x never widens matching to every fleet/* branch.
  * Build-cache rows are only directories a clean build regenerates at a project
  * root or package root: .wheelhouse-build, dist, build, .next, out, .build,
  * target, .NET bin/obj, and Xcode DerivedData when explicitly under a scanned
@@ -97,9 +102,25 @@ function worktrees(repo: string): { path: string; branch: string; sha: string }[
 }
 function clean(repo: string, wt: string): boolean { return run("git", ["-C", wt, "status", "--porcelain"]).out === ""; }
 function isFleetBranch(b: string): boolean { return b.startsWith("fleet/"); }
-function integrated(repo: string, sha: string): boolean {
+function extraIntegrationRefs(roots: string[]): string[] {
+  const out = new Set<string>();
+  for (const root of roots) {
+    try {
+      const file = path.join(path.resolve(root), "seats", "integration-refs.txt");
+      if (!fs.existsSync(file)) continue;
+      for (const raw of fs.readFileSync(file, "utf8").split("\n")) {
+        const ref = raw.replace(/#.*/, "").trim();
+        if (ref) out.add(ref);
+      }
+    } catch {}
+  }
+  return [...out];
+}
+function extraRefMatches(ref: string, listed: string): boolean { return ref === listed || ref.endsWith(`/${listed}`); }
+function listedIntegrationRef(branch: string, extra: string[]): boolean { return extra.includes(branch); }
+function integrated(repo: string, sha: string, extra: string[] = []): boolean {
   const refs = run("git", ["for-each-ref", "--contains", sha, "--format=%(refname:short)", "refs/heads", "refs/remotes"], repo).out.split("\n").filter(Boolean);
-  return refs.some((ref) => INTEGRATION_REFS.some((i) => ref === i || ref.endsWith(`/${i}`) || ref.includes(`/${i}/`) || ref.startsWith(i)));
+  return refs.some((ref) => INTEGRATION_REFS.some((i) => ref === i || ref.endsWith(`/${i}`) || ref.includes(`/${i}/`) || ref.startsWith(i)) || extra.some((i) => extraRefMatches(ref, i)));
 }
 function onRemote(repo: string, sha: string): boolean { return run("git", ["branch", "-r", "--contains", sha], repo).out.split("\n").some((l) => l.trim() && !l.includes("->")); }
 
@@ -177,7 +198,7 @@ function seatAnchors(root: string): Map<string, string> {
 }
 function seatCwds(root: string): Map<string, string> { return seatAnchors(root); }
 
-function scanWorktrees(root: string, repo: string, seats: Map<string, string>, beads: Map<string, string>): Row[] {
+function scanWorktrees(root: string, repo: string, seats: Map<string, string>, beads: Map<string, string>, extra: string[]): Row[] {
   const rows: Row[] = [];
   const registered = new Set<string>();
   for (const w of worktrees(repo)) {
@@ -188,7 +209,8 @@ function scanWorktrees(root: string, repo: string, seats: Map<string, string>, b
     const b = beadFor(w.branch || path.basename(p), beads);
     if (b && b[1] !== "closed") { rows.push(row("needs-review", false, repo, p, w.branch, "none", `bead ${b[0]} is ${b[1]}`)); continue; }
     if (w.branch && isFleetBranch(w.branch)) {
-      const safe = integrated(repo, w.sha) && onRemote(repo, w.sha) && !!b && b[1] === "closed";
+      if (listedIntegrationRef(w.branch, extra)) { rows.push(row("needs-review", false, repo, p, w.branch, "none", "listed integration ref in seats/integration-refs.txt")); continue; }
+      const safe = integrated(repo, w.sha, extra) && onRemote(repo, w.sha) && !!b && b[1] === "closed";
       rows.push(row(safe ? "merged-worktree" : "needs-review", safe, repo, p, w.branch, safe ? "worktree" : "none", safe ? "clean, closed bead, merged to integration ref and present on remote ref" : !b ? "no closed bead record found for this fleet branch" : b[1] !== "closed" ? `bead ${b[0]} is ${b[1]}` : "fleet branch is not both merged and present on a remote ref"));
     } else if (!w.branch) {
       const safe = onRemote(repo, w.sha);
@@ -212,14 +234,15 @@ function scanOrphans(root: string, registered: Set<string>, seats: Map<string, s
   return rows;
 }
 
-function scanBranches(repo: string, root: string, beads: Map<string, string>, registeredBranches: Set<string>): Row[] {
+function scanBranches(repo: string, root: string, beads: Map<string, string>, registeredBranches: Set<string>, extra: string[]): Row[] {
   const rows: Row[] = [];
   const refs = run("git", ["for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/fleet"], repo).out.split("\n").filter(Boolean);
   for (const line of refs) {
     const [branch, sha] = line.split(/\s+/);
     if (!branch || registeredBranches.has(branch)) continue;
+    if (listedIntegrationRef(branch, extra)) { rows.push(row("needs-review", false, repo, repo, branch, "none", "listed integration ref in seats/integration-refs.txt")); continue; }
     const b = beadFor(branch, beads);
-    const safe = integrated(repo, sha) && onRemote(repo, sha) && !!b && b[1] === "closed";
+    const safe = integrated(repo, sha, extra) && onRemote(repo, sha) && !!b && b[1] === "closed";
     rows.push(row(safe ? "stale-branch" : "needs-review", safe, repo, repo, branch, safe ? "branch" : "none", safe ? "local fleet branch has no worktree, closed bead, merged and present on remote ref" : !b ? "no closed bead record found for this fleet branch" : b[1] !== "closed" ? `bead ${b[0]} is ${b[1]}` : "branch is not both merged and present on a remote ref", safe ? 0 : undefined));
   }
   return rows;
@@ -331,15 +354,17 @@ function scanCaches(root: string, includeOptional: boolean, activeBench: boolean
 
 function scan(roots: string[], includeOptional: boolean): Row[] {
   const rows: Row[] = [];
-  for (const root of roots.map((r) => path.resolve(r))) {
+  const resolvedRoots = roots.map((r) => path.resolve(r));
+  const extra = extraIntegrationRefs(resolvedRoots);
+  for (const root of resolvedRoots) {
     const seats = seatCwds(root);
     const beads = beadStatuses(root);
     const registeredPaths = new Set<string>();
     for (const repo of repositories(root)) {
       const wts = worktrees(repo);
       for (const wt of wts) registeredPaths.add(path.resolve(wt.path));
-      rows.push(...scanWorktrees(root, repo, seats, beads));
-      rows.push(...scanBranches(repo, root, beads, new Set(wts.map((w) => w.branch).filter(Boolean))));
+      rows.push(...scanWorktrees(root, repo, seats, beads, extra));
+      rows.push(...scanBranches(repo, root, beads, new Set(wts.map((w) => w.branch).filter(Boolean)), extra));
     }
     const activeBench = benchInProgress(root);
     rows.push(...scanOrphans(root, registeredPaths, seats));
@@ -394,6 +419,25 @@ function getState(rec: any): any | null {
   try { fs.appendFileSync(String(rec.fifo), JSON.stringify({ id, type: "get_state" }) + "\n"); } catch { return null; }
   return readJsonlResponse(String(rec.log), id, start, Date.now() + 2000);
 }
+function rootsWithInstallFiles(rows: Row[]): string[] {
+  const out = new Set<string>();
+  const candidates = new Set<string>();
+  for (const r of rows) {
+    if (path.isAbsolute(r.repo)) candidates.add(path.resolve(r.repo));
+    if (path.isAbsolute(r.path)) candidates.add(path.resolve(r.path));
+  }
+  for (const c of candidates) {
+    if (!path.isAbsolute(c)) continue;
+    let cur = fs.existsSync(c) && fs.statSync(c).isDirectory() ? c : path.dirname(c);
+    while (true) {
+      if (fs.existsSync(path.join(cur, "seats"))) { out.add(cur); break; }
+      const next = path.dirname(cur);
+      if (next === cur) break;
+      cur = next;
+    }
+  }
+  return [...out];
+}
 function rootsWithSeatState(rows: Row[]): string[] {
   const out = new Set<string>();
   const candidates = new Set<string>();
@@ -436,14 +480,16 @@ function assertNoSelectedSeatAnchors(rows: Row[], cats: Set<string> | null): voi
 function localBranchSha(repo: string, branch: string): string {
   return run("git", ["rev-parse", "--verify", branch], repo).out.trim();
 }
-function deleteMergedBranchIfStillSafe(repo: string, branch: string): boolean {
+function deleteMergedBranchIfStillSafe(repo: string, branch: string, extra: string[]): boolean {
   if (!branch || !isFleetBranch(branch)) return false;
+  if (listedIntegrationRef(branch, extra)) return false;
   const sha = localBranchSha(repo, branch);
-  if (!sha || !integrated(repo, sha) || !onRemote(repo, sha)) return false;
-  const r = run("git", ["branch", "-d", branch], repo);
+  if (!sha || !integrated(repo, sha, extra) || !onRemote(repo, sha)) return false;
+  const r = run("git", ["branch", "-D", branch], repo);
   return r.ok;
 }
 function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
+  const extra = extraIntegrationRefs(rootsWithInstallFiles(rows));
   if (yes) { assertNoMidTurnSeats(rows); assertNoSelectedSeatAnchors(rows, cats); }
   let touched = 0, skipped = 0, reclaimed = 0;
   for (const r of rows) {
@@ -454,7 +500,7 @@ function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
     else if (r.action === "worktree") {
       const branch = r.branch;
       run("git", ["worktree", "remove", "--force", r.path], r.repo);
-      if (r.category === "merged-worktree" && branch && deleteMergedBranchIfStillSafe(r.repo, branch)) console.log(`PRUNED branch merged-worktree ${branch}`);
+      if (r.category === "merged-worktree" && branch && deleteMergedBranchIfStillSafe(r.repo, branch, extra)) console.log(`PRUNED branch merged-worktree ${branch}`);
     }
     else if (r.action === "branch") run("git", ["branch", "-d", r.branch], r.repo);
     else if (r.action === "simctl") run("xcrun", ["simctl", "delete", r.path.replace(/^simctl:/, "")]);
