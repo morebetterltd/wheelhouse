@@ -73,7 +73,7 @@ async function processOnce(): Promise<string> {
   try {
     polled=await tx.poll(s.cursor);
   } catch(e:any) {
-    log(`poll failed: ${e?.message ?? e}`);
+    log(`STOP: poll failed: ${e?.message ?? e}`);
     saveState(tx.name, s);
     return `courier scanned ${batch.rows.length} event(s), poll failed`;
   }
