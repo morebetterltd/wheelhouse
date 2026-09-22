@@ -50,8 +50,12 @@ write_server(){
 import * as fs from "node:fs";
 const dir = process.env.STUB_DIR!;
 let msg = 0;
+let activePolls = 0;
+let maxActivePolls = 0;
 function json(path:string, fallback:any){ try { return JSON.parse(fs.readFileSync(`${dir}/${path}`,"utf8")); } catch { return fallback; } }
 function append(path:string, row:any){ fs.appendFileSync(`${dir}/${path}`, JSON.stringify(row)+"\n"); }
+function delayMs(): number { try { return Number(fs.readFileSync(`${dir}/poll-delay-ms`, "utf8").trim()) || 0; } catch { return 0; } }
+function sleep(ms:number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
 Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
   const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : {};
   if(u.pathname.endsWith('/sendMessage')) {
@@ -61,10 +65,19 @@ Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetc
     return Response.json({ok:true,result:{message_id:msg,chat:{id:body.chat_id}}});
   }
   if(u.pathname.endsWith('/getUpdates')) {
-    append('requests.jsonl', {method:'getUpdates', body});
-    const failFile=`${dir}/fail-poll-once`;
-    if (fs.existsSync(failFile)) { fs.unlinkSync(failFile); return Response.json({ok:false,description:'Bad Request: poll failed'}, {status:400}); }
-    const updates=json('updates.json', []); fs.writeFileSync(`${dir}/updates.json`, '[]\n'); return Response.json({ok:true,result:updates});
+    activePolls++;
+    maxActivePolls = Math.max(maxActivePolls, activePolls);
+    fs.writeFileSync(`${dir}/max-poll-active`, String(maxActivePolls));
+    append('requests.jsonl', {method:'getUpdates', body, active:activePolls});
+    try {
+      const ms = delayMs();
+      if (ms > 0) await sleep(ms);
+      const failFile=`${dir}/fail-poll-once`;
+      if (fs.existsSync(failFile)) { fs.unlinkSync(failFile); return Response.json({ok:false,description:'Bad Request: poll failed'}, {status:400}); }
+      const updates=json('updates.json', []); fs.writeFileSync(`${dir}/updates.json`, '[]\n'); return Response.json({ok:true,result:updates});
+    } finally {
+      activePolls--;
+    }
   }
   if(u.pathname.endsWith('/chat.postMessage')) {
     msg++; const ts=`1790000000.${String(msg).padStart(6,'0')}`; append('requests.jsonl', {method:'chat.postMessage', body, ts});
@@ -164,6 +177,16 @@ if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'poll failed: Bad Request: poll
 polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
 if [ "$polls" -ge 2 ] && grep -q 'courier scanned' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure recovers on a later cycle"; else fail "poll failure did not retry/recover polls=$polls log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
 stop_courier
+OVERLAP="$FIX/overlap"; make_proj "$OVERLAP"
+: > "$FIX/requests.jsonl"; rm -f "$FIX/max-poll-active"; printf '350\n' > "$FIX/poll-delay-ms"
+start_courier_daemon "$OVERLAP" 100 "$FIX/overlap.err"
+sleep 1.0
+stop_courier
+rm -f "$FIX/poll-delay-ms"
+max_active="$(cat "$FIX/max-poll-active" 2>/dev/null || echo 0)"
+overlap_polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
+if [ "$max_active" = 1 ] && [ "$overlap_polls" -ge 2 ]; then pass "courier interval skips ticks while a long poll is in flight"
+else fail "courier overlapped long polls or did not poll enough max_active=$max_active polls=$overlap_polls req=$(cat "$FIX/requests.jsonl" 2>/dev/null) err=$(cat "$FIX/overlap.err" 2>/dev/null)"; fi
 PAIR="$FIX/pair"; make_proj "$PAIR"; printf '@keenan\n' > "$PAIR/seats/run/telegram.allow"
 cat > "$PAIR/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-pair","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Pair me","body":"Wait for chat","options":[],"machine":{}}
