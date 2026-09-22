@@ -164,7 +164,7 @@ tmux -L "$SOCK" kill-session -t wh-pane >/dev/null 2>&1 || true
 kill "$POLL_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/commander-inbox-poll.pid"
 
-( cd "$PROJ" && timeout 5 bash -c 'bash seats/cockpit.sh --herald piped | cat' ) > "$FIX/herald-piped.out" 2>&1
+( cd "$PROJ" && with_timeout 5 bash -c 'bash seats/cockpit.sh --herald piped | cat' ) > "$FIX/herald-piped.out" 2>&1
 PIPED_RC=$?
 PIPED_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 PIPED_LINES="$(wc -l < "$FIX/herald-piped.out" | tr -d ' ')"
