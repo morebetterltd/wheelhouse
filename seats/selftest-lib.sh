@@ -3,6 +3,14 @@
 # Source this file, then call selftest_cleanup_fixture_processes "$FIX" [tmux-socket...]
 # from the selftest's EXIT trap before deleting the fixture root.
 
+with_timeout() {
+  seconds="${1:-}"
+  shift || true
+  [ -n "$seconds" ] || { echo "with_timeout: missing seconds" >&2; return 2; }
+  [ "$#" -gt 0 ] || { echo "with_timeout: missing command" >&2; return 2; }
+  perl -e '$seconds = shift @ARGV; alarm $seconds; exec @ARGV or die "exec @ARGV: $!\n"' "$seconds" "$@"
+}
+
 selftest_fixture_processes() {
   root="${1:-}"
   [ -n "$root" ] || return 0
