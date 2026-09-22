@@ -271,8 +271,8 @@ BD_LOG="$FIX/bd-calls.log"
 : > "$BD_LOG"
 
 phase "0. provisioning — the REAL seat-env.sh builds both seats in the temp HOME"
-PROV_A="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$SEAT_ENV" nsA worker-a "$PROJA" 2>&1)"; RCA=$?
-PROV_B="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$SEAT_ENV" nsB worker-b "$PROJB" 2>&1)"; RCB=$?
+RCA=0; PROV_A="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$SEAT_ENV" nsA worker-a "$PROJA" 2>&1)" || RCA=$?
+RCB=0; PROV_B="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$SEAT_ENV" nsB worker-b "$PROJB" 2>&1)" || RCB=$?
 if [ $RCA -eq 0 ] && [ -d "$SEAT_A" ]; then pass "seat-env.sh provisioned A's seat under .pi-seats-nsA"
 else fail "seat-env.sh for A exited ${RCA}: $PROV_A"; fi
 if [ $RCB -eq 0 ] && [ -d "$SEAT_B" ]; then pass "seat-env.sh provisioned B's seat under .pi-seats-nsB"
@@ -339,7 +339,7 @@ restore_b() {
 }
 
 # --- driving A's machinery ---------------------------------------------------
-arun() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" bun "$PROJA/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
+arun() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" bun "$PROJA/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 STATE_A="$PROJA/seats/state.json"
 LOG_A="$PROJA/seats/logs/worker-a.jsonl"
@@ -489,7 +489,7 @@ sed "s|const LOG_DIR = path.join(SEATS_DIR, \"logs\");|const LOG_DIR = \"$PROJB/
 if cmp -s "$ADAPTER" "$CANP/seats/adapter.ts"; then
   fail "canary 6a: could not redirect LOG_DIR — the line no longer matches, so the canary proves nothing"
 else
-  CRUN() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" bun "$CANP/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
+  CRUN() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" bun "$CANP/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
   CRUN spawn worker-a
   CANARY_FAILED_BEFORE=$FAILED
   b_pristine "canary 6a" > /dev/null 2>&1
