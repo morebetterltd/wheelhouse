@@ -722,7 +722,7 @@ function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster
       const renderedDetail = label ? `${detail} (account ${label})` : detail;
       const priorAtSameSource = rec.lastCapacityEvent?.sourceOffset === lineEnd && rec.lastCapacityEvent.detail === renderedDetail ? rec.lastCapacityEvent.at : undefined;
       nextCapacity = {
-        at: eventTimeIso(obj) ?? priorAtSameSource ?? new Date().toISOString(),
+        at: eventTimeIso(obj) ?? priorAtSameSource ?? "time unknown",
         detail: renderedDetail,
         ...(label ? { accountLabel: label } : {}),
         sourceOffset: lineEnd,
@@ -1494,7 +1494,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, retriedWe
       const state = readState();
       const label = accountLabel(undefined, rec);
       state.seats[name].lastCapacityEvent = {
-        at: new Date().toISOString(),
+        at: "time unknown",
         detail: label ? `${String(resp.error ?? "quota-shaped stderr")} (account ${label})` : String(resp.error ?? "quota-shaped stderr"),
         ...(label ? { accountLabel: label } : {}),
       }; // capacity-record
