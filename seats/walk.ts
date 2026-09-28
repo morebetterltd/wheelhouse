@@ -436,6 +436,7 @@ function main(): void {
     ...buildSurfaceInstructions(surface.kind, surface.spec, baseline, workspaceRel),
     ``,
     `Walk only the surface named above. Do not read fleet internals, bead history, ISA files, seat logs, author transcripts, or implementation notes unless the named surface itself sends you there.`,
+    `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT). If the named surface sends you to a wheelhouse/ path that is not present in your scratch cwd, resolve it under WHEELHOUSE_ROOT.`,
     `Image budget for screen captures: full-size captures are evidence on disk under ${rootRelative(imageBudgetInfo.fullDir)}; in-context images must be JPEG, downscaled to <=${IMAGE_MAX_WIDTH}px wide, and limited to the first ${IMAGE_MAX_CONTEXT}. Use the PATH helper \`wheelhouse-walk-capture <label> -- <capture-command...>\` for simulator/app screenshots; it keeps full-size output under --out and only emits budgeted context JPEGs under ${rootRelative(imageBudgetInfo.contextDir)}. Do not paste full-size PNG/screenshots into the transcript or prompt context.`,
     seededContextImages.length > 0 ? `Already-budgeted context image(s), max ${IMAGE_MAX_CONTEXT}: ${seededContextImages.map(rootRelative).join(", ")}` : `Already-budgeted context image(s): none.`,
     `Retain a full transcript. End with exactly one line: VERDICT: WALKED-DONE | WALKED-NOT-DONE — <failing step quoted from the transcript> | COULD-NOT-WALK — <why>.`,
@@ -444,7 +445,7 @@ function main(): void {
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt);
 
   phase = "run verifier walk";
-  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper });
+  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper });
   const res = spawnSync(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
     env,
