@@ -21,7 +21,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
-import { die, expandTilde, makeScratchCwd, sweepStaleScratchWorktrees, validateSegment } from "./verify";
+import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { liveLineCandidates } from "./final-assistant-message";
@@ -229,26 +229,33 @@ function parseWalkVerdict(stdout: string, harness: HarnessName): { verdict: Walk
   const lines = liveLineCandidates(stdout, harness, "VERDICT");
   if (lines.length !== 1) {
     process.stderr.write(`--- walk output tail ---\n${stdout.slice(-2000)}\n`);
-    process.stderr.write(`STOP: walker emitted ${lines.length} distinct VERDICT lines in the final assistant message — expected exactly one\n`);
-    process.exit(4);
+    die(`walker emitted ${lines.length} distinct VERDICT lines in the final assistant message — expected exactly one`, 4);
   }
   const line = lines[0].normalized;
   const m = line.match(/^VERDICT:\s*(WALKED-DONE|WALKED-NOT-DONE|COULD-NOT-WALK)(?:\s*[—-]{1,2}\s*(\S.*))?$/);
   if (!m) {
-    process.stderr.write(`STOP: malformed walk verdict line: ${JSON.stringify(line)}\n`);
-    process.exit(4);
+    die(`malformed walk verdict line: ${JSON.stringify(line)}`, 4);
   }
   const verdict = m[1] as WalkVerdict;
   const detail = (m[2] ?? "").trim();
   if ((verdict === "WALKED-NOT-DONE" || verdict === "COULD-NOT-WALK") && detail.length === 0) {
-    process.stderr.write(`STOP: ${verdict} must carry the failing step or reason on the VERDICT line\n`);
-    process.exit(4);
+    die(`${verdict} must carry the failing step or reason on the VERDICT line`, 4);
   }
   if (verdict === "WALKED-DONE" && detail.length > 0) {
-    process.stderr.write(`STOP: WALKED-DONE takes no detail on the VERDICT line\n`);
-    process.exit(4);
+    die("WALKED-DONE takes no detail on the VERDICT line", 4);
   }
   return { verdict, detail, line };
+}
+
+function appendWalkVerdictInbox(claimRef: string, line: string, detail: string, outDir: string, transcriptRel: string, metaRel: string): void {
+  appendVerifierGateInbox(
+    claimRef,
+    "settle",
+    `verifier walk verdict — ${claimRef}`,
+    `${line}${detail ? `\n${detail}` : ""}\nout: ${rootRelative(outDir)}\ntranscript: ${transcriptRel}\nmetadata: ${metaRel}`,
+    "verifier-walk",
+    "seats/walk.ts"
+  );
 }
 
 function scrubToFile(raw: string, outFile: string): void {
@@ -366,6 +373,7 @@ function main(): void {
   if (!claimRef || positional.length !== 1) {
     die("usage: walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--out <dir>] [--verifier <seat>]");
   }
+  setVerifierGateBead(claimRef, "seats/walk.ts");
   phase = "read claim and surface";
   const claim = readClaim(claimRef);
   if (!claim) die("claim text is empty");
@@ -381,7 +389,9 @@ function main(): void {
   if (!guiGuard.ok) {
     fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: guiGuard.reason, surface: surfaceRaw, baseline, transcript: transcriptRel, guiGuard }, null, 2));
     fs.writeFileSync(transcriptFile, `COULD-NOT-WALK before GUI input: ${guiGuard.reason}\n`);
-    console.log(`VERDICT: COULD-NOT-WALK — ${guiGuard.reason}`);
+    const line = `VERDICT: COULD-NOT-WALK — ${guiGuard.reason}`;
+    appendWalkVerdictInbox(claimRef, line, String(guiGuard.reason ?? ""), outDir, transcriptRel, metaRel);
+    console.log(line);
     console.log(`transcript: ${transcriptRel}`);
     console.log(`metadata: ${metaRel}`);
     process.exit(3);
@@ -458,8 +468,10 @@ function main(): void {
 
   if (res.error) {
     if ((res.error as any).code === "ETIMEDOUT") {
+      const line = `VERDICT: COULD-NOT-WALK — timed out after ${TIMEOUT_MS}ms during ${phase}`;
       fs.writeFileSync(metaFile, JSON.stringify({ verdict: "COULD-NOT-WALK", reason: `timed out after ${TIMEOUT_MS}ms during ${phase}`, phase, transcript: transcriptRel }, null, 2));
-      console.log(`VERDICT: COULD-NOT-WALK — timed out after ${TIMEOUT_MS}ms during ${phase}`);
+      appendWalkVerdictInbox(claimRef, line, `timed out after ${TIMEOUT_MS}ms during ${phase}`, outDir, transcriptRel, metaRel);
+      console.log(line);
       console.log(`transcript: ${transcriptRel}`);
       process.exit(3);
     }
@@ -472,6 +484,7 @@ function main(): void {
   const parsed = parseWalkVerdict(stdout, verifierHarness);
   fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel, guiGuard, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
 
+  appendWalkVerdictInbox(claimRef, parsed.line, parsed.detail, outDir, transcriptRel, metaRel);
   console.log(parsed.line);
   console.log(`transcript: ${transcriptRel}`);
   console.log(`metadata: ${metaRel}`);

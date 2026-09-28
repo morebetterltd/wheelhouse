@@ -265,9 +265,43 @@ export function sweepStaleScratchWorktrees(repoRoot: string): void {
   sweepShaNamedBranches(repoRoot);
 }
 
-export function die(msg: string): never {
+let gateBeadId: string | null = null;
+let gateSourceLog = "seats/verify.ts";
+let gateInboxWrote = false;
+
+export function setVerifierGateBead(beadId: string, sourceLog = "seats/verify.ts"): void {
+  gateBeadId = beadId;
+  gateSourceLog = sourceLog;
+}
+
+function gateInboxId(beadId: string, eventClass: "settle" | "distress", detail: string): string {
+  return crypto.createHash("sha256")
+    .update(`verifier-gate\0${process.pid}\0${Date.now()}\0${beadId}\0${eventClass}\0${detail}\0${crypto.randomBytes(16).toString("hex")}`)
+    .digest("hex");
+}
+
+export function appendVerifierGateInbox(beadId: string, eventClass: "settle" | "distress", title: string, detail: string, sourceType = "verifier-gate", sourceLog = "seats/verify.ts"): void {
+  fs.mkdirSync(SEATS_DIR, { recursive: true });
+  const row = {
+    id: gateInboxId(beadId, eventClass, detail),
+    at: new Date().toISOString(),
+    seat: "verifier-gate",
+    class: eventClass,
+    state: eventClass === "distress" ? "failed" : "terminal",
+    title,
+    detail: detail.replace(/\s+$/g, "").slice(0, 1200),
+    source: { log: sourceLog, offset: 0, type: sourceType },
+  };
+  fs.appendFileSync(path.join(SEATS_DIR, "inbox.jsonl"), JSON.stringify(row) + "\n");
+}
+
+export function die(msg: string, code = 1): never {
+  if (gateBeadId && !gateInboxWrote) {
+    gateInboxWrote = true;
+    try { appendVerifierGateInbox(gateBeadId, "distress", `verifier gate STOP — ${gateBeadId}`, `STOP: ${msg}`, "verifier-gate", gateSourceLog); } catch {}
+  }
   process.stderr.write(`STOP: ${msg}\n`);
-  process.exit(1);
+  process.exit(code);
 }
 
 function liveVerdictCandidates(stdout: string, harness: HarnessName): FinalLineCandidate[] {
@@ -887,6 +921,7 @@ async function main(): Promise<void> {
   if (!beadId || !branch || !authorSeat) {
     die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>]");
   }
+  setVerifierGateBead(beadId);
   const timeoutMs = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || timeoutArg || DEFAULT_TIMEOUT_MS);
   const firstOutputTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || firstOutputTimeoutArg || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
   validateSegment("bead id", beadId);
@@ -1175,6 +1210,13 @@ async function main(): Promise<void> {
     ``,
   ].join("\n");
   fs.writeFileSync(verdictFile, record); // verdict-write
+  appendVerifierGateInbox(
+    beadId,
+    "settle",
+    `verifier gate verdict — ${beadId}`,
+    `VERDICT: ${verdictShown}\nPUSH: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}\nbranch: ${branch}\ntip: ${tip}\nverdict file: ${path.relative(ROOT, verdictFile)}`
+  );
+  gateInboxWrote = true;
 
   console.log(`VERDICT: ${verdictShown}  (bead ${beadId}, tip ${tip.slice(0, 12)}, verifier ${verifierSeat})`);
   console.log(`  full output -> ${verdictFile}`);
