@@ -46,12 +46,14 @@ BRIEFS="$VERIFY_DIR/briefs.ts"
 HARNESS="$VERIFY_DIR/harness.ts"
 FINAL_ASSISTANT="$VERIFY_DIR/final-assistant-message.ts"
 HOST_BUDGET_TS="$VERIFY_DIR/host-budget.ts"
+HERALD="$VERIFY_DIR/herald.ts"
 REAL_FIXTURES_DIR="$VERIFY_DIR/fixtures/verify-real"
 EXPECTED_REAL_FIXTURES="pi-v3-message-end.jsonl claude-code-2.1.278-assistant.jsonl codex-0.144.0-item-completed-agent-message.jsonl"
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
 [ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
 [ -f "$FINAL_ASSISTANT" ] || { echo "selftest: not found: $FINAL_ASSISTANT" >&2; exit 2; }
 [ -f "$BRIEFS" ] || { echo "selftest: not found: $BRIEFS" >&2; exit 2; }
+[ -f "$HERALD" ] || { echo "selftest: not found: $HERALD" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run verify.ts" >&2; exit 2; }
 NODE_BIN="$(command -v node)" || { echo "selftest: node is required for the stub pi" >&2; exit 2; }
 GIT_BIN="$(command -v git)" || { echo "selftest: git is required" >&2; exit 2; }
@@ -280,6 +282,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   cp "$HARNESS" "$proj/seats/harness.ts"
   cp "$FINAL_ASSISTANT" "$proj/seats/final-assistant-message.ts"
   cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
+  cp "$HERALD" "$proj/seats/herald.ts"
   printf '# Crew: Reviewer\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/REVIEWER.md"
   cat > "$proj/seats/seats.json" <<EOF
@@ -328,6 +331,7 @@ build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.
   cp "$HARNESS" "$umb/seats/harness.ts"
   cp "$FINAL_ASSISTANT" "$umb/seats/final-assistant-message.ts"
   cp "$HOST_BUDGET_TS" "$umb/seats/host-budget.ts"
+  cp "$HERALD" "$umb/seats/herald.ts"
   printf '# Crew: Reviewer\n\numbrella reviewer brief.\n' > "$umb/contracts/REVIEWER.md"
   cat > "$umb/seats/seats.json" <<EOF
 {
@@ -398,6 +402,22 @@ VDIR="$PROJ/seats/verdicts"
 VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
+
+phase "verifier gate STOP reaches the dispatch inbox"
+if [ -f "$PROJ/seats/inbox.jsonl" ]; then BEFORE_INBOX_LINES="$(wc -l < "$PROJ/seats/inbox.jsonl" | tr -d ' ')"; else BEFORE_INBOX_LINES=0; fi
+run bead-no-branch fleet/does-not-exist worker-1
+if [ -f "$PROJ/seats/inbox.jsonl" ]; then AFTER_INBOX_LINES="$(wc -l < "$PROJ/seats/inbox.jsonl" | tr -d ' ')"; else AFTER_INBOX_LINES=0; fi
+DRAIN_STOP="$FIX/drain-stop.jsonl"
+bun "$PROJ/seats/herald.ts" --drain > "$DRAIN_STOP"
+if [ $RC -ne 0 ] && [ $((AFTER_INBOX_LINES - BEFORE_INBOX_LINES)) -eq 1 ] \
+  && grep -q '"seat":"verifier-gate"' "$DRAIN_STOP" \
+  && grep -q '"class":"distress"' "$DRAIN_STOP" \
+  && grep -q 'branch \\"fleet/does-not-exist\\" does not resolve' "$DRAIN_STOP"; then
+  pass "nonexistent branch STOP appends one verifier-gate distress row and herald --drain returns it"
+else
+  fail "nonexistent branch STOP did not produce one drainable inbox row (rc=$RC before=$BEFORE_INBOX_LINES after=$AFTER_INBOX_LINES out=$OUT drain=$(cat "$DRAIN_STOP" 2>/dev/null || true))"
+fi
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json"
 
 phase "installed layout — wheelhouse/crew brief is preferred without contracts/"
 INST_PROJ="$FIX/installed-proj"
