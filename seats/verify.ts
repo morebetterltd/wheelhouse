@@ -1022,6 +1022,7 @@ async function main(): Promise<void> {
     ``,
     `Branch under review: ${branch}`,
     `Branch repository: ${repoRoot}`,
+    `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT)`,
     `Tip SHA at dispatch: ${tip}`,
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
@@ -1048,6 +1049,7 @@ async function main(): Promise<void> {
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
     PATH: hostBudgetPath(ROOT),
+    WHEELHOUSE_ROOT: ROOT,
     BEADS_ACTOR: beadsActorFor(verifierSeat),
   });
   const res = await runOneShot(oneShot.bin, oneShot.args, {
