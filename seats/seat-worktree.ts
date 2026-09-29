@@ -72,6 +72,8 @@ export function registeredWorktrees(root: string): RegisteredWorktree[] {
   return out;
 }
 
+function isSymlink(p: string): boolean { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } }
+
 export function samePath(a: string, b: string): boolean {
   if (path.resolve(a) === path.resolve(b)) return true;
   try { return fs.realpathSync(a) === fs.realpathSync(b); } catch { return false; }
@@ -245,6 +247,8 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     // registration without a directory: a hand-removed worktree; prune the stale registration and recreate
     git(repo, ["worktree", "prune"]);
     atTarget = undefined;
+  } else if (!atTarget && isSymlink(target)) {
+    refuse(`worktree target ${target} exists but is not registered by git worktree list (it is a symbolic link); refusing to touch a directory that is not a Git worktree`);
   } else if (!atTarget && fs.existsSync(target)) {
     const entries = fs.readdirSync(target);
     if (entries.length > 0) refuse(`worktree target ${target} exists but is not registered by git worktree list; refusing to touch a directory that is not a Git worktree`);
