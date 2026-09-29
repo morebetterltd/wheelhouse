@@ -12,13 +12,13 @@ The bead's stated outcome is verifiably true in your worktree, committed on a br
 
 ### Constraints
 
-- Work ONLY in a git worktree you create for this bead. Never edit the live checkout.
+- Work ONLY in your seat's worktree (`.wheelhouse-worktrees/<seat>`), on the branch the adapter checked out for this bead. Never edit the live checkout. The adapter prepares that worktree at dispatch — one persistent worktree per seat, switched to `fleet/<bead-id>` before you arrive — so you do not create one; you confirm you are on that branch (see *Evidence* below) and work.
 - NEVER push to any remote. NEVER merge. The branch waits for review.
 - One bead in flight. The graph is the single source of work state.
 - Stay on the bead. Adjacent problems you notice become new bead suggestions in your report, not edits.
 - If the bead's done is unachievable as stated, STOP and report why instead of redefining done.
 - When verifying a host app, daemon, service, supervisor, launch agent, or anything that binds a machine-local port, run only an isolated test instance: give it a scratch state root, choose a non-production port or socket, point the client under test at that test endpoint, and leave the installed app bundle and production service definition untouched. Do not unload, stop, edit, overwrite, or replace the production LaunchAgent, systemd unit, plist, service, installed bundle, login item, or supervisor entry in order to make room for verification; if the only available proof would disturb production, stop and report the missing isolation rather than running it.
-- Every ad-hoc build, derived-data directory, review-output directory, walk-simulator artifact, or other scratch artifact you create for a bead lives under `<container>/.wheelhouse-runs/<bead-id>/...`, not a bare `/tmp` path. Any simulator you create for a bead is named `<bead-id>-*` so the closed-bead scratch pruner can identify it later.
+- Every ad-hoc build, derived-data directory, review-output directory, walk-simulator artifact, or other scratch artifact you create for a bead lives under `<container>/.wheelhouse-runs/<bead-id>/...`, not a bare `/tmp` path; that directory is removed automatically once the bead closes. Any simulator you create for a bead is named `<bead-id>-*` so the closed-bead scratch cleanup can identify it later.
 - When this install has a host build budget (`seats/host-budget.json` exists and seat launch/probe/one-shot PATHs include `seats/bin`), every build and test goes through the shim, regardless of whether the seat harness is `pi`, `claude-code`, or `codex`; never call the raw tool by absolute path, by a PATH that skips `seats/bin`, or by any other escape hatch. Build caches are shared under the host lock by default. Per-worktree cache isolation is allowed only with a written reason on the bead, because isolation multiplies disk and compile load.
 
 ### Evidence
@@ -58,7 +58,7 @@ Generated at install; the fleet accretes here as review earns it.
 
 ### Worktree cleanup
 
-Do not remove a worker worktree by memory or by age. Use `bun seats/prune.ts scan` from the install root and prune only reviewed safe rows with `bun seats/prune.ts prune --from-file <scan> --yes`; the tool keeps seat-anchored, dirty, open-bead, unmerged, and unpushed work as non-prunable review rows.
+Cleanup is not your job. When your bead closes and the adapter moves you to the next one, it pushes your branch, then runs `bun seats/prune.ts cleanup --bead <old bead>` on its own: the old bead's `.wheelhouse-runs/<bead-id>*` scratch, its per-bead build folder and any leftover per-bead worktree are removed the moment the bead is closed, and the nightly reaper does the same fleet-wide. Every decision lands in `seats/logs/cleanup.log`. Never remove a worktree or scratch directory by hand, by memory or by age — cleanup keeps uncommitted changes, live process cwds, seat anchors and unpushed commits, and refuses anything it cannot prove safe. The reviewed `bun seats/prune.ts scan` / `prune --from-file <scan> --yes` path is the exceptions path a person drives for rows cleanup kept; a worker does not run it.
 
 ### Repos and where work lands
 

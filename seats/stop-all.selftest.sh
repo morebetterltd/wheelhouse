@@ -61,10 +61,19 @@ process.on("SIGTERM", () => process.exit(0));
 STUB
 chmod +x "$BIN/pi"
 
+# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+# created from the project repo, so every fixture project is a git repo with
+# one commit on main; fixture state is ignored so it never dirties a worktree.
+init_fixture_repo() {   # $1 = project dir
+  git -C "$1" init -q -b main
+  printf 'seats/\ncontracts/\n.beads/\n.wheelhouse-worktrees/\n.wheelhouse-runs/\n' > "$1/.gitignore"
+  git -C "$1" add .gitignore
+  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+}
 build_proj(){
   local proj="$1" ns="$2"
-  mkdir -p "$proj/seats" "$proj/contracts" "$proj/.wheelhouse-worktrees/bead-x"
-  cp "$ADAPTER" "$proj/seats/adapter.ts"; cp "$HARNESS" "$proj/seats/harness.ts"; cp "$BRIEFS" "$proj/seats/briefs.ts"; cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
+  mkdir -p "$proj/seats" "$proj/contracts"
+  cp "$ADAPTER" "$proj/seats/adapter.ts"; cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$proj/seats/seat-worktree.ts"; cp "$HARNESS" "$proj/seats/harness.ts"; cp "$BRIEFS" "$proj/seats/briefs.ts"; cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
 {
@@ -76,10 +85,11 @@ build_proj(){
 }
 EOF
   for seat in worker-a worker-b; do mkdir -p "$HOME_FIX/.pi-seats-$ns/$seat"; printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-$ns/$seat/auth.json"; done
+  init_fixture_repo "$proj"
 }
 
 RUN_PROJ=""
-run(){ RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run(){ RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says(){ case "$OUT" in *"$1"*) return 0;; *) return 1;; esac; }
 state_get(){ env HOME="$HOME_FIX" bun -e "const s=require('$RUN_PROJ/seats/state.json');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
 wait_for(){ local file="$1" text="$2" i=0; while [ $i -lt 50 ]; do [ -f "$file" ] && grep -q "$text" "$file" && return 0; sleep 0.1; i=$((i+1)); done; return 1; }
