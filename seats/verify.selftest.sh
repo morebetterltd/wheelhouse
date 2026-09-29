@@ -637,6 +637,17 @@ else fail "verifier provider/model from seats.json did not reach pi's argv"; fi
 if grep -q "bead-1" "$VARGV" && grep -q "$TIP" "$VARGV" && grep -q "bd show bead-1" "$VARGV"; then
   pass "prompt carries the bead id, the tip SHA, and the bead-claim reference"
 else fail "prompt is missing bead id, tip SHA, or bead claim"; fi
+if node - "$VARGV" <<'NODE'
+const fs = require('fs');
+const argv = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const prompt = argv[argv.length - 1] || '';
+if (!prompt.includes('exactly one plain-text VERDICT line and exactly one plain-text PUSH line')) process.exit(1);
+if (!prompt.includes('never inside a Markdown code fence')) process.exit(1);
+if (!prompt.includes('Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.')) process.exit(1);
+if (!/^VERDICT: APPROVE \| BOUNCE \| DISCOVER$/m.test(prompt)) process.exit(1);
+if (!/^PUSH: <the line REVIEWER\.md specifies>$/m.test(prompt)) process.exit(1);
+NODE
+then pass "prompt closes with unfenced plain-text VERDICT/PUSH instructions"; else fail "prompt does not clearly forbid fenced verdict lines: $(cat "$VARGV" 2>/dev/null)"; fi
 if grep -q '"BEADS_ACTOR":"verifier"' "${VARGV%argv.json}env.json" 2>/dev/null; then
   pass "the ephemeral verifier's own env carries BEADS_ACTOR=verifier, with no operator export"
 else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:verifier set by verify.ts itself"; fi
