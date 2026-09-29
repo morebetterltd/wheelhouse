@@ -188,6 +188,21 @@ if (process.env.STUB_CANONICAL_WRITE_REPO) {
   }
   fs.writeFileSync(path.join(agentDir, "canonical-write-attempt.txt"), `repo=${repo}\nstatus=${status}\ncwd=${process.cwd()}\nGIT_WORK_TREE=${process.env.GIT_WORK_TREE ?? ""}\n`);
 }
+if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
+  const cp = require("child_process");
+  const started = Date.now();
+  const grep = cp.spawnSync("grep", ["-R", "--", "wheelhouse-selftest-never-match", "seats"], { cwd: process.cwd(), timeout: 2000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const elapsedMs = Date.now() - started;
+  const prompt = process.argv[process.argv.length - 1] || "";
+  fs.writeFileSync(path.join(agentDir, "runtime-grep-check.txt"), JSON.stringify({
+    cwd: process.cwd(),
+    elapsedMs,
+    status: grep.status,
+    signal: grep.signal,
+    stderr: grep.stderr,
+    promptNamesRuntimeExcludes: prompt.includes("seats/logs") && prompt.includes("seats/verdicts/*.partial*")
+  }, null, 2));
+}
 const reply = process.env.STUB_REPLY_FILE;
 let text = reply ? fs.readFileSync(reply, "utf8") : "";
 if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
@@ -301,6 +316,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   cp "$HERALD" "$proj/seats/herald.ts"
   printf '# Crew: Reviewer\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/REVIEWER.md"
+  printf 'tracked fixture seat file\n' > "$proj/seats/README.md"
   cat > "$proj/seats/seats.json" <<EOF
 {
   "commander": { "role": "commander", "external": true, "runtime": "claude-code" },
@@ -327,7 +343,8 @@ EOF
   done
   ( cd "$proj" &&
     git init -q &&
-    git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base &&
+    git add seats/README.md &&
+    git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
 
@@ -409,6 +426,11 @@ run_source_check() {  # $1 = bd-show file, remaining args pass through
   local bdfile="$1"
   shift
   OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_BD_SHOW_FILE="$bdfile" STUB_SOURCE_CHECK=1 \
+    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+  RC=$?
+}
+run_runtime_grep_check() {
+  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_RUNTIME_GREP_CHECK=1 \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
@@ -602,6 +624,19 @@ else pass "the scratch worktree is unregistered after verify.ts exited (process-
 if [ -d "$SCRATCH_CWD" ]; then
   fail "the scratch worktree directory $SCRATCH_CWD still exists on disk after verify.ts exited"
 else pass "the scratch worktree directory no longer exists on disk"; fi
+
+mkdir -p "$PROJ/seats/logs"
+perl -e 'print "large runtime log line without the probe token\n" x 200000' > "$PROJ/seats/logs/large.log"
+cat > "$REPLY" <<EOF
+Runtime grep fixture checked.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED — fixture
+EOF
+run_runtime_grep_check bead-runtime-grep fleet/bead-1 worker-1
+RUNTIME_GREP_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/runtime-grep-check.txt"
+if [ $RC -eq 0 ] && grep -q '"status": 1' "$RUNTIME_GREP_CHECK" 2>/dev/null && grep -q '"promptNamesRuntimeExcludes": true' "$RUNTIME_GREP_CHECK" 2>/dev/null; then
+  pass "large live seats/logs is outside the verifier grep path and the prompt names runtime grep exclusions"
+else fail "runtime grep path check failed (exit $RC): out=$OUT check=$(cat "$RUNTIME_GREP_CHECK" 2>/dev/null)"; fi
 
 cat > "$REPLY" <<EOF
 Annotated approve with the GH#34 shape.
