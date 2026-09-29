@@ -233,6 +233,48 @@ else
   fail "step 8 broad wheelhouse add did not demonstrate untracked wheelhouse staging"
 fi
 
+HEADING_FIX="$TMP/heading-report"
+mkdir -p "$HEADING_FIX"
+cat > "$HEADING_FIX/yours.md" <<'EOF'
+# Contract
+
+## This project
+
+### Alpha
+
+### Beta
+EOF
+cat > "$HEADING_FIX/upstream.md" <<'EOF'
+# Contract
+
+## This project
+
+### Beta
+
+### Alpha
+
+### Gamma
+EOF
+HEADING_OUT=$(zsh -c '
+set -e
+upstream=$1; yours=$2
+yours_h=$(mktemp); upstream_h=$(mktemp)
+awk '\''f&&/^##+ /{print} /^## This project$/{f=1}'\'' "$yours" > "$yours_h"
+awk '\''f&&/^##+ /{print} /^## This project$/{f=1}'\'' "$upstream" > "$upstream_h"
+comm -13 <(sort -u "$yours_h") <(sort -u "$upstream_h") | sed "s|^|project section UPSTREAM, not in yours — $yours: |"
+awk -v file="$yours" '\''NR==FNR { if (!($0 in yi)) yi[$0]=FNR; next } ($0 in yi) && yi[$0] != FNR { print "project section UPSTREAM, present, different position — " file ": " $0 }'\'' "$yours_h" "$upstream_h"
+rm -f "$yours_h" "$upstream_h"
+' zsh "$HEADING_FIX/upstream.md" "$HEADING_FIX/yours.md")
+if printf '%s\n' "$HEADING_OUT" | grep -q 'not in yours .*### Gamma' \
+  && ! printf '%s\n' "$HEADING_OUT" | grep -q 'not in yours .*### Alpha' \
+  && ! printf '%s\n' "$HEADING_OUT" | grep -q 'not in yours .*### Beta' \
+  && printf '%s\n' "$HEADING_OUT" | grep -q 'present, different position .*### Alpha' \
+  && printf '%s\n' "$HEADING_OUT" | grep -q 'present, different position .*### Beta'; then
+  pass "step 4 heading report separates new headings from reordered existing headings"
+else
+  fail "step 4 heading report misclassified moved headings: $HEADING_OUT"
+fi
+
 if [ "${WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG:-1}" = 1 ]; then
   BARE_SOURCE="$TMP/template-source.git"
   git clone --quiet --bare "$TEMPLATE" "$BARE_SOURCE"
