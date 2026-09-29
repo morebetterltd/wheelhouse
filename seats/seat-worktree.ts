@@ -340,17 +340,38 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   return { target, branch, base, created: false, switched: true, pushed, previousBranch: currentBranch };
 }
 
+/** First product repository recorded by the install, when this root is an
+ * umbrella container. Absolute paths are used as-is; relative paths are rooted
+ * at the install root. */
+export function productRepoFor(root: string): string | null {
+  const source = path.join(root, "wheelhouse", ".template-source");
+  let text = "";
+  try { text = fs.readFileSync(source, "utf8"); } catch { return null; }
+  const raw = text.split("\n")
+    .map((line) => line.match(/^(?:product-repo|product-repos|product_repo|product_repos|repo|repos)=(.*)$/)?.[1] ?? "")
+    .find((value) => value.trim().length > 0);
+  if (!raw) return null;
+  const first = raw.split(/[,;]/)[0].trim();
+  if (!first) return null;
+  return path.resolve(root, first);
+}
+
 /** The repository seat worktrees belong to. A single-repo install IS the
- * repository. An umbrella install (the root is a container; product repos
- * sit below it) has no repository at the root, so the seat's worktree must
- * be created once by hand as a worktree of the right product repo; from then
- * on the adapter manages it through that repo like any other. */
+ * repository unless wheelhouse/.template-source records a product-repo= for an
+ * umbrella layout. An existing target's own repository wins first, because the
+ * seat may already have been hand-created or may belong to the product repo
+ * even when the umbrella root is itself a git repository. */
 export function gitRepoFor(root: string, target: string): string {
-  if (git(root, ["rev-parse", "--is-inside-work-tree"]).ok) return git(root, ["rev-parse", "--show-toplevel"]).out || root;
   if (fs.existsSync(target)) {
     const common = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], target);
     if (common.ok && common.out) return path.dirname(common.out);
   }
+  const product = productRepoFor(root);
+  if (product) {
+    if (!git(product, ["rev-parse", "--is-inside-work-tree"]).ok) refuse(`wheelhouse/.template-source names product repo ${product}, but it is not a git repository`);
+    return git(product, ["rev-parse", "--show-toplevel"]).out || product;
+  }
+  if (git(root, ["rev-parse", "--is-inside-work-tree"]).ok) return git(root, ["rev-parse", "--show-toplevel"]).out || root;
   refuse(`${root} is not a git repository (an umbrella install), and ${target} is not a worktree yet; create it once with \`git -C <product repo> worktree add ${target} <base>\`, then dispatch again`);
 }
 

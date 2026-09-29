@@ -153,6 +153,67 @@ else
   fail "prune did not report the in-root orphaned worktree (exit $RC): $SCAN"
 fi
 
+phase "umbrella root git repo with product-repo seat worktree"
+UMB="$FIX/umbrella"
+PRODUCT="$UMB/template"
+mkdir -p "$UMB/seats" "$UMB/contracts" "$UMB/wheelhouse" "$PRODUCT"
+cp "$ADAPTER" "$UMB/seats/adapter.ts"
+cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$UMB/seats/seat-worktree.ts"
+cp "$BRIEFS" "$UMB/seats/briefs.ts"
+cp "$HARNESS" "$UMB/seats/harness.ts"
+cp "$HOST_BUDGET" "$UMB/seats/host-budget.ts"
+cp "$SEAT_ENV" "$UMB/seats/seat-env.sh"
+printf '# Fleet: Worker\n\nfixture brief\n' > "$UMB/contracts/WORKER.md"
+cat > "$UMB/seats/seats.json" <<EOF
+{
+  "commander": { "role": "commander", "external": true, "runtime": "claude-code" },
+  "seats": {
+    "worker-1": {
+      "role": "worker",
+      "provider": "anthropic",
+      "model": "stub-model",
+      "account": { "dir": "~/.pi-seats-umbrella/worker-1" }
+    }
+  }
+}
+EOF
+cat > "$UMB/wheelhouse/.template-source" <<EOF
+path=$FIX/template-source
+product-repo=$PRODUCT
+commit=fixture
+namespace=umbrella
+EOF
+# This is the regression shape: the container root is itself a git repo, but
+# the worker branch belongs to the product repo recorded in .template-source.
+git -C "$UMB" init -q
+printf 'umbrella machinery\n' > "$UMB/README.md"
+git -C "$UMB" add README.md wheelhouse/.template-source
+git -C "$UMB" -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella
+
+git -C "$PRODUCT" init -q
+printf 'product\n' > "$PRODUCT/README.md"
+git -C "$PRODUCT" add README.md
+git -C "$PRODUCT" -c user.email=selftest@local -c user.name=selftest commit -q -m product
+
+RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$UMB/seats/seat-env.sh" umbrella worker-1 "$UMB" 2>&1)" || RC=$?
+if [ $RC -eq 0 ]; then pass "umbrella fixture seat-env writes trust"; else fail "umbrella seat-env failed (exit $RC): $OUT"; fi
+printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-umbrella/worker-1/auth.json"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$UMB/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
+if [ $RC -eq 0 ]; then pass "umbrella fixture seat spawns"; else fail "umbrella spawn failed (exit $RC): $OUT"; fi
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 bun "$UMB/seats/adapter.ts" dispatch worker-1 bead-product-a "hello from umbrella" 2>&1)" || RC=$?
+UMB_WT="$UMB/.wheelhouse-worktrees/worker-1"
+if [ $RC -eq 0 ] && [ "$(git -C "$UMB_WT" rev-parse --show-toplevel 2>/dev/null)" = "$UMB_WT" ] && [ "$(git -C "$PRODUCT" worktree list --porcelain | awk -v wt="$UMB_WT" '$1=="worktree" && $2==wt {found=1} END{print found+0}')" = 1 ] && ! git -C "$UMB" worktree list --porcelain | awk -v wt="$UMB_WT" '$1=="worktree" && $2==wt {found=1} END{exit(found?0:1)}'; then
+  pass "umbrella dispatch creates the seat worktree from product-repo, not the root repo"
+else
+  fail "umbrella dispatch did not create product repo worktree (exit $RC): out=$OUT product_list=$(git -C "$PRODUCT" worktree list --porcelain 2>&1) root_list=$(git -C "$UMB" worktree list --porcelain 2>&1)"
+fi
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 bun "$UMB/seats/adapter.ts" dispatch worker-1 bead-product-b "reuse umbrella worktree" 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(git -C "$PRODUCT" worktree list --porcelain | awk -v wt="$UMB_WT" '$1=="worktree" && $2==wt {found=1} END{print found+0}')" = 1 ] && [ "$(git -C "$UMB_WT" branch --show-current 2>/dev/null)" = "fleet/bead-product-b" ]; then
+  pass "umbrella dispatch reuses the existing product-repo seat worktree"
+else
+  fail "umbrella dispatch did not reuse product repo worktree (exit $RC): out=$OUT branch=$(git -C "$UMB_WT" branch --show-current 2>&1)"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
   echo "worktree-root selftest passed."
 else
