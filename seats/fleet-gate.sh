@@ -95,6 +95,37 @@ inprog=$(bd list --status in_progress --limit 0 --json 2>/dev/null | grep -o '"i
 github_repo_from_remote() {
   sed -E 's#.*github\.com[:/]##; s#\.git$##'
 }
+
+template_source_value() {
+  local key
+  key="$1"
+  [ -f "$ROOT/wheelhouse/.template-source" ] || return 1
+  sed -n "s/^${key}=//p" "$ROOT/wheelhouse/.template-source" 2>/dev/null | tail -1
+}
+
+github_issue_watch_off() {
+  local v
+  v="$(template_source_value github-issue-watch || true)"
+  case "$v" in off|false|disabled|none|0) return 0 ;; *) return 1 ;; esac
+}
+
+github_issue_repos() {
+  local raw product_root repo
+  raw="$(template_source_value github-issue-repos || true)"
+  if [ -n "$raw" ]; then
+    printf '%s\n' "$raw" | tr ',;' '\n\n' | sed '/^[[:space:]]*$/d'
+    return 0
+  fi
+  product_root="$(product_repo_root 2>/dev/null || true)"
+  if [ -n "$product_root" ]; then
+    repo="$(git -C "$product_root" remote get-url origin 2>/dev/null | github_repo_from_remote)"
+    [ -n "$repo" ] && printf '%s\n' "$repo"
+  fi
+}
+
+json_string_array() {
+  printf '%s\n' "$1" | tr ',;' '\n\n' | node -e 'const fs=require("fs"); const rows=fs.readFileSync(0,"utf8").split(/\n/).map(s=>s.trim()).filter(Boolean); process.stdout.write(JSON.stringify(rows));'
+}
 product_repo_root() {
   local source_file="$ROOT/wheelhouse/.template-source" raw candidate
   if [ -f "$source_file" ]; then
@@ -153,25 +184,43 @@ fi
 # body (GRAPH.md's `Trace:` line). Degrades to silence without gh, a remote,
 # or network; never delays the turn more than one gh call.
 untriaged=""
-if command -v gh >/dev/null 2>&1; then
-  product_root="$(product_repo_root 2>/dev/null || true)"
-  if [ -n "$product_root" ]; then
-    repo="$(git -C "$product_root" remote get-url origin 2>/dev/null | github_repo_from_remote)"
-    if [ -n "$repo" ]; then
-      open_urls="$(gh issue list -R "$repo" --state open --limit 100 --json url --jq '.[].url' 2>/dev/null || true)"
-      if [ -n "$open_urls" ]; then
-        traced="$(bd list --status open --limit 0 --json 2>/dev/null; bd list --status in_progress --limit 0 --json 2>/dev/null)"
-        n=0; missing=""
-        while IFS= read -r u; do
-          [ -n "$u" ] || continue
-          if ! printf '%s' "$traced" | grep -qF "$u"; then n=$((n+1)); missing="$missing #${u##*/}"; fi
-        done <<EOF
-$open_urls
+if command -v gh >/dev/null 2>&1 && ! github_issue_watch_off; then
+  repos="$(github_issue_repos 2>/dev/null || true)"
+  if [ -n "$repos" ]; then
+    include_labels_json="$(json_string_array "$(template_source_value github-issue-include-labels || true)")"
+    exclude_labels_json="$(json_string_array "$(template_source_value github-issue-exclude-labels || true)")"
+    author_filter="$(template_source_value github-issue-author || true)"
+    traced="$(bd list --status open --limit 0 --json 2>/dev/null; bd list --status in_progress --limit 0 --json 2>/dev/null)"
+    n=0; missing=""; first_repo=""
+    while IFS= read -r repo; do
+      [ -n "$repo" ] || continue
+      [ -n "$first_repo" ] || first_repo="$repo"
+      open_issues="$(gh issue list -R "$repo" --state open --limit 100 --json url,labels,author 2>/dev/null || true)"
+      [ -n "$open_issues" ] || continue
+      urls="$(node -e '
+        const issues=JSON.parse(process.argv[1]||"[]");
+        const include=new Set(JSON.parse(process.argv[2]||"[]"));
+        const exclude=new Set(JSON.parse(process.argv[3]||"[]"));
+        const author=process.argv[4]||"";
+        for (const issue of issues) {
+          const labels=(issue.labels||[]).map(l => typeof l === "string" ? l : l?.name).filter(Boolean);
+          if (author && issue.author?.login !== author) continue;
+          if (include.size && !labels.some(l => include.has(l))) continue;
+          if (labels.some(l => exclude.has(l))) continue;
+          if (issue.url) console.log(issue.url);
+        }
+      ' "$open_issues" "$include_labels_json" "$exclude_labels_json" "$author_filter" 2>/dev/null || true)"
+      while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        if ! printf '%s' "$traced" | grep -qF "$u"; then n=$((n+1)); missing="$missing #${u##*/}"; fi
+      done <<EOF
+$urls
 EOF
-        if [ "$n" -gt 0 ]; then
-          untriaged=" — ${n} GITHUB ISSUE(S) NOT ON THE BOARD:${missing}. Triage into beads (Trace: <issue url>) before anything else: gh issue view -R $repo <n>"
-        fi
-      fi
+    done <<EOF
+$repos
+EOF
+    if [ "$n" -gt 0 ]; then
+      untriaged=" — ${n} GITHUB ISSUE(S) NOT ON THE BOARD:${missing}. Triage into beads (Trace: <issue url>) before anything else: gh issue view -R ${first_repo:-<repo>} <n>"
     fi
   fi
 fi
