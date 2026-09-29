@@ -1685,6 +1685,35 @@ if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-r1" ] && [ "$(fgit -C "
 else fail "reopened bead: wrong branch or commits (exit $RC branch=$(wt_branch "$WT") log=$(fgit -C "$WT_PROJ" log -1 --format=%s fleet/bead-r1) head=$(fgit -C "$WT" rev-parse HEAD) want=$R1_SHA): $OUT"; fi
 wait_for "$LOG" 'echo: Bead bead-r1' 5 >/dev/null
 
+# GH-58: a reopened bead that was intentionally rebased should not strand the
+# seat on a non-fast-forward push. The lease is pinned to the last observed
+# origin/fleet/* SHA, so a concurrent remote move still refuses.
+fgit -C "$WT" reset -q --hard origin/main
+printf 'r1 rewritten\n' > "$WT/r1-rewritten.txt"
+fgit -C "$WT" add r1-rewritten.txt
+fgit -C "$WT" commit -qm "r1 rewritten by commander"
+R1_REWRITE_SHA="$(fgit -C "$WT" rev-parse HEAD)"
+run dispatch worker-1 bead-r3 "leave rewritten r1"
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-r3" ] && [ "$(fgit -C "$WT_PROJ" rev-parse refs/remotes/origin/fleet/bead-r1)" = "$R1_REWRITE_SHA" ]; then
+  pass "push gate: a rebased fleet branch is pushed with a lease and the seat can leave it"
+else fail "push gate: rebased fleet branch did not push and move (exit $RC branch=$(wt_branch "$WT") remote=$(fgit -C "$WT_PROJ" rev-parse refs/remotes/origin/fleet/bead-r1 2>/dev/null) want=$R1_REWRITE_SHA): $OUT"; fi
+run dispatch worker-1 bead-r1 "reopen rewritten r1 again"
+fgit -C "$WT" reset -q --hard origin/main
+printf 'r1 rewritten again\n' > "$WT/r1-rewritten-again.txt"
+fgit -C "$WT" add r1-rewritten-again.txt
+fgit -C "$WT" commit -qm "r1 rewritten again"
+REMOTE_MOVER="$FIX/remote-mover"
+fgit clone -q "$WT_ORIGIN" "$REMOTE_MOVER"
+printf 'somebody else moved remote\n' > "$REMOTE_MOVER/elsewhere.txt"
+fgit -C "$REMOTE_MOVER" add elsewhere.txt
+fgit -C "$REMOTE_MOVER" commit -qm "somebody else moved r1"
+fgit -C "$REMOTE_MOVER" push -q --force origin HEAD:refs/heads/fleet/bead-r1
+REMOTE_MOVED_SHA="$(fgit --git-dir="$WT_ORIGIN" rev-parse refs/heads/fleet/bead-r1)"
+run dispatch worker-1 bead-r4 "try to leave stale-leased r1"
+if [ $RC -ne 0 ] && says "push failed" && [ "$(wt_branch "$WT")" = "fleet/bead-r1" ] && [ "$(fgit --git-dir="$WT_ORIGIN" rev-parse refs/heads/fleet/bead-r1)" = "$REMOTE_MOVED_SHA" ]; then
+  pass "push gate: force-with-lease refuses when the remote fleet branch moved elsewhere"
+else fail "push gate: stale lease did not refuse safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse refs/heads/fleet/bead-r1 2>/dev/null) want=$REMOTE_MOVED_SHA): $OUT"; fi
+
 # ISC-63: two seats never share a worktree.
 OCC_PID_BEFORE="$(state_get pid)"
 env HOME="$HOME_FIX" HOLDER="$WT" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-2"]={pid:null,cwd:process.env.HOLDER,lastBead:"bead-o0",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
