@@ -1016,7 +1016,7 @@ import pathlib, re, sys
 root = pathlib.Path(sys.argv[1]); bench = pathlib.Path(sys.argv[2])
 fixture_dir = root / "seats" / "fixtures" / "verify-real"
 actual = sorted(str(p.relative_to(root)) for p in fixture_dir.glob("*.jsonl"))
-text = bench.read_text()
+text = re.sub(r"<!--.*?-->", "", bench.read_text(), flags=re.S)
 listed = sorted(set(re.findall(r"fixture:\s*(seats/fixtures/verify-real/[^;\s]+\.jsonl)", text)))
 missing_from_bench = sorted(set(actual) - set(listed))
 missing_from_disk = sorted(set(listed) - set(actual))
@@ -1028,6 +1028,24 @@ PY
   then pass "BENCH.md verifier wire-shape list matches real fixture files"; else fail "BENCH.md verifier wire-shape list and fixture files diverge"; fi
 }
 check_verifier_fixture_manifest
+COMMENTED_BENCH="$FIX/commented-BENCH.md"
+{
+  printf '### Verifier wire shapes covered\n\n<!--\n'
+  for fixture in $EXPECTED_REAL_FIXTURES; do
+    printf -- '- harness: canary; fixture: seats/fixtures/verify-real/%s; binary version: canary; capture date: 2099-01-01\n' "$fixture"
+  done
+  printf -- '-->\n'
+} > "$COMMENTED_BENCH"
+if python3 - "$VERIFY_DIR/.." "$COMMENTED_BENCH" <<'PY'
+import pathlib, re, sys
+root = pathlib.Path(sys.argv[1]); bench = pathlib.Path(sys.argv[2])
+fixture_dir = root / "seats" / "fixtures" / "verify-real"
+actual = sorted(str(p.relative_to(root)) for p in fixture_dir.glob("*.jsonl"))
+text = re.sub(r"<!--.*?-->", "", bench.read_text(), flags=re.S)
+listed = sorted(set(re.findall(r"fixture:\s*(seats/fixtures/verify-real/[^;\s]+\.jsonl)", text)))
+raise SystemExit(0 if not (set(actual) - set(listed)) else 1)
+PY
+then fail "BENCH.md verifier wire-shape manifest check accepted a commented-out fixture list"; else pass "BENCH.md verifier wire-shape manifest check rejects commented-out fixture lists"; fi
 set_verifier_harness pi
 run_stream "$REAL_FIXTURES_DIR/pi-v3-message-end.jsonl" bead-5-recorded-pi fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-pi.md" 2>/dev/null; then
