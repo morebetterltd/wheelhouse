@@ -290,7 +290,13 @@ cat > "$BIN/bd" <<'BDSTUB'
 #!/usr/bin/env bash
 case "$1" in
   ready) printf '[{"id":"fixture-ready"}]\n' ;;
-  list) printf '[{"id":"fixture-in-progress"}]\n' ;;
+  list)
+    status=""
+    for a in "$@"; do case "$a" in --status=*) status="${a#--status=}" ;; esac; done
+    case "$status" in
+      closed) f="${FIXTURE_BD_CLOSED_FILE:-}"; [ -n "$f" ] && cat "$f" || printf '[]\n' ;;
+      *) printf '[{"id":"fixture-in-progress"}]\n' ;;
+    esac ;;
   *) printf '[]\n' ;;
 esac
 BDSTUB
@@ -404,7 +410,7 @@ build_proj "$PROJ" alpha
 # override case sets WHEELHOUSE_BEADS_ACTOR_WORKER_1 explicitly instead.
 # WHEELHOUSE_SKIP_BD=1: the fixture beads have no bead store, so the adapter
 # must not ask `bd show` for an Integration: line when it resolves a base.
-run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 FIXTURE_BD_CLOSED_FILE="${FIXTURE_BD_CLOSED_FILE:-}" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
@@ -1329,12 +1335,13 @@ rm -rf "$SEAT_WT"
 OLD_SESS="$(state_get sessionFile)"
 env HOME="$HOME_FIX" MISSING_CWD="$MISSING_CWD" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 run resume worker-1
-if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "resuming fresh in $PROJ"; then
-  pass "pruned cwd resume: missing seat worktree falls back to the project root (ISC-38)"
-else fail "pruned cwd resume: did not fall back to project root (exit $RC): $OUT"; fi
-if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ" ]; then
-  pass "pruned cwd resume: root fallback is also a fresh session"
-else fail "pruned cwd resume: root fallback did not fresh-start (session before=$OLD_SESS after=$(state_get sessionFile) cwd=$(cat "$CWD_FILE" 2>/dev/null) argv=$(cat "$ARGV" 2>/dev/null))"; fi
+if [ $RC -ne 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "refusing to resume a worker in the repo root"; then
+  pass "pruned cwd resume: missing seat worktree refuses instead of falling back to the project root"
+else fail "pruned cwd resume: missing seat worktree did not refuse safely (exit $RC): $OUT"; fi
+if [ "$(state_get sessionFile)" = "$OLD_SESS" ] && [ -z "$(state_get pid)" ]; then
+  pass "pruned cwd resume: refusal leaves the stopped state record unchanged"
+else fail "pruned cwd resume: refusal unexpectedly launched a session (session before=$OLD_SESS after=$(state_get sessionFile) pid=$(state_get pid) cwd=$(cat "$CWD_FILE" 2>/dev/null))"; fi
+mkdir -p "$MISSING_CWD"
 run stop worker-1
 
 phase "6c. readiness timeout cleanup, orphan status, and queued steer"
@@ -1617,6 +1624,49 @@ if [ $RC -eq 0 ] && wt_registered "$CAP_PROJ" "$CAP_WT" && [ "$(wt_branch "$CAP_
   pass "once live < cap the same dispatch creates the seat worktree and lands"
 else fail "under-cap dispatch failed (exit $RC): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
+
+phase "7a2. legacy per-bead worktrees — upgrade migration path"
+LEG_PROJ="$FIX/legacy-proj"
+build_proj "$LEG_PROJ" legacy
+RUN_PROJ="$LEG_PROJ"; STATE="$LEG_PROJ/seats/state.json"; LOG="$LEG_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-legacy/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-legacy/worker-1/cwd.txt"
+LEG_WTS="$LEG_PROJ/.wheelhouse-worktrees"
+mkdir -p "$LEG_WTS" "$LEG_PROJ/seats/logs"
+env HOME="$HOME_FIX" PROJ="$LEG_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); for (const n of ["worker-2","worker-3"]) r.seats[n]={role:"worker",provider:"anthropic",model:"stub-model-1:high",account:{dir:`~/.pi-seats-legacy/${n}`}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+for s in worker-2 worker-3; do mkdir -p "$HOME_FIX/.pi-seats-legacy/$s"; printf '{\n  "%s": true\n}\n' "$LEG_PROJ" > "$HOME_FIX/.pi-seats-legacy/$s/trust.json"; printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-legacy/$s/auth.json"; done
+for n in $(seq 1 12); do fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/closed-$n" -b "fleet/closed-$n" main; done
+node -e 'const fs=require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify(Array.from({length:12}, (_,i)=>({id:`closed-${i+1}`, status:"closed"}))))' "$FIX/legacy-closed-beads.json"
+FIXTURE_BD_CLOSED_FILE="$FIX/legacy-closed-beads.json"
+fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/open-bead" -b "fleet/open-bead" main
+LEG_SESSION="$HOME_FIX/.pi-seats-legacy/worker-1/sessions/legacy-session.jsonl"; mkdir -p "$(dirname "$LEG_SESSION")"; printf '{"type":"session"}\n' > "$LEG_SESSION"
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/open-bead" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"open-bead",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+run spawn worker-2
+run dispatch worker-2 new-bead "new bead despite closed legacy worktrees"
+if [ $RC -eq 0 ] && [ "$(wt_branch "$(seat_wt "$LEG_PROJ" worker-2)")" = "fleet/new-bead" ]; then
+  pass "legacy worktrees: closed-bead legacy directories do not count against the dispatch cap"
+else fail "legacy worktrees: worker-2 dispatch was blocked by closed legacy dirs (exit $RC): $OUT"; fi
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/open-bead" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"open-bead",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+run dispatch worker-1 open-bead "same legacy bead again"
+if [ $RC -eq 0 ] && { [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$LEG_PROJ" worker-1)" ] || [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$LEG_WTS/open-bead" ]; } && [ "$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")" = "fleet/open-bead" ]; then
+  pass "legacy worktrees: redispatching the open bead reuses or adopts its legacy worktree"
+else fail "legacy worktrees: open legacy bead was not reused/adopted (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null) branch=$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+LEG_MISSING_CWD="$(state_get cwd)"
+fgit -C "$LEG_PROJ" worktree remove --force "$LEG_MISSING_CWD" >/dev/null 2>&1 || rm -rf "$LEG_MISSING_CWD"
+run resume worker-1
+if [ $RC -ne 0 ] && says "refusing to resume a worker in the repo root"; then
+  pass "legacy worktrees: resume with a missing legacy cwd refuses instead of launching in the repo root"
+else fail "legacy worktrees: missing legacy cwd resume did not refuse safely (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null)): $OUT"; fi
+fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/odd-bead" -b fleet/ootb-sync-20260924 main
+ODD_SESSION="$HOME_FIX/.pi-seats-legacy/worker-3/sessions/odd-session.jsonl"; mkdir -p "$(dirname "$ODD_SESSION")"; printf '{"type":"session"}\n' > "$ODD_SESSION"
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/odd-bead" SESSION="$ODD_SESSION" LOG="$LEG_PROJ/seats/logs/worker-3.jsonl" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-3"]={pid:null,cwd:process.env.CWD,lastBead:"odd-bead",sessionFile:process.env.SESSION,sessionId:"odd-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+run dispatch worker-3 odd-bead "nonstandard branch legacy bead"
+if [ $RC -eq 0 ] && [ "$(wt_branch "$(cat "$HOME_FIX/.pi-seats-legacy/worker-3/cwd.txt" 2>/dev/null)")" = "fleet/ootb-sync-20260924" ]; then
+  pass "legacy worktrees: a bead on a non-fleet/bead branch keeps its existing branch"
+else fail "legacy worktrees: nonstandard branch was not preserved (exit $RC cwd=$(cat "$HOME_FIX/.pi-seats-legacy/worker-3/cwd.txt" 2>/dev/null) branch=$(wt_branch "$(cat "$HOME_FIX/.pi-seats-legacy/worker-3/cwd.txt" 2>/dev/null)")): $OUT"; fi
+run stop worker-2 >/dev/null 2>&1
+run stop worker-3 >/dev/null 2>&1
+unset FIXTURE_BD_CLOSED_FILE
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 
 phase "7b. seat worktree lifecycle — push gate, base switch, reopen, occupied, placeholder, cleanup, lock"
