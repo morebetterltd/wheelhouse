@@ -1032,8 +1032,10 @@ async function main(): Promise<void> {
     `VERDICT: APPROVE — at pinned tip ${tip}; branch has since moved to <new-tip> (<N> commits appended, history unrewritten)`,
     `PUSH: NOT CONSIDERED — branch moved; re-verify at <new-tip> before publish`,
     `DISCOVER is reserved for a discovery that displaces the judgment, not for an appended branch tip; the integrator/publisher refuses any tip other than the verdict's pinned SHA until the new tip is re-verified.`,
-    `End with exactly one line: VERDICT: APPROVE | BOUNCE | DISCOVER and exactly`,
-    `one PUSH: line in the format REVIEWER.md specifies. Evidence goes above them.`,
+    `End with exactly one plain-text VERDICT line and exactly one plain-text PUSH line, never inside a Markdown code fence:`,
+    `VERDICT: APPROVE | BOUNCE | DISCOVER`,
+    `PUSH: <the line REVIEWER.md specifies>`,
+    `Evidence goes above those two closing lines. Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.`,
     `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
   ].join("\n");
 
