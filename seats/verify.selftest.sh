@@ -137,7 +137,23 @@ fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the verifier), not rely on an operator
 // export reaching this one-shot process.
-fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null }));
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
+if (process.env.STUB_GIT_INIT_REPO) {
+  const cp = require("child_process");
+  const repo = process.env.STUB_GIT_INIT_REPO;
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.GIT_DIR; delete cleanEnv.GIT_WORK_TREE; delete cleanEnv.GIT_INDEX_FILE;
+  const readWorktree = () => {
+    const r = cp.spawnSync("git", ["-C", repo, "config", "--get", "core.worktree"], { encoding: "utf8", env: cleanEnv });
+    return r.status === 0 ? r.stdout.trim() : "";
+  };
+  const before = readWorktree();
+  const fixture = path.join(agentDir, "git-init-fixture");
+  fs.mkdirSync(fixture, { recursive: true });
+  const init = cp.spawnSync("git", ["init", "-q"], { cwd: fixture, encoding: "utf8", env: process.env });
+  const after = readWorktree();
+  fs.writeFileSync(path.join(agentDir, "git-init-check.json"), JSON.stringify({ before, after, initStatus: init.status, initStderr: init.stderr ?? "", gitDir: process.env.GIT_DIR ?? null, gitWorkTree: process.env.GIT_WORK_TREE ?? null }, null, 2));
+}
 // The dispatcher sets our cwd by construction (a scratch worktree), not by
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
@@ -165,7 +181,7 @@ if (process.env.STUB_CANONICAL_WRITE_REPO) {
   const repo = process.env.STUB_CANONICAL_WRITE_REPO;
   let status = "not-run";
   try {
-    cp.execFileSync("git", ["-C", repo, "checkout", "--", "canonical-guard.txt"], { env: process.env, stdio: "pipe" });
+    cp.execFileSync("git", ["checkout", "--", "canonical-guard.txt"], { env: process.env, stdio: "pipe" });
     status = "ok";
   } catch (e) {
     status = `failed:${e.status ?? e.code ?? "unknown"}`;
@@ -610,11 +626,26 @@ EOF
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CANONICAL_WRITE_REPO="$PROJ" \
   bun "$RUN_PROJ/seats/verify.ts" bead-canonical fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
 ATTEMPT="$HOME_FIX/.pi-seats-alpha/verifier/canonical-write-attempt.txt"
-if [ $RC -eq 0 ] && grep -q 'canonical dirty' "$PROJ/canonical-guard.txt" && grep -q "GIT_WORK_TREE=.*wheelhouse-verify" "$ATTEMPT" 2>/dev/null; then
-  pass "canonical checkout git write is pinned to scratch and leaves canonical checkout unchanged"
+if [ $RC -eq 0 ] && grep -q 'canonical dirty' "$PROJ/canonical-guard.txt" && grep -q "cwd=.*wheelhouse-verify" "$ATTEMPT" 2>/dev/null && grep -q "GIT_WORK_TREE=$" "$ATTEMPT" 2>/dev/null; then
+  pass "bare checkout git write runs from scratch cwd without exported GIT_WORK_TREE and leaves canonical checkout unchanged"
 else fail "canonical checkout changed or attempt was not reported (exit $RC): guard=$(cat "$PROJ/canonical-guard.txt" 2>/dev/null) attempt=$(cat "$ATTEMPT" 2>/dev/null) out=$OUT"; fi
 git -C "$PROJ" checkout -q -- canonical-guard.txt
 TIP="$CANONICAL_TIP"
+
+cat > "$REPLY" <<'EOF'
+Ran git init in a fixture directory; dispatcher must not leak GIT_DIR/GIT_WORK_TREE.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED — fixture
+EOF
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_GIT_INIT_REPO="$PROJ" \
+  bun "$RUN_PROJ/seats/verify.ts" bead-git-init fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
+GIT_INIT_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/git-init-check.json"
+if [ $RC -eq 0 ] && grep -q '"before": ""' "$GIT_INIT_CHECK" 2>/dev/null \
+  && grep -q '"after": ""' "$GIT_INIT_CHECK" 2>/dev/null \
+  && grep -q '"gitDir": null' "$GIT_INIT_CHECK" 2>/dev/null \
+  && grep -q '"gitWorkTree": null' "$GIT_INIT_CHECK" 2>/dev/null; then
+  pass "reviewer git init fixture leaves live repo config unchanged and receives no GIT_DIR/GIT_WORK_TREE"
+else fail "reviewer git init fixture leaked git env or changed live config (exit $RC): check=$(cat "$GIT_INIT_CHECK" 2>/dev/null) out=$OUT"; fi
 
 cat > "$REPLY" <<EOF
 Static half verified; no bench covers the docs deployable this touches.
