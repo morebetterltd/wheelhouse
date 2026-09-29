@@ -24,6 +24,9 @@ export function oneShotEnvForHarness(harness: HarnessName, accountDir: string, b
   delete env.PI_CODING_AGENT_DIR;
   delete env.CLAUDE_CONFIG_DIR;
   delete env.CODEX_HOME;
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
   if (harness === "pi") env.PI_CODING_AGENT_DIR = accountDir;
   else if (harness === "claude-code") env.CLAUDE_CONFIG_DIR = accountDir;
   else env.CODEX_HOME = accountDir;
