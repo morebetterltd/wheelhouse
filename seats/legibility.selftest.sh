@@ -287,7 +287,7 @@ STATE="$PROJ/seats/state.json"
 VDIR="$PROJ/seats/verdicts"
 REPLY="$FIX/reply.txt"
 
-arun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+arun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 vrun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$PROJ/seats/verify.ts" "$@" 2>&1)" || RC=$?; }
 render() { local f="${1:-$PROJ/seats/floor.ts}"; shift 2>/dev/null
            RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS="${COLS:-160}" LINES=70 NO_COLOR=1 bun "$f" --once "$@" 2>&1)" || RC=$?; }
@@ -320,7 +320,6 @@ ME=$$   # alive for the whole run
 phase "phase 1: QUOTA — a quota-shaped dispatch failure is amber, never done"
 arun spawn q-seat
 [ $RC -eq 0 ] && pass "q-seat spawns against the stub" || fail "q-seat spawn: rc=${RC}: $OUT"
-mkdir -p "$PROJ/.wheelhouse-worktrees/bead-q"
 arun dispatch q-seat bead-q "QUOTA please"
 if [ $RC -ne 0 ] && says "dispatch failed"; then
   pass "quota-shaped dispatch fails loudly (rc=$RC) — non-success at the adapter"

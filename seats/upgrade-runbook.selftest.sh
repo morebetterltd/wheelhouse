@@ -350,7 +350,14 @@ HARNESS_FIX="$TMP/harness-switch"
 HARNESS_HOME="$HARNESS_FIX/home"
 HARNESS_BIN="$HARNESS_FIX/bin"
 HARNESS_PROJ="$HARNESS_FIX/project"
-mkdir -p "$HARNESS_HOME" "$HARNESS_BIN" "$HARNESS_PROJ/seats" "$HARNESS_PROJ/contracts" "$HARNESS_PROJ/wheelhouse" "$HARNESS_PROJ/.wheelhouse-worktrees/smoke-a" "$HARNESS_PROJ/.wheelhouse-worktrees/smoke-b"
+mkdir -p "$HARNESS_HOME" "$HARNESS_BIN" "$HARNESS_PROJ/seats" "$HARNESS_PROJ/contracts" "$HARNESS_PROJ/wheelhouse"
+# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+# created from the project repo: make the project a git repo with one commit
+# on main, fixture state ignored so it never dirties a seat worktree.
+git -C "$HARNESS_PROJ" init -q -b main
+printf 'seats/\ncontracts/\nwheelhouse/\n.wheelhouse-worktrees/\n.wheelhouse-runs/\n' > "$HARNESS_PROJ/.gitignore"
+git -C "$HARNESS_PROJ" add .gitignore
+git -C "$HARNESS_PROJ" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
 cp "$ROOT/seats/adapter.ts" "$HARNESS_PROJ/seats/adapter.ts"
 cp "$ROOT/seats/seat-worktree.ts" "$HARNESS_PROJ/seats/seat-worktree.ts"
 cp "$ROOT/seats/harness.ts" "$HARNESS_PROJ/seats/harness.ts"
@@ -391,7 +398,7 @@ let buf=''; process.stdin.on('data',c=>{buf+=c;let i;while((i=buf.indexOf('\n'))
 process.on('SIGTERM',()=>process.exit(0));
 CLAUDESTUB
 chmod +x "$HARNESS_BIN/claude"
-hrun(){ HRC=0; HOUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" WHEELHOUSE_RPC_TIMEOUT_MS=5000 "${HRUN_ADAPTER_CMD:-bun}" "$HARNESS_PROJ/seats/adapter.ts" "$@" 2>&1) || HRC=$?; }
+hrun(){ HRC=0; HOUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 "${HRUN_ADAPTER_CMD:-bun}" "$HARNESS_PROJ/seats/adapter.ts" "$@" 2>&1) || HRC=$?; }
 hstate(){ env HOME="$HARNESS_HOME" node -e "const s=require(process.argv[1]).seats[process.argv[2]]||{}; process.stdout.write(String(s[process.argv[3]]??''));" "$HARNESS_PROJ/seats/state.json" "$1" "$2"; }
 cat > "$HARNESS_BIN/fail-command" <<'FAILCMD'
 #!/usr/bin/env bash

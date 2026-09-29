@@ -235,6 +235,15 @@ chmod +x "$BIN/bd"
 # Each is a complete wheelhouse project shape: seats/, contracts/, a graph dir
 # (.beads with a marker), and a worktrees dir (.wheelhouse-worktrees with a
 # marker). Namespaces nsA/nsB give each its own seat root under $HOME.
+# Each is also a git repo with one commit on main: a worker seat owns one
+# persistent worktree, .wheelhouse-worktrees/<seat>, created from it. Fixture
+# state is ignored so it never dirties a seat worktree.
+init_fixture_repo() {   # $1 = project dir
+  git -C "$1" init -q -b main
+  printf 'seats/\ncontracts/\n.beads/\n.wheelhouse-worktrees/\n.wheelhouse-runs/\n' > "$1/.gitignore"
+  git -C "$1" add .gitignore
+  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+}
 build_proj() {   # $1 = project dir, $2 = namespace, $3 = seat name
   local proj="$1" ns="$2" seat="$3"
   mkdir -p "$proj/seats" "$proj/contracts" "$proj/.beads" "$proj/.wheelhouse-worktrees/wt-1"
@@ -259,6 +268,7 @@ build_proj() {   # $1 = project dir, $2 = namespace, $3 = seat name
   }
 }
 EOF
+  init_fixture_repo "$proj"
 }
 
 PROJA="$FIX/projA"
@@ -340,7 +350,7 @@ restore_b() {
 }
 
 # --- driving A's machinery ---------------------------------------------------
-arun() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" bun "$PROJA/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+arun() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WH_BD_LOG="$BD_LOG" bun "$PROJA/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 STATE_A="$PROJA/seats/state.json"
 LOG_A="$PROJA/seats/logs/worker-a.jsonl"
@@ -358,7 +368,6 @@ log_mark() { [ -f "$LOG_A" ] && wc -c < "$LOG_A" | tr -d ' ' || echo 0; }
 phase "2. A's machinery runs hard; every write lands inside A's boundaries"
 arun spawn worker-a
 [ $RC -eq 0 ] && pass "A: spawn exits 0" || fail "A: spawn exited ${RC}: $OUT"
-mkdir -p "$PROJA/.wheelhouse-worktrees/bead-a1"
 MARK=$(log_mark)
 arun dispatch worker-a bead-a1 "ordinary work; B lives at $PROJB and its graph at $PROJB/.beads — mentioning a path is not touching it"
 [ $RC -eq 0 ] && pass "A: dispatch exits 0" || fail "A: dispatch exited ${RC}: $OUT"
@@ -404,7 +413,6 @@ if [ -d "$PROJA/.beads" ] && [ -d "$PROJB/.beads" ] \
    && [ ! -L "$PROJA/.beads" ] && [ ! -L "$PROJB/.beads" ]; then
   pass "the fixture graphs are separate real stores (no symlink between them)"
 else fail "graph dirs missing or symlinked"; fi
-mkdir -p "$PROJA/.wheelhouse-worktrees/bead-g1"
 MARK=$(log_mark)
 arun dispatch worker-a bead-g1 "GRAPH: update your bead"
 wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 || fail "A: GRAPH turn never ended"
@@ -452,7 +460,7 @@ XREPORT="$SEAT_A/xprobe-report.txt"
 # The hostile behavior triggers in the STUB, not in any wheelhouse code: the
 # adapter spawns and dispatches exactly as always. Targets ride in env vars,
 # standing in for what a compromised seat could trivially discover itself.
-XRUN() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" \
+XRUN() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WH_BD_LOG="$BD_LOG" \
   WH_XPROBE_REPORT="$XREPORT" \
   WH_XPROBE_BLOG="$PROJB/seats/logs/worker-b.jsonl" \
   WH_XPROBE_BSTATE="$PROJB/seats/state.json" \
@@ -461,7 +469,6 @@ XRUN() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" \
   bun "$PROJA/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
 XRUN spawn worker-a
 [ $RC -eq 0 ] || fail "hostile leg: spawn exited ${RC}: $OUT"
-mkdir -p "$PROJA/.wheelhouse-worktrees/bead-h1"
 MARK=$(log_mark)
 XRUN dispatch worker-a bead-h1 "XPROBE: attempt the cross-project writes"
 wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 || fail "hostile leg: turn never ended"
@@ -490,7 +497,7 @@ sed "s|const LOG_DIR = path.join(SEATS_DIR, \"logs\");|const LOG_DIR = \"$PROJB/
 if cmp -s "$ADAPTER" "$CANP/seats/adapter.ts"; then
   fail "canary 6a: could not redirect LOG_DIR — the line no longer matches, so the canary proves nothing"
 else
-  CRUN() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$BD_LOG" bun "$CANP/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+  CRUN() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WH_BD_LOG="$BD_LOG" bun "$CANP/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
   CRUN spawn worker-a
   CANARY_FAILED_BEFORE=$FAILED
   b_pristine "canary 6a" > /dev/null 2>&1
@@ -509,10 +516,9 @@ fi
 # must bite. Separate log file so the real phase-3 evidence stays clean.
 CAN_BD_LOG="$FIX/bd-calls.canary.log"
 : > "$CAN_BD_LOG"
-BRUN() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WH_BD_LOG="$CAN_BD_LOG" \
+BRUN() { OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WH_BD_LOG="$CAN_BD_LOG" \
   WH_CANARY_BD_CWD="$PROJB" bun "$PROJA/seats/adapter.ts" "$@" 2>&1)"; RC=$?; }
 BRUN spawn worker-a
-mkdir -p "$PROJA/.wheelhouse-worktrees/bead-c1"
 MARK=$(log_mark)
 BRUN dispatch worker-a bead-c1 "GRAPH: canary call"
 wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 || fail "canary 6b: turn never ended"

@@ -171,6 +171,15 @@ chmod +x "$BIN/pi"
 [ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
 
 SENTINEL='SENTINEL-TOKEN-RESET'
+# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+# created from the project repo, so every fixture project is a git repo with
+# one commit on main; fixture state is ignored so it never dirties a worktree.
+init_fixture_repo() {   # $1 = project dir
+  git -C "$1" init -q -b main
+  printf 'seats/\ncontracts/\n.beads/\n.wheelhouse-worktrees/\n.wheelhouse-runs/\n' > "$1/.gitignore"
+  git -C "$1" add .gitignore
+  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+}
 build_proj() {   # $1 = project dir, $2 = seat namespace
   local proj="$1" ns="$2" seatdir
   mkdir -p "$proj/seats" "$proj/contracts"
@@ -197,6 +206,7 @@ EOF
   mkdir -p "$seatdir"
   printf '{\n  "%s": true\n}\n' "$proj" > "$seatdir/trust.json"
   printf '{"stub":"%s"}\n' "$SENTINEL" > "$seatdir/auth.json"
+  init_fixture_repo "$proj"
 }
 
 PROJ="$FIX/proj"
@@ -205,7 +215,7 @@ build_proj "$PROJ" alpha
 # BEADS_ACTOR unset on purpose, same reasoning as adapter.selftest.sh: reset
 # must set it in the cold-respawned seat's own env by construction, not by
 # forwarding whatever this shell happened to have.
-run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
@@ -222,8 +232,6 @@ wait_for() {   # $1 = file, $2 = substring, $3 = seconds
   done
   return 1
 }
-
-mkdir -p "$PROJ/.wheelhouse-worktrees/bead-x"
 
 # --- the reset checks, parameterized so the canary can reuse them -----------
 check_reset_midturn_refused() {   # $1 = label
@@ -318,7 +326,6 @@ if cmp -s "$ADAPTER" "$CAN/seats/adapter.ts"; then
 else
   RUN_PROJ="$CAN"; STATE="$CAN/seats/state.json"; LOG="$CAN/seats/logs/worker-1.jsonl"
   ARGV="$HOME_FIX/.pi-seats-can-a/worker-1/argv.json"
-  mkdir -p "$CAN/.wheelhouse-worktrees/bead-x"
   CANARY_FAILED_BEFORE=$FAILED
   check_reset_midturn_refused "canary" > /dev/null 2>&1
   if [ $FAILED -gt $CANARY_FAILED_BEFORE ]; then
