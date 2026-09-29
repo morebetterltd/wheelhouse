@@ -190,7 +190,7 @@ if command -v gh >/dev/null 2>&1 && ! github_issue_watch_off; then
     include_labels_json="$(json_string_array "$(template_source_value github-issue-include-labels || true)")"
     exclude_labels_json="$(json_string_array "$(template_source_value github-issue-exclude-labels || true)")"
     author_filter="$(template_source_value github-issue-author || true)"
-    traced="$(bd list --status open --limit 0 --json 2>/dev/null; bd list --status in_progress --limit 0 --json 2>/dev/null)"
+    traced="$(bd list --status open --limit 0 --json 2>/dev/null; bd list --status in_progress --limit 0 --json 2>/dev/null; bd list --status deferred --limit 0 --json 2>/dev/null)"
     n=0; missing=""; first_repo=""
     while IFS= read -r repo; do
       [ -n "$repo" ] || continue
@@ -212,7 +212,7 @@ if command -v gh >/dev/null 2>&1 && ! github_issue_watch_off; then
       ' "$open_issues" "$include_labels_json" "$exclude_labels_json" "$author_filter" 2>/dev/null || true)"
       while IFS= read -r u; do
         [ -n "$u" ] || continue
-        if ! printf '%s' "$traced" | grep -qF "$u"; then n=$((n+1)); missing="$missing #${u##*/}"; fi
+        if ! grep -qF "$u" <<<"$traced"; then n=$((n+1)); missing="$missing #${u##*/}"; fi
       done <<EOF
 $urls
 EOF
