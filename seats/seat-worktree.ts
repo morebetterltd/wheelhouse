@@ -102,6 +102,31 @@ export function worktreeCap(root: string, roster?: Record<string, unknown>): { c
   return { cap: seats + CAP_HEADROOM, seats };
 }
 
+function beadStatuses(root: string): Map<string, string> {
+  const out = new Map<string, string>();
+  if (process.env.WHEELHOUSE_SKIP_BD === "1" && !process.env.FIXTURE_BD_CLOSED_FILE) return out;
+  for (const st of ["open", "in_progress", "blocked", "deferred", "closed"]) {
+    const r = spawnSync("bd", ["list", `--status=${st}`, "--json", "--limit", "5000"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000 });
+    if (r.status !== 0 || !r.stdout) continue;
+    try { for (const b of JSON.parse(r.stdout)) if (b?.id) out.set(String(b.id), String(b.status ?? st)); } catch {}
+  }
+  return out;
+}
+
+function isLegacyWorktree(root: string, p: string, roster?: Record<string, unknown>): boolean {
+  if (!isFleetWorktreePath(root, p)) return false;
+  const name = path.basename(p);
+  return !(roster ? Object.keys(roster).includes(name) : false);
+}
+
+function legacyBeadOpen(root: string, wt: RegisteredWorktree, state: StateLike, statuses: Map<string, string>): boolean {
+  const name = path.basename(wt.path);
+  const st = statuses.get(name);
+  if (st) return st !== "closed";
+  if (Object.values(state.seats ?? {}).some((rec) => rec?.cwd && samePath(rec.cwd, wt.path))) return true;
+  return true;
+}
+
 /** Which seat a dispatcher should wait for when the cap is reached: a seat
  * holding a worktree that is not running, else the one dispatched longest ago. */
 export function seatToWaitFor(root: string, state: StateLike, live: RegisteredWorktree[]): string | null {
@@ -229,20 +254,43 @@ export interface EnsureResult {
  * SeatWorktreeError with an operator-readable message on any refusal. */
 export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   const root = path.resolve(o.root);
-  const target = seatWorktreeDir(root, o.seat);
-  const branch = beadBranch(o.beadId);
+  const seatTarget = seatWorktreeDir(root, o.seat);
+  let target = seatTarget;
+  let branch = beadBranch(o.beadId);
   const note = o.note ?? (() => {});
   const remote = o.remote ?? process.env.WHEELHOUSE_PUSH_REMOTE ?? "origin";
 
   // 1. one seat per worktree
   for (const [other, rec] of Object.entries(o.state.seats ?? {})) {
     if (other === o.seat || !rec?.cwd) continue;
-    if (samePath(rec.cwd, target)) refuse(`worktree ${target} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
+    if (samePath(rec.cwd, seatTarget)) refuse(`worktree ${seatTarget} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
   }
 
-  const repo = gitRepoFor(root, target);
+  const rec = o.state.seats?.[o.seat];
+  const recordedLegacy = rec?.cwd && isLegacyWorktree(root, rec.cwd, o.roster) && fs.existsSync(rec.cwd) ? rec.cwd : null;
+  const namedLegacy = path.join(worktreesDir(root), o.beadId);
+  const legacy = recordedLegacy ?? (fs.existsSync(namedLegacy) ? namedLegacy : null);
+  const repo = gitRepoFor(root, legacy ?? seatTarget);
   const registered = registeredWorktrees(repo);
-  let atTarget = registered.find((w) => samePath(w.path, target));
+  const atLegacy = legacy ? registered.find((w) => samePath(w.path, legacy)) : undefined;
+  if (atLegacy && (!rec?.pid || !pidAlive(rec.pid ?? null)) && !fs.existsSync(seatTarget)) {
+    const mv = git(repo, ["worktree", "move", atLegacy.path, seatTarget]);
+    if (mv.ok) {
+      note(`seat ${o.seat}: adopted legacy worktree ${atLegacy.path} as ${seatTarget}`);
+      target = seatTarget;
+    } else {
+      target = atLegacy.path;
+      note(`seat ${o.seat}: keeping legacy worktree ${atLegacy.path} in place because git worktree move failed (${mv.err || mv.out})`);
+    }
+  } else if (atLegacy && (path.basename(atLegacy.path) === o.beadId || samePath(rec?.cwd ?? "", atLegacy.path))) {
+    target = atLegacy.path;
+  }
+  let atTarget = registeredWorktrees(repo).find((w) => samePath(w.path, target));
+  if (atTarget?.branch && (path.basename(target) === o.beadId || rec?.lastBead === o.beadId)) branch = atTarget.branch;
+  for (const [other, otherRec] of Object.entries(o.state.seats ?? {})) {
+    if (other === o.seat || !otherRec?.cwd) continue;
+    if (samePath(otherRec.cwd, target)) refuse(`worktree ${target} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
+  }
   const marker = path.join(target, PLACEHOLDER_MARKER);
   const placeholder = fs.existsSync(marker);
 
@@ -268,13 +316,18 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
 
   const base = resolveBase(repo, o.beadId, o.base, root);
   const baseTip = git(repo, ["rev-parse", `${base}^{commit}`]).out;
-  const elsewhere = registered.find((w) => w.branch === branch && !samePath(w.path, target));
+  const elsewhere = registeredWorktrees(repo).find((w) => w.branch === branch && !samePath(w.path, target));
   if (elsewhere) refuse(`branch ${branch} is already checked out at ${elsewhere.path}; a branch can be in one worktree at a time`);
   const exists = branchExists(repo, branch);
 
   if (!atTarget) {
     // 3. cap gates creation only
-    const live = fleetWorktrees(root, repo).filter((w) => !fs.existsSync(path.join(w.path, PLACEHOLDER_MARKER)));
+    const statuses = beadStatuses(root);
+    const live = fleetWorktrees(root, repo).filter((w) => {
+      if (fs.existsSync(path.join(w.path, PLACEHOLDER_MARKER))) return false;
+      if (!isLegacyWorktree(root, w.path, o.roster)) return true;
+      return legacyBeadOpen(root, w, o.state, statuses);
+    });
     const { cap, seats } = worktreeCap(root, o.roster);
     if (live.length >= cap) {
       const wait = seatToWaitFor(root, o.state, live);
