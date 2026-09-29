@@ -179,8 +179,14 @@ export function phantomOnlyStatus(statusPorcelain: string): { clean: boolean; ph
   return { clean: real.length === 0, phantomOnly: real.length === 0 && lines.length > 0, real };
 }
 
-export function worktreeStatus(root: string, wt: string): { clean: boolean; phantomOnly: boolean; real: string[] } {
-  const r = git(root, ["status", "--porcelain", "--untracked-files=all"], wt);
+/** Untrimmed `git status --porcelain`: the first line's leading space is part of its XY code. */
+export function porcelainStatus(wt: string): { ok: boolean; out: string; err: string } {
+  const r = spawnSync("git", ["-C", wt, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
+  return { ok: r.status === 0, out: r.stdout ?? "", err: (r.stderr ?? "").trim() };
+}
+
+export function worktreeStatus(_root: string, wt: string): { clean: boolean; phantomOnly: boolean; real: string[] } {
+  const r = porcelainStatus(wt);
   if (!r.ok) return { clean: false, phantomOnly: false, real: [`git status failed: ${r.err}`] };
   return phantomOnlyStatus(r.out);
 }
