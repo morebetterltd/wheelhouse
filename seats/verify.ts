@@ -1042,14 +1042,11 @@ async function main(): Promise<void> {
 
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt);
 
-  const scratchGitDir = execFileSync("git", ["-C", scratchCwd, "rev-parse", "--git-dir"], { encoding: "utf8" }).trim();
   const startedAt = Date.now();
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
     PATH: hostBudgetPath(ROOT),
     BEADS_ACTOR: beadsActorFor(verifierSeat),
-    GIT_DIR: path.resolve(scratchCwd, scratchGitDir),
-    GIT_WORK_TREE: scratchCwd,
   });
   const res = await runOneShot(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
