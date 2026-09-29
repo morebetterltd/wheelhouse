@@ -754,6 +754,9 @@ else fail "claude-code verifier one-shot did not use claude driver (rc=$RC out=$
 if grep -q '"--output-format","stream-json"' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q '"--verbose"' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
   pass "claude-code verifier one-shot requests stream-json output with --verbose"
 else fail "claude-code verifier one-shot did not request stream-json with --verbose: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
+if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && ! grep -q 'contracts/REVIEWER.md' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
+  pass "claude-code verifier one-shot carries reviewer brief text, not the path"
+else fail "claude-code verifier one-shot carried path or missed brief text: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
 bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"
 run bead-1 fleet/bead-1 worker-1
