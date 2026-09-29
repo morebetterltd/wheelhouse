@@ -184,7 +184,12 @@ fi
 rm -f "$PROJ/seats/needs.jsonl"
 
 phase "7. GitHub issues — untraced open issues are listed, traced issues are silent"
-printf '%s\n' 'https://github.com/fixture-owner/fixture-product/issues/41' 'https://github.com/fixture-owner/fixture-product/issues/42' > "$FIX/gh-open-issues"
+cat > "$FIX/gh-open-issues" <<'JSON'
+[
+  {"url":"https://github.com/fixture-owner/fixture-product/issues/41","labels":[],"author":{"login":"alice"}},
+  {"url":"https://github.com/fixture-owner/fixture-product/issues/42","labels":[],"author":{"login":"alice"}}
+]
+JSON
 printf '%s\n' '[{"id":"proj-traced","description":"Trace: https://github.com/fixture-owner/fixture-product/issues/41"}]' > "$FIX/open-traced-one"
 FIXTURE_GH_ISSUES_FILE="$FIX/gh-open-issues" FIXTURE_OPEN_FILE="$FIX/open-traced-one" run "$FIX/status-live" "$FIX/ready-2" ""
 if [ $RC -eq 0 ] && has "1 GITHUB ISSUE(S) NOT ON THE BOARD: #42" && has "Triage into beads (Trace: <issue url>)"; then
@@ -201,7 +206,42 @@ else
 fi
 unset FIXTURE_GH_ISSUES_FILE FIXTURE_OPEN_FILE
 
-phase "8. graceful degrade — bd absent: silent, exit 0"
+phase "8. GitHub issue watch config — filters and off switch are install-owned"
+mkdir -p "$PROJ/wheelhouse"
+cat > "$PROJ/wheelhouse/.template-source" <<'EOF'
+github-issue-repos=fixture-owner/fixture-product
+github-issue-include-labels=template-report
+github-issue-exclude-labels=wontfix
+github-issue-author=alice
+EOF
+cat > "$FIX/gh-filtered-issues" <<'JSON'
+[
+  {"url":"https://github.com/fixture-owner/fixture-product/issues/51","labels":[{"name":"template-report"}],"author":{"login":"alice"}},
+  {"url":"https://github.com/fixture-owner/fixture-product/issues/52","labels":[{"name":"other"}],"author":{"login":"alice"}},
+  {"url":"https://github.com/fixture-owner/fixture-product/issues/53","labels":[{"name":"template-report"}],"author":{"login":"bob"}},
+  {"url":"https://github.com/fixture-owner/fixture-product/issues/54","labels":[{"name":"template-report"},{"name":"wontfix"}],"author":{"login":"alice"}}
+]
+JSON
+FIXTURE_GH_ISSUES_FILE="$FIX/gh-filtered-issues" FIXTURE_OPEN_FILE="$FIX/ready-0" run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && has "1 GITHUB ISSUE(S) NOT ON THE BOARD: #51" && ! has "#52" && ! has "#53" && ! has "#54"; then
+  pass "install-owned GitHub issue filters list only matching issues"
+else
+  fail "filtered GitHub issue watch did not list only matching issues (rc=$RC): $OUT"
+fi
+cat > "$PROJ/wheelhouse/.template-source" <<'EOF'
+github-issue-watch=off
+github-issue-repos=fixture-owner/fixture-product
+EOF
+FIXTURE_GH_ISSUES_FILE="$FIX/gh-filtered-issues" FIXTURE_OPEN_FILE="$FIX/ready-0" run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && ! has "GITHUB ISSUE(S) NOT ON THE BOARD"; then
+  pass "install-owned GitHub issue watch off switch lists no issues"
+else
+  fail "GitHub issue watch off switch should be silent (rc=$RC): $OUT"
+fi
+rm -f "$PROJ/wheelhouse/.template-source"
+unset FIXTURE_GH_ISSUES_FILE FIXTURE_OPEN_FILE
+
+phase "9. graceful degrade — bd absent: silent, exit 0"
 run "$FIX/status-stopped" "$FIX/ready-2" ""
 NOBD_OUT="$(cd "$PROJ" && env PATH="/usr/bin:/bin" \
   FIXTURE_STATUS_FILE="$FIX/status-stopped" bash seats/fleet-gate.sh 2>&1)"
@@ -212,7 +252,7 @@ else
   fail "no bd on PATH should be silent+0 (rc=$NOBD_RC): $NOBD_OUT"
 fi
 
-phase "9. graceful degrade — adapter.ts absent: silent, exit 0"
+phase "10. graceful degrade — adapter.ts absent: silent, exit 0"
 rm "$PROJ/seats/adapter.ts"
 run "" "$FIX/ready-2" ""
 if [ $RC -eq 0 ] && [ -z "$OUT" ]; then
