@@ -193,6 +193,7 @@ chmod +x "$BIN/pi"
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats" "$PROJ/contracts"
 cp "$ADAPTER" "$PROJ/seats/adapter.ts"
+cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$PROJ/seats/seat-worktree.ts"
 cp "$RECOVER" "$PROJ/seats/recover.ts"
 cp "$BRIEFS" "$PROJ/seats/briefs.ts"
 cp "$HARNESS" "$PROJ/seats/harness.ts"
@@ -215,11 +216,21 @@ SEATDIR="$HOME_FIX/.pi-seats-rec/worker-1"
 mkdir -p "$SEATDIR"
 printf '{\n  "%s": true\n}\n' "$PROJ" > "$SEATDIR/trust.json"
 printf '{"stub":"identity"}\n' > "$SEATDIR/auth.json"
+# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+# created from the project repo, so every fixture project is a git repo with
+# one commit on main; fixture state is ignored so it never dirties a worktree.
+init_fixture_repo() {   # $1 = project dir
+  git -C "$1" init -q -b main
+  printf 'seats/\ncontracts/\n.beads/\n.wheelhouse-worktrees/\n.wheelhouse-runs/\n' > "$1/.gitignore"
+  git -C "$1" add .gitignore
+  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+}
+init_fixture_repo "$PROJ"
 
 STATE="$PROJ/seats/state.json"
 ARGV="$SEATDIR/argv.json"
 
-adapter_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+adapter_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 recover_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/recover.ts" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seat_line() { printf '%s\n' "$OUT" | grep "^$1 "; }
@@ -239,11 +250,10 @@ if [ "$(ps -p "$SPAWN_PID" -o command= | sed 's/ *$//')" = "pi" ]; then
 else
   fail "stub did not rewrite its title (ps: '$(ps -p "$SPAWN_PID" -o command=)') — this suite would not be testing the real process shape"
 fi
-mkdir -p "$PROJ/.wheelhouse-worktrees/bead-98m"
 adapter_run dispatch worker-1 bead-98m "SLOW think about it"
 [ $RC -eq 0 ] || { echo "selftest: fixture dispatch failed: $OUT" >&2; exit 2; }
-# dispatch relaunches into the bead's worktree (the spawn above rooted at
-# the project root, not this bead) — a NEW pid, same session file. The pid
+# dispatch relaunches into the seat's own worktree (the spawn above rooted
+# at the project root, not .wheelhouse-worktrees/worker-1) — a NEW pid, same session file. The pid
 # to kill mid-turn is whichever one is actually running now, not the one
 # spawn reported before dispatch replaced it.
 KPID="$(state_get worker-1 pid)"

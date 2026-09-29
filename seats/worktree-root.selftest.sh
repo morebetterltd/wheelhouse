@@ -89,7 +89,9 @@ STUB
 chmod +x "$BIN/pi"
 
 cp "$ADAPTER" "$PROJ/seats/adapter.ts"
+cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$PROJ/seats/seat-worktree.ts"
 cp "$PRUNE" "$PROJ/seats/prune.ts"
+cp "$(dirname "$PRUNE")/seat-worktree.ts" "$PROJ/seats/seat-worktree.ts"
 cp "$SEAT_ENV" "$PROJ/seats/seat-env.sh"
 cp "$BRIEFS" "$PROJ/seats/briefs.ts"
 cp "$HARNESS" "$PROJ/seats/harness.ts"
@@ -128,15 +130,19 @@ else
 fi
 printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-nyff/worker-1/auth.json"
 
-mkdir -p "$WORKTREE_ROOT/bead-a"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "fixture seat spawns"; else fail "spawn failed (exit $RC): $OUT"; fi
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/adapter.ts" dispatch worker-1 bead-a "hello from worktree root selftest" 2>&1)" || RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 bun "$PROJ/seats/adapter.ts" dispatch worker-1 bead-a "hello from worktree root selftest" 2>&1)" || RC=$?
 CWD_FILE="$HOME_FIX/.pi-seats-nyff/worker-1/cwd.txt"
-if [ $RC -eq 0 ] && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$WORKTREE_ROOT/bead-a" ]; then
-  pass "adapter dispatch uses <root>/.wheelhouse-worktrees/<bead>"
+if [ $RC -eq 0 ] && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$WORKTREE_ROOT/worker-1" ]; then
+  pass "adapter dispatch uses the seat's own <root>/.wheelhouse-worktrees/<seat> worktree"
 else
-  fail "dispatch did not use the in-root worktree (exit $RC): cwd=$(cat "$CWD_FILE" 2>/dev/null) out=$OUT"
+  fail "dispatch did not use the in-root seat worktree (exit $RC): cwd=$(cat "$CWD_FILE" 2>/dev/null) out=$OUT"
+fi
+if [ "$(git -C "$WORKTREE_ROOT/worker-1" branch --show-current 2>/dev/null)" = "fleet/bead-a" ]; then
+  pass "the seat worktree is a real git worktree on fleet/<bead>"
+else
+  fail "seat worktree branch was $(git -C "$WORKTREE_ROOT/worker-1" branch --show-current 2>&1)"
 fi
 
 mkdir -p "$WORKTREE_ROOT/orphan-a"

@@ -321,11 +321,40 @@ chmod +x "$BIN/claude"
 # A fixture project: adapter.ts expects to live at <root>/seats/adapter.ts
 # with crew briefs at <root>/contracts/. build_proj makes one; the canaries
 # make more, each with its own seat namespace so nothing collides.
+#
+# Every fixture project is a git repository with one commit on main and a
+# bare origin under $FIX/origins/: a worker seat owns ONE persistent worktree,
+# <root>/.wheelhouse-worktrees/<seat-name>, and every dispatch runs git in
+# it (worktree add on the first dispatch, git switch to fleet/<bead> after
+# that, and a push of the branch it is leaving). Fixture git runs with the
+# fixture HOME so nothing from the operator's own git config (signing,
+# hooks, templates) leaks in, and adapter.ts sees the same HOME via `run`.
 SENTINEL='SENTINEL-TOKEN-4a7f'
+fgit() { env -u XDG_CONFIG_HOME HOME="$HOME_FIX" GIT_CONFIG_NOSYSTEM=1 git -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false -c init.defaultBranch=main "$@"; }
+git_init_fixture_repo() {   # $1 = project dir, $2 = seat namespace (names the bare origin)
+  local proj="$1" ns="$2" origin="$FIX/origins/$2.git"
+  mkdir -p "$FIX/origins"
+  fgit -C "$proj" init -q -b main
+  printf 'seats/\n.wheelhouse-worktrees/\n.wheelhouse-runs/\n' > "$proj/.gitignore"
+  fgit -C "$proj" add -A
+  fgit -C "$proj" commit -qm "fixture base"
+  fgit init -q --bare -b main "$origin"
+  fgit -C "$proj" remote add origin "$origin"
+  fgit -C "$proj" push -q -u origin main 2>/dev/null
+}
+seat_wt() { printf '%s/.wheelhouse-worktrees/%s' "$1" "${2:-worker-1}"; }   # $1 = project dir, $2 = seat
+wt_registered() {   # $1 = project dir, $2 = worktree path — true when git lists it
+  fgit -C "$1" worktree list --porcelain 2>/dev/null | grep -qx "worktree $2"
+}
+wt_branch() { fgit -C "$1" branch --show-current 2>/dev/null; }   # $1 = worktree path
+state_get_in() {   # $1 = state.json, $2 = field, $3 = seat (default worker-1)
+  env HOME="$HOME_FIX" bun -e "const s=require('$1');const v=s.seats['${3:-worker-1}']?.['$2'];if(v!=null)console.log(v)" 2>/dev/null
+}
 build_proj() {   # $1 = project dir, $2 = seat namespace
   local proj="$1" ns="$2" seatdir
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
+  cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$proj/seats/seat-worktree.ts"
   cp "$ADAPTER_DIR/host-budget.ts" "$proj/seats/host-budget.ts"
   cp "$HARNESS" "$proj/seats/harness.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
@@ -352,6 +381,7 @@ EOF
   mkdir -p "$seatdir"
   printf '{\n  "%s": true\n}\n' "$proj" > "$seatdir/trust.json"
   printf '{"stub":"%s"}\n' "$SENTINEL" > "$seatdir/auth.json"
+  git_init_fixture_repo "$proj" "$ns"
 }
 
 build_installed_proj() {   # $1 = project dir, $2 = seat namespace
@@ -372,7 +402,9 @@ build_proj "$PROJ" alpha
 # for the wrong reason — the operator-export mechanism working, not the
 # adapter setting it — so it is stripped before every `run`, and phase 1's
 # override case sets WHEELHOUSE_BEADS_ACTOR_WORKER_1 explicitly instead.
-run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+# WHEELHOUSE_SKIP_BD=1: the fixture beads have no bead store, so the adapter
+# must not ask `bd show` for an Integration: line when it resolves a base.
+run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
@@ -390,7 +422,6 @@ RUN_PROJ="$PROJ"
 phase "0b. claude-code driver — spawn, dispatch ack, steer, settled, resume, stop, dead-process"
 CLAUDE_PROJ="$FIX/claude-proj"
 build_proj "$CLAUDE_PROJ" claude
-mkdir -p "$CLAUDE_PROJ/.wheelhouse-worktrees/bead-y"
 RUN_PROJ="$CLAUDE_PROJ"
 env HOME="$HOME_FIX" PROJ="$CLAUDE_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["worker-1"].harness="claude-code"; r.seats["worker-1"].model="sonnet"; r.seats["worker-1"].allowedTools="Bash(printf *)"; r.seats["worker-1"].account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 mkdir -p "$HOME_FIX/.pi-seats-claude/worker-1"
@@ -402,6 +433,7 @@ if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json
 CLAUDE_LOG="$CLAUDE_PROJ/seats/logs/worker-1.jsonl"
 run dispatch worker-1 bead-y "tools hello claude"
 if [ $RC -eq 0 ] && grep -q 'dispatched bead-y to worker-1' <<<"$OUT"; then pass "claude-code dispatch ack exits 0"; else fail "claude-code dispatch ack failed (rc=$RC): $OUT"; fi
+if [ "$(state_get_in "$CLAUDE_PROJ/seats/state.json" cwd)" = "$(seat_wt "$CLAUDE_PROJ")" ] && [ "$(wt_branch "$(seat_wt "$CLAUDE_PROJ")")" = "fleet/bead-y" ]; then pass "claude-code first dispatch moved the seat into its own worktree on fleet/bead-y"; else fail "claude-code seat cwd/branch after dispatch: cwd=$(state_get_in "$CLAUDE_PROJ/seats/state.json" cwd) branch=$(wt_branch "$(seat_wt "$CLAUDE_PROJ")")"; fi
 for _ in $(seq 1 100); do grep -q '"type":"agent_end"' "$CLAUDE_LOG" 2>/dev/null && break; sleep 0.05; done
 if grep -q '"type":"agent_end"' "$CLAUDE_LOG" && grep -q '"type":"turn_end"' "$CLAUDE_LOG"; then pass "claude-code settled detection lands turn_end and agent_end"; else fail "claude-code did not settle with expected events"; fi
 if grep -q '"type":"thinking"' "$CLAUDE_LOG" && grep -q '"type":"toolCall"' "$CLAUDE_LOG" && grep -q '"type":"tool_execution_start"' "$CLAUDE_LOG" && grep -q '"type":"tool_execution_end"' "$CLAUDE_LOG" && grep -q '"toolName":"Bash"' "$CLAUDE_LOG" && grep -q '"isError":false' "$CLAUDE_LOG"; then pass "claude-code normalizes thinking, toolCall, tool_execution_start/end with toolName"; else fail "claude-code missing normalized tool/thinking events: $(cat "$CLAUDE_LOG" 2>/dev/null)"; fi
@@ -563,8 +595,7 @@ else fail "authRoute env: adapter probe failed without auth.json (exit $RC): $OU
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "authRoute env: adapter spawn exits 0 without auth.json"
 else fail "authRoute env: adapter spawn failed without auth.json (exit $RC): $OUT"; fi
-mkdir -p "$AUTHROUTE_ENV_PROJ/.wheelhouse-worktrees/env-bead"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 env-bead 'hello env route' 2>&1)" || RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 env-bead 'hello env route' 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && wait_for "$LOG" 'echo: Bead env-bead' 5; then pass "authRoute env: adapter dispatch succeeds without auth.json"
 else fail "authRoute env: adapter dispatch failed without auth.json (exit $RC): $OUT"; fi
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" OPENAI_API_KEY='fixture-openai-key' bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)" || RC=$?
@@ -696,7 +727,6 @@ env HOME="$HOME_FIX" bun -e '
   j.seats["worker-1"].account.label = "fixture-quota-account";
   fs.writeFileSync(f, JSON.stringify(j, null, 2));
 ' "$CAPACITY_PROJ/seats/seats.json"
-mkdir -p "$CAPACITY_PROJ/.wheelhouse-worktrees/quota-bead"
 run spawn worker-1
 run dispatch worker-1 quota-bead 'QUOTA turn from provider'
 if [ $RC -eq 0 ] && wait_for "$LOG" 'usage limit has been reached' 5; then pass "capacity: quota-shaped agent_end fixture reached the event log"
@@ -757,7 +787,7 @@ check_spawn() {   # $1 = label
 
 
 phase "0b. codex driver — spawn, dispatch, normalized events, resume, stop"
-CODEX_TMP="$FIX/codex-driver"; mkdir -p "$CODEX_TMP/bin" "$CODEX_TMP/home" "$CODEX_TMP/home/codex" "$CODEX_TMP/proj/contracts" "$CODEX_TMP/proj/.wheelhouse-worktrees/bead-codex" "$CODEX_TMP/proj/.wheelhouse-worktrees/bead-resume"; printf "{}\n" > "$CODEX_TMP/home/codex/auth.json"
+CODEX_TMP="$FIX/codex-driver"; mkdir -p "$CODEX_TMP/bin" "$CODEX_TMP/home" "$CODEX_TMP/home/codex" "$CODEX_TMP/proj/contracts"; printf "{}\n" > "$CODEX_TMP/home/codex/auth.json"
 cat > "$CODEX_TMP/bin/codex" <<'CODEXSTUB'
 #!/usr/bin/env node
 const fs=require('fs'),path=require('path'); const home=process.env.CODEX_HOME||process.env.HOME; fs.mkdirSync(home,{recursive:true}); fs.appendFileSync(path.join(home,'codex-calls.jsonl'),JSON.stringify({argv:process.argv.slice(2)})+'\n'); if(process.argv[2]==='login'&&process.argv[3]==='status') process.exit(0); if(process.argv[2]==='exec'){console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'OK'}}));process.exit(0);} fs.writeFileSync(path.join(home,'codex-env.json'),JSON.stringify({OPENAI_API_KEY:process.env.OPENAI_API_KEY||null,ANTHROPIC_API_KEY:process.env.ANTHROPIC_API_KEY||null,ANTHROPIC_AUTH_TOKEN:process.env.ANTHROPIC_AUTH_TOKEN||null})); let thread='thread-'+process.pid, threadPath=path.join(home,'sessions','odd','rollout--'+thread+'.jsonl'), buf=''; function ensure(){fs.mkdirSync(path.dirname(threadPath),{recursive:true});fs.appendFileSync(threadPath,'{}\n');} function send(o){console.log(JSON.stringify(o));} function text(input){return (input||[]).map(x=>x.text||'').join('\n')}
@@ -765,10 +795,11 @@ process.stdin.on('data',d=>{buf+=d;let i;while((i=buf.indexOf('\n'))>=0){const l
 CODEXSTUB
 chmod +x "$CODEX_TMP/bin/codex"
 printf 'worker brief\n' > "$CODEX_TMP/proj/contracts/WORKER.md"; printf 'x\n' > "$CODEX_TMP/proj/contracts/COMMANDER.md"; printf 'x\n' > "$CODEX_TMP/proj/contracts/REVIEWER.md"
-mkdir -p "$CODEX_TMP/proj/seats/bin"; cp "$CODEX_TMP/bin/codex" "$CODEX_TMP/proj/seats/bin/codex"; printf '{}\n' > "$CODEX_TMP/proj/seats/host-budget.json"; cp "$PWD/seats/adapter.ts" "$CODEX_TMP/proj/seats/adapter.ts"; cp -R "$PWD/seats/drivers" "$CODEX_TMP/proj/seats/drivers"; cp "$PWD/seats/host-budget.ts" "$CODEX_TMP/proj/seats/host-budget.ts"; cp "$PWD/seats/briefs.ts" "$CODEX_TMP/proj/seats/briefs.ts"; cp "$PWD/seats/harness.ts" "$CODEX_TMP/proj/seats/harness.ts"
+mkdir -p "$CODEX_TMP/proj/seats/bin"; cp "$CODEX_TMP/bin/codex" "$CODEX_TMP/proj/seats/bin/codex"; printf '{}\n' > "$CODEX_TMP/proj/seats/host-budget.json"; cp "$PWD/seats/adapter.ts" "$CODEX_TMP/proj/seats/adapter.ts"; cp "$PWD/seats/seat-worktree.ts" "$CODEX_TMP/proj/seats/seat-worktree.ts"; cp -R "$PWD/seats/drivers" "$CODEX_TMP/proj/seats/drivers"; cp "$PWD/seats/host-budget.ts" "$CODEX_TMP/proj/seats/host-budget.ts"; cp "$PWD/seats/briefs.ts" "$CODEX_TMP/proj/seats/briefs.ts"; cp "$PWD/seats/harness.ts" "$CODEX_TMP/proj/seats/harness.ts"
 cat > "$CODEX_TMP/proj/seats/seats.json" <<JSON
 {"seats":{"worker-1":{"role":"worker","harness":"codex","provider":"openai-codex","model":"gpt-5.5","account":{"dir":"$CODEX_TMP/home/codex","authRoute":"oauth"}}}}
 JSON
+git_init_fixture_repo "$CODEX_TMP/proj" codex
 OLD_RUN_PROJ="$RUN_PROJ"; OLD_STATE="$STATE"; OLD_LOG="$LOG"; OLD_ARGV="$ARGV"
 RUN_PROJ="$CODEX_TMP/proj"; STATE="$CODEX_TMP/proj/seats/state.json"; LOG="$CODEX_TMP/proj/seats/logs/worker-1.jsonl"; ARGV="$CODEX_TMP/home/codex/unused-argv.json"
 PATH="$CODEX_TMP/bin:$PATH" OPENAI_API_KEY=leak ANTHROPIC_API_KEY=leak ANTHROPIC_AUTH_TOKEN=leak run spawn worker-1
@@ -782,8 +813,10 @@ for i in {1..80}; do grep -q '"type":"agent_end"' "$CODEX_TMP/proj/seats/logs/wo
 if grep -q '"type":"tool_execution_start".*"toolName":"shell"' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl" && grep -q '"type":"turn_end"' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl"; then pass "codex normalizes tool execution, turn_end, and agent_end"; else fail "codex normalized events missing: $(tail -20 "$CODEX_TMP/proj/seats/logs/worker-1.jsonl" 2>/dev/null)"; fi
 PATH="$CODEX_TMP/bin:$PATH" run stop worker-1; [ $RC -eq 0 ] && pass "codex stop exits 0" || fail "codex stop failed (rc=$RC): $OUT"
 PATH="$CODEX_TMP/bin:$PATH" run resume worker-1; [ $RC -eq 0 ] && pass "codex resume exits 0 with recorded thread" || fail "codex resume failed: $OUT"
+codex_pid_before=$(node -e 'const s=require(process.argv[1]).seats["worker-1"]; process.stdout.write(String(s.pid||""))' "$CODEX_TMP/proj/seats/state.json")
 PATH="$CODEX_TMP/bin:$PATH" run dispatch worker-1 bead-resume "resume check"; for i in {1..80}; do grep -q 'RESUME_OK' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl" && break; sleep .1; done
 if grep -q 'RESUME_OK' "$CODEX_TMP/proj/seats/logs/worker-1.jsonl"; then pass "codex dispatch after resume answers"; else fail "codex resumed dispatch did not answer"; fi
+if [ $RC -eq 0 ] && [ "$(node -e 'const s=require(process.argv[1]).seats["worker-1"]; process.stdout.write(String(s.pid||""))' "$CODEX_TMP/proj/seats/state.json")" = "$codex_pid_before" ] && [ "$(wt_branch "$(seat_wt "$CODEX_TMP/proj")")" = "fleet/bead-resume" ] && [ -n "$(fgit -C "$CODEX_TMP/proj" branch --list fleet/bead-codex)" ]; then pass "codex cross-bead dispatch switches the seat worktree to fleet/bead-resume without relaunching (fleet/bead-codex kept)"; else fail "codex cross-bead dispatch relaunched or did not switch (rc=$RC pid before=$codex_pid_before branch=$(wt_branch "$(seat_wt "$CODEX_TMP/proj")")): $OUT"; fi
 codex_pid=$(node -e 'const s=require(process.argv[1]).seats["worker-1"]; process.stdout.write(String(s.pid||""))' "$CODEX_TMP/proj/seats/state.json")
 [ -n "$codex_pid" ] || fail "codex pid missing before dead-process check"
 kill -9 "$codex_pid" 2>/dev/null || true
@@ -869,15 +902,15 @@ else fail "probe failure was not verbatim (exit $RC): $OUT"; fi
 
 phase "2. dispatch — prompt round trip lands in log and session"
 PID_BEFORE_BAD="$(state_get pid)"
-run dispatch worker-1 no-such-bead "hello adapter"
-if [ $RC -ne 0 ] && says "does not exist"; then
-  pass "dispatching a bead with no worktree is a loud STOP"
-else fail "dispatch to a bead with no worktree did not STOP (exit $RC): $OUT"; fi
-if [ "$(state_get pid)" = "$PID_BEFORE_BAD" ] && kill -0 "$PID_BEFORE_BAD" 2>/dev/null; then
-  pass "the seat is left running, not stopped, when the target worktree is missing"
-else fail "a rejected dispatch left the seat stopped (pid was $PID_BEFORE_BAD, now $(state_get pid))"; fi
+run dispatch worker-1 "bad/bead" "hello adapter"
+if [ $RC -ne 0 ] && says 'invalid bead id "bad/bead"'; then
+  pass "dispatching a bead id that is not a single path segment is a loud STOP"
+else fail "dispatch to a bead id with a path separator did not STOP (exit $RC): $OUT"; fi
+if [ "$(state_get pid)" = "$PID_BEFORE_BAD" ] && kill -0 "$PID_BEFORE_BAD" 2>/dev/null && [ ! -e "$PROJ/.wheelhouse-worktrees" ]; then
+  pass "the seat is left running, not stopped, and no worktree is created for a refused bead id"
+else fail "a rejected dispatch left the seat stopped or created a worktree (pid was $PID_BEFORE_BAD, now $(state_get pid))"; fi
 
-mkdir -p "$PROJ/.wheelhouse-worktrees/bead-x"
+SEAT_WT="$(seat_wt "$PROJ")"
 SESS="$(state_get sessionFile)"
 SESS_LINES_BEFORE=$(wc -l < "$SESS" | tr -d ' ')
 run dispatch worker-1 bead-x "hello adapter"
@@ -895,9 +928,15 @@ else fail "session file did not grow"; fi
 if [ "$(state_get lastBead)" = "bead-x" ]; then
   pass "state.json records the dispatched bead"
 else fail "lastBead not recorded"; fi
-if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ/.wheelhouse-worktrees/bead-x" ]; then
-  pass "dispatch relaunched the seat rooted in the bead's worktree, by construction"
-else fail "seat cwd after dispatch was $(cat "$CWD_FILE" 2>/dev/null) — expected the bead-x worktree"; fi
+if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$SEAT_WT" ]; then
+  pass "first dispatch relaunched the seat rooted in its own worktree (.wheelhouse-worktrees/worker-1), by construction"
+else fail "seat cwd after dispatch was $(cat "$CWD_FILE" 2>/dev/null) — expected the worker-1 seat worktree $SEAT_WT"; fi
+if wt_registered "$PROJ" "$SEAT_WT" && [ "$(wt_branch "$SEAT_WT")" = "fleet/bead-x" ] && says "created worktree"; then
+  pass "first dispatch created the seat worktree: registered by git worktree list and on fleet/bead-x"
+else fail "seat worktree not created as expected (registered=$(wt_registered "$PROJ" "$SEAT_WT" && echo yes || echo no) branch=$(wt_branch "$SEAT_WT")): $OUT"; fi
+if [ "$(fgit -C "$SEAT_WT" rev-parse HEAD)" = "$(fgit -C "$PROJ" rev-parse origin/main)" ] && [ -z "$(fgit -C "$SEAT_WT" status --porcelain)" ]; then
+  pass "the new bead branch was cut from origin/main and the worktree is clean"
+else fail "bead branch base/cleanliness wrong: HEAD=$(fgit -C "$SEAT_WT" rev-parse HEAD) origin/main=$(fgit -C "$PROJ" rev-parse origin/main) status=$(fgit -C "$SEAT_WT" status --porcelain)"; fi
 assert_state_cwd_is_live_cwd "dispatch relaunch"
 if grep -Fq -- "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null; then
   pass "the cwd-changing relaunch reattached the SAME session (--session), not a cold start"
@@ -910,35 +949,63 @@ run dispatch worker-1 bead-x "$LARGE_PROMPT"
 if [ $RC -eq 0 ]; then pass "dispatch writes and acks a prompt larger than 64 KB"
 else fail "large dispatch did not ack (exit $RC): $OUT"; fi
 
-mkdir -p "$PROJ/.wheelhouse-worktrees/bead-symlink-real"
-ln -s "bead-symlink-real" "$PROJ/.wheelhouse-worktrees/bead-symlink"
-SYMLINK_TARGET="$PROJ/.wheelhouse-worktrees/bead-symlink"
-run dispatch worker-1 bead-symlink "hello symlinked worktree"
-if [ $RC -eq 0 ] && [ "$(state_get cwd)" = "$SYMLINK_TARGET" ] && wait_for "$LOG" 'echo: Bead bead-symlink' 5; then
-  pass "symlinked worktree dispatch records the requested symlink path and is not refused"
-else fail "symlinked worktree dispatch failed or stored the wrong cwd (exit $RC): $OUT state_cwd=$(state_get cwd)"; fi
+# A second bead on the same seat: the seat keeps its process and its
+# worktree; only the branch under it changes (ISC-31/32).
+CROSS_PID_BEFORE="$(state_get pid)"
+run dispatch worker-1 bead-x2 "cross-bead keeps the seat"
+if [ $RC -eq 0 ] && [ "$(state_get pid)" = "$CROSS_PID_BEFORE" ] && kill -0 "$CROSS_PID_BEFORE" 2>/dev/null && says "switched"; then
+  pass "cross-bead dispatch to an idle seat does not relaunch it (same pid)"
+else fail "cross-bead dispatch relaunched or failed (exit $RC before=$CROSS_PID_BEFORE after=$(state_get pid)): $OUT"; fi
+if [ "$(wt_branch "$SEAT_WT")" = "fleet/bead-x2" ] && [ -n "$(fgit -C "$PROJ" branch --list fleet/bead-x)" ] && [ "$(state_get cwd)" = "$SEAT_WT" ]; then
+  pass "cross-bead dispatch switched the seat worktree to fleet/bead-x2 and kept fleet/bead-x; cwd unchanged"
+else fail "cross-bead switch wrong: branch=$(wt_branch "$SEAT_WT") old=$(fgit -C "$PROJ" branch --list fleet/bead-x) cwd=$(state_get cwd)"; fi
+if wait_for "$LOG" 'echo: Bead bead-x2' 5; then pass "the cross-bead prompt round-trips through the unrelaunched seat"
+else fail "cross-bead prompt did not round-trip"; fi
+
+# A pre-existing symlink at the seat's worktree path is not a Git worktree:
+# the adapter refuses to touch it and leaves the seat exactly as it was.
+SYMLINK_PROJ="$FIX/symlink-proj"
+build_proj "$SYMLINK_PROJ" symlink
+mkdir -p "$SYMLINK_PROJ/.wheelhouse-worktrees/plain-dir"
+printf 'not a worktree\n' > "$SYMLINK_PROJ/.wheelhouse-worktrees/plain-dir/README"
+ln -s "plain-dir" "$SYMLINK_PROJ/.wheelhouse-worktrees/worker-1"
+RUN_PROJ="$SYMLINK_PROJ"; STATE="$SYMLINK_PROJ/seats/state.json"; LOG="$SYMLINK_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-symlink/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-symlink/worker-1/cwd.txt"
+run spawn worker-1
 SYMLINK_PID_BEFORE="$(state_get pid)"
-run dispatch worker-1 bead-symlink "hello symlinked worktree again"
-if [ $RC -eq 0 ] && [ "$(state_get pid)" = "$SYMLINK_PID_BEFORE" ]; then
-  pass "symlinked worktree second dispatch to the same task is treated as the same cwd"
-else fail "symlinked worktree second dispatch relaunched/refused (exit $RC before=$SYMLINK_PID_BEFORE after=$(state_get pid)): $OUT"; fi
+run dispatch worker-1 bead-symlink "hello symlinked path"
+if [ $RC -ne 0 ] && says "exists but is not registered by git worktree list" && says "refusing to touch a directory that is not a Git worktree"; then
+  pass "a symlink squatting on the seat worktree path makes dispatch refuse as not registered"
+else fail "symlinked seat worktree path was not refused (exit $RC): $OUT"; fi
+if [ "$(state_get pid)" = "$SYMLINK_PID_BEFORE" ] && kill -0 "$SYMLINK_PID_BEFORE" 2>/dev/null && [ -L "$SYMLINK_PROJ/.wheelhouse-worktrees/worker-1" ] && [ -f "$SYMLINK_PROJ/.wheelhouse-worktrees/plain-dir/README" ]; then
+  pass "the refusal leaves the seat running and the symlink and its target untouched"
+else fail "symlink refusal stopped the seat or touched the path (pid before=$SYMLINK_PID_BEFORE after=$(state_get pid))"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 
 NEG_CWD_PROJ="$FIX/live-cwd-negative-proj"
 build_proj "$NEG_CWD_PROJ" live-cwd-negative
-mkdir -p "$NEG_CWD_PROJ/.wheelhouse-worktrees/guard-bead" "$FIX/genuinely-different-live-cwd"
+mkdir -p "$FIX/genuinely-different-live-cwd"
 RUN_PROJ="$NEG_CWD_PROJ"; STATE="$NEG_CWD_PROJ/seats/state.json"; LOG="$NEG_CWD_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-live-cwd-negative/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-live-cwd-negative/worker-1/cwd.txt"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_FORCE_LIVE_CWD="$FIX/genuinely-different-live-cwd" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 guard-bead 2>&1)" || RC=$?
-if [ $RC -ne 0 ] && says "has live cwd" && says "not requested cwd"; then
-  pass "genuinely different live cwd still trips the post-launch guard"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_FORCE_LIVE_CWD="$FIX/genuinely-different-live-cwd" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 guard-bead 2>&1)" || RC=$?
+if [ $RC -ne 0 ] && says "has live cwd" && says "not requested cwd" && wt_registered "$NEG_CWD_PROJ" "$(seat_wt "$NEG_CWD_PROJ")"; then
+  pass "genuinely different live cwd still trips the post-launch guard (after spawn created the seat worktree)"
 else fail "genuinely different live cwd did not trip the guard (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 
-mkdir -p "$PROJ/.wheelhouse-worktrees/bead-missing-session"
-rm -f "$SESS"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-missing-session "missing session file keeps pi continuity" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && grep -Fq -- "\"--session\",\"$SESS\"" "$ARGV" 2>/dev/null && ! says "session continuity intentionally dropped"; then
+# The relaunch that moves a seat from the root into its worktree keeps the
+# recorded --session even when the session file itself has gone missing.
+MISSING_SESS_PROJ="$FIX/missing-session-proj"
+build_proj "$MISSING_SESS_PROJ" missing-session
+RUN_PROJ="$MISSING_SESS_PROJ"; STATE="$MISSING_SESS_PROJ/seats/state.json"; LOG="$MISSING_SESS_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-missing-session/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-missing-session/worker-1/cwd.txt"
+run spawn worker-1
+MISSING_SESS="$(state_get sessionFile)"
+rm -f "$MISSING_SESS"
+run dispatch worker-1 bead-missing-session "missing session file keeps pi continuity"
+if [ $RC -eq 0 ] && grep -Fq -- "\"--session\",\"$MISSING_SESS\"" "$ARGV" 2>/dev/null && ! says "session continuity intentionally dropped" && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$MISSING_SESS_PROJ")" ]; then
   pass "pi missing recorded session file still relaunches with the recorded --session path"
 else fail "pi missing recorded session file did not preserve --session (exit $RC): $OUT argv=$(cat "$ARGV" 2>/dev/null)"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 LOG_MARK=$(wc -c < "$LOG" | tr -d ' ')
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_EVENT_STRING_BYTES=1024 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "TOOLBIG payload" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes' 5 && grep -q 'wheelhouse log truncated' "$LOG"; then
@@ -986,10 +1053,11 @@ phase "2b. dispatch — late prompt ack after delivery is a warning, not stale s
 SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
 LATE_PROJ="$FIX/late-ack-proj"
 build_proj "$LATE_PROJ" late-ack
-mkdir -p "$LATE_PROJ/.wheelhouse-worktrees/old-bead" "$LATE_PROJ/.wheelhouse-worktrees/new-bead"
 RUN_PROJ="$LATE_PROJ"; STATE="$LATE_PROJ/seats/state.json"; LOG="$LATE_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-late-ack/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-late-ack/worker-1/cwd.txt"
-run spawn worker-1 old-bead
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack fixture" 2>&1)" || RC=$?
+# The stub's behaviour knobs are read from its env at launch, and a
+# cross-bead dispatch no longer relaunches the seat, so they go on the spawn.
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_PROMPT_ACK_DELAY_MS=800 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)" || RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_PROMPT_ACK_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack fixture" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "prompt delivered, ack late" && says "new-bead"; then pass "late prompt ack after delivery exits 0 with warning"
 else fail "late prompt ack dispatch did not warn/succeed (exit $RC): $OUT"; fi
 if [ "$(state_get lastBead)" = "new-bead" ] && grep -q 'Bead new-bead' "$LOG" 2>/dev/null; then
@@ -999,17 +1067,15 @@ run stop worker-1 >/dev/null 2>&1
 
 NO_DELIVERY_PROJ="$FIX/no-delivery-proj"
 build_proj "$NO_DELIVERY_PROJ" no-delivery
-mkdir -p "$NO_DELIVERY_PROJ/.wheelhouse-worktrees/old-bead" "$NO_DELIVERY_PROJ/.wheelhouse-worktrees/new-bead"
 RUN_PROJ="$NO_DELIVERY_PROJ"; STATE="$NO_DELIVERY_PROJ/seats/state.json"; LOG="$NO_DELIVERY_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-no-delivery/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-no-delivery/worker-1/cwd.txt"
-run spawn worker-1 old-bead
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_PROMPT_ACK_MS=200 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)" || RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)" || RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_PROMPT_ACK_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)" || RC=$?
 if [ $RC -ne 0 ] && says "timed out after 200ms waiting for prompt response" && ! says "prompt delivered, ack late"; then pass "late prompt ack without delivery remains a STOP"
 else fail "late prompt ack without delivery did not STOP (exit $RC): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
 
 FIFO_TIMEOUT_PROJ="$FIX/fifo-timeout-proj"
 build_proj "$FIFO_TIMEOUT_PROJ" fifo-timeout
-mkdir -p "$FIFO_TIMEOUT_PROJ/.wheelhouse-worktrees/old-bead" "$FIFO_TIMEOUT_PROJ/.wheelhouse-worktrees/new-bead"
 RUN_PROJ="$FIFO_TIMEOUT_PROJ"; STATE="$FIFO_TIMEOUT_PROJ/seats/state.json"; LOG="$FIFO_TIMEOUT_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-fifo-timeout/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-fifo-timeout/worker-1/cwd.txt"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PAUSE_STDIN_AFTER_GET_STATE_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "fifo timeout setup: spawn exits 0 with a live paused seat"
@@ -1025,25 +1091,26 @@ phase "2b. dispatch — pinned session cwd starts fresh instead of recording a l
 SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
 PINPROJ="$FIX/pinproj"
 build_proj "$PINPROJ" pin
-mkdir -p "$PINPROJ/.wheelhouse-worktrees/bead-a" "$PINPROJ/.wheelhouse-worktrees/bead-b"
 RUN_PROJ="$PINPROJ"; STATE="$PINPROJ/seats/state.json"; LOG="$PINPROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-pin/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-pin/worker-1/cwd.txt"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 bead-a 2>&1)" || RC=$?
+# The seat starts at the root (no bead); the first dispatch is the one
+# relaunch that moves it into its worktree, and a session pinned to the root
+# cannot follow.
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "pinned-cwd setup spawn exits 0"
 else fail "pinned-cwd setup spawn exited ${RC}: $OUT"; fi
 PIN_SESS_BEFORE="$(state_get sessionFile)"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-b "hello pinned" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && says "starting a fresh session"; then pass "pinned-cwd cross-bead dispatch drops session continuity and says so"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-b "hello pinned" 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && says "starting a fresh session"; then pass "pinned-cwd first dispatch drops session continuity and says so"
 else fail "pinned-cwd dispatch did not fresh-start as specified (exit $RC): $OUT"; fi
 if [ "$(state_get sessionFile)" != "$PIN_SESS_BEFORE" ] && ! grep -q "\"--session\",\"$PIN_SESS_BEFORE\"" "$ARGV" 2>/dev/null; then
   pass "pinned-cwd fallback records a new session, not the immovable old one"
 else fail "pinned-cwd fallback kept the old session file or argv: before=$PIN_SESS_BEFORE after=$(state_get sessionFile) argv=$(cat "$ARGV" 2>/dev/null)"; fi
-if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PINPROJ/.wheelhouse-worktrees/bead-b" ]; then pass "pinned-cwd fresh session starts in the target worktree"
+if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$PINPROJ")" ]; then pass "pinned-cwd fresh session starts in the seat worktree"
 else fail "pinned-cwd fresh session cwd was $(cat "$CWD_FILE" 2>/dev/null)"; fi
 assert_state_cwd_is_live_cwd "pinned-cwd fallback"
 run stop worker-1
 RUN_PROJ="$SAVE_RUN_PROJ"; STATE="$SAVE_STATE"; LOG="$SAVE_LOG"; ARGV="$SAVE_ARGV"; CWD_FILE="$SAVE_CWD_FILE"
 
-mkdir -p "$PROJ/.wheelhouse-worktrees/bead-mid" "$PROJ/.wheelhouse-worktrees/bead-other" "$PROJ/.wheelhouse-worktrees/bead-force"
 run dispatch worker-1 bead-mid "SLOW in-flight review"
 if [ $RC -eq 0 ]; then pass "mid-turn setup dispatch exits 0"
 else fail "mid-turn setup dispatch exited ${RC}: $OUT"; fi
@@ -1053,9 +1120,9 @@ run dispatch worker-1 bead-other "cross-bead should refuse"
 if [ $RC -ne 0 ] && says "mid-turn on bead-mid" && says "bead-other" && says "agent_end/isStreaming=false"; then
   pass "mid-turn cross-bead dispatch refuses loudly with both bead ids and the settle it waits on"
 else fail "mid-turn cross-bead dispatch did not refuse as specified (exit $RC): $OUT"; fi
-if [ "$(state_get pid)" = "$PID_MID" ] && kill -0 "$PID_MID" 2>/dev/null; then
-  pass "mid-turn cross-bead refusal leaves the running fake pi process untouched"
-else fail "mid-turn cross-bead refusal killed or replaced pid $PID_MID (now $(state_get pid))"; fi
+if [ "$(state_get pid)" = "$PID_MID" ] && kill -0 "$PID_MID" 2>/dev/null && [ "$(wt_branch "$SEAT_WT")" = "fleet/bead-mid" ]; then
+  pass "mid-turn cross-bead refusal leaves the running fake pi process and its worktree branch untouched"
+else fail "mid-turn cross-bead refusal killed or replaced pid $PID_MID (now $(state_get pid)) or moved the branch to $(wt_branch "$SEAT_WT")"; fi
 if wait_for "$LOG" 'echo: Bead bead-mid' 5 && ! grep -q 'echo: Bead bead-other' "$LOG" 2>/dev/null; then
   pass "the refused cross-bead dispatch did not kill the in-flight turn or enqueue the other bead"
 else fail "refused dispatch either killed bead-mid or reached bead-other"; fi
@@ -1067,13 +1134,12 @@ RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_DIS
 if [ $RC -eq 0 ] && says "WHEELHOUSE_DISPATCH_FORCE=1" && says "deliberately abandoning mid-turn bead bead-mid" && says "bead-force"; then
   pass "force escape announces deliberate abandonment and dispatches the new bead"
 else fail "force escape did not announce and dispatch (exit $RC): $OUT"; fi
-if [ "$(state_get pid)" != "$PID_FORCE_BEFORE" ] && ! kill -0 "$PID_FORCE_BEFORE" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ/.wheelhouse-worktrees/bead-force" ]; then
-  pass "force escape relaunches the seat in the new bead worktree"
-else fail "force escape did not relaunch from pid $PID_FORCE_BEFORE to bead-force (now pid $(state_get pid), cwd $(cat "$CWD_FILE" 2>/dev/null))"; fi
+if [ "$(state_get pid)" != "$PID_FORCE_BEFORE" ] && ! kill -0 "$PID_FORCE_BEFORE" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$SEAT_WT" ] && [ "$(wt_branch "$SEAT_WT")" = "fleet/bead-force" ]; then
+  pass "force escape stops and relaunches the seat in its worktree, now on fleet/bead-force"
+else fail "force escape did not relaunch from pid $PID_FORCE_BEFORE onto bead-force (now pid $(state_get pid), cwd $(cat "$CWD_FILE" 2>/dev/null), branch $(wt_branch "$SEAT_WT"))"; fi
 wait_for "$LOG" 'echo: Bead bead-force' 5 >/dev/null
 
 phase "3. steer — a redirect lands inside a turn still in flight"
-mkdir -p "$PROJ/.wheelhouse-worktrees/bead-y"
 run dispatch worker-1 bead-y "SLOW long think"
 run steer worker-1 "change course"
 if [ $RC -eq 0 ]; then pass "steer exits 0"
@@ -1219,39 +1285,44 @@ run resume worker-1
 if [ $RC -eq 0 ]; then pass "pruned cwd setup: resume exits 0 before pruning"
 else fail "pruned cwd setup: resume exited ${RC}: $OUT"; fi
 OLD_SESS="$(state_get sessionFile)"
-rm -rf "$PROJ/.wheelhouse-worktrees/bead-y"
-mkdir -p "$PROJ/.wheelhouse-worktrees/bead-z"
+# The seat worktree is removed by hand (a prune that left git's registration
+# behind). No `git worktree prune` by the caller: the adapter prunes the
+# stale registration itself and recreates the worktree on the next dispatch.
+rm -rf "$SEAT_WT"
 run stop worker-1 >/dev/null 2>&1
 run dispatch worker-1 bead-z "hello after prune"
 if [ $RC -eq 0 ]; then pass "pruned cwd dispatch: stopped-seat dispatch exits 0 via fallback"
 else fail "pruned cwd dispatch: exited ${RC}: $OUT"; fi
 if says "not running" && says "session continuity intentionally dropped" && says "recorded cwd is gone" && says "falling back to fresh spawn"; then
   pass "pruned cwd dispatch: stopped-seat fallback announcement is visible and names why"
-else fail "pruned cwd dispatch: fallback announcement missing (exit $RC): $OUT"; fi
+else fail "pruned cwd dispatch: fallback announcement missing — the recorded cwd was gone when dispatch started, but adapter.ts checks recordedCwdExists only after prepareSeatCwd recreated the worktree at the same path (exit $RC): $OUT"; fi
 if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null; then
   pass "pruned cwd dispatch: fallback used a fresh session rather than --session"
 else fail "pruned cwd dispatch: fallback still attached the pruned-cwd session"; fi
 if [ "$(state_get lastBead)" = "bead-z" ]; then
   pass "pruned cwd dispatch: state records the new dispatched bead"
 else fail "pruned cwd dispatch: lastBead was not updated"; fi
+if [ -d "$SEAT_WT" ] && wt_registered "$PROJ" "$SEAT_WT" && [ "$(wt_branch "$SEAT_WT")" = "fleet/bead-z" ] && [ "$(state_get cwd)" = "$SEAT_WT" ] && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$SEAT_WT" ]; then
+  pass "pruned cwd dispatch: the seat worktree exists again, registered, on the new bead's branch, and the seat runs in it"
+else fail "pruned cwd dispatch: seat worktree not recreated (dir=$(test -d "$SEAT_WT" && echo yes || echo no) branch=$(wt_branch "$SEAT_WT") state_cwd=$(state_get cwd) live_cwd=$(cat "$CWD_FILE" 2>/dev/null))"; fi
 run stop worker-1
 MISSING_CWD="$PROJ/.wheelhouse-worktrees/pruned-resume-cwd"
 OLD_SESS="$(state_get sessionFile)"
 env HOME="$HOME_FIX" MISSING_CWD="$MISSING_CWD" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 run resume worker-1
-if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "session continuity intentionally dropped" && says "resuming fresh in $PROJ/.wheelhouse-worktrees/bead-z"; then
-  pass "pruned cwd resume: existing bead worktree fallback line names missing cwd and chosen cwd"
-else fail "pruned cwd resume: missing fallback line for bead worktree (exit $RC): $OUT"; fi
-if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ/.wheelhouse-worktrees/bead-z" ]; then
-  pass "pruned cwd resume: falls back with a fresh session in the current bead worktree"
-else fail "pruned cwd resume: did not fresh-start in bead-z (session before=$OLD_SESS after=$(state_get sessionFile) cwd=$(cat "$CWD_FILE" 2>/dev/null) argv=$(cat "$ARGV" 2>/dev/null))"; fi
+if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "session continuity intentionally dropped" && says "resuming fresh in $SEAT_WT"; then
+  pass "pruned cwd resume: existing seat worktree fallback line names missing cwd and chosen cwd (ISC-38)"
+else fail "pruned cwd resume: missing fallback line for seat worktree (exit $RC): $OUT"; fi
+if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$SEAT_WT" ]; then
+  pass "pruned cwd resume: falls back with a fresh session in the seat worktree"
+else fail "pruned cwd resume: did not fresh-start in the seat worktree (session before=$OLD_SESS after=$(state_get sessionFile) cwd=$(cat "$CWD_FILE" 2>/dev/null) argv=$(cat "$ARGV" 2>/dev/null))"; fi
 run stop worker-1
-rm -rf "$PROJ/.wheelhouse-worktrees/bead-z"
+rm -rf "$SEAT_WT"
 OLD_SESS="$(state_get sessionFile)"
 env HOME="$HOME_FIX" MISSING_CWD="$MISSING_CWD" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 run resume worker-1
 if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "resuming fresh in $PROJ"; then
-  pass "pruned cwd resume: missing bead worktree falls back to the project root"
+  pass "pruned cwd resume: missing seat worktree falls back to the project root (ISC-38)"
 else fail "pruned cwd resume: did not fall back to project root (exit $RC): $OUT"; fi
 if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$PROJ" ]; then
   pass "pruned cwd resume: root fallback is also a fresh session"
@@ -1487,6 +1558,205 @@ else fail "host budget worktree cap: auto_prune failed rc=$RC out=$OUT exists=$(
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)" || RC=$?
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
+phase "7a. seat worktree cap — seats.json + 2, root-running seats take no slot (ISC-35/36)"
+CAP_PROJ="$FIX/cap-proj"
+build_proj "$CAP_PROJ" cap
+RUN_PROJ="$CAP_PROJ"; STATE="$CAP_PROJ/seats/state.json"; LOG="$CAP_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cap/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-cap/worker-1/cwd.txt"
+CAP_WT="$(seat_wt "$CAP_PROJ")"
+# Three registered worktrees under .wheelhouse-worktrees/ that no seat owns:
+# with one seat in seats.json the cap is 3, so creating the seat's own
+# worktree is refused.
+for n in x1 x2 x3; do fgit -C "$CAP_PROJ" worktree add -q "$CAP_PROJ/.wheelhouse-worktrees/foreign-$n" -b "fleet/foreign-$n" main; done
+run spawn worker-1
+CAP_PID_BEFORE="$(state_get pid)"
+run dispatch worker-1 cap-bead "over the cap"
+if [ $RC -ne 0 ] && says "cap 3" && says "(1 seats in seats/seats.json + 2)" && printf '%s\n' "$OUT" | grep -Eq 'live [0-9]+ .* cap [0-9]+ .* [Ww]ait for seat'; then
+  pass "over-cap dispatch is refused naming live count, cap 3 (1 seat + 2) and the seat to wait for"
+else fail "over-cap dispatch was not refused as specified (exit $RC): $OUT"; fi
+if printf '%s\n' "$OUT" | grep -Eq '[Ww]ait for seat [A-Za-z0-9_.-]+ to finish' && says "3 worktree(s) not named for a seat: foreign-x1, foreign-x2, foreign-x3"; then
+  pass "over-cap refusal names a seat and lists the worktrees not named for any seat"
+else fail "over-cap refusal did not name a seat or the foreign worktrees: $OUT"; fi
+if [ "$(state_get pid)" = "$CAP_PID_BEFORE" ] && kill -0 "$CAP_PID_BEFORE" 2>/dev/null && [ ! -e "$CAP_WT" ] && [ "$(state_get cwd)" = "$CAP_PROJ" ]; then
+  pass "over-cap refusal leaves the seat running at the root with no worktree created"
+else fail "over-cap refusal changed the seat (pid before=$CAP_PID_BEFORE after=$(state_get pid) wt=$(test -e "$CAP_WT" && echo exists || echo absent) cwd=$(state_get cwd))"; fi
+fgit -C "$CAP_PROJ" worktree remove --force "$CAP_PROJ/.wheelhouse-worktrees/foreign-x2"
+fgit -C "$CAP_PROJ" worktree remove --force "$CAP_PROJ/.wheelhouse-worktrees/foreign-x3"
+# The selftest-only override pins the cap at 1; one live worktree held by a
+# recorded (stopped) seat is enough to refuse, and the refusal names it.
+fgit -C "$CAP_PROJ" worktree move "$CAP_PROJ/.wheelhouse-worktrees/foreign-x1" "$CAP_PROJ/.wheelhouse-worktrees/worker-2"
+env HOME="$HOME_FIX" HOLDER="$CAP_PROJ/.wheelhouse-worktrees/worker-2" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-2"]={pid:null,cwd:process.env.HOLDER,lastBead:"foreign-x1",lastDispatchAt:"2026-01-01T00:00:00.000Z",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_MAX_LIVE_WORKTREES=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 cap-bead "over the override cap" 2>&1)" || RC=$?
+if [ $RC -ne 0 ] && printf '%s\n' "$OUT" | grep -Eq 'live 1 .* cap 1 .* [Ww]ait for seat worker-2' && [ ! -e "$CAP_WT" ] && [ "$(state_get pid)" = "$CAP_PID_BEFORE" ]; then
+  pass "WHEELHOUSE_MAX_LIVE_WORKTREES=1 refuses a fresh seat's worktree and names the seat holding the slot"
+else fail "override cap refusal wrong (exit $RC wt=$(test -e "$CAP_WT" && echo exists || echo absent)): $OUT"; fi
+# A seat that runs from the root ("worktree": false) takes no slot: it
+# dispatches fine under the same cap and creates no worktree.
+env HOME="$HOME_FIX" bun -e 'const fs=require("fs"); const f=process.argv[1]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.seats["worker-root"]={role:"worker",worktree:false,provider:"anthropic",model:"stub-model-1:high",account:{dir:"~/.pi-seats-cap/worker-root"}}; fs.writeFileSync(f, JSON.stringify(j,null,2)+"\n")' "$CAP_PROJ/seats/seats.json"
+mkdir -p "$HOME_FIX/.pi-seats-cap/worker-root"
+printf '{\n  "%s": true\n}\n' "$CAP_PROJ" > "$HOME_FIX/.pi-seats-cap/worker-root/trust.json"
+printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-cap/worker-root/auth.json"
+run spawn worker-root
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_MAX_LIVE_WORKTREES=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-root cap-root-bead "root seat under the cap" 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(cat "$HOME_FIX/.pi-seats-cap/worker-root/cwd.txt" 2>/dev/null)" = "$CAP_PROJ" ] && [ ! -e "$CAP_PROJ/.wheelhouse-worktrees/worker-root" ] && wait_for "$CAP_PROJ/seats/logs/worker-root.jsonl" 'echo: Bead cap-root-bead' 5; then
+  pass "a root-running seat dispatches under a cap of 1 and creates no worktree"
+else fail "root-running seat dispatch failed or made a worktree (exit $RC cwd=$(cat "$HOME_FIX/.pi-seats-cap/worker-root/cwd.txt" 2>/dev/null)): $OUT"; fi
+run stop worker-root >/dev/null 2>&1
+# Free the slot: the worker's worktree is created once live < cap again.
+env HOME="$HOME_FIX" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); delete s.seats["worker-2"]; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+fgit -C "$CAP_PROJ" worktree remove --force "$CAP_PROJ/.wheelhouse-worktrees/worker-2"
+run dispatch worker-1 cap-bead "under the cap"
+if [ $RC -eq 0 ] && wt_registered "$CAP_PROJ" "$CAP_WT" && [ "$(wt_branch "$CAP_WT")" = "fleet/cap-bead" ] && wait_for "$LOG" 'echo: Bead cap-bead' 5; then
+  pass "once live < cap the same dispatch creates the seat worktree and lands"
+else fail "under-cap dispatch failed (exit $RC): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
+
+phase "7b. seat worktree lifecycle — push gate, base switch, reopen, occupied, placeholder, cleanup, lock"
+WT_PROJ="$FIX/worktree-proj"
+build_proj "$WT_PROJ" wt
+RUN_PROJ="$WT_PROJ"; STATE="$WT_PROJ/seats/state.json"; LOG="$WT_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-wt/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-wt/worker-1/cwd.txt"
+WT="$(seat_wt "$WT_PROJ")"
+WT_ORIGIN="$FIX/origins/wt.git"
+
+# ISC-33: a dead remote blocks the move and says so in the seat log.
+run spawn worker-1 bead-p1
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$WT" ]; then
+  pass "push gate setup: spawn with a bead creates the seat worktree on fleet/bead-p1 and launches in it"
+else fail "push gate setup: spawn exited $RC (branch=$(wt_branch "$WT") cwd=$(cat "$CWD_FILE" 2>/dev/null)): $OUT"; fi
+printf 'work on p1\n' > "$WT/p1.txt"
+fgit -C "$WT" add p1.txt
+fgit -C "$WT" commit -qm "p1 work"
+fgit -C "$WT_PROJ" remote set-url origin /nonexistent/path.git
+PUSH_PID_BEFORE="$(state_get pid)"
+run dispatch worker-1 bead-p2 "second bead behind a dead remote"
+if [ $RC -ne 0 ] && says "push failed" && grep -q 'push failed' "$LOG" 2>/dev/null; then
+  pass "push gate: a dead remote makes the cross-bead dispatch fail with 'push failed' on the console and in the seat log"
+else fail "push gate: dead remote did not fail as specified (exit $RC log=$(grep -c 'push failed' "$LOG" 2>/dev/null)): $OUT"; fi
+if [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ] && kill -0 "$PUSH_PID_BEFORE" 2>/dev/null && [ "$(state_get lastBead)" = "bead-p1" ]; then
+  pass "push gate: the seat stays running on fleet/bead-p1 (same pid, lastBead unchanged)"
+else fail "push gate: seat moved or died (branch=$(wt_branch "$WT") pid before=$PUSH_PID_BEFORE after=$(state_get pid) lastBead=$(state_get lastBead))"; fi
+fgit -C "$WT_PROJ" remote set-url origin "$WT_ORIGIN"
+run dispatch worker-1 bead-p2 "second bead after the remote is back"
+if [ $RC -eq 0 ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1 | grep -q 'origin/' && [ "$(wt_branch "$WT")" = "fleet/bead-p2" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ]; then
+  pass "push gate: with the remote restored the same dispatch pushes fleet/bead-p1 to origin and moves the seat to fleet/bead-p2 without relaunching"
+else fail "push gate: restored remote dispatch failed (exit $RC remote=$(fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1) branch=$(wt_branch "$WT")): $OUT"; fi
+if says "pushed fleet/bead-p1 to origin" && wait_for "$LOG" 'echo: Bead bead-p2' 5; then
+  pass "push gate: the push is announced and the new bead's prompt round-trips"
+else fail "push gate: no push announcement or prompt did not land: $OUT"; fi
+
+# ISC-34: a bead on a different base switches the worktree cleanly.
+fgit -C "$WT_PROJ" worktree add -q "$FIX/wt-mayline-src" -b mayline-src main
+printf 'mayline\n' > "$FIX/wt-mayline-src/mayline.txt"
+fgit -C "$FIX/wt-mayline-src" add mayline.txt
+fgit -C "$FIX/wt-mayline-src" commit -qm "mayline diverges"
+fgit -C "$WT_PROJ" update-ref refs/remotes/mayline/main mayline-src
+fgit -C "$WT_PROJ" worktree remove --force "$FIX/wt-mayline-src"
+fgit -C "$WT_PROJ" branch -q -D mayline-src
+run dispatch worker-1 bead-b1 "origin base" --base origin/main
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-b1" ] && [ "$(fgit -C "$WT" rev-parse HEAD)" = "$(fgit -C "$WT_PROJ" rev-parse origin/main)" ]; then
+  pass "base switch: --base origin/main cuts fleet/bead-b1 at origin/main"
+else fail "base switch: bead-b1 wrong (exit $RC branch=$(wt_branch "$WT")): $OUT"; fi
+run dispatch worker-1 bead-b2 "mayline base" --base mayline/main
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-b2" ] && [ -z "$(fgit -C "$WT" status --porcelain)" ] && [ "$(fgit -C "$WT" rev-parse HEAD)" = "$(fgit -C "$WT_PROJ" rev-parse mayline/main)" ] && [ -f "$WT/mayline.txt" ]; then
+  pass "base switch: --base mayline/main after an origin/main bead leaves status empty and HEAD at the mayline/main tip (ISC-34)"
+else fail "base switch: mayline dispatch wrong (exit $RC branch=$(wt_branch "$WT") status=$(fgit -C "$WT" status --porcelain) head=$(fgit -C "$WT" rev-parse HEAD) base=$(fgit -C "$WT_PROJ" rev-parse mayline/main)): $OUT"; fi
+
+# ISC-58: a reopened bead comes back on its own branch with its commits.
+run dispatch worker-1 bead-r1 "first pass on r1"
+printf 'r1 work\n' > "$WT/r1.txt"
+fgit -C "$WT" add r1.txt
+fgit -C "$WT" commit -qm "r1 work kept"
+R1_SHA="$(fgit -C "$WT" rev-parse HEAD)"
+run dispatch worker-1 bead-r2 "move on to r2"
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-r2" ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-r1 | grep -q 'origin/'; then
+  pass "reopen setup: leaving bead-r1 pushed it and moved the seat to fleet/bead-r2"
+else fail "reopen setup: bead-r2 dispatch failed (exit $RC branch=$(wt_branch "$WT")): $OUT"; fi
+run dispatch worker-1 bead-r1 "reopened r1"
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-r1" ] && [ "$(fgit -C "$WT_PROJ" log -1 --format=%s fleet/bead-r1)" = "r1 work kept" ] && [ "$(fgit -C "$WT" rev-parse HEAD)" = "$R1_SHA" ] && [ -f "$WT/r1.txt" ] && says "existing branch, commits kept"; then
+  pass "reopened bead: dispatch switches back to fleet/bead-r1 with its earlier commit unchanged (ISC-58)"
+else fail "reopened bead: wrong branch or commits (exit $RC branch=$(wt_branch "$WT") log=$(fgit -C "$WT_PROJ" log -1 --format=%s fleet/bead-r1) head=$(fgit -C "$WT" rev-parse HEAD) want=$R1_SHA): $OUT"; fi
+wait_for "$LOG" 'echo: Bead bead-r1' 5 >/dev/null
+
+# ISC-63: two seats never share a worktree.
+OCC_PID_BEFORE="$(state_get pid)"
+env HOME="$HOME_FIX" HOLDER="$WT" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-2"]={pid:null,cwd:process.env.HOLDER,lastBead:"bead-o0",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+run dispatch worker-1 bead-o1 "into an occupied worktree"
+if [ $RC -ne 0 ] && says "occupied by seat worker-2" && says "two seats never share a worktree"; then
+  pass "occupied worktree: dispatch exits non-zero naming the occupying seat (ISC-63)"
+else fail "occupied worktree: dispatch was not refused naming worker-2 (exit $RC): $OUT"; fi
+if [ "$(state_get pid)" = "$OCC_PID_BEFORE" ] && kill -0 "$OCC_PID_BEFORE" 2>/dev/null && [ "$(wt_branch "$WT")" = "fleet/bead-r1" ] && [ "$(state_get lastBead)" = "bead-r1" ]; then
+  pass "occupied worktree: the refusal leaves the seat running on fleet/bead-r1"
+else fail "occupied worktree: refusal changed the seat (pid before=$OCC_PID_BEFORE after=$(state_get pid) branch=$(wt_branch "$WT") lastBead=$(state_get lastBead))"; fi
+env HOME="$HOME_FIX" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); delete s.seats["worker-2"]; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+
+# ISC-40: a .pruned-placeholder is recreated; one with extra entries is refused.
+run stop worker-1 >/dev/null 2>&1
+fgit -C "$WT_PROJ" worktree remove --force "$WT"
+mkdir -p "$WT" && touch "$WT/.pruned-placeholder"
+run dispatch worker-1 bead-ph1 "after a placeholder"
+if [ $RC -eq 0 ] && wt_registered "$WT_PROJ" "$WT" && [ "$(wt_branch "$WT")" = "fleet/bead-ph1" ] && [ ! -e "$WT/.pruned-placeholder" ] && says "created worktree" && wait_for "$LOG" 'echo: Bead bead-ph1' 5; then
+  pass "placeholder: a lone .pruned-placeholder is replaced by a real registered worktree on fleet/bead-ph1 (ISC-40)"
+else fail "placeholder: dispatch did not recreate the worktree (exit $RC registered=$(wt_registered "$WT_PROJ" "$WT" && echo yes || echo no) branch=$(wt_branch "$WT")): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+PH_SESS_BEFORE="$(state_get sessionFile)"
+fgit -C "$WT_PROJ" worktree remove --force "$WT"
+mkdir -p "$WT" && touch "$WT/.pruned-placeholder" && printf 'stray\n' > "$WT/stray.txt"
+run dispatch worker-1 bead-ph2 "placeholder with a stray file"
+if [ $RC -ne 0 ] && says "entries besides .pruned-placeholder"; then
+  pass "placeholder: a placeholder dir holding anything else is refused, naming why (ISC-40)"
+else fail "placeholder: stray entry was not refused (exit $RC): $OUT"; fi
+if [ -z "$(state_get pid)" ] && [ "$(state_get sessionFile)" = "$PH_SESS_BEFORE" ] && [ "$(state_get lastBead)" = "bead-ph1" ] && [ -f "$WT/stray.txt" ] && [ -f "$WT/.pruned-placeholder" ] && ! wt_registered "$WT_PROJ" "$WT"; then
+  pass "placeholder: the refusal leaves the seat record and the placeholder dir untouched"
+else fail "placeholder: refusal changed the seat or the dir (pid=$(state_get pid) session=$(state_get sessionFile) lastBead=$(state_get lastBead))"; fi
+rm -rf "$WT"
+run dispatch worker-1 bead-ph2 "placeholder cleared"
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-ph2" ] && wait_for "$LOG" 'echo: Bead bead-ph2' 5; then
+  pass "placeholder: once the stray dir is gone the same dispatch recreates the worktree on fleet/bead-ph2"
+else fail "placeholder: recovery dispatch failed (exit $RC branch=$(wt_branch "$WT")): $OUT"; fi
+
+# ISC-41: leaving a bead kicks the closed-bead cleanup for that bead. The
+# fixture has prune.ts but no .beads/ store, so cleanup has nothing to
+# decide and must still exit 0 and end its log with a `cleanup done` line.
+cp "$ADAPTER_DIR/prune.ts" "$WT_PROJ/seats/prune.ts"
+CLEANUP_LOG="$WT_PROJ/seats/logs/cleanup.log"
+mkdir -p "$WT_PROJ/.wheelhouse-runs/bead-ph2-scratch"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-c1 "sync cleanup of the bead just left" 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ -f "$CLEANUP_LOG" ] && tail -n 1 "$CLEANUP_LOG" | grep -q 'cleanup done' && ! says "cleanup for bead bead-ph2 exited"; then
+  pass "cleanup trigger: a cross-bead dispatch with WHEELHOUSE_CLEANUP_SYNC=1 runs cleanup for the old bead to a 'cleanup done' line (ISC-41)"
+else fail "cleanup trigger: sync cleanup did not finish cleanly (exit $RC log=$(tail -n 3 "$CLEANUP_LOG" 2>/dev/null)): $OUT"; fi
+CLEANUP_MARK=$(wc -c < "$CLEANUP_LOG" | tr -d ' ')
+run dispatch worker-1 bead-c2 "async cleanup of the bead just left"
+if [ $RC -eq 0 ] && says "cleanup started for bead bead-c1"; then
+  pass "cleanup trigger: the default (async) mode announces 'cleanup started for bead <old>'"
+else fail "cleanup trigger: async mode did not announce the cleanup (exit $RC): $OUT"; fi
+if wait_for_from "$CLEANUP_LOG" "$CLEANUP_MARK" 'cleanup done' 20; then
+  pass "cleanup trigger: the detached cleanup for bead-c1 finishes with its own 'cleanup done' line"
+else fail "cleanup trigger: detached cleanup did not finish: $(tail -n 3 "$CLEANUP_LOG" 2>/dev/null) out=$(cat "$WT_PROJ/seats/logs/cleanup.out.log" 2>/dev/null)"; fi
+
+# ISC-66: a cleanup lock held by someone else never blocks a dispatch.
+mkdir -p "$WT_PROJ/seats/run/cleanup.lock"
+printf '%s\n' "$$" > "$WT_PROJ/seats/run/cleanup.lock/pid"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_WAIT_S=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-i1 "dispatched during a cleanup" 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-i1" ] && wait_for "$LOG" 'echo: Bead bead-i1' 5; then
+  pass "dispatch during a cleanup: exits 0 and the prompt round-trips while seats/run/cleanup.lock is held (ISC-66)"
+else fail "dispatch during a cleanup failed (exit $RC branch=$(wt_branch "$WT")): $OUT"; fi
+wait_for "$WT_PROJ/seats/logs/cleanup.out.log" 'already running' 10 >/dev/null
+rm -rf "$WT_PROJ/seats/run/cleanup.lock"
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
+
+phase "7c. every recorded seat cwd resolves to an existing directory (ISC-39)"
+CWD_MISSING=""
+for sf in "$PROJ/seats/state.json" "$CAP_PROJ/seats/state.json" "$WT_PROJ/seats/state.json" "$CLAUDE_PROJ/seats/state.json" "$CODEX_TMP/proj/seats/state.json" "$CAPACITY_PROJ/seats/state.json"; do
+  [ -f "$sf" ] || continue
+  while IFS= read -r cwd; do
+    [ -n "$cwd" ] || continue
+    [ -d "$cwd" ] || CWD_MISSING="$CWD_MISSING $sf:$cwd"
+  done < <(env HOME="$HOME_FIX" bun -e "for (const [n,r] of Object.entries(require('$sf').seats||{})) if (r && r.cwd) console.log(r.cwd)" 2>/dev/null)
+done
+if [ -z "$CWD_MISSING" ]; then pass "every cwd recorded in the worktree fixtures' seats/state.json is an existing directory"
+else fail "recorded seat cwd(s) do not exist:$CWD_MISSING"; fi
+
 phase "8. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
 CAN_A="$FIX/can-a"
@@ -1571,7 +1841,7 @@ else
 }
 EOF
   REAL_PATH="$(dirname "$REAL_PI"):$(dirname "$(command -v bun)"):/usr/bin:/bin"
-  rrun() { RC=0; OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=90000 bun "$RPROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+  rrun() { RC=0; OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_RPC_TIMEOUT_MS=90000 bun "$RPROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
   RSTATE="$RPROJ/seats/state.json"
   RLOG="$RPROJ/seats/logs/worker-1.jsonl"
   rstate_get() { bun -e "const s=require('$RSTATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
@@ -1587,7 +1857,8 @@ EOF
     fi
   }
 
-  mkdir -p "$RPROJ/.wheelhouse-worktrees/smoke-1" "$RPROJ/.wheelhouse-worktrees/smoke-2"
+  # smoke-1 is the first dispatch (creates the seat worktree and relaunches
+  # the seat in it); smoke-2 is a cross-bead switch under the same process.
   rrun spawn worker-1
   if [ $RC -eq 0 ]; then pass "real: spawn exits 0 ($OUT)"
   else fail "real: spawn exited ${RC}: $OUT"; fi
