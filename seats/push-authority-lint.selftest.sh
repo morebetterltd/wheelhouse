@@ -61,22 +61,73 @@ RC=0; OUT="$($LINT "$GOOD" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'push-authority-lint: PASS (grant=1, verdicts=1)'; then pass "grant plus authority-citing PUSH line passes"
 else fail "good verdict failed (rc=$RC): $OUT"; fi
 
+NEWFORMAT="$FIX/newformat"; mkproj "$NEWFORMAT" grant
+cat > "$NEWFORMAT/seats/verdicts/newformat.md" <<'MD'
+# Verdict — bead example
+
+- bead: example
+- branch: fleet/example
+- tip: 0123456789abcdef0123456789abcdef01234567
+- verdict: APPROVE
+- push: APPROVE origin — verified: clean integration gate at reviewed tip
+
+## Verifier output
+
+Evidence goes here.
+VERDICT: APPROVE
+PUSH: APPROVE origin — verified: clean integration gate at reviewed tip
+MD
+RC=0; OUT="$($LINT "$NEWFORMAT" 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'push-authority-lint: PASS (grant=1, verdicts=1)'; then pass "new-format verify.ts verdict header passes despite raw verifier output"
+else fail "new-format verdict failed (rc=$RC): $OUT"; fi
+
 BAD="$FIX/bad"; mkproj "$BAD" grant
 cat > "$BAD/seats/verdicts/bad.md" <<'MD'
 VERDICT: APPROVE
 PUSH:    HOLD — pushing is principal-only on this project.
 MD
 RC=0; OUT="$($LINT "$BAD" 2>&1)" || RC=$?
-if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'FAIL push-authority: .*contradicts INTEGRATOR.md project push grant'; then pass "planted negative: principal-only PUSH line fails when project grants push"
-else fail "planted principal-only verdict was not caught (rc=$RC): $OUT"; fi
+if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'FAIL push-authority: .*contradicts INTEGRATOR.md project push grant'; then pass "planted negative: legacy principal-only PUSH line fails when project grants push"
+else fail "planted legacy principal-only verdict was not caught (rc=$RC): $OUT"; fi
+
+BADHEADER="$FIX/badheader"; mkproj "$BADHEADER" grant
+cat > "$BADHEADER/seats/verdicts/badheader.md" <<'MD'
+# Verdict — bead example
+
+- verdict: APPROVE
+- push: HOLD — pushing is principal-only on this project.
+
+## Verifier output
+
+PUSH: HOLD — pushing is principal-only on this project.
+MD
+RC=0; OUT="$($LINT "$BADHEADER" 2>&1)" || RC=$?
+if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'FAIL push-authority: .*contradicts INTEGRATOR.md project push grant'; then pass "planted negative: new-format principal-only push header fails when project grants push"
+else fail "planted new-format principal-only verdict was not caught (rc=$RC): $OUT"; fi
 
 MISSING="$FIX/missing"; mkproj "$MISSING" grant
 cat > "$MISSING/seats/verdicts/missing.md" <<'MD'
 VERDICT: APPROVE
 MD
 RC=0; OUT="$($LINT "$MISSING" 2>&1)" || RC=$?
-if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'requires exactly one'; then pass "missing PUSH line fails lint"
+if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'require.*exactly one'; then pass "missing PUSH line fails lint"
 else fail "missing PUSH line was not caught (rc=$RC): $OUT"; fi
+
+DUPHEADER="$FIX/dupheader"; mkproj "$DUPHEADER" grant
+cat > "$DUPHEADER/seats/verdicts/dupheader.md" <<'MD'
+# Verdict — bead example
+
+- verdict: APPROVE
+- push: APPROVE origin — verified: first line
+- push: APPROVE origin — verified: second line
+
+## Verifier output
+
+PUSH: APPROVE origin — verified: raw output is ignored when a header is present
+MD
+RC=0; OUT="$($LINT "$DUPHEADER" 2>&1)" || RC=$?
+if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'has 2 push verdict lines'; then pass "duplicate new-format push headers fail lint"
+else fail "duplicate new-format push headers were not caught (rc=$RC): $OUT"; fi
 
 NOGRANT="$FIX/nogrant"; mkproj "$NOGRANT" nogrant
 cat > "$NOGRANT/seats/verdicts/hold.md" <<'MD'
