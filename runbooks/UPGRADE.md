@@ -323,12 +323,20 @@ splice() {   # splice <new-contract> <your-file>
   if [ ! -e "$2" ]; then                      # new contract since your install
     cp "$1" "$2"; echo "new, copied whole: $2"; return
   fi
-  # Headings the template's project-half scaffold carries and yours does not.
-  # Read from the two halves that are about to be joined, because after the mv
-  # the new file's project half is gone and nothing downstream looks there.
-  diff <(awk 'f&&/^##+ /{print} /^## This project$/{f=1}' "$2") \
-       <(awk 'f&&/^##+ /{print} /^## This project$/{f=1}' "$1") \
-    | sed -n "s|^> |project section UPSTREAM, not in yours — $2: |p"
+  # Headings the template's project-half scaffold carries and yours does not,
+  # plus headings both halves have but in a different position. Read from the
+  # two halves that are about to be joined, because after the mv the new file's
+  # project half is gone and nothing downstream looks there.
+  yours_h=$(mktemp); upstream_h=$(mktemp)
+  awk 'f&&/^##+ /{print} /^## This project$/{f=1}' "$2" > "$yours_h"
+  awk 'f&&/^##+ /{print} /^## This project$/{f=1}' "$1" > "$upstream_h"
+  comm -13 <(sort -u "$yours_h") <(sort -u "$upstream_h") \
+    | sed "s|^|project section UPSTREAM, not in yours — $2: |"
+  awk -v file="$2" '
+    NR==FNR { if (!($0 in yi)) yi[$0]=FNR; next }
+    ($0 in yi) && yi[$0] != FNR { print "project section UPSTREAM, present, different position — " file ": " $0 }
+  ' "$yours_h" "$upstream_h"
+  rm -f "$yours_h" "$upstream_h"
   awk '/^## This project$/{exit} {print}' "$1"  >  "$2.tmp"
   awk 'f{print} /^## This project$/{f=1; print}' "$2" >> "$2.tmp"
   mv "$2.tmp" "$2"
@@ -347,9 +355,9 @@ find wheelhouse -name '*.md.new' -delete   # find, not **: globstar is off by de
 
 Without that guard the failure is quiet in the way this template keeps warning about: `awk` reports `can't open file` on stderr, the function still exits 0, and you are left with a contract file whose project section does not exist. Measured, not assumed. If you have already run an upgrade without the guard, check each contract for its `## This project` heading before trusting the integrity check — the check compares contract halves and will report OK on a file that lost its project half entirely.
 
-**The `project section UPSTREAM, not in yours` lines are the other thing this step reports, and they are not failures.** The splice keeps your project half whole, which is what you want and must not change — but "whole" means the template's own scaffold below `## This project` never reaches you, and that scaffold moves too. Between two real commits of this template, `SEATS.md` gained `### Declined seats`, `GRAPH.md` gained `### CLI build notes`, and `BENCH.md` renamed `### What is set up and torn down around the assertion`; a project that ran this procedure by the book learned none of it, because every check in step 5 compares contract halves and the one bullet about project halves is scoped to contracts copied whole — of which that run had none. The heading diff above is what closes that: it is the same reporting the runbook loop in step 3 does for `runbooks/`, one level down.
+**The `project section UPSTREAM, not in yours` and `project section UPSTREAM, present, different position` lines are the other thing this step reports, and they are not failures.** The splice keeps your project half whole, which is what you want and must not change — but "whole" means the template's own scaffold below `## This project` never reaches you, and that scaffold moves too. Between two real commits of this template, `SEATS.md` gained `### Declined seats`, `GRAPH.md` gained `### CLI build notes`, and `BENCH.md` renamed `### What is set up and torn down around the assertion`; a project that ran this procedure by the book learned none of it, because every check in step 5 compares contract halves and the one bullet about project halves is scoped to contracts copied whole — of which that run had none. The heading report above is what closes that: it is the same reporting the runbook loop in step 3 does for `runbooks/`, one level down.
 
-Read the lines and decide. A heading that is genuinely new is a section you may want to fill; a heading that is your own under a different name is a rename you may want to adopt or ignore. The report cannot tell those apart — a rename looks exactly like an arrival to a diff of headings — and it does not try, because which one it is depends on content only you can read. Compare `##`-level headings and above rather than every line, so this is a list of sections and not a second copy of the diff you already read in step 2. It reads headings inside fenced code blocks too, if a contract's project half ever contains one; that is a line you dismiss, not a check that lies to you.
+Read the lines and decide. A `not in yours` heading that is genuinely new is a section you may want to fill; a heading that is your own under a different name is a rename you may want to adopt or ignore. The report cannot tell those apart — a rename looks exactly like an arrival to a set of headings — and it does not try, because which one it is depends on content only you can read. A `present, different position` heading is already present in your project half, but the upstream scaffold now places it somewhere else; decide whether to reorder your project prose or keep your local order. Compare `##`-level headings and above rather than every line, so this is a list of sections and not a second copy of the diff you already read in step 2. It reads headings inside fenced code blocks too, if a contract's project half ever contains one; that is a line you dismiss, not a check that lies to you.
 
 Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A naive match has destroyed a contract file this way once already — it deleted a licensing-compliance rule while every automated check still passed. `BOOTSTRAP.md` states the same rule for the same reason; this is the operation it was stating it for.
 
@@ -368,7 +376,7 @@ Do not split on the first occurrence of the words "this project", and do not spl
 
   Do **not** use "run your real bench and check it is non-zero" as the clobber check, which is what this bullet said until it was run against a real one. An implemented bench takes arguments; invoked bare it exits non-zero on a usage error, having tested nothing: measured, `bash wheelhouse/crew/bench.sh` exits 2 and prints `usage: ...` to stderr. That satisfies the check as written while answering none of the question, and the failure it named — "exits 0 having done nothing" — is not what a clobbered bench does anyway, because the stub it would be replaced by exits 1. Running your real bench properly, with its arguments, is worth doing and is how you learn the upgraded contracts did not break your loop. It is a different question from this one.
 - Your `## This project` sections are intact. Diff them against what you had.
-- **Every `project section UPSTREAM, not in yours` line from step 4 has been read.** Those lines are the only place the procedure looks below `## This project` at all: the integrity check compares contract halves, and the bullet below about newly-arrived contracts only fires for a contract you did not have. A project half that is intact and a project half that is current are different claims, and every check here except this one measures the first. Read each line and decide — fill the section, adopt the rename, or decide your wording is the one you want. Deciding to do nothing is a fine answer; not knowing there was something to decide is what this closes.
+- **Every `project section UPSTREAM, not in yours` and `project section UPSTREAM, present, different position` line from step 4 has been read.** Those lines are the only place the procedure looks below `## This project` at all: the integrity check compares contract halves, and the bullet below about newly-arrived contracts only fires for a contract you did not have. A project half that is intact and a project half that is current are different claims, and every check here except this one measures the first. Read each line and decide — fill the section, adopt the rename, reorder the existing section, or decide your wording is the one you want. Deciding to do nothing is a fine answer; not knowing there was something to decide is what this closes.
 - **Every `runbook YOURS, merge by hand:` line from step 3 has been acted on.** That line is the one output of this procedure that no later check looks at: the integrity check compares contracts, and a runbook left at your version is a legitimate outcome the tooling cannot distinguish from a merge you meant to do and forgot. Read the diff and decide, per file:
 
   ```bash
