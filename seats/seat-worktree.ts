@@ -78,11 +78,11 @@ export function samePath(a: string, b: string): boolean {
 }
 
 /** Registered worktrees that live directly under `<root>/.wheelhouse-worktrees/`. */
-export function fleetWorktrees(root: string): RegisteredWorktree[] {
+export function fleetWorktrees(root: string, repo: string = root): RegisteredWorktree[] {
   const dir = worktreesDir(root);
   let realDir = path.resolve(dir);
   try { realDir = fs.realpathSync(dir); } catch {}
-  return registeredWorktrees(root).filter((w) => {
+  return registeredWorktrees(repo).filter((w) => {
     const parent = path.dirname(w.path);
     return parent === path.resolve(dir) || parent === realDir;
   });
@@ -134,10 +134,10 @@ export function refExists(root: string, ref: string): boolean {
 /** Which base a bead branches from. Explicit wins, then the bead's own
  * `Integration:` line (via bd, when available), then the install's env
  * default, then the remote's default branch, then local main/master/HEAD. */
-export function resolveBase(root: string, beadId: string, explicit?: string | null): string {
+export function resolveBase(root: string, beadId: string, explicit?: string | null, bdRoot: string = root): string {
   const candidates: string[] = [];
   if (explicit) candidates.push(explicit);
-  const fromBead = integrationLineFor(root, beadId);
+  const fromBead = integrationLineFor(bdRoot, beadId);
   if (fromBead) {
     if (!fromBead.includes("/") || !refExists(root, fromBead)) candidates.push(`origin/${fromBead}`);
     candidates.push(fromBead);
@@ -227,7 +227,8 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     if (samePath(rec.cwd, target)) refuse(`worktree ${target} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
   }
 
-  const registered = registeredWorktrees(root);
+  const repo = gitRepoFor(root, target);
+  const registered = registeredWorktrees(repo);
   let atTarget = registered.find((w) => samePath(w.path, target));
   const marker = path.join(target, PLACEHOLDER_MARKER);
   const placeholder = fs.existsSync(marker);
@@ -239,10 +240,10 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
       refuse(`worktree target ${target} is a ${PLACEHOLDER_MARKER}, not a Git worktree; refusing to remove it because it contains entries besides ${PLACEHOLDER_MARKER}`);
     }
     fs.rmSync(target, { recursive: true, force: true });
-    if (atTarget) { git(root, ["worktree", "prune"]); atTarget = undefined; }
+    if (atTarget) { git(repo, ["worktree", "prune"]); atTarget = undefined; }
   } else if (atTarget && !fs.existsSync(target)) {
     // registration without a directory: a hand-removed worktree; prune the stale registration and recreate
-    git(root, ["worktree", "prune"]);
+    git(repo, ["worktree", "prune"]);
     atTarget = undefined;
   } else if (!atTarget && fs.existsSync(target)) {
     const entries = fs.readdirSync(target);
@@ -250,15 +251,15 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     fs.rmdirSync(target);
   }
 
-  const base = resolveBase(root, o.beadId, o.base);
-  const baseTip = git(root, ["rev-parse", `${base}^{commit}`]).out;
+  const base = resolveBase(repo, o.beadId, o.base, root);
+  const baseTip = git(repo, ["rev-parse", `${base}^{commit}`]).out;
   const elsewhere = registered.find((w) => w.branch === branch && !samePath(w.path, target));
   if (elsewhere) refuse(`branch ${branch} is already checked out at ${elsewhere.path}; a branch can be in one worktree at a time`);
-  const exists = branchExists(root, branch);
+  const exists = branchExists(repo, branch);
 
   if (!atTarget) {
     // 3. cap gates creation only
-    const live = fleetWorktrees(root).filter((w) => !fs.existsSync(path.join(w.path, PLACEHOLDER_MARKER)));
+    const live = fleetWorktrees(root, repo).filter((w) => !fs.existsSync(path.join(w.path, PLACEHOLDER_MARKER)));
     const { cap, seats } = worktreeCap(root, o.roster);
     if (live.length >= cap) {
       const wait = seatToWaitFor(root, o.state, live);
@@ -270,32 +271,32 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
       );
     }
     fs.mkdirSync(worktreesDir(root), { recursive: true });
-    const add = exists ? git(root, ["worktree", "add", target, branch]) : git(root, ["worktree", "add", "-b", branch, target, base]);
+    const add = exists ? git(repo, ["worktree", "add", target, branch]) : git(repo, ["worktree", "add", "-b", branch, target, base]);
     if (!add.ok) refuse(`git worktree add failed for ${target}: ${add.err || add.out}`);
     note(`seat ${o.seat}: created worktree ${target} on ${branch}${exists ? " (existing branch, commits kept)" : ` from ${base}`}`);
     return { target, branch, base, created: true, switched: false, pushed: null, previousBranch: null };
   }
 
   // Worktree exists and is registered. Already on the bead's branch?
-  const current = git(root, ["symbolic-ref", "--short", "-q", "HEAD"], target);
+  const current = git(repo, ["symbolic-ref", "--short", "-q", "HEAD"], target);
   const currentBranch = current.ok && current.out ? current.out : null;
   if (currentBranch === branch) return { target, branch, base, created: false, switched: false, pushed: null, previousBranch: currentBranch };
 
   // 4. push gate: the previous branch must be on the remote before the seat moves on
-  const headSha = git(root, ["rev-parse", "HEAD"], target).out;
+  const headSha = git(repo, ["rev-parse", "HEAD"], target).out;
   let pushed: string | null = null;
-  const hasRemote = git(root, ["remote", "get-url", remote]).ok;
-  const reachableFromAnotherBranch = () => git(root, ["branch", "--contains", headSha, "--format=%(refname:short)"]).out.split("\n").filter((b) => b && b !== currentBranch).length > 0;
-  if (currentBranch && !hasRemote && !tipOnRemote(root, headSha)) {
+  const hasRemote = git(repo, ["remote", "get-url", remote]).ok;
+  const reachableFromAnotherBranch = () => git(repo, ["branch", "--contains", headSha, "--format=%(refname:short)"]).out.split("\n").filter((b) => b && b !== currentBranch).length > 0;
+  if (currentBranch && !hasRemote && !tipOnRemote(repo, headSha)) {
     // Nowhere to push. That is fine only when the branch holds nothing of its own.
     if (!reachableFromAnotherBranch()) refuse(`push failed for ${currentBranch} in ${target}: no remote named ${remote} to push to, and its commits are on no other branch. The seat stays on ${currentBranch}.`);
-  } else if (currentBranch && !tipOnRemote(root, headSha)) {
+  } else if (currentBranch && !tipOnRemote(repo, headSha)) {
     const markerFile = pushMarkerPath(root, o.seat);
     fs.mkdirSync(path.dirname(markerFile), { recursive: true });
     fs.writeFileSync(markerFile, JSON.stringify({ seat: o.seat, branch: currentBranch, worktree: target, startedAt: new Date().toISOString(), pid: process.pid }) + "\n");
     let push: ReturnType<typeof git>;
     try {
-      push = git(root, ["push", "-u", remote, `${currentBranch}:${currentBranch}`], target);
+      push = git(repo, ["push", "-u", remote, `${currentBranch}:${currentBranch}`], target);
     } finally {
       try { fs.rmSync(markerFile, { force: true }); } catch {}
     }
@@ -307,26 +308,40 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     pushed = currentBranch;
     note(`seat ${o.seat}: pushed ${currentBranch} to ${remote} before leaving it`);
   } else if (!currentBranch) {
-    const onBranch = git(root, ["branch", "--contains", headSha, "--format=%(refname:short)"]).out.split("\n").filter(Boolean);
-    if (onBranch.length === 0 && !tipOnRemote(root, headSha)) refuse(`worktree ${target} is detached at ${headSha.slice(0, 12)} and that commit is on no branch or remote; put it on a branch before dispatching another bead`);
+    const onBranch = git(repo, ["branch", "--contains", headSha, "--format=%(refname:short)"]).out.split("\n").filter(Boolean);
+    if (onBranch.length === 0 && !tipOnRemote(repo, headSha)) refuse(`worktree ${target} is detached at ${headSha.slice(0, 12)} and that commit is on no branch or remote; put it on a branch before dispatching another bead`);
   }
 
   // 5. never lose work: real uncommitted changes block the move
-  const st = worktreeStatus(root, target);
+  const st = worktreeStatus(repo, target);
   if (!st.clean) refuse(`worktree ${target} has uncommitted changes on ${currentBranch ?? "a detached HEAD"} (${st.real.length} entr${st.real.length === 1 ? "y" : "ies"}, e.g. ${st.real[0]}); commit or stash before dispatching ${o.beadId}`);
   // 6. clean base switch. Deletions of once-committed build output are not
   // work, so when they are all that differs the switch may discard them
   // rather than re-materialize gigabytes of build output from git objects.
   const switchArgs = exists ? ["switch", "--quiet", branch] : ["switch", "--quiet", "-c", branch, baseTip];
-  let sw = git(root, switchArgs, target);
-  if (!sw.ok && st.phantomOnly) sw = git(root, [switchArgs[0], "--discard-changes", ...switchArgs.slice(1)], target);
+  let sw = git(repo, switchArgs, target);
+  if (!sw.ok && st.phantomOnly) sw = git(repo, [switchArgs[0], "--discard-changes", ...switchArgs.slice(1)], target);
   if (!sw.ok) refuse(`git switch failed in ${target}: ${sw.err || sw.out}`);
-  const after = worktreeStatus(root, target);
+  const after = worktreeStatus(repo, target);
   if (!after.clean) refuse(`worktree ${target} is not clean after switching to ${branch}: ${after.real[0]}`);
-  const head = git(root, ["rev-parse", "HEAD"], target).out;
+  const head = git(repo, ["rev-parse", "HEAD"], target).out;
   if (!exists && head !== baseTip) refuse(`worktree ${target} HEAD ${head.slice(0, 12)} is not the base tip ${baseTip.slice(0, 12)} after switching to ${branch}`);
   note(`seat ${o.seat}: switched ${target} from ${currentBranch ?? "detached"} to ${branch}${exists ? " (existing branch, commits kept)" : ` from ${base}`}`);
   return { target, branch, base, created: false, switched: true, pushed, previousBranch: currentBranch };
+}
+
+/** The repository seat worktrees belong to. A single-repo install IS the
+ * repository. An umbrella install (the root is a container; product repos
+ * sit below it) has no repository at the root, so the seat's worktree must
+ * be created once by hand as a worktree of the right product repo; from then
+ * on the adapter manages it through that repo like any other. */
+export function gitRepoFor(root: string, target: string): string {
+  if (git(root, ["rev-parse", "--is-inside-work-tree"]).ok) return git(root, ["rev-parse", "--show-toplevel"]).out || root;
+  if (fs.existsSync(target)) {
+    const common = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], target);
+    if (common.ok && common.out) return path.dirname(common.out);
+  }
+  refuse(`${root} is not a git repository (an umbrella install), and ${target} is not a worktree yet; create it once with \`git -C <product repo> worktree add ${target} <base>\`, then dispatch again`);
 }
 
 /** True when `p` is `<root>/.wheelhouse-worktrees/<something>`. */
