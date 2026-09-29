@@ -15,6 +15,24 @@ cleanup(){ [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; [ -n "$WATCHDOG_PID
 trap cleanup EXIT INT TERM
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
+desk_fixture_processes(){ ps axww -o pid=,command= | awk -v root="$FIX" '$2 ~ /(^|\/)bun$/ && index($0, root) && index($0, "seats/desk.ts") {print}'; }
+stop_fixture_desks(){
+  local pids=""
+  pids="$(desk_fixture_processes | awk '{print $1}' | tr '\n' ' ')"
+  [ -n "$pids" ] && kill $pids >/dev/null 2>&1 || true
+  sleep 0.3
+  pids="$(desk_fixture_processes | awk '{print $1}' | tr '\n' ' ')"
+  [ -n "$pids" ] && kill -9 $pids >/dev/null 2>&1 || true
+}
+assert_no_fixture_desks(){
+  local leaks=""
+  for _ in $(seq 1 30); do
+    leaks="$(desk_fixture_processes)"
+    [ -z "$leaks" ] && break
+    sleep 0.1
+  done
+  [ -z "$leaks" ] && pass "desk selftest leaves zero fixture seats/desk.ts processes" || fail "fixture seats/desk.ts process survived: $leaks"
+}
 port(){ python3 - <<'PY'
 import socket
 s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
@@ -75,7 +93,7 @@ JSON
 EOF
 chmod +x "$PROJ/bin/bd"
 P="$(port)"
-(cd "$PROJ" && PATH="$PROJ/bin:$PATH" WHEELHOUSE_DESK_ROOT="$PROJ" WHEELHOUSE_DESK_PORT="$P" bun seats/desk.ts > "$FIX/desk.out" 2> "$FIX/desk.err") & PID=$!
+(cd "$PROJ" && exec env PATH="$PROJ/bin:$PATH" WHEELHOUSE_DESK_ROOT="$PROJ" WHEELHOUSE_DESK_PORT="$P" bun "$PROJ/seats/desk.ts" > "$FIX/desk.out" 2> "$FIX/desk.err") & PID=$!
 for _ in $(seq 1 50); do [ -s "$PROJ/seats/run/desk.port" ] && curl -fsS "http://127.0.0.1:$P/needs" > "$FIX/needs.html" 2>/dev/null && break; sleep 0.1; done
 if kill -0 "$PID" 2>/dev/null && grep -q "http://127.0.0.1:$P/needs" "$PROJ/seats/run/desk.port"; then pass "desk starts and writes seats/run/desk.port"; else fail "desk did not start: $(cat "$FIX/desk.err" 2>/dev/null)"; fi
 if python3 - "$FIX/needs.html" <<'PY'
@@ -133,7 +151,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$PREC_CAN"; then
 else
   mkdir -p "$FIX/preccan/seats" "$FIX/preccan/wheelhouse" "$FIX/preccan/bin"
   cp "$PREC_CAN" "$FIX/preccan/seats/desk.ts"; cp "$NEEDS" "$FIX/preccan/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/preccan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/preccan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/preccan/seats/"; cp "$PROJ/bin/bd" "$FIX/preccan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/preccan/wheelhouse/.template-source"
-  PPREC="$(port)"; (cd "$FIX/preccan" && PATH="$FIX/preccan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/preccan" WHEELHOUSE_DESK_PORT="$PPREC" bun seats/desk.ts >/dev/null 2>&1) & PID=$!
+  PPREC="$(port)"; (cd "$FIX/preccan" && exec env PATH="$FIX/preccan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/preccan" WHEELHOUSE_DESK_PORT="$PPREC" bun "$FIX/preccan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$PPREC/api/board.json" > "$FIX/precedence-canary.json" 2>/dev/null || true; grep -q 'Finished but still in progress' "$FIX/precedence-canary.json" 2>/dev/null && break; sleep 0.1; done
   if python3 - "$FIX/precedence-canary.json" <<'PY'
 import json, sys
@@ -164,7 +182,7 @@ if command -v lsof >/dev/null 2>&1; then
   if printf '%s\n' "$LSOF" | grep -q "127.0.0.1:$P" && ! printf '%s\n' "$LSOF" | grep -q "\*:$P\|0.0.0.0:$P"; then pass "desk listens on 127.0.0.1 only"; else fail "desk bind was not localhost-only: $LSOF"; fi
 else echo "ok $((PASS+1)) - SKIP lsof not available"; PASS=$((PASS+1)); fi
 SLOW="$FIX/slowproj"; mkdir -p "$SLOW"; cp -R "$PROJ/seats" "$SLOW/seats"; mkdir -p "$SLOW/wheelhouse" "$SLOW/bin"; cp "$PROJ/wheelhouse/.template-source" "$SLOW/wheelhouse/.template-source"; cp "$PROJ/bin/bd" "$SLOW/bin/bd"
-PSLOW="$(port)"; (cd "$SLOW" && PATH="$SLOW/bin:$PATH" WHEELHOUSE_STUB_BD_SLEEP=2 WHEELHOUSE_DESK_BOARD_REFRESH_MS=100 WHEELHOUSE_DESK_ROOT="$SLOW" WHEELHOUSE_DESK_PORT="$PSLOW" bun seats/desk.ts >/dev/null 2> "$FIX/slow-desk.err") & SLOW_PID=$!
+PSLOW="$(port)"; (cd "$SLOW" && exec env PATH="$SLOW/bin:$PATH" WHEELHOUSE_STUB_BD_SLEEP=2 WHEELHOUSE_DESK_BOARD_REFRESH_MS=100 WHEELHOUSE_DESK_ROOT="$SLOW" WHEELHOUSE_DESK_PORT="$PSLOW" bun "$SLOW/seats/desk.ts" >/dev/null 2> "$FIX/slow-desk.err") & SLOW_PID=$!
 for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$PSLOW/board" >/dev/null 2>&1 && break; sleep 0.1; done
 NEEDS_MS="$(python3 - "http://127.0.0.1:$PSLOW/needs" "$FIX/slow-needs.html" <<'PY'
 import sys, time, urllib.request
@@ -199,7 +217,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$ANSWERED_CAN"; then
 else
   mkdir -p "$FIX/answeredcan/seats" "$FIX/answeredcan/wheelhouse"
   cp "$ANSWERED_CAN" "$FIX/answeredcan/seats/desk.ts"; cp "$NEEDS" "$FIX/answeredcan/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/answeredcan/seats/needs.jsonl"
-  PANS="$(port)"; (cd "$FIX/answeredcan" && WHEELHOUSE_DESK_ROOT="$FIX/answeredcan" WHEELHOUSE_DESK_PORT="$PANS" bun seats/desk.ts >/dev/null 2>&1) & PID=$!
+  PANS="$(port)"; (cd "$FIX/answeredcan" && exec env WHEELHOUSE_DESK_ROOT="$FIX/answeredcan" WHEELHOUSE_DESK_PORT="$PANS" bun "$FIX/answeredcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$PANS/needs" > "$FIX/answered-canary.html" 2>/dev/null && break; sleep 0.1; done
   if ! grep -q 'action="/api/needs/need-old/message"' "$FIX/answered-canary.html"; then pass "canary: making answered needs inactive removes controls and is caught"; else fail "canary did not remove answered controls"; fi
   [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
@@ -214,7 +232,7 @@ p.write_text(s)
 PY
 if cmp -s "$PROJ/seats/desk.ts" "$CAN"; then fail "canary: could not make needs page print machine.bead; test proves nothing"; fi
 mkdir -p "$FIX/canproj/seats" "$FIX/canproj/wheelhouse"; cp "$CAN" "$FIX/canproj/seats/desk.ts"; cp "$NEEDS" "$FIX/canproj/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/canproj/seats/needs.jsonl"
-P2="$(port)"; (cd "$FIX/canproj" && WHEELHOUSE_DESK_ROOT="$FIX/canproj" WHEELHOUSE_DESK_PORT="$P2" bun seats/desk.ts >/dev/null 2>&1) & PID=$!
+P2="$(port)"; (cd "$FIX/canproj" && exec env WHEELHOUSE_DESK_ROOT="$FIX/canproj" WHEELHOUSE_DESK_PORT="$P2" bun "$FIX/canproj/seats/desk.ts" >/dev/null 2>&1) & PID=$!
 for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$P2/needs" > "$FIX/canary.html" 2>/dev/null && break; sleep 0.1; done
 if grep -q 'demo-ab12' "$FIX/canary.html"; then pass "canary: rendering machine.bead is caught"; else fail "canary did not expose machine.bead leak"; fi
 [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
@@ -232,10 +250,12 @@ if cmp -s "$PROJ/seats/desk.ts" "$BOARD_CAN"; then
 else
   mkdir -p "$FIX/boardcan/seats" "$FIX/boardcan/wheelhouse" "$FIX/boardcan/bin"
   cp "$BOARD_CAN" "$FIX/boardcan/seats/desk.ts"; cp "$NEEDS" "$FIX/boardcan/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/boardcan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/boardcan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/boardcan/seats/"; cp "$PROJ/bin/bd" "$FIX/boardcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/boardcan/wheelhouse/.template-source"
-  P3="$(port)"; (cd "$FIX/boardcan" && PATH="$FIX/boardcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/boardcan" WHEELHOUSE_DESK_PORT="$P3" bun seats/desk.ts >/dev/null 2>&1) & PID=$!
+  P3="$(port)"; (cd "$FIX/boardcan" && exec env PATH="$FIX/boardcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/boardcan" WHEELHOUSE_DESK_PORT="$P3" bun "$FIX/boardcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P3/board" > "$FIX/board-canary.html" 2>/dev/null || true; grep -q 'demo-ready' "$FIX/board-canary.html" 2>/dev/null && break; sleep 0.1; done
   if grep -q 'demo-ready' "$FIX/board-canary.html"; then pass "canary: a board copy that prints ids is caught"; else fail "canary did not expose board id leak"; fi
   [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
 fi
+stop_fixture_desks
+assert_no_fixture_desks
 if [ "$FAIL" -eq 0 ]; then echo "desk.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "desk.selftest: FAIL ($FAIL failed, $PASS passed)" >&2; exit 1
