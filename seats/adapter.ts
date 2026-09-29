@@ -1333,24 +1333,23 @@ async function cmdResume(name: string): Promise<void> {
     die(`recorded session file is gone: ${rec.sessionFile} — spawn a fresh seat instead`);
   }
   // SPLICE 5/6 (seat worktrees): resuming keeps the seat where it was
-  // working, not the project root: the cwd it was launched into last time,
-  // falling back to ROOT only for a state.json record from before this field
-  // existed. If that cwd was pruned, resume uses the same fresh-session
-  // mechanics as dispatch: prefer the seat's own worktree when it still
-  // exists, else recover at ROOT. Never a STOP on a missing cwd.
-  const resumeCwd = rec.cwd ?? ROOT;
+  // working, not the project root: the cwd it was launched into last time.
+  // If a worker's legacy per-bead cwd was pruned before a seat worktree was
+  // created, STOP rather than resume in the main checkout.
+  const entry = requireSeat(name);
+  const resumeCwd = rec.cwd ?? (seatUsesWorktree(entry) ? seatWorktreeDir(ROOT, name) : ROOT);
   if (!fs.existsSync(resumeCwd) || !fs.statSync(resumeCwd).isDirectory()) {
     const seatCwd = seatWorktreeDir(ROOT, name);
-    const fallbackCwd = fs.existsSync(seatCwd) && fs.statSync(seatCwd).isDirectory() && !fs.existsSync(path.join(seatCwd, ".pruned-placeholder")) ? seatCwd : ROOT;
+    const hasSeatCwd = fs.existsSync(seatCwd) && fs.statSync(seatCwd).isDirectory() && !fs.existsSync(path.join(seatCwd, ".pruned-placeholder"));
+    if (seatUsesWorktree(entry) && !hasSeatCwd) die(`seat ${name}: recorded seat cwd is gone: ${resumeCwd}; refusing to resume a worker in the repo root. Dispatch the bead so the seat worktree can be prepared, or restore/reset the worktree.`);
+    const fallbackCwd = hasSeatCwd ? seatCwd : ROOT;
     console.log(
       `seat ${name}: recorded seat cwd is gone: ${resumeCwd}; ` +
         `session continuity intentionally dropped; resuming fresh in ${fallbackCwd}`
     );
-    const entry = requireSeat(name);
     await driverForSeat(name, entry, "adapter resume").launch(name, entry, null, fallbackCwd);
     return;
   }
-  const entry = requireSeat(name);
   const wasMidTool = logHasUnfinishedToolCall(rec.log);
   await driverForSeat(name, entry, "adapter resume").launch(name, entry, rec.sessionFile, resumeCwd);
   if (wasMidTool) markSeatStalledAfterResume(name, rec.lastBead);
