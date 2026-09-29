@@ -320,19 +320,33 @@ function sessionCwds(sessionFile: string): string[] {
   } catch {}
   return [...out];
 }
+const seatAnchorCache = new Map<string, { at: number; map: Map<string, string> }>();
 function seatAnchors(root: string): Map<string, string> {
+  const cached = seatAnchorCache.get(root);
+  if (cached && Date.now() - cached.at < 5000) return cached.map;
   const out = new Map<string, string>();
   const f = path.join(root, "seats", "state.json");
-  if (!fs.existsSync(f)) return out;
+  if (fs.existsSync(f)) {
+    try {
+      const j = JSON.parse(fs.readFileSync(f, "utf8"));
+      for (const [name, s] of Object.entries<any>(j.seats ?? {})) {
+        if (s?.cwd) out.set(path.resolve(String(s.cwd)), `recorded cwd for seat ${name}`);
+        const live = pidAlive(Number(s?.pid ?? 0)) ? processCwd(Number(s.pid)) : null;
+        if (live) out.set(live, `live cwd for seat ${name} pid ${s.pid}`);
+        if (s?.sessionFile) for (const cwd of sessionCwds(String(s.sessionFile))) out.set(cwd, `session history cwd for seat ${name}`);
+      }
+    } catch {}
+  }
+  // A rostered seat's own worktree (`.wheelhouse-worktrees/<seat>`) is an anchor
+  // even before state.json records it: it carries the seat's warm build.
   try {
-    const j = JSON.parse(fs.readFileSync(f, "utf8"));
-    for (const [name, s] of Object.entries<any>(j.seats ?? {})) {
-      if (s?.cwd) out.set(path.resolve(String(s.cwd)), `recorded cwd for seat ${name}`);
-      const live = pidAlive(Number(s?.pid ?? 0)) ? processCwd(Number(s.pid)) : null;
-      if (live) out.set(live, `live cwd for seat ${name} pid ${s.pid}`);
-      if (s?.sessionFile) for (const cwd of sessionCwds(String(s.sessionFile))) out.set(cwd, `session history cwd for seat ${name}`);
+    const roster = JSON.parse(fs.readFileSync(path.join(root, "seats", "seats.json"), "utf8"));
+    for (const name of Object.keys(roster.seats ?? {})) {
+      const p = path.join(root, FLEET_CONTAINER, name);
+      if (!out.has(path.resolve(p)) && fs.existsSync(p)) out.set(path.resolve(p), `worktree of rostered seat ${name}`);
     }
   } catch {}
+  seatAnchorCache.set(root, { at: Date.now(), map: out });
   return out;
 }
 function seatCwds(root: string): Map<string, string> { return seatAnchors(root); }
