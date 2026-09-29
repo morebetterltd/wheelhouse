@@ -1447,7 +1447,11 @@ async function healWedgedSeat(name: string, rec: SeatRecord, context: string): P
 async function cmdDispatch(name: string, beadId: string, text: string, base: string | null = null, retriedWedged = false): Promise<void> {
   let rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
-  const entry = requireSeat(name);
+  // Looked up lazily: a running seat whose roster entry was removed can still
+  // be dispatched into its current cwd, and its failures stay visible.
+  let entryCache: SeatEntry | undefined;
+  const entry = (): SeatEntry => (entryCache ??= requireSeat(name));
+  const rosterEntry = (() => { try { return readNamedRosterEntry(name); } catch { return undefined; } })();
   const previousBead = rec.lastBead;
   const crossBead = Boolean(previousBead) && previousBead !== beadId;
   const alive = pidAlive(rec.pid, rec.fifo);
@@ -1489,19 +1493,19 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
   }
 
-  const targetCwd = prepareSeatCwd(name, entry, beadId, base);
+  const targetCwd = rosterEntry ? prepareSeatCwd(name, entry(), beadId, base) : (rec.cwd ?? ROOT);
   rec = readState().seats[name];
   if (!pidAlive(rec.pid, rec.fifo)) {
     const recordedCwd = rec.cwd ?? ROOT;
     const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     if (forcedStop && recordedCwdExists) {
-      const driver = driverForSeat(name, entry, "adapter dispatch");
+      const driver = driverForSeat(name, entry(), "adapter dispatch");
       const resumeFile = driver.name === "codex" ? (rec.sessionFile && fs.existsSync(rec.sessionFile) ? rec.sessionFile : null) : rec.sessionFile;
-      await driver.launch(name, entry, resumeFile, targetCwd);
+      await driver.launch(name, entry(), resumeFile, targetCwd);
     } else {
       if (recordedCwdExists) console.log(`seat ${name}: not running; spawning in dispatch target ${targetCwd}`);
       else console.log(`seat ${name}: not running and recorded cwd is gone: ${recordedCwd}; session continuity intentionally dropped; falling back to fresh spawn in dispatch target ${targetCwd}`);
-      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, null, targetCwd);
+      await driverForSeat(name, entry(), "adapter dispatch").launch(name, entry(), null, targetCwd);
     }
     rec = requireRunning(name);
   } else if (!samePath(rec.cwd, targetCwd)) {
@@ -1512,16 +1516,16 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     await cmdStop(name);
     if (recordedCwdExists) {
-      const driver = driverForSeat(name, entry, "adapter dispatch");
+      const driver = driverForSeat(name, entry(), "adapter dispatch");
       const resumeFile = driver.name === "codex" ? (rec.sessionFile && fs.existsSync(rec.sessionFile) ? rec.sessionFile : null) : rec.sessionFile;
       if (driver.name === "codex" && rec.sessionFile && !resumeFile) console.log(`seat ${name}: recorded session file is gone or not yet written; session continuity intentionally dropped; starting fresh in ${targetCwd}`);
-      await driver.launch(name, entry, resumeFile, targetCwd);
+      await driver.launch(name, entry(), resumeFile, targetCwd);
     } else {
       console.log(
         `seat ${name}: session continuity intentionally dropped because recorded cwd is gone: ${recordedCwd}; ` +
           `falling back to fresh spawn in dispatch target ${targetCwd}`
       );
-      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, null, targetCwd);
+      await driverForSeat(name, entry(), "adapter dispatch").launch(name, entry(), null, targetCwd);
     }
     rec = requireRunning(name);
   }
