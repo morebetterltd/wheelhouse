@@ -732,9 +732,9 @@ run dispatch worker-1 quota-bead 'QUOTA turn from provider'
 if [ $RC -eq 0 ] && wait_for "$LOG" 'usage limit has been reached' 5; then pass "capacity: quota-shaped agent_end fixture reached the event log"
 else fail "capacity: quota fixture did not land (exit $RC): $OUT"; fi
 run status
-if [ $RC -eq 0 ] && says "PARKED" && says "CAPACITY: QUOTA" && says "usage limit has been reached" && says "fixture-quota-account" && says "RE-PROBE: bun seats/adapter.ts probe worker-1"; then
-  pass "capacity: adapter status renders PARKED/QUOTA with provider text, account label, and re-probe command"
-else fail "capacity: adapter status did not park on in-turn quota event (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "PARKED" && says "CAPACITY: QUOTA at time unknown" && says "usage limit has been reached" && says "fixture-quota-account" && says "RE-PROBE: bun seats/adapter.ts probe worker-1"; then
+  pass "capacity: adapter status renders PARKED/QUOTA with provider text, account label, event time fallback, and re-probe command"
+else fail "capacity: adapter status did not park on in-turn quota event with time unknown (exit $RC): $OUT"; fi
 STATE_MTIME_BEFORE="$(stat -f %m "$STATE")"
 sleep 1
 run status >/dev/null 2>&1
@@ -742,6 +742,11 @@ STATE_MTIME_AFTER="$(stat -f %m "$STATE")"
 if [ "$STATE_MTIME_AFTER" = "$STATE_MTIME_BEFORE" ]; then
   pass "capacity: rescanning the same quota marker does not rewrite state.json"
 else fail "capacity: status rewrote state.json without a marker change ($STATE_MTIME_BEFORE -> $STATE_MTIME_AFTER)"; fi
+printf '%s\n' '{"type":"agent_end","timestamp":"2026-01-02T03:04:05Z","messages":[{"role":"assistant","stopReason":"error","errorMessage":"HTTP 429 quota at timestamped event"}]}' >> "$LOG"
+run status
+if [ $RC -eq 0 ] && says "CAPACITY: QUOTA at 2026-01-02T03:04:05.000Z" && says "HTTP 429 quota at timestamped event"; then
+  pass "capacity: timestamped quota marker uses the event time, not scan time"
+else fail "capacity: timestamped quota marker did not use event time (exit $RC): $OUT"; fi
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" NO_COLOR=1 bun "$RUN_PROJ/seats/floor.ts" --once --pin 0 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
   pass "capacity: floor row surfaces PARKED/QUOTA and the re-probe command"
@@ -758,6 +763,9 @@ run status
 if [ $RC -eq 0 ] && says "RUNNING" && ! says "PARKED" && ! says "CAPACITY: QUOTA"; then
   pass "capacity: successful probe clears the parked quota marker"
 else fail "capacity: status stayed parked after successful probe (exit $RC): $OUT"; fi
+if node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.exit(s.seats["worker-1"].lastCapacityEvent ? 1 : 0)' "$STATE"; then
+  pass "capacity: successful probe removes lastCapacityEvent from state.json"
+else fail "capacity: successful probe left lastCapacityEvent in state.json: $(cat "$STATE" 2>/dev/null)"; fi
 run dispatch worker-1 quota-bead 'successful turn after quota'
 if [ $RC -eq 0 ] && wait_for "$LOG" 'echo: Bead quota-bead' 5; then pass "capacity: later successful turn reached the event log"
 else fail "capacity: later successful turn did not land (exit $RC): $OUT"; fi
