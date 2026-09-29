@@ -1493,11 +1493,14 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
   }
 
+  // Snapshot BEFORE preparing: preparing may recreate a pruned seat worktree
+  // at the very path the seat last recorded, and that must still count as a
+  // cwd change (fresh session, relaunch), never as "same place as before".
+  const recordedCwd = rec.cwd ?? ROOT;
+  const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
   const targetCwd = rosterEntry ? prepareSeatCwd(name, entry(), beadId, base) : (rec.cwd ?? ROOT);
   rec = readState().seats[name];
   if (!pidAlive(rec.pid, rec.fifo)) {
-    const recordedCwd = rec.cwd ?? ROOT;
-    const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     if (forcedStop && recordedCwdExists) {
       const driver = driverForSeat(name, entry(), "adapter dispatch");
       const resumeFile = driver.name === "codex" ? (rec.sessionFile && fs.existsSync(rec.sessionFile) ? rec.sessionFile : null) : rec.sessionFile;
@@ -1508,12 +1511,10 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
       await driverForSeat(name, entry(), "adapter dispatch").launch(name, entry(), null, targetCwd);
     }
     rec = requireRunning(name);
-  } else if (!samePath(rec.cwd, targetCwd)) {
+  } else if (!recordedCwdExists || !samePath(rec.cwd, targetCwd)) {
     // Construction, not prompt discipline: a seat whose cwd is not the
     // target gets stopped and relaunched attached to its own session,
     // rooted in its worktree, before the prompt goes anywhere near it.
-    const recordedCwd = rec.cwd ?? ROOT;
-    const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     await cmdStop(name);
     if (recordedCwdExists) {
       const driver = driverForSeat(name, entry(), "adapter dispatch");
