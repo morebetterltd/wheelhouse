@@ -64,7 +64,7 @@ chmod +x "$BIN/pi"
 build_proj(){
   local proj="$1" ns="$2"
   mkdir -p "$proj/seats" "$proj/contracts" "$proj/.wheelhouse-worktrees/bead-x"
-  cp "$ADAPTER" "$proj/seats/adapter.ts"; cp "$HARNESS" "$proj/seats/harness.ts"; cp "$BRIEFS" "$proj/seats/briefs.ts"; cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
+  cp "$ADAPTER" "$proj/seats/adapter.ts"; cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$proj/seats/seat-worktree.ts"; cp "$HARNESS" "$proj/seats/harness.ts"; cp "$BRIEFS" "$proj/seats/briefs.ts"; cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
 {

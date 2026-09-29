@@ -196,6 +196,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   local proj="$1" ns="$2" seat seatdir
   mkdir -p "$proj/seats" "$proj/contracts"
   cp "$ADAPTER" "$proj/seats/adapter.ts"
+  cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$proj/seats/seat-worktree.ts"
   cp "$FLOOR" "$proj/seats/floor.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$HARNESS" "$proj/seats/harness.ts"
@@ -457,6 +458,7 @@ else
   mkdir -p "$RHOME"
   mkdir -p "$RPROJ/seats" "$RPROJ/contracts"
   cp "$ADAPTER" "$RPROJ/seats/adapter.ts"
+  cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$RPROJ/seats/seat-worktree.ts"
   cp "$BRIEFS" "$RPROJ/seats/briefs.ts"
   cp "$HARNESS" "$RPROJ/seats/harness.ts"
   cp "$HOST_BUDGET_TS" "$RPROJ/seats/host-budget.ts"

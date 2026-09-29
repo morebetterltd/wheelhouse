@@ -17,3 +17,7 @@ seats/run/
 # (wheelhouse/GRAPH.md, "Where evidence lives") — a tracked verdicts/ would
 # invite citing a path that dies with this checkout
 seats/verdicts/
+
+# fleet runtime: seat worktrees and per-bead scratch are machine-local, never product
+.wheelhouse-worktrees/
+.wheelhouse-runs/
