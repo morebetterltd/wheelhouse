@@ -49,8 +49,9 @@
  *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>]
  *
  * Single-repo installs need no configuration: --repo defaults to ROOT. Umbrella
- * installs pass --repo for the product repository that owns <branch>; evidence
- * paths stay relative to that product repository.
+ * installs with wheelhouse/.template-source product-repo= also need no
+ * configuration: omitted --repo defaults to that product repository. Explicit
+ * --repo still wins. Evidence paths stay relative to the selected repository.
  *
  * Exit: 0 APPROVE | 2 BOUNCE | 3 DISCOVER | 1 anything else (including a
  * malformed or missing verdict — the machine must never mistake an error
@@ -515,27 +516,41 @@ export function validateSegment(kind: string, value: string): string {
  * loudly — an evidence path escaping the repository is not evidence on the
  * branch under review.
  */
+function defaultRepoArgFromTemplateSource(): string | undefined {
+  const source = path.join(ROOT, "wheelhouse", ".template-source");
+  let text = "";
+  try { text = fs.readFileSync(source, "utf8"); } catch { return undefined; }
+  for (const line of text.split("\n")) {
+    const m = line.match(/^(?:product-repo|product-repos|product_repo|product_repos)=(.*)$/);
+    if (!m) continue;
+    const first = m[1].split(/[,;]/).map((s) => s.trim()).find(Boolean);
+    if (first) return first;
+  }
+  return undefined;
+}
+
 function resolveRepoRoot(repoArg: string | undefined): string {
-  if (!repoArg) return ROOT;
-  const expanded = expandTilde(repoArg);
+  const effectiveRepoArg = repoArg ?? defaultRepoArgFromTemplateSource();
+  if (!effectiveRepoArg) return ROOT;
+  const expanded = expandTilde(effectiveRepoArg);
   const abs = path.resolve(ROOT, expanded);
   let real: string;
   try {
     real = fs.realpathSync(abs);
   } catch {
-    die(`--repo ${JSON.stringify(repoArg)} does not exist (resolved from ${ROOT})`);
+    die(`--repo ${JSON.stringify(effectiveRepoArg)} does not exist (resolved from ${ROOT})`);
   }
   let inside = "";
   try {
     inside = execFileSync("git", ["-C", real, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" }).trim();
   } catch {
-    die(`--repo ${JSON.stringify(repoArg)} is not a git worktree (resolved to ${real})`);
+    die(`--repo ${JSON.stringify(effectiveRepoArg)} is not a git worktree (resolved to ${real})`);
   }
-  if (inside !== "true") die(`--repo ${JSON.stringify(repoArg)} is not inside a git worktree (resolved to ${real})`);
+  if (inside !== "true") die(`--repo ${JSON.stringify(effectiveRepoArg)} is not inside a git worktree (resolved to ${real})`);
   try {
     return execFileSync("git", ["-C", real, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
   } catch {
-    die(`could not resolve git top-level for --repo ${JSON.stringify(repoArg)} (resolved to ${real})`);
+    die(`could not resolve git top-level for --repo ${JSON.stringify(effectiveRepoArg)} (resolved to ${real})`);
   }
 }
 
