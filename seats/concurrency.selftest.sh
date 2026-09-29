@@ -191,6 +191,17 @@ process.on("SIGTERM", () => process.exit(0));
 STUB
 chmod +x "$BIN/pi"
 
+# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+# created from the project repo, so every fixture project is a git repo with
+# one commit on main. Fixture state (seats/, contracts/, worktrees, the stub's
+# touched-by-* footprints) is ignored so it never dirties a worktree.
+init_fixture_repo() {   # $1 = project dir
+  git -C "$1" init -q -b main
+  printf 'seats/\ncontracts/\n.wheelhouse-worktrees/\n.wheelhouse-runs/\ntouched-by-*\n' > "$1/.gitignore"
+  git -C "$1" add .gitignore
+  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+}
+
 # A fixture project with a TWO-seat roster — one roster, two account dirs.
 build_proj() {   # $1 = project dir, $2 = seat namespace
   local proj="$1" ns="$2" seat seatdir
@@ -219,13 +230,14 @@ EOF
     printf '{\n  "%s": true\n}\n' "$proj" > "$seatdir/trust.json"
     printf '{"stub":"identity-%s"}\n' "$seat" > "$seatdir/auth.json"
   done
+  init_fixture_repo "$proj"
 }
 
 PROJ="$FIX/proj"
 build_proj "$PROJ" alpha
 RUN_PROJ="$PROJ"
 
-run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 state_get() {   # $1 = seat, $2 = field  (reads $RUN_PROJ's state.json)
   env HOME="$HOME_FIX" bun -e "const s=require('$RUN_PROJ/seats/state.json');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"
@@ -239,23 +251,17 @@ wait_for() {   # $1 = file, $2 = substring, $3 = seconds
   return 1
 }
 
-# The scratch repo and its two worktrees — the isolation contract in
-# miniature: one worktree per bead, each on its own fleet/<bead> branch.
-REPO="$FIX/scratch-repo"
-git init -q "$REPO"
-( cd "$REPO" && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m root )
-git -C "$REPO" worktree add -q "$FIX/wt-bead-a" -b fleet/bead-a >/dev/null 2>&1
-git -C "$REPO" worktree add -q "$FIX/wt-bead-b" -b fleet/bead-b >/dev/null 2>&1
-
 LOG_A="$PROJ/seats/logs/worker-a.jsonl"
 LOG_B="$PROJ/seats/logs/worker-b.jsonl"
 
 # --- the two-seat exercise, parameterized so the canary can reuse it ---------
 # Spawns both seats of $RUN_PROJ, dispatches SLOW bead-a/bead-b back-to-back
 # (each naming its own worktree), asserts overlap, waits both turns out, and
-# asserts log/worktree isolation. $1 = label, $2/$3 = worktree dirs.
+# asserts log/worktree isolation. $1 = label. Each worker seat works in its
+# own adapter-made worktree, .wheelhouse-worktrees/<seat>, on fleet/<bead>.
 run_two_seat_exercise() {
-  local label="$1" wta="$2" wtb="$3"
+  local label="$1"
+  local wta="$RUN_PROJ/.wheelhouse-worktrees/worker-a" wtb="$RUN_PROJ/.wheelhouse-worktrees/worker-b"
   local la="$RUN_PROJ/seats/logs/worker-a.jsonl" lb="$RUN_PROJ/seats/logs/worker-b.jsonl"
 
   run spawn worker-a
@@ -271,10 +277,9 @@ run_two_seat_exercise() {
 
   # Both dispatches go out before either turn is waited on — that is the
   # concurrency under test. SLOW keeps both turns in flight long enough to
-  # observe the overlap. The adapter roots seats in the project-local bead
-  # worktree path; the stub's WORKDIR marker separately names where to leave
-  # the proof footprint.
-  mkdir -p "$RUN_PROJ/.wheelhouse-worktrees/bead-a" "$RUN_PROJ/.wheelhouse-worktrees/bead-b"
+  # observe the overlap. The adapter roots each seat in its own seat
+  # worktree; the stub's WORKDIR marker names where to leave the proof
+  # footprint.
   run dispatch worker-a bead-a "SLOW MARKER-ALPHA work bead-a in WORKDIR:$wta"
   [ $RC -eq 0 ] && pass "${label}: bead-a dispatched to worker-a" || fail "${label}: dispatch a exited ${RC}: $OUT"
   run dispatch worker-b bead-b "SLOW MARKER-BRAVO work bead-b in WORKDIR:$wtb"
@@ -308,11 +313,11 @@ run_two_seat_exercise() {
     pass "${label}: worker-b's events land ONLY in worker-b's log"
   else fail "${label}: worker-b's dispatch text leaked into worker-a's log (or missing from its own)"; fi
 
-  # Worktree isolation: each seat's work footprint is in its own worktree
-  # and nowhere else, and the worktrees sit on distinct branches.
+  # Worktree isolation: each seat's work footprint is in its own seat
+  # worktree and nowhere else, and the worktrees sit on distinct branches.
   if [ -f "$wta/touched-by-bead-a" ] && [ ! -e "$wta/touched-by-bead-b" ] \
      && [ -f "$wtb/touched-by-bead-b" ] && [ ! -e "$wtb/touched-by-bead-a" ]; then
-    pass "${label}: each bead's work landed only in its own worktree"
+    pass "${label}: each seat's work landed only in its own seat worktree"
   else fail "${label}: worktree cross-write (or missing footprint): $(ls "$wta" "$wtb" 2>&1 | tr '\n' ' ')"; fi
   local ba bb
   ba="$(git -C "$wta" branch --show-current 2>/dev/null)"
@@ -328,7 +333,7 @@ run_two_seat_exercise() {
 }
 
 phase "1. two seats, one roster — spawn, overlap, isolation, clean stop"
-run_two_seat_exercise "hermetic" "$FIX/wt-bead-a" "$FIX/wt-bead-b"
+run_two_seat_exercise "hermetic"
 
 phase "1b. state.json concurrent writers preserve both seat records"
 run_state_race() { # label delay-ms project
@@ -338,8 +343,8 @@ run_state_race() { # label delay-ms project
   local safe_label
   safe_label="$(printf '%s' "$label" | tr ' /' '__')"
   OUT_A="$FIX/${safe_label}-a.out"; OUT_B="$FIX/${safe_label}-b.out"
-  env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_STATE_WRITE_DELAY_MS="$delay" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-a >"$OUT_A" 2>&1 & PA=$!
-  env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_STATE_WRITE_DELAY_MS="$delay" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-b >"$OUT_B" 2>&1 & PB=$!
+  env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_STATE_WRITE_DELAY_MS="$delay" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-a >"$OUT_A" 2>&1 & PA=$!
+  env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_STATE_WRITE_DELAY_MS="$delay" bun "$RUN_PROJ/seats/adapter.ts" spawn worker-b >"$OUT_B" 2>&1 & PB=$!
   wait "$PA"; RCA=$?
   wait "$PB"; RCB=$?
   if [ $RCA -eq 0 ] && [ $RCB -eq 0 ]; then pass "$label: concurrent spawns both exit 0"
@@ -367,7 +372,6 @@ RUN_PROJ="$PROJ"
 
 phase "2. capacity visibility — a quota-shaped failure is stamped and rendered"
 run spawn worker-a
-mkdir -p "$RUN_PROJ/.wheelhouse-worktrees/bead-q" "$RUN_PROJ/.wheelhouse-worktrees/bead-ok"
 run dispatch worker-a bead-q "QUOTA please"
 if [ $RC -ne 0 ] && says "dispatch failed"; then
   pass "quota-shaped dispatch fails loudly"
@@ -404,11 +408,9 @@ sed 's|^  const log = path.join(LOG_DIR, `${name}.jsonl`);$|  const log = path.j
 if cmp -s "$ADAPTER" "$CAN_A/seats/adapter.ts"; then
   fail "canary: could not merge the logs — the line no longer matches, so the canary proves nothing"
 else
-  git -C "$REPO" worktree add -q "$FIX/can-wt-a" -b canary/bead-a >/dev/null 2>&1
-  git -C "$REPO" worktree add -q "$FIX/can-wt-b" -b canary/bead-b >/dev/null 2>&1
   CANARY_FAILED_BEFORE=$FAILED
   RUN_PROJ="$CAN_A"
-  run_two_seat_exercise "canary" "$FIX/can-wt-a" "$FIX/can-wt-b" > /dev/null 2>&1
+  run_two_seat_exercise "canary" > /dev/null 2>&1
   if [ $FAILED -gt $CANARY_FAILED_BEFORE ]; then
     FAILED=$CANARY_FAILED_BEFORE
     pass "canary: an adapter that merges both seats into one log is caught"
@@ -430,7 +432,6 @@ if cmp -s "$ADAPTER" "$CAN_B/seats/adapter.ts"; then
 else
   RUN_PROJ="$CAN_B"
   run spawn worker-a > /dev/null 2>&1
-  mkdir -p "$RUN_PROJ/.wheelhouse-worktrees/bead-q"
   run dispatch worker-a bead-q "QUOTA please" > /dev/null 2>&1
   if [ -z "$(state_get worker-a lastCapacityEvent)" ]; then
     pass "canary: an adapter with the capacity stamp cut is caught (no lastCapacityEvent lands)"
@@ -463,6 +464,7 @@ else
   cp "$HARNESS" "$RPROJ/seats/harness.ts"
   cp "$HOST_BUDGET_TS" "$RPROJ/seats/host-budget.ts"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$RPROJ/contracts/WORKER.md"
+  init_fixture_repo "$RPROJ"
   # Two real seats, BOTH borrowing your login (auth is copied per seat dir
   # and dies with the fixture; it never enters state.json or the logs —
   # adapter.selftest.sh's real leg asserts that non-leak rule).
@@ -487,13 +489,9 @@ else
 }
 EOF
   REAL_PATH="$(dirname "$REAL_PI"):$(dirname "$(command -v bun)"):/usr/bin:/bin"
-  rrun() { RC=0; OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=90000 bun "$RPROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+  rrun() { RC=0; OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=90000 bun "$RPROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
   RLOG_A="$RPROJ/seats/logs/worker-a.jsonl"
   RLOG_B="$RPROJ/seats/logs/worker-b.jsonl"
-
-  # Mirror the hermetic phases: the adapter refuses to dispatch a bead unless
-  # its project-local worktree directory already exists.
-  mkdir -p "$RPROJ/.wheelhouse-worktrees/real-a" "$RPROJ/.wheelhouse-worktrees/real-b"
 
   rrun spawn worker-a
   [ $RC -eq 0 ] && pass "real: worker-a spawns ($OUT)" || fail "real: worker-a spawn exited ${RC}: $OUT"
