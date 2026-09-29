@@ -378,7 +378,7 @@ BENCH
 
 build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.ts source
   local umb="$1" ns="$2" src="$3" product="$1/product"
-  mkdir -p "$umb/seats" "$umb/contracts" "$product"
+  mkdir -p "$umb/seats" "$umb/contracts" "$umb/wheelhouse" "$product"
   cp "$src" "$umb/seats/verify.ts"
   cp "$BRIEFS" "$umb/seats/briefs.ts"
   cp "$HARNESS" "$umb/seats/harness.ts"
@@ -386,6 +386,7 @@ build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.
   cp "$HOST_BUDGET_TS" "$umb/seats/host-budget.ts"
   cp "$HERALD" "$umb/seats/herald.ts"
   printf '# Crew: Reviewer\n\numbrella reviewer brief.\n' > "$umb/contracts/REVIEWER.md"
+  printf 'product-repo=product\n' > "$umb/wheelhouse/.template-source"
   cat > "$umb/seats/seats.json" <<EOF
 {
   "commander": { "role": "commander", "external": true, "runtime": "claude-code" },
@@ -539,10 +540,13 @@ if grep -q "branch-repo: $UMB_PROJ/product" "$UMB_PROJ/seats/verdicts/bead-umbre
    && grep -q "evidence/bench.log — exists, .* bytes, non-empty — OK" "$UMB_PROJ/seats/verdicts/bead-umbrella.md" 2>/dev/null; then
   pass "umbrella layout: verdict records the product repo and product-relative evidence floor check"
 else fail "umbrella layout: verdict did not record product repo and evidence check"; fi
-run bead-umbrella-missing fleet/bead-1 worker-1 --evidence evidence/bench.log
-if [ $RC -eq 1 ] && says "does not resolve" && says "$UMB_PROJ"; then
-  pass "umbrella layout: omitting --repo still measures the umbrella root and refuses the product branch"
-else fail "umbrella layout: missing --repo did not fail against the umbrella root (exit $RC): $OUT"; fi
+run bead-umbrella-default fleet/bead-1 worker-1 --evidence evidence/bench.log
+if [ $RC -eq 0 ]; then pass "umbrella layout: omitting --repo defaults to .template-source product-repo"
+else fail "umbrella layout: missing --repo did not use product-repo default (exit $RC): $OUT"; fi
+if grep -q "branch-repo: $UMB_PROJ/product" "$UMB_PROJ/seats/verdicts/bead-umbrella-default.md" 2>/dev/null \
+   && grep -q "evidence/bench.log — exists, .* bytes, non-empty — OK" "$UMB_PROJ/seats/verdicts/bead-umbrella-default.md" 2>/dev/null; then
+  pass "umbrella layout: default repo records the product repo and product-relative evidence floor check"
+else fail "umbrella layout: default repo verdict did not record product repo and evidence check"; fi
 RUN_PROJ="$PROJ"
 VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 
