@@ -15,7 +15,7 @@ HARNESS="$(cd "$(dirname "$WALK")" && pwd)/harness.ts"
 FINAL_ASSISTANT="$(cd "$(dirname "$WALK")" && pwd)/final-assistant-message.ts"
 HOST_BUDGET_TS="$(cd "$(dirname "$WALK")" && pwd)/host-budget.ts"
 REAL_FIXTURES_DIR="$(cd "$(dirname "$WALK")" && pwd)/fixtures/verify-real"
-INCIDENT_STREAM="$(cd "$(dirname "$WALK")" && pwd -P)/../evidence/wheelhouse-project-z4b1/walk-desk-incident.out"
+INCIDENT_STREAM="$(cd "$(dirname "$WALK")" && pwd -P)/fixtures/walk/walk-desk-incident.out"
 SCRUB="$HERE/evidence-scrub.sh"
 [ -f "$WALK" ] || { echo "selftest: not found: $WALK" >&2; exit 2; }
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
