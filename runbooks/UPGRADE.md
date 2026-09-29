@@ -41,10 +41,17 @@ Then write the file:
   echo "path=<disposable cache path, filled in step 1>"
   echo "product-repo=$(pwd -P)"
   echo "installed=<date if you know it, else 'unknown'>"
+  echo "github-issue-watch="
+  echo "github-issue-repos="
+  echo "github-issue-include-labels="
+  echo "github-issue-exclude-labels="
+  echo "github-issue-author="
 } > wheelhouse/.template-source
 ```
 
 `commit=unknown` is honest and still useful — the integrity check runs on it, you just do not get the behind-versus-damaged diagnosis in step 5 until your next upgrade sets a real one. `path=` is the one field expected to die: it is only a cache hint. Existing installs may record a stale path into some other checkout; that is now harmless as long as `source=` and `commit=` are correct.
+
+The `github-issue-*` lines are optional fleet-gate configuration; append them to older `.template-source` files if you want the defaults visible before changing them. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login).
 
 ### One-time rotation for existing oversize seat logs
 
