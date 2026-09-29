@@ -191,29 +191,8 @@ function barePidAlive(pid: number): boolean {
   }
 }
 
-function openPaths(pid: number): string[] {
-  for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
-    try {
-      return execFileSync(lsof, ["-Fn", "-p", String(pid)], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
-        .split("\n")
-        .filter((l) => l.startsWith("n"))
-        .map((l) => l.slice(1));
-    } catch (e: any) {
-      if (e.code === "ENOENT") continue;
-      return [];
-    }
-  }
-  die("lsof is not on PATH — verify cannot establish scratch worktree ownership without it");
-}
-
-function pidHoldsPath(pid: number, p: string): boolean {
-  const wanted = new Set([p]);
-  try { wanted.add(fs.realpathSync(p)); } catch {}
-  return openPaths(pid).some((n) => wanted.has(n));
-}
-
-function pidAlive(pid: number, ownedPath: string): boolean {
-  return barePidAlive(pid) && pidHoldsPath(pid, ownedPath);
+function pidAlive(pid: number): boolean {
+  return barePidAlive(pid);
 }
 
 /**
@@ -259,7 +238,7 @@ export function sweepStaleScratchWorktrees(repoRoot: string): void {
   for (const p of worktreePaths) {
     const m = path.basename(p).match(/^wheelhouse-(?:verify|review)-(\d+)-/);
     if (!m) continue; // not one of ours
-    if (pidAlive(Number(m[1]), p)) continue; // owner still running and holds this scratch worktree — not stale
+    if (pidAlive(Number(m[1]))) continue; // owner process is still running — not stale
     removeScratchWorktree(repoRoot, p);
     process.stderr.write(`swept: removed orphaned scratch worktree ${p} (owner pid ${m[1]} is gone)\n`);
   }
