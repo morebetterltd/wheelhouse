@@ -15,6 +15,9 @@ The main files here:
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
   project root, and prints the export line and the one-time credential flow.
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, stop-all, resume.
+- `seat-worktree.ts` — owns each worker seat's one persistent worktree under
+  `.wheelhouse-worktrees/<seat-name>`: prepares the bead branch on dispatch,
+  pushes the previous bead's branch before a move, enforces the worktree cap.
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
 - `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban.
@@ -28,7 +31,7 @@ The main files here:
   and maps its verdict to an exit code. Default timeout is 15 minutes; for
   large cold workspaces that must build/test from scratch, set
   `WHEELHOUSE_VERIFY_TIMEOUT_MS` or `--timeout-ms` to at least 60 minutes.
-- `prune.ts` — scans/prunes safe worktrees and regenerable caches from a reviewed scan file; dry-run by default.
+- `prune.ts` — scan/cleanup/prune: `cleanup` is the automatic never-lose-work reaper the adapter runs on bead close and the nightly job runs fleet-wide; `scan` plus `prune --from-file` is the reviewed exceptions path a person drives, dry-run by default.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
@@ -118,7 +121,9 @@ file may carry `max_worktrees` (default `24`) and `auto_prune` (default `false`)
 when a settled seat is observed and the fleet is over the cap, `adapter.ts
 status` runs `seats/prune.ts scan`, prints safe `merged-worktree` rows with the
 exact `bun seats/prune.ts prune ...` command, and deletes nothing unless
-`auto_prune` is true.
+`auto_prune` is true. Separately from any host budget, the adapter itself caps
+new seat worktrees at the number of seats in `seats/seats.json` plus two, so
+that bound holds whether or not this file exists.
 
 The template ships `seats/bin/cargo` and `seats/bin/dotnet` as symlinks to one
 plain-bash shim. Keep `seats/bin` even when a fleet does not opt in: without
@@ -291,14 +296,29 @@ to `seats/logs/<seat>.jsonl` (every event, one JSON line each; stderr lands
 beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
 one line, and reads the response out of the log.
 
-The seat's process cwd is the bead's worktree by construction, not a prompt
-telling it to `cd` there. Without a bead id, `spawn` starts the seat rooted
-at the project root; with one, or on `dispatch` for a bead the seat is not
-already sitting in, cwd resolves to `.wheelhouse-worktrees/<bead-id>` — which
-has to exist already (a worker's own claim, or whoever dispatches) — and a
-missing worktree is a loud STOP, never a silent fall-back to the root.
-`dispatch` transparently stops and relaunches the seat, attached to the same
-session, when its cwd does not already match the bead being dispatched.
+The seat's process cwd is the seat's own worktree by construction, not a
+prompt telling it to `cd` there. A worker seat owns ONE persistent git
+worktree at `<root>/.wheelhouse-worktrees/<seat-name>` (for example
+`.wheelhouse-worktrees/worker-1`), not one per bead, and two seats never
+share one. `bun seats/adapter.ts dispatch <seat> <bead> <text> [--base <ref>]`
+prepares it before the seat sees the bead: `git switch -c fleet/<bead> <base>`
+for a new bead, or `git switch fleet/<bead>` for a reopened one so its old
+commits are kept. The base is `--base` if given, else the bead's
+`Integration:` line, else `WHEELHOUSE_WORKTREE_BASE`, else origin's default
+branch. Before a seat moves from one bead to the next, the adapter pushes the
+previous bead's branch to origin; a failed push is written to the seat log as
+"push failed" and blocks the move, and so do real uncommitted changes in the
+seat worktree (deletions of once-committed build output under
+`.cargo-target-shared/` or `car-rs/.wt-target/` do not count). New worktrees
+are capped at the number of seats in `seats/seats.json` plus two. Seats in
+non-worker roles — reviewer, verifier, designer, researcher — run from the
+project root and take no slot; a roster entry may set `"worktree": true|false`
+to override its role's default. A `.pruned-placeholder` directory left by
+cleanup is recreated on the next dispatch; a placeholder holding anything else
+is refused. `resume` never fails on a missing cwd: it falls back to the seat
+worktree, then to the root. `dispatch` transparently stops and relaunches the
+seat, attached to the same session, when its cwd does not already match the
+seat worktree.
 
 `probe` runs the rostered account, provider, and model through a one-shot `pi -p --no-session` liveness turn that asks only for `OK`; it does not need or create a bead worktree and writes no bead comment. A successful probe prints `OK`; a provider failure prints pi's stdout/stderr verbatim and exits with pi's status.
 
@@ -582,13 +602,23 @@ passing silently.
 
 ## Pruning worktrees and caches
 
+The automatic path first, because it is the one that runs:
+
 ```bash
-bun seats/prune.ts scan [--root <container>]... [--format tsv|json] > prune.tsv
-bun seats/prune.ts prune --from-file prune.tsv --categories merged-worktree,orphaned-worktree,build-cache,bead-runs,bead-tmp,bead-simulator,xctest-devices --yes
+bun seats/prune.ts cleanup [--dry-run] [--deadline <unix>] [--log <file>] [--bead <id>] [--wait <s>]
+```
+
+`cleanup` is the never-lose-work reaper. The adapter runs `cleanup --bead <old bead>` detached the moment a seat leaves a bead, so that bead's `.wheelhouse-runs/<bead>*` scratch, its per-bead build folder and any leftover per-bead worktree disappear on bead close; the nightly reaper runs plain `cleanup` for the whole fleet. Nobody runs `rm -rf` or `git worktree remove` on these paths by hand. Its rules: it touches only paths under `.wheelhouse-worktrees/` and `.wheelhouse-runs/`, and never an interactive `.worktrees/*`; it keeps uncommitted changes, any live process's cwd, seat anchors (the cwds in `seats/state.json`) and worktrees named in `wheelhouse/ISA.md`; it defers a worktree mid-push; it removes nothing when `lsof` is unavailable; it refuses symlinked paths (`path mismatch`); a worktree whose commits are on no remote gets an `archive/<name>` tag before removal; it never deletes a branch ref. A bead counts as merged when its branch is merged, squash-merged or patch-equivalent (`git cherry`) on an integration ref, including `origin/fleet/ootb-agent` and `mayline/main`; a zero-commit open bead with no seat is prunable (`zero-commit-worktree`). Every decision is one line in `seats/logs/cleanup.log` — `removed <category> <path> bytes=<n> reason=...`, `kept ... reason=...`, `already removed <path>` — ending in `cleanup done removed=N kept=N bytes=N`. Read that log before asking why a path is still there.
+
+The reviewed path stays for exceptions only — a `kept` row a person has looked at and judged:
+
+```bash
+bun seats/prune.ts scan [--root <container>]... [--format tsv|json|jsonl] > prune.tsv
+bun seats/prune.ts prune --from-file prune.tsv --categories merged-worktree,orphaned-worktree,build-cache,run-scratch,bead-tmp,bead-simulator,xctest-devices --yes
 bun seats/prune.ts categories
 ```
 
-`scan` is read-only and defaults to the install/container root. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, stale `.wheelhouse-bench.lock.stale.*` bench lock directories, closed-bead scratch under `.wheelhouse-runs/<bead>*` and `/private/tmp/<bead>-*`, simctl devices named `<closed-bead>-*`, an idle `~/Library/Developer/XCTestDevices` simctl set, and regenerable build caches. Pruning a merged-worktree also deletes its merged fleet branch in the same pass after re-checking that the branch tip is still integrated and present on a remote ref; stale-branch rows report `0` bytes because deleting a branch does not reclaim worktree storage. Build-cache means only directories a clean build regenerates at a project/package root: `.wheelhouse-build`, `dist`, `build`, `.next`, `out`, `.build`, `target`, .NET `bin`/`obj`, and Xcode `DerivedData` when explicitly under a scanned root; a directory below a dependency tree (`node_modules`, `vendor`, `.venv`, `venv`, `Pods`, or a dependency-like path segment) is never safe build-cache and is emitted as `needs-review` when matched. Caches under a root with an active `.wheelhouse-bench.lock` are `needs-review`. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, bead-named scratch or simulators for open/in-progress beads, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed. The XCTestDevices row is safe only when no `xcodebuild` process is running and no device in that set is booted.
+`scan` is read-only and defaults to the install/container root. The scan category `bead-runs` is now named `run-scratch`; `--categories bead-runs` is still accepted. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, stale `.wheelhouse-bench.lock.stale.*` bench lock directories, closed-bead scratch under `.wheelhouse-runs/<bead>*` and `/private/tmp/<bead>-*`, simctl devices named `<closed-bead>-*`, an idle `~/Library/Developer/XCTestDevices` simctl set, and regenerable build caches. Pruning a merged-worktree also deletes its merged fleet branch in the same pass after re-checking that the branch tip is still integrated and present on a remote ref; stale-branch rows report `0` bytes because deleting a branch does not reclaim worktree storage. Build-cache means only directories a clean build regenerates at a project/package root: `.wheelhouse-build`, `dist`, `build`, `.next`, `out`, `.build`, `target`, .NET `bin`/`obj`, and Xcode `DerivedData` when explicitly under a scanned root; a directory below a dependency tree (`node_modules`, `vendor`, `.venv`, `venv`, `Pods`, or a dependency-like path segment) is never safe build-cache and is emitted as `needs-review` when matched. Caches under a root with an active `.wheelhouse-bench.lock` are `needs-review`. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, bead-named scratch or simulators for open/in-progress beads, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed. The XCTestDevices row is safe only when no `xcodebuild` process is running and no device in that set is booted.
 
 `seats/integration-refs.txt` is install-owned configuration, like `seats/host-budget.json`. It lists extra integration refs one per line; blank lines and `#` comments are allowed. Matching is exact on the branch name (`fleet/goal-x` also matches a containing ref such as `origin/fleet/goal-x`) and does not widen `fleet/` prefixes. A listed ref is itself never pruned as a stale branch. When a commander creates a goal branch, they add that branch here so closed work merged to the goal branch can be pruned before the goal reaches `main`.
 
@@ -606,6 +636,7 @@ bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/walk.selftest.sh
 bash seats/prune.selftest.sh
+bash seats/never-lose-work.selftest.sh
 bash seats/intent-check.selftest.sh
 bash seats/specimen-leak.selftest.sh
 bash seats/placeholder-grep.selftest.sh

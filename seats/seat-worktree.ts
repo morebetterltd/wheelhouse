@@ -284,14 +284,18 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   // 4. push gate: the previous branch must be on the remote before the seat moves on
   const headSha = git(root, ["rev-parse", "HEAD"], target).out;
   let pushed: string | null = null;
-  if (currentBranch && !tipOnRemote(root, headSha)) {
-    const hasRemote = git(root, ["remote", "get-url", remote]).ok;
+  const hasRemote = git(root, ["remote", "get-url", remote]).ok;
+  const reachableFromAnotherBranch = () => git(root, ["branch", "--contains", headSha, "--format=%(refname:short)"]).out.split("\n").filter((b) => b && b !== currentBranch).length > 0;
+  if (currentBranch && !hasRemote && !tipOnRemote(root, headSha)) {
+    // Nowhere to push. That is fine only when the branch holds nothing of its own.
+    if (!reachableFromAnotherBranch()) refuse(`push failed for ${currentBranch} in ${target}: no remote named ${remote} to push to, and its commits are on no other branch. The seat stays on ${currentBranch}.`);
+  } else if (currentBranch && !tipOnRemote(root, headSha)) {
     const markerFile = pushMarkerPath(root, o.seat);
     fs.mkdirSync(path.dirname(markerFile), { recursive: true });
     fs.writeFileSync(markerFile, JSON.stringify({ seat: o.seat, branch: currentBranch, worktree: target, startedAt: new Date().toISOString(), pid: process.pid }) + "\n");
     let push: ReturnType<typeof git>;
     try {
-      push = hasRemote ? git(root, ["push", "-u", remote, `${currentBranch}:${currentBranch}`], target) : { ok: false, out: "", err: `no remote named ${remote}`, code: null };
+      push = git(root, ["push", "-u", remote, `${currentBranch}:${currentBranch}`], target);
     } finally {
       try { fs.rmSync(markerFile, { force: true }); } catch {}
     }
