@@ -51,7 +51,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
-import { PLACEHOLDER_MARKER, phantomOnlyStatus } from "./seat-worktree";
+import { PLACEHOLDER_MARKER, phantomOnlyStatus, porcelainStatus } from "./seat-worktree";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const FLEET_CONTAINER = ".wheelhouse-worktrees";
@@ -132,7 +132,7 @@ function worktrees(repo: string): { path: string; branch: string; sha: string }[
 }
 /** Phantom-aware cleanliness: deletions of once-committed build output do not count. */
 function treeState(repo: string, wt: string): { clean: boolean; phantomOnly: boolean; detail: string } {
-  const r = run("git", ["-C", wt, "status", "--porcelain", "--untracked-files=all"]);
+  const r = porcelainStatus(wt);
   if (!r.ok) return { clean: false, phantomOnly: false, detail: `git status failed: ${r.err}` };
   const st = phantomOnlyStatus(r.out);
   return { clean: st.clean, phantomOnly: st.phantomOnly, detail: st.real[0] ?? "" };
@@ -416,6 +416,15 @@ function scanWorktrees(root: string, repo: string, seats: Map<string, string>, b
 function scanOrphans(root: string, registered: Set<string>, seats: Map<string, string>, live: Set<string> | null): Row[] {
   const rows: Row[] = [];
   for (const c of DEFAULT_CONTAINERS.map((n) => path.join(root, n)).filter(isDir)) {
+    // A symbolic link under a container is never followed or removed: the path
+    // cleanup would act on is not the directory it resolves to.
+    try {
+      for (const e of fs.readdirSync(c, { withFileTypes: true })) {
+        if (!e.isSymbolicLink()) continue;
+        const link = path.join(c, e.name);
+        rows.push(row("needs-review", false, root, link, "", "none", `path mismatch: ${link} is a symbolic link to ${realpathOr(link) ?? "a missing target"}`, 0));
+      }
+    } catch {}
     for (const d of subdirs(c)) {
       const p = path.resolve(d);
       if (registered.has(p) || registered.has(realpathOr(p) ?? p) || fs.existsSync(path.join(p, ".git"))) continue;
