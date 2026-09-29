@@ -21,12 +21,14 @@ scrub_evidence() {
   HOME_RAW="$home" HOME_PHYS="$home_phys" TMP_RAW="$tmp" TMP_PHYS="$tmp_phys" USER_RAW="$user" HOME_BASE="$home_base" \
   perl -Mstrict -Mwarnings -pe '
     BEGIN {
-      our @literal = grep { defined($_) && length($_) } (
+      my @tmp = grep { defined($_) && length($_) } (
         $ENV{TMP_RAW}, $ENV{TMP_PHYS},
         ($ENV{TMP_RAW}  // "") =~ s{^/private/}{/}r,
         ($ENV{TMP_PHYS} // "") =~ s{^/private/}{/}r,
         ($ENV{TMP_RAW}  // "") =~ m{^/} ? "/private$ENV{TMP_RAW}"  : "",
         ($ENV{TMP_PHYS} // "") =~ m{^/} ? "/private$ENV{TMP_PHYS}" : "",
+      );
+      my @home = grep { defined($_) && length($_) } (
         $ENV{HOME_RAW}, $ENV{HOME_PHYS},
         ($ENV{HOME_RAW}  // "") =~ s{^/private/}{/}r,
         ($ENV{HOME_PHYS} // "") =~ s{^/private/}{/}r,
@@ -34,14 +36,16 @@ scrub_evidence() {
         ($ENV{HOME_PHYS} // "") =~ m{^/} ? "/private$ENV{HOME_PHYS}" : "",
       );
       my %seen;
-      @literal = sort { length($b) <=> length($a) } grep { !$seen{$_}++ } @literal;
+      our @literal = sort { length($b->[0]) <=> length($a->[0]) }
+        grep { !$seen{$_->[0]}++ }
+        ((map { [$_, "[tmpdir]"] } @tmp), (map { [$_, "[home]"] } @home));
       our $user = $ENV{USER_RAW} // "";
       our $home_base = $ENV{HOME_BASE} // "";
     }
     our (@literal, $user, $home_base);
-    for my $p (@literal) {
+    for my $entry (@literal) {
+      my ($p, $replacement) = @$entry;
       next if $p eq "/";
-      my $replacement = ($p =~ m{(?:^|/)var/folders(?:/|$)} || $p =~ m{(?:^|/)tmp(?:/|$)}) ? "[tmpdir]" : "[home]";
       s/\Q$p\E/$replacement/g;
     }
     s{/(?:private/)?var/folders/[^[:space:]"'"'"'`)>,;]+}{[tmpdir]}g;
