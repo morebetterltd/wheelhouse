@@ -21,7 +21,7 @@
  *     deletions of once-committed build output (.cargo-target-shared/,
  *     car-rs/.wt-target/) are not real changes ("build output only")
  *   - a path a live process has its cwd inside is kept ("live process has its cwd")
- *   - a seat's recorded/live/session cwd is a seat-anchor, never removed
+ *   - a seat's recorded/live cwd is a seat-anchor, never removed
  *   - a worktree named in wheelhouse/ISA.md is kept ("named by wheelhouse/ISA.md")
  *   - a worktree whose seat is mid-push is kept ("deferred: push in progress")
  *   - when lsof is unavailable nothing is removed ("cannot verify: lsof unavailable")
@@ -301,25 +301,6 @@ function pushInProgress(root: string, p: string, live: Set<string> | null): stri
   void live;
   return null;
 }
-function sessionCwds(sessionFile: string): string[] {
-  const out = new Set<string>();
-  if (!fs.existsSync(sessionFile)) return [];
-  const visit = (v: any) => {
-    if (typeof v === "string") return;
-    if (!v || typeof v !== "object") return;
-    for (const [k, child] of Object.entries<any>(v)) {
-      if ((k === "cwd" || k === "workingDirectory") && typeof child === "string" && path.isAbsolute(child)) out.add(path.resolve(child));
-      else visit(child);
-    }
-  };
-  try {
-    for (const line of fs.readFileSync(sessionFile, "utf8").split("\n")) {
-      if (!line.trim()) continue;
-      try { visit(JSON.parse(line)); } catch {}
-    }
-  } catch {}
-  return [...out];
-}
 const seatAnchorCache = new Map<string, { at: number; map: Map<string, string> }>();
 function seatAnchors(root: string): Map<string, string> {
   const cached = seatAnchorCache.get(root);
@@ -333,7 +314,6 @@ function seatAnchors(root: string): Map<string, string> {
         if (s?.cwd) out.set(path.resolve(String(s.cwd)), `recorded cwd for seat ${name}`);
         const live = pidAlive(Number(s?.pid ?? 0)) ? processCwd(Number(s.pid)) : null;
         if (live) out.set(live, `live cwd for seat ${name} pid ${s.pid}`);
-        if (s?.sessionFile) for (const cwd of sessionCwds(String(s.sessionFile))) out.set(cwd, `session history cwd for seat ${name}`);
       }
     } catch {}
   }
