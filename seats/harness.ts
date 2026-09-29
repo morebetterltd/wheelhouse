@@ -45,7 +45,8 @@ export function oneShotCommandForHarness(harness: HarnessName, brief: string, pr
     return { bin: "pi", args, display: `pi ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
   }
   if (harness === "claude-code") {
-    const args = ["-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt", brief];
+    const briefText = fs.existsSync(brief) ? fs.readFileSync(brief, "utf8") : brief;
+    const args = ["-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt", briefText];
     if (model) args.push("--model", model);
     args.push(prompt);
     return { bin: "claude", args, display: `claude ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
