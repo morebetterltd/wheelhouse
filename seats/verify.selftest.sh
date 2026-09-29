@@ -1351,7 +1351,6 @@ bash -c '
   dir="$1/wheelhouse-verify-${pid}-live"
   mkdir -p "$dir"
   git -C "$2" worktree add --detach "$dir" HEAD >/dev/null 2>&1
-  cd "$dir"
   printf "%s\n%s\n" "$pid" "$dir" > "$1/live-owner.txt"
   sleep 5
 ' _ "$FIX" "$PROJ" &
@@ -1376,8 +1375,42 @@ if ! git -C "$PROJ" show-ref --verify --quiet "refs/heads/$SHA_BRANCH"; then
   pass "the stale 40-hex local branch was reclaimed"
 else fail "the stale SHA-named branch survived: $(git -C "$PROJ" branch --list "$SHA_BRANCH")"; fi
 if git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ -d "$LIVE_DIR" ]; then
-  pass "the live scratch worktree (real running pid) was spared"
+  pass "the live scratch worktree (real running pid, not holding the path) was spared"
 else fail "the live worktree was swept even though its owner pid is still alive"; fi
+
+CONCURRENT_OUT_A="$FIX/concurrent-verify-a.out"
+CONCURRENT_OUT_B="$FIX/concurrent-verify-b.out"
+(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$CONCURRENT_OUT_A" 2>&1) &
+CONCURRENT_PID_A=$!
+(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$CONCURRENT_OUT_B" 2>&1) &
+CONCURRENT_PID_B=$!
+CONCURRENT_DIRS=""
+for _ in $(seq 1 100); do
+  CONCURRENT_DIRS="$(git -C "$PROJ" worktree list --porcelain 2>/dev/null | awk -v a="wheelhouse-verify-${CONCURRENT_PID_A}-" -v b="wheelhouse-verify-${CONCURRENT_PID_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
+  [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ] && break
+  sleep 0.05
+ done
+if [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ]; then
+  pass "concurrent verify gates both reached registered scratch worktrees"
+else
+  fail "concurrent verify gates did not both register scratch worktrees: a=$(cat "$CONCURRENT_OUT_A" 2>/dev/null) b=$(cat "$CONCURRENT_OUT_B" 2>/dev/null) dirs=$CONCURRENT_DIRS"
+fi
+run   # a third gate's early sweep must not delete either live concurrent gate's scratch
+MISSING_CONCURRENT=0
+while IFS= read -r d; do
+  [ -z "$d" ] && continue
+  git -C "$PROJ" worktree list | grep -qF "$d" && [ -d "$d" ] || MISSING_CONCURRENT=$((MISSING_CONCURRENT + 1))
+done <<EOF_CONCURRENT_DIRS
+$CONCURRENT_DIRS
+EOF_CONCURRENT_DIRS
+if [ "$MISSING_CONCURRENT" -eq 0 ]; then
+  pass "concurrent live verify gates keep their scratch worktrees through another sweep"
+else
+  fail "a live concurrent gate scratch worktree was swept: missing=$MISSING_CONCURRENT dirs=$CONCURRENT_DIRS output=$OUT"
+fi
+kill "$CONCURRENT_PID_A" "$CONCURRENT_PID_B" 2>/dev/null || true
+wait "$CONCURRENT_PID_A" 2>/dev/null || true
+wait "$CONCURRENT_PID_B" 2>/dev/null || true
 
 kill "$LIVE_OWNER_PID" 2>/dev/null
 i=0; while kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
