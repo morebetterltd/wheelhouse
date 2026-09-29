@@ -1718,6 +1718,18 @@ run dispatch worker-1 bead-b2 "mayline base" --base mayline/main
 if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-b2" ] && [ -z "$(fgit -C "$WT" status --porcelain)" ] && [ "$(fgit -C "$WT" rev-parse HEAD)" = "$(fgit -C "$WT_PROJ" rev-parse mayline/main)" ] && [ -f "$WT/mayline.txt" ]; then
   pass "base switch: --base mayline/main after an origin/main bead leaves status empty and HEAD at the mayline/main tip (ISC-34)"
 else fail "base switch: mayline dispatch wrong (exit $RC branch=$(wt_branch "$WT") status=$(fgit -C "$WT" status --porcelain) head=$(fgit -C "$WT" rev-parse HEAD) base=$(fgit -C "$WT_PROJ" rev-parse mayline/main)): $OUT"; fi
+fgit -C "$WT_PROJ" checkout -q -b fleet/bead-pre59 main
+perl -0pi -e 's/^\.wheelhouse-runs\/\n//m' "$WT_PROJ/.gitignore"
+fgit -C "$WT_PROJ" add .gitignore
+fgit -C "$WT_PROJ" commit -qm 'pre PR59 ignore shape'
+fgit -C "$WT_PROJ" push -q origin fleet/bead-pre59
+fgit -C "$WT_PROJ" checkout -q main
+mkdir -p "$WT/.wheelhouse-runs/wheelhouse-project-old"
+printf 'seat-local scratch\n' > "$WT/.wheelhouse-runs/wheelhouse-project-old/report.md"
+run dispatch worker-1 bead-pre59 "reopen old-base branch with seat-local scratch"
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-pre59" ] && [ -z "$(fgit -C "$WT" status --porcelain --untracked-files=all)" ] && [ -f "$WT/.wheelhouse-runs/wheelhouse-project-old/report.md" ]; then
+  pass "base switch: seat-local .wheelhouse-runs remains ignored when switching to a pre-PR59 branch"
+else fail "base switch: pre-PR59 branch saw seat-local scratch as dirty (exit $RC branch=$(wt_branch "$WT") status=$(fgit -C "$WT" status --porcelain --untracked-files=all)): $OUT"; fi
 
 # ISC-58: a reopened bead comes back on its own branch with its commits.
 run dispatch worker-1 bead-r1 "first pass on r1"
