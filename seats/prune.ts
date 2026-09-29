@@ -694,18 +694,10 @@ function assertNoSelectedSeatAnchors(rows: Row[], cats: Set<string> | null): voi
 function localBranchSha(repo: string, branch: string): string {
   return run("git", ["rev-parse", "--verify", branch], repo).out.trim();
 }
-function deleteMergedBranchIfStillSafe(repo: string, branch: string, extra: string[]): boolean {
-  if (!branch || !isFleetBranch(branch)) return false;
-  if (listedIntegrationRef(branch, extra)) return false;
-  const sha = localBranchSha(repo, branch);
-  if (!sha || !integrated(repo, sha, extra) || !onRemote(repo, sha)) return false;
-  const r = run("git", ["branch", "-D", branch], repo);
-  return r.ok;
-}
 /** `archive/<worktree-basename>` at the tip, so nothing is unreachable after removal. */
-function archiveTag(repo: string, wt: string, sha: string): string | null {
-  if (!sha || onRemote(repo, sha)) return null;
-  const base = `archive/${path.basename(wt)}`;
+function archiveTag(repo: string, wt: string, sha: string, force = false): string | null {
+  if (!sha || (!force && onRemote(repo, sha))) return null;
+  const base = `archive/${wt.includes("/") && !fs.existsSync(wt) ? wt : path.basename(wt)}`;
   let name = base;
   const existing = run("git", ["rev-parse", "--verify", "--quiet", `refs/tags/${name}^{commit}`], repo).out;
   if (existing && existing !== sha) name = `${base}-${sha.slice(0, 7)}`;
@@ -720,7 +712,6 @@ function normalizeCats(cats: Set<string> | null): Set<string> | null {
   return new Set([...cats].map((c) => CATEGORY_ALIASES[c] ?? c));
 }
 function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
-  const extra = extraIntegrationRefs(rootsWithInstallFiles(rows));
   if (yes) { assertNoMidTurnSeats(rows); assertNoSelectedSeatAnchors(rows, cats); }
   let touched = 0, skipped = 0, reclaimed = 0;
   for (const r of rows) {
@@ -735,9 +726,16 @@ function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
       const tag = archiveTag(r.repo, r.path, sha);
       if (tag) console.log(`TAGGED ${tag} ${sha.slice(0, 12)} before removing ${r.path}`);
       run("git", ["worktree", "remove", "--force", r.path], r.repo);
-      if (r.category === "merged-worktree" && branch && deleteMergedBranchIfStillSafe(r.repo, branch, extra)) console.log(`PRUNED branch merged-worktree ${branch}`);
     }
-    else if (r.action === "branch") run("git", ["branch", "-d", r.branch], r.repo);
+    else if (r.action === "branch") {
+      const sha = localBranchSha(r.repo, r.branch);
+      const tagName = r.branch.replace(/^fleet\//, "");
+      const tag = archiveTag(r.repo, tagName, sha, true);
+      if (!tag) { skipped++; continue; }
+      console.log(`TAGGED ${tag} ${sha.slice(0, 12)} before deleting ${r.branch}`);
+      const del = run("git", ["branch", "-d", r.branch], r.repo);
+      if (!del.ok) { skipped++; continue; }
+    }
     else if (r.action === "simctl") run("xcrun", ["simctl", "delete", r.path.replace(/^simctl:/, "")]);
     else if (r.action === "xctest-devices") run("xcrun", ["simctl", "--set", r.path, "delete", "all"]);
     reclaimed += r.size_bytes;
