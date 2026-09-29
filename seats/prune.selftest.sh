@@ -120,6 +120,8 @@ cleanup_live(){ kill "$LIVE_PID" >/dev/null 2>&1 || true; }
 cleanup_prune(){ cleanup_live; cleanup; }
 trap cleanup_prune EXIT INT TERM
 printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"},"worker-live":{"pid":%s,"cwd":"%s"},"worker-history":{"pid":999998,"cwd":"%s","sessionFile":"%s"}}}\n' "$WTS/$OPEN_ID" "$LIVE_PID" "$WTS/$OPEN_ID" "$WTS/$OPEN_ID" "$SESSION_HISTORY" > "$ROOT/seats/state.json"
+printf '{"seats":{"worker-rostered":{}}}\n' > "$ROOT/seats/seats.json"
+mkdir -p "$WTS/worker-rostered"
 
 mkdir -p "$WTS/orphaned-checkout" "$PROD/.wheelhouse-build" "$PROD/obj" "$PROD/dist" "$PROD/node_modules/pkg/dist" "$PROD/node_modules/.bin" "$ROOT/.wheelhouse-bench.lock.stale.12345"
 printf 'orphan\n' > "$WTS/orphaned-checkout/file.txt"
@@ -210,9 +212,10 @@ EOF
 if awk -F '\t' -v p="$WTS/$GOAL_CHILD_ID" '$1=="merged-worktree" && $2=="1" && $4==p && $5 ~ /^fleet\// {found=1} END{exit found?0:1}' "$SCAN"; then pass 'goal-branch child becomes safe merged-worktree when its goal branch is listed'; else fail "goal child merged-worktree row missing after integration-refs:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v b="fleet/goal-x" '$1=="needs-review" && $2=="0" && $5==b && $9 ~ /listed integration ref/ {found=1} $1=="stale-branch" && $5==b {bad=1} END{exit found && !bad ? 0 : 1}' "$SCAN"; then pass 'listed goal branch is needs-review, never stale-branch'; else fail "listed goal branch guard row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /not merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'listed goal ref does not widen matching to unrelated fleet branches'; else fail "unrelated unmerged branch was widened by integration-refs:\n$(cat "$SCAN")"; fi
-if awk -F '\t' -v p="$WTS/$OPEN_ID" '$1=="seat-anchor" && $2=="0" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'seat cwd is classified as non-prunable seat-anchor'; else fail "seat-anchor row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$OPEN_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /recorded cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'current recorded seat cwd is classified as non-prunable seat-anchor'; else fail "recorded cwd seat-anchor row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/worker-rostered" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /worktree of rostered seat worker-rostered/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'rostered .wheelhouse-worktrees/<seat> directory is classified as non-prunable seat-anchor'; else fail "rostered seat worktree anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$LIVE_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /live cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'live lsof cwd beats stale state.json cwd and is a seat-anchor'; else fail "live cwd seat-anchor row missing:\n$(cat "$SCAN")"; fi
-if awk -F '\t' -v p="$WTS/$HIST_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /session history cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'session history cwd is a non-prunable seat-anchor'; else fail "session history seat-anchor row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$HIST_ID" '$1=="merged-worktree" && $2=="1" && $4==p {found=1} $1=="seat-anchor" && $4==p {bad=1} END{exit found && !bad ? 0 : 1}' "$SCAN"; then pass 'session history cwd is scanned by normal closed-bead worktree rules, not as a seat-anchor'; else fail "session history worktree did not become a safe merged-worktree:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/orphaned-checkout" '$1=="orphaned-worktree" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'orphaned checkout is safe orphaned-worktree'; else fail "orphaned row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$PROD/.wheelhouse-build" '$1=="build-cache" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'build cache is safe build-cache'; else fail "build-cache row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$PROD/obj" '$1=="build-cache" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass '.NET obj cache is safe build-cache'; else fail "obj build-cache row missing:\n$(cat "$SCAN")"; fi
@@ -281,8 +284,8 @@ printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treas
 set +e
 SESSION_STALE_RC=0; SESSION_STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-session-scan.tsv" --yes --categories merged-worktree 2>&1) || SESSION_STALE_RC=$?
 set -e
-if [ $SESSION_STALE_RC -ne 0 ] && printf '%s\n' "$SESSION_STALE_OUT" | grep -q 'worker-history' && printf '%s\n' "$SESSION_STALE_OUT" | grep -q 'session history cwd'; then pass 'prune --yes refuses a reviewed safe row that a stored session history still points at'; else fail "stale session-history row was not refused (exit $SESSION_STALE_RC): $SESSION_STALE_OUT"; fi
-[ -d "$WTS/$HIST_ID" ] && pass 'stale-scan session-history worktree remains after refused prune --yes' || fail 'stale-scan session-history worktree was removed'
+if [ $SESSION_STALE_RC -eq 0 ] && printf '%s\n' "$SESSION_STALE_OUT" | grep -q "PRUNED worktree merged-worktree $WTS/$HIST_ID" && ! printf '%s\n' "$SESSION_STALE_OUT" | grep -q 'session history cwd'; then pass 'prune --yes removes a reviewed safe row that appears only in stored session history'; else fail "stale session-history row was not removed cleanly (exit $SESSION_STALE_RC): $SESSION_STALE_OUT"; fi
+[ ! -d "$WTS/$HIST_ID" ] && pass 'stale-scan session-history worktree is removed by prune --yes' || fail 'stale-scan session-history worktree remains'
 
 phase 'prune acts only on safe selected rows'
 ( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune.out" )
@@ -309,15 +312,16 @@ grep -q 'delete CLOSED-UDID' "$FIX/xcrun.log" && pass 'safe closed bead simulato
 grep -q "set-delete $HOME/Library/Developer/XCTestDevices all" "$FIX/xcrun.log" && [ ! -e "$HOME/Library/Developer/XCTestDevices" ] && pass 'idle XCTestDevices set deleted with simctl --set' || fail "XCTestDevices set delete missing: $(cat "$FIX/xcrun.log" 2>/dev/null)"
 [ -d "$PROD/node_modules/pkg/dist" ] && pass 'node_modules package dist remains after prune --yes' || fail 'node_modules package dist was removed'
 [ -d "$PROD/node_modules/.bin" ] && pass 'node_modules .bin remains after prune --yes' || fail 'node_modules .bin was removed'
-[ -d "$WTS/$OPEN_ID" ] && pass 'seat-anchor worktree remains' || fail 'seat-anchor worktree was removed'
+[ -d "$WTS/$OPEN_ID" ] && pass 'recorded-cwd seat-anchor worktree remains' || fail 'recorded-cwd seat-anchor worktree was removed'
+[ -d "$WTS/worker-rostered" ] && pass 'rostered seat worktree remains' || fail 'rostered seat worktree was removed'
 [ -d "$WTS/$LIVE_ID" ] && pass 'live-cwd seat-anchor worktree remains' || fail 'live-cwd seat-anchor worktree was removed'
-[ -d "$WTS/$HIST_ID" ] && pass 'session-history seat-anchor worktree remains' || fail 'session-history seat-anchor worktree was removed'
+[ ! -d "$WTS/$HIST_ID" ] && pass 'session-history worktree was removed by normal pruning rules' || fail 'session-history worktree remains'
 OPEN_RUNS_AFTER=$(shasum -a 256 "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt" | awk '{print $1}')
 OPEN_TMP_AFTER=$(shasum -a 256 "$OPEN_TMP/file.txt" | awk '{print $1}')
 [ "$OPEN_RUNS_BEFORE" = "$OPEN_RUNS_AFTER" ] && pass 'open bead runs scratch remains byte-identical' || fail 'open bead runs scratch changed'
 [ "$OPEN_TMP_BEFORE" = "$OPEN_TMP_AFTER" ] && pass 'open bead tmp scratch remains byte-identical' || fail 'open bead tmp scratch changed'
 if ! grep -q 'delete OPEN-UDID' "$FIX/xcrun.log"; then pass 'open bead simulator is not deleted'; else fail "open bead simulator was deleted: $(cat "$FIX/xcrun.log")"; fi
-if grep -q 'prune summary: touched=11' "$FIX/prune.out" && grep -q 'reclaimed_bytes=' "$FIX/prune.out"; then pass 'prune summary reports eleven touched rows and reclaimed bytes'; else fail "unexpected prune summary: $(cat "$FIX/prune.out")"; fi
+if grep -q 'prune summary: touched=12' "$FIX/prune.out" && grep -q 'reclaimed_bytes=' "$FIX/prune.out"; then pass 'prune summary reports twelve touched rows and reclaimed bytes'; else fail "unexpected prune summary: $(cat "$FIX/prune.out")"; fi
 
 # ---------------------------------------------------------------------------
 # cleanup phases. One empty install proves the fresh-install case; every other
