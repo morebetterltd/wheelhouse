@@ -137,7 +137,7 @@ fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the verifier), not rely on an operator
 // export reaching this one-shot process.
-fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
 if (process.env.STUB_GIT_INIT_REPO) {
   const cp = require("child_process");
   const repo = process.env.STUB_GIT_INIT_REPO;
@@ -158,6 +158,19 @@ if (process.env.STUB_GIT_INIT_REPO) {
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+if (process.env.STUB_RUN_BENCH === "1") {
+  const cp = require("child_process");
+  const outDir = path.join(agentDir, "bench-out");
+  fs.mkdirSync(outDir, { recursive: true });
+  const bench = path.join(process.env.WHEELHOUSE_ROOT || "", "wheelhouse", "crew", "bench.sh");
+  const res = cp.spawnSync(bench, ["artifact-fixture", outDir], { encoding: "utf8" });
+  const rc = res.error && res.error.code === "ENOENT" ? 127 : (res.status ?? 1);
+  fs.writeFileSync(path.join(agentDir, "bench-run.json"), JSON.stringify({ bench, rc, stdout: res.stdout ?? "", stderr: res.stderr ?? "", error: res.error?.message ?? null }, null, 2));
+  const text = `bench rc=${rc}\nVERDICT: ${rc === 127 ? "BOUNCE" : "APPROVE"}\nPUSH: NOT CONSIDERED\n`;
+  const wantsJson = process.argv.includes("--mode") && process.argv[process.argv.indexOf("--mode") + 1] === "json";
+  process.stdout.write(wantsJson ? JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n" : text);
+  process.exit(0);
+}
 if (process.env.STUB_SOURCE_CHECK === "1") {
   const prompt = process.argv[process.argv.length - 1] || "";
   const match = prompt.match(/mounted read-only at (\S+)/);
@@ -250,7 +263,7 @@ if (!agentDir) { process.stderr.write("stub claude: no CLAUDE_CONFIG_DIR\n"); pr
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
-fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
 const text = reply ? fs.readFileSync(reply, "utf8") : "";
@@ -273,7 +286,7 @@ if (!agentDir) { process.stderr.write("stub codex: no CODEX_HOME\n"); process.ex
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
-fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, CODEX_HOME: process.env.CODEX_HOME ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, CODEX_HOME: process.env.CODEX_HOME ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
 const text = reply ? fs.readFileSync(reply, "utf8") : "";
@@ -354,6 +367,13 @@ build_installed_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.
   rm -rf "$proj/contracts"
   mkdir -p "$proj/wheelhouse/fleet" "$proj/wheelhouse/crew"
   printf '# Crew: Reviewer\n\ninstalled-layout reviewer brief.\n' > "$proj/wheelhouse/crew/REVIEWER.md"
+  cat > "$proj/wheelhouse/crew/bench.sh" <<'BENCH'
+#!/usr/bin/env bash
+printf 'machine-local bench ran: artifact=%s out=%s\n' "${1:-}" "${2:-}"
+exit 42
+BENCH
+  chmod +x "$proj/wheelhouse/crew/bench.sh"
+  printf 'wheelhouse/\n' >> "$proj/.git/info/exclude"
 }
 
 build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.ts source
@@ -390,6 +410,9 @@ EOF
     printf '{\n  "%s": true\n}\n' "$umb" > "$HOME_FIX/.pi-seats-$ns/$d/trust.json"
     printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-$ns/$d/auth.json"
   done
+  ( cd "$umb" &&
+    git init -q &&
+    git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
   ( cd "$product" &&
     git init -q &&
     mkdir -p evidence && printf 'product branch evidence\n' > evidence/bench.log &&
@@ -434,6 +457,11 @@ run_runtime_grep_check() {
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
+run_bench_check() {  # args pass through to verify.ts
+  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_RUN_BENCH=1 \
+    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+  RC=$?
+}
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 VDIR="$PROJ/seats/verdicts"
@@ -473,6 +501,16 @@ else fail "installed layout: verify exited ${RC}: $OUT"; fi
 if grep -q "\"--append-system-prompt\",\"$INST_PROJ/wheelhouse/crew/REVIEWER.md\"" "$VARGV" 2>/dev/null; then
   pass "installed layout: verifier brief resolves to wheelhouse/crew/REVIEWER.md"
 else fail "installed layout: verifier brief was not the installed path"; fi
+if git -C "$INST_PROJ" check-ignore -q wheelhouse/crew/bench.sh; then
+  pass "installed layout: wheelhouse/ is machine-local and excluded from the branch worktree"
+else fail "installed layout: wheelhouse/crew/bench.sh was not excluded by .git/info/exclude"; fi
+run_bench_check bead-installed-bench fleet/bead-1 worker-1
+BENCH_RUN="$HOME_FIX/.pi-seats-installed/verifier/bench-run.json"
+if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null \
+  && grep -q '"rc": 42' "$BENCH_RUN" 2>/dev/null \
+  && ! grep -q '"rc": 127' "$BENCH_RUN" 2>/dev/null; then
+  pass "installed layout: machine-local bench resolves via WHEELHOUSE_ROOT and runs (rc != 127)"
+else fail "installed layout: machine-local bench did not run via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
 MISS_PROJ="$FIX/missing-brief-proj"
 build_proj "$MISS_PROJ" missing "$VERIFY"
 rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"
