@@ -210,7 +210,21 @@ export function porcelainStatus(wt: string): { ok: boolean; out: string; err: st
   return { ok: r.status === 0, out: r.stdout ?? "", err: (r.stderr ?? "").trim() };
 }
 
+export function ensureSeatLocalExcludes(wt: string): void {
+  const exclude = git(wt, ["rev-parse", "--git-path", "info/exclude"], wt);
+  if (!exclude.ok || !exclude.out) return;
+  const file = path.isAbsolute(exclude.out) ? exclude.out : path.join(wt, exclude.out);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    const lines = ["/.wheelhouse-runs/", "/.wheelhouse-worktrees/"];
+    const missing = lines.filter((line) => !current.split("\n").includes(line));
+    if (missing.length) fs.appendFileSync(file, `${current.endsWith("\n") || current.length === 0 ? "" : "\n"}${missing.join("\n")}\n`);
+  } catch {}
+}
+
 export function worktreeStatus(_root: string, wt: string): { clean: boolean; phantomOnly: boolean; real: string[] } {
+  ensureSeatLocalExcludes(wt);
   const r = porcelainStatus(wt);
   if (!r.ok) return { clean: false, phantomOnly: false, real: [`git status failed: ${r.err}`] };
   return phantomOnlyStatus(r.out);
