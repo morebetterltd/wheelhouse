@@ -196,6 +196,11 @@ export function tipOnRemote(root: string, sha: string): boolean {
   return r.ok && r.out.split("\n").some((l) => l.trim() && !l.includes("->"));
 }
 
+export function remoteTrackingTip(root: string, remote: string, branch: string): string | null {
+  const r = git(root, ["rev-parse", "--verify", "-q", `refs/remotes/${remote}/${branch}^{commit}`]);
+  return r.ok && r.out ? r.out : null;
+}
+
 export function pushMarkerPath(root: string, seat: string): string { return path.join(root, "seats", "run", `push.${seat}.json`); }
 
 export interface EnsureOptions {
@@ -306,7 +311,9 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     fs.writeFileSync(markerFile, JSON.stringify({ seat: o.seat, branch: currentBranch, worktree: target, startedAt: new Date().toISOString(), pid: process.pid }) + "\n");
     let push: ReturnType<typeof git>;
     try {
-      push = git(repo, ["push", "-u", remote, `${currentBranch}:${currentBranch}`], target);
+      const lease = currentBranch.startsWith("fleet/") ? remoteTrackingTip(repo, remote, currentBranch) : null;
+      const pushArgs = ["push", "-u", ...(lease ? [`--force-with-lease=refs/heads/${currentBranch}:${lease}`] : []), remote, `${currentBranch}:${currentBranch}`];
+      push = git(repo, pushArgs, target);
     } finally {
       try { fs.rmSync(markerFile, { force: true }); } catch {}
     }
