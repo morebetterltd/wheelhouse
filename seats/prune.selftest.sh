@@ -59,13 +59,16 @@ git -C "$PROD" push -q -u origin main
 ( cd "$ROOT" && bd init --non-interactive --skip-agents -p prune >/dev/null 2>&1 ) || { echo "selftest: bd init failed" >&2; exit 2; }
 CLOSED_ID=$(cd "$ROOT" && bd create 'closed merged worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 OPEN_ID=$(cd "$ROOT" && bd create 'seat anchored worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
+OPEN_LIVE_ID=$(cd "$ROOT" && bd create 'open live cwd anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 LIVE_ID=$(cd "$ROOT" && bd create 'closed live cwd anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
+CLOSED_LIVE_ID=$(cd "$ROOT" && bd create 'closed live cwd needs-review' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 HIST_ID=$(cd "$ROOT" && bd create 'closed session history anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 STALE_ID=$(cd "$ROOT" && bd create 'closed stale branch no worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 UNMERGED_ID=$(cd "$ROOT" && bd create 'closed unmerged branch must survive' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 GOAL_CHILD_ID=$(cd "$ROOT" && bd create 'closed child merged only to goal branch' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
 cd "$ROOT" && bd close "$CLOSED_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$LIVE_ID" >/dev/null 2>&1
+cd "$ROOT" && bd close "$CLOSED_LIVE_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$HIST_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$STALE_ID" >/dev/null 2>&1
 cd "$ROOT" && bd close "$UNMERGED_ID" >/dev/null 2>&1
@@ -84,6 +87,7 @@ make_closed_worktree(){
 make_closed_worktree "$CLOSED_ID" "closed work"
 git -C "$PROD" push -q origin "fleet/$CLOSED_ID"
 make_closed_worktree "$LIVE_ID" "live cwd work"
+make_closed_worktree "$CLOSED_LIVE_ID" "closed live cwd work"
 make_closed_worktree "$HIST_ID" "history cwd work"
 make_closed_worktree "$STALE_ID" "stale branch work"
 git -C "$PROD" worktree remove --force "$WTS/$STALE_ID"
@@ -110,13 +114,18 @@ git -C "$PROD" push -q origin "fleet/$GOAL_CHILD_ID"
 git -C "$PROD" checkout -q main
 
 git -C "$PROD" worktree add -q -b "fleet/$OPEN_ID" "$WTS/$OPEN_ID" main
+git -C "$PROD" worktree add -q -b "fleet/$OPEN_LIVE_ID" "$WTS/$OPEN_LIVE_ID" main
 mkdir -p "$ROOT/seats/logs" "$ROOT/seats/sessions"
 SESSION_HISTORY="$ROOT/seats/sessions/history.jsonl"
 printf '{"type":"session-start","cwd":"%s"}\n' "$WTS/$HIST_ID" > "$SESSION_HISTORY"
 ( cd "$WTS/$LIVE_ID" && sleep 1000 ) >/dev/null 2>&1 &
 LIVE_PID=$!
+( cd "$WTS/$OPEN_LIVE_ID" && sleep 1000 ) >/dev/null 2>&1 &
+OPEN_LIVE_PID=$!
+( cd "$WTS/$CLOSED_LIVE_ID" && sleep 1000 ) >/dev/null 2>&1 &
+CLOSED_LIVE_PID=$!
 TMP_SCRATCH+=()
-cleanup_live(){ kill "$LIVE_PID" >/dev/null 2>&1 || true; }
+cleanup_live(){ kill "$LIVE_PID" "$OPEN_LIVE_PID" "$CLOSED_LIVE_PID" >/dev/null 2>&1 || true; }
 cleanup_prune(){ cleanup_live; cleanup; }
 trap cleanup_prune EXIT INT TERM
 printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"},"worker-live":{"pid":%s,"cwd":"%s"},"worker-history":{"pid":999998,"cwd":"%s","sessionFile":"%s"}}}\n' "$WTS/$OPEN_ID" "$LIVE_PID" "$WTS/$OPEN_ID" "$WTS/$OPEN_ID" "$SESSION_HISTORY" > "$ROOT/seats/state.json"
@@ -215,6 +224,8 @@ if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p 
 if awk -F '\t' -v p="$WTS/$OPEN_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /recorded cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'current recorded seat cwd is classified as non-prunable seat-anchor'; else fail "recorded cwd seat-anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/worker-rostered" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /worktree of rostered seat worker-rostered/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'rostered .wheelhouse-worktrees/<seat> directory is classified as non-prunable seat-anchor'; else fail "rostered seat worktree anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$LIVE_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /live cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'live lsof cwd beats stale state.json cwd and is a seat-anchor'; else fail "live cwd seat-anchor row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$CLOSED_LIVE_ID" -v id="$CLOSED_LIVE_ID" '$1=="needs-review" && $2=="0" && $4==p && $9 == "live process has its cwd here; worktree belongs to closed bead " id {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed bead live-cwd worktree reason includes exact closed-bead wording'; else fail "closed bead live-cwd reason missing exact wording:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$OPEN_LIVE_ID" -v id="$OPEN_LIVE_ID" '$1=="needs-review" && $2=="0" && $4==p && $9 == "live process has its cwd here; worktree belongs to open bead " id {found=1} END{exit found?0:1}' "$SCAN"; then pass 'open bead live-cwd worktree reason includes exact open-bead wording'; else fail "open bead live-cwd reason missing exact wording:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$HIST_ID" '$1=="merged-worktree" && $2=="1" && $4==p {found=1} $1=="seat-anchor" && $4==p {bad=1} END{exit found && !bad ? 0 : 1}' "$SCAN"; then pass 'session history cwd is scanned by normal closed-bead worktree rules, not as a seat-anchor'; else fail "session history worktree did not become a safe merged-worktree:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/orphaned-checkout" '$1=="orphaned-worktree" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'orphaned checkout is safe orphaned-worktree'; else fail "orphaned row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$PROD/.wheelhouse-build" '$1=="build-cache" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'build cache is safe build-cache'; else fail "build-cache row missing:\n$(cat "$SCAN")"; fi

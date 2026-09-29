@@ -371,11 +371,12 @@ function scanWorktrees(root: string, repo: string, seats: Map<string, string>, b
     if (!tree.clean) { rows.push(row("needs-review", false, repo, p, w.branch, "none", `worktree has uncommitted changes (${tree.detail})`)); continue; }
     const phantom = tree.phantomOnly ? "; build output only" : "";
     if (live === null) { rows.push(row("needs-review", false, repo, p, w.branch, "none", "cannot verify: lsof unavailable")); continue; }
+    const b = beadFor(w.branch || path.basename(p), beads);
+    const beadState = b ? `; worktree belongs to ${b[1] === "closed" ? "closed" : "open"} bead ${b[0]}` : "";
     const cwd = liveCwdInside(p, live);
-    if (cwd) { rows.push(row("needs-review", false, repo, p, w.branch, "none", `live process has its cwd ${cwd === p ? "here" : `in ${cwd}`}`)); continue; }
+    if (cwd) { rows.push(row("needs-review", false, repo, p, w.branch, "none", `live process has its cwd ${cwd === p ? "here" : `in ${cwd}`}${beadState}`)); continue; }
     const pushing = pushInProgress(root, p, live);
     if (pushing) { rows.push(row("needs-review", false, repo, p, w.branch, "none", `deferred: push in progress (${pushing})`)); continue; }
-    const b = beadFor(w.branch || path.basename(p), beads);
     if (w.branch && isFleetBranch(w.branch)) {
       if (listedIntegrationRef(w.branch, extra)) { rows.push(row("needs-review", false, repo, p, w.branch, "none", "listed integration ref in seats/integration-refs.txt")); continue; }
       const done = integratedRef(repo, w.sha, extra);
