@@ -51,6 +51,7 @@ case "$1 $2" in
     case "${3:-}" in
       open) f="${FIXTURE_OPEN_FILE:-}"; [ -n "$f" ] && cat "$f" || echo '[]' ;;
       in_progress) f="${FIXTURE_INPROG_FILE:-}"; [ -n "$f" ] && cat "$f" || echo '[]' ;;
+      deferred) f="${FIXTURE_DEFERRED_FILE:-}"; [ -n "$f" ] && cat "$f" || echo '[]' ;;
       *) echo '[]' ;;
     esac ;;
   *) echo '[]' ;;
@@ -78,7 +79,7 @@ READY_0='[]'
 run() {
   OUT="$(cd "$PROJ" && env PATH="$PROJ/bin:$PATH" \
     FIXTURE_STATUS_FILE="${1:-}" FIXTURE_READY_FILE="${2:-}" FIXTURE_INPROG_FILE="${3:-}" \
-    FIXTURE_OPEN_FILE="${FIXTURE_OPEN_FILE:-}" FIXTURE_GH_ISSUES_FILE="${FIXTURE_GH_ISSUES_FILE:-}" \
+    FIXTURE_OPEN_FILE="${FIXTURE_OPEN_FILE:-}" FIXTURE_DEFERRED_FILE="${FIXTURE_DEFERRED_FILE:-}" FIXTURE_GH_ISSUES_FILE="${FIXTURE_GH_ISSUES_FILE:-}" \
     bash seats/fleet-gate.sh 2>&1)"
   RC=$?
 }
@@ -204,7 +205,27 @@ if [ $RC -eq 0 ] && ! has "GITHUB ISSUE(S) NOT ON THE BOARD"; then
 else
   fail "traced GitHub issues should be silent (rc=$RC): $OUT"
 fi
-unset FIXTURE_GH_ISSUES_FILE FIXTURE_OPEN_FILE
+printf '%s\n' '[{"id":"proj-deferred-42","description":"Trace: https://github.com/fixture-owner/fixture-product/issues/42"}]' > "$FIX/deferred-traced-one"
+FIXTURE_GH_ISSUES_FILE="$FIX/gh-open-issues" FIXTURE_OPEN_FILE="$FIX/open-traced-one" FIXTURE_DEFERRED_FILE="$FIX/deferred-traced-one" run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && ! has "GITHUB ISSUE(S) NOT ON THE BOARD"; then
+  pass "deferred traced GitHub issues count as triaged"
+else
+  fail "deferred traced GitHub issue should be silent (rc=$RC): $OUT"
+fi
+cat > "$FIX/gh-large-traced-issue" <<'JSON'
+[
+  {"url":"https://github.com/fixture-owner/fixture-product/issues/61","labels":[],"author":{"login":"alice"}}
+]
+JSON
+node -e 'const fs=require("fs"); const url="https://github.com/fixture-owner/fixture-product/issues/61"; const filler="x".repeat(70000); fs.writeFileSync(process.argv[1], JSON.stringify([{id:"proj-large", description:`Trace: ${url}\n${filler}`}]))' "$FIX/open-large-traced"
+unset FIXTURE_DEFERRED_FILE
+FIXTURE_GH_ISSUES_FILE="$FIX/gh-large-traced-issue" FIXTURE_OPEN_FILE="$FIX/open-large-traced" run "$FIX/status-live" "$FIX/ready-2" ""
+if [ $RC -eq 0 ] && ! has "GITHUB ISSUE(S) NOT ON THE BOARD"; then
+  pass "large traced set match is stable under pipefail"
+else
+  fail "large traced set produced a false miss (rc=$RC): $OUT"
+fi
+unset FIXTURE_GH_ISSUES_FILE FIXTURE_OPEN_FILE FIXTURE_DEFERRED_FILE
 
 phase "8. GitHub issue watch config — filters and off switch are install-owned"
 mkdir -p "$PROJ/wheelhouse"
