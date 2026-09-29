@@ -40,15 +40,19 @@
  *   resume   <seat>                    respawn attached to the recorded session
  *   reset    <seat>                    stop, discard the session, respawn cold
  *
- * A seat's process cwd is the bead's worktree, not the project root and not
- * prompt discipline: spawn with a bead id, or dispatch a bead the running
- * seat is not already sitting in, resolves to
- * `.wheelhouse-worktrees/<bead-id>` and STOPs loudly if that directory does
- * not exist yet — the worktree is a precondition dispatch enforces, not one
- * it creates. A cross-bead dispatch never interrupts a mid-turn seat: it
+ * A worker seat's process cwd is its OWN persistent worktree,
+ * `.wheelhouse-worktrees/<seat-name>`, by construction and not by prompt
+ * discipline: spawn with a bead id, or dispatch, prepares that worktree on
+ * `fleet/<bead-id>` (seats/seat-worktree.ts: create it under the seats+2
+ * cap, push the previous bead's branch first, refuse real uncommitted
+ * changes, switch base cleanly) and launches or relaunches the seat there
+ * only when its cwd actually changes. Seats of other roles run from the
+ * project root. A cross-bead dispatch never interrupts a mid-turn seat: it
  * STOPs and names the in-flight bead and the agent_end/isStreaming=false
  * settle it is waiting on, unless WHEELHOUSE_DISPATCH_FORCE=1 deliberately
- * abandons that turn and allows the stop-and-relaunch escape.
+ * abandons that turn. After a seat leaves a bead, `bun seats/prune.ts
+ * cleanup --bead <old>` runs detached so the old bead's scratch goes the
+ * moment its bead closes.
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -60,6 +64,8 @@ import { execFileSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
+// SPLICE 1/6 (seat worktrees): the per-seat worktree module.
+import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
 
 interface SeatDriver {
   readonly name: string;
@@ -77,7 +83,6 @@ const STATE_FILE = path.join(SEATS_DIR, "state.json");
 const RUN_DIR = path.join(SEATS_DIR, "run");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
 const ROSTER_FILE = path.join(SEATS_DIR, "seats.json");
-const WORKTREES_DIR = path.join(ROOT, ".wheelhouse-worktrees");
 
 // One knob for every wait in this file; the selftest raises it for real pi.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_RPC_TIMEOUT_MS || 20000);
@@ -91,12 +96,64 @@ const LOG_EVENT_STRING_BYTES = Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BY
 const ORPHAN_CONFIRM_MS = Number(process.env.WHEELHOUSE_ORPHAN_CONFIRM_MS || 3000);
 const WEDGED_GET_STATE_MS = Number(process.env.WHEELHOUSE_WEDGED_GET_STATE_MS || Math.min(TIMEOUT_MS, 3000));
 
-/** A bead's worktree, by the convention every worker and reviewer already
- * follows (wheelhouse/fleet/WORKER.md): `.wheelhouse-worktrees/<bead-id>`
- * beside seats/. This does not create it — it names where dispatch expects
- * to find it already created (worker claim, or the commander's own setup). */
-function beadWorktreeDir(beadId: string): string {
-  return path.join(WORKTREES_DIR, beadId);
+// SPLICE 2/6 (seat worktrees): where a seat works and how its worktree is
+// prepared. A worker seat owns ONE persistent worktree,
+// `.wheelhouse-worktrees/<seat-name>` (wheelhouse/fleet/WORKER.md), and a
+// dispatch switches that worktree to `fleet/<bead-id>`; seats of every other
+// role run from the project root and take no worktree slot. A roster entry may
+// force either with `"worktree": true|false`.
+function seatUsesWorktree(entry: SeatEntry): boolean {
+  if (typeof entry.worktree === "boolean") return entry.worktree;
+  return entry.role === "worker";
+}
+
+function seatCwdFor(name: string, entry: SeatEntry): string {
+  return seatUsesWorktree(entry) ? seatWorktreeDir(ROOT, name) : ROOT;
+}
+
+/** Prepare the seat's worktree on the bead's branch (create, push-gate,
+ * switch) and return the cwd to launch or dispatch into. Refusals are loud
+ * STOPs that leave the seat exactly as it was; plain-words notes land in
+ * the seat's event log so "push failed" is readable where the seat's
+ * history is. */
+function prepareSeatCwd(name: string, entry: SeatEntry, beadId: string, base: string | null): string {
+  if (!seatUsesWorktree(entry)) return ROOT;
+  const state = readState();
+  const rec = state.seats[name];
+  const note = (line: string) => {
+    console.log(line);
+    if (rec?.log) appendSeatLog(rec.log, { type: "wheelhouse_note", seat: name, bead: beadId, message: line, at: new Date().toISOString() });
+  };
+  try {
+    return ensureSeatWorktree({ root: ROOT, seat: name, beadId, base, roster: parseRosterFile(), state, note }).target;
+  } catch (e: any) {
+    if (e instanceof SeatWorktreeError) die(e.message);
+    throw e;
+  }
+}
+
+/** After a seat leaves a bead, that bead's run folder, per-bead build folder
+ * and any per-bead worktree become prunable the moment the bead closes.
+ * Kick the canonical cleanup for exactly that bead, detached, so dispatch
+ * does not wait on it; WHEELHOUSE_CLEANUP_SYNC=1 waits (selftests),
+ * WHEELHOUSE_CLEANUP=0 disables it. */
+function startBeadCleanup(beadId: string): void {
+  if (process.env.WHEELHOUSE_CLEANUP === "0") return;
+  const prune = path.join(SEATS_DIR, "prune.ts");
+  if (!fs.existsSync(prune)) return;
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+  const args = [prune, "cleanup", "--bead", beadId, "--wait", String(Number(process.env.WHEELHOUSE_CLEANUP_WAIT_S || 120))];
+  if (process.env.WHEELHOUSE_CLEANUP_SYNC === "1") {
+    const r = spawnSync(process.execPath, args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    process.stdout.write(r.stdout ?? "");
+    if (r.status !== 0) console.log(`cleanup for bead ${beadId} exited ${r.status ?? r.signal}: ${(r.stderr ?? "").trim().slice(-500)}`);
+    return;
+  }
+  const out = fs.openSync(path.join(LOG_DIR, "cleanup.out.log"), "a");
+  const child = spawn(process.execPath, args, { cwd: ROOT, detached: true, stdio: ["ignore", out, out] });
+  child.unref();
+  fs.closeSync(out);
+  console.log(`cleanup started for bead ${beadId} (pid ${child.pid}); decisions land in seats/logs/cleanup.log`);
 }
 
 function die(msg: string): never {
@@ -183,6 +240,7 @@ interface SeatEntry {
   model?: string;
   external?: boolean;
   shadow?: boolean;
+  worktree?: boolean;
   skills?: string[];
   allowedTools?: string;
   account?: { dir: string; label?: string; authRoute?: string };
@@ -815,7 +873,7 @@ function accountLabelSuffix(entry: SeatEntry | undefined, rec?: SeatRecord): str
 
 // The seat's process cwd IS the bead's worktree — construction, not a
 // prompt telling the seat to cd there. Callers compute cwd from the bead id
-// (beadWorktreeDir); launch() only ever starts a process in a directory
+// (prepareSeatCwd); launch() only ever starts a process in a directory
 // that already exists, never creates one. Checked BEFORE anything is
 // stopped or spawned: a dispatch aimed at a bead with no worktree must
 // refuse loudly and leave whatever was already running alone, not kill a
@@ -1203,9 +1261,15 @@ function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatD
   requirePiHarness(name, entry, operation);
   return PI_DRIVER;
 }
-async function cmdSpawn(name: string, beadId?: string): Promise<void> {
+// SPLICE 3/6 (seat worktrees): spawn with a bead prepares the seat worktree.
+async function cmdSpawn(name: string, beadId?: string, base: string | null = null): Promise<void> {
   const entry = requireSeat(name);
-  await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, beadId ? beadWorktreeDir(beadId) : ROOT);
+  const cwd = beadId ? prepareSeatCwd(name, entry, beadId, base) : ROOT;
+  await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, cwd);
+  if (beadId) {
+    const state = readState();
+    if (state.seats[name]) { state.seats[name].lastBead = beadId; writeState(state); }
+  }
 }
 
 function piProbe(name: string, entry: SeatEntry): void {
@@ -1268,15 +1332,16 @@ async function cmdResume(name: string): Promise<void> {
   if (!fs.existsSync(rec.sessionFile)) {
     die(`recorded session file is gone: ${rec.sessionFile} — spawn a fresh seat instead`);
   }
-  // Resuming keeps the seat where it was working, not the project root: the
-  // cwd it was launched into last time, falling back to ROOT only for a
-  // state.json record from before this field existed. If that cwd was pruned,
-  // resume uses the same fresh-session mechanics as dispatch: prefer the
-  // current bead's worktree when it still exists, else recover at ROOT.
+  // SPLICE 5/6 (seat worktrees): resuming keeps the seat where it was
+  // working, not the project root: the cwd it was launched into last time,
+  // falling back to ROOT only for a state.json record from before this field
+  // existed. If that cwd was pruned, resume uses the same fresh-session
+  // mechanics as dispatch: prefer the seat's own worktree when it still
+  // exists, else recover at ROOT. Never a STOP on a missing cwd.
   const resumeCwd = rec.cwd ?? ROOT;
   if (!fs.existsSync(resumeCwd) || !fs.statSync(resumeCwd).isDirectory()) {
-    const beadCwd = rec.lastBead ? beadWorktreeDir(rec.lastBead) : "";
-    const fallbackCwd = beadCwd && fs.existsSync(beadCwd) && fs.statSync(beadCwd).isDirectory() ? beadCwd : ROOT;
+    const seatCwd = seatWorktreeDir(ROOT, name);
+    const fallbackCwd = fs.existsSync(seatCwd) && fs.statSync(seatCwd).isDirectory() && !fs.existsSync(path.join(seatCwd, ".pruned-placeholder")) ? seatCwd : ROOT;
     console.log(
       `seat ${name}: recorded seat cwd is gone: ${resumeCwd}; ` +
         `session continuity intentionally dropped; resuming fresh in ${fallbackCwd}`
@@ -1375,81 +1440,78 @@ async function healWedgedSeat(name: string, rec: SeatRecord, context: string): P
   return healed;
 }
 
-async function cmdDispatch(name: string, beadId: string, text: string, retriedWedged = false): Promise<void> {
-  const targetCwd = beadWorktreeDir(beadId);
+// SPLICE 4/6 (seat worktrees): dispatch prepares the seat's own worktree on
+// the bead's branch, relaunches only when the seat's cwd actually changes
+// (first dispatch from the root, or a pruned cwd), and kicks the closed-bead
+// cleanup for the bead the seat just left.
+async function cmdDispatch(name: string, beadId: string, text: string, base: string | null = null, retriedWedged = false): Promise<void> {
   let rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
-  if (!pidAlive(rec.pid, rec.fifo)) {
-    requireCwdDir(targetCwd);
-    const recordedCwd = rec.cwd ?? ROOT;
-    const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
-    if (recordedCwdExists) {
-      console.log(`seat ${name}: not running; spawning in dispatch target ${targetCwd}`);
-    } else {
-      console.log(
-        `seat ${name}: not running and recorded cwd is gone: ${recordedCwd}; ` +
-          `session continuity intentionally dropped; falling back to fresh spawn in dispatch target ${targetCwd}`
-      );
-    }
-    const entry = requireSeat(name);
-    await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, null, targetCwd);
-    rec = requireRunning(name);
-  }
+  const entry = requireSeat(name);
+  const previousBead = rec.lastBead;
+  const crossBead = Boolean(previousBead) && previousBead !== beadId;
+  const alive = pidAlive(rec.pid, rec.fifo);
   const sameCwdDriver = driverForRunningSeat(name, "adapter dispatch");
-  if (seatIdleByLog(rec)) {
-    try {
-      const st = await sameCwdDriver.getState(rec);
-      if (!st.success) die(`get_state failed while checking idle seat "${name}" before dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
-    } catch (e: any) {
-      if (isRpcTimeout(e, "get_state")) {
-        if (retriedWedged) die(`seat "${name}" is WEDGED — idle get_state timed out again after stop+resume; remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}. stderr tail:\n${stderrTail(rec)}`);
-        await healWedgedSeat(name, rec, "dispatch");
-        return cmdDispatch(name, beadId, text, true);
-      }
-      die(`get_state failed while checking idle seat "${name}" before dispatch: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
-    }
-  }
-  if (!samePath(rec.cwd, targetCwd)) {
-    // Construction, not prompt discipline: a seat handed a DIFFERENT bead
-    // than the one it is sitting in gets stopped and relaunched attached to
-    // its own session, but rooted in the new bead's worktree, before the
-    // prompt goes anywhere near it. Checked BEFORE stopping anything — a
-    // missing worktree must refuse loudly with the seat left exactly as it
-    // was, not stopped on the way to discovering the target doesn't exist.
-    requireCwdDir(targetCwd);
+
+  // A different bead never lands on a mid-turn seat: the worktree would be
+  // switched under a running turn. Checked BEFORE the worktree is touched, so
+  // a refusal leaves the seat and its worktree exactly as they were.
+  let streaming = false;
+  let forcedStop = false;
+  if (alive && (crossBead || seatIdleByLog(rec))) {
     let st: any;
     try {
       st = await sameCwdDriver.getState(rec);
     } catch (e: any) {
       if (isRpcTimeout(e, "get_state") && seatIdleByLog(rec)) {
         if (retriedWedged) die(`seat "${name}" is WEDGED — idle get_state timed out again after stop+resume; remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}. stderr tail:\n${stderrTail(rec)}`);
-        await healWedgedSeat(name, rec, "cross-bead dispatch");
-        return cmdDispatch(name, beadId, text, true);
+        await healWedgedSeat(name, rec, crossBead ? "cross-bead dispatch" : "dispatch");
+        return cmdDispatch(name, beadId, text, base, true);
       }
-      die(`get_state failed while checking seat "${name}" before cross-bead dispatch: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
+      die(`get_state failed while checking seat "${name}" before ${crossBead ? "cross-bead " : ""}dispatch: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
     }
-    if (!st.success) {
-      die(`get_state failed while checking seat "${name}" before cross-bead dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
-    }
-    const inFlight = rec.lastBead ?? "unknown bead";
+    if (!st.success) die(`get_state failed while checking seat "${name}" before ${crossBead ? "cross-bead " : ""}dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
+    streaming = Boolean(st.data?.isStreaming);
     const force = process.env.WHEELHOUSE_DISPATCH_FORCE === "1";
-    if (st.data?.isStreaming && !force) {
+    if (crossBead && streaming && !force) {
       die(
-        `seat "${name}" is mid-turn on ${inFlight}; refusing cross-bead dispatch to ${beadId}. ` +
+        `seat "${name}" is mid-turn on ${previousBead}; refusing cross-bead dispatch to ${beadId}. ` +
           `Wait for settle agent_end/isStreaming=false before dispatching another bead, or set WHEELHOUSE_DISPATCH_FORCE=1 to abandon the running turn.`
       );
     }
-    if (st.data?.isStreaming && force) {
+    if (crossBead && streaming && force) {
       console.log(
-        `seat ${name}: WHEELHOUSE_DISPATCH_FORCE=1 — deliberately abandoning mid-turn bead ${inFlight}; ` +
+        `seat ${name}: WHEELHOUSE_DISPATCH_FORCE=1 — deliberately abandoning mid-turn bead ${previousBead}; ` +
           `old stop-and-relaunch escape will dispatch ${beadId}`
       );
+      await cmdStop(name);
+      forcedStop = true;
     }
+  }
+
+  const targetCwd = prepareSeatCwd(name, entry, beadId, base);
+  rec = readState().seats[name];
+  if (!pidAlive(rec.pid, rec.fifo)) {
+    const recordedCwd = rec.cwd ?? ROOT;
+    const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
+    if (forcedStop && recordedCwdExists) {
+      const driver = driverForSeat(name, entry, "adapter dispatch");
+      const resumeFile = driver.name === "codex" ? (rec.sessionFile && fs.existsSync(rec.sessionFile) ? rec.sessionFile : null) : rec.sessionFile;
+      await driver.launch(name, entry, resumeFile, targetCwd);
+    } else {
+      if (recordedCwdExists) console.log(`seat ${name}: not running; spawning in dispatch target ${targetCwd}`);
+      else console.log(`seat ${name}: not running and recorded cwd is gone: ${recordedCwd}; session continuity intentionally dropped; falling back to fresh spawn in dispatch target ${targetCwd}`);
+      await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, null, targetCwd);
+    }
+    rec = requireRunning(name);
+  } else if (!samePath(rec.cwd, targetCwd)) {
+    // Construction, not prompt discipline: a seat whose cwd is not the
+    // target gets stopped and relaunched attached to its own session,
+    // rooted in its worktree, before the prompt goes anywhere near it.
     const recordedCwd = rec.cwd ?? ROOT;
     const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
     await cmdStop(name);
     if (recordedCwdExists) {
-      const entry = requireSeat(name);
       const driver = driverForSeat(name, entry, "adapter dispatch");
       const resumeFile = driver.name === "codex" ? (rec.sessionFile && fs.existsSync(rec.sessionFile) ? rec.sessionFile : null) : rec.sessionFile;
       if (driver.name === "codex" && rec.sessionFile && !resumeFile) console.log(`seat ${name}: recorded session file is gone or not yet written; session continuity intentionally dropped; starting fresh in ${targetCwd}`);
@@ -1459,7 +1521,6 @@ async function cmdDispatch(name: string, beadId: string, text: string, retriedWe
         `seat ${name}: session continuity intentionally dropped because recorded cwd is gone: ${recordedCwd}; ` +
           `falling back to fresh spawn in dispatch target ${targetCwd}`
       );
-      const entry = requireSeat(name);
       await driverForSeat(name, entry, "adapter dispatch").launch(name, entry, null, targetCwd);
     }
     rec = requireRunning(name);
@@ -1515,6 +1576,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, retriedWe
   delete landedState.seats[name].lastStalledEvent; // a dispatch that lands clears it
   writeState(landedState);
   console.log(`dispatched ${beadId} to ${name}; watch ${rec.log}`);
+  if (crossBead && previousBead) startBeadCleanup(previousBead);
 }
 
 async function cmdSteer(name: string, text: string): Promise<void> {
@@ -1957,19 +2019,31 @@ async function cmdStopAll(): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
-const [cmd, ...rest] = process.argv.slice(2);
+const [cmd, ...argvRest] = process.argv.slice(2);
+
+// SPLICE 6/6 (seat worktrees): `--base <ref>` on spawn/dispatch names the
+// ref a NEW bead branch is cut from (default: the bead's `Integration:` line,
+// then WHEELHOUSE_WORKTREE_BASE, then origin's default branch).
+let baseRef: string | null = null;
+const rest: string[] = [];
+for (let i = 0; i < argvRest.length; i++) {
+  if (argvRest[i] === "--base" && (cmd === "spawn" || cmd === "dispatch")) {
+    baseRef = argvRest[++i] ?? null;
+    if (!baseRef) die("--base requires a ref");
+  } else rest.push(argvRest[i]);
+}
 
 async function main(): Promise<void> {
   switch (cmd) {
     case "spawn":
-      if (rest.length !== 1 && rest.length !== 2) die("usage: adapter.ts spawn <seat> [bead-id]");
-      return cmdSpawn(validateSeatName(rest[0]), rest[1] !== undefined ? validateSegment("bead id", rest[1]) : undefined);
+      if (rest.length !== 1 && rest.length !== 2) die("usage: adapter.ts spawn <seat> [bead-id] [--base <ref>]");
+      return cmdSpawn(validateSeatName(rest[0]), rest[1] !== undefined ? validateSegment("bead id", rest[1]) : undefined, baseRef);
     case "probe":
       if (rest.length !== 1) die("usage: adapter.ts probe <seat>");
       return cmdProbe(validateSeatName(rest[0]));
     case "dispatch":
-      if (rest.length !== 3) die("usage: adapter.ts dispatch <seat> <bead-id> <text>");
-      return cmdDispatch(validateSeatName(rest[0]), validateSegment("bead id", rest[1]), rest[2]);
+      if (rest.length !== 3) die("usage: adapter.ts dispatch <seat> <bead-id> <text> [--base <ref>]");
+      return cmdDispatch(validateSeatName(rest[0]), validateSegment("bead id", rest[1]), rest[2], baseRef);
     case "steer":
       if (rest.length !== 2) die("usage: adapter.ts steer <seat> <text>");
       return cmdSteer(validateSeatName(rest[0]), rest[1]);

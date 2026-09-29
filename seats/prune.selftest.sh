@@ -38,6 +38,7 @@ PROD="$ROOT/product"
 WTS="$ROOT/.wheelhouse-worktrees"
 mkdir -p "$PROD" "$WTS" "$ROOT/seats"
 cp "$PRUNE" "$ROOT/seats/prune.ts"
+cp "$(dirname "$PRUNE")/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"
 chmod +x "$ROOT/seats/prune.ts"
 
 git -C "$ROOT" init -q -b main
@@ -182,21 +183,22 @@ BUSY="$FIX/busy-container"
 mkdir -p "$BUSY/seats" "$BUSY/.wheelhouse-bench.lock" "$BUSY/product/.wheelhouse-build"
 printf '{"seats":{}}\n' > "$BUSY/seats/state.json"
 cp "$PRUNE" "$BUSY/seats/prune.ts"
+cp "$(dirname "$PRUNE")/seat-worktree.ts" "$BUSY/seats/seat-worktree.ts"
 chmod +x "$BUSY/seats/prune.ts"
 printf 'active-lock\n' > "$BUSY/.wheelhouse-bench.lock/pid"
 printf 'busy-cache\n' > "$BUSY/product/.wheelhouse-build/cache.txt"
 
 phase 'categories verb'
 CATS=$(cd "$ROOT" && bun seats/prune.ts categories 2>&1)
-if printf '%s\n' "$CATS" | grep -q 'merged-worktree' && printf '%s\n' "$CATS" | grep -q 'seat-anchor' && printf '%s\n' "$CATS" | grep -q 'bench-junk' && printf '%s\n' "$CATS" | grep -q 'bead-runs' && printf '%s\n' "$CATS" | grep -q 'bead-tmp' && printf '%s\n' "$CATS" | grep -q 'bead-simulator' && printf '%s\n' "$CATS" | grep -q 'xctest-devices'; then pass 'categories names worktree, bench-junk, scratch, simulator, xctest, and seat safety categories'; else fail "categories output missing expected categories: $CATS"; fi
+if printf '%s\n' "$CATS" | grep -q 'merged-worktree' && printf '%s\n' "$CATS" | grep -q 'seat-anchor' && printf '%s\n' "$CATS" | grep -q 'bench-junk' && printf '%s\n' "$CATS" | grep -q 'run-scratch' && printf '%s\n' "$CATS" | grep -q 'bead-tmp' && printf '%s\n' "$CATS" | grep -q 'bead-simulator' && printf '%s\n' "$CATS" | grep -q 'xctest-devices'; then pass 'categories names worktree, bench-junk, scratch, simulator, xctest, and seat safety categories'; else fail "categories output missing expected categories: $CATS"; fi
 
 phase 'scan classifies fixture rows'
 SCAN="$FIX/scan.tsv"
 ( cd "$ROOT" && bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan failed" >&2; exit 2; }
 if awk -F '\t' -v p="$WTS/$CLOSED_ID" '$1=="merged-worktree" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed merged clean worktree is safe merged-worktree'; else fail "closed merged worktree row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v b="fleet/$STALE_ID" '$1=="stale-branch" && $2=="1" && $5==b && $6=="0" && $7=="0.0B" {found=1} END{exit found?0:1}' "$SCAN"; then pass 'safe stale-branch reports zero reclaimed size'; else fail "stale-branch zero-size row missing:\n$(cat "$SCAN")"; fi
-if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $5 ~ /^fleet\// && $9 ~ /not both merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed but unmerged fleet worktree is needs-review'; else fail "unmerged branch guard row missing:\n$(cat "$SCAN")"; fi
-if awk -F '\t' -v p="$WTS/$GOAL_CHILD_ID" '$1=="needs-review" && $2=="0" && $4==p && $5 ~ /^fleet\// && $9 ~ /not both merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'goal-branch child is needs-review before integration-refs.txt exists'; else fail "goal child before integration-refs row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $5 ~ /^fleet\// && $9 ~ /not merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed but unmerged fleet worktree is needs-review'; else fail "unmerged branch guard row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$GOAL_CHILD_ID" '$1=="needs-review" && $2=="0" && $4==p && $5 ~ /^fleet\// && $9 ~ /not merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'goal-branch child is needs-review before integration-refs.txt exists'; else fail "goal child before integration-refs row missing:\n$(cat "$SCAN")"; fi
 cat > "$ROOT/seats/integration-refs.txt" <<'EOF'
 # extra integration branches for this install
 
@@ -206,7 +208,7 @@ EOF
 ( cd "$ROOT" && bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan with integration-refs failed" >&2; exit 2; }
 if awk -F '\t' -v p="$WTS/$GOAL_CHILD_ID" '$1=="merged-worktree" && $2=="1" && $4==p && $5 ~ /^fleet\// {found=1} END{exit found?0:1}' "$SCAN"; then pass 'goal-branch child becomes safe merged-worktree when its goal branch is listed'; else fail "goal child merged-worktree row missing after integration-refs:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v b="fleet/goal-x" '$1=="needs-review" && $2=="0" && $5==b && $9 ~ /listed integration ref/ {found=1} $1=="stale-branch" && $5==b {bad=1} END{exit found && !bad ? 0 : 1}' "$SCAN"; then pass 'listed goal branch is needs-review, never stale-branch'; else fail "listed goal branch guard row missing:\n$(cat "$SCAN")"; fi
-if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /not both merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'listed goal ref does not widen matching to unrelated fleet branches'; else fail "unrelated unmerged branch was widened by integration-refs:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /not merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'listed goal ref does not widen matching to unrelated fleet branches'; else fail "unrelated unmerged branch was widened by integration-refs:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$OPEN_ID" '$1=="seat-anchor" && $2=="0" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'seat cwd is classified as non-prunable seat-anchor'; else fail "seat-anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$LIVE_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /live cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'live lsof cwd beats stale state.json cwd and is a seat-anchor'; else fail "live cwd seat-anchor row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$HIST_ID" '$1=="seat-anchor" && $2=="0" && $4==p && $9 ~ /session history cwd/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'session history cwd is a non-prunable seat-anchor'; else fail "session history seat-anchor row missing:\n$(cat "$SCAN")"; fi
@@ -218,7 +220,7 @@ if awk -F '\t' -v p="$PROD/node_modules/pkg/dist" '$1=="needs-review" && $2=="0"
 if awk -F '\t' -v p="$PROD/node_modules/.bin" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /dependency/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'node_modules .bin is needs-review, not safe build-cache'; else fail "node_modules .bin guard row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' '$4 ~ /\/node_modules\// && $2=="1" {bad=1} END{exit bad?1:0}' "$SCAN"; then pass 'no safe scan rows appear under node_modules'; else fail "safe node_modules row present:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$ROOT/.wheelhouse-bench.lock.stale.12345" '$1=="bench-junk" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'stale bench lock is safe bench-junk'; else fail "bench-junk row missing:\n$(cat "$SCAN")"; fi
-if awk -F '\t' -v p="$ROOT/.wheelhouse-runs/$CLOSED_ID-build" '$1=="bead-runs" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed bead .wheelhouse-runs scratch is safe bead-runs'; else fail "closed bead-runs row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$ROOT/.wheelhouse-runs/$CLOSED_ID-build" '$1=="run-scratch" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed bead .wheelhouse-runs scratch is safe run-scratch'; else fail "closed bead-runs row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$ROOT/.wheelhouse-runs/$OPEN_ID-build" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /which is open/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'open bead .wheelhouse-runs scratch is needs-review'; else fail "open bead-runs guard row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$CLOSED_TMP" '$1=="bead-tmp" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed bead /private/tmp scratch is safe bead-tmp'; else fail "closed bead-tmp row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$OPEN_TMP" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /which is open/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'open bead /private/tmp scratch is needs-review'; else fail "open bead-tmp guard row missing:\n$(cat "$SCAN")"; fi
@@ -243,6 +245,7 @@ phase 'prune --yes refuses while a rostered seat is mid-turn'
 MID="$FIX/midturn"
 mkdir -p "$MID/seats" "$MID/product/.wheelhouse-build"
 cp "$PRUNE" "$MID/seats/prune.ts"
+cp "$(dirname "$PRUNE")/seat-worktree.ts" "$MID/seats/seat-worktree.ts"
 chmod +x "$MID/seats/prune.ts"
 MID_FIFO="$MID/seats/mid.stdin"
 MID_LOG="$MID/seats/mid.jsonl"
