@@ -429,13 +429,14 @@ phase "0b. claude-code driver — spawn, dispatch ack, steer, settled, resume, s
 CLAUDE_PROJ="$FIX/claude-proj"
 build_proj "$CLAUDE_PROJ" claude
 RUN_PROJ="$CLAUDE_PROJ"
-env HOME="$HOME_FIX" PROJ="$CLAUDE_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["worker-1"].harness="claude-code"; r.seats["worker-1"].model="sonnet"; r.seats["worker-1"].allowedTools="Bash(printf *)"; r.seats["worker-1"].account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+env HOME="$HOME_FIX" PROJ="$CLAUDE_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["worker-1"].harness="claude-code"; r.seats["worker-1"].model="sonnet"; r.seats["worker-1"].allowedTools="Bash(printf *)"; r.seats["worker-1"].disallowedTools="Bash(rm -rf:*)"; r.seats["worker-1"].account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 mkdir -p "$HOME_FIX/.pi-seats-claude/worker-1"
 printf '{"loggedIn":true}\n' > "$HOME_FIX/.pi-seats-claude/worker-1/.claude.json"
 ANTHROPIC_API_KEY=leak ANTHROPIC_AUTH_TOKEN=leak OPENAI_API_KEY=leak run spawn worker-1
 if [ $RC -eq 0 ] && grep -q 'seat worker-1' <<<"$OUT"; then pass "claude-code spawn exits 0 through the adapter"; else fail "claude-code spawn failed: $OUT"; fi
 for _ in $(seq 1 100); do [ -f "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" ] && break; sleep 0.05; done
 if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" && ! grep -q 'contracts/WORKER.md' "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json"; then pass "claude-code passes brief text, not a path"; else fail "claude-code did not pass brief text: $(cat "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" 2>/dev/null)"; fi
+if grep -q '"--allowedTools","Bash(printf \*)"' "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" && grep -q '"--disallowedTools","Bash(rm -rf:\*)"' "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json"; then pass "claude-code shim forwards allowedTools and disallowedTools to claude"; else fail "claude-code shim did not forward tool lists: $(cat "$HOME_FIX/.pi-seats-claude/worker-1/claude-argv.json" 2>/dev/null)"; fi
 CLAUDE_LOG="$CLAUDE_PROJ/seats/logs/worker-1.jsonl"
 run dispatch worker-1 bead-y "tools hello claude"
 if [ $RC -eq 0 ] && grep -q 'dispatched bead-y to worker-1' <<<"$OUT"; then pass "claude-code dispatch ack exits 0"; else fail "claude-code dispatch ack failed (rc=$RC): $OUT"; fi

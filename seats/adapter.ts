@@ -243,6 +243,7 @@ interface SeatEntry {
   worktree?: boolean;
   skills?: string[];
   allowedTools?: string;
+  disallowedTools?: string;
   account?: { dir: string; label?: string; authRoute?: string };
 }
 
@@ -1116,6 +1117,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
     "--permission-mode", "acceptEdits",
     "--allowed-tools", entry.allowedTools,
   ];
+  if (entry.disallowedTools) args.push("--disallowed-tools", entry.disallowedTools);
   if (isClaudeDefaultAuth(entry)) args.push("--default-login");
   if (sessionFile) args.push("--resume", sessionFile);
   const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;

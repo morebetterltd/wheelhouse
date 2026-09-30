@@ -238,7 +238,20 @@ rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT
 if [ "$rc" -eq 0 ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'claude-code walk one-shot uses claude driver environment, not pi'; else fail "claude-code walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
 if grep -q '"--output-format","stream-json"' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q '"--verbose"' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot requests stream-json output with --verbose'; else fail "claude-code walk one-shot missing stream-json/--verbose argv: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
 if grep -q 'Fixture walker brief' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && ! grep -q 'contracts/VERIFIER.md' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot carries verifier brief text, not the path'; else fail "claude-code walk one-shot carried path or missed brief text: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
-bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+if ! grep -q -- 'permission-mode\|allowed-tools\|disallowed-tools' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot omits tool permission flags when the seat has no tool lists'; else fail "claude-code walk one-shot unexpectedly carried tool permission flags: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
+bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+rm -f "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"
+rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-claude-tools" 2>&1) || rc=$?
+if [ "$rc" -eq 0 ] && bun -e '
+  const fs = require("fs");
+  const args = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  const flagAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 && /^--/.test(args[i+2] ?? ""); };
+  if (args.at(-1).startsWith("--")) process.exit(1);
+  if (!args.includes("--permission-mode") || args[args.indexOf("--permission-mode")+1] !== "acceptEdits") process.exit(2);
+  if (!flagAfter("--allowed-tools") || !flagAfter("--disallowed-tools")) process.exit(3);
+  if (args.indexOf("--allowed-tools") > args.indexOf("--model") || args.indexOf("--disallowed-tools") > args.indexOf("--model")) process.exit(4);
+' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot passes tool lists before --model with a following flag and prompt last'; else fail "claude-code walk one-shot tool-list argv order wrong (rc=$rc argv=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null))"; fi
+bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/env.json"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-codex" 2>&1) || rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'codex walk one-shot uses codex driver environment, not pi'; else fail "codex walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi

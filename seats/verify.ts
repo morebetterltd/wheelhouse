@@ -679,6 +679,8 @@ interface SeatEntry {
   model?: string;
   external?: boolean;
   account?: { dir: string; label?: string; authRoute?: string };
+  allowedTools?: string;
+  disallowedTools?: string;
 }
 
 function readRoster(): Record<string, SeatEntry> {
@@ -1058,7 +1060,7 @@ async function main(): Promise<void> {
     `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
   ].join("\n");
 
-  const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt);
+  const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   const startedAt = Date.now();
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
