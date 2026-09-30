@@ -834,6 +834,7 @@ VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
 bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+printf '{"oauthAccount":{"email":"verifier@example.test","accessToken":"fixture-token"}}\n' > "$HOME_FIX/.pi-seats-mixedv/verifier/.claude.json"
 RUN_PROJ="$MIX_PROJ"; VDIR="$MIX_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
@@ -1006,12 +1007,17 @@ else fail "final-message conflicting verdicts did not STOP (exit $RC): $OUT"; fi
 set_verifier_harness() {
   env HOME="$HOME_FIX" bun -e '
     const fs = require("fs");
-    const file = process.argv[1], harness = process.argv[2];
+    const file = process.argv[1], harness = process.argv[2], dir = process.argv[3];
     const j = JSON.parse(fs.readFileSync(file, "utf8"));
     if (harness === "pi") delete j.seats.verifier.harness;
     else j.seats.verifier.harness = harness;
+    if (harness === "claude-code") {
+      fs.writeFileSync(`${dir}/.claude.json`, JSON.stringify({ oauthAccount: { email: "verifier@example.test", accessToken: "fixture-token" } }));
+    } else {
+      fs.rmSync(`${dir}/.claude.json`, { force: true });
+    }
     fs.writeFileSync(file, JSON.stringify(j, null, 2));
-  ' "$PROJ/seats/seats.json" "$1"
+  ' "$PROJ/seats/seats.json" "$1" "$HOME_FIX/.pi-seats-alpha/verifier"
 }
 for fixture in $EXPECTED_REAL_FIXTURES; do
   [ -f "$REAL_FIXTURES_DIR/$fixture" ] || { echo "selftest: missing real verifier fixture: $REAL_FIXTURES_DIR/$fixture" >&2; exit 2; }
@@ -1151,6 +1157,15 @@ if [ $RC -eq 1 ] && says "no identity"; then
   pass "a verifier seat that was never logged in is a STOP"
 else fail "identity-less verifier not refused (exit $RC): $OUT"; fi
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-alpha/verifier/auth.json"
+CLAUDE_ID_PROJ="$FIX/claude-identity-stop"
+build_proj "$CLAUDE_ID_PROJ" claudeid "$VERIFY"
+bun -e "const fs=require('fs'); const p='$CLAUDE_ID_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.account.authRoute='oauth'; fs.rmSync('$HOME_FIX/.pi-seats-claudeid/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
+RUN_PROJ="$CLAUDE_ID_PROJ"; VDIR="$CLAUDE_ID_PROJ/seats/verdicts"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-claude-id fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
+if [ $RC -eq 1 ] && says "no identity" && says "CLAUDE_CONFIG_DIR" && says "claude" && ! says "PI_CODING_AGENT_DIR"; then
+  pass "empty claude-code verifier dir STOPs with Claude Code login wording"
+else fail "identity-less claude-code verifier not refused with Claude wording (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
 check_bad_segment() {   # $1 = label, $2 = bead, $3 = author, $4 = expected phrase
   run "$2" fleet/bead-1 "$3"
   if [ $RC -eq 1 ] && says "$4"; then

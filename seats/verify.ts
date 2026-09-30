@@ -65,7 +65,7 @@ import * as path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
-import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness } from "./harness";
+import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -735,7 +735,19 @@ function authIsIdentity(authFile: string): boolean {
   const body = fs.readFileSync(authFile, "utf8").replace(/[{}\s]/g, "");
   return body.length > 0;
 }
-function authRouteIdentity(name: string, entry: SeatEntry, authFile: string): boolean {
+function claudeOauthIsIdentity(configDir: string): boolean {
+  const config = path.join(configDir, ".claude.json");
+  if (!fs.existsSync(config)) return false;
+  try {
+    const j = JSON.parse(fs.readFileSync(config, "utf8"));
+    const acct = j?.oauthAccount;
+    if (!acct || typeof acct !== "object") return false;
+    return Object.values(acct).some((v) => typeof v === "string" ? v.trim().length > 0 : v != null);
+  } catch {
+    return false;
+  }
+}
+function authRouteIdentity(name: string, entry: SeatEntry, authFile: string, harness: HarnessName, accountDir: string): boolean {
   const route = entry.account?.authRoute;
   if (route === "env") {
     if (!entry.provider) die(`verifier seat "${name}" uses account.authRoute=env but has no provider in seats/seats.json`);
@@ -743,6 +755,7 @@ function authRouteIdentity(name: string, entry: SeatEntry, authFile: string): bo
     if (!envVar) die(`verifier seat "${name}" uses account.authRoute=env for provider ${JSON.stringify(entry.provider)}, but this verifier does not know that provider's env var`);
     return !!process.env[envVar];
   }
+  if (harness === "claude-code") return claudeOauthIsIdentity(accountDir);
   return authIsIdentity(authFile);
 }
 
@@ -957,12 +970,18 @@ async function main(): Promise<void> {
     );
   }
   const verifierAuthFile = path.join(verifierDir, "auth.json");
-  if (!authRouteIdentity(verifierSeat, entry, verifierAuthFile)) {
+  if (!authRouteIdentity(verifierSeat, entry, verifierAuthFile, verifierHarness, verifierDir)) {
     const envVar = entry.account?.authRoute === "env" && entry.provider ? providerEnvVar(entry.provider) : undefined;
+    const oauthLine = verifierHarness === "claude-code"
+      ? `      OAuth: CLAUDE_CONFIG_DIR="${verifierDir}" claude, then type /login and exit after the browser flow\n`
+      : `      OAuth: PI_CODING_AGENT_DIR="${verifierDir}" pi, then type /login in the REPL and /exit after the browser flow\n`;
+    const keyLine = verifierHarness === "claude-code"
+      ? `      oauth record: ${path.join(verifierDir, ".claude.json")} must contain oauthAccount\n`
+      : `      api_key: write ${verifierAuthFile}\n`;
     die(
       `verifier seat "${verifierSeat}" has no identity — give it credentials once:\n` +
-        `      OAuth: PI_CODING_AGENT_DIR="${verifierDir}" pi, then type /login in the REPL and /exit after the browser flow\n` +
-        `      api_key: write ${verifierAuthFile}\n` +
+        oauthLine +
+        keyLine +
         `      env: set account.authRoute=env and export ${envVar ?? "the provider env var"} in the shell that spawns this verifier`
     );
   }
