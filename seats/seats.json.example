@@ -40,7 +40,8 @@
         "dir": "~/.pi-seats-myproject/reviewer-shadow",
         "authRoute": "oauth"
       },
-      "allowedTools": "Bash(git status:*),Bash(bun test:*)"
+      "allowedTools": "Bash(git status:*),Bash(bun test:*)",
+      "disallowedTools": "Bash(rm -rf:*)"
     },
     "researcher": {
       "role": "researcher",

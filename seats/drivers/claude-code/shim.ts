@@ -61,6 +61,7 @@ const resumeRef = optionalArg("resume");
 const defaultLogin = process.argv.includes("--default-login");
 const permissionMode = optionalArg("permission-mode") || "acceptEdits";
 const allowedTools = optionalArg("allowed-tools");
+const disallowedTools = optionalArg("disallowed-tools");
 
 fs.mkdirSync(path.dirname(log), { recursive: true });
 fs.mkdirSync(accountDir, { recursive: true });
@@ -84,6 +85,7 @@ const args = [
   "--permission-prompts", "none",
 ];
 if (allowedTools) args.push("--allowedTools", allowedTools);
+if (disallowedTools) args.push("--disallowedTools", disallowedTools);
 if (resumeRef) args.push("--resume", path.basename(resumeRef, ".jsonl"));
 
 const child = spawn("claude", args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });

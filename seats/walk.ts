@@ -43,6 +43,8 @@ interface SeatEntry {
   model?: string;
   external?: boolean;
   account?: { dir: string; label?: string; authRoute?: string };
+  allowedTools?: string;
+  disallowedTools?: string;
 }
 
 type WalkVerdict = "WALKED-DONE" | "WALKED-NOT-DONE" | "COULD-NOT-WALK";
@@ -442,7 +444,7 @@ function main(): void {
     `Retain a full transcript. End with exactly one line: VERDICT: WALKED-DONE | WALKED-NOT-DONE — <failing step quoted from the transcript> | COULD-NOT-WALK — <why>.`,
   ].join("\n");
 
-  const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt);
+  const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   phase = "run verifier walk";
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper });
