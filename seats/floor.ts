@@ -331,7 +331,7 @@ interface Assessment {
   line: string; // the rail line body (no seat name)
 }
 
-const AUTH_RE = /auth|unauthoriz|401|forbidden|token.*(expired|invalid|revoked)|log ?in required|credential/i;
+const AUTH_RE = /(?:\bHTTP(?:\/\d(?:\.\d)?)?\s+|\bstatus(?:\s+code)?\s*[:=]?\s*)(?:401|403)\b|\bUnauthorized\b|\binvalid_grant\b|\btoken\b[^\n]*(?:expired|revoked)\b|\blogin required\b/i;
 const QUOTA_RE = /quota|rate.?limit|429|usage limit|exhaust|out of credits|insufficient.credit/i;
 const CAPACITY_EVENT_TYPES = new Set(["message_end", "turn_end", "agent_end"]);
 
@@ -459,7 +459,7 @@ function assess(seat: Seat): Assessment {
   })();
   const alive = pidAlive(rec?.pid);
 
-  if (AUTH_RE.test(errBlob)) {
+  if (AUTH_RE.test(errTail)) {
     return { cue: "red", line: `AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=${rec?.accountDir ?? "<dir>"} pi, then /login in the REPL; api_key: auth.json or provider env var` };
   }
   if (rec && rec.pid && !alive && !rec.stoppedAt) {
