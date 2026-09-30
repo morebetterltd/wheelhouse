@@ -89,7 +89,7 @@ EOF
 }
 
 RUN_PROJ=""
-run(){ RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run(){ RC=0; OUT="$(with_timeout 30 env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says(){ case "$OUT" in *"$1"*) return 0;; *) return 1;; esac; }
 state_get(){ env HOME="$HOME_FIX" bun -e "const s=require('$RUN_PROJ/seats/state.json');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
 wait_for(){ local file="$1" text="$2" i=0; while [ $i -lt 50 ]; do [ -f "$file" ] && grep -q "$text" "$file" && return 0; sleep 0.1; i=$((i+1)); done; return 1; }
