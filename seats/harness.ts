@@ -36,7 +36,7 @@ export function oneShotEnvForHarness(harness: HarnessName, accountDir: string, b
   return env;
 }
 
-export function oneShotCommandForHarness(harness: HarnessName, brief: string, provider: string | undefined, model: string | undefined, prompt: string): { bin: string; args: string[]; display: string } {
+export function oneShotCommandForHarness(harness: HarnessName, brief: string, provider: string | undefined, model: string | undefined, prompt: string, allowedTools?: string, disallowedTools?: string): { bin: string; args: string[]; display: string } {
   if (harness === "pi") {
     const args = ["-p", "--mode", "json", "--no-session", "--append-system-prompt", brief];
     if (provider) args.push("--provider", provider);
@@ -47,6 +47,10 @@ export function oneShotCommandForHarness(harness: HarnessName, brief: string, pr
   if (harness === "claude-code") {
     const briefText = fs.existsSync(brief) ? fs.readFileSync(brief, "utf8") : brief;
     const args = ["-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt", briefText];
+    if (allowedTools || disallowedTools) args.push("--permission-mode", "acceptEdits");
+    if (allowedTools) args.push("--allowed-tools", allowedTools);
+    if (disallowedTools) args.push("--disallowed-tools", disallowedTools);
+    if (allowedTools || disallowedTools) args.push("--permission-prompts", "none");
     if (model) args.push("--model", model);
     args.push(prompt);
     return { bin: "claude", args, display: `claude ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
