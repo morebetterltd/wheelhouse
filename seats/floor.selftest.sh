@@ -119,8 +119,8 @@ EOF
 # Seat "authless": the process answers, but its identity is dead.
 cat > "$LOGS/authless.jsonl" <<EOF
 {"type":"agent_start"}
-{"type":"response","command":"prompt","success":false,"error":"401 Unauthorized: token expired - login required"}
 EOF
+printf 'HTTP 401 Unauthorized: token expired - login required\n' > "$LOGS/authless.stderr.log"
 
 # Seat "quota": alive, but cannot take work.
 cat > "$LOGS/quota.jsonl" <<EOF
@@ -284,6 +284,29 @@ has "VERDICT LANDED — APPROVE" && pass "reviewer: VERDICT LANDED (green)" || f
 has "REVIEW BLOCKED.*BOUNCE"   && pass "bounced: REVIEW BLOCKED line"     || fail "no REVIEW BLOCKED line"
 has "EVIDENCE UNSATISFIED.*wh-unsat-1" && pass "unsat: BOUNCE with failed evidence-floor renders EVIDENCE UNSATISFIED" || fail "no EVIDENCE UNSATISFIED line"
 has "no event log yet"    && pass "nolog: missing log is a named line"    || fail "missing log line absent"
+AUTH_SHAPES=(
+  'HTTP 401 Unauthorized'
+  'HTTP 403 Forbidden'
+  'status 401 from provider'
+  'status code: 403'
+  'Unauthorized'
+  'invalid_grant'
+  'token expired'
+  'token revoked'
+  'login required'
+)
+for shape in "${AUTH_SHAPES[@]}"; do
+  printf '%s\n' "$shape" > "$LOGS/authless.stderr.log"
+  render "$PROJ/seats/floor.ts" --pin 1
+  if has "AUTH DEAD"; then pass "auth stderr shape renders AUTH DEAD: $shape"
+  else fail "auth stderr shape did not render AUTH DEAD ($shape): $OUT"; fi
+done
+printf 'waitpid: pid 401 exited for author worker; authority unchanged\n' > "$LOGS/authless.stderr.log"
+render "$PROJ/seats/floor.ts" --pin 1
+if has "AUTH DEAD"; then fail "waitpid/author/authority false-positive rendered AUTH DEAD: $OUT"
+else pass "waitpid pid 401 and author/authority do not render AUTH DEAD"; fi
+printf 'HTTP 401 Unauthorized: token expired - login required\n' > "$LOGS/authless.stderr.log"
+render "$PROJ/seats/floor.ts" --pin 1
 has " RED"   && has " AMBER" && has " GREEN" \
   && pass "cue words RED/AMBER/GREEN all present" || fail "cue words missing"
 has '\[0\] STATUS' && pass "rail has the [0] STATUS cell" || fail "no [0] STATUS row"
