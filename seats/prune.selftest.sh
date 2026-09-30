@@ -27,11 +27,36 @@ phase(){ printf '\n%s\n' "$*"; }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-prune-selftest.XXXXXX")" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+export GIT_CEILING_DIRECTORIES="$FIX${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}"
 TMP_SCRATCH=()
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; rm -rf ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
 trap cleanup EXIT INT TERM
 export HOME="$FIX/home"
 mkdir -p "$HOME"
+
+if [ "${WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK:-0}" != 1 ]; then
+  phase 'preflight: TMPDIR inside another git repo is not touched'
+  OUTER="$FIX/enclosing-tmp-repo"
+  mkdir -p "$OUTER/tmp"
+  git -C "$OUTER" init -q -b main
+  git -C "$OUTER" config user.email selftest@example.invalid
+  git -C "$OUTER" config user.name selftest
+  printf 'outer\n' > "$OUTER/outer.txt"
+  git -C "$OUTER" add outer.txt
+  git -C "$OUTER" commit -q -m outer
+  OUTER_HEAD_BEFORE="$(git -C "$OUTER" rev-parse HEAD)"
+  if TMPDIR="$OUTER/tmp" WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK=1 with_timeout 900 bash "$0" "$PRUNE" > "$FIX/nested-prune.out" 2>&1; then
+    OUTER_HEAD_AFTER="$(git -C "$OUTER" rev-parse HEAD)"
+    OUTER_STATUS="$(git -C "$OUTER" status --porcelain --untracked-files=all)"
+    if [ "$OUTER_HEAD_AFTER" = "$OUTER_HEAD_BEFORE" ] && [ -z "$OUTER_STATUS" ]; then
+      pass 'prune.selftest with TMPDIR inside a scratch git repo leaves that repo HEAD and index unchanged'
+    else
+      fail "nested TMPDIR repo changed: before=$OUTER_HEAD_BEFORE after=$OUTER_HEAD_AFTER status=$OUTER_STATUS"
+    fi
+  else
+    fail "nested TMPDIR prune.selftest failed: $(tail -80 "$FIX/nested-prune.out" 2>/dev/null)"
+  fi
+fi
 
 ROOT="$FIX/container"
 PROD="$ROOT/product"
@@ -374,8 +399,9 @@ mk_install "$EXT"; mkdir -p "$EWTS" "$ERUNS"
 ext_bead(){ local id; id=$(cd "$EXT" && bd create "$1" --json | json_id); [ "${2:-closed}" = closed ] && ( cd "$EXT" && bd close "$id" >/dev/null 2>&1 ); printf '%s\n' "$id"; }
 ext_wt(){ # $1 bead id, $2 optional dir: worktree on fleet/<id> with one commit touching <id>.txt
   local dir="${2:-$EWTS/$1}"
-  git -C "$EPROD" worktree add -q -b "fleet/$1" "$dir" main
-  printf '%s\n' "$1" > "$dir/$1.txt"; git -C "$dir" add "$1.txt"; git -C "$dir" commit -q -m "work $1"
+  git -C "$EPROD" worktree add -q -b "fleet/$1" "$dir" main || { fail "worktree add failed for $dir"; return 1; }
+  [ -e "$dir/.git" ] || { fail "worktree $dir has no .git after git worktree add; refusing to commit"; return 1; }
+  printf '%s\n' "$1" > "$dir/$1.txt"; git -C "$dir" add "$1.txt" && git -C "$dir" commit -q -m "work $1"
 }
 ext_merge(){ git -C "$EPROD" checkout -q main; git -C "$EPROD" merge -q --no-ff "fleet/$1" -m "merge $1"; git -C "$EPROD" push -q origin main; git -C "$EPROD" push -q origin "fleet/$1"; }
 ext_scan(){ ( cd "$EXT" && bun seats/prune.ts scan --format jsonl > "$FIX/ext-scan.jsonl" 2>/dev/null ); }
