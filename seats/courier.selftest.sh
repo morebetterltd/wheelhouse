@@ -9,6 +9,7 @@ NEEDS="$HERE/needs.ts"
 TELEGRAM="$HERE/transports/telegram.ts"
 SLACK="$HERE/transports/slack.ts"
 TRANSPORT="$HERE/transports/transport.ts"
+CHANNELS="$HERE/channels.ts"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-courier-selftest.XXXXXX")" || exit 2
@@ -40,7 +41,7 @@ PY
 }
 make_proj(){
   local p="$1"; mkdir -p "$p/seats/transports" "$p/seats/run" "$p/seats/logs" "$p/wheelhouse"
-  cp "$COURIER" "$p/seats/courier.ts"; [ -f "$WATCHDOG" ] && cp "$WATCHDOG" "$p/seats/courier-watchdog.sh" && chmod +x "$p/seats/courier-watchdog.sh"; cp "$NEEDS" "$p/seats/needs.ts"; cp "$TELEGRAM" "$p/seats/transports/telegram.ts"; cp "$SLACK" "$p/seats/transports/slack.ts"; cp "$TRANSPORT" "$p/seats/transports/transport.ts"
+  cp "$COURIER" "$p/seats/courier.ts"; [ -f "$WATCHDOG" ] && cp "$WATCHDOG" "$p/seats/courier-watchdog.sh" && chmod +x "$p/seats/courier-watchdog.sh"; cp "$NEEDS" "$p/seats/needs.ts"; cp "$CHANNELS" "$p/seats/channels.ts"; cp "$TELEGRAM" "$p/seats/transports/telegram.ts"; cp "$SLACK" "$p/seats/transports/slack.ts"; cp "$TRANSPORT" "$p/seats/transports/transport.ts"
   printf 'namespace=demo\n' > "$p/wheelhouse/.template-source"
   printf 'TESTTOKEN\n' > "$p/seats/run/telegram.token"; chmod 600 "$p/seats/run/telegram.token"
   printf '111\n' > "$p/seats/run/telegram.allow"
@@ -249,6 +250,42 @@ EOF
 : > "$FIX/requests.jsonl"; : > "$FIX/slack-messages.jsonl"; touch "$FIX/fail-slack-readback"
 (cd "$SLACKBAD" && WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" bun seats/courier.ts --once) > "$FIX/slackbad.out" 2>&1; SLACKBAD_RC=$?; rm -f "$FIX/fail-slack-readback"
 if [ $SLACKBAD_RC -eq 0 ] && grep -q 'slack send unverified' "$SLACKBAD/seats/logs/courier.out.log" && ! grep -q '"type":"sent"' "$SLACKBAD/seats/needs.jsonl"; then pass "Slack ts read-back failure reports send unverified without recording sent"; else fail "slack unverified send was not reported rc=$SLACKBAD_RC out=$(cat "$FIX/slackbad.out") log=$(cat "$SLACKBAD/seats/logs/courier.out.log" 2>/dev/null) ledger=$(cat "$SLACKBAD/seats/needs.jsonl")"; fi
+PRINTELE="$FIX/principal-telegram"; make_proj "$PRINTELE"
+cat > "$PRINTELE/seats/channels.json" <<'EOF'
+{"version":1,"channels":{"principal":{"kind":"telegram","destination":"222","audience":"principal","members":[{"id":"222","name":"Principal"}],"read":true}}}
+EOF
+cat > "$PRINTELE/seats/needs.jsonl" <<'EOF'
+{"type":"opened","id":"need-principal-telegram","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Declared principal","body":"Use declared destination","options":[{"label":"Y","text":"Yes"}],"machine":{}}
+EOF
+: > "$FIX/requests.jsonl"; echo '[]' > "$FIX/updates.json"
+(cd "$PRINTELE" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/principal-telegram1.out" 2> "$FIX/principal-telegram1.err"
+if grep -q '"chat_id":"222"' "$FIX/requests.jsonl" && grep -q 'Declared principal' "$FIX/requests.jsonl" && grep -q 'principal channel from seats/channels.json' <(cd "$PRINTELE" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --status); then pass "declared principal Telegram channel sends to seats/channels.json destination and status names principal channel"; else fail "declared telegram did not use/status principal destination out=$(cat "$FIX/principal-telegram1.out" "$FIX/principal-telegram1.err" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
+cat > "$FIX/updates.json" <<'EOF'
+[{"update_id":40,"message":{"message_id":80,"date":1790000004,"chat":{"id":222},"from":{"id":222},"text":"Y","reply_to_message":{"message_id":1}}},{"update_id":41,"message":{"message_id":81,"date":1790000005,"chat":{"id":111},"from":{"id":111},"text":"ignored","reply_to_message":{"message_id":1}}}]
+EOF
+(cd "$PRINTELE" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/principal-telegram2.out" 2> "$FIX/principal-telegram2.err"
+if grep -q '"type":"answered"' "$PRINTELE/seats/needs.jsonl" && grep -q '"via":"telegram"' "$PRINTELE/seats/needs.jsonl" && grep -q '"choice":"Y"' "$PRINTELE/seats/needs.jsonl" && grep -q 'ignored telegram sender 111' "$PRINTELE/seats/logs/courier.out.log"; then pass "declared principal Telegram members decide replies: member 222 answers and legacy 111 is ignored"; else fail "declared telegram reply rules failed ledger=$(cat "$PRINTELE/seats/needs.jsonl") log=$(cat "$PRINTELE/seats/logs/courier.out.log" 2>/dev/null) out=$(cat "$FIX/principal-telegram2.out" "$FIX/principal-telegram2.err" 2>/dev/null)"; fi
+PRINSLACK="$FIX/principal-slack-no-token"; make_proj "$PRINSLACK"
+cat > "$PRINSLACK/seats/channels.json" <<'EOF'
+{"version":1,"channels":{"principal":{"kind":"slack","destination":"C999","audience":"principal","members":[{"id":"U222","name":"Principal"}],"read":true}}}
+EOF
+cat > "$PRINSLACK/seats/needs.jsonl" <<'EOF'
+{"type":"opened","id":"need-principal-slack","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Declared slack","body":"No fallback","options":[],"machine":{}}
+EOF
+(cd "$PRINSLACK" && WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" bun seats/courier.ts --once) > "$FIX/principal-slack.out" 2>&1; PRINSLACK_RC=$?
+if [ $PRINSLACK_RC -ne 0 ] && grep -q 'STOP: no slack token configured at .*/seats/run/slack.token' "$FIX/principal-slack.out" && ! grep -q '"type":"sent"' "$PRINSLACK/seats/needs.jsonl"; then pass "declared principal Slack channel requires Slack transport and does not fall back to Telegram"; else fail "declared slack missing-token behavior wrong rc=$PRINSLACK_RC out=$(cat "$FIX/principal-slack.out") ledger=$(cat "$PRINSLACK/seats/needs.jsonl")"; fi
+STAKEONLY="$FIX/stakeholders-only"; make_proj "$STAKEONLY"
+cat > "$STAKEONLY/seats/channels.json" <<'EOF'
+{"version":1,"channels":{"partners":{"kind":"telegram","destination":"333","audience":"stakeholders","members":[{"id":"333","name":"Partner"}],"read":true}}}
+EOF
+(cd "$STAKEONLY" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --status) > "$FIX/stakeonly-status.out" 2>&1
+if grep -q 'legacy: seats/run/telegram.allow' "$FIX/stakeonly-status.out"; then pass "stakeholders-only channels file keeps legacy courier path and status says legacy"; else fail "stakeholders-only status did not name legacy out=$(cat "$FIX/stakeonly-status.out")"; fi
+MISMATCH="$FIX/principal-mismatch"; make_proj "$MISMATCH"
+cat > "$MISMATCH/seats/channels.json" <<'EOF'
+{"version":1,"channels":{"principal":{"kind":"telegram","destination":"222","audience":"principal","members":[{"id":"222","name":"Principal"}],"read":true}}}
+EOF
+(cd "$MISMATCH" && WHEELHOUSE_TRANSPORT=slack WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/mismatch.out" 2>&1; MISMATCH_RC=$?
+if [ $MISMATCH_RC -ne 0 ] && grep -q 'STOP: WHEELHOUSE_TRANSPORT=slack disagrees with principal channel from seats/channels.json: telegram' "$FIX/mismatch.out"; then pass "WHEELHOUSE_TRANSPORT mismatch with declared principal channel is a named STOP"; else fail "transport mismatch was not a named STOP rc=$MISMATCH_RC out=$(cat "$FIX/mismatch.out")"; fi
 BAD="$FIX/badmode"; make_proj "$BAD"; chmod 0644 "$BAD/seats/run/telegram.token"; cp "$PROJ/seats/needs.jsonl" "$BAD/seats/needs.jsonl"
 (cd "$BAD" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/bad.out" 2>&1; BAD_RC=$?
 if [ $BAD_RC -ne 0 ] && grep -q 'mode 0600' "$FIX/bad.out"; then pass "telegram token file mode 0644 is refused"; else fail "token mode refusal failed rc=$BAD_RC out=$(cat "$FIX/bad.out")"; fi

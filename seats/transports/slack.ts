@@ -9,7 +9,7 @@ function now(){ return new Date().toISOString(); }
 function tokenFrom(root: string): string {
   if (process.env.WHEELHOUSE_SLACK_TOKEN) return process.env.WHEELHOUSE_SLACK_TOKEN;
   const f = path.join(root, "seats", "run", "slack.token");
-  if (!fs.existsSync(f)) throw new NoSlackTransport("no slack token configured");
+  if (!fs.existsSync(f)) throw new NoSlackTransport(`no slack token configured at ${f}`);
   const mode = fs.statSync(f).mode & 0o777;
   if (mode !== 0o600) throw new Error(`slack token file must be mode 0600, got ${mode.toString(8)}`);
   return fs.readFileSync(f, "utf8").trim();
@@ -53,11 +53,11 @@ export class SlackTransport implements NeedTransport, ChannelTransport {
   channel: string;
   allow: Set<string>;
   apiBase: string;
-  constructor(root: string){
+  constructor(root: string, opts: { destination?: string; allow?: string[] } = {}){
     this.root = root;
     this.token = tokenFrom(root);
-    this.channel = process.env.WHEELHOUSE_SLACK_CHANNEL || (fs.existsSync(path.join(root, "seats", "run", "slack.channel")) ? fs.readFileSync(path.join(root, "seats", "run", "slack.channel"), "utf8").trim() : "");
-    this.allow = allowedFrom(root);
+    this.channel = opts.destination ?? (process.env.WHEELHOUSE_SLACK_CHANNEL || (fs.existsSync(path.join(root, "seats", "run", "slack.channel")) ? fs.readFileSync(path.join(root, "seats", "run", "slack.channel"), "utf8").trim() : ""));
+    this.allow = opts.destination !== undefined ? new Set(opts.allow || []) : allowedFrom(root);
     this.apiBase = (process.env.WHEELHOUSE_SLACK_API_BASE || "https://slack.com/api").replace(/\/$/, "");
   }
   endpoint(method: string): string { return `${this.apiBase}/${method}`; }
