@@ -90,7 +90,9 @@ Generated at install.
 <!--
 How far the fleet takes work here, which remotes/repositories/PR targets/deploy
 surfaces carry standing authorization, and which actions are reserved, in the
-principal's words and with the date. Inferences about scope are recorded as
+principal's words and with the date. If stakeholder channels are declared, say
+that declaration narrows the reserved "communication outside the team" action
+to exactly those channels. Inferences about scope are recorded as
 inferences until the principal confirms them.
 
 If nothing is written here yet, this install has not recorded its authority;
