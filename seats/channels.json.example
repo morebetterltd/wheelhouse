@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "channels": {
+    "principal-telegram": {
+      "kind": "telegram",
+      "destination": "@wheelhouse_principal_example",
+      "audience": "principal"
+    },
+    "stakeholders-slack": {
+      "kind": "slack",
+      "destination": "C0EXAMPLE",
+      "audience": "stakeholders",
+      "members": [
+        { "id": "U0EXAMPLE1", "name": "Example Stakeholder One" },
+        { "id": "U0EXAMPLE2", "name": "Example Stakeholder Two" }
+      ],
+      "read": true
+    },
+    "stakeholders-teams": {
+      "kind": "teams",
+      "destination": "teams/team-id-example/channels/channel-id-example",
+      "audience": "stakeholders",
+      "read": false
+    }
+  }
+}
