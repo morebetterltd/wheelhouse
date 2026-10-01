@@ -1695,9 +1695,19 @@ if [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_P
   pass "push gate: the seat stays running on fleet/bead-p1 (same pid, lastBead unchanged)"
 else fail "push gate: seat moved or died (branch=$(wt_branch "$WT") pid before=$PUSH_PID_BEFORE after=$(state_get pid) lastBead=$(state_get lastBead))"; fi
 fgit -C "$WT_PROJ" remote set-url origin "$WT_ORIGIN"
+P1_SAFE_SHA="$(fgit -C "$WT" rev-parse HEAD)"
+TOKEN_SHAPED_FIXTURE="$(printf 'xox%s-%s' b 12345678901234567890)"
+printf 'runtime-built credential fixture: %s\n' "$TOKEN_SHAPED_FIXTURE" > "$WT/leak.txt"
+fgit -C "$WT" add leak.txt
+fgit -C "$WT" commit -qm "leaky p1 work"
+run dispatch worker-1 bead-p2 "second bead with a credential-shaped fixture"
+if [ $RC -ne 0 ] && says "credential scan failed" && says "leak.txt:1" && [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ] && ! fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 >/dev/null; then
+  pass "push gate: credential scan refuses the pre-switch push and leaves the seat on its branch"
+else fail "push gate: credential scan did not refuse safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
+fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
 run dispatch worker-1 bead-p2 "second bead after the remote is back"
 if [ $RC -eq 0 ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1 | grep -q 'origin/' && [ "$(wt_branch "$WT")" = "fleet/bead-p2" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ]; then
-  pass "push gate: with the remote restored the same dispatch pushes fleet/bead-p1 to origin and moves the seat to fleet/bead-p2 without relaunching"
+  pass "push gate: with the remote restored and the credential commit removed, dispatch pushes fleet/bead-p1 to origin and moves the seat to fleet/bead-p2 without relaunching"
 else fail "push gate: restored remote dispatch failed (exit $RC remote=$(fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1) branch=$(wt_branch "$WT")): $OUT"; fi
 if says "pushed fleet/bead-p1 to origin" && wait_for "$LOG" 'echo: Bead bead-p2' 5; then
   pass "push gate: the push is announced and the new bead's prompt round-trips"
