@@ -12,6 +12,7 @@ other's identity, and a reviewer seat on its own directory is what makes
 The main files here:
 
 - `seats.json.example` — the roster format. Copy it to `seats.json` and edit.
+- `channels.json.example` — declared stakeholder/principal channels. Copy it to `channels.json` and edit.
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
   project root, and prints the export line and the one-time credential flow.
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, stop-all, resume.
@@ -20,6 +21,7 @@ The main files here:
   pushes the previous bead's branch before a move, enforces the worktree cap.
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
+- `channels.ts` — reads and validates install-owned `seats/channels.json` declarations for principal/stakeholder channels.
 - `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban.
 - `commander-inbox-poll.sh` — wrapper-independent commander fallback: drains the Dispatch Office inbox from inside the commander pane whenever the cursor lags.
 - `principal-sentinel.sh` — Claude Code Stop hook that turns final assistant `@principal:` lines into durable needs.
@@ -642,6 +644,7 @@ bun seats/prune.ts categories
 bash seats/evidence-scrub.selftest.sh
 bash seats/seat-env.selftest.sh
 bash seats/needs.selftest.sh
+bash seats/channels.selftest.sh
 bash seats/desk.selftest.sh
 bash seats/principal-sentinel.selftest.sh
 bash seats/courier.selftest.sh
