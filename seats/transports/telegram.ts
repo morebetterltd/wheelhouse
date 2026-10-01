@@ -30,6 +30,16 @@ function allowedUsernames(root: string): Set<string> {
   for (const line of allowEntries(root)) for (const part of line.split(/\s+/)) if (part.startsWith("@")) out.add(part.toLowerCase());
   return out;
 }
+function pairedIdFor(root: string, username: string): string | null {
+  const want = username.toLowerCase();
+  for (const line of allowEntries(root)) {
+    const parts = line.split(/\s+/).filter(Boolean);
+    if (!parts.some((part) => part.startsWith("@") && part.toLowerCase() === want)) continue;
+    const id = parts.find((part) => !part.startsWith("@"));
+    if (id) return id;
+  }
+  return null;
+}
 function appendPairing(root: string, username: string, id: string){
   const f = allowFile(root); fs.mkdirSync(path.dirname(f), { recursive:true });
   const lines = allowEntries(root);
@@ -42,7 +52,7 @@ function openNeedIds(): string[] { return Array.from(fold().values()).filter(n=>
 function abortMs(method: string, body: any): number {
   const override = Number(process.env.WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS || "0");
   if (Number.isFinite(override) && override > 0) return override;
-  if (method === "get" + "Updates") return (Number(body?.timeout ?? 25) * 1000) + 10000;
+  if (method === "getUpdates") return (Number(body?.timeout ?? 25) * 1000) + 10000;
   return 10000;
 }
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, label: string): Promise<Response> {
@@ -114,9 +124,9 @@ export class TelegramTransport implements NeedTransport, ChannelTransport {
   }
   resolveDestination(destination: string): string {
     if (!destination.startsWith("@")) return destination;
-    const id = Array.from(this.allow)[0];
-    if (!id) throw new Error(`waiting for ${destination} to message the bot`);
-    return id;
+    const paired = pairedIdFor(this.root, destination);
+    if (!paired) throw new Error(`waiting for ${destination} to message the bot`);
+    return paired;
   }
   async post(destination: string, text: string, opts: { threadRef?: string } = {}): Promise<{ref:string; readBack:"echo"}> {
     const chat = this.resolveDestination(destination);
@@ -145,7 +155,8 @@ export class TelegramTransport implements NeedTransport, ChannelTransport {
   async poll(cursor?: string): Promise<TransportPollResult> {
     const body:any = { timeout: Number(process.env.WHEELHOUSE_TELEGRAM_POLL_TIMEOUT || "25") };
     if (cursor) body.offset = Number(cursor);
-    const updates:any[] = await this.call("get" + "Updates", body);
+    // NeedTransport.poll is the courier-owned polling path; ChannelTransport.read never calls getUpdates.
+    const updates:any[] = await this.call("getUpdates", body);
     const byMsg = needByMessageId();
     const replies:any[] = [];
     let next = cursor || "";

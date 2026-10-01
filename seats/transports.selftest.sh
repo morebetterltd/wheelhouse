@@ -95,6 +95,13 @@ TS
 base_env(){ env ROOT="$ROOT" STUB_DIR="$FIX" WHEELHOUSE_TELEGRAM_CHAT_ID=111 WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TEAMS_API_BASE="http://127.0.0.1:$P" "$@"; }
 run_kind(){ kind="$1" dest="$2" envname="$3" token="$4"; : > "$FIX/requests.jsonl"; rm -f "$FIX/fail-readback" "$FIX/${kind}.jsonl"; base_env "$envname=$token" bun "$FIX/check.ts" "$kind" "$dest" > "$FIX/$kind.out" 2>&1; rc=$?; if [ $rc -eq 0 ] && [ "$(grep -c '"url".*postMessage\|sendMessage\|/messages' "$FIX/requests.jsonl")" -ge 1 ]; then pass "$kind post, direct readBack, planted read and cursor advance work with env token"; else fail "$kind env leg rc=$rc out=$(cat "$FIX/$kind.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi; rm -f "$FIX/fail-readback"; base_env "$envname=$token" bun "$FIX/readback-false.ts" "$kind" "$dest" > "$FIX/$kind-drop.out" 2>&1; [ $? -eq 0 ] && grep -q '^false$' "$FIX/$kind-drop.out" && pass "$kind direct readBack false path is asserted under marker" || fail "$kind readBack false leg failed: $(cat "$FIX/$kind-drop.out")"; rm -f "$FIX/fail-readback"; }
 run_kind telegram 111 WHEELHOUSE_TELEGRAM_TOKEN tg-token
+cat > "$ROOT/seats/run/telegram.allow" <<'EOF'
+@alice 111
+@bob 222
+EOF
+ROOT="$ROOT" WHEELHOUSE_TELEGRAM_TOKEN=tg-token bun -e 'import { TelegramTransport } from "./seats/transports/telegram"; const t=new TelegramTransport(process.env.ROOT!); if(t.resolveDestination("@ALICE")!=="111") throw new Error("@alice did not resolve to its own id"); try{t.resolveDestination("@carol"); process.exit(1)}catch(e:any){ if(!/waiting for @carol to message the bot/.test(e.message)) throw e; }' > "$FIX/telegram-resolve.out" 2>&1
+[ $? -eq 0 ] && pass 'telegram @username destination resolves matching pairing and refuses unpaired names' || fail "telegram @username pairing failed: $(cat "$FIX/telegram-resolve.out")"
+rm -f "$ROOT/seats/run/telegram.allow"
 run_kind slack C0EXAMPLE WHEELHOUSE_SLACK_TOKEN "$(printf 'xox%s-%s' b fixture)"
 run_kind teams chats/chat-example WHEELHOUSE_TEAMS_TOKEN teams-token
 # file credentials and mode refusals
