@@ -159,6 +159,7 @@ export class TelegramTransport implements NeedTransport, ChannelTransport {
     if (cursor) body.offset = Number(cursor);
     // NeedTransport.poll is the courier-owned polling path; ChannelTransport.read never calls getUpdates.
     const updates:any[] = await this.call("getUpdates", body);
+    (this as any).lastUpdates = updates;
     const byMsg = needByMessageId();
     const replies:any[] = [];
     let next = cursor || "";
