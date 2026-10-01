@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readEvents } from "../needs";
-import type { NeedTransport, OutboundNeedEvent, TransportPollResult } from "./transport";
+import type { ChannelTransport, InboundMessage, NeedTransport, OutboundNeedEvent, TransportPollResult } from "./transport";
 
 export class NoSlackTransport extends Error {}
 
@@ -9,7 +9,7 @@ function now(){ return new Date().toISOString(); }
 function tokenFrom(root: string): string {
   if (process.env.WHEELHOUSE_SLACK_TOKEN) return process.env.WHEELHOUSE_SLACK_TOKEN;
   const f = path.join(root, "seats", "run", "slack.token");
-  if (!fs.existsSync(f)) throw new NoSlackTransport("no slack token configured");
+  if (!fs.existsSync(f)) throw new NoSlackTransport(`no slack token configured at ${f}`);
   const mode = fs.statSync(f).mode & 0o777;
   if (mode !== 0o600) throw new Error(`slack token file must be mode 0600, got ${mode.toString(8)}`);
   return fs.readFileSync(f, "utf8").trim();
@@ -45,18 +45,19 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
-export class SlackTransport implements NeedTransport {
+export class SlackTransport implements NeedTransport, ChannelTransport {
   name = "slack";
+  kind = "slack" as const;
   root: string;
   token: string;
   channel: string;
   allow: Set<string>;
   apiBase: string;
-  constructor(root: string){
+  constructor(root: string, opts: { destination?: string; allow?: string[] } = {}){
     this.root = root;
     this.token = tokenFrom(root);
-    this.channel = channelFrom(root);
-    this.allow = allowedFrom(root);
+    this.channel = opts.destination ?? (process.env.WHEELHOUSE_SLACK_CHANNEL || (fs.existsSync(path.join(root, "seats", "run", "slack.channel")) ? fs.readFileSync(path.join(root, "seats", "run", "slack.channel"), "utf8").trim() : ""));
+    this.allow = opts.destination !== undefined ? new Set(opts.allow || []) : allowedFrom(root);
     this.apiBase = (process.env.WHEELHOUSE_SLACK_API_BASE || "https://slack.com/api").replace(/\/$/, "");
   }
   endpoint(method: string): string { return `${this.apiBase}/${method}`; }
@@ -72,27 +73,55 @@ export class SlackTransport implements NeedTransport {
     if (ev.type === "message") return ev.text;
     return `Resolved: ${ev.reason}`;
   }
-  async confirm(ts: string, threadTs?: string): Promise<void> {
+  async readBack(destination: string, ref: string, text: string): Promise<boolean> {
+    const parts = ref.split(":");
+    const ts = parts.pop() || ref;
+    const threadTs = parts.length > 1 ? parts.pop() : undefined;
     const method = threadTs ? "conversations.replies" : "conversations.history";
-    const body:any = { channel:this.channel, limit:20 };
+    const body:any = { channel:destination, limit:20 };
     if (threadTs) body.ts = threadTs;
     else { body.latest = ts; body.inclusive = true; }
     const json = await this.call(method, body);
     const messages:any[] = json.messages || [];
-    if (!messages.some(m => String(m.ts) === String(ts))) throw new Error(`slack send unverified: ${method} did not return ts ${ts}`);
+    return messages.some(m => String(m.ts) === String(ts) && (text === undefined || String(m.text ?? "") === text));
   }
-  async send(ev: OutboundNeedEvent): Promise<{ref:string}> {
-    const prior = slackRefs().get(ev.id);
-    const threadTs = prior && ev.type !== "opened" ? prior.split(":").pop() : undefined;
-    const body:any = { channel:this.channel, text:this.text(ev) };
-    if (threadTs) body.thread_ts = threadTs;
+  async confirm(ts: string, threadTs?: string): Promise<void> {
+    const ok = await this.readBack(this.channel, threadTs ? `${this.channel}:${threadTs}:${ts}` : `${this.channel}:${ts}`, undefined as any);
+    if (!ok) throw new Error(`slack send unverified: did not return ts ${ts}`);
+  }
+  async post(destination: string, text: string, opts: { threadRef?: string } = {}): Promise<{ref:string; readBack:"fetched"}> {
+    const body:any = { channel:destination, text };
+    if (opts.threadRef) body.thread_ts = opts.threadRef;
     const json = await this.call("chat.postMessage", body);
     const ts = String(json.ts || json.message?.ts || "");
     if (!ts) throw new Error("slack send unverified: chat.postMessage returned no ts");
-    await this.confirm(ts, threadTs);
-    return { ref: `${this.channel}:${ts}` };
+    const ref = opts.threadRef ? `${destination}:${opts.threadRef}:${ts}` : `${destination}:${ts}`;
+    return { ref, readBack: "fetched" };
+  }
+  async send(ev: OutboundNeedEvent): Promise<{ref:string}> {
+    if (!this.channel) this.channel = channelFrom(this.root);
+    const prior = slackRefs().get(ev.id);
+    const threadTs = prior && ev.type !== "opened" ? prior.split(":").pop() : undefined;
+    const text = this.text(ev);
+    const r = await this.post(this.channel, text, threadTs ? { threadRef: threadTs } : undefined);
+    if (!(await this.readBack(this.channel, r.ref, text))) throw new Error(`slack send unverified: read-back did not return ${r.ref}`);
+    return { ref: r.ref };
+  }
+  async read(destination: string, cursor?: string): Promise<{messages: InboundMessage[]; cursor: string}> {
+    const json = await this.call("conversations.history", { channel:destination, oldest:cursor || "0", inclusive:false, limit:100 });
+    const messages: InboundMessage[] = [];
+    let next = cursor || "0";
+    for (const msg of (json.messages || []).slice().reverse()) {
+      const ts = String(msg.ts || "");
+      if (ts && Number(ts) > Number(next || 0)) next = ts;
+      if (cursor && Number(ts) <= Number(cursor)) continue;
+      if (!ts || msg.thread_ts && String(msg.thread_ts) !== ts || typeof msg.text !== "string") continue;
+      messages.push({ ref: `${destination}:${ts}`, from: String(msg.user || ""), text: msg.text, at: msg.ts ? new Date(Number(msg.ts.split(".")[0])*1000).toISOString() : now(), threadRef: msg.thread_ts ? String(msg.thread_ts) : undefined });
+    }
+    return { messages, cursor: next };
   }
   async poll(cursor?: string): Promise<TransportPollResult> {
+    if (!this.channel) this.channel = channelFrom(this.root);
     const json = await this.call("conversations.history", { channel:this.channel, oldest:cursor || "0", inclusive:false, limit:100 });
     const byThread = needByThreadTs();
     const replies:any[] = [];

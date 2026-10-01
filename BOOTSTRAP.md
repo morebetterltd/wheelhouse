@@ -147,7 +147,7 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 
 ### Copy the verbatim half of the install
 
-Everything in this list is copied whole and unedited. The interview-derived content — every `## This project` fill, `CLAUDE.md`, the ISA, `STARTUP.md`, `seats/seats.json` — is written in steps 3 and 5, not here; what this step lands is the half that is byte-identical in every project.
+Everything in this list is copied whole and unedited. The interview-derived content — every `## This project` fill, `CLAUDE.md`, the ISA, `STARTUP.md`, `seats/seats.json`, `seats/channels.json` — is written in steps 3 and 5, not here; what this step lands is the half that is byte-identical in every project.
 
 - Create `wheelhouse/crew/`, `wheelhouse/fleet/`, and `wheelhouse/research/`.
 - Copy **verbatim** from the template's `contracts/`:
@@ -156,7 +156,7 @@ Everything in this list is copied whole and unedited. The interview-derived cont
   - `GRAPH.md` and `INTEGRATOR.md` into `wheelhouse/`
   - the whole `runbooks/` directory into `wheelhouse/runbooks/`. `SEATS.md` and `STARTUP.md` both point at these by path, and a runbook that is only in the template is a broken link in the project.
   - `bench.sh.stub` to `wheelhouse/crew/bench.sh`, executable, unchanged — **it exits non-zero on purpose.** A stub that exits 0 lets the first APPROVE through on nothing.
-- Copy the whole `seats/` directory from the template to `seats/` at the install root, scripts kept executable (`cp -R "$TEMPLATE/seats" seats`). This is the machinery every seat runs on — `seat-env.sh` (provisioning), `adapter.ts` (spawn/dispatch/status/stop/resume), `verify.ts` (the reviewer bead-verdict dispatcher), `walk.ts` (the consumer-surface verifier walk), `needs.ts` (durable human requests), `desk.ts` (the local needs/board web desk), `principal-sentinel.sh` (Claude Code Stop hook for `@principal:`), `courier.ts` plus `transports/` (optional off-machine replies, Telegram first), `prune.ts` (safe worktree/cache pruning), `floor.ts` and `cockpit.sh` (the bridge), `recover.ts` (post-interruption triage), their selftests, and `seats/README.md`, which documents every command. It lands at the ROOT rather than under `wheelhouse/` because every path the contracts and runbooks print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative, and a copy that lands anywhere else breaks each of them. `seats/seats.json.example` arrives with it as the roster format's reference; the real `seats.json` is written by step 3's interview.
+- Copy the whole `seats/` directory from the template to `seats/` at the install root, scripts kept executable (`cp -R "$TEMPLATE/seats" seats`). This is the machinery every seat runs on — `seat-env.sh` (provisioning), `adapter.ts` (spawn/dispatch/status/stop/resume), `verify.ts` (the reviewer bead-verdict dispatcher), `walk.ts` (the consumer-surface verifier walk), `needs.ts` (durable human requests), `desk.ts` (the local needs/board web desk), `principal-sentinel.sh` (Claude Code Stop hook for `@principal:`), `courier.ts`, `channels.ts`, `comms.ts`, `seats/channels.json.example` plus `transports/` (optional off-machine replies to the principal channel declared in `seats/channels.json` and stakeholder channels across Telegram, Slack and Teams), `prune.ts` (safe worktree/cache pruning), `floor.ts` and `cockpit.sh` (the bridge), `recover.ts` (post-interruption triage), their selftests, and `seats/README.md`, which documents every command. It lands at the ROOT rather than under `wheelhouse/` because every path the contracts and runbooks print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative, and a copy that lands anywhere else breaks each of them. `seats/seats.json.example` arrives with it as the roster format's reference; the real `seats.json` is written by step 3's interview.
 - The seats machinery writes per-machine runtime state beside itself — `seats/run/` (FIFOs), `seats/logs/` (event streams), `seats/state.json` (pid/session records), `seats/verdicts/` (the commander's working copies of reviewer verdict output) — none of which is product, so keep it out of git now, before anything creates it. The guard first line is the same trailing-newline repair the worktree entry in step 5's commit section explains; it is not decoration.
 
   ```bash
@@ -300,10 +300,18 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    Those fields mirror the shim's `--contract` output: `cargo` and `dotnet` go through `seats/bin/host-build-shim`, the lock is host-wide and crash-safe (`flock(2)`), and build caches are shared under the lock by default. If the principal answers no, record nothing: remove `seats/host-budget.json` if it exists and remove `seats/bin` from this install so no host-build shim is installed for a project that declined it.
 
+10. **Stakeholder channels — where the commander may speak outside the team.** Ask after the runtime questions because this is a project communication boundary, not a seat property. Default first: "My default is none: the commander reaches only you, through the local desk and the optional courier, and never posts anywhere else. Do your stakeholders talk somewhere the commander should be able to speak — Telegram, Slack, or Teams?" With `AskUserQuestion`, offer a multi-select whose labels are exactly `No stakeholder channels`, `Telegram`, `Slack`, and `Teams`.
+
+   For each selected kind, walk one channel at a time and collect exactly the fields `seats/channels.json` records: `name` (short, `[a-z0-9-]`, for example `partners` or `dev`), `kind` (the selected Telegram/Slack/Teams value), `destination`, `audience`, `members`, and `read`. Explain destination by kind: Slack is the channel, group, or DM id from channel details (`C...`, `G...`, or `D...`); Telegram is the principal's `@username` (paired to a chat id on first message) or a numeric chat id; Teams is `chats/<chat-id>` or `teams/<team-id>/channels/<channel-id>` from a Teams link. For Telegram or Slack, ask whether this is the one `principal` channel where the fleet reaches the principal; at most one channel may be `principal`, and every other channel is `stakeholders`. Ask who is there as member ids and display names, read the list back, and ask read permission as `read: yes` / `read: no` while saying: "Reading means inbound messages land in the commander's inbox as information; nothing anyone says there authorizes an action."
+
+   Say credentials once per kind selected, and do not ask for tokens: the token goes in `seats/run/<kind>.token` mode `0600` or the `WHEELHOUSE_<KIND>_TOKEN` environment variable; Teams may instead name `WHEELHOUSE_TEAMS_TOKEN_CMD`. Credentials never go in `seats/channels.json`, never in `seats/seats.json`, and never in git. Point to `seats/README.md`'s channel section for exact setup. Since question 4's reserved list includes communication outside the team, say that declaring stakeholder channels is the principal narrowing that reservation to exactly the channels in `seats/channels.json`, and write that same sentence into `wheelhouse/INTEGRATOR.md` beside the reserved list.
+
+   The round ends in a read-back table, before anything is written: `name | kind | destination | audience | read | members`. If the answer was `No stakeholder channels`, the table is empty and the record still says so.
+
 
 ### Record what the interview decided — the machine copies, before anything derives from them
 
-Three writes close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
+Four writes close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
 
 **First, the namespace, into `wheelhouse/.template-source`** — the machine record, the value `seats/seat-env.sh` is invoked with:
 
@@ -317,6 +325,14 @@ An install upgrading over a `.template-source` that has no `namespace=` line at 
 **Then the host-build budget record, from question 9** — if the answer was `seats/host-budget.json = enabled`, write `seats/host-budget.json` exactly as the JSON object in question 9 and ensure `seats/bin/host-build-shim`, `seats/bin/cargo`, and `seats/bin/dotnet` are present and executable/symlinked as shipped by the template. If the answer was `absent`, remove `seats/host-budget.json` and remove `seats/bin`; the absence of the file is the adapter's switch, and the absence of `seats/bin` is the install's record that it did not opt in.
 
 **Then `seats/seats.json`, from the read-back value** — the roster's machine record, in the format `seats/README.md` documents and `seats/seats.json.example` shows: the `commander` entry marked external, then one entry per taken seat carrying exactly the six roster columns the interview collected — name and agent directory from question 7, harness, provider, pinned model, and auth route from question 8's read-back table — `account.dir` spelled under `~/.pi-seats-<namespace>/`, `harness` written as `pi`, `claude-code`, or `codex` (omitting it is allowed only for explicit Pi/default compatibility), and the auth route written as `account.authRoute` matching whichever route the seat's read-back row recorded. If every seat was declined, write the file anyway with the commander entry and an empty `seats` map — a roster that says "nobody" is a record; an absent file is a question. Read it back with `bun -e 'console.log(JSON.stringify(require("./seats/seats.json"), null, 2))'` or equivalent so a syntax error surfaces now, at the moment of writing, not at the first spawn.
+
+**Then `seats/channels.json`, from question 10's read-back table** — the channel machine record, in the format `seats/channels.json.example` shows. Write `{"version":1,"channels":{}}` when the answer was `No stakeholder channels` and no principal channel was declared; a file that says "nobody" is a record, while an absent file is an unanswered install question. Read it back immediately:
+
+```bash
+bun seats/channels.ts check    # expect either: channels: none declared (principal-only) / channels: <n> declared
+```
+
+Paste the line it prints into the install log.
 
 ## 4. Provision the seats
 
@@ -616,6 +632,15 @@ Run each of these and paste what it prints:
   ```
 
   The selftest plants a closed merged worktree, a seat-anchored worktree, an orphaned checkout, build caches, closed/open bead scratch under `.wheelhouse-runs` and `/private/tmp`, fake bead-named simctl devices, an idle fake XCTestDevices set, a stale bench lock, and an active bench lock guard, then proves only the safe rows are touched by `prune --yes` and open-bead scratch remains byte-identical.
+- **Check the stakeholder channel machinery arrived with the seats machinery.** It is copied in step 2 and later runbooks depend on it refusing undeclared channels before any transport call.
+
+  ```bash
+  bash seats/channels.selftest.sh      # expect: channels.selftest: PASS
+  bash seats/transports.selftest.sh    # expect: transports.selftest: PASS
+  bash seats/comms.selftest.sh         # expect: comms.selftest: PASS
+  ```
+
+  `channels.selftest.sh` proves the declared-channel file shape in `seats/channels.json`, including the no-channels record; `transports.selftest.sh` proves Telegram, Slack, and Teams can post/read-back/read against fakes without credential literals; `comms.selftest.sh` proves the single send gate.
 - A grep of the files you generated for the template's specimen strings. Scope it to the install — `CLAUDE.md` and `wheelhouse/`, excluding `.beads/` — and use word boundaries, or the specimen name matches inside ordinary words:
 
   ```bash
