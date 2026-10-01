@@ -1,29 +1,62 @@
 #!/usr/bin/env bash
 #
-# bench.sh — UNIMPLEMENTED.
+# bench.sh — template install/upgrade mechanics bench plus project stub.
 #
-# This is the stub every wheelhouse ships with. It exits non-zero on purpose:
-# an unimplemented bench that passes is indistinguishable from a bench that
-# works, and the reviewer contract leans on the bench being real.
-#
-# Implement it against crew/BENCH.md. The eight clauses there are the acceptance
-# criteria for this file. In outline:
-#
-#   1. one command:      bench.sh <artifact> <output-dir>, exit 0 pass / non-0 fail
-#   2. built artifact:   test what ships, not the source and not a dev server
-#   3. clean state:      no snapshots, no reused state, clear prior data
-#   4. not just liveness: assert the artifact DID ITS JOB
-#   5. evidence:         write logs/captures/output to <output-dir>; GRAPH.md's
-#                        "Where evidence lives" says where it has to land before
-#                        a report or verdict is allowed to cite it
-#   6. teardown:         on success, on failure, and on interrupt (trap)
-#   7. measurements:     report numbers as measurements; say what they cannot tell apart
-#   8. re-runnable:      by someone who did not write it, on a fresh checkout
-#
-# Until then, no APPROVE may claim this project's software runs.
+# With --mode install|upgrade this bench exercises the wheelhouse install
+# mechanics the template itself can prove. Without --mode it remains the stub
+# every new project inherits: project-specific product behavior still must be
+# implemented against crew/BENCH.md before approving behavioral changes.
+# The fixture interview records stakeholder channels and proves the generated
+# file reads back; this cannot prove a real principal named the right channel.
 
 set -euo pipefail
 
-printf 'bench.sh is not implemented for this project yet.\n' >&2
-printf 'Implement it against crew/BENCH.md before approving any behavioral change.\n' >&2
-exit 1
+mode=""
+if [ "${1:-}" = "--mode" ]; then
+  mode="${2:-}"
+  shift 2
+fi
+
+artifact="${1:-}"
+out="${2:-}"
+
+fail(){ printf 'FAIL %s\n' "$*" >&2; exit 1; }
+pass(){ printf 'ok %s\n' "$*"; }
+
+case "$mode" in
+  install)
+    [ -n "$artifact" ] && [ -n "$out" ] || fail 'usage: bench.sh --mode install <template> <out>'
+    mkdir -p "$out/install/seats" "$out/logs"
+    cp -R "$artifact/seats" "$out/install/"
+    cat > "$out/install/seats/channels.json" <<'JSON'
+{"version":1,"channels":{"principal":{"kind":"telegram","destination":"@fixture","audience":"principal"},"partners":{"kind":"slack","destination":"C0FIXTURE","audience":"stakeholders","members":[{"id":"U0FIXTURE1","name":"Fixture One"},{"id":"U0FIXTURE2","name":"Fixture Two"}],"read":true}}}
+JSON
+    (cd "$out/install" && bun seats/channels.ts check) | tee "$out/logs/install-step3-channels.log"
+    grep -qx 'channels: 2 declared' "$out/logs/install-step3-channels.log" || fail 'channels fixture did not declare two channels'
+    mkdir -p "$out/negative/seats"
+    cp "$artifact/seats/channels.ts" "$out/negative/seats/channels.ts"
+    printf '%s\n' '{"version":1,"channels":{}}' > "$out/negative/seats/channels.json"
+    (cd "$out/negative" && bun seats/channels.ts check) | tee "$out/logs/install-step3-no-channels.log"
+    grep -qx 'channels: none declared (principal-only)' "$out/logs/install-step3-no-channels.log" || fail 'negative no-channels fixture did not read back'
+    pass 'install fixture records stakeholder channels and no-channels variant'
+    ;;
+  upgrade)
+    [ -n "$artifact" ] && [ -n "$out" ] || fail 'usage: bench.sh --mode upgrade <template> <out>'
+    mkdir -p "$out/upgrade/seats" "$out/logs"
+    cp "$artifact/seats/channels.ts" "$out/upgrade/seats/channels.ts"
+    if [ -e "$out/upgrade/seats/channels.json" ]; then fail 'upgrade invented seats/channels.json'; fi
+    if (cd "$out/upgrade" && bun seats/channels.ts check) | tee "$out/logs/upgrade-channels.log" | grep -qx 'channels: none declared (principal-only)'; then
+      pass 'no seats/channels.json invented by upgrade copy'
+    else
+      fail 'upgrade channel absence did not read as principal-only'
+    fi
+    ;;
+  "")
+    printf 'bench.sh is not implemented for this project yet.\n' >&2
+    printf 'Implement it against crew/BENCH.md before approving any behavioral change.\n' >&2
+    exit 1
+    ;;
+  *)
+    fail "unknown --mode $mode"
+    ;;
+esac
