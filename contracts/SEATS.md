@@ -45,6 +45,7 @@ One consequence is enforced rather than trusted: **the verifier's account must b
 - **The commander probes, then nudges once, on silence.** A seat that cannot be reached looks exactly like a seat that is idle.
 - **Seats inherit the project's permissions.** Provisioning pre-grants trust for the project root and nothing else; per-seat escalations go to the principal.
 - **A seat does only briefed work.** It never self-assigns from the graph without a dispatch.
+- **A seat never speaks to stakeholders.** The owning commander is the one voice on every declared channel; a seat that needs a message passed on files a relay request (`bun seats/comms.ts request <channel> ...`) and reports that it did. The send gate refuses a seat identity by construction.
 - **A reviewer seat never reviews what it authored.** If the only available reviewer wrote the diff, the work waits. For the verifier this is enforced on disk, per Seat accounting above.
 
 ### Running a seat
