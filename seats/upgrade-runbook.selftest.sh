@@ -87,6 +87,15 @@ if [ "$TEMPLATE" = "$ROOT" ]; then
   else
     fail "host budget docs do not agree that seats/bin is kept but inert without host-budget.json"
   fi
+  for needle in 'Declare your stakeholder channels' 'seats/channels.json' 'seats/channels.json.example' 'bun seats/channels.ts check'; do
+    grep -qF "$needle" "$TEMPLATE/runbooks/UPGRADE.md" || fail "UPGRADE.md step 7 missing $needle"
+  done
+  for needle in 'channels.ts' 'comms.ts'; do
+    grep -qF "$needle" "$TEMPLATE/runbooks/UPGRADE.md" || fail "UPGRADE.md step 3 copy list missing $needle"
+  done
+  grep -qF 'seats/comms.ts send' "$TEMPLATE/generated/CLAUDE.md.example" || fail "generated CLAUDE specimen missing seats/comms.ts send"
+  grep -qF 'inbound' "$TEMPLATE/generated/CLAUDE.md.example" || fail "generated CLAUDE specimen missing inbound rule"
+  pass "stakeholder-channel upgrade docs name channels, comms, specimens, and read-back"
 fi
 
 PROJ="$TMP/project"
