@@ -100,13 +100,15 @@ export class TelegramTransport implements NeedTransport, ChannelTransport {
   chatId: string;
   usernames: Set<string>;
   sentEchoes = new Map<string, string>();
-  constructor(root: string){
+  constructor(root: string, opts: { destination?: string; allow?: string[] } = {}){
     this.root = root;
     this.token = tokenFrom(root);
-    this.allow = allowedFrom(root);
-    this.usernames = allowedUsernames(root);
+    const declared = opts.destination !== undefined;
+    this.allow = declared ? new Set((opts.allow || []).filter((id) => !id.startsWith("@"))) : allowedFrom(root);
+    this.usernames = declared ? new Set((opts.allow || []).filter((id) => id.startsWith("@")).map((id) => id.toLowerCase())) : allowedUsernames(root);
+    if (declared && opts.destination?.startsWith("@")) this.usernames.add(opts.destination.toLowerCase());
     this.apiBase = (process.env.WHEELHOUSE_TELEGRAM_API_BASE || "https://api.telegram.org").replace(/\/$/, "");
-    this.chatId = process.env.WHEELHOUSE_TELEGRAM_CHAT_ID || Array.from(this.allow)[0] || Array.from(this.usernames)[0] || "";
+    this.chatId = opts.destination || process.env.WHEELHOUSE_TELEGRAM_CHAT_ID || Array.from(this.allow)[0] || Array.from(this.usernames)[0] || "";
     if (!this.chatId) throw new Error("telegram.allow must name at least one chat/user id or @username, or set WHEELHOUSE_TELEGRAM_CHAT_ID");
   }
   endpoint(method: string): string { return `${this.apiBase}/bot${this.token}/${method}`; }
