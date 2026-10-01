@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fold, readEvents, type NeedEvent } from "../needs";
-import type { NeedTransport, OutboundNeedEvent, TransportPollResult } from "./transport";
+import type { ChannelTransport, InboundMessage, NeedTransport, OutboundNeedEvent, TransportPollResult } from "./transport";
 
 export class NoTelegramTransport extends Error {}
 
@@ -29,6 +29,16 @@ function allowedUsernames(root: string): Set<string> {
   const out = new Set<string>();
   for (const line of allowEntries(root)) for (const part of line.split(/\s+/)) if (part.startsWith("@")) out.add(part.toLowerCase());
   return out;
+}
+function pairedIdFor(root: string, username: string): string | null {
+  const want = username.toLowerCase();
+  for (const line of allowEntries(root)) {
+    const parts = line.split(/\s+/).filter(Boolean);
+    if (!parts.some((part) => part.startsWith("@") && part.toLowerCase() === want)) continue;
+    const id = parts.find((part) => !part.startsWith("@"));
+    if (id) return id;
+  }
+  return null;
 }
 function appendPairing(root: string, username: string, id: string){
   const f = allowFile(root); fs.mkdirSync(path.dirname(f), { recursive:true });
@@ -58,14 +68,38 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
-export class TelegramTransport implements NeedTransport {
+export function demuxUpdates(updates: any[], destination: string): { messages: InboundMessage[]; cursor: string } {
+  const messages: InboundMessage[] = [];
+  let cursor = "";
+  for (const upd of updates || []) {
+    if (typeof upd.update_id === "number") cursor = String(Math.max(Number(cursor || 0), upd.update_id + 1));
+    const msg = upd.message;
+    if (!msg || typeof msg.text !== "string") continue;
+    const chat = String(msg.chat?.id ?? "");
+    const username = msg.chat?.username ? `@${String(msg.chat.username).replace(/^@/, "")}` : "";
+    if (String(destination) !== chat && String(destination).toLowerCase() !== username.toLowerCase()) continue;
+    messages.push({
+      ref: `${chat}:${msg.message_id}`,
+      from: String(msg.from?.id ?? ""),
+      fromName: msg.from?.username ? `@${String(msg.from.username).replace(/^@/, "")}` : undefined,
+      text: msg.text,
+      at: msg.date ? new Date(msg.date * 1000).toISOString() : now(),
+      threadRef: msg.reply_to_message?.message_id !== undefined ? String(msg.reply_to_message.message_id) : undefined,
+    });
+  }
+  return { messages, cursor };
+}
+
+export class TelegramTransport implements NeedTransport, ChannelTransport {
   name = "telegram";
+  kind = "telegram" as const;
   root: string;
   token: string;
   allow: Set<string>;
   apiBase: string;
   chatId: string;
   usernames: Set<string>;
+  sentEchoes = new Map<string, string>();
   constructor(root: string){
     this.root = root;
     this.token = tokenFrom(root);
@@ -88,19 +122,40 @@ export class TelegramTransport implements NeedTransport {
     if (ev.type === "message") return ev.text;
     return `Resolved: ${ev.reason}`;
   }
+  resolveDestination(destination: string): string {
+    if (!destination.startsWith("@")) return destination;
+    const paired = pairedIdFor(this.root, destination);
+    if (!paired) throw new Error(`waiting for ${destination} to message the bot`);
+    return paired;
+  }
+  async post(destination: string, text: string, opts: { threadRef?: string } = {}): Promise<{ref:string; readBack:"echo"}> {
+    const chat = this.resolveDestination(destination);
+    const body:any = { chat_id:chat, text };
+    if (opts.threadRef) body.reply_to_message_id = Number(opts.threadRef.split(":").pop() || opts.threadRef);
+    const result = await this.call("sendMessage", body);
+    const ref = `${result.chat?.id ?? chat}:${result.message_id}`;
+    // Telegram Bot API has no fetch-by-id for sent messages; the sendMessage response echo is the strongest read-back.
+    if (String(result.message_id ?? "") === "" || String(result.chat?.id ?? chat) === "" || (result.text !== undefined && result.text !== text)) throw new Error("telegram send echo did not match posted text");
+    this.sentEchoes.set(ref, text);
+    return { ref, readBack: "echo" };
+  }
+  async readBack(destination: string, ref: string, text: string): Promise<boolean> {
+    void destination;
+    // Telegram Bot API has no fetch-by-id for sent messages; read-back means the sendMessage echo already observed for this transport instance.
+    return this.sentEchoes.get(ref) === text;
+  }
+  async read(destination: string, cursor?: string): Promise<{messages: InboundMessage[]; cursor: string}> { void destination; void cursor; throw new Error("telegram read runs inside the courier tick; update polling has one offset consumer per bot token"); }
   async send(ev: OutboundNeedEvent): Promise<{ref:string}> {
     const sent = sentRefByNeed();
     const prior = sent.get(ev.id);
-    const chat = this.chatId.startsWith("@") ? Array.from(this.allow)[0] : this.chatId;
-    if (!chat) throw new Error(`waiting for ${this.chatId} to message the bot`);
-    const body:any = { chat_id:chat, text:this.text(ev) };
-    if (prior && ev.type !== "opened") body.reply_to_message_id = Number(prior.split(":").pop());
-    const result = await this.call("sendMessage", body);
-    return { ref: `${result.chat?.id ?? chat}:${result.message_id}` };
+    const destination = this.chatId;
+    const r = await this.post(destination, this.text(ev), prior && ev.type !== "opened" ? { threadRef: prior } : undefined);
+    return { ref: r.ref };
   }
   async poll(cursor?: string): Promise<TransportPollResult> {
     const body:any = { timeout: Number(process.env.WHEELHOUSE_TELEGRAM_POLL_TIMEOUT || "25") };
     if (cursor) body.offset = Number(cursor);
+    // NeedTransport.poll is the courier-owned polling path; ChannelTransport.read never calls getUpdates.
     const updates:any[] = await this.call("getUpdates", body);
     const byMsg = needByMessageId();
     const replies:any[] = [];
