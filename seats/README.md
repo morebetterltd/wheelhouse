@@ -28,7 +28,8 @@ The main files here:
 - `courier.ts` — optional transport daemon for off-machine replies; Telegram lives under `transports/`.
 - `principal-sentinel.selftest.sh` — proves the Stop hook opens exactly the intended needs and that source dedupe works.
 - `courier.ts` — optional human transport daemon: pushes needs to Telegram and records replies back into `seats/needs.jsonl`.
-- `transports/` — transport interface and adapters. The template ships Telegram first.
+- `transports/` — transport interface and adapters, including Telegram, Slack, and Teams.
+- `transports/teams.ts` — Microsoft Graph Teams channel transport used by stakeholder channels.
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code. Default timeout is 15 minutes; for
   large cold workspaces that must build/test from scratch, set
@@ -648,6 +649,7 @@ bash seats/channels.selftest.sh
 bash seats/desk.selftest.sh
 bash seats/principal-sentinel.selftest.sh
 bash seats/courier.selftest.sh
+bash seats/transports.selftest.sh
 bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
