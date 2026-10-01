@@ -37,6 +37,12 @@ export class TeamsTransport implements ChannelTransport {
   apiBase: string;
   constructor(root: string) { this.root = root; this.apiBase = (process.env.WHEELHOUSE_TEAMS_API_BASE || "https://graph.microsoft.com/v1.0").replace(/\/$/, ""); }
   url(destination: string, suffix = ""): string { return `${this.apiBase}/${destination.replace(/^\/+|\/+$/g, "")}${suffix}`; }
+  private parentRef(ref: string): string { return ref.replace(/\/replies\/[^/]+$/, ""); }
+  private readBackSuffix(ref: string): string {
+    const m = ref.match(/^(.+)\/replies\/([^/]+)$/);
+    if (m) return `/messages/${encodeURIComponent(m[1])}/replies/${encodeURIComponent(m[2])}`;
+    return `/messages/${encodeURIComponent(ref)}`;
+  }
   async call(method: string, url: string, body?: any): Promise<any> {
     const token = tokenFrom(this.root);
     const init: RequestInit = { method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" } };
@@ -47,16 +53,18 @@ export class TeamsTransport implements ChannelTransport {
     return json;
   }
   async post(destination: string, text: string, opts: { threadRef?: string } = {}): Promise<{ ref: string; readBack: "fetched" }> {
-    const suffix = opts.threadRef ? `/messages/${encodeURIComponent(opts.threadRef)}/replies` : "/messages";
+    const parent = opts.threadRef ? this.parentRef(opts.threadRef) : "";
+    const suffix = parent ? `/messages/${encodeURIComponent(parent)}/replies` : "/messages";
     const json = await this.call("POST", this.url(destination, suffix), { body: { contentType: "text", content: text } });
-    const ref = String(json.id || "");
-    if (!ref) throw new Error("teams post returned no message id");
+    const id = String(json.id || "");
+    if (!id) throw new Error("teams post returned no message id");
+    const ref = parent ? `${parent}/replies/${id}` : id;
     if (!(await this.readBack(destination, ref, text))) throw new Error(`teams send unverified: read-back did not return id ${ref}`);
     return { ref, readBack: "fetched" };
   }
   async readBack(destination: string, ref: string, text: string): Promise<boolean> {
     try {
-      const json = await this.call("GET", this.url(destination, `/messages/${encodeURIComponent(ref)}`));
+      const json = await this.call("GET", this.url(destination, this.readBackSuffix(ref)));
       return htmlText(String(json?.body?.content ?? "")) === text;
     } catch { return false; }
   }

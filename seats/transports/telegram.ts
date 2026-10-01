@@ -89,6 +89,7 @@ export class TelegramTransport implements NeedTransport, ChannelTransport {
   apiBase: string;
   chatId: string;
   usernames: Set<string>;
+  sentEchoes = new Map<string, string>();
   constructor(root: string){
     this.root = root;
     this.token = tokenFrom(root);
@@ -125,9 +126,14 @@ export class TelegramTransport implements NeedTransport, ChannelTransport {
     const ref = `${result.chat?.id ?? chat}:${result.message_id}`;
     // Telegram Bot API has no fetch-by-id for sent messages; the sendMessage response echo is the strongest read-back.
     if (String(result.message_id ?? "") === "" || String(result.chat?.id ?? chat) === "" || (result.text !== undefined && result.text !== text)) throw new Error("telegram send echo did not match posted text");
+    this.sentEchoes.set(ref, text);
     return { ref, readBack: "echo" };
   }
-  async readBack(destination: string, ref: string, text: string): Promise<boolean> { void destination; void ref; void text; return true; }
+  async readBack(destination: string, ref: string, text: string): Promise<boolean> {
+    void destination;
+    // Telegram Bot API has no fetch-by-id for sent messages; read-back means the sendMessage echo already observed for this transport instance.
+    return this.sentEchoes.get(ref) === text;
+  }
   async read(destination: string, cursor?: string): Promise<{messages: InboundMessage[]; cursor: string}> { void destination; void cursor; throw new Error("telegram read runs inside the courier tick; update polling has one offset consumer per bot token"); }
   async send(ev: OutboundNeedEvent): Promise<{ref:string}> {
     const sent = sentRefByNeed();
