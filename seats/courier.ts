@@ -31,6 +31,7 @@ function completeLines(offset: number): { rows:{line:string; start:number; end:n
   for (const part of text.split(/(?<=\n)/)) { if (!part.endsWith("\n")) break; const line=part.replace(/\r?\n$/,""); const end=pos+Buffer.byteLength(part); if(line.trim()) rows.push({line,start:pos,end}); pos=end; }
   return { rows, end:pos };
 }
+// Telegram's Bot API getUpdates offset has one consumer per bot token; courier owns that polling path.
 function transport(): NeedTransport | null {
   const forced = process.env.WHEELHOUSE_TRANSPORT;
   if (forced === "telegram") return new TelegramTransport(ROOT);
