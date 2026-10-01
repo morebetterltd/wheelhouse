@@ -59,7 +59,6 @@ export class TeamsTransport implements ChannelTransport {
     const id = String(json.id || "");
     if (!id) throw new Error("teams post returned no message id");
     const ref = parent ? `${parent}/replies/${id}` : id;
-    if (!(await this.readBack(destination, ref, text))) throw new Error(`teams send unverified: read-back did not return id ${ref}`);
     return { ref, readBack: "fetched" };
   }
   async readBack(destination: string, ref: string, text: string): Promise<boolean> {
