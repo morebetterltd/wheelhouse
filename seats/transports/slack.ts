@@ -114,6 +114,7 @@ export class SlackTransport implements NeedTransport, ChannelTransport {
     for (const msg of (json.messages || []).slice().reverse()) {
       const ts = String(msg.ts || "");
       if (ts && Number(ts) > Number(next || 0)) next = ts;
+      if (cursor && Number(ts) <= Number(cursor)) continue;
       if (!ts || msg.thread_ts && String(msg.thread_ts) !== ts || typeof msg.text !== "string") continue;
       messages.push({ ref: `${destination}:${ts}`, from: String(msg.user || ""), text: msg.text, at: msg.ts ? new Date(Number(msg.ts.split(".")[0])*1000).toISOString() : now(), threadRef: msg.thread_ts ? String(msg.thread_ts) : undefined });
     }

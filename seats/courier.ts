@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { appendEvent, answerNeed, addMessage, fold, readEvents, type NeedEvent } from "./needs";
 import * as channels from "./channels";
+import { readDeclaredChannels } from "./comms";
 import { NoTelegramTransport, TelegramTransport } from "./transports/telegram";
 import { NoSlackTransport, SlackTransport } from "./transports/slack";
 import type { NeedTransport } from "./transports/transport";
@@ -48,14 +49,22 @@ function transport(principal = channels.principalChannel(ROOT)): ConfiguredTrans
   if (forced === "telegram") return { tx: new TelegramTransport(ROOT), source: "legacy: seats/run/telegram.allow" };
   if (forced === "slack") return { tx: new SlackTransport(ROOT), source: "legacy: seats/run/slack.channel" };
   try { return { tx: new SlackTransport(ROOT), source: "legacy: seats/run/slack.channel" }; } catch(e:any) { if(!(e instanceof NoSlackTransport)) throw e; }
-  try { return { tx: new TelegramTransport(ROOT), source: "legacy: seats/run/telegram.allow" }; } catch(e:any) { if(e instanceof NoTelegramTransport) return null; throw e; }
+  try { return { tx: new TelegramTransport(ROOT), source: "legacy: seats/run/telegram.allow" }; } catch(e:any) { if(!(e instanceof NoTelegramTransport)) throw e; }
+  const telegramReadable = channels.loadChannels(ROOT).find((c) => c.read && c.kind === "telegram");
+  if (telegramReadable) return { tx: new TelegramTransport(ROOT, { destination: telegramReadable.destination, allow: telegramReadable.members.map((m) => m.id) }), source: "readable channel from seats/channels.json" };
+  return null;
 }
+function hasReadableChannels(): boolean { return channels.loadChannels(ROOT).some((c) => c.read); }
 function alreadySent(id: string, transport: string, refPrefix: string): boolean { return (readEvents() as any[]).some(ev => ev?.type==="sent" && ev.id===id && ev.transport===transport && String(ev.ref).startsWith(`${refPrefix}:`)); }
 function sentRef(ref: string, kind: string, start: number){ return `${kind}:${start}:${ref}`; }
 function choiceFor(needId: string, text: string): string | undefined { const n=fold().get(needId); if(!n) return undefined; const t=text.trim(); const byNum=t.match(/^\d+$/) ? n.opened.options[Number(t)-1]?.label : undefined; return byNum || n.opened.options.find(o=>o.label===t || o.text===t)?.label; }
 async function processOnce(): Promise<string> {
   const configured=transport();
-  if(!configured) return "courier skipped: no transport configured";
+  if(!configured) {
+    if (!hasReadableChannels()) return "courier skipped: no principal transport and no readable channel";
+    const readRows = await readDeclaredChannels(ROOT);
+    return `courier scanned 0 event(s), 0 replies, read ${readRows.map(r=>`${r.channel}:${Math.max(0,r.count)}`).join(",")}`;
+  }
   const tx=configured.tx;
   const s=loadState(tx.name);
   const batch=completeLines(s.offset);
@@ -90,6 +99,8 @@ async function processOnce(): Promise<string> {
     return `courier scanned ${batch.rows.length} event(s), poll failed`;
   }
   s.cursor=polled.cursor;
+  const telegramUpdates = tx.name === "telegram" ? (tx as any).lastUpdates : undefined;
+  const readRows = await readDeclaredChannels(ROOT, undefined, telegramUpdates);
   for(const reply of polled.replies){
     const n=fold().get(reply.needRef);
     if(!n) { log(`reply for unknown need ${reply.needRef}`); continue; }
@@ -100,9 +111,9 @@ async function processOnce(): Promise<string> {
   // If a send failed, leave the offset at the unsent row so a later cycle retries it and records `sent` only after success.
   if (!sendBlocked && fs.existsSync(LEDGER)) s.offset=fs.statSync(LEDGER).size;
   saveState(tx.name, s);
-  return `courier scanned ${batch.rows.length} event(s), ${polled.replies.length} repl${polled.replies.length===1?"y":"ies"}`;
+  return `courier scanned ${batch.rows.length} event(s), ${polled.replies.length} repl${polled.replies.length===1?"y":"ies"}, read ${readRows.map(r=>`${r.channel}:${Math.max(0,r.count)}`).join(",")}`;
 }
-function status(){ const configured = transport(channels.principalChannel(ROOT)); if(!configured) { console.log("courier skipped: no transport configured"); return; } const pid=fs.existsSync(PID_FILE)?fs.readFileSync(PID_FILE,"utf8").trim():""; if(pid){ try{ process.kill(Number(pid),0); console.log(`courier RUNNING pid ${pid} — ${configured.source}`); return; } catch{} } console.log(`courier configured but not running — ${configured.source}`); }
+function status(){ const configured = transport(channels.principalChannel(ROOT)); if(!configured) { console.log(hasReadableChannels() ? "courier configured but not running — readable channels from seats/channels.json" : "courier skipped: no principal transport and no readable channel"); return; } const pid=fs.existsSync(PID_FILE)?fs.readFileSync(PID_FILE,"utf8").trim():""; if(pid){ try{ process.kill(Number(pid),0); console.log(`courier RUNNING pid ${pid} — ${configured.source}${hasReadableChannels() ? " + readable channels" : ""}`); return; } catch{} } console.log(`courier configured but not running — ${configured.source}${hasReadableChannels() ? " + readable channels" : ""}`); }
 async function main(){ const args=process.argv.slice(2); if(args.includes("--status")){ status(); return; } if(args.includes("--drain-out")){ if(fs.existsSync(OUT_LOG)) process.stdout.write(fs.readFileSync(OUT_LOG)); return; } let line=""; try { line=await processOnce(); } catch(e:any){ line=`STOP: ${e.message}`; process.exitCode=1; } console.log(line); if(args.includes("--once")) return; if(process.exitCode) return; fs.mkdirSync(RUN,{recursive:true}); fs.writeFileSync(PID_FILE, `${process.pid}\n`); let inFlight=false; setInterval(()=>{ if(inFlight) return; inFlight=true; processOnce().then(log).catch(e=>log(`STOP: ${e.message}`)).finally(()=>{ inFlight=false; }); }, Number(process.env.WHEELHOUSE_COURIER_INTERVAL_MS || "10000")); }
 
 if(import.meta.main) main();
