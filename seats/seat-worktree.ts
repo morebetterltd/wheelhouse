@@ -242,6 +242,41 @@ export function remoteTrackingTip(root: string, remote: string, branch: string):
 
 export function pushMarkerPath(root: string, seat: string): string { return path.join(root, "seats", "run", `push.${seat}.json`); }
 
+const CREDENTIAL_SHAPE_RE = [
+  String.raw`xox[abpr]-[0-9][A-Za-z0-9-]{10,}`,
+  String.raw`github_pat_[A-Za-z0-9_]{20,}`,
+  String.raw`ghp_[A-Za-z0-9_]{20,}`,
+  String.raw`sk-[A-Za-z0-9][A-Za-z0-9_-]{20,}`,
+  String.raw`[0-9]{6,}:[A-Za-z0-9_-]{30,}`,
+  String.raw`eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}`,
+  String.raw`-----BEGIN (RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----`,
+].join("|");
+
+function commitsToPublish(repo: string, remote: string, branch: string, headSha: string): string[] {
+  const remoteTip = remoteTrackingTip(repo, remote, branch);
+  const args = remoteTip ? ["rev-list", `${remoteTip}..${headSha}`] : ["rev-list", headSha, `--not`, `--remotes=${remote}`];
+  const r = git(repo, args);
+  if (!r.ok) return [headSha];
+  return r.out.split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+export interface CredentialScanHit { commit: string; path: string; line: string; text: string }
+export function credentialShapeHits(repo: string, commits: string[]): CredentialScanHit[] {
+  if (commits.length === 0) return [];
+  const r = git(repo, ["grep", "-I", "-n", "-E", CREDENTIAL_SHAPE_RE, ...commits, "--", "."]);
+  if (!r.ok && r.code !== 1) return [{ commit: "scan", path: "git grep", line: "0", text: r.err || r.out || "credential scan failed" }];
+  return r.out.split("\n").filter(Boolean).map((line) => {
+    const m = line.match(/^([^:]+):([^:]+):(\d+):(.*)$/);
+    return m ? { commit: m[1], path: m[2], line: m[3], text: m[4] } : { commit: "scan", path: "git grep", line: "0", text: line };
+  });
+}
+
+export function credentialScanSummary(repo: string, remote: string, branch: string, headSha: string): string | null {
+  const hits = credentialShapeHits(repo, commitsToPublish(repo, remote, branch, headSha));
+  if (hits.length === 0) return null;
+  return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
+}
+
 export interface EnsureOptions {
   root: string;
   seat: string;
@@ -373,6 +408,12 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     // Nowhere to push. That is fine only when the branch holds nothing of its own.
     if (!reachableFromAnotherBranch()) refuse(`push failed for ${currentBranch} in ${target}: no remote named ${remote} to push to, and its commits are on no other branch. The seat stays on ${currentBranch}.`);
   } else if (currentBranch && !tipOnRemote(repo, headSha)) {
+    const credentialHits = credentialScanSummary(repo, remote, currentBranch, headSha);
+    if (credentialHits) {
+      const msg = `credential scan failed for ${currentBranch}: ${credentialHits}; refusing to push. The seat stays on ${currentBranch} in ${target}.`;
+      note(`seat ${o.seat}: ${msg}`);
+      refuse(msg);
+    }
     const markerFile = pushMarkerPath(root, o.seat);
     fs.mkdirSync(path.dirname(markerFile), { recursive: true });
     fs.writeFileSync(markerFile, JSON.stringify({ seat: o.seat, branch: currentBranch, worktree: target, startedAt: new Date().toISOString(), pid: process.pid }) + "\n");
