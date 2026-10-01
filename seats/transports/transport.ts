@@ -24,3 +24,19 @@ export interface NeedTransport {
   send(ev: OutboundNeedEvent): Promise<TransportSendResult>;
   poll(cursor?: string): Promise<TransportPollResult>;
 }
+
+export interface InboundMessage {
+  ref: string;
+  from: string;
+  fromName?: string;
+  text: string;
+  at: string;
+  threadRef?: string;
+}
+
+export interface ChannelTransport {
+  kind: "telegram" | "slack" | "teams";
+  post(destination: string, text: string, opts?: { threadRef?: string }): Promise<{ ref: string; readBack: "fetched" | "echo" }>;
+  readBack(destination: string, ref: string, text: string): Promise<boolean>;
+  read(destination: string, cursor?: string): Promise<{ messages: InboundMessage[]; cursor: string }>;
+}
