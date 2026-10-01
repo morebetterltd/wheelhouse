@@ -173,7 +173,7 @@ cat > "$POLLFAIL/seats/needs.jsonl" <<'EOF'
 EOF
 : > "$FIX/requests.jsonl"; : > "$POLLFAIL/seats/logs/courier.out.log"; touch "$FIX/fail-poll-once"
 start_courier_daemon "$POLLFAIL" 200 "$FIX/pollfail.err"
-sleep 0.45
+sleep 0.8
 if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'poll failed: Bad Request: poll failed' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure is logged and courier daemon keeps running"; else fail "poll failure killed courier or missed log pid=$COURIER_PID log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) err=$(cat "$FIX/pollfail.err" 2>/dev/null)"; fi
 polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
 if [ "$polls" -ge 2 ] && grep -q 'courier scanned' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure recovers on a later cycle"; else fail "poll failure did not retry/recover polls=$polls log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi

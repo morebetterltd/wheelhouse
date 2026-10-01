@@ -66,7 +66,7 @@ run list --unread; if [ $RC -eq 0 ] && says "$MSG_NEED open question"; then pass
 SHOW="$(json show "$MSG_NEED")"; run list --unread; if [ $RC -eq 0 ] && ! says "$MSG_NEED" && printf '%s\n' "$SHOW" | grep -q '"type": "read"'; then pass "show clears unread human message"; else fail "show did not clear human message (rc=$RC out=$OUT show=$SHOW)"; fi
 phase "6. canary — refusal removal is caught"
 SAB="$FIX/needs-no-refusal.ts"
-perl -0pe 's/function humanTextGuard\(text:string, where:string\)\{.*?\nfunction seatNames/function humanTextGuard(text:string, where:string){ }\nfunction seatNames/s' "$SCRIPT" > "$SAB"
+perl -0pe 's/export function humanTextGuard\(text:string, where:string, root=ROOT\)\{.*?\nfunction seatNames/export function humanTextGuard(text:string, where:string, root=ROOT){ }\nfunction seatNames/s' "$SCRIPT" > "$SAB"
 chmod +x "$SAB"
 if cmp -s "$SCRIPT" "$SAB"; then fail "canary: could not remove refusal function; pattern no longer matches"; else BEFORE=$FAILED; RUN_SCRIPT="$SAB"; run open --title x --body "see wheelhouse-project-abcd"; RUN_SCRIPT="$SCRIPT"; if [ $RC -eq 2 ]; then FAILED=$((BEFORE+1)); fail "canary: sabotaged script still refused the forbidden id, so this test proves nothing"; else FAILED=$BEFORE; pass "canary: removing the human-text refusal is caught"; fi; fi
 printf '\n'; if [ $FAILED -eq 0 ]; then echo "needs.ts works on this machine."; exit 0; fi; echo "$FAILED check(s) failed."; exit 1
