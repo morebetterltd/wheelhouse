@@ -12,8 +12,11 @@ pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 port(){ bun -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats/transports" "$ROOT/seats/run"
-cp "$HERE/comms.ts" "$HERE/channels.ts" "$HERE/needs.ts" "$ROOT/seats/"
+cp "$HERE/comms.ts" "$HERE/channels.ts" "$HERE/needs.ts" "$HERE/herald.ts" "$ROOT/seats/"
 cp "$HERE/transports/"*.ts "$ROOT/seats/transports/"
+cat > "$ROOT/seats/seats.json" <<'JSON'
+{"commander":{"role":"commander","external":true},"seats":{"worker-1":{"role":"worker"},"reviewer":{"role":"reviewer"}}}
+JSON
 cat > "$ROOT/seats/channels.json" <<'JSON'
 {
   "version": 1,
@@ -44,10 +47,10 @@ Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch
 TS
 P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
 sleep 0.2
-base_env(){ env WHEELHOUSE_COMMS_ROOT="$ROOT" WHEELHOUSE_TELEGRAM_TOKEN=tg-token WHEELHOUSE_TELEGRAM_CHAT_ID=111 WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_SLACK_TOKEN="$(printf 'xox%s-%s' b fixture)" WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TEAMS_TOKEN=teams-token WHEELHOUSE_TEAMS_API_BASE="http://127.0.0.1:$P" "$@"; }
+base_env(){ env -u BEADS_ACTOR WHEELHOUSE_COMMS_ROOT="$ROOT" WHEELHOUSE_TELEGRAM_TOKEN=tg-token WHEELHOUSE_TELEGRAM_CHAT_ID=111 WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_SLACK_TOKEN="$(printf 'xox%s-%s' b fixture)" WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TEAMS_TOKEN=teams-token WHEELHOUSE_TEAMS_API_BASE="http://127.0.0.1:$P" "$@"; }
 count_req(){ [ -f "$FIX/requests.jsonl" ] && wc -l < "$FIX/requests.jsonl" | tr -d ' ' || printf '0'; }
 count_rows(){ if [ -f "$ROOT/seats/comms.jsonl" ]; then awk -v t="\"type\":\"$1\"" 'index($0,t){n++} END{print n+0}' "$ROOT/seats/comms.jsonl"; else printf '0'; fi; }
-reset_logs(){ rm -f "$FIX/requests.jsonl" "$FIX/slack.jsonl" "$FIX/telegram.jsonl" "$FIX/teams.jsonl" "$FIX/fail-readback" "$ROOT/seats/comms.jsonl"; }
+reset_logs(){ rm -f "$FIX/requests.jsonl" "$FIX/slack.jsonl" "$FIX/telegram.jsonl" "$FIX/teams.jsonl" "$FIX/fail-readback" "$ROOT/seats/comms.jsonl" "$ROOT/seats/inbox.jsonl" "$ROOT/seats/herald.state.json"; }
 
 reset_logs
 base_env bun "$ROOT/seats/comms.ts" send nowhere hi > "$FIX/undeclared.out" 2>&1; rc=$?
@@ -56,6 +59,35 @@ if [ $rc -eq 2 ] && grep -q 'STOP: channel nowhere is not declared in seats/chan
 reset_logs
 base_env bun "$ROOT/seats/comms.ts" send C08EXAMPLE hi > "$FIX/rawid.out" 2>&1; rc=$?
 if [ $rc -eq 2 ] && grep -q 'STOP: channel C08EXAMPLE is not declared in seats/channels.json' "$FIX/rawid.out" && [ ! -e "$FIX/requests.jsonl" ] && [ ! -e "$ROOT/seats/comms.jsonl" ]; then pass 'raw platform id is refused like any undeclared name before network'; else fail "raw id leg rc=$rc out=$(cat "$FIX/rawid.out") req=$(count_req)"; fi
+
+reset_logs
+base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms.ts" request partners "need a word with Tyler" > "$FIX/request.out" 2>&1; rc=$?; RELAY_ID="$(cat "$FIX/request.out" | tr -d '\r\n')"
+if [ $rc -eq 0 ] && echo "$RELAY_ID" | grep -Eq '^relay-[0-9a-z]{4}$' && [ "$(count_rows request)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'seat relay request records one request row and makes zero network calls'; else fail "request leg rc=$rc id=$RELAY_ID ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null) req=$(count_req) out=$(cat "$FIX/request.out")"; fi
+base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request1.out" 2>&1; rc=$?
+base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request2.out" 2>&1; rc2=$?
+HERALD_MATCHES="$(node -e 'const fs=require("fs"); const rows=fs.existsSync(process.argv[1])?fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse):[]; console.log(rows.filter(r=>r.class==="relay-request"&&r.seat==="worker-1"&&r.state==="input-required"&&r.detail.includes("relay "+process.argv[2])).length)' "$ROOT/seats/inbox.jsonl" "$RELAY_ID")"
+if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q 'appended 1 wake event' "$FIX/herald-request1.out" && grep -q 'appended 0 wake event' "$FIX/herald-request2.out" && [ "$HERALD_MATCHES" -eq 1 ]; then pass 'herald turns one relay request into one input-required inbox row and does not duplicate'; else fail "herald relay request leg rc=$rc/$rc2 out1=$(cat "$FIX/herald-request1.out") out2=$(cat "$FIX/herald-request2.out") inbox=$(cat "$ROOT/seats/inbox.jsonl" 2>/dev/null)"; fi
+base_env bun "$ROOT/seats/comms.ts" relay "$RELAY_ID" > "$FIX/relay.out" 2>&1; rc=$?
+if [ $rc -eq 0 ] && grep -q "^relayed $RELAY_ID C08EXAMPLE:" "$FIX/relay.out" && [ "$(grep -c 'chat.postMessage' "$FIX/requests.jsonl")" -eq 1 ] && [ "$(grep -c 'conversations.history' "$FIX/requests.jsonl")" -eq 1 ] && [ "$(count_rows sent)" -eq 1 ] && [ "$(count_rows relayed)" -eq 1 ]; then pass 'commander relay sends through shared gate, records sent and relayed rows'; else fail "relay leg rc=$rc out=$(cat "$FIX/relay.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
+BEFORE_LEDGER="$(wc -c < "$ROOT/seats/comms.jsonl" | tr -d ' ')"; BEFORE_CALLS="$(count_req)"
+base_env bun "$ROOT/seats/comms.ts" relay "$RELAY_ID" > "$FIX/relay-again.out" 2>&1; rc=$?; AFTER_LEDGER="$(wc -c < "$ROOT/seats/comms.jsonl" | tr -d ' ')"; AFTER_CALLS="$(count_req)"
+if [ $rc -eq 2 ] && grep -q 'STOP: already relayed' "$FIX/relay-again.out" && [ "$BEFORE_LEDGER" = "$AFTER_LEDGER" ] && [ "$BEFORE_CALLS" = "$AFTER_CALLS" ]; then pass 'relaying the same request again exits already relayed with no calls or ledger change'; else fail "relay-again leg rc=$rc out=$(cat "$FIX/relay-again.out") before=$BEFORE_LEDGER/$BEFORE_CALLS after=$AFTER_LEDGER/$AFTER_CALLS"; fi
+base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms.ts" request partners "please decline this" > "$FIX/request-decline.out" 2>&1; DECLINE_ID="$(cat "$FIX/request-decline.out" | tr -d '\r\n')"; : > "$FIX/requests.jsonl"
+base_env bun "$ROOT/seats/comms.ts" relay "$DECLINE_ID" --decline "not ours to say" > "$FIX/decline.out" 2>&1; rc=$?
+if [ $rc -eq 0 ] && grep -q "^declined $DECLINE_ID" "$FIX/decline.out" && [ "$(count_rows declined)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'relay decline records declined row and makes zero network calls'; else fail "decline leg rc=$rc out=$(cat "$FIX/decline.out") req=$(count_req) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
+base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms.ts" send partners hi > "$FIX/seat-send.out" 2>&1; rc=$?
+if [ $rc -eq 2 ] && grep -q 'STOP: seats cannot send to stakeholders; file a relay request: bun seats/comms.ts request partners' "$FIX/seat-send.out" && [ "$(count_req)" -eq 0 ] && [ "$(count_rows sent)" -eq 1 ]; then pass 'seat identity send is refused before transport construction or new ledger row'; else fail "seat-send leg rc=$rc out=$(cat "$FIX/seat-send.out") req=$(count_req) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
+base_env BEADS_ACTOR=reviewer bun "$ROOT/seats/comms.ts" request partners "reviewer wants relay" > "$FIX/request-reviewer.out" 2>&1; REVIEW_ID="$(cat "$FIX/request-reviewer.out" | tr -d '\r\n')"; : > "$FIX/requests.jsonl"
+base_env BEADS_ACTOR=reviewer bun "$ROOT/seats/comms.ts" relay "$REVIEW_ID" > "$FIX/reviewer-relay.out" 2>&1; rc=$?
+if [ $rc -eq 2 ] && grep -q 'STOP: seats cannot send to stakeholders; file a relay request: bun seats/comms.ts request partners' "$FIX/reviewer-relay.out" && [ "$(count_req)" -eq 0 ]; then pass 'reviewer identity relay is refused by the same send gate before network'; else fail "reviewer relay leg rc=$rc out=$(cat "$FIX/reviewer-relay.out") req=$(count_req)"; fi
+base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms.ts" request partners "same source" --source fixture-source > "$FIX/source1.out" 2>&1; base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms.ts" request partners "same source changed" --source fixture-source > "$FIX/source2.out" 2>&1
+SRC1="$(cat "$FIX/source1.out" | tr -d '\r\n')"; SRC2="$(cat "$FIX/source2.out" | tr -d '\r\n')"
+SOURCE_COUNT="$(awk 'index($0,"\"source\":\"fixture-source\""){n++} END{print n+0}' "$ROOT/seats/comms.jsonl")"
+if [ "$SRC1" = "$SRC2" ] && [ "$SOURCE_COUNT" -eq 1 ]; then pass 'request --source deduplicates pending relay requests and prints the existing id'; else fail "source dedupe failed src1=$SRC1 src2=$SRC2 count=$SOURCE_COUNT ledger=$(cat "$ROOT/seats/comms.jsonl")"; fi
+perl -0pe 's/enforceSendIdentity\(channel\.name\);/\/\/ identity gate removed by canary/;' "$ROOT/seats/comms.ts" > "$ROOT/seats/comms-bad-identity.ts"
+: > "$FIX/requests.jsonl"
+base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms-bad-identity.ts" send partners hi > "$FIX/canary-identity.out" 2>&1; rc=$?
+if [ $rc -eq 0 ] && [ "$(count_req)" -gt 0 ]; then pass 'canary: removing identity gate lets a seat send and is caught'; else fail "identity canary failed rc=$rc out=$(cat "$FIX/canary-identity.out") req=$(count_req)"; fi
 
 reset_logs
 base_env BEADS_ACTOR=commander bun "$ROOT/seats/comms.ts" send partners "shipping tonight" > "$FIX/partners.out" 2>&1; rc=$?
@@ -89,5 +121,5 @@ reset_logs
 base_env bun "$ROOT/seats/comms-bad.ts" send nowhere hi > "$FIX/canary.out" 2>&1; rc=$?
 if [ $rc -eq 0 ] && [ -e "$FIX/requests.jsonl" ]; then pass 'canary: removing declared-name check makes undeclared send reach network'; else fail "canary did not prove declared-name check: rc=$rc out=$(cat "$FIX/canary.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
 
-if [ $FAIL -eq 0 ]; then echo 'comms.selftest: PASS (ten legs)'; exit 0; fi
+if [ $FAIL -eq 0 ]; then echo "comms.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "comms.selftest: FAIL ($FAIL failure(s))"; exit 1

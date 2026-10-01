@@ -29,6 +29,7 @@ const SEATS_DIR = path.join(ROOT, "seats");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
 const INBOX = path.join(SEATS_DIR, "inbox.jsonl");
 const NEEDS_LEDGER = path.join(SEATS_DIR, "needs.jsonl");
+const COMMS_LEDGER = path.join(SEATS_DIR, "comms.jsonl");
 const HERALD_OUT_LOG = path.join(LOG_DIR, "herald.out.log");
 const DRAIN_CURSOR = path.join(SEATS_DIR, "inbox.cursor");
 const DRAIN_SEEN = path.join(SEATS_DIR, "inbox.seen.json");
@@ -51,12 +52,13 @@ const DISTRESS_RE = /(?:\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|atio
 const STOP_DISTRESS_RE = /\bSTOP\b/;
 const SENTINEL_RE = /^\s*@commander\s*:/im;
 
-type WakeClass = "settle" | "distress" | "sentinel" | "verdict-not-posted" | "need-answered" | "need-message";
+type WakeClass = "settle" | "distress" | "sentinel" | "verdict-not-posted" | "need-answered" | "need-message" | "relay-request";
 type A2AState = "terminal" | "input-required" | "failed";
 
 interface HeraldState {
   logs: Record<string, { offset: number }>;
   needs?: { offset: number };
+  comms?: { offset: number };
   seen: string[];
   lastPokedInboxSize?: number;
   lastPokedByPane?: Record<string, number>;
@@ -92,7 +94,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, needs: parsed.needs, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {} };
+    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {} };
   } catch (e: any) {
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
@@ -433,6 +435,60 @@ function needCandidate(ev: any, titles: Map<string, string>): Candidate | null {
   return null;
 }
 
+function relayEventId(relLog: string, offset: number, line: string): string {
+  return crypto.createHash("sha256").update(`${relLog}\0${offset}\0${line}`).digest("hex");
+}
+
+function relayCandidate(ev: any): Candidate | null {
+  if (!ev || ev.type !== "request" || typeof ev.id !== "string") return null;
+  const channel = String(ev.channel ?? "");
+  return {
+    eventClass: "relay-request",
+    state: "input-required",
+    title: `relay request — ${channel}`,
+    detail: truncate(`${String(ev.text ?? "")}\nSend it: bun seats/comms.ts relay ${ev.id}  |  decline: bun seats/comms.ts relay ${ev.id} --decline <reason>`, 700),
+    sourceType: "request",
+  };
+}
+
+function scanComms(state: HeraldState, seen: Set<string>): number {
+  if (!fs.existsSync(COMMS_LEDGER)) return 0;
+  const rel = path.relative(ROOT, COMMS_LEDGER);
+  if (!state.comms) state.comms = { offset: 0 };
+  const prior = state.comms.offset;
+  let appended = 0;
+  const batch = readCompleteLines(COMMS_LEDGER, prior, (rec) => {
+    let ev: any;
+    try { ev = JSON.parse(rec.line); } catch { state.comms = { offset: rec.endOffset }; writeState(state); return; }
+    const candidate = relayCandidate(ev);
+    if (candidate) {
+      const id = relayEventId(rel, rec.offset, rec.line);
+      if (!seen.has(id)) {
+        seen.add(id);
+        appendInbox({
+          id,
+          at: new Date().toISOString(),
+          seat: String(ev.from ?? "unknown"),
+          class: candidate.eventClass,
+          state: candidate.state,
+          title: candidate.title,
+          detail: candidate.detail,
+          source: { log: rel, offset: rec.offset, type: candidate.sourceType ?? null },
+        });
+        appended++;
+      }
+    }
+    state.comms = { offset: rec.endOffset };
+    state.seen = Array.from(seen).slice(-MAX_SEEN);
+    writeState(state);
+  });
+  if (batch.linesRead === 0 && batch.offset !== prior) {
+    state.comms = { offset: batch.offset };
+    writeState(state);
+  }
+  return appended;
+}
+
 function scanNeeds(state: HeraldState, seen: Set<string>): number {
   if (!fs.existsSync(NEEDS_LEDGER)) return 0;
   const rel = path.relative(ROOT, NEEDS_LEDGER);
@@ -646,6 +702,7 @@ function scanOnce(): number {
     }
   }
   appended += scanNeeds(state, seen);
+  appended += scanComms(state, seen);
   pokeCommanderIfSafe(state);
   return appended;
 }
