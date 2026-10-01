@@ -172,6 +172,18 @@ if [ "$(line_count "$DRAIN_NEED1")" = 1 ] && [ ! -s "$DRAIN_NEED2" ] && [ "$(jso
 else
   fail "need answered drain/dedup failed (drain1=$(line_count "$DRAIN_NEED1") drain2=$(wc -c < "$DRAIN_NEED2" | tr -d ' ') inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
 fi
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/comms.jsonl" 2>/dev/null || true
+cat > "$PROJ/seats/comms.jsonl" <<'JSONL'
+{"type":"request","id":"relay-test","at":"2026-09-21T00:04:00.000Z","channel":"partners","from":"worker-1","text":"Need a word with Tyler"}
+JSONL
+RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
+RC2=0; OUT2="$(run_herald --once 2>&1)" || RC2=$?
+if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && echo "$OUT2" | grep -q 'appended 0 wake event' && [ "$(json_count 'r.class==="relay-request" && r.seat==="worker-1" && r.state==="input-required" && /relay request — partners/.test(r.title) && r.detail.includes("Need a word with Tyler") && r.detail.includes("bun seats/comms.ts relay relay-test") && r.source.log==="seats/comms.jsonl" && r.source.type==="request"')" = 1 ]; then
+  pass "planted relay request appends one relay-request inbox row and does not duplicate on rescan"
+else
+  fail "relay request herald leg failed (rc=$RC/$RC2 out=$OUT out2=$OUT2 inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
+fi
+rm -f "$PROJ/seats/comms.jsonl"
 cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
 {"type":"message","id":"need-demo","at":"2026-09-21T00:02:00.000Z","from":"commander","via":"cli","text":"commander note"}
 JSONL
