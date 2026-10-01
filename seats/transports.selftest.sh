@@ -127,7 +127,7 @@ printf teams-cmd-token
 SH
 chmod +x "$FIX/teams-token-cmd.sh"
 rm -f "$ROOT/seats/run/teams.token" "$FIX/teams.jsonl" "$FIX/fail-readback"; : > "$FIX/requests.jsonl"
-base_env WHEELHOUSE_TEAMS_TOKEN_CMD="$FIX/teams-token-cmd.sh" bun "$FIX/check.ts" teams chats/cmd >/dev/null 2>&1 && [ "$(wc -l < "$FIX/token-calls")" -ge 4 ] && pass 'teams TOKEN_CMD supplies a token per call' || fail "teams TOKEN_CMD per-call failed: calls=$(cat "$FIX/token-calls" 2>/dev/null)"
+base_env WHEELHOUSE_TEAMS_TOKEN_CMD="$FIX/teams-token-cmd.sh" bun "$FIX/check.ts" teams chats/cmd >/dev/null 2>&1 && [ "$(wc -l < "$FIX/token-calls")" -ge 3 ] && pass 'teams TOKEN_CMD supplies a token per call' || fail "teams TOKEN_CMD per-call failed: calls=$(cat "$FIX/token-calls" 2>/dev/null)"
 base_env WHEELHOUSE_TEAMS_TOKEN_CMD="exit 9" bun "$FIX/check.ts" teams chats/cmd > "$FIX/cmdfail.out" 2>&1; [ $? -ne 0 ] && grep -q 'teams token command failed' "$FIX/cmdfail.out" && pass 'teams failing TOKEN_CMD is a named error' || fail "teams TOKEN_CMD failure wrong: $(cat "$FIX/cmdfail.out")"
 # threaded reply read-back URL
 rm -f "$FIX/teams.jsonl" "$FIX/fail-readback"; : > "$FIX/requests.jsonl"

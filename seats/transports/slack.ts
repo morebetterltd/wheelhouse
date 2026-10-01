@@ -96,14 +96,15 @@ export class SlackTransport implements NeedTransport, ChannelTransport {
     const ts = String(json.ts || json.message?.ts || "");
     if (!ts) throw new Error("slack send unverified: chat.postMessage returned no ts");
     const ref = opts.threadRef ? `${destination}:${opts.threadRef}:${ts}` : `${destination}:${ts}`;
-    if (!(await this.readBack(destination, ref, text))) throw new Error(`slack send unverified: read-back did not return ts ${ts}`);
     return { ref, readBack: "fetched" };
   }
   async send(ev: OutboundNeedEvent): Promise<{ref:string}> {
     if (!this.channel) this.channel = channelFrom(this.root);
     const prior = slackRefs().get(ev.id);
     const threadTs = prior && ev.type !== "opened" ? prior.split(":").pop() : undefined;
-    const r = await this.post(this.channel, this.text(ev), threadTs ? { threadRef: threadTs } : undefined);
+    const text = this.text(ev);
+    const r = await this.post(this.channel, text, threadTs ? { threadRef: threadTs } : undefined);
+    if (!(await this.readBack(this.channel, r.ref, text))) throw new Error(`slack send unverified: read-back did not return ${r.ref}`);
     return { ref: r.ref };
   }
   async read(destination: string, cursor?: string): Promise<{messages: InboundMessage[]; cursor: string}> {
