@@ -449,6 +449,11 @@ OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
 kill "$RUN_PID" >/dev/null 2>&1; wait "$RUN_PID" 2>/dev/null
 OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ ! -e "$ERUNS/$RUN_ID-x" ] && printf '%s\n' "$OUT" | grep -q "removed run-scratch $ERUNS/$RUN_ID-x " && pass 'run folder removed on the next cleanup once the process is gone' || fail "freed run folder rc=$RC: $OUT"
+RO_ID=$(ext_bead 'closed bead with read-only scratch'); mkdir -p "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources/allowed-sibling"
+printf 'readonly\n' > "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources/allowed-sibling/file.txt"
+chmod -R a-w "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources"
+OUT=$(ext_cleanup --bead "$RO_ID"); RC=$?
+[ "$RC" -eq 0 ] && [ ! -e "$ERUNS/$RO_ID-run" ] && printf '%s\n' "$OUT" | grep -q "removed run-scratch $ERUNS/$RO_ID-run " && pass 'cleanup removes closed-bead scratch containing a read-only source snapshot subtree' || { chmod -R u+w "$ERUNS/$RO_ID-run" 2>/dev/null || true; fail "read-only scratch cleanup rc=$RC: $OUT"; }
 
 phase 'ISC-46/138 concurrent cleanups, lock refusal, and a race with another remover'
 CA_ID=$(ext_bead 'concurrent close A'); CB_ID=$(ext_bead 'concurrent close B')

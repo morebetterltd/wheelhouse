@@ -766,6 +766,13 @@ function underAllowed(root: string, p: string): boolean {
   const rp = path.resolve(p);
   return [FLEET_CONTAINER, RUNS_DIRNAME, ".wheelhouse-build"].some((d) => insideOf(rp, path.join(root, d)) && rp !== path.join(root, d));
 }
+function makeWritable(p: string): void {
+  try {
+    const st = fs.lstatSync(p);
+    fs.chmodSync(p, st.mode | 0o200);
+    if (st.isDirectory() && !st.isSymbolicLink()) for (const child of fs.readdirSync(p)) makeWritable(path.join(p, child));
+  } catch {}
+}
 
 function cleanup(o: CleanupOptions): number {
   const root = realpathOr(path.resolve(o.root)) ?? path.resolve(o.root);
@@ -806,6 +813,7 @@ function cleanup(o: CleanupOptions): number {
       }
       if (o.dryRun) { emit(`dry-run would remove ${r.category} ${r.path} bytes=${r.size_bytes} reason=${r.reason}`); removed++; freed += r.size_bytes; continue; }
       try {
+        makeWritable(r.path);
         let tagged = "";
         if (r.action === "worktree") {
           const sha = run("git", ["rev-parse", "HEAD"], r.path).out;
