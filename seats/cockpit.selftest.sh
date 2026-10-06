@@ -88,6 +88,37 @@ trap 'rm -f "$(dirname "$0")/run/desk-watchdog.pid"; exit 0' INT TERM
 while :; do sleep 1; done
 EOF
 chmod +x "$PROJ/seats/desk-watchdog.sh"
+cat > "$PROJ/seats/courier.ts" <<'EOF'
+import * as fs from "node:fs";
+import * as path from "node:path";
+const root = path.resolve(process.env.WHEELHOUSE_COURIER_ROOT || path.join(import.meta.dir, ".."));
+const seats = path.join(root, "seats");
+const run = path.join(seats, "run");
+const channelsFile = path.join(seats, "channels.json");
+const hasPrincipal = () => {
+  try {
+    const j = JSON.parse(fs.readFileSync(channelsFile, "utf8"));
+    return Object.values(j.channels || {}).some((c:any) => c && c.audience === "principal");
+  } catch { return false; }
+};
+if (process.argv.includes("--status")) {
+  if (hasPrincipal()) console.log("courier configured but not running — principal channel from seats/channels.json: telegram 222");
+  else if (fs.existsSync(path.join(run, "telegram.token"))) console.log("courier configured but not running — legacy: seats/run/telegram.allow");
+  else console.log("courier skipped: no principal transport and no readable channel");
+  process.exit(0);
+}
+fs.mkdirSync(run, { recursive: true });
+fs.writeFileSync(path.join(run, "courier.started"), "yes\n");
+setInterval(() => {}, 1000);
+EOF
+cat > "$PROJ/seats/courier-watchdog.sh" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$(dirname "$0")/run" "$(dirname "$0")/logs"
+printf '%s\n' $$ > "$(dirname "$0")/run/courier-watchdog.pid"
+trap 'rm -f "$(dirname "$0")/run/courier-watchdog.pid"; exit 0' INT TERM
+while :; do sleep 1; done
+EOF
+chmod +x "$PROJ/seats/courier-watchdog.sh"
 
 run_cockpit() {
   WHEELHOUSE_TMUX_SOCKET="$SOCK" WHEELHOUSE_COCKPIT_COMMANDER_PERCENT=55 "$PROJ/seats/cockpit.sh" ratio > "$FIX/cockpit.out" 2>&1
@@ -217,11 +248,36 @@ rm -f "$PROJ/seats/run/desk.pid"
 
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" "$PROJ/seats/cockpit.sh" --courier > "$FIX/courier-skip.out" 2>&1
 COURIER_SKIP_RC=$?
-if [ $COURIER_SKIP_RC -eq 0 ] && grep -q 'courier skipped: no transport configured' "$FIX/courier-skip.out"; then
-  pass "cockpit --courier skips cleanly when no transport is configured"
+if [ $COURIER_SKIP_RC -eq 0 ] && grep -q 'courier skipped: no declared principal channel' "$FIX/courier-skip.out"; then
+  pass "cockpit --courier skips cleanly when no principal channel is declared"
 else
   fail "cockpit --courier did not skip cleanly (rc=$COURIER_SKIP_RC out=$(cat "$FIX/courier-skip.out" 2>/dev/null))"
 fi
+mkdir -p "$PROJ/seats/run"
+printf 'fixture-token\n' > "$PROJ/seats/run/telegram.token"
+chmod 600 "$PROJ/seats/run/telegram.token"
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" "$PROJ/seats/cockpit.sh" --courier > "$FIX/courier-token-only.out" 2>&1
+COURIER_TOKEN_RC=$?
+COURIER_TOKEN_PID="$(cat "$PROJ/seats/run/courier.pid" 2>/dev/null || true)"
+if [ $COURIER_TOKEN_RC -eq 0 ] && grep -q 'courier skipped: no declared principal channel' "$FIX/courier-token-only.out" && [ -z "$COURIER_TOKEN_PID" ]; then
+  pass "cockpit --courier does not start from a legacy Telegram token alone"
+else
+  fail "cockpit --courier started or failed with token but no declared principal channel (rc=$COURIER_TOKEN_RC pid=${COURIER_TOKEN_PID:-none} out=$(cat "$FIX/courier-token-only.out" 2>/dev/null))"
+fi
+cat > "$PROJ/seats/channels.json" <<'EOF'
+{"version":1,"channels":{"principal":{"kind":"telegram","destination":"222","audience":"principal","members":[],"read":false}}}
+EOF
+PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" "$PROJ/seats/cockpit.sh" --courier > "$FIX/courier-principal.out" 2>&1
+COURIER_PRINCIPAL_RC=$?
+COURIER_PRINCIPAL_PID="$(cat "$PROJ/seats/run/courier.pid" 2>/dev/null || true)"
+COURIER_WATCHDOG_PID="$(cat "$PROJ/seats/run/courier-watchdog.pid" 2>/dev/null || true)"
+if [ $COURIER_PRINCIPAL_RC -eq 0 ] && [ -n "$COURIER_PRINCIPAL_PID" ] && kill -0 "$COURIER_PRINCIPAL_PID" 2>/dev/null && [ -n "$COURIER_WATCHDOG_PID" ] && kill -0 "$COURIER_WATCHDOG_PID" 2>/dev/null && grep -q 'courier started: pid' "$FIX/courier-principal.out"; then
+  pass "cockpit --courier starts only after a declared principal channel exists"
+else
+  fail "cockpit --courier did not start for declared principal channel (rc=$COURIER_PRINCIPAL_RC pid=${COURIER_PRINCIPAL_PID:-none} watchdog=${COURIER_WATCHDOG_PID:-none} out=$(cat "$FIX/courier-principal.out" 2>/dev/null))"
+fi
+kill "$COURIER_PRINCIPAL_PID" "$COURIER_WATCHDOG_PID" 2>/dev/null || true
+rm -f "$PROJ/seats/run/courier.pid" "$PROJ/seats/run/courier-watchdog.pid" "$PROJ/seats/channels.json" "$PROJ/seats/run/telegram.token"
 
 PLANTED_BIN="$FIX/planted-bin"
 mkdir -p "$PLANTED_BIN"
