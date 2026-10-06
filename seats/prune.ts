@@ -767,10 +767,29 @@ function underAllowed(root: string, p: string): boolean {
   return [FLEET_CONTAINER, RUNS_DIRNAME, ".wheelhouse-build"].some((d) => insideOf(rp, path.join(root, d)) && rp !== path.join(root, d));
 }
 
+type CleanupPolicy = "on" | "off" | "report";
+function templateSourceSetting(root: string, key: string): string | null {
+  try {
+    const text = fs.readFileSync(path.join(root, "wheelhouse", ".template-source"), "utf8");
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = text.match(new RegExp(`^${escaped}=(.*)$`, "m"));
+    return m ? m[1].trim() : null;
+  } catch { return null; }
+}
+function cleanupPolicy(root: string): CleanupPolicy {
+  const raw = templateSourceSetting(root, "cleanup");
+  if (!raw) return "on";
+  if (raw === "on" || raw === "off" || raw === "report") return raw;
+  stop(`wheelhouse/.template-source cleanup=${raw} is invalid; expected one of on|off|report`);
+}
+
 function cleanup(o: CleanupOptions): number {
   const root = realpathOr(path.resolve(o.root)) ?? path.resolve(o.root);
   fs.mkdirSync(path.dirname(o.log), { recursive: true });
-  const emit = (line: string) => { const l = `${nowIso()} ${line}`; console.log(l); if (!o.dryRun) fs.appendFileSync(o.log, l + "\n"); };
+  const emit = (line: string) => { const l = `${nowIso()} ${line}`; console.log(l); fs.appendFileSync(o.log, l + "\n"); };
+  const policy = cleanupPolicy(root);
+  if (policy === "off") { emit("cleanup skipped cleanup=off in wheelhouse/.template-source"); return 0; }
+  if (policy === "report") o = { ...o, dryRun: true };
   const release = acquireCleanupLock(root, o.wait);
   if (!release) { console.log("already running"); return 0; }
   let removed = 0, kept = 0, freed = 0, failed = 0;

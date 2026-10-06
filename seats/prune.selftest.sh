@@ -409,6 +409,23 @@ ext_row(){ grep -F "\"path\":\"$1\"" "$FIX/ext-scan.jsonl"; }
 ext_registered(){ git -C "$EPROD" worktree list --porcelain | grep -qxF "worktree $1"; }
 ext_cleanup(){ ( cd "$EXT" && bun seats/prune.ts cleanup "$@" 2>&1 ); }
 
+phase 'install policy cleanup=off/report is honored by direct prune cleanup'
+mkdir -p "$EXT/wheelhouse"
+OFF_ID=$(ext_bead 'cleanup off direct')
+mkdir -p "$ERUNS/$OFF_ID-run"
+printf 'keep\n' > "$ERUNS/$OFF_ID-run/file.txt"
+printf 'cleanup=off\n' > "$EXT/wheelhouse/.template-source"
+OUT=$(ext_cleanup --bead "$OFF_ID"); RC=$?
+[ "$RC" -eq 0 ] && [ -e "$ERUNS/$OFF_ID-run/file.txt" ] && printf '%s\n' "$OUT" | grep -q 'cleanup skipped cleanup=off in wheelhouse/.template-source' && ! printf '%s\n' "$OUT" | grep -q 'removed run-scratch' && pass 'cleanup=off direct cleanup exits without deleting closed-bead scratch' || fail "cleanup=off direct rc=$RC out=$OUT exists=$([ -e "$ERUNS/$OFF_ID-run/file.txt" ] && echo yes || echo no)"
+REPORT_ID=$(ext_bead 'cleanup report direct')
+mkdir -p "$ERUNS/$REPORT_ID-run"
+printf 'report\n' > "$ERUNS/$REPORT_ID-run/file.txt"
+printf 'cleanup=report\n' > "$EXT/wheelhouse/.template-source"
+OUT=$(ext_cleanup --bead "$REPORT_ID"); RC=$?
+[ "$RC" -eq 0 ] && [ -e "$ERUNS/$REPORT_ID-run/file.txt" ] && printf '%s\n' "$OUT" | grep -q "dry-run would remove run-scratch $ERUNS/$REPORT_ID-run " && grep -q "dry-run would remove run-scratch $ERUNS/$REPORT_ID-run " "$ELOG" && pass 'cleanup=report direct cleanup writes a would-remove report and deletes nothing' || fail "cleanup=report direct rc=$RC out=$OUT log=$(grep -F "$REPORT_ID" "$ELOG" 2>/dev/null) exists=$([ -e "$ERUNS/$REPORT_ID-run/file.txt" ] && echo yes || echo no)"
+rm -rf "$ERUNS/$OFF_ID-run" "$ERUNS/$REPORT_ID-run"
+printf 'cleanup=on\n' > "$EXT/wheelhouse/.template-source"
+
 phase 'ISC-42 squash-merge and ISC-117 mayline/main integration ref'
 git -C "$EPROD" init --bare -q "$FIX/ext-mayline.git"; git -C "$EPROD" remote add mayline "$FIX/ext-mayline.git"
 MAY_ID=$(ext_bead 'merged only on mayline'); ext_wt "$MAY_ID"
