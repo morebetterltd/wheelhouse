@@ -46,12 +46,17 @@ Then write the file:
   echo "github-issue-include-labels="
   echo "github-issue-exclude-labels="
   echo "github-issue-author="
+  echo "seat_push=on"
+  echo "seat_worktrees=per-seat"
+  echo "cleanup=on"
 } > wheelhouse/.template-source
 ```
 
 `commit=unknown` is honest and still useful — the integrity check runs on it, you just do not get the behind-versus-damaged diagnosis in step 5 until your next upgrade sets a real one. `path=` is the one field expected to die: it is only a cache hint. Existing installs may record a stale path into some other checkout; that is now harmless as long as `source=` and `commit=` are correct.
 
 The `github-issue-*` lines are optional fleet-gate configuration; append them to older `.template-source` files if you want the defaults visible before changing them. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login).
+
+The `seat_push`, `seat_worktrees`, and `cleanup` lines are install policy switches read by the copied seat machinery from this same committed file. Omit them to keep today's template defaults: `seat_push=on` lets cross-bead dispatch publish the previous branch before moving; `seat_worktrees=per-seat` lets the adapter create and switch `.wheelhouse-worktrees/<seat>`; `cleanup=on` runs automatic closed-bead cleanup. Installs whose recorded authority forbids one of those actions may set the independent opt-outs: `seat_push=off` means the adapter never pushes, `seat_worktrees=per-task` means the adapter does not create, move, or switch worktrees and instead uses the cwd already recorded by the install, and `cleanup=off` disables automatic cleanup while `cleanup=report` writes the would-remove cleanup report without deleting anything.
 
 ### One-time rotation for existing oversize seat logs
 
