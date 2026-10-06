@@ -513,6 +513,42 @@ wait_for_from() {   # $1 = file, $2 = byte offset, $3 = substring, $4 = seconds
   return 1
 }
 
+phase "pid reuse — foreign live pid is DIED and lifecycle commands do not signal it"
+REUSE_PROJ="$FIX/pid-reuse-proj"
+build_proj "$REUSE_PROJ" reuse
+RUN_PROJ="$REUSE_PROJ"; STATE="$REUSE_PROJ/seats/state.json"; LOG="$REUSE_PROJ/seats/logs/worker-1.jsonl"
+mkdir -p "$REUSE_PROJ/seats/run" "$REUSE_PROJ/seats/logs"
+: > "$LOG"
+(sh -c 'trap "" TERM; while :; do sleep 1; done') &
+FOREIGN_PID=$!
+env HOME="$HOME_FIX" PROJ="$REUSE_PROJ" PID="$FOREIGN_PID" bun -e '
+  const fs = require("fs"), path = require("path");
+  const proj = process.env.PROJ;
+  const fifo = path.join(proj, "seats", "run", "worker-1.stdin");
+  const log = path.join(proj, "seats", "logs", "worker-1.jsonl");
+  const state = { seats: { "worker-1": { pid: Number(process.env.PID), startedAt: "2000-01-01T00:00:00.000Z", accountDir: path.join(process.env.HOME, ".pi-seats-reuse", "worker-1"), role: "worker", roleBrief: "x", cwd: proj, fifo, log, sessionId: "s-reused", sessionFile: null } } };
+  fs.writeFileSync(path.join(proj, "seats", "state.json"), JSON.stringify(state, null, 2)+"\n");
+'
+run status
+if [ $RC -eq 0 ] && says "worker-1" && says "DIED" && says "pid $FOREIGN_PID foreign" && says "not this seat"; then
+  pass "status treats a live reused pid without FIFO/start proof as DIED"
+else fail "status did not mark reused pid DIED (rc=$RC pid=$FOREIGN_PID): $OUT"; fi
+run stop worker-1
+if [ $RC -eq 0 ] && says "not running" && kill -0 "$FOREIGN_PID" 2>/dev/null; then
+  pass "stop does not signal a reused foreign pid"
+else fail "stop signaled or mishandled reused pid (rc=$RC alive=$(kill -0 "$FOREIGN_PID" 2>/dev/null && echo yes || echo no)): $OUT"; fi
+run stop-all
+if [ $RC -eq 0 ] && says "not running" && kill -0 "$FOREIGN_PID" 2>/dev/null; then
+  pass "stop-all does not signal a reused foreign pid"
+else fail "stop-all signaled or mishandled reused pid (rc=$RC alive=$(kill -0 "$FOREIGN_PID" 2>/dev/null && echo yes || echo no)): $OUT"; fi
+run steer worker-1 "do not reach foreign pid"
+if [ $RC -ne 0 ] && says "not running" && kill -0 "$FOREIGN_PID" 2>/dev/null; then
+  pass "steer refuses a reused foreign pid without signaling it"
+else fail "steer signaled or accepted reused pid (rc=$RC alive=$(kill -0 "$FOREIGN_PID" 2>/dev/null && echo yes || echo no)): $OUT"; fi
+kill -9 "$FOREIGN_PID" 2>/dev/null || true
+wait "$FOREIGN_PID" 2>/dev/null || true
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"
+
 phase "installed layout — wheelhouse/fleet brief is preferred without contracts/"
 INST_PROJ="$FIX/installed-proj"
 build_installed_proj "$INST_PROJ" installed
