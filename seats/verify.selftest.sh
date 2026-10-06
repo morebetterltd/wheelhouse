@@ -216,6 +216,20 @@ if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
     promptNamesRuntimeExcludes: prompt.includes("seats/logs") && prompt.includes("seats/verdicts/*.partial*")
   }, null, 2));
 }
+if (process.env.STUB_BD_READONLY_CHECK === "1") {
+  const cp = require("child_process");
+  const cases = [
+    ["show", ["show", "bead-1"]],
+    ["comments", ["comments", "bead-1"]],
+    ["comment", ["comment", "bead-1", "--stdin"]],
+    ["update", ["update", "bead-1", "--add-label", "needs-review"]],
+    ["actor-close", ["--actor", "x", "close", "bead-1"]],
+  ].map(([name, args]) => {
+    const r = cp.spawnSync("bd", args, { input: "body\n", encoding: "utf8" });
+    return { name, status: r.status, stdout: r.stdout, stderr: r.stderr };
+  });
+  fs.writeFileSync(path.join(agentDir, "bd-readonly-check.json"), JSON.stringify(cases, null, 2));
+}
 const reply = process.env.STUB_REPLY_FILE;
 let text = reply ? fs.readFileSync(reply, "utf8") : "";
 if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
@@ -324,11 +338,23 @@ chmod +x "$BIN/claude" "$BIN/codex"
 cat > "$BIN/bd" <<'STUB'
 #!/usr/bin/env bash
 set -u
-if [ "${1:-}" = show ] && [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then
-  cat "$STUB_BD_SHOW_FILE"
-  exit 0
-fi
-exit 1
+readonly=0
+while [ "${1:-}" = "--readonly" ] || [ "${1:-}" = "--actor" ]; do
+  if [ "${1:-}" = "--readonly" ]; then readonly=1; shift; continue; fi
+  if [ "${1:-}" = "--actor" ]; then shift 2; continue; fi
+done
+verb="${1:-}"
+case "$verb" in
+  show)
+    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf 'fixture bead\n'; fi
+    exit 0 ;;
+  comments)
+    printf 'fixture comments\n'; exit 0 ;;
+  comment|update|close)
+    if [ "$readonly" = 1 ]; then printf "operation '%s' is not allowed in read-only mode\n" "$verb" >&2; exit 1; fi
+    printf 'write allowed unexpectedly\n' >&2; exit 0 ;;
+  *) exit 1 ;;
+esac
 STUB
 chmod +x "$BIN/bd"
 [ -x "$BIN/pi" ] || { echo "selftest: fixture stub pi was not created" >&2; exit 2; }
@@ -690,6 +716,24 @@ else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null)
 if ! grep -q "$PROJ/seats/bin" "${VARGV%argv.json}env.json" 2>/dev/null; then
   pass "host budget absent: verifier PATH is not rewritten to seats/bin"
 else fail "host budget absent: verifier PATH unexpectedly included seats/bin: $(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
+cat > "$REPLY" <<EOF
+Checked readonly bd shim.
+VERDICT: APPROVE
+EOF
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_READONLY_CHECK=1 STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-bd-ro fleet/bead-1 worker-1 2>&1)" || RC=$?
+BD_RO_CHECK="${VARGV%argv.json}bd-readonly-check.json"
+if [ $RC -eq 0 ] && node - "$BD_RO_CHECK" <<'NODE'
+const fs = require('fs');
+const rows = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const by = Object.fromEntries(rows.map(r => [r.name, r]));
+if (by.show.status !== 0 || by.comments.status !== 0) process.exit(1);
+for (const k of ['comment', 'update', 'actor-close']) {
+  if (by[k].status === 0) process.exit(1);
+  if (!/not allowed in read-only mode/.test(`${by[k].stdout}\n${by[k].stderr}`)) process.exit(1);
+}
+NODE
+then pass "verifier one-shot bd is read-only: show/comments work, comment/update/--actor close fail"
+else fail "verifier bd readonly shim failed (rc=$RC out=$OUT check=$(cat "$BD_RO_CHECK" 2>/dev/null))"; fi
 
 # --- scratch cwd: construction, not contract discipline ---------------------
 # The verifier's process cwd must be A repository the branch's ref resolves

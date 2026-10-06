@@ -446,6 +446,14 @@ repository is — the scratch one included, and disposable specifically
 because nothing about it matters except that it exists and is not the
 live checkout.
 
+The one-shot verifier's `PATH` also starts with a private `bd` shim that
+execs the real `bd` with `--readonly`. `bd show` and `bd comments` still
+work for reading the graph, but graph-writing verbs such as `bd comment`,
+`bd update`, and `bd --actor ... close` fail inside the verifier process
+before they can mutate the bead store. Roster-level Claude Code
+`disallowedTools` entries for `bd` remain useful belt-and-braces, but graph
+read-only enforcement does not depend on enumerating every write verb.
+
 `process.on("exit", ...)` cannot run on SIGKILL, so killing the dispatcher
 process mid-verification leaves the scratch worktree (and its `git
 worktree` registration) behind — same gap class recover.ts's fixture
@@ -564,7 +572,7 @@ of reaching around the dispatcher.
 bun seats/walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--out <dir>] [--verifier <seat>]
 ```
 
-One invocation = one verifier walk of one ISA claim against the surface that claim names. `<claim-ref>` is either the quoted claim text or a file containing it. Surface kinds are `install:<readme-or-repo path/URL>`, `upgrade:<runbook path>` with `--baseline <sha>`, and `product:<url-or-command>`. The command spawns one `pi -p --no-session` on the roster's verifier identity with the resolved `VERIFIER.md` walker brief and a prompt containing only the claim text, the surface spec, and consumer setup for that surface. It does not perform the author-account distinctness check from `verify.ts`, because a walk judges a surface, not a diff.
+One invocation = one verifier walk of one ISA claim against the surface that claim names. `<claim-ref>` is either the quoted claim text or a file containing it. Surface kinds are `install:<readme-or-repo path/URL>`, `upgrade:<runbook path>` with `--baseline <sha>`, and `product:<url-or-command>`. The command spawns one `pi -p --no-session` on the roster's verifier identity with the resolved `VERIFIER.md` walker brief and a prompt containing only the claim text, the surface spec, and consumer setup for that surface. Its one-shot `PATH` uses the same read-only `bd` shim as `verify.ts`. It does not perform the author-account distinctness check from `verify.ts`, because a walk judges a surface, not a diff.
 
 The transcript is scrubbed through `seats/evidence-scrub.sh` and retained under `--out`; stdout and `walk.json` print the transcript/metadata paths relative to the install root, not as machine-local absolute paths. If `--out` is omitted, it defaults under ignored `seats/verdicts/walks/` for the commander to transcribe into a graph-approved evidence home. The default walker budget is 1800000 ms (30 minutes); override it for one invocation with `WHEELHOUSE_WALK_TIMEOUT_MS=<ms> bun seats/walk.ts ...`. On timeout, `walk.ts` keeps the partial transcript, exits `3`, writes `COULD-NOT-WALK` metadata, and names the phase it was in. Exit codes are `0` for `WALKED-DONE`, `2` for `WALKED-NOT-DONE`, `3` for `COULD-NOT-WALK`, `4` for missing/ambiguous/malformed `VERDICT:` output, and `5` for preflight or credential refusal before any walker spawns.
 
