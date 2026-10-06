@@ -618,6 +618,14 @@ function commanderPaneIdleClaude(): boolean {
 function pokeCommanderIfSafe(state: HeraldState): void {
   const inboxSize = fs.existsSync(INBOX) ? fs.statSync(INBOX).size : 0;
   if (inboxSize <= 0 || state.lastPokedInboxSize === inboxSize) return;
+  const drainCursor = readDrainCursor();
+  if (drainCursor >= inboxSize) {
+    logPoke("dropped", `reason=already-drained inbox=${inboxSize} cursor=${drainCursor}`);
+    state.lastPokedInboxSize = inboxSize;
+    if (TMUX_PANE) state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [TMUX_PANE]: 0 };
+    writeState(state);
+    return;
+  }
   if (!TMUX_PANE) {
     logPoke("dropped", `reason=no-pane inbox=${inboxSize}`);
     state.lastPokedInboxSize = inboxSize;
