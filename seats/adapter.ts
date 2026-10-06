@@ -116,16 +116,43 @@ function seatCwdFor(name: string, entry: SeatEntry): string {
  * STOPs that leave the seat exactly as it was; plain-words notes land in
  * the seat's event log so "push failed" is readable where the seat's
  * history is. */
+type SeatPushSetting = "on" | "off";
+type SeatWorktreesSetting = "per-seat" | "per-task";
+type CleanupSetting = "on" | "off" | "report";
+
+function templateSourceSetting(key: string): string | null {
+  try {
+    const text = fs.readFileSync(path.join(ROOT, "wheelhouse", ".template-source"), "utf8");
+    const m = text.match(new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=(.*)$`, "m"));
+    return m ? m[1].trim() : null;
+  } catch { return null; }
+}
+
+function setting<T extends string>(key: string, allowed: readonly T[], def: T): T {
+  const raw = templateSourceSetting(key);
+  if (!raw) return def;
+  if ((allowed as readonly string[]).includes(raw)) return raw as T;
+  die(`wheelhouse/.template-source ${key}=${raw} is invalid; expected one of ${allowed.join("|")}`);
+}
+
+function seatPushSetting(): SeatPushSetting { return setting("seat_push", ["on", "off"] as const, "on"); }
+function seatWorktreesSetting(): SeatWorktreesSetting { return setting("seat_worktrees", ["per-seat", "per-task"] as const, "per-seat"); }
+function cleanupSetting(): CleanupSetting { return setting("cleanup", ["on", "off", "report"] as const, "on"); }
+
 function prepareSeatCwd(name: string, entry: SeatEntry, beadId: string, base: string | null): string {
   if (!seatUsesWorktree(entry)) return ROOT;
   const state = readState();
   const rec = state.seats[name];
+  if (seatWorktreesSetting() === "per-task") {
+    console.log(`seat ${name}: seat_worktrees=per-task; adapter will not create, move, or switch worktrees`);
+    return rec?.cwd ?? ROOT;
+  }
   const note = (line: string) => {
     console.log(line);
     if (rec?.log) appendSeatLog(rec.log, { type: "wheelhouse_note", seat: name, bead: beadId, message: line, at: new Date().toISOString() });
   };
   try {
-    return ensureSeatWorktree({ root: ROOT, seat: name, beadId, base, roster: parseRosterFile(), state, note }).target;
+    return ensureSeatWorktree({ root: ROOT, seat: name, beadId, base, roster: parseRosterFile(), state, note, seatPush: seatPushSetting() }).target;
   } catch (e: any) {
     if (e instanceof SeatWorktreeError) die(e.message);
     throw e;
@@ -139,10 +166,12 @@ function prepareSeatCwd(name: string, entry: SeatEntry, beadId: string, base: st
  * WHEELHOUSE_CLEANUP=0 disables it. */
 function startBeadCleanup(beadId: string): void {
   if (process.env.WHEELHOUSE_CLEANUP === "0") return;
+  const cleanup = cleanupSetting();
+  if (cleanup === "off") { console.log(`cleanup skipped for bead ${beadId} (cleanup=off in wheelhouse/.template-source)`); return; }
   const prune = path.join(SEATS_DIR, "prune.ts");
   if (!fs.existsSync(prune)) return;
   fs.mkdirSync(LOG_DIR, { recursive: true });
-  const args = [prune, "cleanup", "--bead", beadId, "--wait", String(Number(process.env.WHEELHOUSE_CLEANUP_WAIT_S || 120))];
+  const args = [prune, "cleanup", "--bead", beadId, "--wait", String(Number(process.env.WHEELHOUSE_CLEANUP_WAIT_S || 120)), ...(cleanup === "report" ? ["--dry-run"] : [])];
   if (process.env.WHEELHOUSE_CLEANUP_SYNC === "1") {
     const r = spawnSync(process.execPath, args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     process.stdout.write(r.stdout ?? "");
@@ -153,7 +182,7 @@ function startBeadCleanup(beadId: string): void {
   const child = spawn(process.execPath, args, { cwd: ROOT, detached: true, stdio: ["ignore", out, out] });
   child.unref();
   fs.closeSync(out);
-  console.log(`cleanup started for bead ${beadId} (pid ${child.pid}); decisions land in seats/logs/cleanup.log`);
+  console.log(`${cleanup === "report" ? "cleanup report" : "cleanup"} started for bead ${beadId} (pid ${child.pid}); decisions land in seats/logs/cleanup.log`);
 }
 
 function die(msg: string): never {

@@ -770,7 +770,7 @@ function underAllowed(root: string, p: string): boolean {
 function cleanup(o: CleanupOptions): number {
   const root = realpathOr(path.resolve(o.root)) ?? path.resolve(o.root);
   fs.mkdirSync(path.dirname(o.log), { recursive: true });
-  const emit = (line: string) => { const l = `${nowIso()} ${line}`; console.log(l); if (!o.dryRun) fs.appendFileSync(o.log, l + "\n"); };
+  const emit = (line: string) => { const l = `${nowIso()} ${line}`; console.log(l); fs.appendFileSync(o.log, l + "\n"); };
   const release = acquireCleanupLock(root, o.wait);
   if (!release) { console.log("already running"); return 0; }
   let removed = 0, kept = 0, freed = 0, failed = 0;
