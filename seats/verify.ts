@@ -47,6 +47,7 @@
  *
  * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
  *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>]
+ *          [--no-event-timeout-ms <ms>]
  *
  * Single-repo installs need no configuration: --repo defaults to ROOT. Umbrella
  * installs with wheelhouse/.template-source product-repo= also need no
@@ -77,6 +78,7 @@ const VERDICTS_DIR = path.join(SEATS_DIR, "verdicts");
 // One-shot verification reads a diff and maybe runs a bench; give it room.
 const DEFAULT_TIMEOUT_MS = 900000;
 const DEFAULT_FIRST_OUTPUT_TIMEOUT_MS = 120000;
+const DEFAULT_NO_EVENT_TIMEOUT_MS = 600000;
 
 function hostBuildLockPath(): string {
   return process.env.WHEELHOUSE_BUILD_LOCK || path.join(os.homedir(), ".cache", "wheelhouse-build.lock");
@@ -398,7 +400,7 @@ interface OneShotRunResult {
 function runOneShot(
   bin: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; maxBuffer: number }
+  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number }
 ): Promise<OneShotRunResult> {
   return new Promise((resolve) => {
     const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"] });
@@ -408,6 +410,7 @@ function runOneShot(
     let stderrBytes = 0;
     let done = false;
     let sawOutput = false;
+    let noEventTimer: ReturnType<typeof setTimeout> | null = null;
     const out = () => Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8");
     const err = () => Buffer.concat(stderrChunks, stderrBytes).toString("utf8");
     const finish = (result: Partial<OneShotRunResult>) => {
@@ -415,6 +418,7 @@ function runOneShot(
       done = true;
       clearTimeout(totalTimer);
       clearTimeout(firstOutputTimer);
+      if (noEventTimer) clearTimeout(noEventTimer);
       resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error });
     };
     const killFor = (code: string, message: string) => {
@@ -428,9 +432,14 @@ function runOneShot(
     const firstOutputTimer = setTimeout(() => {
       if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT", `no verifier output within ${opts.firstOutputTimeoutMs}ms`);
     }, opts.firstOutputTimeoutMs);
+    const resetNoEventTimer = () => {
+      if (noEventTimer) clearTimeout(noEventTimer);
+      noEventTimer = setTimeout(() => killFor("WHEELHOUSE_NO_EVENT_TIMEOUT", `model stalled after ${opts.noEventTimeoutMs}ms with no verifier stream event`), opts.noEventTimeoutMs);
+    };
     const collect = (chunks: Buffer[], current: () => number, setBytes: (n: number) => void, chunk: Buffer) => {
       sawOutput = true;
       clearTimeout(firstOutputTimer);
+      resetNoEventTimer();
       const next = current() + chunk.length;
       if (next > opts.maxBuffer) {
         killFor("ERR_CHILD_PROCESS_STDIO_MAXBUFFER", `verifier output exceeded ${opts.maxBuffer} bytes`);
@@ -905,6 +914,7 @@ async function main(): Promise<void> {
   let repoArg: string | undefined;
   let timeoutArg: string | undefined;
   let firstOutputTimeoutArg: string | undefined;
+  let noEventTimeoutArg: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--evidence") {
@@ -920,6 +930,9 @@ async function main(): Promise<void> {
     } else if (argv[i] === "--first-output-timeout-ms") {
       firstOutputTimeoutArg = argv[++i];
       if (!firstOutputTimeoutArg || !/^\d+$/.test(firstOutputTimeoutArg)) die("--first-output-timeout-ms requires a positive integer millisecond budget");
+    } else if (argv[i] === "--no-event-timeout-ms") {
+      noEventTimeoutArg = argv[++i];
+      if (!noEventTimeoutArg || !/^\d+$/.test(noEventTimeoutArg)) die("--no-event-timeout-ms requires a positive integer millisecond budget");
     } else {
       positional.push(argv[i]);
     }
@@ -928,11 +941,12 @@ async function main(): Promise<void> {
   sweepStaleScratchWorktrees(repoRoot);
   const [beadId, branch, authorSeat, verifierArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>]");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--no-event-timeout-ms <ms>]");
   }
   setVerifierGateBead(beadId);
   const timeoutMs = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || timeoutArg || DEFAULT_TIMEOUT_MS);
   const firstOutputTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || firstOutputTimeoutArg || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
+  const noEventTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS || noEventTimeoutArg || DEFAULT_NO_EVENT_TIMEOUT_MS);
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
   if (verifierArg) validateSegment("seat name", verifierArg);
@@ -1074,6 +1088,7 @@ async function main(): Promise<void> {
     env,
     timeoutMs,
     firstOutputTimeoutMs,
+    noEventTimeoutMs,
     maxBuffer: 64 * 1024 * 1024,
   });
   const elapsedMs = Date.now() - startedAt;
@@ -1085,6 +1100,11 @@ async function main(): Promise<void> {
       const phase = lastVerifierPhase(stdout);
       const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, firstOutputTimeoutMs);
       die(`verifier emitted no stdout/stderr within ${firstOutputTimeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial}). This is a first-output deadline, not the full verify timeout; retry with --first-output-timeout-ms <ms> if the verifier is legitimately silent that long.`);
+    }
+    if ((res.error as any).code === "WHEELHOUSE_NO_EVENT_TIMEOUT") {
+      const phase = lastVerifierPhase(stdout);
+      const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, noEventTimeoutMs);
+      die(`model stalled after ${noEventTimeoutMs}ms with no verifier stream event (elapsed ${elapsedMs}ms; last event: ${phase}; partial output: ${partial}). This is the no-event watchdog, not the full verify timeout; retry with --no-event-timeout-ms <ms> if the verifier is legitimately quiet that long.`);
     }
     if ((res.error as any).code === "ETIMEDOUT") {
       const phase = lastVerifierPhase(stdout);
