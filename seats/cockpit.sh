@@ -152,7 +152,7 @@ ensure_courier_watchdog() {
 
 ensure_courier() {
   if [ ! -f "$HERE/courier.ts" ]; then
-    echo "courier skipped: no transport configured"
+    echo "courier skipped: no declared principal channel"
     return 0
   fi
   if ! command -v bun >/dev/null 2>&1; then
@@ -160,9 +160,8 @@ ensure_courier() {
     exit 1
   fi
   mkdir -p "$HERE/run" "$HERE/logs"
-  status_out="$(cd "$ROOT" && WHEELHOUSE_COURIER_ROOT="$ROOT" bun "$HERE/courier.ts" --status 2>&1 || true)"
-  if printf '%s\n' "$status_out" | grep -q 'courier skipped: no transport configured'; then
-    echo "courier skipped: no transport configured"
+  if ! (cd "$ROOT" && bun -e 'const fs=require("fs"); let j={}; try{j=JSON.parse(fs.readFileSync("seats/channels.json","utf8"));}catch{} process.exit(Object.values(j.channels||{}).some(c=>c&&c.audience==="principal") ? 0 : 1);' >/dev/null 2>&1); then
+    echo "courier skipped: no declared principal channel"
     return 0
   fi
   pid_file="$HERE/run/courier.pid"
