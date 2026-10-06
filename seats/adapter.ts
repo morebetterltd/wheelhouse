@@ -465,9 +465,28 @@ function pidHoldsPath(pid: number, p: string): boolean {
   try { wanted.add(fs.realpathSync(p)); } catch {}
   return openPaths(pid).some((n) => wanted.has(n));
 }
-function pidAlive(pid: number | null, fifo?: string): boolean {
+function processStartMs(pid: number): number | null {
+  const out = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout?.trim();
+  if (!out) return null;
+  const ms = Date.parse(out);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function pidMatchesStartedAt(pid: number, startedAt?: string): boolean {
+  if (!startedAt) return false;
+  const recorded = Date.parse(startedAt);
+  if (!Number.isFinite(recorded)) return false;
+  const live = processStartMs(pid);
+  if (live === null) return false;
+  // ps lstart is second-granularity; allow clock/rendering round-off, but not
+  // pid reuse after reboot or long after the recorded seat launch.
+  return Math.abs(live - recorded) <= 2000;
+}
+
+function pidAlive(pid: number | null, fifo?: string, startedAt?: string): boolean {
   if (!barePidAlive(pid)) return false;
-  return fifo ? pidHoldsPath(pid!, fifo) : true;
+  if (!fifo && !startedAt) return true;
+  return (fifo ? pidHoldsPath(pid!, fifo) : false) || pidMatchesStartedAt(pid!, startedAt);
 }
 
 // Same rule as seat-env.sh: pi auto-creates an empty {} auth.json on a first
@@ -653,7 +672,7 @@ async function rpc(
       }
       if (obj.type === "response" && obj.id === id) return obj;
     }
-    if (!pidAlive(rec.pid, rec.fifo)) {
+    if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
       throw new Error(`seat process died while waiting for ${command.type} response — check the .stderr.log beside its event log`);
     }
     await sleep(100);
@@ -920,7 +939,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   const labelSuffix = accountLabelSuffix(entry);
   const state = readState();
   const existing = state.seats[name];
-  if (existing && pidAlive(existing.pid, existing.fifo)) {
+  if (existing && pidAlive(existing.pid, existing.fifo, existing.startedAt)) {
     die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
   }
 
@@ -1076,7 +1095,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   const labelSuffix = accountLabelSuffix(entry);
   const state = readState();
   const existing = state.seats[name];
-  if (existing && pidAlive(existing.pid, existing.fifo)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
+  if (existing && pidAlive(existing.pid, existing.fifo, existing.startedAt)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
 
   const accountDir = claudeAccountDir(entry);
   if (!isClaudeDefaultAuth(entry) && !fs.existsSync(accountDir)) {
@@ -1204,7 +1223,7 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
   const state = readState(); const existing = state.seats[name];
-  if (existing && pidAlive(existing.pid, existing.fifo)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
+  if (existing && pidAlive(existing.pid, existing.fifo, existing.startedAt)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
   const accountDir = codexAccountDir(entry);
   if (!isCodexDefaultAuth(entry) && !fs.existsSync(accountDir)) die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`);
   requireCodexCredential(name, entry, accountDir, labelSuffix);
@@ -1329,7 +1348,7 @@ function cmdProbe(name: string): void {
 async function cmdResume(name: string): Promise<void> {
   const rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" in seats/state.json — spawn it instead`);
-  if (pidAlive(rec.pid, rec.fifo)) die(`seat "${name}" is already running (pid ${rec.pid})`);
+  if (pidAlive(rec.pid, rec.fifo, rec.startedAt)) die(`seat "${name}" is already running (pid ${rec.pid})`);
   if (!rec.sessionFile) die(`seat "${name}" has no recorded session file — spawn it instead`);
   if (!fs.existsSync(rec.sessionFile)) {
     die(`recorded session file is gone: ${rec.sessionFile} — spawn a fresh seat instead`);
@@ -1379,7 +1398,7 @@ async function cmdReset(name: string): Promise<void> {
   const rec = stateBefore.seats[name];
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
   const entry = requireSeat(name);
-  if (pidAlive(rec.pid, rec.fifo)) {
+  if (pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     const st = await rpc(rec, { type: "get_state" });
     if (!st.success) {
       die(`get_state failed while checking seat "${name}" before reset: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
@@ -1412,7 +1431,7 @@ async function cmdReset(name: string): Promise<void> {
 function requireRunning(name: string): SeatRecord {
   const rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
-  if (!pidAlive(rec.pid, rec.fifo)) die(`seat "${name}" is not running — resume or spawn it first`);
+  if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) die(`seat "${name}" is not running — resume or spawn it first`);
   return rec;
 }
 
@@ -1455,7 +1474,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   const rosterEntry = (() => { try { return readNamedRosterEntry(name); } catch { return undefined; } })();
   const previousBead = rec.lastBead;
   const crossBead = Boolean(previousBead) && previousBead !== beadId;
-  const alive = pidAlive(rec.pid, rec.fifo);
+  const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
   const sameCwdDriver = driverForRunningSeat(name, "adapter dispatch");
 
   // A different bead never lands on a mid-turn seat: the worktree would be
@@ -1501,7 +1520,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
   const targetCwd = rosterEntry ? prepareSeatCwd(name, entry(), beadId, base) : (rec.cwd ?? ROOT);
   rec = readState().seats[name];
-  if (!pidAlive(rec.pid, rec.fifo)) {
+  if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     if (forcedStop && recordedCwdExists) {
       const driver = driverForSeat(name, entry(), "adapter dispatch");
       const resumeFile = driver.name === "codex" ? (rec.sessionFile && fs.existsSync(rec.sessionFile) ? rec.sessionFile : null) : rec.sessionFile;
@@ -1897,10 +1916,11 @@ async function cmdStatus(): Promise<void> {
   for (const name of names) {
     const rec = state.seats[name];
     syncCapacityFromLog(name, rec, state, roster);
-    const alive = barePidAlive(rec.pid);
-    // A seat nobody stopped whose pid is gone DIED — that is a failure, and
-    // rendering it as the same calm STOPPED a graceful stop earns would be
-    // a failure conflated into a normal state. Say which one it is.
+    const bareAlive = barePidAlive(rec.pid);
+    const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
+    // A seat nobody stopped whose pid is gone — or whose pid was reused by a
+    // foreign process — DIED. Rendering either as the same calm STOPPED a
+    // graceful stop earns would be a failure conflated into a normal state.
     const died = !alive && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
     const stalled = Boolean(rec.lastStalledEvent) || logLastStalledEvent(rec.log);
@@ -1915,7 +1935,7 @@ async function cmdStatus(): Promise<void> {
       }
     }
     const word = parkedQuota ? "PARKED" : wedged ? "WEDGED" : alive && stalled ? "STALLED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
-    const pid = alive ? `pid ${rec.pid}` : died ? `pid ${rec.pid} gone` : "stopped";
+    const pid = alive ? `pid ${rec.pid}` : died ? (bareAlive ? `pid ${rec.pid} foreign` : `pid ${rec.pid} gone`) : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
     const labelText = label ? `  account ${label}` : "";
@@ -1924,7 +1944,7 @@ async function cmdStatus(): Promise<void> {
     console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${last}${bead}${labelText}`);
     rotateLogIfSafe(rec.log, last);
     if (died) {
-      console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} is gone and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
+      console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? "is alive but is not this seat (no FIFO/start-time proof)" : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
     if (wedged) {
       console.log(`${" ".repeat(16)} WEDGED: idle seat is alive but get_state timed out; remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}`);
@@ -1951,10 +1971,11 @@ async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<
   // SIGTERM is pi's graceful path: it flushes stdout and exits 143. No
   // SIGKILL fallback here — a seat that ignores SIGTERM is worth looking at,
   // not shooting.
+  if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) return `seat ${name} is not running; session ${rec.sessionId ?? "-"} kept for resume`;
   process.kill(rec.pid!, "SIGTERM");
   const deadline = Date.now() + TIMEOUT_MS;
-  while (pidAlive(rec.pid, rec.fifo) && Date.now() < deadline) await sleep(100);
-  if (pidAlive(rec.pid, rec.fifo)) {
+  while (pidAlive(rec.pid, rec.fifo, rec.startedAt) && Date.now() < deadline) await sleep(100);
+  if (pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     throw new Error(`pid ${rec.pid} is still alive after SIGTERM and ${TIMEOUT_MS}ms — look at it before escalating`);
   }
   rec.pid = null;
@@ -1967,7 +1988,7 @@ async function cmdStop(name: string): Promise<void> {
   const state = readState();
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
-  if (!pidAlive(rec.pid, rec.fifo)) {
+  if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     console.log(`seat ${name} is not running`);
     return;
   }
@@ -1989,7 +2010,7 @@ async function cmdStopAll(): Promise<void> {
       console.log(`seat ${name}: no state record — not running`);
       continue;
     }
-    if (!pidAlive(rec.pid, rec.fifo)) {
+    if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
       console.log(`seat ${name}: not running; session ${rec.sessionId ?? "-"} kept for resume`);
       continue;
     }

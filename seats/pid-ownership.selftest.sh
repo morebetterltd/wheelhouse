@@ -11,11 +11,11 @@ trap cleanup EXIT INT TERM
 FAILED=0
 pass(){ echo "  ok    $*"; }
 fail(){ echo "  FAIL  $*"; FAILED=$((FAILED+1)); }
-if grep -En 'function pidHoldsPath|function pidAlive\(pid: number \| null, fifo\?: string\)' "$ADAPTER" >/dev/null \
-  && grep -En 'pidAlive\(rec\.pid, rec\.fifo\)|pidAlive\(existing\.pid, existing\.fifo\)' "$ADAPTER" >/dev/null; then
-  pass 'adapter pid liveness is gated by the seat FIFO ownership proof, not bare kill -0 for recorded seats'
+if grep -En 'function pidHoldsPath|function pidMatchesStartedAt|function pidAlive\(pid: number \| null, fifo\?: string, startedAt\?: string\)' "$ADAPTER" >/dev/null \
+  && grep -En 'pidAlive\(rec\.pid, rec\.fifo, rec\.startedAt\)|pidAlive\(existing\.pid, existing\.fifo, existing\.startedAt\)' "$ADAPTER" >/dev/null; then
+  pass 'adapter pid liveness is gated by FIFO ownership or recorded start-time proof, not bare kill -0 for recorded seats'
 else
-  fail 'adapter pid liveness did not show FIFO ownership proof at recorded-seat call sites'
+  fail 'adapter pid liveness did not show ownership/start-time proof at recorded-seat call sites'
 fi
 if [ "$FAILED" -eq 0 ]; then echo 'pid-ownership.selftest: PASS'; exit 0; fi
 echo "pid-ownership.selftest: FAIL ($FAILED failure(s))" >&2
