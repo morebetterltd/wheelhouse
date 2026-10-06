@@ -285,6 +285,7 @@ export interface EnsureOptions {
   roster?: Record<string, unknown>;
   state: StateLike;
   remote?: string;
+  seatPush?: "on" | "off";
   /** Called with a plain-words line for the seat log and console. */
   note?: (line: string) => void;
 }
@@ -308,6 +309,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   let branch = beadBranch(o.beadId);
   const note = o.note ?? (() => {});
   const remote = o.remote ?? process.env.WHEELHOUSE_PUSH_REMOTE ?? "origin";
+  const seatPush = o.seatPush ?? "on";
 
   // 1. one seat per worktree
   for (const [other, rec] of Object.entries(o.state.seats ?? {})) {
@@ -404,7 +406,9 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   let pushed: string | null = null;
   const hasRemote = git(repo, ["remote", "get-url", remote]).ok;
   const reachableFromAnotherBranch = () => git(repo, ["branch", "--contains", headSha, "--format=%(refname:short)"]).out.split("\n").filter((b) => b && b !== currentBranch).length > 0;
-  if (currentBranch && !hasRemote && !tipOnRemote(repo, headSha)) {
+  if (currentBranch && !tipOnRemote(repo, headSha) && seatPush === "off") {
+    note(`seat ${o.seat}: seat_push=off; not pushing ${currentBranch} before leaving it`);
+  } else if (currentBranch && !hasRemote && !tipOnRemote(repo, headSha)) {
     // Nowhere to push. That is fine only when the branch holds nothing of its own.
     if (!reachableFromAnotherBranch()) refuse(`push failed for ${currentBranch} in ${target}: no remote named ${remote} to push to, and its commits are on no other branch. The seat stays on ${currentBranch}.`);
   } else if (currentBranch && !tipOnRemote(repo, headSha)) {

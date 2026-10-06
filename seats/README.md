@@ -17,8 +17,10 @@ The main files here:
   project root, and prints the export line and the one-time credential flow.
 - `adapter.ts` — runs the seats: spawn, dispatch, steer, status, stop, stop-all, resume.
 - `seat-worktree.ts` — owns each worker seat's one persistent worktree under
-  `.wheelhouse-worktrees/<seat-name>`: prepares the bead branch on dispatch,
-  pushes the previous bead's branch before a move, enforces the worktree cap.
+  `.wheelhouse-worktrees/<seat-name>` by default: prepares the bead branch on
+  dispatch, pushes the previous bead's branch before a move, enforces the
+  worktree cap. Install policy in `wheelhouse/.template-source` may opt out
+  with `seat_push=off` or `seat_worktrees=per-task`.
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
 - `channels.ts` — reads and validates install-owned `seats/channels.json` declarations for principal/stakeholder channels.
@@ -35,7 +37,7 @@ The main files here:
   and maps its verdict to an exit code. Default timeout is 15 minutes; for
   large cold workspaces that must build/test from scratch, set
   `WHEELHOUSE_VERIFY_TIMEOUT_MS` or `--timeout-ms` to at least 60 minutes.
-- `prune.ts` — scan/cleanup/prune: `cleanup` is the automatic never-lose-work reaper the adapter runs on bead close and the nightly job runs fleet-wide; `scan` plus `prune --from-file` is the reviewed exceptions path a person drives, dry-run by default.
+- `prune.ts` — scan/cleanup/prune: `cleanup` is the automatic never-lose-work reaper the adapter runs on bead close and the nightly job runs fleet-wide; `scan` plus `prune --from-file` is the reviewed exceptions path a person drives, dry-run by default. `wheelhouse/.template-source` may set `cleanup=off` or `cleanup=report` for installs whose authority forbids automatic deletion.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.

@@ -118,6 +118,9 @@ mkdir -p wheelhouse
   echo "github-issue-include-labels="
   echo "github-issue-exclude-labels="
   echo "github-issue-author="
+  echo "seat_push=on"
+  echo "seat_worktrees=per-seat"
+  echo "cleanup=on"
 } > wheelhouse/.template-source
 cat wheelhouse/.template-source
 ```
@@ -125,6 +128,8 @@ cat wheelhouse/.template-source
 `namespace=` is written empty here and filled at the end of step 3's interview, because its value comes from an answer that has not been given yet. It is this project's seat namespace: the value `seats/seat-env.sh` is invoked with, and the one that names this project's seat root (`$HOME/.pi-seats-<namespace>`), which is what keeps two fleets' seat directories apart on one machine. It lives in this file rather than in a file of its own because `.template-source` is already per-install and already read by other steps.
 
 The `github-issue-*` lines are install-owned fleet-gate configuration. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login).
+
+The `seat_push=on`, `seat_worktrees=per-seat`, and `cleanup=on` lines record the default install policy for seat machinery. Leave them at the default unless this install's recorded authority requires an opt-out: `seat_push=off` means the adapter never pushes branches, `seat_worktrees=per-task` means the adapter uses the install's existing task worktree instead of creating/moving `.wheelhouse-worktrees/<seat>`, and `cleanup=off` disables automatic cleanup while `cleanup=report` writes a would-remove report without deleting.
 
 Every later step reads `path=` out of that file rather than trusting `$TEMPLATE` to still be set:
 

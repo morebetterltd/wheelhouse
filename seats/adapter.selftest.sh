@@ -951,6 +951,20 @@ if [ $RC -eq 23 ] && [ "$OUT" = "HTTP 429 quota exhausted" ]; then
   pass "probe failure preserves the provider error verbatim and exit status"
 else fail "probe failure was not verbatim (exit $RC): $OUT"; fi
 
+phase "1d. install policy — seat_worktrees=per-task leaves worktrees to the install"
+PERTASK_PROJ="$FIX/per-task-proj"
+build_proj "$PERTASK_PROJ" pertask
+mkdir -p "$PERTASK_PROJ/wheelhouse"
+printf 'seat_worktrees=per-task\n' > "$PERTASK_PROJ/wheelhouse/.template-source"
+RUN_PROJ="$PERTASK_PROJ"; STATE="$PERTASK_PROJ/seats/state.json"; LOG="$PERTASK_PROJ/seats/logs/worker-1.jsonl"
+run spawn worker-1
+run dispatch worker-1 bead-pertask "hello per-task"
+if [ $RC -eq 0 ] && says "seat_worktrees=per-task" && [ ! -e "$PERTASK_PROJ/.wheelhouse-worktrees" ] && [ "$(state_get_in "$STATE" cwd)" = "$PERTASK_PROJ" ]; then
+  pass "seat_worktrees=per-task: dispatch uses the install's current cwd and creates no seat worktree"
+else fail "seat_worktrees=per-task did not leave worktrees alone (rc=$RC cwd=$(state_get_in "$STATE" cwd) out=$OUT)"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"
+
 phase "2. dispatch — prompt round trip lands in log and session"
 PID_BEFORE_BAD="$(state_get pid)"
 run dispatch worker-1 "bad/bead" "hello adapter"
@@ -1705,6 +1719,61 @@ run stop worker-2 >/dev/null 2>&1
 run stop worker-3 >/dev/null 2>&1
 unset FIXTURE_BD_CLOSED_FILE
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
+
+phase "7b. install policy — seat_push=off and cleanup report/off"
+PUSHOFF_PROJ="$FIX/push-off-proj"
+build_proj "$PUSHOFF_PROJ" pushoff
+mkdir -p "$PUSHOFF_PROJ/wheelhouse"
+printf 'seat_push=off\n' > "$PUSHOFF_PROJ/wheelhouse/.template-source"
+RUN_PROJ="$PUSHOFF_PROJ"; STATE="$PUSHOFF_PROJ/seats/state.json"; LOG="$PUSHOFF_PROJ/seats/logs/worker-1.jsonl"
+run spawn worker-1 bead-pushoff
+PUSHOFF_WT="$(seat_wt "$PUSHOFF_PROJ")"
+printf 'local only\n' > "$PUSHOFF_WT/local.txt"
+fgit -C "$PUSHOFF_WT" add local.txt && fgit -C "$PUSHOFF_WT" commit -qm 'local only'
+fgit -C "$PUSHOFF_PROJ" remote remove origin
+run dispatch worker-1 bead-pushoff2 "leave without push"
+if [ $RC -eq 0 ] && says 'seat_push=off; not pushing fleet/bead-pushoff' && [ "$(wt_branch "$PUSHOFF_WT")" = "fleet/bead-pushoff2" ]; then
+  pass "seat_push=off: cross-bead dispatch never pushes and still switches locally"
+else fail "seat_push=off did not skip push and switch (rc=$RC branch=$(wt_branch "$PUSHOFF_WT") out=$OUT)"; fi
+run stop worker-1 >/dev/null 2>&1
+REPORT_PROJ="$FIX/cleanup-report-proj"
+build_proj "$REPORT_PROJ" cleanupreport
+cp "$ADAPTER_DIR/prune.ts" "$REPORT_PROJ/seats/prune.ts"
+mkdir -p "$REPORT_PROJ/wheelhouse" "$REPORT_PROJ/.beads" "$REPORT_PROJ/fakebin" "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch"
+printf 'cleanup=report\n' > "$REPORT_PROJ/wheelhouse/.template-source"
+printf 'scratch\n' > "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt"
+cat > "$REPORT_PROJ/fakebin/bd" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "list" ] && printf '%s\n' "$@" | grep -q -- '--status=closed'; then
+  printf '[{"id":"bead-report","status":"closed"}]\n'
+else
+  printf '[]\n'
+fi
+EOF
+chmod +x "$REPORT_PROJ/fakebin/bd"
+RUN_PROJ="$REPORT_PROJ"; STATE="$REPORT_PROJ/seats/state.json"; LOG="$REPORT_PROJ/seats/logs/worker-1.jsonl"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$REPORT_PROJ/fakebin:$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 bead-report 2>&1)" || RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$REPORT_PROJ/fakebin:$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-report "first cleanup report" 2>&1)" || RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$REPORT_PROJ/fakebin:$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-after-report "cleanup report" 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ -e "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt" ] && grep -q 'dry-run would remove run-scratch' "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null && grep -q 'dry-run cleanup done' "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null; then
+  pass "cleanup=report: cross-bead cleanup writes a would-remove report and deletes nothing"
+else fail "cleanup=report did not dry-run to log or preserved scratch wrong (rc=$RC out=$OUT log=$(cat "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null))"; fi
+run stop worker-1 >/dev/null 2>&1
+OFF_PROJ="$FIX/cleanup-off-proj"
+build_proj "$OFF_PROJ" cleanupoff
+cp "$ADAPTER_DIR/prune.ts" "$OFF_PROJ/seats/prune.ts"
+mkdir -p "$OFF_PROJ/wheelhouse" "$OFF_PROJ/.wheelhouse-runs/bead-off-scratch"
+printf 'cleanup=off\n' > "$OFF_PROJ/wheelhouse/.template-source"
+printf 'scratch\n' > "$OFF_PROJ/.wheelhouse-runs/bead-off-scratch/file.txt"
+RUN_PROJ="$OFF_PROJ"; STATE="$OFF_PROJ/seats/state.json"; LOG="$OFF_PROJ/seats/logs/worker-1.jsonl"
+run spawn worker-1 bead-off
+run dispatch worker-1 bead-off "first cleanup off"
+run dispatch worker-1 bead-after-off "cleanup off"
+if [ $RC -eq 0 ] && says 'cleanup skipped for bead bead-off' && [ -e "$OFF_PROJ/.wheelhouse-runs/bead-off-scratch/file.txt" ] && [ ! -e "$OFF_PROJ/seats/logs/cleanup.log" ]; then
+  pass "cleanup=off: cross-bead cleanup is skipped and deletes nothing"
+else fail "cleanup=off did not skip cleanly (rc=$RC out=$OUT log=$(cat "$OFF_PROJ/seats/logs/cleanup.log" 2>/dev/null))"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"
 
 phase "7b. seat worktree lifecycle — push gate, base switch, reopen, occupied, placeholder, cleanup, lock"
 WT_PROJ="$FIX/worktree-proj"
