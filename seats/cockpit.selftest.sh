@@ -279,6 +279,54 @@ fi
 kill "$COURIER_PRINCIPAL_PID" "$COURIER_WATCHDOG_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/courier.pid" "$PROJ/seats/run/courier-watchdog.pid" "$PROJ/seats/channels.json" "$PROJ/seats/run/telegram.token"
 
+RECOVERY_BIN="$FIX/recovery-bin"
+mkdir -p "$RECOVERY_BIN" "$PROJ/seats/logs" "$PROJ/open-work" "$PROJ/clean-work" "$PROJ/closed-work" "$PROJ/.beads"
+cat > "$RECOVERY_BIN/bd" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "list" ] && printf '%s\n' "$@" | grep -q -- '--status=closed'; then
+  printf '[{"id":"closed-bead","status":"closed"}]\n'
+else
+  printf '[]\n'
+fi
+EOF
+chmod +x "$RECOVERY_BIN/bd"
+( cd "$PROJ/open-work" && git init -q && git config user.email a@example.invalid && git config user.name A && printf tracked > tracked.txt && git add tracked.txt && git commit -q -m base && printf dirty > dirty.txt )
+( cd "$PROJ/clean-work" && git init -q && git config user.email a@example.invalid && git config user.name A && printf clean > clean.txt && git add clean.txt && git commit -q -m base && git init -q --bare "$PROJ/clean-remote.git" && git remote add origin "$PROJ/clean-remote.git" && git push -q -u origin HEAD )
+cat > "$PROJ/seats/adapter.ts" <<'EOF'
+import * as fs from "node:fs";
+import * as path from "node:path";
+const root = path.resolve(import.meta.dir, "..");
+const [cmd, seat] = process.argv.slice(2);
+fs.mkdirSync(path.join(root, "seats", "logs"), { recursive: true });
+fs.appendFileSync(path.join(root, "seats", "logs", "adapter.fixture.log"), `${cmd} ${seat}\n`);
+if (cmd === "resume") {
+  console.error(`seat "${seat}" brief changed; reset instead of resume (recorded old, current new)`);
+  process.exit(1);
+}
+if (cmd === "reset") {
+  fs.appendFileSync(path.join(root, "seats", "logs", "reset.fixture.log"), `${seat}\n`);
+  const f = path.join(root, "seats", "state.json");
+  const s = JSON.parse(fs.readFileSync(f, "utf8"));
+  if (s.seats?.[seat]) s.seats[seat].pid = null;
+  fs.writeFileSync(f, JSON.stringify(s, null, 2));
+  console.log(`seat ${seat}: reset — session discarded, respawned cold`);
+  process.exit(0);
+}
+process.exit(0);
+EOF
+cat > "$PROJ/seats/state.json" <<EOF
+{"seats":{"closed-seat":{"pid":999991,"lastBead":"closed-bead","cwd":"$PROJ/closed-work","log":"$PROJ/seats/logs/closed-seat.jsonl"},"open-clean":{"pid":999992,"lastBead":"open-bead","cwd":"$PROJ/clean-work","log":"$PROJ/seats/logs/open-clean.jsonl"},"open-dirty":{"pid":999993,"lastBead":"open-bead","cwd":"$PROJ/open-work","log":"$PROJ/seats/logs/open-dirty.jsonl"}}}
+EOF
+PATH="$RECOVERY_BIN:$(dirname "$(command -v tmux)"):$(dirname "$(command -v bun)"):/usr/bin:/bin" WHEELHOUSE_TMUX_SOCKET="$SOCK" "$PROJ/seats/cockpit.sh" recovery > "$FIX/recovery.out" 2>&1
+RECOVERY_RC=$?
+if [ $RECOVERY_RC -eq 0 ] && grep -q 'seat closed-seat cold-reset after changed brief (recorded bead closed-bead is closed)' "$FIX/recovery.out" && grep -q 'seat open-clean cold-reset after changed brief (recorded cwd has no uncommitted or unpushed work)' "$FIX/recovery.out" && grep -q '^closed-seat$' "$PROJ/seats/logs/reset.fixture.log" && grep -q '^open-clean$' "$PROJ/seats/logs/reset.fixture.log" && grep -q 'left dead after changed brief; recorded bead open-bead is not closed and recorded cwd has uncommitted or unpushed work' "$FIX/recovery.out" && ! grep -q '^open-dirty$' "$PROJ/seats/logs/reset.fixture.log" && grep -q 'left dead after changed brief' "$PROJ/seats/logs/open-dirty.jsonl"; then
+  pass "cockpit cold-resets changed-brief closed/safe seats and leaves unsafe open work dead"
+else
+  fail "cockpit recovery policy failed (rc=$RECOVERY_RC out=$(cat "$FIX/recovery.out" 2>/dev/null) adapter=$(cat "$PROJ/seats/logs/adapter.fixture.log" 2>/dev/null) reset=$(cat "$PROJ/seats/logs/reset.fixture.log" 2>/dev/null) openlog=$(cat "$PROJ/seats/logs/open-dirty.jsonl" 2>/dev/null))"
+fi
+rm -f "$PROJ/seats/state.json" "$PROJ/seats/adapter.ts" "$PROJ/seats/logs/adapter.fixture.log" "$PROJ/seats/logs/reset.fixture.log" "$PROJ/seats/logs/open-dirty.jsonl" "$PROJ/seats/logs/closed-seat.jsonl" "$PROJ/seats/logs/cockpit-recovery.log"
+tmux -L "$SOCK" kill-session -t wh-recovery >/dev/null 2>&1 || true
+
 PLANTED_BIN="$FIX/planted-bin"
 mkdir -p "$PLANTED_BIN"
 cat > "$PLANTED_BIN/tmux" <<'EOF'
