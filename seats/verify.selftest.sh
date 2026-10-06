@@ -71,7 +71,14 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
-cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"; return 0; }
+cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+  if [ -n "$FIX" ] && [ -e "$FIX" ]; then
+    chmod -R u+w "$FIX" 2>/dev/null || true
+    selftest_remove_fixture_dir "$FIX"
+  fi
+  return 0
+}
 trap cleanup EXIT INT TERM
 
 # --- fixture -----------------------------------------------------------------
