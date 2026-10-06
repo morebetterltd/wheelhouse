@@ -381,7 +381,25 @@ RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMU
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "wide capture sees spinner above prompt and classifies mid-turn pane not idle"
 else fail "wide mid-turn fixture was considered idle (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
-rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf '%s\n' '{"type":"agent_end","messages":["drained while busy"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+DRAINED_SIZE="$(wc -c < "$PROJ/seats/inbox.jsonl" | tr -d ' ')"
+printf '%s\n' "$DRAINED_SIZE" > "$PROJ/seats/inbox.cursor"
+RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC2=$?
+if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke dropped .*reason=already-drained' "$POKE_LOG" 2>/dev/null; then pass "drained deferred inbox row is not poked later"
+else fail "drained deferred row still poked (rc=$RC/$RC2 out=$OUT/$OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) cursor=$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo none))"; fi
+cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
+{"type":"agent_end","messages":["after drain"]}
+JSONL
+BEFORE_SENDS="$(line_count "$SEND_LOG")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+AFTER_SENDS="$(line_count "$SEND_LOG")"
+if [ $RC -eq 0 ] && [ "$AFTER_SENDS" = "$((BEFORE_SENDS+1))" ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "new inbox row after drain still pokes"
+else fail "post-drain row did not poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["post-fixture settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
 RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
