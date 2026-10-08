@@ -739,6 +739,26 @@ const PROVIDER_ENV_VARS: Record<string, string> = {
 };
 function providerEnvVar(provider: string): string | undefined { return PROVIDER_ENV_VARS[provider]; }
 
+function findOnPath(bin: string, searchPath = process.env.PATH ?? ""): string | null {
+  for (const dir of searchPath.split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, bin);
+    try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch {}
+  }
+  return null;
+}
+
+export function readonlyBdPath(root: string, basePath: string, scratchCwd: string): string {
+  const realBd = findOnPath("bd", basePath);
+  if (!realBd) return basePath;
+  const shimDir = path.join(scratchCwd, ".wheelhouse-readonly-bin");
+  fs.mkdirSync(shimDir, { recursive: true });
+  const shim = path.join(shimDir, "bd");
+  fs.writeFileSync(shim, `#!/usr/bin/env bash\nexec ${JSON.stringify(realBd)} --readonly "$@"\n`);
+  fs.chmodSync(shim, 0o755);
+  return `${shimDir}${path.delimiter}${basePath}`;
+}
+
 // Same rule as adapter.ts: pi auto-creates an empty {} auth.json on a first
 // headless run, and a seat with only that has never been logged in.
 function authIsIdentity(authFile: string): boolean {
@@ -1077,9 +1097,10 @@ async function main(): Promise<void> {
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   const startedAt = Date.now();
+  const oneShotPath = readonlyBdPath(ROOT, hostBudgetPath(ROOT), scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
-    PATH: hostBudgetPath(ROOT),
+    PATH: oneShotPath,
     WHEELHOUSE_ROOT: ROOT,
     BEADS_ACTOR: beadsActorFor(verifierSeat),
   });
