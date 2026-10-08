@@ -130,18 +130,42 @@ function assertHostBuildLockAvailable(): void {
  * `wheelhouse-review-<owning-pid>-<random>` so a later sweep can tell which
  * process made it without asking anything but the path.
  */
+interface CoreWorktreeConfig { present: boolean; value: string }
+
+function readCoreWorktreeConfig(repoRoot: string): CoreWorktreeConfig {
+  const r = spawnSync("git", ["-C", repoRoot, "config", "--local", "--get", "core.worktree"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return r.status === 0 ? { present: true, value: (r.stdout ?? "").trimEnd() } : { present: false, value: "" };
+}
+
+function restoreCoreWorktreeConfig(repoRoot: string, before: CoreWorktreeConfig): void {
+  const after = readCoreWorktreeConfig(repoRoot);
+  if (after.present === before.present && after.value === before.value) return;
+  try {
+    if (before.present) execFileSync("git", ["-C", repoRoot, "config", "--local", "core.worktree", before.value], { stdio: "ignore" });
+    else execFileSync("git", ["-C", repoRoot, "config", "--local", "--unset", "core.worktree"], { stdio: "ignore" });
+  } catch {}
+}
+
 export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD"): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`));
+  const coreWorktreeBefore = readCoreWorktreeConfig(repoRoot);
   try {
     execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, `${tip}^{commit}`], { stdio: "pipe" });
   } catch (e: any) {
     fs.rmSync(dir, { recursive: true, force: true });
+    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
     die(`could not create a detached scratch worktree for the ${kind} one-shot in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
   }
-  process.on("exit", () => {
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     removeScratchWorktree(repoRoot, dir);
     sweepShaNamedBranches(repoRoot);
-  });
+    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
+  };
+  process.on("exit", cleanup);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
   return dir;
 }
 
