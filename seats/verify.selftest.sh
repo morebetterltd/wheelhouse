@@ -472,6 +472,7 @@ build_proj "$PROJ" alpha "$VERIFY"
 TIP="$(git -C "$PROJ" rev-parse fleet/bead-1)"
 
 REPLY="$FIX/reply.txt"
+core_worktree_snapshot() { local out rc; out="$(git -C "$1" config --local --get core.worktree 2>&1)"; rc=$?; printf 'rc=%s\n%s\n' "$rc" "$out"; }
 run() {   # runs verify.ts in the fixture; args pass through
   # BEADS_ACTOR unset on purpose: the dispatcher must set it in the spawned
   # verifier's own env by construction, not forward whatever this shell has.
@@ -672,6 +673,7 @@ Checked the done: diff at $TIP adds the thing the bead asks for.
  1 file changed
 VERDICT: APPROVE
 EOF
+CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$PROJ")"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ]; then pass "APPROVE exits 0"
 else fail "APPROVE path exited ${RC}: $OUT"; fi
@@ -757,6 +759,9 @@ else pass "the scratch worktree is unregistered after verify.ts exited (process-
 if [ -d "$SCRATCH_CWD" ]; then
   fail "the scratch worktree directory $SCRATCH_CWD still exists on disk after verify.ts exited"
 else pass "the scratch worktree directory no longer exists on disk"; fi
+if [ "$(core_worktree_snapshot "$PROJ")" = "$CORE_WORKTREE_BEFORE" ]; then
+  pass "normal verify run leaves product repo core.worktree byte-identical"
+else fail "normal verify changed core.worktree: before=$CORE_WORKTREE_BEFORE after=$(core_worktree_snapshot "$PROJ")"; fi
 
 mkdir -p "$PROJ/seats/logs"
 perl -e 'print "large runtime log line without the probe token\n" x 200000' > "$PROJ/seats/logs/large.log"
@@ -1567,6 +1572,7 @@ RUN_PROJ="$KILL_PROJ"; VDIR="$KILL_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-se
 KILL_SHA_BRANCH="89abcdef0123456789abcdef0123456789abcdef"
 git -C "$KILL_PROJ" branch "$KILL_SHA_BRANCH" HEAD >/dev/null 2>&1
 OUT_FILE="$FIX/killed-verify.out"
+KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
 (env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$OUT_FILE" 2>&1) &
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
@@ -1588,6 +1594,9 @@ else fail "killed one-shot scratch survived: dir=$KILLED_DIR list=$(git -C "$KIL
 if ! git -C "$KILL_PROJ" show-ref --verify --quiet "refs/heads/$KILL_SHA_BRANCH"; then
   pass "killed one-shot reaper pass removed the stale SHA-named branch"
 else fail "killed one-shot stale SHA branch survived"; fi
+if [ "$(core_worktree_snapshot "$KILL_PROJ")" = "$KILL_CORE_WORKTREE_BEFORE" ]; then
+  pass "killed verify run leaves product repo core.worktree byte-identical"
+else fail "killed verify changed core.worktree: before=$KILL_CORE_WORKTREE_BEFORE after=$(core_worktree_snapshot "$KILL_PROJ")"; fi
 RUN_PROJ="$PROJ"; VDIR="$PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 
 phase "11. real pi — one smoke leg through the actual binary (SKIP-able)"
