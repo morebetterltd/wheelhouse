@@ -24,6 +24,8 @@ import { resolveRoleBrief } from "./briefs";
 import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
+import { effectiveRoster } from "./roster";
+import { hasPool } from "./pool";
 import { liveLineCandidates } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -55,6 +57,7 @@ function refuse(msg: string): never {
 }
 
 function readRoster(): Record<string, SeatEntry> {
+  if (hasPool(ROOT)) return effectiveRoster(ROOT) as Record<string, SeatEntry>;
   if (!fs.existsSync(ROSTER_FILE)) refuse(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   return (JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8")).seats ?? {}) as Record<string, SeatEntry>;
 }

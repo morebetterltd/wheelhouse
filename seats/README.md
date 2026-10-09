@@ -11,7 +11,8 @@ other's identity, and a reviewer seat on its own directory is what makes
 
 The main files here:
 
-- `seats.json.example` — the roster format. Copy it to `seats.json` and edit.
+- `seats.json.example` — the fixed roster format. Copy it to `seats.json` and edit.
+- `pool.json.example` — optional dynamic-staffing pool format. Copy it to `pool.json` only when this install wants workers/reviewers staffed from a subscription pool.
 - `channels.json.example` — declared stakeholder/principal channels. Copy it to `channels.json` and edit.
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
   project root, and prints the export line and the one-time credential flow.
@@ -174,7 +175,11 @@ Any scanned executable named `cargo` or `dotnet` whose first `--contract` line
 has a different lock/cap/re-entry contract is reported as `parity=mismatch` and
 the `--contract` command exits non-zero.
 
-## The roster format
+## The roster and pool formats
+
+With no `seats/pool.json`, `seats.json` is still the full roster and all existing commands behave as before. When `seats/pool.json` exists, its `roles.workers` and/or `roles.reviewers` entries replace fixed `worker` / `verifier` rows from `seats.json`; the adapter, verifier, walker, and worktree cap read the effective roster assembled from the fixed rows plus staffed names like `worker-codex-a` and `verifier-claude-b`.
+
+`bun seats/pool.ts check` validates a pool without reading credential files. It requires each entry to name a harness, provider, offered models, and an `account.dir` under this install's `$HOME/.pi-seats-<namespace>/pool/<entry>` root; `seats/seat-env.sh <namespace> --pool <entry>` provisions that directory. The pool refuses unknown harnesses, unknown keys, missing login folders, shared login directories, commander's login directories, role limits outside the listed entries, role models the entry does not offer, fixed-roster conflicts for the same role, and token-shaped strings. It records login folder paths and auth-route names, never credentials.
 
 `seats.json` is plain JSON with no comments, so its fields are documented
 here instead.

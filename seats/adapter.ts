@@ -64,6 +64,8 @@ import { execFileSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
+import { effectiveRoster } from "./roster";
+import { hasPool } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
 
@@ -368,12 +370,13 @@ interface State {
 }
 
 function parseRosterFile(): Record<string, SeatEntry> {
+  if (hasPool(ROOT)) return effectiveRoster(ROOT) as Record<string, SeatEntry>;
   const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
   return raw.seats ?? {};
 }
 
 function readRoster(): Record<string, SeatEntry> {
-  if (!fs.existsSync(ROSTER_FILE)) {
+  if (!hasPool(ROOT) && !fs.existsSync(ROSTER_FILE)) {
     die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   }
   const seats = parseRosterFile();

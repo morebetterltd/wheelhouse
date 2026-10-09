@@ -67,6 +67,8 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
+import { effectiveRoster } from "./roster";
+import { hasPool } from "./pool";
 import { liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -693,6 +695,7 @@ interface SeatEntry {
 }
 
 function readRoster(): Record<string, SeatEntry> {
+  if (hasPool(ROOT)) return effectiveRoster(ROOT) as Record<string, SeatEntry>;
   if (!fs.existsSync(ROSTER_FILE)) {
     die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   }
