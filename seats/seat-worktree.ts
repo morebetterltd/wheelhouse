@@ -33,6 +33,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { effectiveRoster } from "./roster";
+import { CREDENTIAL_SHAPE_RE } from "./credential-shapes";
 
 export const WORKTREES_DIRNAME = ".wheelhouse-worktrees";
 export const PLACEHOLDER_MARKER = ".pruned-placeholder";
@@ -90,12 +92,14 @@ export function fleetWorktrees(root: string, repo: string = root): RegisteredWor
   });
 }
 
-/** seats.json length + 2; WHEELHOUSE_MAX_LIVE_WORKTREES is a selftest override only. */
+/** effective roster length + 2; WHEELHOUSE_MAX_LIVE_WORKTREES is a selftest override only. */
 export function worktreeCap(root: string, roster?: Record<string, unknown>): { cap: number; seats: number } {
   let seats = 0;
   if (roster) seats = Object.keys(roster).length;
   else {
-    try { seats = Object.keys(JSON.parse(fs.readFileSync(path.join(root, "seats", "seats.json"), "utf8")).seats ?? {}).length; } catch {}
+    try { seats = Object.keys(effectiveRoster(root)).length; } catch {
+      try { seats = Object.keys(JSON.parse(fs.readFileSync(path.join(root, "seats", "seats.json"), "utf8")).seats ?? {}).length; } catch {}
+    }
   }
   const override = Number(process.env.WHEELHOUSE_MAX_LIVE_WORKTREES ?? "");
   if (Number.isSafeInteger(override) && override > 0) return { cap: override, seats };
@@ -242,15 +246,6 @@ export function remoteTrackingTip(root: string, remote: string, branch: string):
 
 export function pushMarkerPath(root: string, seat: string): string { return path.join(root, "seats", "run", `push.${seat}.json`); }
 
-const CREDENTIAL_SHAPE_RE = [
-  String.raw`xox[abpr]-[0-9][A-Za-z0-9-]{10,}`,
-  String.raw`github_pat_[A-Za-z0-9_]{20,}`,
-  String.raw`ghp_[A-Za-z0-9_]{20,}`,
-  String.raw`sk-[A-Za-z0-9][A-Za-z0-9_-]{20,}`,
-  String.raw`[0-9]{6,}:[A-Za-z0-9_-]{30,}`,
-  String.raw`eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}`,
-  String.raw`-----BEGIN (RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----`,
-].join("|");
 
 function commitsToPublish(repo: string, remote: string, branch: string, headSha: string): string[] {
   const remoteTip = remoteTrackingTip(repo, remote, branch);
