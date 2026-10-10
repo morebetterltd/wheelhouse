@@ -295,8 +295,9 @@ decides what the work IS; the note says where to stand while reading it.
 
 **The order, explicitly, because reading it is not the same as doing it in
 this sequence:** recover (`bun seats/recover.ts` if this session followed a
-`/clear` or a compaction), spawn or resume every rostered seat, drain the
-Dispatch Office inbox (`bun seats/herald.ts --drain`, following any human-answer row with `bun seats/needs.ts show <id>`), list open needs (`bun seats/needs.ts list`), dispatch every ready
+`/clear` or a compaction), spawn or resume every rostered seat, read `bun
+seats/adapter.ts status` and, when a pool exists, `bun seats/staffing.ts
+status`, drain the Dispatch Office inbox (`bun seats/herald.ts --drain`, following any human-answer row with `bun seats/needs.ts show <id>`), list open needs (`bun seats/needs.ts list`), dispatch every ready
 bead to a seat — and only then any commander-owned chore (machinery sync,
 selftests, upgrades, ISA edits). A chore that reads as high-priority in
 yesterday's handoff is still a chore: it waits behind the first dispatch, not

@@ -1867,14 +1867,31 @@ function rotateLogIfSafe(log: string, last: string): void {
   fs.truncateSync(log, 0);
 }
 
+function staffingTrailer(state: State, roster: Record<string, SeatEntry>): string | null {
+  if (!hasPool(ROOT)) return null;
+  try {
+    const pool = loadPool(ROOT);
+    let workers = 0, reviewers = 0;
+    for (const [name, rec] of Object.entries(state.seats)) {
+      const entry = roster[name];
+      if (!entry || entry.external || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) continue;
+      if (entry.role === "worker") workers++;
+      if (entry.role === "verifier") reviewers++;
+    }
+    return `staffing: workers ${workers}/${pool.roles.workers?.min ?? 0}..${pool.roles.workers?.max ?? 0} · reviewers ${reviewers}/${pool.roles.reviewers?.min ?? 0}..${pool.roles.reviewers?.max ?? 0} · see bun seats/staffing.ts status`;
+  } catch { return null; }
+}
+
 async function cmdStatus(): Promise<void> {
   const state = readState();
   const names = Object.keys(state.seats);
+  const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   if (names.length === 0) {
     console.log("no seats recorded in seats/state.json");
+    const staffing = staffingTrailer(state, roster);
+    if (staffing) console.log(staffing);
     return;
   }
-  const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   const rows = processRows();
   let sawSettled = false;
   for (const name of names) {
@@ -1928,6 +1945,8 @@ async function cmdStatus(): Promise<void> {
       }
     }
   }
+  const staffing = staffingTrailer(state, roster);
+  if (staffing) console.log(staffing);
   if (sawSettled) reportHostBudgetWorktreeCap();
 }
 

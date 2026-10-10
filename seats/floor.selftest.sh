@@ -293,6 +293,19 @@ has "VERDICT LANDED — APPROVE" && pass "reviewer: VERDICT LANDED (green)" || f
 has "REVIEW BLOCKED.*BOUNCE"   && pass "bounced: REVIEW BLOCKED line"     || fail "no REVIEW BLOCKED line"
 has "EVIDENCE UNSATISFIED.*wh-unsat-1" && pass "unsat: BOUNCE with failed evidence-floor renders EVIDENCE UNSATISFIED" || fail "no EVIDENCE UNSATISFIED line"
 has "no event log yet"    && pass "nolog: missing log is a named line"    || fail "missing log line absent"
+POOL_PROJ="$FIX/poolproj"; mkdir -p "$POOL_PROJ" "$FIX/pool-home/.pi-seats-poolfloor/e1"
+cp -R "$PROJ/seats" "$POOL_PROJ/seats"
+mkdir -p "$POOL_PROJ/seats/logs" "$POOL_PROJ/seats/run" "$POOL_PROJ/wheelhouse"
+printf 'namespace=poolfloor\n' > "$POOL_PROJ/wheelhouse/.template-source"
+printf '{"version":1,"seats":{}}\n' > "$POOL_PROJ/seats/seats.json"
+cat > "$POOL_PROJ/seats/pool.json" <<'JSON'
+{"version":1,"entries":{"e1":{"harness":"codex","provider":"openai","models":["m1"],"account":{"dir":"~/.pi-seats-poolfloor/e1","label":"pool-label","authRoute":"env"}}},"roles":{"workers":{"min":1,"max":1,"entries":["e1"],"model":"m1"}}}
+JSON
+printf '{"version":1,"seats":{"worker-e1":{"role":"worker","entry":"e1","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}\n' > "$POOL_PROJ/seats/staffing.json"
+printf '{"seats":{"worker-e1":{"pid":%s,"startedAt":"2026-08-29T00:00:00Z","role":"worker","fifo":"%s","log":"%s","sessionId":"pool"}}}\n' "$$" "$POOL_PROJ/seats/run/worker-e1.stdin" "$POOL_PROJ/seats/logs/worker-e1.jsonl" > "$POOL_PROJ/seats/state.json"
+printf '{"type":"agent_end","timestamp":"2026-08-29T00:00:00Z"}\n' > "$POOL_PROJ/seats/logs/worker-e1.jsonl"
+HOME="$FIX/pool-home" render "$POOL_PROJ/seats/floor.ts" --pin 0
+has 'worker-e1.*pool-label (pool)' && pass "staffed seat rail marks pool subscription" || fail "pool marker missing from floor rail: $OUT"
 AUTH_SHAPES=(
   'HTTP 401 Unauthorized'
   'HTTP 403 Forbidden'
