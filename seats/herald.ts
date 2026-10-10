@@ -21,7 +21,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import.meta.dir, ".."));
@@ -35,6 +35,9 @@ const DRAIN_CURSOR = path.join(SEATS_DIR, "inbox.cursor");
 const DRAIN_SEEN = path.join(SEATS_DIR, "inbox.seen.json");
 const STATE_FILE = path.join(SEATS_DIR, "herald.state.json");
 const ADAPTER_STATE_FILE = path.join(SEATS_DIR, "state.json");
+const POOL_FILE = path.join(SEATS_DIR, "pool.json");
+const STAFFING_LOG = path.join(LOG_DIR, "staffing.log");
+const STAFFING_OUT_LOG = path.join(LOG_DIR, "staffing.out.log");
 const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
 const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
 const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
@@ -63,6 +66,7 @@ interface HeraldState {
   lastPokedInboxSize?: number;
   lastPokedByPane?: Record<string, number>;
   firstDeferredAtByPane?: Record<string, number>;
+  staffing?: { lastCheckAt?: string };
 }
 
 interface Candidate {
@@ -94,7 +98,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {} };
+    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, staffing: parsed.staffing ?? {} };
   } catch (e: any) {
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
@@ -615,6 +619,48 @@ function commanderPaneIdleClaude(): boolean {
   }
 }
 
+interface DetachedJob { child: ChildProcess | null; lastLaunchAt: number }
+const detachedJobs: Record<string, DetachedJob> = {};
+
+export function launchDetached(name: string, argv: string[], intervalMs: number, logFile: string): boolean {
+  const now = Date.now();
+  const job = detachedJobs[name] ?? (detachedJobs[name] = { child: null, lastLaunchAt: 0 });
+  if (job.child && job.child.pid && pidAlive(job.child.pid)) return false;
+  if (now - job.lastLaunchAt < intervalMs) return false;
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  const fd = fs.openSync(logFile, "a");
+  const child = spawn(argv[0], argv.slice(1), { cwd: ROOT, detached: true, stdio: ["ignore", fd, fd] });
+  try { fs.closeSync(fd); } catch {}
+  child.unref();
+  job.child = child;
+  job.lastLaunchAt = now;
+  return true;
+}
+
+function staffingIntervalMs(): number {
+  const env = Number(process.env.WHEELHOUSE_STAFFING_INTERVAL_MS ?? "");
+  if (Number.isFinite(env) && env >= 0) return Math.floor(env);
+  try {
+    const pool = JSON.parse(fs.readFileSync(POOL_FILE, "utf8"));
+    const seconds = Number(pool.check_interval_seconds ?? 60);
+    return Math.max(0, Math.floor(seconds * 1000));
+  } catch { return 60_000; }
+}
+
+function lastStaffingDecisionLine(): string {
+  try { return fs.readFileSync(STAFFING_LOG, "utf8").trim().split(/\r?\n/).filter(Boolean).pop() ?? "none"; } catch { return "none"; }
+}
+
+function runStaffingClock(state: HeraldState): boolean {
+  if (!fs.existsSync(POOL_FILE)) return false;
+  const interval = staffingIntervalMs();
+  const last = Date.parse(state.staffing?.lastCheckAt ?? "") || 0;
+  if (Date.now() - last < interval) return false;
+  const launched = launchDetached("staffing", ["bun", "seats/staffing.ts", "check"], 0, STAFFING_OUT_LOG);
+  if (launched) state.staffing = { ...(state.staffing ?? {}), lastCheckAt: new Date().toISOString() };
+  return launched;
+}
+
 function pokeCommanderIfSafe(state: HeraldState): void {
   const inboxSize = fs.existsSync(INBOX) ? fs.statSync(INBOX).size : 0;
   if (inboxSize <= 0 || state.lastPokedInboxSize === inboxSize) return;
@@ -711,6 +757,7 @@ function scanOnce(): number {
   }
   appended += scanNeeds(state, seen);
   appended += scanComms(state, seen);
+  if (runStaffingClock(state)) writeState(state);
   pokeCommanderIfSafe(state);
   return appended;
 }
@@ -775,6 +822,15 @@ function pidAlive(pid: number): boolean {
 }
 
 function status(): void {
+  if (fs.existsSync(POOL_FILE)) {
+    const state = readState();
+    const interval = staffingIntervalMs();
+    const last = Date.parse(state.staffing?.lastCheckAt ?? "") || 0;
+    const next = Math.max(0, Math.ceil((last + interval - Date.now()) / 1000));
+    console.log(`staffing: next check in ${next}s (last decision: ${lastStaffingDecisionLine()})`);
+  } else {
+    console.log("staffing: no pool");
+  }
   if (!fs.existsSync(PID_FILE)) {
     console.log("herald STOPPED — no pid file");
     process.exit(1);
