@@ -30,6 +30,8 @@ set -uo pipefail   # deliberately not -e: sabotaged runs are meant to differ
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FLOOR="${1:-$HERE/floor.ts}"
 COCKPIT="$HERE/cockpit.sh"
+DAEMONS="$HERE/daemons.sh"
+SUPERVISOR="$HERE/supervisor.sh"
 BRIDGE_GUARD="$HERE/bridge-guard.sh"
 [ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run floor.ts" >&2; exit 2; }
@@ -64,6 +66,8 @@ PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats/logs" "$FIX/bin"
 cp "$FLOOR" "$PROJ/seats/floor.ts"
 [ -f "$COCKPIT" ] && cp "$COCKPIT" "$PROJ/seats/cockpit.sh" && chmod +x "$PROJ/seats/cockpit.sh"
+[ -f "$DAEMONS" ] && cp "$DAEMONS" "$PROJ/seats/daemons.sh" && chmod +x "$PROJ/seats/daemons.sh"
+[ -f "$SUPERVISOR" ] && cp "$SUPERVISOR" "$PROJ/seats/supervisor.sh" && chmod +x "$PROJ/seats/supervisor.sh"
 [ -f "$BRIDGE_GUARD" ] && cp "$BRIDGE_GUARD" "$PROJ/seats/bridge-guard.sh" && chmod +x "$PROJ/seats/bridge-guard.sh"
 
 # Stub bd: two ready beads, so idle-with-ready-work has work to point at.
@@ -410,7 +414,12 @@ elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
   skip "cockpit.sh not found beside floor.ts — leg not run"
 else
   SOCK="whfloor$$"
-  crun() { RC=0; OUT="$(env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null 2>&1)" || RC=$?; }
+  crun() {
+    RC=0
+    out_file="$FIX/cockpit-crun.out"
+    env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null > "$out_file" 2>&1 || RC=$?
+    OUT="$(cat "$out_file" 2>/dev/null || true)"
+  }
   crun
   [ $RC -eq 0 ] && has "bridge built" && pass "first run builds the bridge" || fail "first run: rc=${RC}: $OUT"
   if tmux -L "$SOCK" has-session -t "=wh-tfix" 2>/dev/null; then pass "session wh-tfix exists"
