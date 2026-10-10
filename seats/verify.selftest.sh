@@ -154,6 +154,13 @@ if (process.env.STUB_GIT_INIT_REPO) {
   const after = readWorktree();
   fs.writeFileSync(path.join(agentDir, "git-init-check.json"), JSON.stringify({ before, after, initStatus: init.status, initStderr: init.stderr ?? "", gitDir: process.env.GIT_DIR ?? null, gitWorkTree: process.env.GIT_WORK_TREE ?? null }, null, 2));
 }
+if (process.env.STUB_CLOBBER_CORE_WORKTREE_REPO) {
+  const cp = require("child_process");
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.GIT_DIR; delete cleanEnv.GIT_WORK_TREE; delete cleanEnv.GIT_INDEX_FILE;
+  cp.spawnSync("git", ["-C", process.env.STUB_CLOBBER_CORE_WORKTREE_REPO, "config", "--local", "core.worktree", process.cwd()], { env: cleanEnv });
+  fs.writeFileSync(path.join(agentDir, "core-worktree-clobber.txt"), process.cwd());
+}
 // The dispatcher sets our cwd by construction (a scratch worktree), not by
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
@@ -1481,6 +1488,22 @@ fi
 RUN_PROJ="$PROJ"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 
+phase "9b. core.worktree restore guard covers mid-run clobber"
+CORE_GUARD_PROJ="$FIX/proj-core-guard"
+build_proj "$CORE_GUARD_PROJ" coreguard "$VERIFY"
+printf 'Core worktree restore guard checked.\nVERDICT: APPROVE\n' > "$REPLY"
+git -C "$CORE_GUARD_PROJ" config --local core.worktree "$CORE_GUARD_PROJ"
+CORE_GUARD_BEFORE="$(core_worktree_snapshot "$CORE_GUARD_PROJ")"
+OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLOBBER_CORE_WORKTREE_REPO="$CORE_GUARD_PROJ" bun "$CORE_GUARD_PROJ/seats/verify.ts" bead-core-guard fleet/bead-1 worker-1 verifier 2>&1)"
+RC=$?
+CORE_GUARD_CLOBBER="$HOME_FIX/.pi-seats-coreguard/verifier/core-worktree-clobber.txt"
+if [ $RC -eq 0 ] && [ "$(core_worktree_snapshot "$CORE_GUARD_PROJ")" = "$CORE_GUARD_BEFORE" ]; then
+  pass "pre-set core.worktree is byte-identical after verifier clobbers it mid-run"
+else fail "pre-set core.worktree was not restored (exit $RC): before=$CORE_GUARD_BEFORE after=$(core_worktree_snapshot "$CORE_GUARD_PROJ") out=$OUT"; fi
+if grep -q '/wheelhouse-verify-' "$CORE_GUARD_CLOBBER" 2>/dev/null && ! grep -qF "$CORE_GUARD_PROJ" "$CORE_GUARD_CLOBBER" 2>/dev/null; then
+  pass "restore-path fixture wrote the scratch wheelhouse-verify path into core.worktree"
+else fail "restore-path fixture did not write a scratch wheelhouse-verify path: $(cat "$CORE_GUARD_CLOBBER" 2>/dev/null)"; fi
+
 phase "10. sweep — a SIGKILLed run's scratch worktree and stale SHA branch are reclaimed"
 # sweepStaleScratchWorktrees() runs at the very top of main(), before argv
 # is even validated, so a bare no-args invocation (an immediate usage STOP)
@@ -1597,6 +1620,38 @@ else fail "killed one-shot stale SHA branch survived"; fi
 if [ "$(core_worktree_snapshot "$KILL_PROJ")" = "$KILL_CORE_WORKTREE_BEFORE" ]; then
   pass "killed verify run leaves product repo core.worktree byte-identical"
 else fail "killed verify changed core.worktree: before=$KILL_CORE_WORKTREE_BEFORE after=$(core_worktree_snapshot "$KILL_PROJ")"; fi
+
+phase "10c. SIGTERM/SIGINT one-shot cleanup restores core.worktree and removes scratch"
+signal_cleanup_case() {
+  local sig="$1" expect="$2" ns="$3" label="$4"
+  local sig_proj="$FIX/proj-$ns" out_file="$FIX/$ns.out" before dir pid_file wait_rc
+  build_proj "$sig_proj" "$ns" "$VERIFY"
+  git -C "$sig_proj" config --local core.worktree "$sig_proj"
+  before="$(core_worktree_snapshot "$sig_proj")"
+  (env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 STUB_CLOBBER_CORE_WORKTREE_REPO="$sig_proj" bun "$sig_proj/seats/verify.ts" "bead-$ns" fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$out_file" 2>&1) &
+  local dispatcher_pid=$!
+  dir=""
+  for _ in $(seq 1 100); do
+    dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | head -n 1 || true)"
+    [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/verifier/core-worktree-clobber.txt" ] && break
+    sleep 0.05
+  done
+  if [ -n "$dir" ]; then pass "$label fixture reached a registered scratch worktree"
+  else fail "$label fixture never registered a scratch worktree: $(cat "$out_file" 2>/dev/null)"; fi
+  kill -"$sig" "$dispatcher_pid" 2>/dev/null || true
+  wait "$dispatcher_pid" 2>/dev/null; wait_rc=$?
+  pid_file="$HOME_FIX/.pi-seats-$ns/verifier/pi-pid.txt"
+  if [ -s "$pid_file" ]; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi
+  if [ "$wait_rc" = "$expect" ]; then pass "$label exits with signal-shaped status $expect"
+  else fail "$label exit status was $wait_rc, expected $expect; out=$(cat "$out_file" 2>/dev/null)"; fi
+  if [ "$(core_worktree_snapshot "$sig_proj")" = "$before" ]; then pass "$label leaves product repo core.worktree byte-identical after mid-run clobber"
+  else fail "$label changed core.worktree: before=$before after=$(core_worktree_snapshot "$sig_proj")"; fi
+  if [ -n "$dir" ] && ! git -C "$sig_proj" worktree list | grep -qF "$dir" && [ ! -d "$dir" ]; then
+    pass "$label removes scratch worktree on signal"
+  else fail "$label scratch survived: dir=$dir list=$(git -C "$sig_proj" worktree list 2>/dev/null)"; fi
+}
+signal_cleanup_case TERM 143 sigterm SIGTERM
+signal_cleanup_case INT 130 sigint SIGINT
 RUN_PROJ="$PROJ"; VDIR="$PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 
 phase "11. real pi — one smoke leg through the actual binary (SKIP-able)"
