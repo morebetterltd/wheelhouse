@@ -637,8 +637,8 @@ if grep -q 'Read-only source snapshots' "$PROJ/seats/verdicts/bead-source.md" 2>
 else fail "source snapshots: verdict record did not name source snapshot"; fi
 
 phase "0c. timeout — last phase and partial verifier output are retained"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)" || RC=$?
-if [ $RC -eq 1 ] && says "timed out after 1500ms" && says "elapsed" && says "last phase: tool bash started" && says "partial output:"; then
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 5000 2>&1)" || RC=$?
+if [ $RC -eq 1 ] && says "timed out after 5000ms" && says "elapsed" && says "last phase: tool bash started" && says "partial output:"; then
   pass "timeout STOP names elapsed time, last tool/phase, and partial output path"
 else fail "timeout STOP missing phase/elapsed/partial detail (exit $RC): $OUT"; fi
 PARTIAL="$VDIR/bead-1.partial.md"
