@@ -38,6 +38,7 @@ const ADAPTER_STATE_FILE = path.join(SEATS_DIR, "state.json");
 const POOL_FILE = path.join(SEATS_DIR, "pool.json");
 const STAFFING_LOG = path.join(LOG_DIR, "staffing.log");
 const STAFFING_OUT_LOG = path.join(LOG_DIR, "staffing.out.log");
+const ALERTS_OUT_LOG = path.join(LOG_DIR, "alerts.out.log");
 const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
 const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
 const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
@@ -67,6 +68,7 @@ interface HeraldState {
   lastPokedByPane?: Record<string, number>;
   firstDeferredAtByPane?: Record<string, number>;
   staffing?: { lastCheckAt?: string };
+  alerts?: { lastCheckAt?: string };
 }
 
 interface Candidate {
@@ -98,7 +100,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, staffing: parsed.staffing ?? {} };
+    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
   } catch (e: any) {
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
@@ -661,6 +663,20 @@ function runStaffingClock(state: HeraldState): boolean {
   return launched;
 }
 
+function alertsIntervalMs(): number {
+  const env = Number(process.env.WHEELHOUSE_ALERT_INTERVAL_MS ?? "");
+  return Number.isFinite(env) && env >= 0 ? Math.floor(env) : 60_000;
+}
+
+function runAlertsClock(state: HeraldState): boolean {
+  const interval = alertsIntervalMs();
+  const last = Date.parse(state.alerts?.lastCheckAt ?? "") || 0;
+  if (Date.now() - last < interval) return false;
+  const launched = launchDetached("alerts", ["bun", "seats/alerts.ts", "check"], 0, ALERTS_OUT_LOG);
+  if (launched) state.alerts = { ...(state.alerts ?? {}), lastCheckAt: new Date().toISOString() };
+  return launched;
+}
+
 function pokeCommanderIfSafe(state: HeraldState): void {
   const inboxSize = fs.existsSync(INBOX) ? fs.statSync(INBOX).size : 0;
   if (inboxSize <= 0 || state.lastPokedInboxSize === inboxSize) return;
@@ -757,7 +773,8 @@ function scanOnce(): number {
   }
   appended += scanNeeds(state, seen);
   appended += scanComms(state, seen);
-  if (runStaffingClock(state)) writeState(state);
+  const clocked = runStaffingClock(state) || runAlertsClock(state);
+  if (clocked) writeState(state);
   pokeCommanderIfSafe(state);
   return appended;
 }
