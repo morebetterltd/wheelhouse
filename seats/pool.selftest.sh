@@ -99,8 +99,7 @@ expect_refusal 'unknown entry key is refused' 'unknown key entries.a.surprise'
 write_valid_pool; python3 - <<PY
 import json; p='$ROOT/seats/seats.json'; j=json.load(open(p)); j['seats']['fixed-worker']={'role':'worker','harness':'codex','provider':'openai','model':'m','account':{'dir':'~/.pi-seats-pooltest/fixed','authRoute':'oauth'}}; json.dump(j,open(p,'w'))
 PY
-run_check
-[ $RC -eq 0 ] && pass 'fixed worker plus pool workers is allowed and reported by status' || fail "fixed worker plus pool workers failed rc=$RC out=$OUT"
+expect_refusal 'fixed worker plus pool workers is refused' 'the pool replaces the fixed roster for workers'
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"commander":{"role":"commander","external":true},"seats":{"observer":{"role":"researcher","external":true}}}
 JSON
