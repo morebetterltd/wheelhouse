@@ -69,6 +69,7 @@ import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, pidAlive, pidHoldsPath } from "./seat-activity";
+import { QUOTA_RE } from "./quota";
 
 interface SeatDriver {
   readonly name: string;
@@ -697,7 +698,6 @@ async function terminateSpawnedOnly(pid: number): Promise<string> {
 // adapter stamps state.json when a dispatch fails quota-shaped, the floor
 // renders from the stamp AND keeps scanning raw streams for what the
 // adapter never saw.
-const QUOTA_RE = /quota|rate.?limit|429|usage limit|exhaust|out of credits|insufficient.credit/i;
 const CAPACITY_EVENT_TYPES = new Set(["message_end", "turn_end", "agent_end"]);
 
 function textOf(value: unknown): string {
