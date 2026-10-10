@@ -132,18 +132,42 @@ function assertHostBuildLockAvailable(): void {
  * `wheelhouse-review-<owning-pid>-<random>` so a later sweep can tell which
  * process made it without asking anything but the path.
  */
+interface CoreWorktreeConfig { present: boolean; value: string }
+
+function readCoreWorktreeConfig(repoRoot: string): CoreWorktreeConfig {
+  const r = spawnSync("git", ["-C", repoRoot, "config", "--local", "--get", "core.worktree"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return r.status === 0 ? { present: true, value: (r.stdout ?? "").trimEnd() } : { present: false, value: "" };
+}
+
+function restoreCoreWorktreeConfig(repoRoot: string, before: CoreWorktreeConfig): void {
+  const after = readCoreWorktreeConfig(repoRoot);
+  if (after.present === before.present && after.value === before.value) return;
+  try {
+    if (before.present) execFileSync("git", ["-C", repoRoot, "config", "--local", "core.worktree", before.value], { stdio: "ignore" });
+    else execFileSync("git", ["-C", repoRoot, "config", "--local", "--unset", "core.worktree"], { stdio: "ignore" });
+  } catch {}
+}
+
 export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD"): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`));
+  const coreWorktreeBefore = readCoreWorktreeConfig(repoRoot);
   try {
     execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, `${tip}^{commit}`], { stdio: "pipe" });
   } catch (e: any) {
     fs.rmSync(dir, { recursive: true, force: true });
+    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
     die(`could not create a detached scratch worktree for the ${kind} one-shot in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
   }
-  process.on("exit", () => {
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     removeScratchWorktree(repoRoot, dir);
     sweepShaNamedBranches(repoRoot);
-  });
+    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
+  };
+  process.on("exit", cleanup);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
   return dir;
 }
 
@@ -980,9 +1004,9 @@ async function main(): Promise<void> {
     die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--no-event-timeout-ms <ms>]");
   }
   setVerifierGateBead(beadId);
-  const timeoutMs = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || timeoutArg || DEFAULT_TIMEOUT_MS);
-  const firstOutputTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || firstOutputTimeoutArg || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
-  const noEventTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS || noEventTimeoutArg || DEFAULT_NO_EVENT_TIMEOUT_MS);
+  const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
+  const firstOutputTimeoutMs = Number(firstOutputTimeoutArg || process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
+  const noEventTimeoutMs = Number(noEventTimeoutArg || process.env.WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS || DEFAULT_NO_EVENT_TIMEOUT_MS);
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
   if (verifierArg) validateSegment("seat name", verifierArg);
@@ -1073,7 +1097,13 @@ async function main(): Promise<void> {
   // worktree — construction closing the confused-writer hazard, still
   // distinct from adapter.ts's per-bead worker seats (a worker's cwd needs
   // to BE the bead; the verifier's cwd only needs to be A repository the
-  // branch's ref resolves from, which any worktree of this repo is). See
+  // branch's ref resolves from, which any worktree of this repo is). The
+  // deleted-path core.worktree leak came from the old verifier launch that
+  // exported GIT_DIR/GIT_WORK_TREE for this scratch worktree into the one-shot
+  // reviewer process; any `git config --local core.worktree ...` the reviewer
+  // ran with that environment wrote to the product repo's common config. That
+  // environment leak is removed, and makeScratchCwd snapshots/restores the
+  // product repo config in case a child still clobbers it mid-run. See
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
   assertHostBuildLockAvailable();

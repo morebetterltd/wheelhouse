@@ -1706,8 +1706,9 @@ function fixtureLeakBeadForProcess(row: ProcessRow, openPaths: string[] = []): s
   return null;
 }
 
-function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): Map<number, ExtraProcessMatch> {
+function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>, entry?: SeatEntry): Map<number, ExtraProcessMatch> {
   const seen = new Map<number, ExtraProcessMatch>();
+  const harness = entry?.harness ?? "pi";
   function add(row: ProcessRow, reason: string, openPaths: string[] = []) {
     const pid = row.pid;
     if (!Number.isFinite(pid) || pid <= 0 || pid === rec.pid || !barePidAlive(pid)) return;
@@ -1722,7 +1723,9 @@ function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, Pr
       const cmd = row.command;
       const looksLikePiSeat = /(^|[ /])pi( |$)/.test(cmd) && cmd.includes("--mode rpc");
       const looksLikeClaudeSeat = cmd.includes("drivers/claude-code/shim.ts") && cmd.includes("--account-dir") && cmd.includes("--cwd");
-      if (!looksLikePiSeat && !looksLikeClaudeSeat) continue;
+      if (harness === "pi" && !looksLikePiSeat) continue;
+      if (harness === "claude-code" && !looksLikeClaudeSeat) continue;
+      if (harness !== "pi" && harness !== "claude-code") continue;
       if (needles.some((n) => cmd.includes(n))) {
         add(row, "argv/cwd/account match");
         continue;
@@ -1734,8 +1737,8 @@ function orphanCandidatesFor(name: string, rec: SeatRecord, rows: Map<number, Pr
   return seen;
 }
 
-function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>): ExtraProcessMatch[] {
-  const first = orphanCandidatesFor(name, rec, rows);
+function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, ProcessRow>, entry?: SeatEntry): ExtraProcessMatch[] {
+  const first = orphanCandidatesFor(name, rec, rows, entry);
   if (first.size === 0) return [];
   if (ORPHAN_CONFIRM_MS > 0) sleepMs(ORPHAN_CONFIRM_MS);
   const confirmed: ExtraProcessMatch[] = [];
@@ -1917,7 +1920,7 @@ async function cmdStatus(): Promise<void> {
     if (stalled && rec.lastStalledEvent) {
       console.log(`${" ".repeat(16)} STALLED: ${rec.lastStalledEvent.detail}`);
     }
-    for (const orphan of orphanMatchesFor(name, rec, rows)) {
+    for (const orphan of orphanMatchesFor(name, rec, rows, roster[name])) {
       if (orphan.fixtureBead) {
         console.log(`${" ".repeat(16)} fixture leak (${orphan.fixtureBead}): pid ${orphan.pid} matches rostered seat ${name} but is running under a .wheelhouse-runs fixture root; reason: ${orphan.reason}; remedy: kill the fixture process and inspect fixture cleanup`);
       } else {
