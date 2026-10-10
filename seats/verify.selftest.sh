@@ -376,6 +376,10 @@ build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   cp "$src" "$proj/seats/verify.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$HARNESS" "$proj/seats/harness.ts"
+  cp "$VERIFY_DIR/pool.ts" "$proj/seats/pool.ts"
+  cp "$VERIFY_DIR/roster.ts" "$proj/seats/roster.ts"
+  cp "$VERIFY_DIR/credential-shapes.ts" "$proj/seats/credential-shapes.ts"
+  cp "$VERIFY_DIR/seat-worktree.ts" "$proj/seats/seat-worktree.ts"
   cp "$FINAL_ASSISTANT" "$proj/seats/final-assistant-message.ts"
   cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
   cp "$HERALD" "$proj/seats/herald.ts"
@@ -434,6 +438,10 @@ build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.
   cp "$src" "$umb/seats/verify.ts"
   cp "$BRIEFS" "$umb/seats/briefs.ts"
   cp "$HARNESS" "$umb/seats/harness.ts"
+  cp "$VERIFY_DIR/pool.ts" "$umb/seats/pool.ts"
+  cp "$VERIFY_DIR/roster.ts" "$umb/seats/roster.ts"
+  cp "$VERIFY_DIR/credential-shapes.ts" "$umb/seats/credential-shapes.ts"
+  cp "$VERIFY_DIR/seat-worktree.ts" "$umb/seats/seat-worktree.ts"
   cp "$FINAL_ASSISTANT" "$umb/seats/final-assistant-message.ts"
   cp "$HOST_BUDGET_TS" "$umb/seats/host-budget.ts"
   cp "$HERALD" "$umb/seats/herald.ts"
@@ -538,6 +546,55 @@ else
   fail "nonexistent branch STOP did not produce one drainable inbox row (rc=$RC before=$BEFORE_INBOX_LINES after=$AFTER_INBOX_LINES out=$OUT drain=$(cat "$DRAIN_STOP" 2>/dev/null || true))"
 fi
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json"
+
+phase "pool reviewer routing — shared author subscription is skipped"
+cp "$PROJ/seats/seats.json" "$FIX/seats-json.before-pool"
+python3 - <<PY
+import json, pathlib
+p=pathlib.Path('$PROJ/seats/seats.json'); j=json.load(open(p)); j['seats'].pop('verifier', None); p.write_text(json.dumps(j, indent=2))
+PY
+mkdir -p "$HOME_FIX/.pi-seats-proj/pool/rv1" "$HOME_FIX/.pi-seats-proj/pool/rv2"
+printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv1/auth.json"
+printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv2/auth.json"
+cat > "$PROJ/seats/pool.json" <<'JSON'
+{"version":1,"entries":{"rv1":{"harness":"pi","provider":"openai","models":["stub-model-rv1"],"account":{"dir":"~/.pi-seats-proj/pool/rv1","authRoute":"oauth"}},"rv2":{"harness":"pi","provider":"openai","models":["stub-model-rv2"],"account":{"dir":"~/.pi-seats-proj/pool/rv2","authRoute":"oauth"}}},"roles":{"reviewers":{"min":0,"max":2,"entries":["rv1","rv2"],"model":{"rv1":"stub-model-rv1","rv2":"stub-model-rv2"}}}}
+JSON
+cat > "$PROJ/seats/staffing.json" <<'JSON'
+{"version":1,"seats":{"verifier-rv1":{"role":"verifier","entry":"rv1","addedAt":"2026-01-01T00:00:00Z"},"verifier-rv2":{"role":"verifier","entry":"rv2","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}
+JSON
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv1"}}}
+JSON
+cat > "$REPLY" <<EOF
+Reviewer pool routing fixture.
+VERDICT: APPROVE
+EOF
+RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-proj/pool/rv2/argv.json"
+run bead-pool-route fleet/bead-1 author-state
+if [ $RC -eq 0 ] && [ -f "$VARGV" ] && grep -q 'stub-model-rv2' "$VARGV" && [ ! -f "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json" ]; then pass "pool verifier routing skips staffed reviewer sharing author subscription and picks the other"; else fail "pool verifier route failed rc=$RC out=$OUT rv1=$(cat "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json" 2>/dev/null) rv2=$(cat "$VARGV" 2>/dev/null)"; fi
+rm -f "$VARGV" "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json"
+cat > "$PROJ/seats/pool.json" <<'JSON'
+{"version":1,"entries":{"rv2":{"harness":"pi","provider":"openai","models":["stub-model-rv2"],"account":{"dir":"~/.pi-seats-proj/pool/rv2","authRoute":"oauth"}}},"roles":{"reviewers":{"min":0,"max":1,"entries":["rv2"],"model":"stub-model-rv2"}}}
+JSON
+cat > "$PROJ/seats/staffing.json" <<'JSON'
+{"version":1,"seats":{"verifier-rv2":{"role":"verifier","entry":"rv2","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}
+JSON
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv2"}}}
+JSON
+run bead-pool-all-share fleet/bead-1 author-state
+if [ $RC -ne 0 ] && says "SAME account directory" && says "waiting for a reviewer"; then pass "pool verifier routing STOPs with waiting wording when every reviewer shares author subscription"; else fail "all-shared reviewer STOP failed rc=$RC out=$OUT"; fi
+run bead-pool-explicit-same fleet/bead-1 author-state verifier-rv2
+if [ $RC -eq 1 ] && says "SAME account directory"; then pass "pool-present explicit verifier still runs the disk distinctness STOP before spawn"; else fail "pool explicit distinctness STOP failed rc=$RC out=$OUT"; fi
+mkdir -p "$PROJ/seats/run"; (sleep 60) & BUSY_RV2=$!; printf '{"pid":%s,"bead":"other"}\n' "$BUSY_RV2" > "$PROJ/seats/run/verify.verifier-rv2.json"
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv1"}}}
+JSON
+run bead-pool-all-busy fleet/bead-1 author-state
+kill "$BUSY_RV2" 2>/dev/null || true
+if [ $RC -eq 4 ] && says "all eligible verifier seats busy"; then pass "pool verifier routing retry-exits when all distinct reviewers are busy"; else fail "all-busy reviewer retry failed rc=$RC out=$OUT"; fi
+rm -f "$PROJ/seats/run/verify.verifier-rv2.json"
+mv "$FIX/seats-json.before-pool" "$PROJ/seats/seats.json"; rm -f "$PROJ/seats/pool.json" "$PROJ/seats/staffing.json" "$PROJ/seats/state.json"
 
 phase "installed layout — wheelhouse/crew brief is preferred without contracts/"
 INST_PROJ="$FIX/installed-proj"
@@ -645,6 +702,9 @@ PARTIAL="$VDIR/bead-1.partial.md"
 if [ -s "$PARTIAL" ] && grep -q '## seat tool-call/event log tail' "$PARTIAL" && grep -q 'tool_execution_start' "$PARTIAL" && grep -q 'cargo test' "$PARTIAL"; then
   pass "timeout keeps partial pi output and event-log tail at seats/verdicts/<bead>.partial.md"
 else fail "timeout partial file missing event-log tail or streamed tool output: $(cat "$PARTIAL" 2>/dev/null)"; fi
+if [ ! -e "$RUN_PROJ/seats/run/verify.verifier.json" ]; then
+  pass "timeout path removes verifier live marker"
+else fail "timeout path left verifier live marker: $(cat "$RUN_PROJ/seats/run/verify.verifier.json" 2>/dev/null)"; fi
 rm -f "$PARTIAL"
 RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR WHEELHOUSE_VERIFY_TIMEOUT_MS=1800000 HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-timeout-env fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && says "timed out after 1500ms" && says "last phase: tool bash started"; then
@@ -1421,8 +1481,8 @@ else fail "dot-dot evidence path not refused (exit $RC): $OUT"; fi
 phase "9. canary — can these checks detect a broken verify.ts?"
 # 9a: a verify.ts whose account-distinctness gate never fires
 CAN_A="$FIX/can-a"
-sed 's|if (authorDir === verifierDir) { // distinctness-gate|if (false) { // distinctness-gate|' \
-  "$VERIFY" > "$FIX/can-a-verify.ts"
+cp "$VERIFY" "$FIX/can-a-verify.ts"
+perl -0pi -e 's/const distinct = verifiers\.filter\(\(\[, e\]\) => e\.account\?\.dir && canonicalDir\(e\.account\.dir\) !== authorDir\);/const distinct = verifiers;\/\/ canary disables picker distinctness/; s/if \(authorDir === verifierDir\) \{ \/\/ distinctness-gate/if (false) { \/\/ distinctness-gate/' "$FIX/can-a-verify.ts"
 if cmp -s "$VERIFY" "$FIX/can-a-verify.ts"; then
   fail "canary: could not disarm the distinctness gate — the line no longer matches, so the canary proves nothing"
 else

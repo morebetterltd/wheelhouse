@@ -67,6 +67,8 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
+import { effectiveRoster } from "./roster";
+import { hasPool } from "./pool";
 import { liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -424,10 +426,15 @@ interface OneShotRunResult {
 function runOneShot(
   bin: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number }
+  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; marker?: { seat: string; bead: string } }
 ): Promise<OneShotRunResult> {
   return new Promise((resolve) => {
     const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"] });
+    const markerFile = opts.marker ? path.join(ROOT, "seats", "run", `verify.${opts.marker.seat}.json`) : null;
+    if (markerFile) {
+      fs.mkdirSync(path.dirname(markerFile), { recursive: true });
+      fs.writeFileSync(markerFile, JSON.stringify({ pid: child.pid, bead: opts.marker!.bead, startedAt: new Date().toISOString() }, null, 2) + "\n");
+    }
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -443,6 +450,7 @@ function runOneShot(
       clearTimeout(totalTimer);
       clearTimeout(firstOutputTimer);
       if (noEventTimer) clearTimeout(noEventTimer);
+      if (markerFile) { try { fs.unlinkSync(markerFile); } catch {} }
       resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error });
     };
     const killFor = (code: string, message: string) => {
@@ -717,6 +725,7 @@ interface SeatEntry {
 }
 
 function readRoster(): Record<string, SeatEntry> {
+  if (hasPool(ROOT)) return effectiveRoster(ROOT) as Record<string, SeatEntry>;
   if (!fs.existsSync(ROSTER_FILE)) {
     die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   }
@@ -814,7 +823,14 @@ function authRouteIdentity(name: string, entry: SeatEntry, authFile: string, har
   return authIsIdentity(authFile);
 }
 
-function requireVerifierSeat(explicit: string | undefined): { name: string; entry: SeatEntry } {
+function verifyMarkerLive(seat: string): boolean {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "run", `verify.${seat}.json`), "utf8"));
+    return !!m?.pid && (() => { try { process.kill(Number(m.pid), 0); return true; } catch { return false; } })();
+  } catch { return false; }
+}
+
+function requireVerifierSeat(explicit: string | undefined, authorSeat: string): { name: string; entry: SeatEntry } {
   const roster = readRoster();
   if (explicit) {
     const entry = roster[explicit];
@@ -825,13 +841,13 @@ function requireVerifierSeat(explicit: string | undefined): { name: string; entr
     return { name: explicit, entry };
   }
   const verifiers = Object.entries(roster).filter(([, e]) => e.role === "verifier" && !e.external);
-  if (verifiers.length === 0) {
-    die(`no seat with role "verifier" in seats/seats.json — add one (its account.dir must differ from every author's)`);
-  }
-  if (verifiers.length > 1) {
-    die(`multiple verifier seats (${verifiers.map(([n]) => n).join(", ")}) — name one: verify.ts <bead-id> <branch> <author-seat> <verifier-seat>`);
-  }
-  return { name: verifiers[0][0], entry: verifiers[0][1] };
+  if (verifiers.length === 0) die(`no seat with role "verifier" in seats/seats.json — add one (its account.dir must differ from every author's)`);
+  const authorDir = canonicalDir(accountDirFor(authorSeat));
+  const distinct = verifiers.filter(([, e]) => e.account?.dir && canonicalDir(e.account.dir) !== authorDir);
+  if (distinct.length === 0) die(`verifier seat and author seat "${authorSeat}" resolve to the SAME account directory; waiting for a reviewer on a different subscription. Same directory means same auth.json means same account, and a verdict from the author's own account is not a verdict. Nothing was spawned.`);
+  const free = distinct.find(([n]) => !verifyMarkerLive(n));
+  if (!free) { console.error(`all eligible verifier seats busy (${distinct.map(([n]) => n).join(", ")}) — retry later`); process.exit(4); }
+  return { name: free[0], entry: free[1] };
 }
 
 function beadClaim(beadId: string): string {
@@ -1002,7 +1018,7 @@ async function main(): Promise<void> {
     die(e.message);
   }
 
-  const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg, authorSeat);
   let verifierHarness: ReturnType<typeof harnessNameForSeat>;
   try {
     verifierHarness = harnessNameForSeat(verifierSeat, entry);
@@ -1141,6 +1157,7 @@ async function main(): Promise<void> {
     firstOutputTimeoutMs,
     noEventTimeoutMs,
     maxBuffer: 64 * 1024 * 1024,
+    marker: { seat: verifierSeat, bead: beadId },
   });
   const elapsedMs = Date.now() - startedAt;
   const stdout = res.stdout ?? "";
