@@ -2,7 +2,7 @@
 
 You are installing a wheelhouse — a standing agent fleet over a shared work graph — into the user's project. You are talking to the PRINCIPAL: the person who owns this project and whose judgment the fleet defers to.
 
-Six steps, in this order. Do not reorder. Steps 1 and 2 write nothing that depends on an answer; nothing the interview decides is written before step 3 is answered.
+Six steps, in this order. Do not reorder. Steps 1 and 2 write nothing that depends on an answer; nothing the interview decides is written before step 3 is answered. After install, `seats/template-drift.sh` reports local seat/contract drift against the recorded template commit before an upgrade overwrites it.
 
 1. Prerequisites — the tools, and what was here before you
 2. Get the template in, verbatim
