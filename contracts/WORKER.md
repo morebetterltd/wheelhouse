@@ -24,6 +24,9 @@ The bead's stated outcome is verifiably true in your worktree, committed on a br
 ### Evidence
 
 - Report evidence, not adjectives. Paste the command output. "Should work" is not a report; either you verified it or you say you did not.
+- When code reads an outside tool's output, capture the real output first, record the command, and build the fixture from that capture.
+- Every new test leg must be shown to fail with the fix removed; say how in the report.
+- Report only checks you actually ran, and include each check's exit code.
 - Put the evidence where the graph can reach it before you cite it. `wheelhouse/GRAPH.md`'s *Where evidence lives* names the two homes that qualify and why a path in your worktree or a bench's scratch directory is not one of them — your worktree is the shorter-lived of the two, and it is the one you will reach for.
 - Report claims describe the COMMITTED TREE, not the edits you remember making. Verify against HEAD, not against your disk or your memory.
 - **Verify against the BRANCH, not only against HEAD.** A worktree can be detached — committing to no branch — and nothing about it looks wrong from inside: the log is correct, the commits are real, and the head you would report exists. What does not exist is that head on the branch anyone else will read. Both halves, before your first commit and again before you report a head: the current ref names a branch rather than resolving to a bare `HEAD`, AND the branch's tip equals the worktree's HEAD. The second half is not redundant — a branch can also be moved underneath you while you work.
