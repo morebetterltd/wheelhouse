@@ -49,9 +49,7 @@ fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 
 PROJ="$FIX/project"
 mkdir -p "$PROJ/seats" "$PROJ/contracts"
-cp "$COCKPIT" "$PROJ/seats/cockpit.sh"
-cp "$BRIDGE_GUARD" "$PROJ/seats/bridge-guard.sh"
-cp "$HERE/daemons.sh" "$HERE/supervisor.sh" "$PROJ/seats/"
+selftest_copy_seat_runtime "$PROJ" "$HERE"
 chmod +x "$PROJ/seats/cockpit.sh" "$PROJ/seats/bridge-guard.sh" "$PROJ/seats/daemons.sh" "$PROJ/seats/supervisor.sh"
 cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
