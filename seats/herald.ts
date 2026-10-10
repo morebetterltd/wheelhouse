@@ -626,11 +626,19 @@ function configuredIdleRegex(): RegExp | null {
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
 
+function liveStatusText(paneText: string): string {
+  const plainLines = stripAnsi(paneText).split(/\r?\n/);
+  const prompt = plainLines.findLastIndex((line) => promptLineLooksIdle(line));
+  if (prompt < 0) return plainLines.slice(-12).join("\n");
+  const start = Math.max(0, prompt - 12);
+  return plainLines.slice(start, prompt).join("\n");
+}
+
 function paneTextHasActiveMarkers(paneText: string): boolean {
-  const plain = stripAnsi(paneText);
-  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(plain)
-    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(plain)
-    || /\besc to interrupt\b/i.test(plain);
+  const live = liveStatusText(paneText);
+  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(live)
+    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(live)
+    || /\besc to interrupt\b/i.test(live);
 }
 
 const IDLE_PROMPT_LINE_RE = /^\s*(?:[>❯](?:[\s\u00a0]{8,}[A-Za-z0-9_.:-]+)?|Human:|You:)\s*$/;
@@ -740,7 +748,7 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${pane} inbox=${inboxSize}`); return; }
   const idle = commanderPaneIdleClaude(pane);
   const firstDeferred = state.firstDeferredAtByPane?.[pane] ?? 0;
-  const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && lastCommanderPaneStableForPoke && !lastCommanderPaneHadActiveMarkersForPoke;
+  const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && lastCommanderPaneStableForPoke;
   if (!idle && !escalated) {
     const first = firstDeferred || Date.now();
     state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [pane]: first };
