@@ -11,7 +11,7 @@ fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 ROOT="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/.wheelhouse-worktrees" "$BIN" "$HOME_FIX/.pi-seats-staff"
 printf 'namespace=staff\n' > "$ROOT/wheelhouse/.template-source"
 for e in e1 e2 e3 e4 rv1 rv2; do mkdir -p "$HOME_FIX/.pi-seats-staff/$e"; done
-cp "$HERE/staffing.ts" "$ROOT/seats/staffing.ts"; cp "$HERE/pool.ts" "$ROOT/seats/pool.ts"; cp "$HERE/roster.ts" "$ROOT/seats/roster.ts"; cp "$HERE/fleet-snapshot.ts" "$ROOT/seats/fleet-snapshot.ts"; cp "$HERE/seat-activity.ts" "$ROOT/seats/seat-activity.ts"; cp "$HERE/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"; cp "$HERE/harness.ts" "$ROOT/seats/harness.ts"; cp "$HERE/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"; cp "$HERE/quota.ts" "$ROOT/seats/quota.ts"
+cp "$HERE/staffing.ts" "$ROOT/seats/staffing.ts"; cp "$HERE/jev.ts" "$ROOT/seats/jev.ts"; cp "$HERE/pool.ts" "$ROOT/seats/pool.ts"; cp "$HERE/roster.ts" "$ROOT/seats/roster.ts"; cp "$HERE/fleet-snapshot.ts" "$ROOT/seats/fleet-snapshot.ts"; cp "$HERE/seat-activity.ts" "$ROOT/seats/seat-activity.ts"; cp "$HERE/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"; cp "$HERE/harness.ts" "$ROOT/seats/harness.ts"; cp "$HERE/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"; cp "$HERE/quota.ts" "$ROOT/seats/quota.ts"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"seats":{}}
 JSON
@@ -74,7 +74,7 @@ EOF
 run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && grep -q 'worker-e1 m1' "$ROOT/spawn-models.log" && pass 'G4-15 add-worker places first listed free entry with role model' || fail "add-worker failed rc=$RC out=$OUT"
 run env BD_READY_COUNT=3 bun seats/staffing.ts check
-[ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && grep -q 'reason="nothing to do"' <<<"$OUT" && pass 'G4-15 free worker exists with ready work -> nothing' || fail "free-worker row failed: $OUT"
+[ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && grep -Eq 'reason="(jev skipped: [^"]+; )?nothing to do"' <<<"$OUT" && pass 'G4-15 free worker exists with ready work -> nothing' || fail "free-worker row failed: $OUT"
 READY_IDLE_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e 'import { decide } from "./seats/staffing.ts"; const old="2026-01-01T00:00:00.000Z"; const snap={at:new Date().toISOString(),ready:[{id:"ready-1",title:"Synthetic ready"}],readyCount:1,chainedCount:0,overlapCount:0,reviewBacklog:[],workers:{live:[{name:"worker-e1",busy:false,lastActivityAt:old,entry:"e1"},{name:"worker-e2",busy:false,lastActivityAt:old,entry:"e2"}],idle:2,busy:0},reviewers:{live:[],idle:0,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}}; const pool={root:process.cwd(),entries:{},roles:{workers:{min:1,max:4,entries:["e1","e2"],model:"m"},reviewers:{min:0,max:1,entries:[],model:"r"}},idle_drop_minutes:30}; console.log(JSON.stringify(decide(snap, pool, {version:1,seats:{},rateLimited:{}})));' 2>&1)"; READY_IDLE_RC=$?
 [ $READY_IDLE_RC -eq 0 ] && grep -q '"kind":"nothing"' <<<"$READY_IDLE_OUT" && pass 'G4-15 ready work + idle seat above min -> nothing' || fail "ready-idle drop guard failed rc=$READY_IDLE_RC out=$READY_IDLE_OUT"
 python3 - <<PY
@@ -99,7 +99,7 @@ run bun seats/staffing.ts probe e1 >/dev/null; run env BD_READY_COUNT=1 bun seat
 # G4-25 against the real adapter: fake codex records the JSON-RPC thread/start models.
 REAL="$FIX/real-adapter"; mkdir -p "$REAL/seats/logs" "$REAL/seats/run" "$REAL/contracts" "$REAL/wheelhouse" "$REAL/.wheelhouse-worktrees" "$REAL/bin"
 printf 'namespace=staff\n' > "$REAL/wheelhouse/.template-source"; printf '# Fleet: Worker\n\nfixture brief\n' > "$REAL/contracts/WORKER.md"
-for f in staffing.ts adapter.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts briefs.ts host-budget.ts; do cp "$HERE/$f" "$REAL/seats/$f"; done
+for f in staffing.ts jev.ts adapter.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts briefs.ts host-budget.ts; do cp "$HERE/$f" "$REAL/seats/$f"; done
 cp -R "$HERE/drivers" "$REAL/seats/drivers"
 cp "$ROOT/seats/pool.json" "$REAL/seats/pool.json"
 python3 - <<PY
@@ -247,7 +247,7 @@ git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-unpus
 LOG_LINES=$(wc -l < "$ROOT/seats/logs/staffing.log" | tr -d ' ')
 awk 'NF{line=$0} END{print line}' "$ROOT/seats/logs/staffing.log" | grep -Eq 'decision=.* decider=rule conf=0.00 ready=[0-9]+ chained=[0-9]+ overlap=[0-9]+ backlog=[0-9]+ workers=[0-9]+/[0-9]+\.\.[0-9]+ reviewers=[0-9]+/[0-9]+\.\.[0-9]+ seat=.* entry=.* reason="[^"]+"' && [ "$LOG_LINES" -ge 12 ] && pass 'G4-39/G4-40 decision log has one parseable plain-English line per check' || fail "log shape/count failed lines=$LOG_LINES"
 # no pool touches nothing.
-NOPOOL="$FIX/nopool"; mkdir -p "$NOPOOL/seats" "$NOPOOL/wheelhouse"; for f in staffing.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts; do cp "$HERE/$f" "$NOPOOL/seats/$f"; done; before=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)
+NOPOOL="$FIX/nopool"; mkdir -p "$NOPOOL/seats" "$NOPOOL/wheelhouse"; for f in staffing.ts jev.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts; do cp "$HERE/$f" "$NOPOOL/seats/$f"; done; before=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)
 OUT="$(cd "$NOPOOL" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts check 2>&1)"; RC=$?; after=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)
 [ $RC -eq 0 ] && grep -q 'staffing: no pool (fixed roster)' <<<"$OUT" && [ "$before" = "$after" ] && pass 'no pool exits 0 and touches nothing' || fail "no-pool failed rc=$RC out=$OUT"
 # Canary: removing clamp makes at-max leg fail.
