@@ -98,17 +98,34 @@ function authIsIdentity(authFile: string): boolean {
   const body = fs.readFileSync(authFile, "utf8").replace(/[{}\s]/g, "");
   return body.length > 0;
 }
+function claudeOauthIsIdentity(configDir: string): boolean {
+  const config = path.join(configDir, ".claude.json");
+  if (!fs.existsSync(config)) return false;
+  try {
+    const j = JSON.parse(fs.readFileSync(config, "utf8"));
+    const acct = j?.oauthAccount;
+    if (!acct || typeof acct !== "object") return false;
+    return Object.values(acct).some((v) => typeof v === "string" ? v.trim().length > 0 : v != null);
+  } catch {
+    return false;
+  }
+}
 
-function requireCredential(entry: SeatEntry, seatName: string): string {
+function requireCredential(entry: SeatEntry, seatName: string, harness: HarnessName): string {
   if (!entry.account?.dir) refuse(`verifier seat "${seatName}" has no account.dir in seats/seats.json`);
   const dir = path.resolve(expandTilde(entry.account.dir));
   if (!fs.existsSync(dir)) refuse(`verifier seat directory does not exist: ${dir}`);
   const authFile = path.join(dir, "auth.json");
   const envName = providerEnvName(entry.provider);
   const envReady = entry.account.authRoute === "env" && !!(envName && process.env[envName]);
-  if (!authIsIdentity(authFile) && !envReady) {
+  const oauthReady = entry.account.authRoute !== "env" && harness === "claude-code" && claudeOauthIsIdentity(dir);
+  const fileReady = entry.account.authRoute !== "env" && harness !== "claude-code" && authIsIdentity(authFile);
+  if (!fileReady && !oauthReady && !envReady) {
+    const credentialHint = harness === "claude-code" && entry.account.authRoute !== "env"
+      ? `${path.join(dir, ".claude.json")} has no oauthAccount`
+      : `${authFile} is missing/empty`;
     refuse(
-      `verifier seat "${seatName}" has no resolved credential — ${authFile} is missing/empty` +
+      `verifier seat "${seatName}" has no resolved credential — ${credentialHint}` +
         (envName ? ` and ${envName} is not exported for env-route use` : "")
     );
   }
@@ -416,7 +433,7 @@ function main(): void {
   } catch (e: any) {
     refuse(e.message);
   }
-  const verifierDir = requireCredential(entry, verifierSeat);
+  const verifierDir = requireCredential(entry, verifierSeat, verifierHarness);
   let brief: string;
   try {
     brief = resolveRoleBrief(ROOT, "verifier");
