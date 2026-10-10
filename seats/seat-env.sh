@@ -51,9 +51,16 @@ note() { printf '%s\n' "$*"; }
 # --- arguments ---------------------------------------------------------------
 ns="${1:-}"
 seat="${2:-}"
-root="${3:-}"
+pool_entry=""
+if [ "$seat" = "--pool" ]; then
+  pool_entry="${3:-}"
+  seat="$pool_entry"
+  root="${4:-}"
+else
+  root="${3:-}"
+fi
 if [ -z "$ns" ] || [ -z "$seat" ]; then
-  die "usage: seat-env.sh <namespace> <seat-name> [project-root]"
+  die "usage: seat-env.sh <namespace> <seat-name> [project-root] OR seat-env.sh <namespace> --pool <entry-name> [project-root]"
 fi
 # Each becomes exactly one path segment under $HOME; a separator or a dot-dot
 # in either would silently land the seat somewhere else.
@@ -79,10 +86,11 @@ root="$(cd "$root" && pwd -P)" || die "could not resolve the physical path of $r
 
 seat_root="$HOME/.pi-seats-$ns"
 project_file="$seat_root/.project"
-seat_dir="$seat_root/$seat"
+if [ -n "$pool_entry" ]; then seat_dir="$seat_root/pool/$pool_entry"; else seat_dir="$seat_root/$seat"; fi
 trust_file="$seat_dir/trust.json"
 auth_file="$seat_dir/auth.json"
 roster_file="$root/seats/seats.json"
+pool_file="$root/seats/pool.json"
 account_label=""
 auth_route=""
 harness="pi"
@@ -97,12 +105,23 @@ if command -v node >/dev/null 2>&1; then
 elif command -v bun >/dev/null 2>&1; then
   json_runtime="bun"
 fi
-if [ -f "$roster_file" ] && [ -z "$json_runtime" ]; then
+if { [ -f "$roster_file" ] || [ -f "$pool_file" ]; } && [ -z "$json_runtime" ]; then
   echo "MISSING node-or-bun"
-  echo "        seats/seats.json exists, so seat-env.sh needs node or bun to read the selected harness for this seat"
+  echo "        seats/seats.json or seats/pool.json exists, so seat-env.sh needs node or bun to read the selected harness"
   exit 1
 fi
-if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
+if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
+  harness="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const h = j.entries?.[seat]?.harness ?? "pi";
+      if (["pi", "claude-code", "codex"].includes(h)) process.stdout.write(h);
+      else process.stdout.write(`__INVALID_HARNESS__:${JSON.stringify(h)}`);
+    } catch {}
+  ' "$pool_file" "$seat")"
+elif [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   harness="$($json_runtime -e '
     const fs = require("fs");
     const file = process.argv[1], seat = process.argv[2];
@@ -143,7 +162,17 @@ if [ "$harness" = "codex" ] && ! command -v codex >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
+if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
+  account_label="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const label = j.entries?.[seat]?.account?.label;
+      if (typeof label === "string" && label.length > 0) process.stdout.write(label);
+    } catch {}
+  ' "$pool_file" "$seat")"
+elif [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   account_label="$($json_runtime -e '
     const fs = require("fs");
     const file = process.argv[1], seat = process.argv[2];
@@ -161,7 +190,27 @@ fi
 # but-invalid is a STOP so a typo in the roster is caught here instead of
 # silently ignored.
 harness="pi"
-if [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
+if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
+  harness="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const h = j.entries?.[seat]?.harness;
+      if (typeof h === "string" && h.length > 0) process.stdout.write(h);
+      else process.stdout.write("pi");
+    } catch { process.stdout.write("pi"); }
+  ' "$pool_file" "$seat")"
+  auth_route="$($json_runtime -e '
+    const fs = require("fs");
+    const file = process.argv[1], seat = process.argv[2];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      const route = j.entries?.[seat]?.account?.authRoute;
+      if (typeof route === "string" && route.length > 0) process.stdout.write(route);
+    } catch {}
+  ' "$pool_file" "$seat")"
+elif [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
   harness="$($json_runtime -e '
     const fs = require("fs");
     const file = process.argv[1], seat = process.argv[2];

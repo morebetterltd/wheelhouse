@@ -16,8 +16,8 @@
  * grid of every seat, `q` also returns to overview instead of exiting the
  * tmux pane. Use Ctrl-C to quit.
  *
- * READ-ONLY by contract: this program reads state.json, seats.json, the
- * logs, and seats/verdicts/*.md. It never writes to a FIFO, never touches
+ * READ-ONLY by contract: this program reads state.json, seats.json, optional
+ * pool/staffing records, the logs, and seats/verdicts/*.md. It never writes to a FIFO, never touches
  * state.json, never signals a seat. It is a window, not a hand.
  *
  * Failure states are DISTINCT LINES, never silence: a seat whose process is
@@ -36,12 +36,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { effectiveRoster } from "./roster";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
 const STATE_FILE = path.join(SEATS_DIR, "state.json");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
-const ROSTER_FILE = path.join(SEATS_DIR, "seats.json");
 
 const TAIL_BYTES = 64 * 1024; // how much of each log we look at per frame
 const READY_TTL_MS = 15000; // how often we re-ask bd for ready work
@@ -179,7 +179,7 @@ interface Seat {
 
 /** Roster order first (it is the crew list), then state-only seats. */
 function listSeats(): Seat[] {
-  const roster = readJson(ROSTER_FILE)?.seats ?? {};
+  const roster = effectiveRoster(ROOT);
   const state = readJson(STATE_FILE)?.seats ?? {};
   const names: string[] = [];
   for (const n of Object.keys(roster)) if (!roster[n]?.external) names.push(n);
@@ -641,7 +641,7 @@ function overviewLines(seats: Seat[], width: number): string[] {
 function frame(view: View, rows: number, cols: number): string {
   const seats = listSeats();
   if (seats.length === 0) {
-    return "no seats: neither seats/seats.json nor seats/state.json names any —\ncopy seats/seats.json.example to seats/seats.json to define the roster.\n";
+    return "no seats: neither the effective roster nor seats/state.json names any —\ncopy seats/seats.json.example to seats/seats.json to define the roster.\n";
   }
   let pin = view.pin;
   if (view.follow) {

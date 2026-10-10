@@ -64,8 +64,12 @@ import { execFileSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
+import { effectiveRoster } from "./roster";
+import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
+import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, pidAlive, pidHoldsPath } from "./seat-activity";
+import { QUOTA_RE } from "./quota";
 
 interface SeatDriver {
   readonly name: string;
@@ -368,12 +372,13 @@ interface State {
 }
 
 function parseRosterFile(): Record<string, SeatEntry> {
+  if (hasPool(ROOT)) return effectiveRoster(ROOT) as Record<string, SeatEntry>;
   const raw = JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8"));
   return raw.seats ?? {};
 }
 
 function readRoster(): Record<string, SeatEntry> {
-  if (!fs.existsSync(ROSTER_FILE)) {
+  if (!hasPool(ROOT) && !fs.existsSync(ROSTER_FILE)) {
     die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   }
   const seats = parseRosterFile();
@@ -463,59 +468,6 @@ function writeState(state: State): void {
   } finally {
     releaseStateLock(fd);
   }
-}
-
-function barePidAlive(pid: number | null): boolean {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e: any) {
-    return e.code === "EPERM"; // exists, not ours to signal — still alive
-  }
-}
-
-function openPaths(pid: number): string[] {
-  for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
-    try {
-      return execFileSync(lsof, ["-Fn", "-p", String(pid)], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
-        .split("\n")
-        .filter((l) => l.startsWith("n"))
-        .map((l) => l.slice(1));
-    } catch (e: any) {
-      if (e.code === "ENOENT") continue;
-      return [];
-    }
-  }
-  return [];
-}
-function pidHoldsPath(pid: number, p: string): boolean {
-  const wanted = new Set([p]);
-  try { wanted.add(fs.realpathSync(p)); } catch {}
-  return openPaths(pid).some((n) => wanted.has(n));
-}
-function processStartMs(pid: number): number | null {
-  const out = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout?.trim();
-  if (!out) return null;
-  const ms = Date.parse(out);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-function pidMatchesStartedAt(pid: number, startedAt?: string): boolean {
-  if (!startedAt) return false;
-  const recorded = Date.parse(startedAt);
-  if (!Number.isFinite(recorded)) return false;
-  const live = processStartMs(pid);
-  if (live === null) return false;
-  // ps lstart is second-granularity; allow clock/rendering round-off, but not
-  // pid reuse after reboot or long after the recorded seat launch.
-  return Math.abs(live - recorded) <= 2000;
-}
-
-function pidAlive(pid: number | null, fifo?: string, startedAt?: string): boolean {
-  if (!barePidAlive(pid)) return false;
-  if (!fifo && !startedAt) return true;
-  return (fifo ? pidHoldsPath(pid!, fifo) : false) || pidMatchesStartedAt(pid!, startedAt);
 }
 
 // Same rule as seat-env.sh: pi auto-creates an empty {} auth.json on a first
@@ -746,7 +698,6 @@ async function terminateSpawnedOnly(pid: number): Promise<string> {
 // adapter stamps state.json when a dispatch fails quota-shaped, the floor
 // renders from the stamp AND keeps scanning raw streams for what the
 // adapter never saw.
-const QUOTA_RE = /quota|rate.?limit|429|usage limit|exhaust|out of credits|insufficient.credit/i;
 const CAPACITY_EVENT_TYPES = new Set(["message_end", "turn_end", "agent_end"]);
 
 function textOf(value: unknown): string {
@@ -761,18 +712,6 @@ function textOf(value: unknown): string {
     try { return JSON.stringify(value); } catch { return String(value); }
   }
   return String(value);
-}
-
-function eventTimeIso(ev: any): string | null {
-  for (const key of ["timestamp", "time", "created_at", "createdAt", "at"]) {
-    const v = ev?.[key] ?? ev?.message?.[key];
-    if (typeof v === "number" && Number.isFinite(v)) return new Date(v < 10_000_000_000 ? v * 1000 : v).toISOString();
-    if (typeof v === "string") {
-      const t = Date.parse(v);
-      if (Number.isFinite(t)) return new Date(t).toISOString();
-    }
-  }
-  return null;
 }
 
 function lastMessage(obj: any): any {
@@ -1374,6 +1313,15 @@ function cmdProbe(name: string): void {
   clearCapacityAfterProbe(name);
 }
 
+function cmdProbeEntry(entryName: string): void {
+  const pool = loadPool(ROOT);
+  const role = pool.roles.workers?.entries.includes(entryName) ? "workers" : pool.roles.reviewers?.entries.includes(entryName) ? "reviewers" : null;
+  if (!role) die(`pool entry ${entryName} is not listed by a role`);
+  const entry = seatEntryFor(pool, role, entryName);
+  const seat = `${role === "workers" ? "worker" : "verifier"}-${entryName}`;
+  driverForSeat(seat, entry, "adapter probe --entry").probe(seat, entry);
+}
+
 async function cmdResume(name: string): Promise<void> {
   const rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" in seats/state.json — spawn it instead`);
@@ -1802,22 +1750,6 @@ function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, Proce
   return confirmed.sort((a, b) => a.pid - b.pid);
 }
 
-function lastEvent(log: string): string {
-  try {
-    const r = logLinesFrom(log, 0);
-    for (let i = r.lines.length - 1; i >= 0; i--) {
-      try {
-        const obj = JSON.parse(r.lines[i]);
-        if (obj.type) return obj.type;
-      } catch { /* skip */ }
-    }
-    return r.truncated ? "log too large to parse" : "-";
-  } catch {
-    return "log too large to parse";
-  }
-}
-
-function agentSettledEvent(ev: string): boolean { return ev === "agent_end" || ev === "turn_end" || ev === "agent_settled"; }
 function seatIdleByLog(rec: SeatRecord): boolean { return agentSettledEvent(lastEvent(rec.log)); }
 function isRpcTimeout(e: any, commandType?: string): boolean {
   return e?.code === "WHEELHOUSE_RPC_TIMEOUT" && (commandType === undefined || e?.commandType === commandType);
@@ -2098,6 +2030,10 @@ async function main(): Promise<void> {
       if (rest.length !== 1 && rest.length !== 2) die("usage: adapter.ts spawn <seat> [bead-id] [--base <ref>]");
       return cmdSpawn(validateSeatName(rest[0]), rest[1] !== undefined ? validateSegment("bead id", rest[1]) : undefined, baseRef);
     case "probe":
+      if (rest[0] === "--entry") {
+        if (rest.length !== 2) die("usage: adapter.ts probe --entry <entry>");
+        return cmdProbeEntry(validateSeatName(rest[1]));
+      }
       if (rest.length !== 1) die("usage: adapter.ts probe <seat>");
       return cmdProbe(validateSeatName(rest[0]));
     case "dispatch":

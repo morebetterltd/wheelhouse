@@ -11,7 +11,8 @@ other's identity, and a reviewer seat on its own directory is what makes
 
 The main files here:
 
-- `seats.json.example` — the roster format. Copy it to `seats.json` and edit.
+- `seats.json.example` — the fixed roster format. Copy it to `seats.json` and edit.
+- `pool.json.example` — optional dynamic-staffing pool format. Copy it to `pool.json` only when this install wants workers/reviewers staffed from a subscription pool.
 - `channels.json.example` — declared stakeholder/principal channels. Copy it to `channels.json` and edit.
 - `seat-env.sh` — creates one seat's directory, pre-grants trust for the
   project root, and prints the export line and the one-time credential flow.
@@ -42,6 +43,9 @@ The main files here:
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
+- `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and verifier markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
+- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, alerts}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work and invalid commander panes open/close human needs through `seats/needs.ts` only.
+- `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi
@@ -174,7 +178,11 @@ Any scanned executable named `cargo` or `dotnet` whose first `--contract` line
 has a different lock/cap/re-entry contract is reported as `parity=mismatch` and
 the `--contract` command exits non-zero.
 
-## The roster format
+## The roster and pool formats
+
+With no `seats/pool.json`, `seats.json` is still the full roster and all existing commands behave as before. When `seats/pool.json` exists, its `roles.workers` and/or `roles.reviewers` entries replace fixed `worker` / `verifier` rows from `seats.json`; the adapter, verifier, walker, and worktree cap read the effective roster assembled from the fixed rows plus staffed names like `worker-codex-a` and `verifier-claude-b`.
+
+`bun seats/pool.ts check` validates a pool without reading credential files. It requires each entry to name a harness, provider, offered models, and an `account.dir` under this install's `$HOME/.pi-seats-<namespace>/pool/<entry>` root; `seats/seat-env.sh <namespace> --pool <entry>` provisions that directory. The pool refuses unknown harnesses, unknown keys, missing login folders, shared login directories, commander's login directories, role limits outside the listed entries, role models the entry does not offer, fixed-roster conflicts for the same role, and token-shaped strings. It records login folder paths and auth-route names, never credentials.
 
 `seats.json` is plain JSON with no comments, so its fields are documented
 here instead.
@@ -397,7 +405,10 @@ seat's account — no session saved, nothing to resume — with
 the resolved REVIEWER brief appended to the system prompt, hands it the bead
 claim (via `bd show` when `bd` is reachable, otherwise the verifier reads
 the bead itself) and the branch's tip SHA, and parses the single
-`VERDICT:` line out of the reply.
+`VERDICT:` line out of the reply. With a pool and no explicit verifier,
+`verify.ts` picks the first free non-external verifier identity whose
+canonical `account.dir` differs from the author; staffed reviewer identities
+are named `verifier-<entry>` and are never spawned by staffing.
 
 Unlike a worker seat, the verifier's process cwd is never a bead's
 worktree — but as of this bead it is not the project root either. The
@@ -684,6 +695,9 @@ bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/walk.selftest.sh
 bash seats/prune.selftest.sh
+bash seats/staffing.selftest.sh
+bash seats/staffing-live.selftest.sh
+bash seats/alerts.selftest.sh
 bash seats/never-lose-work.selftest.sh
 bash seats/intent-check.selftest.sh
 bash seats/specimen-leak.selftest.sh
