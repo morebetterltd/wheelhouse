@@ -600,20 +600,45 @@ function targetFromCommanderFile(): { target: string; resolvedBy: ResolvedBy } |
   return null;
 }
 
+function projectNamespace(): string {
+  try {
+    const m = fs.readFileSync(path.join(ROOT, "wheelhouse", ".template-source"), "utf8").match(/^namespace=(.+)$/m);
+    if (m?.[1]?.trim()) return m[1].trim();
+  } catch {}
+  return path.basename(ROOT);
+}
+
 function scanCommanderPane(): { target: string; resolvedBy: ResolvedBy } | null {
   let out = "";
   try { out = tmuxOutput(["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_index}\t#{pane_current_path}"]); }
   catch { return null; }
   const rows = out.split(/\r?\n/).map((line) => line.split("\t")).filter((r) => r.length >= 5 && r[2] === "bridge" && r[3] === "0" && pathUnderRoot(r.slice(4).join("\t")));
   if (rows.length === 0) return null;
-  const want = `wh-${path.basename(ROOT)}`.toLowerCase();
+  const want = `wh-${projectNamespace()}`.toLowerCase();
   const preferred = rows.find((r) => r[1].toLowerCase() === want) ?? rows[0];
   return { target: preferred[0], resolvedBy: "scan" };
 }
 
 function resolveCommanderPane(): CommanderTarget {
   const envTarget = TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
-  const candidate = envTarget ? { target: envTarget, resolvedBy: "env" as ResolvedBy } : (targetFromCommanderFile() ?? scanCommanderPane());
+  if (envTarget) {
+    const next = validateTarget(envTarget, "env");
+    writeTarget(next);
+    return next;
+  }
+  const fileCandidate = targetFromCommanderFile();
+  if (fileCandidate) {
+    const fileTarget = validateTarget(fileCandidate.target, fileCandidate.resolvedBy);
+    if (fileTarget.status === "ok") { writeTarget(fileTarget); return fileTarget; }
+    const scanned = scanCommanderPane();
+    if (scanned) {
+      const scanTarget = validateTarget(scanned.target, scanned.resolvedBy);
+      if (scanTarget.status === "ok") { writeTarget(scanTarget); return scanTarget; }
+    }
+    writeTarget(fileTarget);
+    return fileTarget;
+  }
+  const candidate = scanCommanderPane();
   const next = candidate ? validateTarget(candidate.target, candidate.resolvedBy) : { target: "", resolvedBy: "scan" as ResolvedBy, status: "missing" as TargetStatus, reason: "missing", checkedAt: new Date().toISOString() };
   writeTarget(next);
   return next;
