@@ -8,6 +8,7 @@ import { fleetSnapshot, freeWorkers, freeReviewers, readyWorkNobodyOnIt, type Sn
 import { pidAlive } from "./seat-activity";
 import { removeSeatWorktree } from "./seat-worktree";
 import { QUOTA_RE } from "./quota";
+import { acquirePidLock, releasePidLock } from "./lock";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
@@ -24,17 +25,8 @@ function writeJsonAtomic(file: string, value: any): void { fs.mkdirSync(path.dir
 function emptyStaffing(): StaffingFile { return { version: 1, seats: {}, rateLimited: {} }; }
 function readStaffing(root = ROOT): StaffingFile { const v = readJson(staffingPath(root)); return v && v.version === 1 ? { version: 1, seats: v.seats ?? {}, rateLimited: v.rateLimited ?? {}, lastCheck: v.lastCheck } : emptyStaffing(); }
 function writeStaffing(root: string, s: StaffingFile) { writeJsonAtomic(staffingPath(root), s); }
-function acquireLock(): number | null {
-  fs.mkdirSync(RUN_DIR, { recursive: true });
-  try { const fd = fs.openSync(LOCK_FILE, "wx", 0o600); fs.writeFileSync(fd, `${process.pid}\n`); return fd; }
-  catch (e: any) {
-    if (e?.code !== "EEXIST") throw e;
-    const owner = Number((fs.existsSync(LOCK_FILE) ? fs.readFileSync(LOCK_FILE, "utf8") : "").trim());
-    if (owner && !pidAlive(owner)) { try { fs.rmSync(LOCK_FILE, { force: true }); return acquireLock(); } catch {} }
-    return null;
-  }
-}
-function releaseLock(fd: number | null) { if (fd === null) return; try { fs.closeSync(fd); } catch {} try { fs.rmSync(LOCK_FILE, { force: true }); } catch {} }
+function acquireLock(): number | null { return acquirePidLock(LOCK_FILE); }
+function releaseLock(fd: number | null) { releasePidLock(LOCK_FILE, fd); }
 function canon(p?: string): string | null { if (!p) return null; const x = p.startsWith("~/") ? path.join(process.env.HOME ?? "", p.slice(2)) : p; try { return fs.realpathSync(x); } catch { return path.resolve(x); } }
 function occupiedEntries(root: string, staffing: StaffingFile): Set<string> {
   const out = new Set<string>();
