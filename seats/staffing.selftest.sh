@@ -216,6 +216,20 @@ MARKER="$ROOT/seats/run/verify.verifier-rv1.json"; mkdir -p "$(dirname "$MARKER"
 run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
 kill "$MPID0" 2>/dev/null || true; rm -f "$MARKER"
 [ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=verifier-rv2' <<<"$OUT" && pass 'G4-19 review backlog with no eligible free reviewer adds next reviewer' || fail "no eligible reviewer backlog failed: $OUT"
+UNIT_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e '
+import { decide } from "./seats/staffing.ts";
+const snap={at:"now",ready:[],readyCount:0,chainedCount:0,overlapCount:0,reviewBacklog:[{id:"review-bead",title:"Review",authorSeat:"worker-fixed",authorAccountDir:"/same"}],workers:{live:[],idle:0,busy:0},reviewers:{live:[{name:"verifier-fixed",entry:null,accountDir:"/same",busy:false}],idle:1,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}};
+const pool={version:1,idle_drop_minutes:30,entries:{rv2:{harness:"codex",provider:"openai",models:["vr2"],account:{dir:"/other",authRoute:"env"}}},roles:{reviewers:{min:0,max:2,entries:["rv2"],model:"vr2"},workers:{min:0,max:1,entries:[],model:"m"}}};
+const staffing={version:1,seats:{}};
+console.log(JSON.stringify(decide(snap, pool, staffing)));
+')" && grep -q '"kind":"add-reviewer"' <<<"$UNIT_OUT" && pass 'G4-35 decide counts backlog when only free reviewer shares author subscription' || fail "G4-35 decide path failed: $UNIT_OUT"
+UNIT_DROP="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e '
+import { decide } from "./seats/staffing.ts";
+const snap={at:"now",ready:[],readyCount:0,chainedCount:0,overlapCount:0,reviewBacklog:[],workers:{live:[],idle:0,busy:0},reviewers:{live:[{name:"verifier-rv1",entry:"rv1",accountDir:"/rv1",busy:false}],idle:1,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}};
+const pool={version:1,idle_drop_minutes:0,entries:{rv1:{harness:"codex",provider:"openai",models:["vr"],account:{dir:"/rv1",authRoute:"env"}}},roles:{reviewers:{min:0,max:2,entries:["rv1"],model:"vr"},workers:{min:0,max:1,entries:[],model:"m"}}};
+const staffing={version:1,seats:{"verifier-rv1":{role:"verifier",entry:"rv1",addedAt:"2026-01-01T00:00:00Z"}}};
+console.log(JSON.stringify(decide(snap, pool, staffing)));
+')" && grep -q '"kind":"drop-seat"' <<<"$UNIT_DROP" && grep -q '"role":"reviewers"' <<<"$UNIT_DROP" && pass 'G4-19 decide path drops idle reviewer above minimum' || fail "idle reviewer decide path failed: $UNIT_DROP"
 MARKER="$ROOT/seats/run/verify.verifier-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID=$!; printf '{"pid":%s,"bead":"review-bead"}\n' "$MPID" > "$MARKER"
 run env BD_READY_COUNT=0 bun seats/staffing.ts drop verifier-rv1
 [ $RC -eq 0 ] && grep -q 'drop refused: verifier-rv1 is busy' <<<"$OUT" && kill "$MPID" 2>/dev/null && rm -f "$MARKER" && pass 'G4-19 reviewer with live verify marker is not dropped' || { kill "$MPID" 2>/dev/null || true; fail "busy reviewer drop failed: $OUT"; }

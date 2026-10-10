@@ -545,27 +545,48 @@ python3 - <<PY
 import json, pathlib
 p=pathlib.Path('$PROJ/seats/seats.json'); j=json.load(open(p)); j['seats'].pop('verifier', None); p.write_text(json.dumps(j, indent=2))
 PY
-mkdir -p "$HOME_FIX/.pi-seats-proj/pool/rv2"; printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv2/auth.json"
+mkdir -p "$HOME_FIX/.pi-seats-proj/pool/rv1" "$HOME_FIX/.pi-seats-proj/pool/rv2"
+printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv1/auth.json"
+printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv2/auth.json"
 cat > "$PROJ/seats/pool.json" <<'JSON'
-{"version":1,"entries":{"rv2":{"harness":"pi","provider":"openai","models":["stub-model-rv2"],"account":{"dir":"~/.pi-seats-proj/pool/rv2","authRoute":"oauth"}}},"roles":{"reviewers":{"min":0,"max":1,"entries":["rv2"],"model":"stub-model-rv2"}}}
+{"version":1,"entries":{"rv1":{"harness":"pi","provider":"openai","models":["stub-model-rv1"],"account":{"dir":"~/.pi-seats-proj/pool/rv1","authRoute":"oauth"}},"rv2":{"harness":"pi","provider":"openai","models":["stub-model-rv2"],"account":{"dir":"~/.pi-seats-proj/pool/rv2","authRoute":"oauth"}}},"roles":{"reviewers":{"min":0,"max":2,"entries":["rv1","rv2"],"model":{"rv1":"stub-model-rv1","rv2":"stub-model-rv2"}}}}
 JSON
 cat > "$PROJ/seats/staffing.json" <<'JSON'
-{"version":1,"seats":{"verifier-rv2":{"role":"verifier","entry":"rv2","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}
+{"version":1,"seats":{"verifier-rv1":{"role":"verifier","entry":"rv1","addedAt":"2026-01-01T00:00:00Z"},"verifier-rv2":{"role":"verifier","entry":"rv2","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}
+JSON
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv1"}}}
 JSON
 cat > "$REPLY" <<EOF
 Reviewer pool routing fixture.
 VERDICT: APPROVE
 EOF
 RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-proj/pool/rv2/argv.json"
-run bead-pool-route fleet/bead-1 worker-1
-if [ $RC -eq 0 ] && [ -f "$VARGV" ] && grep -q 'stub-model-rv2' "$VARGV"; then pass "pool verifier routing picks distinct free staffed reviewer with role model"; else fail "pool verifier route failed rc=$RC out=$OUT argv=$(cat "$VARGV" 2>/dev/null)"; fi
-rm -f "$VARGV"
+run bead-pool-route fleet/bead-1 author-state
+if [ $RC -eq 0 ] && [ -f "$VARGV" ] && grep -q 'stub-model-rv2' "$VARGV" && [ ! -f "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json" ]; then pass "pool verifier routing skips staffed reviewer sharing author subscription and picks the other"; else fail "pool verifier route failed rc=$RC out=$OUT rv1=$(cat "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json" 2>/dev/null) rv2=$(cat "$VARGV" 2>/dev/null)"; fi
+rm -f "$VARGV" "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json"
+cat > "$PROJ/seats/pool.json" <<'JSON'
+{"version":1,"entries":{"rv2":{"harness":"pi","provider":"openai","models":["stub-model-rv2"],"account":{"dir":"~/.pi-seats-proj/pool/rv2","authRoute":"oauth"}}},"roles":{"reviewers":{"min":0,"max":1,"entries":["rv2"],"model":"stub-model-rv2"}}}
+JSON
+cat > "$PROJ/seats/staffing.json" <<'JSON'
+{"version":1,"seats":{"verifier-rv2":{"role":"verifier","entry":"rv2","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}
+JSON
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv2"}}}
+JSON
+run bead-pool-all-share fleet/bead-1 author-state
+if [ $RC -ne 0 ] && says "SAME account directory" && says "waiting for a reviewer"; then pass "pool verifier routing STOPs with waiting wording when every reviewer shares author subscription"; else fail "all-shared reviewer STOP failed rc=$RC out=$OUT"; fi
+run bead-pool-explicit-same fleet/bead-1 author-state verifier-rv2
+if [ $RC -eq 1 ] && says "SAME account directory"; then pass "pool-present explicit verifier still runs the disk distinctness STOP before spawn"; else fail "pool explicit distinctness STOP failed rc=$RC out=$OUT"; fi
 mkdir -p "$PROJ/seats/run"; (sleep 60) & BUSY_RV2=$!; printf '{"pid":%s,"bead":"other"}\n' "$BUSY_RV2" > "$PROJ/seats/run/verify.verifier-rv2.json"
-run bead-pool-all-busy fleet/bead-1 worker-1
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv1"}}}
+JSON
+run bead-pool-all-busy fleet/bead-1 author-state
 kill "$BUSY_RV2" 2>/dev/null || true
 if [ $RC -eq 4 ] && says "all eligible verifier seats busy"; then pass "pool verifier routing retry-exits when all distinct reviewers are busy"; else fail "all-busy reviewer retry failed rc=$RC out=$OUT"; fi
 rm -f "$PROJ/seats/run/verify.verifier-rv2.json"
-mv "$FIX/seats-json.before-pool" "$PROJ/seats/seats.json"; rm -f "$PROJ/seats/pool.json" "$PROJ/seats/staffing.json"
+mv "$FIX/seats-json.before-pool" "$PROJ/seats/seats.json"; rm -f "$PROJ/seats/pool.json" "$PROJ/seats/staffing.json" "$PROJ/seats/state.json"
 
 phase "installed layout — wheelhouse/crew brief is preferred without contracts/"
 INST_PROJ="$FIX/installed-proj"
