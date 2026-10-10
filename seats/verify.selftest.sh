@@ -483,36 +483,36 @@ core_worktree_snapshot() { local out rc; out="$(git -C "$1" config --local --get
 run() {   # runs verify.ts in the fixture; args pass through
   # BEADS_ACTOR unset on purpose: the dispatcher must set it in the spawned
   # verifier's own env by construction, not forward whatever this shell has.
-  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" \
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
 run_without_default_push() {
-  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SUPPRESS_DEFAULT_PUSH=1 \
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SUPPRESS_DEFAULT_PUSH=1 \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
 run_stream() {  # $1 = JSONL stream file, remaining args pass through
   local stream="$1"
   shift
-  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STREAM_FILE="$stream" \
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STREAM_FILE="$stream" \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
 run_source_check() {  # $1 = bd-show file, remaining args pass through
   local bdfile="$1"
   shift
-  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_BD_SHOW_FILE="$bdfile" STUB_SOURCE_CHECK=1 \
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_BD_SHOW_FILE="$bdfile" STUB_SOURCE_CHECK=1 \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
 run_runtime_grep_check() {
-  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_RUNTIME_GREP_CHECK=1 \
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_RUNTIME_GREP_CHECK=1 \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
 run_bench_check() {  # args pass through to verify.ts
-  OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_RUN_BENCH=1 \
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_RUN_BENCH=1 \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
@@ -637,7 +637,7 @@ if grep -q 'Read-only source snapshots' "$PROJ/seats/verdicts/bead-source.md" 2>
 else fail "source snapshots: verdict record did not name source snapshot"; fi
 
 phase "0c. timeout — last phase and partial verifier output are retained"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)" || RC=$?
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && says "timed out after 1500ms" && says "elapsed" && says "last phase: tool bash started" && says "partial output:"; then
   pass "timeout STOP names elapsed time, last tool/phase, and partial output path"
 else fail "timeout STOP missing phase/elapsed/partial detail (exit $RC): $OUT"; fi
@@ -646,7 +646,12 @@ if [ -s "$PARTIAL" ] && grep -q '## seat tool-call/event log tail' "$PARTIAL" &&
   pass "timeout keeps partial pi output and event-log tail at seats/verdicts/<bead>.partial.md"
 else fail "timeout partial file missing event-log tail or streamed tool output: $(cat "$PARTIAL" 2>/dev/null)"; fi
 rm -f "$PARTIAL"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL_AFTER_TOOL_END=1 bun "$RUN_PROJ/seats/verify.ts" bead-stalled fleet/bead-1 worker-1 verifier --timeout-ms 5000 --no-event-timeout-ms 300 2>&1)"; RC=$?
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR WHEELHOUSE_VERIFY_TIMEOUT_MS=1800000 HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-timeout-env fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)" || RC=$?
+if [ $RC -eq 1 ] && says "timed out after 1500ms" && says "last phase: tool bash started"; then
+  pass "explicit --timeout-ms beats WHEELHOUSE_VERIFY_TIMEOUT_MS for phase 0c"
+else fail "explicit timeout did not beat WHEELHOUSE_VERIFY_TIMEOUT_MS (exit $RC): $OUT"; fi
+rm -f "$VDIR/bead-timeout-env.partial.md"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL_AFTER_TOOL_END=1 bun "$RUN_PROJ/seats/verify.ts" bead-stalled fleet/bead-1 worker-1 verifier --timeout-ms 5000 --no-event-timeout-ms 300 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && says "model stalled after 300ms" && says "last event: tool_execution_end" && says "no-event watchdog" && says "partial output:"; then
   pass "no-event watchdog STOPs a verifier that goes silent after a tool event"
 else fail "no-event watchdog did not stop the post-tool stall with last event detail (exit $RC): $OUT"; fi
@@ -659,11 +664,11 @@ cat > "$REPLY" <<EOF
 Slow selftest produced output until it finished.
 VERDICT: APPROVE
 EOF
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SLOW_TOOL_OUTPUT=1 bun "$RUN_PROJ/seats/verify.ts" bead-slow-tool fleet/bead-1 worker-1 verifier --timeout-ms 5000 --no-event-timeout-ms 250 2>&1)"; RC=$?
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SLOW_TOOL_OUTPUT=1 bun "$RUN_PROJ/seats/verify.ts" bead-slow-tool fleet/bead-1 worker-1 verifier --timeout-ms 5000 --no-event-timeout-ms 250 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "no-event watchdog does not trip while a long-running tool keeps streaming output"
 else fail "no-event watchdog tripped on a still-streaming tool (exit $RC): $OUT"; fi
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$RUN_PROJ/seats/verify.ts" bead-silent fleet/bead-1 worker-1 verifier --timeout-ms 5000 --first-output-timeout-ms 300 2>&1)"; RC=$?
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$RUN_PROJ/seats/verify.ts" bead-silent fleet/bead-1 worker-1 verifier --timeout-ms 5000 --first-output-timeout-ms 300 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && says "verifier emitted no stdout/stderr within 300ms" && says "first-output deadline" && says "--first-output-timeout-ms"; then
   pass "silent verifier stops on the first-output deadline with an actionable reason"
 else fail "silent verifier did not stop on first-output deadline (exit $RC): $OUT"; fi
@@ -729,7 +734,7 @@ cat > "$REPLY" <<EOF
 Checked readonly bd shim.
 VERDICT: APPROVE
 EOF
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_READONLY_CHECK=1 STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-bd-ro fleet/bead-1 worker-1 2>&1)" || RC=$?
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_READONLY_CHECK=1 STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-bd-ro fleet/bead-1 worker-1 2>&1)" || RC=$?
 BD_RO_CHECK="${VARGV%argv.json}bd-readonly-check.json"
 if [ $RC -eq 0 ] && node - "$BD_RO_CHECK" <<'NODE'
 const fs = require('fs');
@@ -803,7 +808,7 @@ Attempted canonical checkout write; dispatcher should pin git to scratch.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CANONICAL_WRITE_REPO="$PROJ" \
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CANONICAL_WRITE_REPO="$PROJ" \
   bun "$RUN_PROJ/seats/verify.ts" bead-canonical fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
 ATTEMPT="$HOME_FIX/.pi-seats-alpha/verifier/canonical-write-attempt.txt"
 if [ $RC -eq 0 ] && grep -q 'canonical dirty' "$PROJ/canonical-guard.txt" && grep -q "cwd=.*wheelhouse-verify" "$ATTEMPT" 2>/dev/null && grep -q "GIT_WORK_TREE=$" "$ATTEMPT" 2>/dev/null; then
@@ -817,7 +822,7 @@ Ran git init in a fixture directory; dispatcher must not leak GIT_DIR/GIT_WORK_T
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_GIT_INIT_REPO="$PROJ" \
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_GIT_INIT_REPO="$PROJ" \
   bun "$RUN_PROJ/seats/verify.ts" bead-git-init fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
 GIT_INIT_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/git-init-check.json"
 if [ $RC -eq 0 ] && grep -q '"before": ""' "$GIT_INIT_CHECK" 2>/dev/null \
@@ -861,7 +866,7 @@ Checked the pinned tip before considering the branch move.
 VERDICT: APPROVE — at pinned tip __PINNED__; branch has since moved to __MOVED__ (1 commits appended, history unrewritten)
 PUSH: NOT CONSIDERED — branch moved; re-verify at __MOVED__ before publish
 EOF
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_MOVE_BRANCH_REPO="$MOVE_PROJ" STUB_MOVE_BRANCH=fleet/bead-1 \
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_MOVE_BRANCH_REPO="$MOVE_PROJ" STUB_MOVE_BRANCH=fleet/bead-1 \
   bun "$RUN_PROJ/seats/verify.ts" bead-move fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
 MOVE_TIP="$(git -C "$MOVE_PROJ" rev-parse fleet/bead-1)"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && says "at pinned tip $MOVE_PIN" && says "branch has since moved to $MOVE_TIP"; then
@@ -886,7 +891,7 @@ cat > "$REPLY" <<'EOF'
 Env-route verifier checked.
 VERDICT: APPROVE
 EOF
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" OPENAI_API_KEY=fixture-key bun "$RUN_PROJ/seats/verify.ts" bead-env fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" OPENAI_API_KEY=fixture-key bun "$RUN_PROJ/seats/verify.ts" bead-env fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then pass "account.authRoute=env verifier runs with exported provider env var and no auth.json"
 else fail "account.authRoute=env verifier was refused (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
@@ -909,7 +914,7 @@ LOCK="$FIX/verify-budget.lock"
 perl -MFcntl=:flock -e 'open(my $fh, ">>", $ARGV[0]) or die $!; flock($fh, LOCK_EX) or die $!; sleep 10' "$LOCK" &
 LOCK_PID=$!
 sleep 0.2
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" WHEELHOUSE_BUILD_LOCK="$LOCK" bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 2>&1)" || RC=$?
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" WHEELHOUSE_BUILD_LOCK="$LOCK" bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 2>&1)" || RC=$?
 kill "$LOCK_PID" 2>/dev/null || true
 wait "$LOCK_PID" 2>/dev/null || true
 if [ $RC -eq 1 ] && says "host build lock is held by another bead" && says "timeout-ms is not spent queued"; then
@@ -1270,7 +1275,7 @@ CLAUDE_ID_PROJ="$FIX/claude-identity-stop"
 build_proj "$CLAUDE_ID_PROJ" claudeid "$VERIFY"
 bun -e "const fs=require('fs'); const p='$CLAUDE_ID_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.account.authRoute='oauth'; fs.rmSync('$HOME_FIX/.pi-seats-claudeid/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
 RUN_PROJ="$CLAUDE_ID_PROJ"; VDIR="$CLAUDE_ID_PROJ/seats/verdicts"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-claude-id fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-claude-id fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && says "no identity" && says "CLAUDE_CONFIG_DIR" && says "claude" && ! says "PI_CODING_AGENT_DIR"; then
   pass "empty claude-code verifier dir STOPs with Claude Code login wording"
 else fail "identity-less claude-code verifier not refused with Claude wording (exit $RC): $OUT"; fi
@@ -1494,7 +1499,7 @@ build_proj "$CORE_GUARD_PROJ" coreguard "$VERIFY"
 printf 'Core worktree restore guard checked.\nVERDICT: APPROVE\n' > "$REPLY"
 git -C "$CORE_GUARD_PROJ" config --local core.worktree "$CORE_GUARD_PROJ"
 CORE_GUARD_BEFORE="$(core_worktree_snapshot "$CORE_GUARD_PROJ")"
-OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLOBBER_CORE_WORKTREE_REPO="$CORE_GUARD_PROJ" bun "$CORE_GUARD_PROJ/seats/verify.ts" bead-core-guard fleet/bead-1 worker-1 verifier 2>&1)"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLOBBER_CORE_WORKTREE_REPO="$CORE_GUARD_PROJ" bun "$CORE_GUARD_PROJ/seats/verify.ts" bead-core-guard fleet/bead-1 worker-1 verifier 2>&1)"
 RC=$?
 CORE_GUARD_CLOBBER="$HOME_FIX/.pi-seats-coreguard/verifier/core-worktree-clobber.txt"
 if [ $RC -eq 0 ] && [ "$(core_worktree_snapshot "$CORE_GUARD_PROJ")" = "$CORE_GUARD_BEFORE" ]; then
@@ -1549,9 +1554,9 @@ else fail "the live worktree was swept even though its owner pid is still alive"
 
 CONCURRENT_OUT_A="$FIX/concurrent-verify-a.out"
 CONCURRENT_OUT_B="$FIX/concurrent-verify-b.out"
-(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$CONCURRENT_OUT_A" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$CONCURRENT_OUT_A" 2>&1) &
 CONCURRENT_PID_A=$!
-(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$CONCURRENT_OUT_B" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$CONCURRENT_OUT_B" 2>&1) &
 CONCURRENT_PID_B=$!
 CONCURRENT_DIRS=""
 for _ in $(seq 1 100); do
@@ -1596,7 +1601,7 @@ KILL_SHA_BRANCH="89abcdef0123456789abcdef0123456789abcdef"
 git -C "$KILL_PROJ" branch "$KILL_SHA_BRANCH" HEAD >/dev/null 2>&1
 OUT_FILE="$FIX/killed-verify.out"
 KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
-(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$OUT_FILE" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$OUT_FILE" 2>&1) &
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
 for _ in $(seq 1 100); do
@@ -1628,7 +1633,7 @@ signal_cleanup_case() {
   build_proj "$sig_proj" "$ns" "$VERIFY"
   git -C "$sig_proj" config --local core.worktree "$sig_proj"
   before="$(core_worktree_snapshot "$sig_proj")"
-  (env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 STUB_CLOBBER_CORE_WORKTREE_REPO="$sig_proj" bun "$sig_proj/seats/verify.ts" "bead-$ns" fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$out_file" 2>&1) &
+  (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 STUB_CLOBBER_CORE_WORKTREE_REPO="$sig_proj" bun "$sig_proj/seats/verify.ts" "bead-$ns" fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$out_file" 2>&1) &
   local dispatcher_pid=$!
   dir=""
   for _ in $(seq 1 100); do

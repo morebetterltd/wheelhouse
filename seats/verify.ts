@@ -988,9 +988,9 @@ async function main(): Promise<void> {
     die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--no-event-timeout-ms <ms>]");
   }
   setVerifierGateBead(beadId);
-  const timeoutMs = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || timeoutArg || DEFAULT_TIMEOUT_MS);
-  const firstOutputTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || firstOutputTimeoutArg || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
-  const noEventTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS || noEventTimeoutArg || DEFAULT_NO_EVENT_TIMEOUT_MS);
+  const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
+  const firstOutputTimeoutMs = Number(firstOutputTimeoutArg || process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
+  const noEventTimeoutMs = Number(noEventTimeoutArg || process.env.WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS || DEFAULT_NO_EVENT_TIMEOUT_MS);
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
   if (verifierArg) validateSegment("seat name", verifierArg);
