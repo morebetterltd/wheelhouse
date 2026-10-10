@@ -688,11 +688,18 @@ cat > "$REPLY" <<'EOF'
 Read the mounted source snapshot and confirmed writes fail.
 VERDICT: APPROVE
 EOF
-run_source_check "$BD_SOURCE" bead-source fleet/bead-1 worker-1 verifier
+VERIFY_RO_TMP="$FIX/verify-ro-tmp"; mkdir -p "$VERIFY_RO_TMP"
+TMPDIR="$VERIFY_RO_TMP" run_source_check "$BD_SOURCE" bead-source fleet/bead-1 worker-1 verifier
 SOURCE_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/source-check.txt"
 if [ $RC -eq 0 ] && grep -q '"readable": true' "$SOURCE_CHECK" 2>/dev/null && grep -q '"writeFailed": true' "$SOURCE_CHECK" 2>/dev/null; then
   pass "source snapshots: verifier can read the bead-declared sibling and writes to the mounted copy fail"
 else fail "source snapshots: read/write assertion failed (exit $RC): $OUT check=$(cat "$SOURCE_CHECK" 2>/dev/null)"; fi
+if ! find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -exec test ! -w '{}' \; -print -quit | grep -q .; then
+  pass "source snapshots: cleanup restores/removes read-only snapshot trees"
+else
+  chmod -R u+w "$VERIFY_RO_TMP" 2>/dev/null || true
+  fail "source snapshots: read-only snapshot tree left under TMPDIR: $(find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -print 2>/dev/null | head -5)"
+fi
 if grep -q '"undeclaredAbsent": true' "$SOURCE_CHECK" 2>/dev/null; then
   pass "source snapshots: undeclared sibling source is not mounted or named"
 else fail "source snapshots: undeclared sibling source was reachable or named: $(cat "$SOURCE_CHECK" 2>/dev/null)"; fi
