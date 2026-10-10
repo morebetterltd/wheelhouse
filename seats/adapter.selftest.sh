@@ -799,10 +799,23 @@ RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" NO_COLOR=1 bun
 if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
   pass "capacity: floor row surfaces PARKED/QUOTA and the re-probe command"
 else fail "capacity: floor did not surface PARKED/QUOTA (exit $RC): $OUT"; fi
+node - "$RUN_PROJ/seats/run/fleet-snapshot.json" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+const j = {
+  at: new Date().toISOString(),
+  intervalMs: 60000,
+  snapshot: { readyCount: 0, reviewBacklog: [], workers: { live: [{ name: 'worker-1' }], rostered: 1, idle: 0, busy: 1 } },
+  herald: {}, inbox: {}, needs: {}, capacity: { seats: ['worker-1'] }, disk: {}, github: {}, drift: {},
+  alerts: { 'capacity-events': { active: true, since: new Date().toISOString(), lastFiredAt: new Date().toISOString() } },
+};
+fs.mkdirSync(require('path').dirname(file), { recursive: true });
+fs.writeFileSync(file, JSON.stringify(j, null, 2) + '\n');
+NODE
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$RUN_PROJ/seats/fleet-gate.sh" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && says "PARKED/QUOTA" && says "bun seats/adapter.ts probe worker-1"; then
-  pass "capacity: fleet-gate surfaces PARKED/QUOTA and the re-probe command"
-else fail "capacity: fleet-gate did not surface PARKED/QUOTA (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "alerts: capacity-events"; then
+  pass "capacity: fleet-gate snapshot reader surfaces the capacity-events alert name"
+else fail "capacity: fleet-gate did not surface capacity-events from snapshot (exit $RC): $OUT"; fi
 run probe worker-1
 if [ $RC -eq 0 ] && says "OK" && says "capacity cleared at"; then
   pass "capacity: successful probe records capacity cleared time"

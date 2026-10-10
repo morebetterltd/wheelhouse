@@ -624,19 +624,11 @@ double-resume refusal) and `lastBead`, never `sessionId`. `verify.ts`
 never reads `sessionId` at all — author/verifier distinctness there is
 `account.dir`, not the session.
 
-## Fleet gate hook
+## Fleet gate reader
 
-`seats/fleet-gate.sh` is the commander `UserPromptSubmit` hook. It prints the fleet liveness line, ready/in-progress counts, waiting needs, unread human answers, capacity events, and (when configured and available) open GitHub issues that no open/in-progress/deferred bead body traces yet. The GitHub check is read-only, uses `gh issue list`, degrades to silence when `gh`, the repo, or the network is unavailable, and is configured from install-owned keys in `wheelhouse/.template-source`:
+`seats/fleet-gate.sh` is optional. New installs do not wire it by default because the Dispatch Office herald and `seats/alerts.ts` now do the action detection off the prompt path and poke only when an alert changes. If an install chooses to keep a `UserPromptSubmit` status line, this script is a sub-second reader: it opens only `seats/run/fleet-snapshot.json`, prints one line with live worker seats, ready count, review backlog count, and active alert names, and exits 0. It does not call `bd`, `gh`, `adapter.ts status`, or scan herald logs.
 
-| Key | Values | Default |
-| --- | --- | --- |
-| `github-issue-watch` | Set to `off`, `false`, `disabled`, `none`, or `0` to disable the GitHub issue watch; any other value leaves it enabled. | Empty or absent: enabled. |
-| `github-issue-repos` | Comma- or semicolon-separated GitHub `owner/repo` names to watch. | Empty or absent: derive one repo from the product repo's `origin` remote. |
-| `github-issue-include-labels` | Comma- or semicolon-separated labels; when set, an issue is reported only if it has at least one listed label. | Empty or absent: no include-label filter. |
-| `github-issue-exclude-labels` | Comma- or semicolon-separated labels; an issue with any listed label is skipped. | Empty or absent: no exclude-label filter. |
-| `github-issue-author` | A GitHub login; when set, only issues opened by that author are reported. | Empty or absent: any author. |
-
-When the line says `GITHUB ISSUE(S) NOT ON THE BOARD`, triage those issues into beads with a `Trace: <issue url>` line before starting commander chores.
+Until the herald writes the first snapshot it prints `🚢 FLEET: no snapshot yet — run seats/cockpit.sh`. If the snapshot is older than three alert intervals, it appends `snapshot <age>s old — is the herald running?`. GitHub issue, inbox, capacity, low-disk, and pane-validity checks live in `seats/alerts.ts`; active conditions appear here only by alert name from the snapshot.
 
 ## Intent gate
 
