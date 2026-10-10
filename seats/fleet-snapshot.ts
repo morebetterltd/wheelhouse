@@ -35,15 +35,19 @@ function canonicalDir(raw: string | undefined): string | null { if (!raw) return
 
 function allIssues(root: string): any[] { return normalizeList(runBd(root, ["list", "--json", "--limit", "5000"])); }
 function readyIssues(root: string): any[] { return normalizeList(runBd(root, ["ready", "--json"])); }
-// Measured for bd 1.2.2: `bd show <id> --json` carries dependency/blocker fields in JSON; this parser accepts blocks/dependents/dependencies names from that output and from `bd list --json` rows.
-function dependentIds(row: any): string[] {
-  const xs = row?.blocks ?? row?.dependents ?? row?.blocked_by_me ?? row?.children ?? [];
-  return Array.isArray(xs) ? xs.map((v) => typeof v === "string" ? v : idOf(v)).filter(Boolean) : [];
+// Measured first on this install with `bd list --json` (bd 1.2.2): rows expose
+// `dependencies` (array), `dependency_count`, and `dependent_count`; they do
+// not expose `blocks`, `dependents`, `blocked_by_me`, or `children`. Chained is
+// therefore computed by inverting open rows' `dependencies[].depends_on_id`.
+function dependencyTargetIds(row: any): string[] {
+  const xs = Array.isArray(row?.dependencies) ? row.dependencies : [];
+  return xs.filter((d: any) => d?.type !== "parent-child").map((d: any) => String(d?.depends_on_id ?? "")).filter(Boolean);
 }
+function issueOpen(row: any): boolean { return statusOf(row) !== "closed"; }
 function chainedReadyIds(ready: any[], all: any[]): Set<string> {
   const readyIds = new Set(ready.map(idOf));
   const out = new Set<string>();
-  for (const row of all) for (const dep of dependentIds(row)) if (readyIds.has(dep)) out.add(dep);
+  for (const row of all) if (issueOpen(row)) for (const dep of dependencyTargetIds(row)) if (readyIds.has(dep)) out.add(dep);
   return out;
 }
 
@@ -102,7 +106,7 @@ export function fleetSnapshot(root: string = ROOT, opts: { since?: { isaHead?: s
     reviewersLive.push({ name, entry: entryForSeat(staffing, name), accountDir: authorDirs.get(name) ?? null, busy: verifyMarkerLive(root, name) });
   }
   const head = isaHead(root);
-  const newEpics = all.filter((x) => String(x?.type ?? "").toLowerCase() === "epic" && (!opts.since?.at || Date.parse(String(x?.created ?? x?.created_at ?? 0)) > Date.parse(opts.since.at))).length;
+  const newEpics = all.filter((x) => String(x?.issue_type ?? x?.type ?? "").toLowerCase() === "epic" && (!opts.since?.at || Date.parse(String(x?.created_at ?? x?.created ?? 0)) > Date.parse(opts.since.at))).length;
   return {
     at,
     ready,
