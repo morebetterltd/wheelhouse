@@ -162,196 +162,35 @@ ensure_commander_poll() {
   echo "commander inbox poll started: pid $(cat "$poll_pid_file" 2>/dev/null || echo '?')"
 }
 
-ensure_desk_watchdog() {
-  if [ ! -x "$HERE/desk-watchdog.sh" ]; then
-    echo "desk watchdog not installed beside cockpit; skipping desk supervision"
-    return 0
+ensure_herald() { WHEELHOUSE_DAEMONS_ROOT="$ROOT" . "$HERE/daemons.sh"; start_herald || exit $?; }
+ensure_desk() { WHEELHOUSE_DAEMONS_ROOT="$ROOT" . "$HERE/daemons.sh"; start_desk || exit $?; }
+ensure_courier() { WHEELHOUSE_DAEMONS_ROOT="$ROOT" . "$HERE/daemons.sh"; start_courier || exit $?; }
+stop_legacy_watchdog() {
+  name="$1"; f="$HERE/run/$name-watchdog.pid"
+  [ -f "$f" ] || return 0
+  pid="$(cat "$f" 2>/dev/null || true)"
+  if pid_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    cockpit_recovery_note "stopped legacy $name-watchdog pid $pid"
+    echo "legacy $name watchdog stopped: pid $pid"
   fi
-  mkdir -p "$HERE/run" "$HERE/logs"
-  wd_pid_file="$HERE/run/desk-watchdog.pid"
-  if [ -f "$wd_pid_file" ]; then
-    wd_pid="$(cat "$wd_pid_file" 2>/dev/null || true)"
-    if pid_alive "$wd_pid"; then
-      echo "desk watchdog already running: pid $wd_pid"
-      return 0
-    fi
-    rm -f "$wd_pid_file"
-  fi
-  (cd "$ROOT" && WHEELHOUSE_DESK_ROOT="$ROOT" "$HERE/desk-watchdog.sh" >> "$HERE/logs/desk.out.log" 2>> "$HERE/logs/desk.stderr.log" & echo $! > "$wd_pid_file")
-  echo "desk watchdog started: pid $(cat "$wd_pid_file" 2>/dev/null || echo '?')"
+  rm -f "$f"
 }
-
-ensure_desk() {
-  if [ ! -f "$HERE/desk.ts" ]; then
-    echo "desk not installed beside cockpit; skipping needs desk"
-    return 0
-  fi
-  if ! command -v bun >/dev/null 2>&1; then
-    echo "STOP: bun is required to run the needs desk" >&2
-    exit 1
-  fi
+ensure_supervisor() {
+  if [ ! -x "$HERE/supervisor.sh" ]; then echo "supervisor not installed beside cockpit; skipping daemon supervision"; return 0; fi
   mkdir -p "$HERE/run" "$HERE/logs"
-  pid_file="$HERE/run/desk.pid"
+  stop_legacy_watchdog desk
+  stop_legacy_watchdog courier
+  pid_file="$HERE/run/supervisor.pid"
   if [ -f "$pid_file" ]; then
     old_pid="$(cat "$pid_file" 2>/dev/null || true)"
-    if pid_alive "$old_pid"; then
-      desk_url="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
-      ensure_desk_watchdog
-      echo "desk already running: pid $old_pid${desk_url:+ — $desk_url}"
-      return 0
-    fi
-    echo "desk dead: pid ${old_pid:-?}; restarting"
-    rm -f "$pid_file"
+    if pid_alive "$old_pid"; then echo "supervisor already running: pid $old_pid"; return 0; fi
+    echo "supervisor dead: pid ${old_pid:-?}; restarting"; rm -f "$pid_file"
   fi
-  tmp_pid_file="$pid_file.$$"
-  rm -f "$tmp_pid_file"
-  (
-    cd "$ROOT" || exit 1
-    exec </dev/null >> "$HERE/logs/desk.out.log" 2>> "$HERE/logs/desk.stderr.log"
-    WHEELHOUSE_DESK_ROOT="$ROOT" nohup bun "$HERE/desk.ts" &
-    desk_pid=$!
-    printf '%s\n' "$desk_pid" > "$tmp_pid_file"
-    disown "$desk_pid" 2>/dev/null || true
-  ) </dev/null >/dev/null 2>/dev/null &
-  launcher_pid=$!
-  disown "$launcher_pid" 2>/dev/null || true
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -s "$tmp_pid_file" ] && break
-    sleep 0.05
-  done
-  if [ -s "$tmp_pid_file" ]; then mv -f "$tmp_pid_file" "$pid_file"; fi
-  new_pid="$(cat "$pid_file" 2>/dev/null || true)"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -s "$HERE/run/desk.port" ] && pid_alive "$new_pid" && break
-    sleep 0.1
-  done
-  desk_url="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
-  if pid_alive "$new_pid"; then
-    ensure_desk_watchdog
-    echo "desk started: pid $new_pid${desk_url:+ — $desk_url}"
-    return 0
-  fi
-  echo "STOP: desk failed to start; see $HERE/logs/desk.stderr.log" >&2
-  exit 1
-}
-
-ensure_courier_watchdog() {
-  if [ ! -x "$HERE/courier-watchdog.sh" ]; then
-    echo "courier watchdog not installed beside cockpit; skipping courier supervision"
-    return 0
-  fi
-  mkdir -p "$HERE/run" "$HERE/logs"
-  wd_pid_file="$HERE/run/courier-watchdog.pid"
-  if [ -f "$wd_pid_file" ]; then
-    wd_pid="$(cat "$wd_pid_file" 2>/dev/null || true)"
-    if pid_alive "$wd_pid"; then
-      echo "courier watchdog already running: pid $wd_pid"
-      return 0
-    fi
-    rm -f "$wd_pid_file"
-  fi
-  (cd "$ROOT" && WHEELHOUSE_COURIER_ROOT="$ROOT" "$HERE/courier-watchdog.sh" >> "$HERE/logs/courier.out.log" 2>> "$HERE/logs/courier.stderr.log" & echo $! > "$wd_pid_file")
-  echo "courier watchdog started: pid $(cat "$wd_pid_file" 2>/dev/null || echo '?')"
-}
-
-ensure_courier() {
-  if [ ! -f "$HERE/courier.ts" ]; then
-    echo "courier skipped: no declared principal channel"
-    return 0
-  fi
-  if ! command -v bun >/dev/null 2>&1; then
-    echo "STOP: bun is required to run the courier" >&2
-    exit 1
-  fi
-  mkdir -p "$HERE/run" "$HERE/logs"
-  if ! (cd "$ROOT" && bun -e 'const fs=require("fs"); let j={}; try{j=JSON.parse(fs.readFileSync("seats/channels.json","utf8"));}catch{} process.exit(Object.values(j.channels||{}).some(c=>c&&c.audience==="principal") ? 0 : 1);' >/dev/null 2>&1); then
-    echo "courier skipped: no declared principal channel"
-    return 0
-  fi
-  pid_file="$HERE/run/courier.pid"
-  if [ -f "$pid_file" ]; then
-    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
-    if pid_alive "$old_pid"; then
-      ensure_courier_watchdog
-      echo "courier already running: pid $old_pid"
-      return 0
-    fi
-    echo "courier dead: pid ${old_pid:-?}; restarting"
-    rm -f "$pid_file"
-  fi
-  tmp_pid_file="$pid_file.$$"
-  rm -f "$tmp_pid_file"
-  (
-    cd "$ROOT" || exit 1
-    exec </dev/null >> "$HERE/logs/courier.out.log" 2>> "$HERE/logs/courier.stderr.log"
-    WHEELHOUSE_COURIER_ROOT="$ROOT" nohup bun "$HERE/courier.ts" &
-    courier_pid=$!
-    printf '%s\n' "$courier_pid" > "$tmp_pid_file"
-    disown "$courier_pid" 2>/dev/null || true
-  ) </dev/null >/dev/null 2>/dev/null &
-  launcher_pid=$!
-  disown "$launcher_pid" 2>/dev/null || true
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -s "$tmp_pid_file" ] && break
-    sleep 0.05
-  done
-  if [ -s "$tmp_pid_file" ]; then mv -f "$tmp_pid_file" "$pid_file"; fi
-  new_pid="$(cat "$pid_file" 2>/dev/null || true)"
-  sleep 0.2
-  if pid_alive "$new_pid"; then
-    ensure_courier_watchdog
-    echo "courier started: pid $new_pid"
-    return 0
-  fi
-  echo "STOP: courier failed to start; see $HERE/logs/courier.stderr.log" >&2
-  exit 1
-}
-
-ensure_herald() {
-  if [ ! -f "$HERE/herald.ts" ]; then
-    echo "herald not installed beside cockpit; skipping dispatch herald"
-    return 0
-  fi
-  if ! command -v bun >/dev/null 2>&1; then
-    echo "STOP: bun is required to run the dispatch herald" >&2
-    exit 1
-  fi
-  mkdir -p "$HERE/run" "$HERE/logs"
-  pid_file="$HERE/run/herald.pid"
-  if [ -f "$pid_file" ]; then
-    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
-    if pid_alive "$old_pid"; then
-      echo "herald already running: pid $old_pid"
-      return 0
-    fi
-    echo "herald dead: pid ${old_pid:-?}; restarting"
-    rm -f "$pid_file"
-  fi
-  tmp_pid_file="$pid_file.$$"
-  rm -f "$tmp_pid_file"
-  (
-    cd "$ROOT" || exit 1
-    exec </dev/null >> "$HERE/logs/herald.out.log" 2>> "$HERE/logs/herald.stderr.log"
-    WHEELHOUSE_HERALD_TMUX_SESSION="$S" WHEELHOUSE_HERALD_TMUX_PANE="${S}:bridge.0" WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" nohup bun "$HERE/herald.ts" &
-    herald_pid=$!
-    printf '%s\n' "$herald_pid" > "$tmp_pid_file"
-    disown "$herald_pid" 2>/dev/null || true
-  ) </dev/null >/dev/null 2>/dev/null &
-  launcher_pid=$!
-  disown "$launcher_pid" 2>/dev/null || true
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -s "$tmp_pid_file" ] && break
-    sleep 0.05
-  done
-  if [ -s "$tmp_pid_file" ]; then mv -f "$tmp_pid_file" "$pid_file"; fi
-  new_pid="$(cat "$pid_file" 2>/dev/null || true)"
-  sleep 0.2
-  if pid_alive "$new_pid"; then
-    echo "herald started: pid $new_pid"
-    return 0
-  fi
-  echo "STOP: herald failed to start; see $HERE/logs/herald.stderr.log" >&2
-  exit 1
+  (cd "$ROOT" && WHEELHOUSE_SUPERVISOR_ROOT="$ROOT" nohup "$HERE/supervisor.sh" >> "$HERE/logs/supervisor.out.log" 2>> "$HERE/logs/supervisor.stderr.log" & echo $! > "$pid_file")
+  new_pid="$(cat "$pid_file" 2>/dev/null || true)"; sleep 0.2
+  if pid_alive "$new_pid"; then echo "supervisor started: pid $new_pid"; return 0; fi
+  echo "STOP: supervisor failed to start; see $HERE/logs/supervisor.stderr.log" >&2; exit 1
 }
 
 usage() {
@@ -386,13 +225,21 @@ case "${1:-}" in
     exit 0
     ;;
   --pane-commander)
+    mkdir -p "$HERE/run"
+    pane_id="$(tmx display-message -p -t "${TMUX_PANE:-}" '#{pane_id}' 2>/dev/null || printf '%s' "${TMUX_PANE:-}")"
+    pane_session="$(tmx display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null || true)"
+    ROOT_JSON="$(printf '%s' "$ROOT" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    PANE_JSON="$(printf '%s' "$pane_id" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    SESSION_JSON="$(printf '%s' "$pane_session" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    printf '{ "paneId": "%s", "session": "%s", "root": "%s", "writtenAt": "%s" }\n' "$PANE_JSON" "$SESSION_JSON" "$ROOT_JSON" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$HERE/run/commander-pane.json"
     ensure_commander_poll
     cat <<EOF
 
   ┌─ COMMANDER PANE ──────────────────────────────────────────────┐
   │ This is the commander's seat. Launch your interactive         │
   │ commander here yourself — the cockpit never does it for you.  │
-  │ cockpit has started commander-inbox-poll.sh for this pane.    │
+  │ cockpit has started commander-inbox-poll.sh for visual hints; │
+  │ drain with: bun seats/herald.ts --drain                       │
   │ Needs desk: ${DESK_URL:-not started}                          │
   │                                                               │
   │     cd $ROOT
@@ -433,9 +280,9 @@ NS="${1:-$(basename "$ROOT")}"
 S="wh-$NS"
 
 recover_dead_seats
-ensure_herald
 ensure_desk
 ensure_courier
+ensure_supervisor
 DESK_URL="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
 export DESK_URL
 
@@ -508,6 +355,8 @@ if tmx has-session -t "=$S" 2>/dev/null; then
   fi
   install_resize_hook
   install_session_options
+  ensure_herald
+  ensure_supervisor
   echo "bridge already built: $S (re-run is attach, never a duplicate)"
   attach
   exit 0
@@ -517,6 +366,8 @@ fi
 tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander"
 
 spawn_floor_pane || exit 1
+ensure_herald
+ensure_supervisor
 install_resize_hook
 
 # Status bar: project on the left, the key hints on the right.

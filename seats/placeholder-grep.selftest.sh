@@ -36,6 +36,19 @@ printf '# copied runbook may mention {{DOUBLE_BRACE}} and is excluded\n' > "$INS
 # file and must not make grep print "Binary file ... matches".
 printf '\211PNG\r\n\032\n\000\000binary {{ bytes inside committed evidence\000\377\n' > "$INSTALL/wheelhouse/evidence/brace-pair.png"
 
+run_worker_brief_leg() {
+  printf 'placeholder grep selftest: worker evidence discipline sentences\n'
+  local brief="$ROOT/contracts/WORKER.md"
+  if [ -f "$brief" ] \
+    && grep -qF 'When code reads an outside tool'"'"'s output, capture the real output first, record the command, and build the fixture from that capture.' "$brief" \
+    && grep -qF 'Every new test leg must be shown to fail with the fix removed; say how in the report.' "$brief" \
+    && grep -qF 'Report only checks you actually ran, and include each check'"'"'s exit code.' "$brief"; then
+    pass "WORKER.md carries the three evidence-discipline sentences"
+  else
+    fail "WORKER.md is missing one of the required evidence-discipline sentences"
+  fi
+}
+
 run_binary_leg() {
   local old rc out
   printf 'placeholder grep selftest: binary evidence fixture\n'
@@ -71,11 +84,12 @@ run_text_leg() {
   fi
 }
 
+run_worker_brief_leg
 run_binary_leg
 run_text_leg
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "placeholder-grep.selftest: PASS (2 legs)"
+  echo "placeholder-grep.selftest: PASS (3 legs)"
   exit 0
 fi
 printf 'placeholder-grep.selftest: FAIL (%s failure(s))\n' "$FAILED"
