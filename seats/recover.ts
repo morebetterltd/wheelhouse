@@ -54,6 +54,7 @@ const SEATS_DIR = path.join(ROOT, "seats");
 const STATE_FILE = path.join(SEATS_DIR, "state.json");
 const RUN_DIR = path.join(SEATS_DIR, "run");
 const ADAPTER = path.join(SEATS_DIR, "adapter.ts");
+const STAFFING_FILE = path.join(SEATS_DIR, "staffing.json");
 
 interface SeatRecord {
   pid: number | null;
@@ -197,8 +198,13 @@ function sessionAttachment(name: string, rec: SeatRecord, rows: Row[]): string |
   return null;
 }
 
+function readStaffing(): Record<string, { entry?: string }> {
+  try { return JSON.parse(fs.readFileSync(STAFFING_FILE, "utf8")).seats ?? {}; } catch { return {}; }
+}
+
 function main(): void {
   const state = readState();
+  const staffed = readStaffing();
 
   const rows: Row[] = Object.entries(state.seats).map(([name, rec]) => {
     const { cls, detail } = classify(rec);
@@ -211,7 +217,8 @@ function main(): void {
     console.log("seat classification (state.json + run/ + open-fd tables):");
     for (const { name, rec, cls, detail } of rows) {
       const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
-      console.log(`${name.padEnd(16)} ${cls.padEnd(8)} ${detail}${bead}`);
+      const staffedTag = staffed[name]?.entry ? `  staffed: ${staffed[name].entry}` : "";
+      console.log(`${name.padEnd(16)} ${cls.padEnd(8)} ${detail}${bead}${staffedTag}`);
       if (cls === "DEAD") {
         const attachedBy = sessionAttachment(name, rec, rows); // attach-check
         if (attachedBy) {
@@ -226,6 +233,10 @@ function main(): void {
         console.log(`  nothing to resume; spawn fresh when needed: bun ${ADAPTER} spawn ${name}`);
       }
     }
+  }
+
+  for (const [name, rec] of Object.entries(staffed)) {
+    if (!state.seats[name]) console.log(`${name.padEnd(16)} STAFFED-UNSPAWNED staffed: ${rec.entry ?? "?"}  spawn: bun ${ADAPTER} spawn ${name}`);
   }
 
   // Janitorial: a FIFO whose seat is not RUNNING has no reader. Left in
