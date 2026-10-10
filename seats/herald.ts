@@ -36,6 +36,8 @@ const DRAIN_SEEN = path.join(SEATS_DIR, "inbox.seen.json");
 const STATE_FILE = path.join(SEATS_DIR, "herald.state.json");
 const ADAPTER_STATE_FILE = path.join(SEATS_DIR, "state.json");
 const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
+const COMMANDER_PANE_FILE = path.join(SEATS_DIR, "run", "commander-pane.json");
+const TARGET_FILE = path.join(SEATS_DIR, "run", "herald.target.json");
 const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
 const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
 const READ_CHUNK_BYTES = Math.max(1024, Number(process.env.WHEELHOUSE_HERALD_READ_CHUNK_BYTES || 64 * 1024));
@@ -44,7 +46,7 @@ const POKE_STABILITY_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_
 const POKE_COOLDOWN_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_COOLDOWN_MS || 120_000));
 const POKE_ESCALATE_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_ESCALATE_MS || 300_000));
 const TMUX_SESSION = process.env.WHEELHOUSE_HERALD_TMUX_SESSION || "";
-const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
+const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || "";
 const TMUX_SOCKET = process.env.WHEELHOUSE_TMUX_SOCKET || "";
 const HERALD_IDLE_RE = process.env.WHEELHOUSE_HERALD_IDLE_RE || "";
 
@@ -546,6 +548,71 @@ function logPoke(outcome: string, detail = ""): void {
   fs.appendFileSync(HERALD_OUT_LOG, `${new Date().toISOString()} poke ${outcome}${suffix}\n`);
 }
 
+type TargetStatus = "ok" | "missing" | "wrong-root" | "no-tmux";
+type ResolvedBy = "env" | "cockpit-file" | "scan";
+interface CommanderTarget { target: string; resolvedBy: ResolvedBy; status: TargetStatus; reason?: string; checkedAt: string }
+
+function realpathMaybe(p: string): string {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+
+function pathUnderRoot(p: string): boolean {
+  const root = realpathMaybe(ROOT);
+  const candidate = realpathMaybe(p);
+  return candidate === root || candidate.startsWith(root + path.sep);
+}
+
+function readLastTarget(): CommanderTarget | null {
+  try { return JSON.parse(fs.readFileSync(TARGET_FILE, "utf8")); } catch { return null; }
+}
+
+function writeTarget(next: CommanderTarget): void {
+  const prior = readLastTarget();
+  const changed = !prior || prior.target !== next.target || prior.resolvedBy !== next.resolvedBy || prior.status !== next.status || prior.reason !== next.reason;
+  fs.mkdirSync(path.dirname(TARGET_FILE), { recursive: true });
+  fs.writeFileSync(TARGET_FILE, JSON.stringify(next, null, 2) + "\n");
+  if (changed && next.status !== "ok") logPoke("refused", `reason=${next.reason || next.status} target=${next.target || "-"} resolvedBy=${next.resolvedBy}`);
+}
+
+function validateTarget(target: string, resolvedBy: ResolvedBy): CommanderTarget {
+  const checkedAt = new Date().toISOString();
+  try {
+    const panePath = tmuxOutput(["display-message", "-p", "-t", target, "#{pane_current_path}"]);
+    if (!pathUnderRoot(panePath)) return { target, resolvedBy, status: "wrong-root", reason: "wrong-root", checkedAt };
+    return { target, resolvedBy, status: "ok", checkedAt };
+  } catch (e: any) {
+    const reason: TargetStatus = e?.code === "ENOENT" ? "no-tmux" : "missing";
+    return { target, resolvedBy, status: reason, reason, checkedAt };
+  }
+}
+
+function targetFromCommanderFile(): { target: string; resolvedBy: ResolvedBy } | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(COMMANDER_PANE_FILE, "utf8"));
+    if (typeof parsed?.paneId === "string" && parsed.paneId.trim()) return { target: parsed.paneId.trim(), resolvedBy: "cockpit-file" };
+  } catch { /* absent or unreadable: scan */ }
+  return null;
+}
+
+function scanCommanderPane(): { target: string; resolvedBy: ResolvedBy } | null {
+  let out = "";
+  try { out = tmuxOutput(["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_index}\t#{pane_current_path}"]); }
+  catch { return null; }
+  const rows = out.split(/\r?\n/).map((line) => line.split("\t")).filter((r) => r.length >= 5 && r[2] === "bridge" && r[3] === "0" && pathUnderRoot(r.slice(4).join("\t")));
+  if (rows.length === 0) return null;
+  const want = `wh-${path.basename(ROOT)}`.toLowerCase();
+  const preferred = rows.find((r) => r[1].toLowerCase() === want) ?? rows[0];
+  return { target: preferred[0], resolvedBy: "scan" };
+}
+
+function resolveCommanderPane(): CommanderTarget {
+  const envTarget = TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
+  const candidate = envTarget ? { target: envTarget, resolvedBy: "env" as ResolvedBy } : (targetFromCommanderFile() ?? scanCommanderPane());
+  const next = candidate ? validateTarget(candidate.target, candidate.resolvedBy) : { target: "", resolvedBy: "scan" as ResolvedBy, status: "missing" as TargetStatus, reason: "missing", checkedAt: new Date().toISOString() };
+  writeTarget(next);
+  return next;
+}
+
 function configuredIdleRegex(): RegExp | null {
   if (!HERALD_IDLE_RE) return null;
   try {
@@ -625,24 +692,24 @@ function stablePaneText(paneText: string): string {
   return stripAnsi(lines.join("\n")).split(/\r?\n/).filter((l) => !/\b(?:tokens|ctx|context|model|cost|elapsed|status|lifeos)\b/i.test(l)).join("\n");
 }
 
-function captureCommanderPane(): { command: string; text: string; stableText: string } | null {
-  const command = tmuxOutput(["display-message", "-p", "-t", TMUX_PANE, "#{pane_current_command}"]);
-  const text = tmuxOutput(["capture-pane", "-p", "-e", "-J", "-t", TMUX_PANE, "-S", "-200"]);
+function captureCommanderPane(pane: string): { command: string; text: string; stableText: string } | null {
+  const command = tmuxOutput(["display-message", "-p", "-t", pane, "#{pane_current_command}"]);
+  const text = tmuxOutput(["capture-pane", "-p", "-e", "-J", "-t", pane, "-S", "-200"]);
   return { command, text, stableText: stablePaneText(text) };
 }
 
 let lastCommanderPaneStableForPoke = false;
 let lastCommanderPaneHadActiveMarkersForPoke = true;
 
-function commanderPaneIdleClaude(): boolean {
+function commanderPaneIdleClaude(pane: string): boolean {
   lastCommanderPaneStableForPoke = false;
   lastCommanderPaneHadActiveMarkersForPoke = true;
-  if (!TMUX_PANE) return false;
+  if (!pane) return false;
   try {
-    const first = captureCommanderPane();
+    const first = captureCommanderPane(pane);
     if (!first || !["claude", "node", "bun"].includes(first.command)) return false;
     sleepSync(POKE_STABILITY_MS);
-    const second = captureCommanderPane();
+    const second = captureCommanderPane(pane);
     if (!second || second.command !== first.command) return false;
     lastCommanderPaneStableForPoke = second.stableText === first.stableText;
     lastCommanderPaneHadActiveMarkersForPoke = paneTextHasActiveMarkers(first.text) || paneTextHasActiveMarkers(second.text);
@@ -661,38 +728,36 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   if (drainCursor >= inboxSize) {
     logPoke("dropped", `reason=already-drained inbox=${inboxSize} cursor=${drainCursor}`);
     state.lastPokedInboxSize = inboxSize;
-    if (TMUX_PANE) state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [TMUX_PANE]: 0 };
+    const target = resolveCommanderPane();
+    if (target.status === "ok" && target.target) state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [target.target]: 0 };
     writeState(state);
     return;
   }
-  if (!TMUX_PANE) {
-    logPoke("dropped", `reason=no-pane inbox=${inboxSize}`);
-    state.lastPokedInboxSize = inboxSize;
-    writeState(state);
-    return;
-  }
-  const lastPoked = state.lastPokedByPane?.[TMUX_PANE] ?? 0;
-  if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
-  const idle = commanderPaneIdleClaude();
-  const firstDeferred = state.firstDeferredAtByPane?.[TMUX_PANE] ?? 0;
+  const target = resolveCommanderPane();
+  if (target.status !== "ok" || !target.target) return;
+  const pane = target.target;
+  const lastPoked = state.lastPokedByPane?.[pane] ?? 0;
+  if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${pane} inbox=${inboxSize}`); return; }
+  const idle = commanderPaneIdleClaude(pane);
+  const firstDeferred = state.firstDeferredAtByPane?.[pane] ?? 0;
   const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && lastCommanderPaneStableForPoke && !lastCommanderPaneHadActiveMarkersForPoke;
   if (!idle && !escalated) {
     const first = firstDeferred || Date.now();
-    state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [TMUX_PANE]: first };
+    state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [pane]: first };
     writeState(state);
-    logPoke("deferred", `reason=not-idle pane=${TMUX_PANE} inbox=${inboxSize}`);
+    logPoke("deferred", `reason=not-idle pane=${pane} inbox=${inboxSize}`);
     return;
   }
   try {
-    execFileSync("tmux", tmuxArgs(["send-keys", "-t", TMUX_PANE, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
+    execFileSync("tmux", tmuxArgs(["send-keys", "-t", pane, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
   } catch (e: any) {
-    logPoke("dropped", `reason=send-failed pane=${TMUX_PANE} inbox=${inboxSize} error=${e?.message || e}`);
+    logPoke("dropped", `reason=send-failed pane=${pane} inbox=${inboxSize} error=${e?.message || e}`);
     throw e;
   }
-  logPoke(escalated ? "escalated" : "sent", `pane=${TMUX_PANE} inbox=${inboxSize}`);
+  logPoke(escalated ? "escalated" : "sent", `pane=${pane} inbox=${inboxSize}`);
   state.lastPokedInboxSize = inboxSize;
-  state.lastPokedByPane = { ...(state.lastPokedByPane ?? {}), [TMUX_PANE]: Date.now() };
-  state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [TMUX_PANE]: 0 };
+  state.lastPokedByPane = { ...(state.lastPokedByPane ?? {}), [pane]: Date.now() };
+  state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [pane]: 0 };
   writeState(state);
 }
 
@@ -814,6 +879,8 @@ function pidAlive(pid: number): boolean {
 }
 
 function status(): void {
+  const target = readLastTarget();
+  if (target) console.log(`target ${target.status} ${target.target || "-"} resolvedBy=${target.resolvedBy}${target.reason ? ` reason=${target.reason}` : ""}`);
   if (!fs.existsSync(PID_FILE)) {
     console.log("herald STOPPED — no pid file");
     process.exit(1);
