@@ -459,6 +459,20 @@ if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*
 else fail "idle prompt with working/thinking prose was misclassified busy (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf '%s\n' '{"type":"agent_end","messages":["idle busy-looking scrollback prose settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-busy-prose-in-scrollback.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "busy-looking prose in scrollback is not classified busy"
+else fail "busy-looking prose in scrollback blocked poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf '%s\n' '{"type":"agent_end","messages":["idle regex source scrollback settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-regex-source-in-scrollback.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "herald regex source in scrollback is not classified busy"
+else fail "herald regex source in scrollback blocked poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf 'settled but wrapper not idle; commander prose says still working and thinking\n' > "$FIX/wrapper-not-idle.txt"
 printf '%s\n' '{"type":"agent_end","messages":["escalate settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
@@ -467,6 +481,16 @@ node -e 'const fs=require("fs"); const f=process.argv[1]; const s=JSON.parse(fs.
 RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC2=$?
 if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke escalated .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "deferred poke escalates after bounded window when stable pane text has bare working/thinking prose"
 else fail "deferred poke did not escalate (rc=$RC/$RC2 out=$OUT/$OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf 'settled but wrapper not idle; scrollback says still running (tool path)\n' > "$FIX/wrapper-not-idle-busy-looking.txt"
+printf '%s\n' '{"type":"agent_end","messages":["escalate busy-looking scrollback settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle-busy-looking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+node -e 'const fs=require("fs"); const f=process.argv[1]; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.firstDeferredAtByPane={"wh-demo:bridge.0":1}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")' "$PROJ/seats/herald.state.json"
+RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle-busy-looking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC2=$?
+if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke escalated .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "escalation is not blocked by busy-looking scrollback"
+else fail "busy-looking scrollback blocked escalation (rc=$RC/$RC2 out=$OUT/$OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf 'stable transcript\n❯\nLifeOS status repaint 1 tokens=10\n' > "$FIX/repaint-1.txt"
@@ -484,11 +508,11 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$PO
   for i in $(seq 1 60); do printf 'status filler %s\n' "$i"; done
   printf '❯\nLifeOS status footer\n'
 } > "$FIX/wide-mid-turn.txt"
-printf '%s\n' '{"type":"agent_end","messages":["wide mid turn settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+printf '%s\n' '{"type":"agent_end","messages":["wide old spinner settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
 RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wide-mid-turn.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "wide capture sees spinner above prompt and classifies mid-turn pane not idle"
-else fail "wide mid-turn fixture was considered idle (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "wide capture ignores old spinner outside live status area"
+else fail "old spinner outside live status area blocked poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["drained while busy"]}' > "$PROJ/seats/logs/worker-1.jsonl"
