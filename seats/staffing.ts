@@ -70,7 +70,8 @@ export function decide(snap: Snapshot, pool: Pool, staffing: StaffingFile, overr
   const workerRole = pool.roles.workers, reviewerRole = pool.roles.reviewers;
   if (override) return { kind: override, role: override.includes("worker") || override === "drop-seat" ? "workers" : override.includes("reviewer") ? "reviewers" : undefined, reason: "manual override", decider: "rule" };
   if (workerRole && snap.readyCount > 0 && freeWorkers(snap).length === 0 && liveCount(snap, "workers") < workerRole.max) return { kind: "add-worker", role: "workers", reason: "ready work and no free worker", decider: "rule" };
-  if (reviewerRole && snap.reviewBacklog.length > 0 && freeCount(snap, "reviewers") === 0 && liveCount(snap, "reviewers") < reviewerRole.max) return { kind: "add-reviewer", role: "reviewers", reason: "review backlog and no free reviewer", decider: "rule" };
+  const needsEligibleReviewer = snap.reviewBacklog.some((item) => !freeReviewers(snap).some((r) => r.accountDir && item.authorAccountDir && r.accountDir !== item.authorAccountDir));
+  if (reviewerRole && snap.reviewBacklog.length > 0 && needsEligibleReviewer && liveCount(snap, "reviewers") < reviewerRole.max) return { kind: "add-reviewer", role: "reviewers", reason: "review backlog and no eligible free reviewer", decider: "rule" };
   const idleMinutes = pool.idle_drop_minutes ?? 30;
   const cutoff = Date.now() - idleMinutes * 60_000;
   const idle = snap.workers.live.filter((w) => !w.busy && w.lastActivityAt && Date.parse(w.lastActivityAt) < cutoff);
@@ -78,6 +79,8 @@ export function decide(snap: Snapshot, pool: Pool, staffing: StaffingFile, overr
   // Commander ruling: do not drop idle workers while ready work exists; the
   // idle worker should receive work, and dropping it would fight scale-out.
   if (workerRole && snap.readyCount === 0 && snap.workers.live.length > workerRole.min && idle[0]) return { kind: "drop-seat", role: "workers", seat: idle[0].name, entry: idle[0].entry ?? undefined, reason: "idle past drop window", decider: "rule" };
+  const idleReviewer = snap.reviewers.live.filter((r) => !r.busy && r.entry && Date.parse(staffing.seats?.[r.name]?.addedAt ?? "") < cutoff).sort((a,b)=>String(staffing.seats?.[a.name]?.addedAt).localeCompare(String(staffing.seats?.[b.name]?.addedAt)))[0];
+  if (reviewerRole && snap.reviewers.live.length > reviewerRole.min && idleReviewer) return { kind: "drop-seat", role: "reviewers", seat: idleReviewer.name, entry: idleReviewer.entry ?? undefined, reason: "idle past drop window", decider: "rule" };
   return { kind: "nothing", reason: "nothing to do", decider: "rule" };
 }
 export function clamp(decision: Decision, snap: Snapshot, pool: Pool, staffing: StaffingFile): Decision {
@@ -91,12 +94,15 @@ export function clamp(decision: Decision, snap: Snapshot, pool: Pool, staffing: 
   if (decision.kind === "add-reviewer") {
     const role = pool.roles.reviewers; if (!role) return { kind: "nothing", reason: "reviewers not pooled", decider: decision.decider };
     if (snap.reviewers.live.length >= role.max) return { kind: "nothing", reason: `at limit: reviewers ${snap.reviewers.live.length}/${role.max}`, decider: decision.decider };
-    return { kind: "nothing", reason: "reviewers: not yet scalable", decider: decision.decider };
+    const placed = placeSeat(pool, staffing, "reviewers");
+    if (!placed) return { kind: "nothing", reason: "no free subscription for reviewers", decider: decision.decider };
+    return { ...decision, ...placed, role: "reviewers" };
   }
   if (decision.kind === "drop-seat") {
-    const role = pool.roles.workers; if (!role) return { kind: "nothing", reason: "workers not pooled", decider: decision.decider };
+    const role = decision.role === "reviewers" ? pool.roles.reviewers : pool.roles.workers; if (!role) return { kind: "nothing", reason: `${decision.role ?? "workers"} not pooled`, decider: decision.decider };
     if (!decision.seat) return { kind: "nothing", reason: "drop needs a seat", decider: decision.decider };
-    if (snap.workers.live.length <= role.min) return { kind: "nothing", reason: `at minimum: workers ${snap.workers.live.length}/${role.min}`, decider: decision.decider };
+    const live = decision.role === "reviewers" ? snap.reviewers.live.length : snap.workers.live.length;
+    if (live <= role.min) return { kind: "nothing", reason: `at minimum: ${decision.role ?? "workers"} ${live}/${role.min}`, decider: decision.decider };
   }
   return decision;
 }
@@ -112,6 +118,7 @@ function unregisterSeat(root: string, staffing: StaffingFile, seat: string) { de
 function applyAdd(root: string, pool: Pool, staffing: StaffingFile, d: Decision): Decision {
   if (!d.role || !d.seat || !d.entry) return d;
   registerSeat(root, staffing, d.role, d.seat, d.entry);
+  if (d.role === "reviewers") return d;
   const r = runAdapter(["spawn", d.seat]);
   if (r.status !== 0) {
     unregisterSeat(root, staffing, d.seat);
@@ -126,6 +133,7 @@ function applyDrop(root: string, staffing: StaffingFile, d: Decision, snap: Snap
   if (!d.seat) return d;
   const live = [...snap.workers.live, ...snap.reviewers.live].find((s) => s.name === d.seat);
   if (live?.busy) return { ...d, kind: "nothing", reason: `drop refused: ${d.seat} is busy` };
+  if (d.role === "reviewers") { unregisterSeat(root, staffing, d.seat); return d; }
   const r = runAdapter(["stop", d.seat]);
   const deadline = Date.now() + Number(process.env.WHEELHOUSE_STAFFING_STOP_MS ?? 30000);
   while (Date.now() < deadline) { const rec = readJson(statePath(root))?.seats?.[d.seat]; if (!rec?.pid || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) break; sleep(50); }
@@ -150,7 +158,7 @@ export async function main(argv = process.argv.slice(2), root = ROOT): Promise<v
     const snap = fleetSnapshot(root);
     let d: Decision;
     if (cmd === "add") { const role = argv[1] as Role; d = clamp({ kind: role === "reviewers" ? "add-reviewer" : "add-worker", role, reason: "manual add", decider: "rule" }, snap, pool, staffing); }
-    else if (cmd === "drop") d = clamp({ kind: "drop-seat", role: "workers", seat: argv[1], reason: "manual drop", decider: "rule" }, snap, pool, staffing);
+    else if (cmd === "drop") { const role = (staffing.seats?.[argv[1]]?.role === "verifier" ? "reviewers" : "workers") as Role; d = clamp({ kind: "drop-seat", role, seat: argv[1], reason: "manual drop", decider: "rule" }, snap, pool, staffing); }
     else if (cmd === "check") d = clamp(decide(snap, pool, staffing, argv.includes("--decision") ? argv[argv.indexOf("--decision") + 1] as DecisionKind : undefined), snap, pool, staffing);
     else usage();
     if (!dry) {
