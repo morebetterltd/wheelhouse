@@ -556,15 +556,17 @@ function configuredIdleRegex(): RegExp | null {
   }
 }
 
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
+
 function paneTextHasActiveMarkers(paneText: string): boolean {
-  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(paneText)
-    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(paneText)
-    || /\besc to interrupt\b/i.test(paneText);
+  const plain = stripAnsi(paneText);
+  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(plain)
+    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(plain)
+    || /\besc to interrupt\b/i.test(plain);
 }
 
-const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 const IDLE_PROMPT_LINE_RE = /^\s*(?:[>❯](?:[\s\u00a0]{8,}[A-Za-z0-9_.:-]+)?|Human:|You:)\s*$/;
-function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
 function promptLineLooksIdle(line: string): boolean {
   const plain = stripAnsi(line);
   if (/^\s*(?:Human:|You:)\s*$/.test(plain)) return true;
@@ -619,8 +621,8 @@ function sleepSync(ms: number): void {
 function stablePaneText(paneText: string): string {
   const lines = paneText.split(/\r?\n/);
   const prompt = lines.findIndex((l) => promptLineLooksIdle(l));
-  if (prompt >= 0) return lines.slice(0, prompt + 1).join("\n");
-  return lines.filter((l) => !/\b(?:tokens|ctx|context|model|cost|elapsed|status|lifeos)\b/i.test(l)).join("\n");
+  if (prompt >= 0) return stripAnsi(lines.slice(0, prompt + 1).join("\n"));
+  return stripAnsi(lines.join("\n")).split(/\r?\n/).filter((l) => !/\b(?:tokens|ctx|context|model|cost|elapsed|status|lifeos)\b/i.test(l)).join("\n");
 }
 
 function captureCommanderPane(): { command: string; text: string; stableText: string } | null {
