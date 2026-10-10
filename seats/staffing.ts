@@ -171,7 +171,7 @@ function statusObject(root: string, pool: Pool, staffing: StaffingFile, snap: Sn
   const live = [
     ...snap.workers.live.map((s) => ({ ...s, roleKey: "workers" as Role, role: "worker", idleSince: s.lastActivityAt })),
     ...snap.reviewers.live.map((s) => ({ ...s, roleKey: "reviewers" as Role, role: "verifier", idleSince: null })),
-  ].filter((s) => !!pool.roles[s.roleKey]);
+  ].filter((s) => (s.entry && staffing.seats?.[s.name]) || !pool.roles[s.roleKey]);
   const seats = live.sort((a, b) => a.name.localeCompare(b.name)).map((s) => {
     const staffed = s.entry && staffing.seats?.[s.name];
     if (staffed) {
