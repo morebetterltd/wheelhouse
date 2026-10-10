@@ -13,7 +13,7 @@ cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; [ "${WHEELHOUSE
 trap cleanup EXIT INT TERM
 PROJ="$FIX/project"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/contracts" "$PROJ/wheelhouse" "$BIN" "$HOME_FIX/.pi-seats-live"
 for e in e1 e2 e3 rv1; do mkdir -p "$HOME_FIX/.pi-seats-live/$e"; done
-for f in adapter.ts staffing.ts herald.ts recover.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts lock.ts briefs.ts host-budget.ts; do cp "$HERE/$f" "$PROJ/seats/$f"; done
+selftest_copy_seat_runtime "$PROJ" "$HERE"
 printf '# Fleet: Worker\n\nfixture brief\n' > "$PROJ/contracts/WORKER.md"; printf 'namespace=live\n' > "$PROJ/wheelhouse/.template-source"
 cat > "$PROJ/seats/seats.json" <<'JSON'
 {"version":1,"seats":{}}

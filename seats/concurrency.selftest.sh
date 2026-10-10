@@ -206,17 +206,7 @@ init_fixture_repo() {   # $1 = project dir
 build_proj() {   # $1 = project dir, $2 = seat namespace
   local proj="$1" ns="$2" seat seatdir
   mkdir -p "$proj/seats" "$proj/contracts"
-  cp "$ADAPTER" "$proj/seats/adapter.ts"
-  cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$proj/seats/seat-worktree.ts"
-  cp "$HERE/seat-activity.ts" "$proj/seats/seat-activity.ts"
-  cp "$HERE/pool.ts" "$proj/seats/pool.ts"
-  cp "$HERE/roster.ts" "$proj/seats/roster.ts"
-  cp "$HERE/credential-shapes.ts" "$proj/seats/credential-shapes.ts"
-  cp "$HERE/quota.ts" "$proj/seats/quota.ts"
-  cp "$FLOOR" "$proj/seats/floor.ts"
-  cp "$BRIEFS" "$proj/seats/briefs.ts"
-  cp "$HARNESS" "$proj/seats/harness.ts"
-  cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
+  selftest_copy_seat_runtime "$proj" "$HERE"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$proj/contracts/WORKER.md"
   cat > "$proj/seats/seats.json" <<EOF
 {
@@ -463,16 +453,7 @@ else
   RHOME="$FIX/realhome"
   mkdir -p "$RHOME"
   mkdir -p "$RPROJ/seats" "$RPROJ/contracts"
-  cp "$ADAPTER" "$RPROJ/seats/adapter.ts"
-  cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$RPROJ/seats/seat-worktree.ts"
-  cp "$HERE/seat-activity.ts" "$RPROJ/seats/seat-activity.ts"
-  cp "$HERE/pool.ts" "$RPROJ/seats/pool.ts"
-  cp "$HERE/roster.ts" "$RPROJ/seats/roster.ts"
-  cp "$HERE/credential-shapes.ts" "$RPROJ/seats/credential-shapes.ts"
-  cp "$HERE/quota.ts" "$RPROJ/seats/quota.ts"
-  cp "$BRIEFS" "$RPROJ/seats/briefs.ts"
-  cp "$HARNESS" "$RPROJ/seats/harness.ts"
-  cp "$HOST_BUDGET_TS" "$RPROJ/seats/host-budget.ts"
+  selftest_copy_seat_runtime "$RPROJ" "$HERE"
   printf '# Fleet: Worker\n\nfixture brief.\n' > "$RPROJ/contracts/WORKER.md"
   init_fixture_repo "$RPROJ"
   # Two real seats, BOTH borrowing your login (auth is copied per seat dir
