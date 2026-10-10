@@ -332,7 +332,7 @@ ensure_herald() {
   (
     cd "$ROOT" || exit 1
     exec </dev/null >> "$HERE/logs/herald.out.log" 2>> "$HERE/logs/herald.stderr.log"
-    WHEELHOUSE_HERALD_TMUX_SESSION="$S" WHEELHOUSE_HERALD_TMUX_PANE="${S}:bridge.0" WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" nohup bun "$HERE/herald.ts" &
+    WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" nohup bun "$HERE/herald.ts" &
     herald_pid=$!
     printf '%s\n' "$herald_pid" > "$tmp_pid_file"
     disown "$herald_pid" 2>/dev/null || true
@@ -386,6 +386,13 @@ case "${1:-}" in
     exit 0
     ;;
   --pane-commander)
+    mkdir -p "$HERE/run"
+    pane_id="$(tmx display-message -p -t "${TMUX_PANE:-}" '#{pane_id}' 2>/dev/null || printf '%s' "${TMUX_PANE:-}")"
+    pane_session="$(tmx display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null || true)"
+    ROOT_JSON="$(printf '%s' "$ROOT" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    PANE_JSON="$(printf '%s' "$pane_id" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    SESSION_JSON="$(printf '%s' "$pane_session" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    printf '{ "paneId": "%s", "session": "%s", "root": "%s", "writtenAt": "%s" }\n' "$PANE_JSON" "$SESSION_JSON" "$ROOT_JSON" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$HERE/run/commander-pane.json"
     ensure_commander_poll
     cat <<EOF
 
@@ -434,7 +441,6 @@ NS="${1:-$(basename "$ROOT")}"
 S="wh-$NS"
 
 recover_dead_seats
-ensure_herald
 ensure_desk
 ensure_courier
 DESK_URL="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
@@ -509,6 +515,7 @@ if tmx has-session -t "=$S" 2>/dev/null; then
   fi
   install_resize_hook
   install_session_options
+  ensure_herald
   echo "bridge already built: $S (re-run is attach, never a duplicate)"
   attach
   exit 0
@@ -518,6 +525,7 @@ fi
 tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander"
 
 spawn_floor_pane || exit 1
+ensure_herald
 install_resize_hook
 
 # Status bar: project on the left, the key hints on the right.

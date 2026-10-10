@@ -207,7 +207,7 @@ For the human, the local desk is the standing surface: read `seats/run/desk.port
 
 There is no fixed rhythm to prescribe. The shape that worked:
 
-- Start by reading the graph, listing open needs (`bun seats/needs.ts list`), and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the herald is running (`seats/cockpit.sh --herald`) and the cockpit commander pane has launched the commander-pane visual poll. If an inbox row reports a human answer or message, read the full need with `bun seats/needs.ts show <id>`. The floor is the commander's live view; the desk board (`seats/cockpit.sh --desk`, then `/board`) is the human's read-only kanban. Deadline beads and anything blocking others first.
+- Start by reading the graph, listing open needs (`bun seats/needs.ts list`), and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the herald is running (`seats/cockpit.sh --herald` starts it but does not aim it; the herald resolves its target from the commander pane record or tmux scan) and the cockpit commander pane has launched the commander-pane visual poll. If an inbox row reports a human answer or message, read the full need with `bun seats/needs.ts show <id>`. The floor is the commander's live view; the desk board (`seats/cockpit.sh --desk`, then `/board`) is the human's read-only kanban. Deadline beads and anything blocking others first.
 - Dispatch one bead per seat, and let the seat finish before adding another.
 - Review as soon as work lands, so the author still has the context to fix a bounce cheaply.
 - Merge in batches if you like, but confirm each tip against its reported head individually.

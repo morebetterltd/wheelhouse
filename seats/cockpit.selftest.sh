@@ -207,6 +207,13 @@ if [ -n "$POLL_PID" ] && kill -0 "$POLL_PID" 2>/dev/null && grep -q "poll-root=$
 else
   fail "cockpit --pane-commander did not start poll (pid=${POLL_PID:-none} log=$(cat "$PROJ/seats/logs/poll.fixture.log" 2>/dev/null || echo none))"
 fi
+PANE0="$(tmux -L "$SOCK" list-panes -t wh-pane:bridge -F '#{pane_id}' | sed -n '1p')"
+RECORDED_PANE="$(node -e 'const fs=require("fs"); const f=process.argv[1]; try { console.log(JSON.parse(fs.readFileSync(f,"utf8")).paneId || "") } catch { console.log("") }' "$PROJ/seats/run/commander-pane.json")"
+if [ -n "$PANE0" ] && [ "$RECORDED_PANE" = "$PANE0" ]; then
+  pass "cockpit --pane-commander writes commander-pane.json for bridge pane 0"
+else
+  fail "commander-pane.json did not record bridge pane 0 (pane0=${PANE0:-none} recorded=${RECORDED_PANE:-none} file=$(cat "$PROJ/seats/run/commander-pane.json" 2>/dev/null || echo missing))"
+fi
 tmux -L "$SOCK" kill-session -t wh-pane >/dev/null 2>&1 || true
 kill "$POLL_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/commander-inbox-poll.pid"
