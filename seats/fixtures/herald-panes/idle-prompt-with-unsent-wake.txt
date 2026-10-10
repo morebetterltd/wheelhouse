@@ -1,0 +1,7 @@
+previous assistant output, generic and non-sensitive
+
+                                           ✔ Update installed · Restart to update
+─────────────────────────────────────────────────────── synthetic helper ─
+❯ check the fleet inbox                             cockpit
+  GENERIC STATUS: ready
+  GENERIC FOOTER: no private values

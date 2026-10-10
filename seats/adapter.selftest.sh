@@ -1441,6 +1441,23 @@ if [ $RC -eq 0 ] && [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null && !
 else fail "status flagged a recorded seat child as orphan or child missing (exit $RC child=${CHILD_PID:-none}): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
 
+MIXED_PROJ="$FIX/mixed-harness-orphan-proj"
+build_proj "$MIXED_PROJ" mixed
+RUN_PROJ="$MIXED_PROJ"; STATE="$MIXED_PROJ/seats/state.json"; LOG="$MIXED_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-mixed/worker-1/argv.json"
+env HOME="$HOME_FIX" PROJ="$MIXED_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["reviewer"]={role:"verifier", harness:"claude-code", provider:"anthropic", model:"sonnet", account:{dir:"~/.pi-seats-mixed/reviewer", authRoute:"oauth"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+mkdir -p "$HOME_FIX/.pi-seats-mixed/reviewer"
+printf '{"loggedIn":true}\n' > "$HOME_FIX/.pi-seats-mixed/reviewer/.claude.json"
+run spawn worker-1
+( env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bash -c "cd '$MIXED_PROJ' && exec node -e 'setInterval(()=>{},1000)' seats/drivers/claude-code/shim.ts --account-dir '$HOME_FIX/.pi-seats-mixed/reviewer' --cwd '$MIXED_PROJ'" ) &
+MIXED_CLAUDE_PID=$!
+sleep 0.5
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_ORPHAN_CONFIRM_MS=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ -n "$MIXED_CLAUDE_PID" ] && kill -0 "$MIXED_CLAUDE_PID" 2>/dev/null && ! grep -q "pid $MIXED_CLAUDE_PID" <<<"$OUT"; then
+  pass "mixed-harness status does not flag a healthy claude-code process as a pi worker orphan"
+else fail "mixed-harness claude-code process was flagged as matching the pi worker (exit $RC pid=$MIXED_CLAUDE_PID): $OUT"; fi
+kill "$MIXED_CLAUDE_PID" 2>/dev/null
+run stop worker-1 >/dev/null 2>&1
+
 ORPHAN_PROJ="$FIX/orphan-proj"
 build_proj "$ORPHAN_PROJ" orphan
 RUN_PROJ="$ORPHAN_PROJ"; STATE="$ORPHAN_PROJ/seats/state.json"; LOG="$ORPHAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-orphan/worker-1/argv.json"
