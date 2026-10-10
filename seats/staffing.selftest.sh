@@ -11,7 +11,7 @@ fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 ROOT="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/.wheelhouse-worktrees" "$BIN" "$HOME_FIX/.pi-seats-staff"
 printf 'namespace=staff\n' > "$ROOT/wheelhouse/.template-source"
 for e in e1 e2 e3 e4 rv1; do mkdir -p "$HOME_FIX/.pi-seats-staff/$e"; done
-cp "$HERE/staffing.ts" "$ROOT/seats/staffing.ts"; cp "$HERE/pool.ts" "$ROOT/seats/pool.ts"; cp "$HERE/roster.ts" "$ROOT/seats/roster.ts"; cp "$HERE/fleet-snapshot.ts" "$ROOT/seats/fleet-snapshot.ts"; cp "$HERE/seat-activity.ts" "$ROOT/seats/seat-activity.ts"; cp "$HERE/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"; cp "$HERE/harness.ts" "$ROOT/seats/harness.ts"; cp "$HERE/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"
+cp "$HERE/staffing.ts" "$ROOT/seats/staffing.ts"; cp "$HERE/pool.ts" "$ROOT/seats/pool.ts"; cp "$HERE/roster.ts" "$ROOT/seats/roster.ts"; cp "$HERE/fleet-snapshot.ts" "$ROOT/seats/fleet-snapshot.ts"; cp "$HERE/seat-activity.ts" "$ROOT/seats/seat-activity.ts"; cp "$HERE/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"; cp "$HERE/harness.ts" "$ROOT/seats/harness.ts"; cp "$HERE/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"; cp "$HERE/quota.ts" "$ROOT/seats/quota.ts"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"seats":{}}
 JSON
@@ -72,25 +72,55 @@ EOF
 # Fixture shape note: bd ready/list rows above were built after capturing real `bd ready --json` and `bd list --json`; ids/titles are synthetic.
 run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && grep -q 'worker-e1 m1' "$ROOT/spawn-models.log" && pass 'G4-15 add-worker places first listed free entry with role model' || fail "add-worker failed rc=$RC out=$OUT"
+run env BD_READY_COUNT=3 bun seats/staffing.ts check
+[ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && grep -q 'reason="nothing to do"' <<<"$OUT" && pass 'G4-15 free worker exists with ready work -> nothing' || fail "free-worker row failed: $OUT"
+python3 - <<PY
+import json; p='$ROOT/seats/state.json'; j=json.load(open(p)); j['seats']['worker-e1']['lastBead']='busy-bead'; json.dump(j,open(p,'w'))
+PY
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e2' <<<"$OUT" || fail "second add did not use e2: $OUT"
+python3 - <<PY
+import json; p='$ROOT/seats/state.json'; j=json.load(open(p)); j['seats']['worker-e2']['lastBead']='busy-bead'; json.dump(j,open(p,'w'))
+PY
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e3' <<<"$OUT" || fail "third add did not use e3: $OUT"
+python3 - <<PY
+import json; p='$ROOT/seats/state.json'; j=json.load(open(p)); j['seats']['worker-e3']['lastBead']='busy-bead'; json.dump(j,open(p,'w'))
+PY
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e4' <<<"$OUT" || fail "fourth add did not use e4: $OUT"
 run env BD_READY_COUNT=6 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'reason="at limit: workers 4/4"' <<<"$OUT" && pass 'G4-18/G4-23 burst grows 1→4 then G4-16 clamps at max' || fail "at max clamp failed: $OUT"
 rm -f "$ROOT/seats/staffing.json" "$ROOT/seats/state.json" "$ROOT/spawn-models.log"; rm -rf "$ROOT/.wheelhouse-worktrees"; mkdir -p "$ROOT/.wheelhouse-worktrees"
 run bun seats/staffing.ts flag e1 --reason synthetic-limit; run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'seat=worker-e2' <<<"$OUT" && pass 'G4-24 rate-limited entry is skipped' || fail "rate limit skip failed: $OUT"
-run bun seats/staffing.ts probe e1 >/dev/null; run env BD_READY_COUNT=1 bun seats/staffing.ts check
+run bun seats/staffing.ts probe e1 >/dev/null; run env BD_READY_COUNT=1 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'seat=worker-e1' <<<"$OUT" && pass 'G4-24 probe OK clears rate limit for next add' || fail "probe clear failed: $OUT"
-# Prepare shrink: e1/e2 live and old idle; min=1 means one drop then clamp.
+# No free subscription while under max: staffing records occupy every entry.
 python3 - <<PY
 import json, pathlib
-p=pathlib.Path('$ROOT/seats/staffing.json'); j=json.load(open(p)); j['seats']={'worker-e1':{'role':'worker','entry':'e1'},'worker-e2':{'role':'worker','entry':'e2'}}; json.dump(j,open(p,'w'))
+p=pathlib.Path('$ROOT/seats/staffing.json'); j=json.load(open(p)); j['seats']={f'worker-e{i}':{'role':'worker','entry':f'e{i}'} for i in range(1,5)}; json.dump(j,open(p,'w'))
 PY
+run env BD_READY_COUNT=1 bun seats/staffing.ts check --dry-run --decision add-worker
+[ $RC -eq 0 ] && grep -q 'reason="no free subscription for workers"' <<<"$OUT" && pass 'G4-26 all entries occupied -> no free subscription' || fail "no-free-subscription failed: $OUT"
+
+# Prepare shrink: e1/e2/e3 live and old idle; min=1 means successive checks drop to min.
+python3 - <<PY
+import json, pathlib
+p=pathlib.Path('$ROOT/seats/staffing.json'); j=json.load(open(p)); j['seats']={'worker-e1':{'role':'worker','entry':'e1'},'worker-e2':{'role':'worker','entry':'e2'},'worker-e3':{'role':'worker','entry':'e3'}}; json.dump(j,open(p,'w'))
+PY
+(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/adapter.ts spawn worker-e3 >/dev/null 2>&1)
 run env BD_READY_COUNT=0 bun seats/staffing.ts check
-[ $RC -eq 0 ] && grep -q 'decision=drop-seat' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && [ ! -d "$ROOT/.wheelhouse-worktrees/worker-e1" ] && pass 'G4-20/G4-30 idle shrink drops oldest idle and removes worktree' || fail "drop failed: $OUT"
-run env BD_READY_COUNT=0 bun seats/staffing.ts check --decision drop-seat
+if python3 - <<PY
+import json; assert 'worker-e1' not in json.load(open('$ROOT/seats/state.json'))['seats']
+PY
+then STATE_REMOVED=1; else STATE_REMOVED=0; fi
+[ $RC -eq 0 ] && grep -q 'decision=drop-seat' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && [ ! -d "$ROOT/.wheelhouse-worktrees/worker-e1" ] && [ "$STATE_REMOVED" = 1 ] && pass 'G4-20/G4-30 first idle shrink removes pid/state/worktree and frees entry' || fail "first drop failed: $OUT state=$(cat "$ROOT/seats/state.json" 2>/dev/null)"
+run env BD_READY_COUNT=0 bun seats/staffing.ts check
+[ $RC -eq 0 ] && grep -q 'decision=drop-seat' <<<"$OUT" && grep -q 'seat=worker-e2' <<<"$OUT" && pass 'G4-20 successive checks keep dropping oldest idle until min' || fail "second drop failed: $OUT"
+run env BD_READY_COUNT=0 bun seats/staffing.ts drop worker-e3
 [ $RC -eq 0 ] && grep -q 'reason="at minimum: workers 1/1"' <<<"$OUT" && pass 'G4-31 drop clamp refuses below minimum' || fail "min clamp failed: $OUT"
+run env BD_READY_COUNT=0 bun seats/staffing.ts check --decision drop-seat
+[ $RC -eq 0 ] && grep -q 'reason="drop needs a seat"' <<<"$OUT" && pass 'drop-seat decision without a seat logs nothing' || fail "drop-seat without seat failed: $OUT"
+run env BD_READY_COUNT=1 bun seats/staffing.ts check --decision add-worker
+[ $RC -eq 0 ] && grep -q 'seat=worker-e1' <<<"$OUT" && pass 'G4-30 next add reuses the freed entry' || fail "freed entry was not reused: $OUT"
 # Busy seat protected; idle extra goes.
 run env BD_READY_COUNT=1 bun seats/staffing.ts check >/dev/null
 python3 - <<PY
@@ -119,10 +149,23 @@ p='$ROOT/seats/pool.json'; j=json.load(open(p)); j['roles']['workers']['min']=j[
 PY
 run env BD_READY_COUNT=6 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'at limit: workers 1/1' <<<"$OUT" && pass 'G4-5 min=max pins worker scale-out' || fail "min=max failed: $OUT"
+run env BD_READY_COUNT=0 bun seats/staffing.ts check
+[ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && ! grep -q 'decision=drop-seat' <<<"$OUT" && pass 'G4-5 min=max pins empty queue against drop' || fail "min=max empty queue failed: $OUT"
+run env BD_READY_COUNT=0 bun seats/staffing.ts check --decision add-reviewer
+[ $RC -eq 0 ] && grep -q 'reason="reviewers: not yet scalable"' <<<"$OUT" && pass 'add-reviewer decision is clamped to not-yet-scalable in this bead' || fail "add-reviewer clamp failed: $OUT"
+# Safe worktree removal refusals used by drop.
+git -C "$ROOT" worktree add --detach "$ROOT/.wheelhouse-worktrees/worker-dirty" HEAD >/dev/null 2>&1
+printf 'dirty\n' > "$ROOT/.wheelhouse-worktrees/worker-dirty/local.txt"
+if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e 'import { removeSeatWorktree } from "./seats/seat-worktree.ts"; try { removeSeatWorktree(process.cwd(), "worker-dirty"); process.exit(1); } catch (e) { if (!String(e.message).includes("real changes")) process.exit(2); }'); then pass 'drop worktree removal refuses dirty worktrees'; else fail 'dirty worktree refusal failed'; fi
+git -C "$ROOT/.wheelhouse-worktrees/worker-dirty" reset --hard >/dev/null 2>&1; git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-dirty" >/dev/null 2>&1
+git -C "$ROOT" worktree add --detach "$ROOT/.wheelhouse-worktrees/worker-unpushed" HEAD >/dev/null 2>&1
+if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_SEAT_PUSH=on bun -e 'import { removeSeatWorktree } from "./seats/seat-worktree.ts"; try { removeSeatWorktree(process.cwd(), "worker-unpushed"); process.exit(1); } catch (e) { if (!String(e.message).includes("not on a remote")) process.exit(2); }'); then pass 'drop worktree removal refuses unpushed tips when seat_push=on'; else fail 'unpushed-tip refusal failed'; fi
+git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-unpushed" >/dev/null 2>&1
 # log line fields/reasons.
-awk 'NF{line=$0} END{print line}' "$ROOT/seats/logs/staffing.log" | grep -Eq 'decision=.* decider=rule conf=0.00 ready=[0-9]+ chained=[0-9]+ overlap=[0-9]+ backlog=[0-9]+ workers=[0-9]+/[0-9]+\.\.[0-9]+ reviewers=[0-9]+/[0-9]+\.\.[0-9]+ seat=.* entry=.* reason="[^"]+"' && pass 'G4-39/G4-40 decision log has one parseable plain-English line per check' || fail 'log shape failed'
+LOG_LINES=$(wc -l < "$ROOT/seats/logs/staffing.log" | tr -d ' ')
+awk 'NF{line=$0} END{print line}' "$ROOT/seats/logs/staffing.log" | grep -Eq 'decision=.* decider=rule conf=0.00 ready=[0-9]+ chained=[0-9]+ overlap=[0-9]+ backlog=[0-9]+ workers=[0-9]+/[0-9]+\.\.[0-9]+ reviewers=[0-9]+/[0-9]+\.\.[0-9]+ seat=.* entry=.* reason="[^"]+"' && [ "$LOG_LINES" -ge 12 ] && pass 'G4-39/G4-40 decision log has one parseable plain-English line per check' || fail "log shape/count failed lines=$LOG_LINES"
 # no pool touches nothing.
-NOPOOL="$FIX/nopool"; mkdir -p "$NOPOOL/seats" "$NOPOOL/wheelhouse"; for f in staffing.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts; do cp "$HERE/$f" "$NOPOOL/seats/$f"; done; before=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)
+NOPOOL="$FIX/nopool"; mkdir -p "$NOPOOL/seats" "$NOPOOL/wheelhouse"; for f in staffing.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts; do cp "$HERE/$f" "$NOPOOL/seats/$f"; done; before=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)
 OUT="$(cd "$NOPOOL" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts check 2>&1)"; RC=$?; after=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)
 [ $RC -eq 0 ] && grep -q 'staffing: no pool (fixed roster)' <<<"$OUT" && [ "$before" = "$after" ] && pass 'no pool exits 0 and touches nothing' || fail "no-pool failed rc=$RC out=$OUT"
 # Canary: removing clamp makes at-max leg fail.

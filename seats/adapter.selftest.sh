@@ -366,6 +366,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   cp "$ADAPTER_DIR/roster.ts" "$proj/seats/roster.ts"
   cp "$ADAPTER_DIR/credential-shapes.ts" "$proj/seats/credential-shapes.ts"
   cp "$ADAPTER_DIR/host-budget.ts" "$proj/seats/host-budget.ts"
+  cp "$ADAPTER_DIR/quota.ts" "$proj/seats/quota.ts"
   cp "$HARNESS" "$proj/seats/harness.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$FLOOR" "$proj/seats/floor.ts"
@@ -850,7 +851,7 @@ process.stdin.on('data',d=>{buf+=d;let i;while((i=buf.indexOf('\n'))>=0){const l
 CODEXSTUB
 chmod +x "$CODEX_TMP/bin/codex"
 printf 'worker brief\n' > "$CODEX_TMP/proj/contracts/WORKER.md"; printf 'x\n' > "$CODEX_TMP/proj/contracts/COMMANDER.md"; printf 'x\n' > "$CODEX_TMP/proj/contracts/REVIEWER.md"
-mkdir -p "$CODEX_TMP/proj/seats/bin"; cp "$CODEX_TMP/bin/codex" "$CODEX_TMP/proj/seats/bin/codex"; printf '{}\n' > "$CODEX_TMP/proj/seats/host-budget.json"; cp "$PWD/seats/adapter.ts" "$CODEX_TMP/proj/seats/adapter.ts"; cp "$PWD/seats/seat-activity.ts" "$CODEX_TMP/proj/seats/seat-activity.ts"; cp "$PWD/seats/seat-worktree.ts" "$CODEX_TMP/proj/seats/seat-worktree.ts"; cp "$PWD/seats/pool.ts" "$CODEX_TMP/proj/seats/pool.ts"; cp "$PWD/seats/roster.ts" "$CODEX_TMP/proj/seats/roster.ts"; cp "$PWD/seats/credential-shapes.ts" "$CODEX_TMP/proj/seats/credential-shapes.ts"; cp -R "$PWD/seats/drivers" "$CODEX_TMP/proj/seats/drivers"; cp "$PWD/seats/host-budget.ts" "$CODEX_TMP/proj/seats/host-budget.ts"; cp "$PWD/seats/briefs.ts" "$CODEX_TMP/proj/seats/briefs.ts"; cp "$PWD/seats/harness.ts" "$CODEX_TMP/proj/seats/harness.ts"
+mkdir -p "$CODEX_TMP/proj/seats/bin"; cp "$CODEX_TMP/bin/codex" "$CODEX_TMP/proj/seats/bin/codex"; printf '{}\n' > "$CODEX_TMP/proj/seats/host-budget.json"; cp "$PWD/seats/adapter.ts" "$CODEX_TMP/proj/seats/adapter.ts"; cp "$PWD/seats/seat-activity.ts" "$CODEX_TMP/proj/seats/seat-activity.ts"; cp "$PWD/seats/seat-worktree.ts" "$CODEX_TMP/proj/seats/seat-worktree.ts"; cp "$PWD/seats/pool.ts" "$CODEX_TMP/proj/seats/pool.ts"; cp "$PWD/seats/roster.ts" "$CODEX_TMP/proj/seats/roster.ts"; cp "$PWD/seats/credential-shapes.ts" "$CODEX_TMP/proj/seats/credential-shapes.ts"; cp -R "$PWD/seats/drivers" "$CODEX_TMP/proj/seats/drivers"; cp "$PWD/seats/host-budget.ts" "$CODEX_TMP/proj/seats/host-budget.ts"; cp "$PWD/seats/quota.ts" "$CODEX_TMP/proj/seats/quota.ts"; cp "$PWD/seats/briefs.ts" "$CODEX_TMP/proj/seats/briefs.ts"; cp "$PWD/seats/harness.ts" "$CODEX_TMP/proj/seats/harness.ts"
 cat > "$CODEX_TMP/proj/seats/seats.json" <<JSON
 {"seats":{"worker-1":{"role":"worker","harness":"codex","provider":"openai-codex","model":"gpt-5.5","account":{"dir":"$CODEX_TMP/home/codex","authRoute":"oauth"}}}}
 JSON
