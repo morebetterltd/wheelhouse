@@ -404,7 +404,10 @@ seat's account — no session saved, nothing to resume — with
 the resolved REVIEWER brief appended to the system prompt, hands it the bead
 claim (via `bd show` when `bd` is reachable, otherwise the verifier reads
 the bead itself) and the branch's tip SHA, and parses the single
-`VERDICT:` line out of the reply.
+`VERDICT:` line out of the reply. With a pool and no explicit verifier,
+`verify.ts` picks the first free non-external verifier identity whose
+canonical `account.dir` differs from the author; staffed reviewer identities
+are named `verifier-<entry>` and are never spawned by staffing.
 
 Unlike a worker seat, the verifier's process cwd is never a bead's
 worktree — but as of this bead it is not the project root either. The

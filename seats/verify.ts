@@ -799,7 +799,14 @@ function authRouteIdentity(name: string, entry: SeatEntry, authFile: string, har
   return authIsIdentity(authFile);
 }
 
-function requireVerifierSeat(explicit: string | undefined): { name: string; entry: SeatEntry } {
+function verifyMarkerLive(seat: string): boolean {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "run", `verify.${seat}.json`), "utf8"));
+    return !!m?.pid && (() => { try { process.kill(Number(m.pid), 0); return true; } catch { return false; } })();
+  } catch { return false; }
+}
+
+function requireVerifierSeat(explicit: string | undefined, authorSeat: string): { name: string; entry: SeatEntry } {
   const roster = readRoster();
   if (explicit) {
     const entry = roster[explicit];
@@ -810,13 +817,13 @@ function requireVerifierSeat(explicit: string | undefined): { name: string; entr
     return { name: explicit, entry };
   }
   const verifiers = Object.entries(roster).filter(([, e]) => e.role === "verifier" && !e.external);
-  if (verifiers.length === 0) {
-    die(`no seat with role "verifier" in seats/seats.json — add one (its account.dir must differ from every author's)`);
-  }
-  if (verifiers.length > 1) {
-    die(`multiple verifier seats (${verifiers.map(([n]) => n).join(", ")}) — name one: verify.ts <bead-id> <branch> <author-seat> <verifier-seat>`);
-  }
-  return { name: verifiers[0][0], entry: verifiers[0][1] };
+  if (verifiers.length === 0) die(`no seat with role "verifier" in seats/seats.json — add one (its account.dir must differ from every author's)`);
+  const authorDir = canonicalDir(accountDirFor(authorSeat));
+  const distinct = verifiers.filter(([, e]) => e.account?.dir && canonicalDir(e.account.dir) !== authorDir);
+  if (distinct.length === 0) die(`verifier seat and author seat "${authorSeat}" resolve to the SAME account directory; waiting for a reviewer on a different subscription. Same directory means same auth.json means same account, and a verdict from the author's own account is not a verdict. Nothing was spawned.`);
+  const free = distinct.find(([n]) => !verifyMarkerLive(n));
+  if (!free) { console.error(`all eligible verifier seats busy (${distinct.map(([n]) => n).join(", ")}) — retry later`); process.exit(4); }
+  return { name: free[0], entry: free[1] };
 }
 
 function beadClaim(beadId: string): string {
@@ -987,7 +994,7 @@ async function main(): Promise<void> {
     die(e.message);
   }
 
-  const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg, authorSeat);
   let verifierHarness: ReturnType<typeof harnessNameForSeat>;
   try {
     verifierHarness = harnessNameForSeat(verifierSeat, entry);
