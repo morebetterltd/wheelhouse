@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { hasPool, loadPool, seatEntryFor, staffedSeatName, type Pool } from "./pool";
 import { staffingPath, type StaffingFile } from "./roster";
-import { fleetSnapshot, freeWorkers, freeReviewers, type Snapshot } from "./fleet-snapshot";
+import { fleetSnapshot, freeWorkers, freeReviewers, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
 import { removeSeatWorktree } from "./seat-worktree";
 import { QUOTA_RE } from "./quota";
@@ -69,7 +69,8 @@ function freeCount(snap: Snapshot, role: Role): number { return role === "worker
 export function decide(snap: Snapshot, pool: Pool, staffing: StaffingFile, override?: DecisionKind): Decision {
   const workerRole = pool.roles.workers, reviewerRole = pool.roles.reviewers;
   if (override) return { kind: override, role: override.includes("worker") || override === "drop-seat" ? "workers" : override.includes("reviewer") ? "reviewers" : undefined, reason: "manual override", decider: "rule" };
-  if (workerRole && snap.readyCount > 0 && freeWorkers(snap).length === 0 && liveCount(snap, "workers") < workerRole.max) return { kind: "add-worker", role: "workers", reason: "ready work and no free worker", decider: "rule" };
+  const readyAndNobodyOnIt = readyWorkNobodyOnIt(snap);
+  if (workerRole && snap.readyCount > 0 && freeWorkers(snap).length === 0 && liveCount(snap, "workers") < workerRole.max) return { kind: "add-worker", role: "workers", reason: readyAndNobodyOnIt ? "ready work and nobody on it" : "ready work and no free worker", decider: "rule" };
   const needsEligibleReviewer = snap.reviewBacklog.some((item) => !freeReviewers(snap).some((r) => r.accountDir && item.authorAccountDir && r.accountDir !== item.authorAccountDir));
   if (reviewerRole && snap.reviewBacklog.length > 0 && needsEligibleReviewer && liveCount(snap, "reviewers") < reviewerRole.max) return { kind: "add-reviewer", role: "reviewers", reason: "review backlog and no eligible free reviewer", decider: "rule" };
   const idleMinutes = pool.idle_drop_minutes ?? 30;

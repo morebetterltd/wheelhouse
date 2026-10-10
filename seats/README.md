@@ -44,6 +44,7 @@ The main files here:
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
 - `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and verifier markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
+- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, alerts}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work and invalid commander panes open/close human needs through `seats/needs.ts` only.
 - `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
@@ -695,6 +696,7 @@ bash seats/walk.selftest.sh
 bash seats/prune.selftest.sh
 bash seats/staffing.selftest.sh
 bash seats/staffing-live.selftest.sh
+bash seats/alerts.selftest.sh
 bash seats/never-lose-work.selftest.sh
 bash seats/intent-check.selftest.sh
 bash seats/specimen-leak.selftest.sh

@@ -14,7 +14,7 @@ export interface LiveWorker { name: string; entry: string | null; accountDir: st
 export interface LiveReviewer { name: string; entry: string | null; accountDir: string | null; busy: boolean }
 export interface Snapshot { at: string; ready: ReadyItem[]; readyCount: number; chainedCount: number; overlapCount: number; reviewBacklog: BacklogItem[]; workers: { live: LiveWorker[]; idle: number; busy: number }; reviewers: { live: LiveReviewer[]; idle: number; busy: number }; changes: { isaHead: string | null; isaChanged: boolean; newEpics: number } }
 
-function stop(msg: string): never { console.error(`STOP: ${msg}`); process.exit(2); }
+function stop(msg: string): never { throw new Error(`STOP: ${msg}`); }
 function readJson(file: string): any { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } }
 function runBd(root: string, args: string[]): any[] {
   const r = spawnSync("bd", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000, maxBuffer: 16 * 1024 * 1024 });
@@ -125,8 +125,13 @@ export function freeWorkers(snap: Snapshot): LiveWorker[] { return snap.workers.
 export function freeReviewers(snap: Snapshot): LiveReviewer[] { return snap.reviewers.live.filter((r) => !r.busy); }
 
 if (import.meta.main) {
-  const json = process.argv.includes("--json");
-  const snap = fleetSnapshot(ROOT);
-  if (json) console.log(JSON.stringify(snap, null, 2));
-  else console.log(`ready ${snap.readyCount} (${snap.chainedCount} chained, ${snap.overlapCount} overlapping) · review backlog ${snap.reviewBacklog.length} · workers ${snap.workers.live.length} live/${snap.workers.idle} idle · reviewers ${snap.reviewers.live.length} live/${snap.reviewers.idle} idle · nobody-on-it=${readyWorkNobodyOnIt(snap) ? "yes" : "no"}`);
+  try {
+    const json = process.argv.includes("--json");
+    const snap = fleetSnapshot(ROOT);
+    if (json) console.log(JSON.stringify(snap, null, 2));
+    else console.log(`ready ${snap.readyCount} (${snap.chainedCount} chained, ${snap.overlapCount} overlapping) · review backlog ${snap.reviewBacklog.length} · workers ${snap.workers.live.length} live/${snap.workers.idle} idle · reviewers ${snap.reviewers.live.length} live/${snap.reviewers.idle} idle · nobody-on-it=${readyWorkNobodyOnIt(snap) ? "yes" : "no"}`);
+  } catch (e: any) {
+    console.error(String(e?.message ?? e));
+    process.exit(2);
+  }
 }
