@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fleetSnapshot, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
+import { acquirePidLock, releasePidLock } from "./lock";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_ALERTS_ROOT || path.join(import.meta.dir, ".."));
 const SEATS = path.join(ROOT, "seats");
@@ -25,8 +26,8 @@ function appendLog(s:string){ fs.mkdirSync(LOGS,{recursive:true}); fs.appendFile
 function templateValue(key:string):string{ try { const m=fs.readFileSync(path.join(ROOT,"wheelhouse",".template-source"),"utf8").match(new RegExp(`^${key}=(.*)$`,"m")); return m?.[1]?.trim() ?? ""; } catch { return ""; } }
 function minutesValue(key:string, def:number):number{ const n=Number(templateValue(key)); return Number.isFinite(n) ? n : def; }
 function gbValue(key:string, def:number):number{ const n=Number(templateValue(key)); return Number.isFinite(n) ? n : def; }
-function acquireLock():number|null{ fs.mkdirSync(RUN,{recursive:true}); try { return fs.openSync(LOCK,"wx"); } catch(e:any){ if(e?.code!=="EEXIST") throw e; try { const st=fs.statSync(LOCK); if(Date.now()-st.mtimeMs>10*60_000){ fs.unlinkSync(LOCK); return fs.openSync(LOCK,"wx"); } } catch{} return null; } }
-function releaseLock(fd:number|null){ if(fd!==null){ try{fs.closeSync(fd);}catch{} try{fs.unlinkSync(LOCK);}catch{} } }
+function acquireLock():number|null{ return acquirePidLock(LOCK); }
+function releaseLock(fd:number|null){ releasePidLock(LOCK, fd); }
 function intervalMs(){ const n=Number(process.env.WHEELHOUSE_ALERT_INTERVAL_MS ?? ""); return Number.isFinite(n)&&n>=0?Math.floor(n):DEFAULT_INTERVAL_MS; }
 
 export function inboxStats(root=ROOT){
