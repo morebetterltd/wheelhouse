@@ -1081,7 +1081,13 @@ async function main(): Promise<void> {
   // worktree — construction closing the confused-writer hazard, still
   // distinct from adapter.ts's per-bead worker seats (a worker's cwd needs
   // to BE the bead; the verifier's cwd only needs to be A repository the
-  // branch's ref resolves from, which any worktree of this repo is). See
+  // branch's ref resolves from, which any worktree of this repo is). The
+  // deleted-path core.worktree leak came from the old verifier launch that
+  // exported GIT_DIR/GIT_WORK_TREE for this scratch worktree into the one-shot
+  // reviewer process; any `git config --local core.worktree ...` the reviewer
+  // ran with that environment wrote to the product repo's common config. That
+  // environment leak is removed, and makeScratchCwd snapshots/restores the
+  // product repo config in case a child still clobbers it mid-run. See
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
   assertHostBuildLockAvailable();
