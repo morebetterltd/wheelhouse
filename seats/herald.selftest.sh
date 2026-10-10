@@ -642,7 +642,8 @@ cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 JSONL
 seed_log_cursor worker-1.jsonl 0
 RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-never-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
-POLL_RC=0; POLL_OUT="$(cp "$ROOT/seats/herald.ts" "$PROJ/seats/herald.ts" && cp "$ROOT/seats/commander-inbox-poll.sh" "$PROJ/seats/commander-inbox-poll.sh" && chmod +x "$PROJ/seats/commander-inbox-poll.sh" && WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$PROJ/seats/commander-inbox-poll.sh" --once 2>&1)" || POLL_RC=$?
+selftest_copy_seat_runtime "$PROJ" "$ROOT/seats"
+POLL_RC=0; POLL_OUT="$(chmod +x "$PROJ/seats/commander-inbox-poll.sh" && WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$PROJ/seats/commander-inbox-poll.sh" --once 2>&1)" || POLL_RC=$?
 CURSOR_AFTER_POLL="$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo 0)"
 POLL_OUT2="$(WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$PROJ/seats/commander-inbox-poll.sh" --once 2>&1)"; POLL2_RC=$?
 BEFORE_IDLE_SENDS="$(line_count "$SEND_LOG")"
@@ -658,9 +659,7 @@ fi
 # cockpit.sh starts/verifies/restarts the herald before it builds or attaches
 # the bridge. The fake records a session so the second run takes the idempotent
 # existing-session path.
-cp "$ROOT/seats/herald.ts" "$PROJ/seats/herald.ts"
-cp "$ROOT/seats/cockpit.sh" "$PROJ/seats/cockpit.sh"
-cp "$ROOT/seats/daemons.sh" "$ROOT/seats/supervisor.sh" "$PROJ/seats/"
+selftest_copy_seat_runtime "$PROJ" "$ROOT/seats"
 chmod +x "$PROJ/seats/cockpit.sh" "$PROJ/seats/daemons.sh" "$PROJ/seats/supervisor.sh"
 cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);

@@ -43,7 +43,7 @@ PY
 }
 make_proj(){
   local p="$1"; mkdir -p "$p/seats/transports" "$p/seats/run" "$p/seats/logs" "$p/wheelhouse"
-  cp "$COURIER" "$p/seats/courier.ts"; cp "$NEEDS" "$p/seats/needs.ts"; cp "$COMMS" "$p/seats/comms.ts"; cp "$CHANNELS" "$p/seats/channels.ts"; cp "$TELEGRAM" "$p/seats/transports/telegram.ts"; cp "$SLACK" "$p/seats/transports/slack.ts"; cp "$TEAMS" "$p/seats/transports/teams.ts"; cp "$INDEX" "$p/seats/transports/index.ts"; cp "$TRANSPORT" "$p/seats/transports/transport.ts"
+  selftest_copy_seat_runtime "$p" "$HERE"
   printf 'namespace=demo\n' > "$p/wheelhouse/.template-source"
   printf 'TESTTOKEN\n' > "$p/seats/run/telegram.token"; chmod 600 "$p/seats/run/telegram.token"
   printf '111\n' > "$p/seats/run/telegram.allow"

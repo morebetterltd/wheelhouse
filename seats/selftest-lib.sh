@@ -34,6 +34,17 @@ selftest_make_fixture_dir() {
   : > "$fixture/.wheelhouse-selftest-fixture"
   printf '%s\n' "$fixture"
 }
+selftest_copy_seat_runtime() {
+  dest_root="${1:-}"
+  src_seats="${2:-$(selftest_lib_root)/seats}"
+  [ -n "$dest_root" ] || { echo "STOP: selftest_copy_seat_runtime needs destination root" >&2; return 2; }
+  [ -d "$src_seats" ] || { echo "STOP: selftest_copy_seat_runtime source missing: $src_seats" >&2; return 2; }
+  mkdir -p "$dest_root/seats"
+  find "$src_seats" -maxdepth 1 \( -name '*.ts' -o -name '*.sh' \) ! -name '*.selftest.sh' -type f -exec cp -f {} "$dest_root/seats/" \;
+  [ ! -d "$src_seats/drivers" ] || { rm -rf "$dest_root/seats/drivers"; cp -R "$src_seats/drivers" "$dest_root/seats/drivers"; }
+  [ ! -d "$src_seats/transports" ] || { rm -rf "$dest_root/seats/transports"; cp -R "$src_seats/transports" "$dest_root/seats/transports"; }
+}
+
 selftest_remove_fixture_dir() {
   fixture="${1:-}"
   [ -n "$fixture" ] || return 0

@@ -10,7 +10,7 @@ fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/wheelhouse"
-cp "$HERE/supervisor.sh" "$HERE/daemons.sh" "$PROJ/seats/"; chmod +x "$PROJ/seats/supervisor.sh" "$PROJ/seats/daemons.sh"
+selftest_copy_seat_runtime "$PROJ" "$HERE"; chmod +x "$PROJ/seats/supervisor.sh" "$PROJ/seats/daemons.sh"
 for d in herald desk courier; do cat > "$PROJ/seats/$d.ts" <<'TS'
 if (process.env.WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY === "1") { console.error("synthetic crash"); process.exit(42); }
 setInterval(() => {}, 1000);

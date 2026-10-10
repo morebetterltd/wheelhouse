@@ -20,7 +20,7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-channels-selftest.X
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 
-mkroot(){ local r="$1"; mkdir -p "$r/seats"; cp "$CHANNELS" "$r/seats/channels.ts"; }
+mkroot(){ local r="$1"; mkdir -p "$r/seats"; selftest_copy_seat_runtime "$r" "$HERE"; }
 run(){ local r="$1"; shift; RC=0; OUT="$(WHEELHOUSE_COMMS_ROOT="$r" bun "$r/seats/channels.ts" "$@" 2>&1)" || RC=$?; }
 write_json(){ local r="$1" body="$2"; mkdir -p "$r/seats"; printf '%s\n' "$body" > "$r/seats/channels.json"; }
 
@@ -52,7 +52,7 @@ ROOT8="$FIX/reed"; mkroot "$ROOT8"; write_json "$ROOT8" '{"version":1,"channels"
 phase 'canary: duplicate-principal leg catches a broken loader'
 SAB="$FIX/channels-no-dup-check.ts"
 perl -0pe 's/if \(principalCount > 1\) fail\("at most one channel may have audience principal"\);/\/\/ duplicate principal check removed by canary/ or die "canary replacement missed\n"' "$CHANNELS" > "$SAB" || exit 2
-ROOT9="$FIX/canary"; mkdir -p "$ROOT9/seats"; cp "$SAB" "$ROOT9/seats/channels.ts"; write_json "$ROOT9" '{"version":1,"channels":{"one":{"kind":"telegram","destination":"@one","audience":"principal"},"two":{"kind":"slack","destination":"C0EXAMPLE","audience":"principal"}}}' ; run "$ROOT9" check
+ROOT9="$FIX/canary"; mkdir -p "$ROOT9/seats"; selftest_copy_seat_runtime "$ROOT9" "$HERE"; cp "$SAB" "$ROOT9/seats/channels.ts"; write_json "$ROOT9" '{"version":1,"channels":{"one":{"kind":"telegram","destination":"@one","audience":"principal"},"two":{"kind":"slack","destination":"C0EXAMPLE","audience":"principal"}}}' ; run "$ROOT9" check
 if [ "$RC" -eq 0 ]; then pass 'canary: removing duplicate-principal check makes the planted duplicate leg fail'
 else fail "canary did not produce the expected broken-loader false pass rc=$RC: $OUT"; fi
 
