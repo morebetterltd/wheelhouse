@@ -392,7 +392,8 @@ case "${1:-}" in
   ┌─ COMMANDER PANE ──────────────────────────────────────────────┐
   │ This is the commander's seat. Launch your interactive         │
   │ commander here yourself — the cockpit never does it for you.  │
-  │ cockpit has started commander-inbox-poll.sh for this pane.    │
+  │ cockpit has started commander-inbox-poll.sh for visual hints; │
+  │ drain with: bun seats/herald.ts --drain                       │
   │ Needs desk: ${DESK_URL:-not started}                          │
   │                                                               │
   │     cd $ROOT
