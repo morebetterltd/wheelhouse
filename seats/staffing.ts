@@ -4,11 +4,12 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { hasPool, loadPool, seatEntryFor, staffedSeatName, type Pool } from "./pool";
 import { staffingPath, type StaffingFile } from "./roster";
-import { fleetSnapshot, freeWorkers, freeReviewers, type Snapshot } from "./fleet-snapshot";
+import { fleetSnapshot, freeWorkers, freeReviewers, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
 import { removeSeatWorktree } from "./seat-worktree";
 import { QUOTA_RE } from "./quota";
 import { askChoice, jevConfig } from "./jev";
+import { acquirePidLock, releasePidLock } from "./lock";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
@@ -25,17 +26,8 @@ function writeJsonAtomic(file: string, value: any): void { fs.mkdirSync(path.dir
 function emptyStaffing(): StaffingFile { return { version: 1, seats: {}, rateLimited: {} }; }
 function readStaffing(root = ROOT): StaffingFile { const v = readJson(staffingPath(root)); return v && v.version === 1 ? { version: 1, seats: v.seats ?? {}, rateLimited: v.rateLimited ?? {}, lastCheck: v.lastCheck } : emptyStaffing(); }
 function writeStaffing(root: string, s: StaffingFile) { writeJsonAtomic(staffingPath(root), s); }
-function acquireLock(): number | null {
-  fs.mkdirSync(RUN_DIR, { recursive: true });
-  try { const fd = fs.openSync(LOCK_FILE, "wx", 0o600); fs.writeFileSync(fd, `${process.pid}\n`); return fd; }
-  catch (e: any) {
-    if (e?.code !== "EEXIST") throw e;
-    const owner = Number((fs.existsSync(LOCK_FILE) ? fs.readFileSync(LOCK_FILE, "utf8") : "").trim());
-    if (owner && !pidAlive(owner)) { try { fs.rmSync(LOCK_FILE, { force: true }); return acquireLock(); } catch {} }
-    return null;
-  }
-}
-function releaseLock(fd: number | null) { if (fd === null) return; try { fs.closeSync(fd); } catch {} try { fs.rmSync(LOCK_FILE, { force: true }); } catch {} }
+function acquireLock(): number | null { return acquirePidLock(LOCK_FILE); }
+function releaseLock(fd: number | null) { releasePidLock(LOCK_FILE, fd); }
 function canon(p?: string): string | null { if (!p) return null; const x = p.startsWith("~/") ? path.join(process.env.HOME ?? "", p.slice(2)) : p; try { return fs.realpathSync(x); } catch { return path.resolve(x); } }
 function occupiedEntries(root: string, staffing: StaffingFile): Set<string> {
   const out = new Set<string>();
@@ -70,7 +62,8 @@ function freeCount(snap: Snapshot, role: Role): number { return role === "worker
 export function decide(snap: Snapshot, pool: Pool, staffing: StaffingFile, override?: DecisionKind): Decision {
   const workerRole = pool.roles.workers, reviewerRole = pool.roles.reviewers;
   if (override) return { kind: override, role: override.includes("worker") || override === "drop-seat" ? "workers" : override.includes("reviewer") ? "reviewers" : undefined, reason: "manual override", decider: "rule" };
-  if (workerRole && snap.readyCount > 0 && freeWorkers(snap).length === 0 && liveCount(snap, "workers") < workerRole.max) return { kind: "add-worker", role: "workers", reason: "ready work and no free worker", decider: "rule" };
+  const readyAndNobodyOnIt = readyWorkNobodyOnIt(snap);
+  if (workerRole && snap.readyCount > 0 && freeWorkers(snap).length === 0 && liveCount(snap, "workers") < workerRole.max) return { kind: "add-worker", role: "workers", reason: readyAndNobodyOnIt ? "ready work and nobody on it" : "ready work and no free worker", decider: "rule" };
   const needsEligibleReviewer = snap.reviewBacklog.some((item) => !freeReviewers(snap).some((r) => r.accountDir && item.authorAccountDir && r.accountDir !== item.authorAccountDir));
   if (reviewerRole && snap.reviewBacklog.length > 0 && needsEligibleReviewer && liveCount(snap, "reviewers") < reviewerRole.max) return { kind: "add-reviewer", role: "reviewers", reason: "review backlog and no eligible free reviewer", decider: "rule" };
   const idleMinutes = pool.idle_drop_minutes ?? 30;

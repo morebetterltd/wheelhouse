@@ -12,7 +12,7 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
 ROOT="$FIX/project"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$BIN" "$HOME_FIX" "$FIX/out"
-for f in staffing.ts jev.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts; do cp "$HERE/$f" "$ROOT/seats/$f"; done
+for f in staffing.ts jev.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts lock.ts; do cp "$HERE/$f" "$ROOT/seats/$f"; done
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"seats":{"commander":{"role":"commander","external":true}}}
 JSON
