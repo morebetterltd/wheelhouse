@@ -645,6 +645,9 @@ PARTIAL="$VDIR/bead-1.partial.md"
 if [ -s "$PARTIAL" ] && grep -q '## seat tool-call/event log tail' "$PARTIAL" && grep -q 'tool_execution_start' "$PARTIAL" && grep -q 'cargo test' "$PARTIAL"; then
   pass "timeout keeps partial pi output and event-log tail at seats/verdicts/<bead>.partial.md"
 else fail "timeout partial file missing event-log tail or streamed tool output: $(cat "$PARTIAL" 2>/dev/null)"; fi
+if [ ! -e "$RUN_PROJ/seats/run/verify.verifier.json" ]; then
+  pass "timeout path removes verifier live marker"
+else fail "timeout path left verifier live marker: $(cat "$RUN_PROJ/seats/run/verify.verifier.json" 2>/dev/null)"; fi
 rm -f "$PARTIAL"
 OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL_AFTER_TOOL_END=1 bun "$RUN_PROJ/seats/verify.ts" bead-stalled fleet/bead-1 worker-1 verifier --timeout-ms 5000 --no-event-timeout-ms 300 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && says "model stalled after 300ms" && says "last event: tool_execution_end" && says "no-event watchdog" && says "partial output:"; then

@@ -402,10 +402,15 @@ interface OneShotRunResult {
 function runOneShot(
   bin: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number }
+  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; marker?: { seat: string; bead: string } }
 ): Promise<OneShotRunResult> {
   return new Promise((resolve) => {
     const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"] });
+    const markerFile = opts.marker ? path.join(ROOT, "seats", "run", `verify.${opts.marker.seat}.json`) : null;
+    if (markerFile) {
+      fs.mkdirSync(path.dirname(markerFile), { recursive: true });
+      fs.writeFileSync(markerFile, JSON.stringify({ pid: child.pid, bead: opts.marker!.bead, startedAt: new Date().toISOString() }, null, 2) + "\n");
+    }
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -421,6 +426,7 @@ function runOneShot(
       clearTimeout(totalTimer);
       clearTimeout(firstOutputTimer);
       if (noEventTimer) clearTimeout(noEventTimer);
+      if (markerFile) { try { fs.unlinkSync(markerFile); } catch {} }
       resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error });
     };
     const killFor = (code: string, message: string) => {
@@ -1114,6 +1120,7 @@ async function main(): Promise<void> {
     firstOutputTimeoutMs,
     noEventTimeoutMs,
     maxBuffer: 64 * 1024 * 1024,
+    marker: { seat: verifierSeat, bead: beadId },
   });
   const elapsedMs = Date.now() - startedAt;
   const stdout = res.stdout ?? "";

@@ -43,6 +43,7 @@ The main files here:
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
+- `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and verifier markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi

@@ -450,6 +450,9 @@ function main(): void {
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   phase = "run verifier walk";
+  const markerFile = path.join(ROOT, "seats", "run", `walk.${verifierSeat}.json`);
+  fs.mkdirSync(path.dirname(markerFile), { recursive: true });
+  fs.writeFileSync(markerFile, JSON.stringify({ pid: process.pid, bead: claimRef, startedAt: new Date().toISOString() }, null, 2) + "\n");
   const oneShotPath = readonlyBdPath(ROOT, `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper });
   const res = spawnSync(oneShot.bin, oneShot.args, {
@@ -461,6 +464,7 @@ function main(): void {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
+  try { fs.unlinkSync(markerFile); } catch {}
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   const rawTranscript = [
