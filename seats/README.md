@@ -677,6 +677,7 @@ bash seats/comms.selftest.sh
 bash seats/desk.selftest.sh
 bash seats/principal-sentinel.selftest.sh
 bash seats/courier.selftest.sh
+bash seats/supervisor.selftest.sh
 bash seats/transports.selftest.sh
 bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
@@ -689,6 +690,7 @@ bash seats/specimen-leak.selftest.sh
 bash seats/placeholder-grep.selftest.sh
 bash seats/push-authority-lint.selftest.sh
 bash seats/cockpit.selftest.sh
+bash seats/supervisor.selftest.sh
 bash seats/herald.selftest.sh
 ```
 
@@ -732,7 +734,7 @@ run; to clean it by hand, those pid-stamped dirs are the whole footprint.
 ## The bridge
 
 The bridge is how a human looks at the fleet: ONE tmux window per project,
-built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. `cockpit.sh` starts the local needs desk (`bun seats/desk.ts`) and optional courier (`bun seats/courier.ts` only when `seats/channels.json` declares an `audience: "principal"` channel) before building or attaching the tmux session; on a fresh bridge it starts the Dispatch Office herald (`bun seats/herald.ts`) after the bridge panes exist so the commander pane can record itself. Every re-run verifies the recorded pids and restarts any of them if the pid is dead. The commander pane starts `seats/commander-inbox-poll.sh` automatically; it is a wrapper-independent visual hint when tmux pokes cannot be delivered, not a drain.
+built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. `cockpit.sh` starts the local needs desk (`bun seats/desk.ts`) and optional courier (`bun seats/courier.ts` only when `seats/channels.json` declares an `audience: "principal"` channel) before building or attaching the tmux session; on a fresh bridge it starts the Dispatch Office herald (`bun seats/herald.ts`) after the bridge panes exist so the commander pane can record itself. Every run also starts or verifies `seats/supervisor.sh`, a single loop that keeps herald, desk, and the declared courier alive and replaces the old per-daemon watchdog scripts. A daemon that crashes three times in five minutes is marked in `seats/run/supervisor.state.json`; the supervisor stops restarting it, appends one `daemon-down` inbox row, opens one human notification need, and waits for `seats/supervisor.sh reset <daemon>`. The commander pane starts `seats/commander-inbox-poll.sh` automatically; it is a wrapper-independent visual hint when tmux pokes cannot be delivered, not a drain.
 
 The desk is the human-facing page for `seats/needs.ts` and the read-only work board: open `seats/run/desk.port` or run `seats/cockpit.sh --desk` and visit the printed URL. It binds `127.0.0.1` by default; `WHEELHOUSE_DESK_BIND` overrides the bind address and `WHEELHOUSE_DESK_PORT` overrides the port. Without an override, the port is `42000 + fnv1a(namespace) % 1000`, where `namespace=` comes from `wheelhouse/.template-source` and falls back to the install directory name. `/needs` lists open needs first, keeps answered/closed needs as history, and posts answers/messages only through the needs ledger API. `/board` is read-only: it has no form, button, input, or POST route, polls `/api/board.json` every 5 seconds, and hides graph ids in the HTML. Its columns are Ready (`bd ready` ids joined to `bd list --json` titles), In progress (`bd list --status in_progress`, seat from a worker in `seats/state.json` whose `lastBead` matches, else assignee), In review (`bd list --label needs-review`, reviewer/verifier `lastBead`, `sent back` when `seats/verdicts/<id>.md` records BOUNCE, else `waiting for a reviewer`), Blocked on you (open needs whose `machine.bead` names work, linking back to `/needs`), and Merged recently (`bd list --status closed` rows closed in the last 48 hours). Dependency-blocked work is omitted. The commander never needs the page — the CLI, graph, and floor remain canonical for command — but the desk is the standing surface for a human who has been asked for an answer or wants the read-only board.
 

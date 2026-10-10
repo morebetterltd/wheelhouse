@@ -51,7 +51,8 @@ PROJ="$FIX/project"
 mkdir -p "$PROJ/seats" "$PROJ/contracts"
 cp "$COCKPIT" "$PROJ/seats/cockpit.sh"
 cp "$BRIDGE_GUARD" "$PROJ/seats/bridge-guard.sh"
-chmod +x "$PROJ/seats/cockpit.sh" "$PROJ/seats/bridge-guard.sh"
+cp "$HERE/daemons.sh" "$HERE/supervisor.sh" "$PROJ/seats/"
+chmod +x "$PROJ/seats/cockpit.sh" "$PROJ/seats/bridge-guard.sh" "$PROJ/seats/daemons.sh" "$PROJ/seats/supervisor.sh"
 cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
@@ -233,11 +234,10 @@ rm -f "$PROJ/seats/run/herald.pid"
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_DESK_PORT=42321 "$PROJ/seats/cockpit.sh" --desk > "$FIX/desk-only.out" 2>&1
 DESK_ONLY_RC=$?
 DESK_ONLY_PID="$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)"
-DESK_WATCHDOG_PID="$(cat "$PROJ/seats/run/desk-watchdog.pid" 2>/dev/null || true)"
-if [ $DESK_ONLY_RC -eq 0 ] && [ -n "$DESK_ONLY_PID" ] && kill -0 "$DESK_ONLY_PID" 2>/dev/null && [ -n "$DESK_WATCHDOG_PID" ] && kill -0 "$DESK_WATCHDOG_PID" 2>/dev/null && grep -q 'desk watchdog started: pid' "$FIX/desk-only.out" && grep -q 'desk started: pid' "$FIX/desk-only.out" && grep -q 'http://127.0.0.1:42321/needs' "$FIX/desk-only.out"; then
-  pass "cockpit --desk starts the desk, watchdog, and prints its URL"
+if [ $DESK_ONLY_RC -eq 0 ] && [ -n "$DESK_ONLY_PID" ] && kill -0 "$DESK_ONLY_PID" 2>/dev/null && grep -q 'desk started: pid' "$FIX/desk-only.out" && grep -q 'http://127.0.0.1:42321/needs' "$FIX/desk-only.out"; then
+  pass "cockpit --desk starts the desk and prints its URL"
 else
-  fail "cockpit --desk did not run standalone (rc=$DESK_ONLY_RC pid=${DESK_ONLY_PID:-none} watchdog=${DESK_WATCHDOG_PID:-none} out=$(cat "$FIX/desk-only.out" 2>/dev/null))"
+  fail "cockpit --desk did not run standalone (rc=$DESK_ONLY_RC pid=${DESK_ONLY_PID:-none} out=$(cat "$FIX/desk-only.out" 2>/dev/null))"
 fi
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_DESK_PORT=42321 "$PROJ/seats/cockpit.sh" --desk > "$FIX/desk-again.out" 2>&1
 if grep -q 'desk already running: pid' "$FIX/desk-again.out"; then pass "cockpit --desk reports already running"; else fail "cockpit --desk did not report already running: $(cat "$FIX/desk-again.out" 2>/dev/null)"; fi
@@ -277,14 +277,13 @@ EOF
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" "$PROJ/seats/cockpit.sh" --courier > "$FIX/courier-principal.out" 2>&1
 COURIER_PRINCIPAL_RC=$?
 COURIER_PRINCIPAL_PID="$(cat "$PROJ/seats/run/courier.pid" 2>/dev/null || true)"
-COURIER_WATCHDOG_PID="$(cat "$PROJ/seats/run/courier-watchdog.pid" 2>/dev/null || true)"
-if [ $COURIER_PRINCIPAL_RC -eq 0 ] && [ -n "$COURIER_PRINCIPAL_PID" ] && kill -0 "$COURIER_PRINCIPAL_PID" 2>/dev/null && [ -n "$COURIER_WATCHDOG_PID" ] && kill -0 "$COURIER_WATCHDOG_PID" 2>/dev/null && grep -q 'courier started: pid' "$FIX/courier-principal.out"; then
+if [ $COURIER_PRINCIPAL_RC -eq 0 ] && [ -n "$COURIER_PRINCIPAL_PID" ] && kill -0 "$COURIER_PRINCIPAL_PID" 2>/dev/null && grep -q 'courier started: pid' "$FIX/courier-principal.out"; then
   pass "cockpit --courier starts only after a declared principal channel exists"
 else
-  fail "cockpit --courier did not start for declared principal channel (rc=$COURIER_PRINCIPAL_RC pid=${COURIER_PRINCIPAL_PID:-none} watchdog=${COURIER_WATCHDOG_PID:-none} out=$(cat "$FIX/courier-principal.out" 2>/dev/null))"
+  fail "cockpit --courier did not start for declared principal channel (rc=$COURIER_PRINCIPAL_RC pid=${COURIER_PRINCIPAL_PID:-none} out=$(cat "$FIX/courier-principal.out" 2>/dev/null))"
 fi
-kill "$COURIER_PRINCIPAL_PID" "$COURIER_WATCHDOG_PID" 2>/dev/null || true
-rm -f "$PROJ/seats/run/courier.pid" "$PROJ/seats/run/courier-watchdog.pid" "$PROJ/seats/channels.json" "$PROJ/seats/run/telegram.token"
+kill "$COURIER_PRINCIPAL_PID" 2>/dev/null || true
+rm -f "$PROJ/seats/run/courier.pid" "$PROJ/seats/channels.json" "$PROJ/seats/run/telegram.token"
 
 RECOVERY_BIN="$FIX/recovery-bin"
 mkdir -p "$RECOVERY_BIN" "$PROJ/seats/logs" "$PROJ/open-work" "$PROJ/clean-work" "$PROJ/closed-work" "$PROJ/.beads"
@@ -360,6 +359,21 @@ if grep -q 'bridge built: session wh-ratio' "$FIX/cockpit.out" && [ "$(pane_coun
   pass "cockpit builds one bridge window with two panes on a private tmux socket"
 else
   fail "cockpit did not build the bridge: $(cat "$FIX/cockpit.out" 2>/dev/null) panes=$(pane_count)"
+fi
+SUPERVISOR_PID="$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)"
+if [ -n "$SUPERVISOR_PID" ] && kill -0 "$SUPERVISOR_PID" 2>/dev/null && grep -Eq 'supervisor (started|already running): pid' "$FIX/cockpit.out"; then
+  pass "cockpit starts or verifies the supervisor"
+else
+  fail "cockpit did not start/verify supervisor (pid=${SUPERVISOR_PID:-none} out=$(cat "$FIX/cockpit.out" 2>/dev/null))"
+fi
+(sleep 1000) & LEGACY_WD=$!
+printf '%s\n' "$LEGACY_WD" > "$PROJ/seats/run/desk-watchdog.pid"
+run_cockpit
+if ! kill -0 "$LEGACY_WD" 2>/dev/null && grep -q 'legacy desk watchdog stopped: pid' "$FIX/cockpit.out"; then
+  pass "cockpit re-run stops a fixture legacy watchdog once"
+else
+  kill "$LEGACY_WD" 2>/dev/null || true
+  fail "legacy watchdog was not stopped on cockpit re-run (out=$(cat "$FIX/cockpit.out" 2>/dev/null))"
 fi
 if grep -Eq 'desk (started|already running): pid' "$FIX/cockpit.out" && opt_value wh-ratio status-right | grep -q 'desk http://127.0.0.1:42042/needs'; then
   pass "cockpit banner/status include the desk URL"

@@ -636,7 +636,8 @@ fi
 # existing-session path.
 cp "$ROOT/seats/herald.ts" "$PROJ/seats/herald.ts"
 cp "$ROOT/seats/cockpit.sh" "$PROJ/seats/cockpit.sh"
-chmod +x "$PROJ/seats/cockpit.sh"
+cp "$ROOT/seats/daemons.sh" "$ROOT/seats/supervisor.sh" "$PROJ/seats/"
+chmod +x "$PROJ/seats/cockpit.sh" "$PROJ/seats/daemons.sh" "$PROJ/seats/supervisor.sh"
 cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
