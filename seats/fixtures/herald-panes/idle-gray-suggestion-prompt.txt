@@ -1,0 +1,4 @@
+synthetic prior output
+──────────────── synthetic input ────────────────
+❯ [38;5;246mcheck the fleet inbox[39m                             cockpit
+  GENERIC STATUS: ready

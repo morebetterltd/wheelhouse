@@ -67,6 +67,8 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
+import { effectiveRoster } from "./roster";
+import { hasPool } from "./pool";
 import { liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -130,18 +132,42 @@ function assertHostBuildLockAvailable(): void {
  * `wheelhouse-review-<owning-pid>-<random>` so a later sweep can tell which
  * process made it without asking anything but the path.
  */
+interface CoreWorktreeConfig { present: boolean; value: string }
+
+function readCoreWorktreeConfig(repoRoot: string): CoreWorktreeConfig {
+  const r = spawnSync("git", ["-C", repoRoot, "config", "--local", "--get", "core.worktree"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return r.status === 0 ? { present: true, value: (r.stdout ?? "").trimEnd() } : { present: false, value: "" };
+}
+
+function restoreCoreWorktreeConfig(repoRoot: string, before: CoreWorktreeConfig): void {
+  const after = readCoreWorktreeConfig(repoRoot);
+  if (after.present === before.present && after.value === before.value) return;
+  try {
+    if (before.present) execFileSync("git", ["-C", repoRoot, "config", "--local", "core.worktree", before.value], { stdio: "ignore" });
+    else execFileSync("git", ["-C", repoRoot, "config", "--local", "--unset", "core.worktree"], { stdio: "ignore" });
+  } catch {}
+}
+
 export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD"): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`));
+  const coreWorktreeBefore = readCoreWorktreeConfig(repoRoot);
   try {
     execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, `${tip}^{commit}`], { stdio: "pipe" });
   } catch (e: any) {
     fs.rmSync(dir, { recursive: true, force: true });
+    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
     die(`could not create a detached scratch worktree for the ${kind} one-shot in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
   }
-  process.on("exit", () => {
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     removeScratchWorktree(repoRoot, dir);
     sweepShaNamedBranches(repoRoot);
-  });
+    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
+  };
+  process.on("exit", cleanup);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
   return dir;
 }
 
@@ -400,10 +426,15 @@ interface OneShotRunResult {
 function runOneShot(
   bin: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number }
+  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; marker?: { seat: string; bead: string } }
 ): Promise<OneShotRunResult> {
   return new Promise((resolve) => {
     const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"] });
+    const markerFile = opts.marker ? path.join(ROOT, "seats", "run", `verify.${opts.marker.seat}.json`) : null;
+    if (markerFile) {
+      fs.mkdirSync(path.dirname(markerFile), { recursive: true });
+      fs.writeFileSync(markerFile, JSON.stringify({ pid: child.pid, bead: opts.marker!.bead, startedAt: new Date().toISOString() }, null, 2) + "\n");
+    }
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -419,6 +450,7 @@ function runOneShot(
       clearTimeout(totalTimer);
       clearTimeout(firstOutputTimer);
       if (noEventTimer) clearTimeout(noEventTimer);
+      if (markerFile) { try { fs.unlinkSync(markerFile); } catch {} }
       resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error });
     };
     const killFor = (code: string, message: string) => {
@@ -693,6 +725,7 @@ interface SeatEntry {
 }
 
 function readRoster(): Record<string, SeatEntry> {
+  if (hasPool(ROOT)) return effectiveRoster(ROOT) as Record<string, SeatEntry>;
   if (!fs.existsSync(ROSTER_FILE)) {
     die(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   }
@@ -739,6 +772,26 @@ const PROVIDER_ENV_VARS: Record<string, string> = {
 };
 function providerEnvVar(provider: string): string | undefined { return PROVIDER_ENV_VARS[provider]; }
 
+function findOnPath(bin: string, searchPath = process.env.PATH ?? ""): string | null {
+  for (const dir of searchPath.split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, bin);
+    try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch {}
+  }
+  return null;
+}
+
+export function readonlyBdPath(root: string, basePath: string, scratchCwd: string): string {
+  const realBd = findOnPath("bd", basePath);
+  if (!realBd) return basePath;
+  const shimDir = path.join(scratchCwd, ".wheelhouse-readonly-bin");
+  fs.mkdirSync(shimDir, { recursive: true });
+  const shim = path.join(shimDir, "bd");
+  fs.writeFileSync(shim, `#!/usr/bin/env bash\nexec ${JSON.stringify(realBd)} --readonly "$@"\n`);
+  fs.chmodSync(shim, 0o755);
+  return `${shimDir}${path.delimiter}${basePath}`;
+}
+
 // Same rule as adapter.ts: pi auto-creates an empty {} auth.json on a first
 // headless run, and a seat with only that has never been logged in.
 function authIsIdentity(authFile: string): boolean {
@@ -770,7 +823,14 @@ function authRouteIdentity(name: string, entry: SeatEntry, authFile: string, har
   return authIsIdentity(authFile);
 }
 
-function requireVerifierSeat(explicit: string | undefined): { name: string; entry: SeatEntry } {
+function verifyMarkerLive(seat: string): boolean {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "run", `verify.${seat}.json`), "utf8"));
+    return !!m?.pid && (() => { try { process.kill(Number(m.pid), 0); return true; } catch { return false; } })();
+  } catch { return false; }
+}
+
+function requireVerifierSeat(explicit: string | undefined, authorSeat: string): { name: string; entry: SeatEntry } {
   const roster = readRoster();
   if (explicit) {
     const entry = roster[explicit];
@@ -781,13 +841,13 @@ function requireVerifierSeat(explicit: string | undefined): { name: string; entr
     return { name: explicit, entry };
   }
   const verifiers = Object.entries(roster).filter(([, e]) => e.role === "verifier" && !e.external);
-  if (verifiers.length === 0) {
-    die(`no seat with role "verifier" in seats/seats.json — add one (its account.dir must differ from every author's)`);
-  }
-  if (verifiers.length > 1) {
-    die(`multiple verifier seats (${verifiers.map(([n]) => n).join(", ")}) — name one: verify.ts <bead-id> <branch> <author-seat> <verifier-seat>`);
-  }
-  return { name: verifiers[0][0], entry: verifiers[0][1] };
+  if (verifiers.length === 0) die(`no seat with role "verifier" in seats/seats.json — add one (its account.dir must differ from every author's)`);
+  const authorDir = canonicalDir(accountDirFor(authorSeat));
+  const distinct = verifiers.filter(([, e]) => e.account?.dir && canonicalDir(e.account.dir) !== authorDir);
+  if (distinct.length === 0) die(`verifier seat and author seat "${authorSeat}" resolve to the SAME account directory; waiting for a reviewer on a different subscription. Same directory means same auth.json means same account, and a verdict from the author's own account is not a verdict. Nothing was spawned.`);
+  const free = distinct.find(([n]) => !verifyMarkerLive(n));
+  if (!free) { console.error(`all eligible verifier seats busy (${distinct.map(([n]) => n).join(", ")}) — retry later`); process.exit(4); }
+  return { name: free[0], entry: free[1] };
 }
 
 function beadClaim(beadId: string): string {
@@ -944,9 +1004,9 @@ async function main(): Promise<void> {
     die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--no-event-timeout-ms <ms>]");
   }
   setVerifierGateBead(beadId);
-  const timeoutMs = Number(process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || timeoutArg || DEFAULT_TIMEOUT_MS);
-  const firstOutputTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || firstOutputTimeoutArg || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
-  const noEventTimeoutMs = Number(process.env.WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS || noEventTimeoutArg || DEFAULT_NO_EVENT_TIMEOUT_MS);
+  const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
+  const firstOutputTimeoutMs = Number(firstOutputTimeoutArg || process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
+  const noEventTimeoutMs = Number(noEventTimeoutArg || process.env.WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS || DEFAULT_NO_EVENT_TIMEOUT_MS);
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
   if (verifierArg) validateSegment("seat name", verifierArg);
@@ -958,7 +1018,7 @@ async function main(): Promise<void> {
     die(e.message);
   }
 
-  const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg, authorSeat);
   let verifierHarness: ReturnType<typeof harnessNameForSeat>;
   try {
     verifierHarness = harnessNameForSeat(verifierSeat, entry);
@@ -1037,7 +1097,13 @@ async function main(): Promise<void> {
   // worktree — construction closing the confused-writer hazard, still
   // distinct from adapter.ts's per-bead worker seats (a worker's cwd needs
   // to BE the bead; the verifier's cwd only needs to be A repository the
-  // branch's ref resolves from, which any worktree of this repo is). See
+  // branch's ref resolves from, which any worktree of this repo is). The
+  // deleted-path core.worktree leak came from the old verifier launch that
+  // exported GIT_DIR/GIT_WORK_TREE for this scratch worktree into the one-shot
+  // reviewer process; any `git config --local core.worktree ...` the reviewer
+  // ran with that environment wrote to the product repo's common config. That
+  // environment leak is removed, and makeScratchCwd snapshots/restores the
+  // product repo config in case a child still clobbers it mid-run. See
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
   assertHostBuildLockAvailable();
@@ -1077,9 +1143,10 @@ async function main(): Promise<void> {
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   const startedAt = Date.now();
+  const oneShotPath = readonlyBdPath(ROOT, hostBudgetPath(ROOT), scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
-    PATH: hostBudgetPath(ROOT),
+    PATH: oneShotPath,
     WHEELHOUSE_ROOT: ROOT,
     BEADS_ACTOR: beadsActorFor(verifierSeat),
   });
@@ -1090,6 +1157,7 @@ async function main(): Promise<void> {
     firstOutputTimeoutMs,
     noEventTimeoutMs,
     maxBuffer: 64 * 1024 * 1024,
+    marker: { seat: verifierSeat, bead: beadId },
   });
   const elapsedMs = Date.now() - startedAt;
   const stdout = res.stdout ?? "";

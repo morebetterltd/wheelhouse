@@ -30,6 +30,8 @@ set -uo pipefail   # deliberately not -e: sabotaged runs are meant to differ
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FLOOR="${1:-$HERE/floor.ts}"
 COCKPIT="$HERE/cockpit.sh"
+DAEMONS="$HERE/daemons.sh"
+SUPERVISOR="$HERE/supervisor.sh"
 BRIDGE_GUARD="$HERE/bridge-guard.sh"
 [ -f "$FLOOR" ] || { echo "selftest: not found: $FLOOR" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required to run floor.ts" >&2; exit 2; }
@@ -63,7 +65,14 @@ FIX="$(cd "$FIX" && pwd -P)"   # macOS: /var/... is really /private/var/...
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats/logs" "$FIX/bin"
 cp "$FLOOR" "$PROJ/seats/floor.ts"
+cp "$HERE/roster.ts" "$PROJ/seats/roster.ts"
+cp "$HERE/pool.ts" "$PROJ/seats/pool.ts"
+cp "$HERE/harness.ts" "$PROJ/seats/harness.ts"
+cp "$HERE/seat-worktree.ts" "$PROJ/seats/seat-worktree.ts"
+cp "$HERE/credential-shapes.ts" "$PROJ/seats/credential-shapes.ts"
 [ -f "$COCKPIT" ] && cp "$COCKPIT" "$PROJ/seats/cockpit.sh" && chmod +x "$PROJ/seats/cockpit.sh"
+[ -f "$DAEMONS" ] && cp "$DAEMONS" "$PROJ/seats/daemons.sh" && chmod +x "$PROJ/seats/daemons.sh"
+[ -f "$SUPERVISOR" ] && cp "$SUPERVISOR" "$PROJ/seats/supervisor.sh" && chmod +x "$PROJ/seats/supervisor.sh"
 [ -f "$BRIDGE_GUARD" ] && cp "$BRIDGE_GUARD" "$PROJ/seats/bridge-guard.sh" && chmod +x "$PROJ/seats/bridge-guard.sh"
 
 # Stub bd: two ready beads, so idle-with-ready-work has work to point at.
@@ -337,7 +346,7 @@ phase "phase 4: missing pieces degrade with named lines"
 render "$PROJ/seats/floor.ts" --pin nolog   # nolog seat in the spotlight
 [ $RC -eq 0 ] && pass "spotlight on log-less seat exits 0" || fail "crashed on missing log: $OUT"
 has "no event log yet for nolog" && pass "spotlight names the missing log" || fail "no named missing-log line"
-EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats"; cp "$FLOOR" "$EMPTY/seats/floor.ts"
+EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats"; cp "$FLOOR" "$EMPTY/seats/floor.ts"; cp "$HERE/roster.ts" "$EMPTY/seats/roster.ts"; cp "$HERE/pool.ts" "$EMPTY/seats/pool.ts"; cp "$HERE/harness.ts" "$EMPTY/seats/harness.ts"; cp "$HERE/seat-worktree.ts" "$EMPTY/seats/seat-worktree.ts"; cp "$HERE/credential-shapes.ts" "$EMPTY/seats/credential-shapes.ts"
 render "$EMPTY/seats/floor.ts"
 [ $RC -eq 0 ] && has "no seats" && pass "no roster/state degrades to a named line" || fail "empty project: rc=${RC}: $OUT"
 
@@ -410,7 +419,12 @@ elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
   skip "cockpit.sh not found beside floor.ts — leg not run"
 else
   SOCK="whfloor$$"
-  crun() { RC=0; OUT="$(env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null 2>&1)" || RC=$?; }
+  crun() {
+    RC=0
+    out_file="$FIX/cockpit-crun.out"
+    env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null > "$out_file" 2>&1 || RC=$?
+    OUT="$(cat "$out_file" 2>/dev/null || true)"
+  }
   crun
   [ $RC -eq 0 ] && has "bridge built" && pass "first run builds the bridge" || fail "first run: rc=${RC}: $OUT"
   if tmux -L "$SOCK" has-session -t "=wh-tfix" 2>/dev/null; then pass "session wh-tfix exists"

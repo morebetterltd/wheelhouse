@@ -21,7 +21,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import.meta.dir, ".."));
@@ -35,7 +35,13 @@ const DRAIN_CURSOR = path.join(SEATS_DIR, "inbox.cursor");
 const DRAIN_SEEN = path.join(SEATS_DIR, "inbox.seen.json");
 const STATE_FILE = path.join(SEATS_DIR, "herald.state.json");
 const ADAPTER_STATE_FILE = path.join(SEATS_DIR, "state.json");
+const POOL_FILE = path.join(SEATS_DIR, "pool.json");
+const STAFFING_LOG = path.join(LOG_DIR, "staffing.log");
+const STAFFING_OUT_LOG = path.join(LOG_DIR, "staffing.out.log");
+const ALERTS_OUT_LOG = path.join(LOG_DIR, "alerts.out.log");
 const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
+const COMMANDER_PANE_FILE = path.join(SEATS_DIR, "run", "commander-pane.json");
+const TARGET_FILE = path.join(SEATS_DIR, "run", "herald.target.json");
 const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
 const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
 const READ_CHUNK_BYTES = Math.max(1024, Number(process.env.WHEELHOUSE_HERALD_READ_CHUNK_BYTES || 64 * 1024));
@@ -44,7 +50,7 @@ const POKE_STABILITY_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_
 const POKE_COOLDOWN_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_COOLDOWN_MS || 120_000));
 const POKE_ESCALATE_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_ESCALATE_MS || 300_000));
 const TMUX_SESSION = process.env.WHEELHOUSE_HERALD_TMUX_SESSION || "";
-const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
+const TMUX_PANE = process.env.WHEELHOUSE_HERALD_TMUX_PANE || "";
 const TMUX_SOCKET = process.env.WHEELHOUSE_TMUX_SOCKET || "";
 const HERALD_IDLE_RE = process.env.WHEELHOUSE_HERALD_IDLE_RE || "";
 
@@ -63,6 +69,8 @@ interface HeraldState {
   lastPokedInboxSize?: number;
   lastPokedByPane?: Record<string, number>;
   firstDeferredAtByPane?: Record<string, number>;
+  staffing?: { lastCheckAt?: string };
+  alerts?: { lastCheckAt?: string };
 }
 
 interface Candidate {
@@ -94,7 +102,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {} };
+    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
   } catch (e: any) {
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
@@ -546,6 +554,71 @@ function logPoke(outcome: string, detail = ""): void {
   fs.appendFileSync(HERALD_OUT_LOG, `${new Date().toISOString()} poke ${outcome}${suffix}\n`);
 }
 
+type TargetStatus = "ok" | "missing" | "wrong-root" | "no-tmux";
+type ResolvedBy = "env" | "cockpit-file" | "scan";
+interface CommanderTarget { target: string; resolvedBy: ResolvedBy; status: TargetStatus; reason?: string; checkedAt: string }
+
+function realpathMaybe(p: string): string {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+
+function pathUnderRoot(p: string): boolean {
+  const root = realpathMaybe(ROOT);
+  const candidate = realpathMaybe(p);
+  return candidate === root || candidate.startsWith(root + path.sep);
+}
+
+function readLastTarget(): CommanderTarget | null {
+  try { return JSON.parse(fs.readFileSync(TARGET_FILE, "utf8")); } catch { return null; }
+}
+
+function writeTarget(next: CommanderTarget): void {
+  const prior = readLastTarget();
+  const changed = !prior || prior.target !== next.target || prior.resolvedBy !== next.resolvedBy || prior.status !== next.status || prior.reason !== next.reason;
+  fs.mkdirSync(path.dirname(TARGET_FILE), { recursive: true });
+  fs.writeFileSync(TARGET_FILE, JSON.stringify(next, null, 2) + "\n");
+  if (changed && next.status !== "ok") logPoke("refused", `reason=${next.reason || next.status} target=${next.target || "-"} resolvedBy=${next.resolvedBy}`);
+}
+
+function validateTarget(target: string, resolvedBy: ResolvedBy): CommanderTarget {
+  const checkedAt = new Date().toISOString();
+  try {
+    const panePath = tmuxOutput(["display-message", "-p", "-t", target, "#{pane_current_path}"]);
+    if (!pathUnderRoot(panePath)) return { target, resolvedBy, status: "wrong-root", reason: "wrong-root", checkedAt };
+    return { target, resolvedBy, status: "ok", checkedAt };
+  } catch (e: any) {
+    const reason: TargetStatus = e?.code === "ENOENT" ? "no-tmux" : "missing";
+    return { target, resolvedBy, status: reason, reason, checkedAt };
+  }
+}
+
+function targetFromCommanderFile(): { target: string; resolvedBy: ResolvedBy } | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(COMMANDER_PANE_FILE, "utf8"));
+    if (typeof parsed?.paneId === "string" && parsed.paneId.trim()) return { target: parsed.paneId.trim(), resolvedBy: "cockpit-file" };
+  } catch { /* absent or unreadable: scan */ }
+  return null;
+}
+
+function scanCommanderPane(): { target: string; resolvedBy: ResolvedBy } | null {
+  let out = "";
+  try { out = tmuxOutput(["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_index}\t#{pane_current_path}"]); }
+  catch { return null; }
+  const rows = out.split(/\r?\n/).map((line) => line.split("\t")).filter((r) => r.length >= 5 && r[2] === "bridge" && r[3] === "0" && pathUnderRoot(r.slice(4).join("\t")));
+  if (rows.length === 0) return null;
+  const want = `wh-${path.basename(ROOT)}`.toLowerCase();
+  const preferred = rows.find((r) => r[1].toLowerCase() === want) ?? rows[0];
+  return { target: preferred[0], resolvedBy: "scan" };
+}
+
+function resolveCommanderPane(): CommanderTarget {
+  const envTarget = TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
+  const candidate = envTarget ? { target: envTarget, resolvedBy: "env" as ResolvedBy } : (targetFromCommanderFile() ?? scanCommanderPane());
+  const next = candidate ? validateTarget(candidate.target, candidate.resolvedBy) : { target: "", resolvedBy: "scan" as ResolvedBy, status: "missing" as TargetStatus, reason: "missing", checkedAt: new Date().toISOString() };
+  writeTarget(next);
+  return next;
+}
+
 function configuredIdleRegex(): RegExp | null {
   if (!HERALD_IDLE_RE) return null;
   try {
@@ -556,23 +629,70 @@ function configuredIdleRegex(): RegExp | null {
   }
 }
 
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
+
+function liveStatusText(paneText: string): string {
+  const plainLines = stripAnsi(paneText).split(/\r?\n/);
+  const prompt = plainLines.findLastIndex((line) => promptLineLooksIdle(line));
+  if (prompt < 0) return plainLines.slice(-12).join("\n");
+  const start = Math.max(0, prompt - 12);
+  return plainLines.slice(start, prompt).join("\n");
+}
+
 function paneTextHasActiveMarkers(paneText: string): boolean {
-  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(paneText)
-    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(paneText)
-    || /\besc to interrupt\b/i.test(paneText);
+  const live = liveStatusText(paneText);
+  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(live)
+    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(live)
+    || /\besc to interrupt\b/i.test(live);
+}
+
+const IDLE_PROMPT_LINE_RE = /^\s*(?:[>❯](?:[\s\u00a0]{8,}[A-Za-z0-9_.:-]+)?|Human:|You:)\s*$/;
+function promptLineLooksIdle(line: string): boolean {
+  const plain = stripAnsi(line);
+  if (/^\s*(?:Human:|You:)\s*$/.test(plain)) return true;
+  if (!/^\s*[>❯]/.test(plain)) return false;
+  let dim = false, gray = false;
+  const visible: { ch: string; suggestion: boolean }[] = [];
+  for (let i = 0; i < line.length;) {
+    const m = line.slice(i).match(/^\x1b\[([0-9;?]*)m/);
+    if (m) {
+      const codes = (m[1] || "0").split(";").map((v) => Number(v || 0));
+      if (codes.includes(0)) { dim = false; gray = false; }
+      if (codes.includes(2)) dim = true;
+      if (codes.includes(22)) dim = false;
+      if (codes.includes(39)) gray = false;
+      for (let j = 0; j + 2 < codes.length; j++) if (codes[j] === 38 && codes[j + 1] === 5 && codes[j + 2] >= 240 && codes[j + 2] <= 252) gray = true;
+      i += m[0].length;
+      continue;
+    }
+    const ch = Array.from(line.slice(i))[0];
+    visible.push({ ch, suggestion: dim || gray });
+    i += ch.length;
+  }
+  const prompt = visible.findIndex((v) => v.ch === "❯" || v.ch === ">");
+  if (prompt < 0 || visible.slice(0, prompt).some((v) => !/\s/.test(v.ch))) return false;
+  let after = visible.slice(prompt + 1);
+  while (after.length && /\s/.test(after[after.length - 1].ch)) after = after.slice(0, -1);
+  if (after.length === 0) return true;
+  const afterText = after.map((v) => v.ch).join("");
+  if (/^[\s\u00a0]{8,}[A-Za-z0-9_.:-]+$/.test(afterText)) return true;
+  const label = afterText.match(/[\s\u00a0]{8,}[A-Za-z0-9_.:-]+$/);
+  const beforeLabel = label ? after.slice(0, afterText.length - label[0].length) : after;
+  const content = beforeLabel.filter((v) => !/\s/.test(v.ch));
+  return content.length > 0 && content.every((v) => v.suggestion);
 }
 
 function paneTextLooksIdleClaude(paneText: string): boolean {
-  // Claude Code's current prompt UI is a bordered input box: a standalone
-  // `❯` prompt line followed by a status/footer line. During a turn that
-  // same box can still be visible below an active status line, so exclude the
-  // measured active markers first. Wrapper launches can render their own idle
-  // prompt, so WHEELHOUSE_HERALD_IDLE_RE lets an install add the wrapper's
-  // exact idle signature without changing the safe active-marker exclusions.
+  // Claude Code's current prompt UI is a bordered input box: an empty prompt
+  // line (`❯`) followed by status/footer lines. Some wrappers render a
+  // right-aligned pane label on the same otherwise-empty prompt line; accept
+  // that only when it is separated by a wide run of spaces so typed-but-unsent
+  // input such as "check the fleet inbox" remains NOT idle.
   if (paneTextHasActiveMarkers(paneText)) return false;
   const custom = configuredIdleRegex();
   if (custom?.test(paneText)) return true;
-  return /(?:^|\n)\s*(?:[>❯]|Human:|You:)\s*(?:\n|$)/.test(paneText) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
+  return paneText.split(/\r?\n/).some((line) => promptLineLooksIdle(line)) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(stripAnsi(paneText));
 }
 
 function sleepSync(ms: number): void {
@@ -581,29 +701,29 @@ function sleepSync(ms: number): void {
 
 function stablePaneText(paneText: string): string {
   const lines = paneText.split(/\r?\n/);
-  const prompt = lines.findIndex((l) => /^\s*(?:[>❯]|Human:|You:)\s*$/.test(l));
-  if (prompt >= 0) return lines.slice(0, prompt + 1).join("\n");
-  return lines.filter((l) => !/\b(?:tokens|ctx|context|model|cost|elapsed|status|lifeos)\b/i.test(l)).join("\n");
+  const prompt = lines.findIndex((l) => promptLineLooksIdle(l));
+  if (prompt >= 0) return stripAnsi(lines.slice(0, prompt + 1).join("\n"));
+  return stripAnsi(lines.join("\n")).split(/\r?\n/).filter((l) => !/\b(?:tokens|ctx|context|model|cost|elapsed|status|lifeos)\b/i.test(l)).join("\n");
 }
 
-function captureCommanderPane(): { command: string; text: string; stableText: string } | null {
-  const command = tmuxOutput(["display-message", "-p", "-t", TMUX_PANE, "#{pane_current_command}"]);
-  const text = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-200"]);
+function captureCommanderPane(pane: string): { command: string; text: string; stableText: string } | null {
+  const command = tmuxOutput(["display-message", "-p", "-t", pane, "#{pane_current_command}"]);
+  const text = tmuxOutput(["capture-pane", "-p", "-e", "-J", "-t", pane, "-S", "-200"]);
   return { command, text, stableText: stablePaneText(text) };
 }
 
 let lastCommanderPaneStableForPoke = false;
 let lastCommanderPaneHadActiveMarkersForPoke = true;
 
-function commanderPaneIdleClaude(): boolean {
+function commanderPaneIdleClaude(pane: string): boolean {
   lastCommanderPaneStableForPoke = false;
   lastCommanderPaneHadActiveMarkersForPoke = true;
-  if (!TMUX_PANE) return false;
+  if (!pane) return false;
   try {
-    const first = captureCommanderPane();
+    const first = captureCommanderPane(pane);
     if (!first || !["claude", "node", "bun"].includes(first.command)) return false;
     sleepSync(POKE_STABILITY_MS);
-    const second = captureCommanderPane();
+    const second = captureCommanderPane(pane);
     if (!second || second.command !== first.command) return false;
     lastCommanderPaneStableForPoke = second.stableText === first.stableText;
     lastCommanderPaneHadActiveMarkersForPoke = paneTextHasActiveMarkers(first.text) || paneTextHasActiveMarkers(second.text);
@@ -615,37 +735,99 @@ function commanderPaneIdleClaude(): boolean {
   }
 }
 
+interface DetachedJob { child: ChildProcess | null; lastLaunchAt: number }
+const detachedJobs: Record<string, DetachedJob> = {};
+
+export function launchDetached(name: string, argv: string[], intervalMs: number, logFile: string): boolean {
+  const now = Date.now();
+  const job = detachedJobs[name] ?? (detachedJobs[name] = { child: null, lastLaunchAt: 0 });
+  if (job.child && job.child.pid && pidAlive(job.child.pid)) return false;
+  if (now - job.lastLaunchAt < intervalMs) return false;
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  const fd = fs.openSync(logFile, "a");
+  const child = spawn(argv[0], argv.slice(1), { cwd: ROOT, detached: true, stdio: ["ignore", fd, fd] });
+  try { fs.closeSync(fd); } catch {}
+  child.unref();
+  job.child = child;
+  job.lastLaunchAt = now;
+  return true;
+}
+
+function staffingIntervalMs(): number {
+  const env = Number(process.env.WHEELHOUSE_STAFFING_INTERVAL_MS ?? "");
+  if (Number.isFinite(env) && env >= 0) return Math.floor(env);
+  try {
+    const pool = JSON.parse(fs.readFileSync(POOL_FILE, "utf8"));
+    const seconds = Number(pool.check_interval_seconds ?? 60);
+    return Math.max(0, Math.floor(seconds * 1000));
+  } catch { return 60_000; }
+}
+
+function lastStaffingDecisionLine(): string {
+  try { return fs.readFileSync(STAFFING_LOG, "utf8").trim().split(/\r?\n/).filter(Boolean).pop() ?? "none"; } catch { return "none"; }
+}
+
+function runStaffingClock(state: HeraldState): boolean {
+  if (!fs.existsSync(POOL_FILE)) return false;
+  const interval = staffingIntervalMs();
+  const last = Date.parse(state.staffing?.lastCheckAt ?? "") || 0;
+  if (Date.now() - last < interval) return false;
+  const launched = launchDetached("staffing", ["bun", "seats/staffing.ts", "check"], 0, STAFFING_OUT_LOG);
+  if (launched) state.staffing = { ...(state.staffing ?? {}), lastCheckAt: new Date().toISOString() };
+  return launched;
+}
+
+function alertsIntervalMs(): number {
+  const env = Number(process.env.WHEELHOUSE_ALERT_INTERVAL_MS ?? "");
+  return Number.isFinite(env) && env >= 0 ? Math.floor(env) : 60_000;
+}
+
+function runAlertsClock(state: HeraldState): boolean {
+  const interval = alertsIntervalMs();
+  const last = Date.parse(state.alerts?.lastCheckAt ?? "") || 0;
+  if (Date.now() - last < interval) return false;
+  const launched = launchDetached("alerts", ["bun", "seats/alerts.ts", "check"], 0, ALERTS_OUT_LOG);
+  if (launched) state.alerts = { ...(state.alerts ?? {}), lastCheckAt: new Date().toISOString() };
+  return launched;
+}
+
 function pokeCommanderIfSafe(state: HeraldState): void {
   const inboxSize = fs.existsSync(INBOX) ? fs.statSync(INBOX).size : 0;
   if (inboxSize <= 0 || state.lastPokedInboxSize === inboxSize) return;
-  if (!TMUX_PANE) {
-    logPoke("dropped", `reason=no-pane inbox=${inboxSize}`);
+  const drainCursor = readDrainCursor();
+  if (drainCursor >= inboxSize) {
+    logPoke("dropped", `reason=already-drained inbox=${inboxSize} cursor=${drainCursor}`);
     state.lastPokedInboxSize = inboxSize;
+    const target = resolveCommanderPane();
+    if (target.status === "ok" && target.target) state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [target.target]: 0 };
     writeState(state);
     return;
   }
-  const lastPoked = state.lastPokedByPane?.[TMUX_PANE] ?? 0;
-  if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${TMUX_PANE} inbox=${inboxSize}`); return; }
-  const idle = commanderPaneIdleClaude();
-  const firstDeferred = state.firstDeferredAtByPane?.[TMUX_PANE] ?? 0;
-  const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && lastCommanderPaneStableForPoke && !lastCommanderPaneHadActiveMarkersForPoke;
+  const target = resolveCommanderPane();
+  if (target.status !== "ok" || !target.target) return;
+  const pane = target.target;
+  const lastPoked = state.lastPokedByPane?.[pane] ?? 0;
+  if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${pane} inbox=${inboxSize}`); return; }
+  const idle = commanderPaneIdleClaude(pane);
+  const firstDeferred = state.firstDeferredAtByPane?.[pane] ?? 0;
+  const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && lastCommanderPaneStableForPoke;
   if (!idle && !escalated) {
     const first = firstDeferred || Date.now();
-    state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [TMUX_PANE]: first };
+    state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [pane]: first };
     writeState(state);
-    logPoke("deferred", `reason=not-idle pane=${TMUX_PANE} inbox=${inboxSize}`);
+    logPoke("deferred", `reason=not-idle pane=${pane} inbox=${inboxSize}`);
     return;
   }
   try {
-    execFileSync("tmux", tmuxArgs(["send-keys", "-t", TMUX_PANE, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
+    execFileSync("tmux", tmuxArgs(["send-keys", "-t", pane, POKE_PHRASE, "Enter"]), { stdio: "ignore" });
   } catch (e: any) {
-    logPoke("dropped", `reason=send-failed pane=${TMUX_PANE} inbox=${inboxSize} error=${e?.message || e}`);
+    logPoke("dropped", `reason=send-failed pane=${pane} inbox=${inboxSize} error=${e?.message || e}`);
     throw e;
   }
-  logPoke(escalated ? "escalated" : "sent", `pane=${TMUX_PANE} inbox=${inboxSize}`);
+  logPoke(escalated ? "escalated" : "sent", `pane=${pane} inbox=${inboxSize}`);
   state.lastPokedInboxSize = inboxSize;
-  state.lastPokedByPane = { ...(state.lastPokedByPane ?? {}), [TMUX_PANE]: Date.now() };
-  state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [TMUX_PANE]: 0 };
+  state.lastPokedByPane = { ...(state.lastPokedByPane ?? {}), [pane]: Date.now() };
+  state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [pane]: 0 };
   writeState(state);
 }
 
@@ -703,6 +885,8 @@ function scanOnce(): number {
   }
   appended += scanNeeds(state, seen);
   appended += scanComms(state, seen);
+  const clocked = runStaffingClock(state) || runAlertsClock(state);
+  if (clocked) writeState(state);
   pokeCommanderIfSafe(state);
   return appended;
 }
@@ -767,6 +951,17 @@ function pidAlive(pid: number): boolean {
 }
 
 function status(): void {
+  const target = readLastTarget();
+  if (target) console.log(`target ${target.status} ${target.target || "-"} resolvedBy=${target.resolvedBy}${target.reason ? ` reason=${target.reason}` : ""}`);
+  if (fs.existsSync(POOL_FILE)) {
+    const state = readState();
+    const interval = staffingIntervalMs();
+    const last = Date.parse(state.staffing?.lastCheckAt ?? "") || 0;
+    const next = Math.max(0, Math.ceil((last + interval - Date.now()) / 1000));
+    console.log(`staffing: next check in ${next}s (last decision: ${lastStaffingDecisionLine()})`);
+  } else {
+    console.log("staffing: no pool");
+  }
   if (!fs.existsSync(PID_FILE)) {
     console.log("herald STOPPED — no pid file");
     process.exit(1);

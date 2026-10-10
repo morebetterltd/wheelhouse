@@ -45,6 +45,10 @@ LOG="$ROOT/seats/logs/cleanup.log"
 mkdir -p "$PROD" "$WTS" "$ROOT/seats"
 cp "$PRUNE" "$ROOT/seats/prune.ts"
 cp "$(dirname "$PRUNE")/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"
+cp "$(dirname "$PRUNE")/roster.ts" "$ROOT/seats/roster.ts"
+cp "$(dirname "$PRUNE")/pool.ts" "$ROOT/seats/pool.ts"
+cp "$(dirname "$PRUNE")/harness.ts" "$ROOT/seats/harness.ts"
+cp "$(dirname "$PRUNE")/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"
 
 # No simulator or Xcode scanning on this machine: a fake xcrun that knows nothing.
 FAKEBIN="$FIX/fakebin"; mkdir -p "$FAKEBIN"
