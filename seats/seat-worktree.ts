@@ -495,3 +495,16 @@ export function isFleetWorktreePath(root: string, p: string): boolean {
   const rp = path.resolve(p);
   return path.dirname(rp) === dir;
 }
+
+/** Remove a staffed seat's persistent worktree only when it is safe to discard. */
+export function removeSeatWorktree(root: string, seat: string): void {
+  const wt = seatWorktreeDir(root, seat);
+  if (!fs.existsSync(wt)) return;
+  const st = worktreeStatus(root, wt);
+  if (!st.clean) refuse(`worktree ${wt} has real changes (${st.real[0]}); leaving seat registered`);
+  const head = git(root, ["rev-parse", "HEAD"], wt).out;
+  if ((process.env.WHEELHOUSE_SEAT_PUSH ?? "off") === "on" && head && !tipOnRemote(root, head)) refuse(`worktree ${wt} tip ${head.slice(0, 12)} is not on a remote; leaving seat registered`);
+  const rm = git(root, ["worktree", "remove", "--force", wt]);
+  if (!rm.ok) refuse(`git worktree remove failed for ${wt}: ${rm.err || rm.out}`);
+  try { fs.rmSync(wt, { recursive: true, force: true }); } catch {}
+}
