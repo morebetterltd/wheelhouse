@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { hasPool, loadPool, seatEntryFor, staffedSeatName, type Pool } from "./pool";
-import { staffingPath, type StaffingFile } from "./roster";
+import { effectiveRoster, staffingPath, type StaffingFile } from "./roster";
 import { fleetSnapshot, freeWorkers, freeReviewers, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
 import { removeSeatWorktree } from "./seat-worktree";
@@ -164,17 +164,24 @@ function logDecision(line: string) { fs.mkdirSync(path.dirname(LOG_FILE), { recu
 function lastDecisionLine(root = ROOT): string | null { try { return fs.readFileSync(path.join(root, "seats", "logs", "staffing.log"), "utf8").split(/\r?\n/).filter(Boolean).at(-1) ?? null; } catch { return null; } }
 function roleModel(role: any, entry: string): string { return typeof role?.model === "string" ? role.model : role?.model?.[entry] ?? "-"; }
 function subscriptionLabel(pool: Pool, entry: string | null): string { if (!entry) return "-"; return pool.entries[entry]?.account?.label || entry; }
+function fixedSubscriptionLabel(entry: any, seat: string): string { return entry?.account?.label || entry?.provider || seat; }
 function ageSince(iso?: string | null): string { if (!iso) return "unknown"; const ms = Math.max(0, Date.now() - Date.parse(iso)); if (!Number.isFinite(ms)) return "unknown"; const m = Math.floor(ms / 60000); if (m < 1) return "now"; if (m < 60) return `${m}m`; const h = Math.floor(m / 60); if (h < 48) return `${h}h`; return `${Math.floor(h / 24)}d`; }
 function statusObject(root: string, pool: Pool, staffing: StaffingFile, snap: Snapshot) {
+  const roster = effectiveRoster(root) as Record<string, any>;
   const live = [
     ...snap.workers.live.map((s) => ({ ...s, roleKey: "workers" as Role, role: "worker", idleSince: s.lastActivityAt })),
     ...snap.reviewers.live.map((s) => ({ ...s, roleKey: "reviewers" as Role, role: "verifier", idleSince: null })),
-  ].filter((s) => s.entry && staffing.seats?.[s.name]);
+  ].filter((s) => !!pool.roles[s.roleKey]);
   const seats = live.sort((a, b) => a.name.localeCompare(b.name)).map((s) => {
-    const entry = s.entry!;
-    const poolEntry = pool.entries[entry];
-    const roleDef = pool.roles[s.roleKey];
-    return { seat: s.name, role: s.role, harness: poolEntry?.harness ?? "-", model: roleModel(roleDef, entry), subscription: subscriptionLabel(pool, entry), state: s.busy ? "busy" : `idle since ${ageSince(s.idleSince)}`, source: "staffed" };
+    const staffed = s.entry && staffing.seats?.[s.name];
+    if (staffed) {
+      const entry = s.entry!;
+      const poolEntry = pool.entries[entry];
+      const roleDef = pool.roles[s.roleKey];
+      return { seat: s.name, role: s.role, harness: poolEntry?.harness ?? "-", model: roleModel(roleDef, entry), subscription: subscriptionLabel(pool, entry), state: s.busy ? "busy" : `idle since ${ageSince(s.idleSince)}`, source: "staffed" };
+    }
+    const fixed = roster[s.name];
+    return { seat: s.name, role: s.role, harness: fixed?.harness ?? "-", model: fixed?.model ?? "-", subscription: fixedSubscriptionLabel(fixed, s.name), state: s.busy ? "busy" : `idle since ${ageSince(s.idleSince)}`, source: "fixed" };
   });
   const roles = Object.fromEntries((["workers", "reviewers"] as Role[]).map((role) => {
     const def = pool.roles[role];

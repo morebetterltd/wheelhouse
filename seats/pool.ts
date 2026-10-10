@@ -76,7 +76,6 @@ export function loadPool(root: string): Pool {
     if (typeof r.model === "object" && !Array.isArray(r.model)) { for (const e of r.entries) if (typeof r.model[e] !== "string") stop(`roles.${roleName}.model is missing ${e}`, "provide a model for every listed entry"); }
     else if (typeof r.model !== "string") stop(`roles.${roleName}.model is invalid`, "use a model string or an object keyed by entry");
     for (const e of r.entries) { const m = typeof r.model === "string" ? r.model : r.model[e]; if (!entries[e].models.includes(m)) stop(`roles.${roleName}.model for ${e} is not offered`, "choose one of that entry's models"); }
-    for (const [seat, s] of Object.entries(fixed)) if (!s.external && s.role === roleRosterName(roleName)) stop(`the pool replaces the fixed roster for ${roleName}`, `remove ${seat} from seats/seats.json or remove ${roleName} from the pool`);
     roles[roleName] = { min: r.min, max: r.max, entries: r.entries, model: r.model };
   }
   return { version: 1, entries, roles, idle_drop_minutes: raw.idle_drop_minutes, check_interval_seconds: raw.check_interval_seconds, root };

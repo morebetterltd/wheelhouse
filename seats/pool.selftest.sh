@@ -8,7 +8,7 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 
 ROOT="$FIX/proj"; HOME_FIX="$FIX/home"; BIN="$FIX/bin"
-mkdir -p "$ROOT/seats" "$ROOT/wheelhouse" "$HOME_FIX/.pi-seats-pooltest/pool/a" "$HOME_FIX/.pi-seats-pooltest/pool/b" "$HOME_FIX/.pi-seats-pooltest/pool/c" "$HOME_FIX/.pi-seats-pooltest/pool/codex-a" "$HOME_FIX/.pi-seats-pooltest/pool/claude-b" "$HOME_FIX/.pi-seats-pooltest/pool/openrouter-c" "$BIN"
+mkdir -p "$ROOT/seats" "$ROOT/wheelhouse" "$HOME_FIX/.pi-seats-pooltest/pool/a" "$HOME_FIX/.pi-seats-pooltest/pool/b" "$HOME_FIX/.pi-seats-pooltest/pool/c" "$HOME_FIX/.pi-seats-pooltest/pool/codex-a" "$HOME_FIX/.pi-seats-pooltest/pool/claude-b" "$HOME_FIX/.pi-seats-pooltest/pool/openrouter-c" "$HOME_FIX/.pi-seats-pooltest/fixed" "$BIN"
 printf 'namespace=pooltest\n' > "$ROOT/wheelhouse/.template-source"
 cp "$HERE/pool.ts" "$ROOT/seats/pool.ts"; cp "$HERE/roster.ts" "$ROOT/seats/roster.ts"; cp "$HERE/harness.ts" "$ROOT/seats/harness.ts"; cp "$HERE/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"; cp "$HERE/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"; cp "$HERE/seat-env.sh" "$ROOT/seats/seat-env.sh"; chmod +x "$ROOT/seats/seat-env.sh"
 for tool in pi claude codex; do printf '#!/usr/bin/env sh\nexit 0\n' > "$BIN/$tool"; chmod +x "$BIN/$tool"; done
@@ -99,7 +99,8 @@ expect_refusal 'unknown entry key is refused' 'unknown key entries.a.surprise'
 write_valid_pool; python3 - <<PY
 import json; p='$ROOT/seats/seats.json'; j=json.load(open(p)); j['seats']['fixed-worker']={'role':'worker','harness':'codex','provider':'openai','model':'m','account':{'dir':'~/.pi-seats-pooltest/fixed','authRoute':'oauth'}}; json.dump(j,open(p,'w'))
 PY
-expect_refusal 'fixed worker plus pool workers is refused' 'the pool replaces the fixed roster for workers'
+run_check
+[ $RC -eq 0 ] && pass 'fixed worker plus pool workers is allowed and reported by status' || fail "fixed worker plus pool workers failed rc=$RC out=$OUT"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"commander":{"role":"commander","external":true},"seats":{"observer":{"role":"researcher","external":true}}}
 JSON

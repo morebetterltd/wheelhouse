@@ -10,7 +10,7 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 ROOT="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/.wheelhouse-worktrees" "$BIN" "$HOME_FIX/.pi-seats-staff"
 printf 'namespace=staff\n' > "$ROOT/wheelhouse/.template-source"
-for e in e1 e2 e3 e4 rv1 rv2; do mkdir -p "$HOME_FIX/.pi-seats-staff/$e"; done
+for e in e1 e2 e3 e4 rv1 rv2 fixed-worker; do mkdir -p "$HOME_FIX/.pi-seats-staff/$e"; done
 cp "$HERE/staffing.ts" "$ROOT/seats/staffing.ts"; cp "$HERE/jev.ts" "$ROOT/seats/jev.ts"; cp "$HERE/pool.ts" "$ROOT/seats/pool.ts"; cp "$HERE/roster.ts" "$ROOT/seats/roster.ts"; cp "$HERE/fleet-snapshot.ts" "$ROOT/seats/fleet-snapshot.ts"; cp "$HERE/seat-activity.ts" "$ROOT/seats/seat-activity.ts"; cp "$HERE/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"; cp "$HERE/harness.ts" "$ROOT/seats/harness.ts"; cp "$HERE/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"; cp "$HERE/quota.ts" "$ROOT/seats/quota.ts"; cp "$HERE/lock.ts" "$ROOT/seats/lock.ts"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"seats":{}}
@@ -110,6 +110,31 @@ if (s.seats.some(r => !r.seat || !r.role || !r.harness || !r.model || !r.subscri
 if (JSON.stringify(s).match(/\/Users\/|\/home\/|~\//)) process.exit(5);
 PY
 then pass 'G4-38 staffing status --json carries the same scrubbed counts and seat fields'; else fail "staffing status json wrong rc=$JSON_RC out=$JSON_OUT"; fi
+(sleep 1000) & FIXED_PID=$!; PIDS="$PIDS $FIXED_PID"
+python3 - <<PY
+import json, pathlib
+seats=pathlib.Path('$ROOT/seats/seats.json'); sj=json.load(open(seats)); sj['seats']['worker-fixed']={'role':'worker','harness':'codex','provider':'openai','model':'fixed-model','account':{'dir':'~/.pi-seats-staff/fixed-worker','label':'fixed-sub','authRoute':'env'}}; seats.write_text(json.dumps(sj, indent=2)+'\n')
+log=pathlib.Path('$ROOT/seats/logs/worker-fixed.jsonl'); log.write_text('{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}\n')
+st=pathlib.Path('$ROOT/seats/state.json'); j=json.load(open(st)); j['seats']['worker-fixed']={'pid':$FIXED_PID,'log':str(log)}; st.write_text(json.dumps(j, indent=2)+'\n')
+PY
+run bun seats/staffing.ts status
+if [ $RC -eq 0 ] \
+  && [ "$(printf '%s\n' "$OUT" | grep -Ec '^worker-(e[1-4]|fixed) \| worker \| codex \| (m[1-4]|fixed-model) \| (e[1-4]|fixed-sub) \| (busy|idle since .*) \| (staffed|fixed)$')" = 5 ] \
+  && grep -q '^worker-fixed | worker | codex | fixed-model | fixed-sub | idle since .* | fixed$' <<<"$OUT" \
+  && grep -q '^workers: 5 live of 1..4 (free subscriptions: 0, rate-limited: 0)$' <<<"$OUT" \
+  && ! grep -Eq '/Users/|/home/|~/' <<<"$OUT"; then pass 'G4-38 mixed roster status rows equal live fixed plus staffed seats and counts agree'
+else fail "mixed roster staffing status output wrong or leaked path: $OUT"; fi
+JSON_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts status --json 2>&1)"; JSON_RC=$?
+if [ $JSON_RC -eq 0 ] && JSON_OUT="$JSON_OUT" node - <<'PY'
+const s=JSON.parse(process.env.JSON_OUT);
+if (s.seats.length!==5) process.exit(1);
+if (s.roles.workers.used!==5 || s.roles.workers.min!==1 || s.roles.workers.max!==4) process.exit(2);
+const fixed=s.seats.find(r => r.seat==='worker-fixed');
+if (!fixed || fixed.source!=='fixed' || fixed.subscription!=='fixed-sub' || fixed.model!=='fixed-model') process.exit(3);
+if (s.seats.filter(r => r.source==='staffed').length!==4) process.exit(4);
+if (JSON.stringify(s).match(/\/Users\/|\/home\/|~\//)) process.exit(5);
+PY
+then pass 'G4-38 mixed roster status --json rows equal live seats and counts agree'; else fail "mixed roster status json wrong rc=$JSON_RC out=$JSON_OUT"; fi
 rm -f "$ROOT/seats/staffing.json" "$ROOT/seats/state.json" "$ROOT/spawn-models.log"; rm -rf "$ROOT/.wheelhouse-worktrees"; mkdir -p "$ROOT/.wheelhouse-worktrees"
 run bun seats/staffing.ts flag e1 --reason synthetic-limit; run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'seat=worker-e2' <<<"$OUT" && pass 'G4-24 rate-limited entry is skipped' || fail "rate limit skip failed: $OUT"
