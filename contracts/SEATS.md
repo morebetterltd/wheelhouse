@@ -36,7 +36,7 @@ This has a collision consequence worth stating plainly: two seats — or two PRO
 
 How the subscriptions you hold get divided across several fleets on one machine is the operator's call, not this template's. The rule above says a seat is not shared; it says nothing about which wheelhouse a given seat belongs to, and that allocation is a decision about your own licences that no template is in a position to make for you.
 
-One consequence is enforced rather than trusted: **the verifier's account must be distinct from the author's.** A review from the author's own account is not a review, so `seats/verify.ts` compares the author seat's `account.dir` against the verifier's — canonicalized, on disk, before any model runs — and a match is a loud STOP. Keep the reviewer's and verifier's directories different from every worker's, or the fleet has no reviewer it can use.
+One consequence is enforced rather than trusted: **the verifier's account must be distinct from the author's.** A review from the author's own account is not a review, so `seats/verify.ts` compares the author seat's `account.dir` against the verifier's — canonicalized, on disk, before any model runs — and a match is a loud STOP. With a pool, the reviewer identities are the registered `verifier-<entry>` seats and the distinctness rule applies to whichever reviewer identity is picked. Keep the reviewer's and verifier's directories different from every worker's, or the fleet has no reviewer it can use.
 
 ### Rules
 

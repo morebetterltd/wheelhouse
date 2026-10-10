@@ -21,9 +21,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
-import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
+import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
+import { effectiveRoster } from "./roster";
+import { hasPool } from "./pool";
 import { liveLineCandidates } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -55,8 +57,13 @@ function refuse(msg: string): never {
 }
 
 function readRoster(): Record<string, SeatEntry> {
+  if (hasPool(ROOT)) return effectiveRoster(ROOT) as Record<string, SeatEntry>;
   if (!fs.existsSync(ROSTER_FILE)) refuse(`no ${ROSTER_FILE} — copy seats/seats.json.example to seats/seats.json and edit it`);
   return (JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8")).seats ?? {}) as Record<string, SeatEntry>;
+}
+
+function walkMarkerLive(seat: string): boolean {
+  try { const m = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "run", `walk.${seat}.json`), "utf8")); process.kill(Number(m.pid), 0); return true; } catch { return false; }
 }
 
 function requireVerifierSeat(explicit: string | undefined): { name: string; entry: SeatEntry } {
@@ -70,8 +77,9 @@ function requireVerifierSeat(explicit: string | undefined): { name: string; entr
   }
   const verifiers = Object.entries(roster).filter(([, e]) => e.role === "verifier" && !e.external);
   if (verifiers.length === 0) refuse(`no non-external verifier seat in seats/seats.json`);
-  if (verifiers.length > 1) refuse(`multiple verifier seats (${verifiers.map(([n]) => n).join(", ")}) — pass --verifier <seat>`);
-  return { name: verifiers[0][0], entry: verifiers[0][1] };
+  const free = verifiers.find(([n]) => !walkMarkerLive(n));
+  if (!free) refuse(`all verifier seats busy (${verifiers.map(([n]) => n).join(", ")}) — retry later`);
+  return { name: free[0], entry: free[1] };
 }
 
 function providerEnvName(provider: string | undefined): string | undefined {
@@ -90,17 +98,34 @@ function authIsIdentity(authFile: string): boolean {
   const body = fs.readFileSync(authFile, "utf8").replace(/[{}\s]/g, "");
   return body.length > 0;
 }
+function claudeOauthIsIdentity(configDir: string): boolean {
+  const config = path.join(configDir, ".claude.json");
+  if (!fs.existsSync(config)) return false;
+  try {
+    const j = JSON.parse(fs.readFileSync(config, "utf8"));
+    const acct = j?.oauthAccount;
+    if (!acct || typeof acct !== "object") return false;
+    return Object.values(acct).some((v) => typeof v === "string" ? v.trim().length > 0 : v != null);
+  } catch {
+    return false;
+  }
+}
 
-function requireCredential(entry: SeatEntry, seatName: string): string {
+function requireCredential(entry: SeatEntry, seatName: string, harness: HarnessName): string {
   if (!entry.account?.dir) refuse(`verifier seat "${seatName}" has no account.dir in seats/seats.json`);
   const dir = path.resolve(expandTilde(entry.account.dir));
   if (!fs.existsSync(dir)) refuse(`verifier seat directory does not exist: ${dir}`);
   const authFile = path.join(dir, "auth.json");
   const envName = providerEnvName(entry.provider);
   const envReady = entry.account.authRoute === "env" && !!(envName && process.env[envName]);
-  if (!authIsIdentity(authFile) && !envReady) {
+  const oauthReady = entry.account.authRoute !== "env" && harness === "claude-code" && claudeOauthIsIdentity(dir);
+  const fileReady = entry.account.authRoute !== "env" && harness !== "claude-code" && authIsIdentity(authFile);
+  if (!fileReady && !oauthReady && !envReady) {
+    const credentialHint = harness === "claude-code" && entry.account.authRoute !== "env"
+      ? `${path.join(dir, ".claude.json")} has no oauthAccount`
+      : `${authFile} is missing/empty`;
     refuse(
-      `verifier seat "${seatName}" has no resolved credential — ${authFile} is missing/empty` +
+      `verifier seat "${seatName}" has no resolved credential — ${credentialHint}` +
         (envName ? ` and ${envName} is not exported for env-route use` : "")
     );
   }
@@ -408,7 +433,7 @@ function main(): void {
   } catch (e: any) {
     refuse(e.message);
   }
-  const verifierDir = requireCredential(entry, verifierSeat);
+  const verifierDir = requireCredential(entry, verifierSeat, verifierHarness);
   let brief: string;
   try {
     brief = resolveRoleBrief(ROOT, "verifier");
@@ -447,7 +472,11 @@ function main(): void {
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   phase = "run verifier walk";
-  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper });
+  const markerFile = path.join(ROOT, "seats", "run", `walk.${verifierSeat}.json`);
+  fs.mkdirSync(path.dirname(markerFile), { recursive: true });
+  fs.writeFileSync(markerFile, JSON.stringify({ pid: process.pid, bead: claimRef, startedAt: new Date().toISOString() }, null, 2) + "\n");
+  const oneShotPath = readonlyBdPath(ROOT, `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, scratchCwd);
+  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper });
   const res = spawnSync(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
     env,
@@ -457,6 +486,7 @@ function main(): void {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
+  try { fs.unlinkSync(markerFile); } catch {}
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   const rawTranscript = [

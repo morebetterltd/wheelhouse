@@ -1,0 +1,5 @@
+synthetic tool output still running
+[38;5;196mesc[39m [2mto interrupt[22m
+──────────────── synthetic input ────────────────
+❯ [38;5;246mcheck the fleet inbox[39m                             cockpit
+  GENERIC STATUS: running

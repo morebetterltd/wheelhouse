@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "entries": {
+    "codex-a": {
+      "harness": "codex",
+      "provider": "openai-codex",
+      "models": ["gpt-5-codex"],
+      "account": { "dir": "~/.pi-seats-myproject/pool/codex-a", "label": "ChatGPT subscription A", "authRoute": "oauth" }
+    },
+    "claude-b": {
+      "harness": "claude-code",
+      "provider": "anthropic",
+      "models": ["sonnet"],
+      "account": { "dir": "~/.pi-seats-myproject/pool/claude-b", "label": "Claude subscription B", "authRoute": "oauth" },
+      "allowedTools": "Bash(git:*), Bash(bun:*), Read, Edit, Write"
+    },
+    "openrouter-c": {
+      "harness": "pi",
+      "provider": "openrouter",
+      "models": ["openrouter/anthropic/claude-sonnet-4.5"],
+      "account": { "dir": "~/.pi-seats-myproject/pool/openrouter-c", "label": "OpenRouter API key seat", "authRoute": "api_key" }
+    }
+  },
+  "roles": {
+    "workers": { "min": 1, "max": 2, "entries": ["codex-a", "claude-b"], "model": { "codex-a": "gpt-5-codex", "claude-b": "sonnet" } },
+    "reviewers": { "min": 1, "max": 1, "entries": ["openrouter-c"], "model": "openrouter/anthropic/claude-sonnet-4.5" }
+  },
+  "idle_drop_minutes": 30,
+  "check_interval_seconds": 60
+}

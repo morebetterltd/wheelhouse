@@ -5,6 +5,7 @@ seats/logs/
 
 # seat runtime state and command FIFOs are per-machine, never product
 seats/state.json
+seats/staffing.json
 seats/herald.state.json
 seats/inbox.jsonl
 seats/needs.jsonl

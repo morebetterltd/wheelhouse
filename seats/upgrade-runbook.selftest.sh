@@ -411,6 +411,11 @@ git -C "$HARNESS_PROJ" add .gitignore
 git -C "$HARNESS_PROJ" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
 cp "$ROOT/seats/adapter.ts" "$HARNESS_PROJ/seats/adapter.ts"
 cp "$ROOT/seats/seat-worktree.ts" "$HARNESS_PROJ/seats/seat-worktree.ts"
+cp "$ROOT/seats/seat-activity.ts" "$HARNESS_PROJ/seats/seat-activity.ts"
+cp "$ROOT/seats/pool.ts" "$HARNESS_PROJ/seats/pool.ts"
+cp "$ROOT/seats/roster.ts" "$HARNESS_PROJ/seats/roster.ts"
+cp "$ROOT/seats/credential-shapes.ts" "$HARNESS_PROJ/seats/credential-shapes.ts"
+cp "$ROOT/seats/quota.ts" "$HARNESS_PROJ/seats/quota.ts"
 cp "$ROOT/seats/harness.ts" "$HARNESS_PROJ/seats/harness.ts"
 cp "$ROOT/seats/briefs.ts" "$HARNESS_PROJ/seats/briefs.ts"
 cp "$ROOT/seats/host-budget.ts" "$HARNESS_PROJ/seats/host-budget.ts"
