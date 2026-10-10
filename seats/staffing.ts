@@ -161,6 +161,40 @@ function lineFor(decision: Decision, snap: Snapshot, pool: Pool): string {
   return `${new Date().toISOString()} decision=${decision.kind} decider=${decision.decider} conf=${conf} ready=${snap.readyCount} chained=${snap.chainedCount} overlap=${snap.overlapCount} backlog=${snap.reviewBacklog.length} workers=${snap.workers.live.length}/${w?.min ?? 0}..${w?.max ?? 0} reviewers=${snap.reviewers.live.length}/${r?.min ?? 0}..${r?.max ?? 0} seat=${decision.seat ?? "-"} entry=${decision.entry ?? "-"} reason="${esc}"`;
 }
 function logDecision(line: string) { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, line + "\n"); console.log(line); }
+function lastDecisionLine(root = ROOT): string | null { try { return fs.readFileSync(path.join(root, "seats", "logs", "staffing.log"), "utf8").split(/\r?\n/).filter(Boolean).at(-1) ?? null; } catch { return null; } }
+function roleModel(role: any, entry: string): string { return typeof role?.model === "string" ? role.model : role?.model?.[entry] ?? "-"; }
+function subscriptionLabel(pool: Pool, entry: string | null): string { if (!entry) return "-"; return pool.entries[entry]?.account?.label || entry; }
+function ageSince(iso?: string | null): string { if (!iso) return "unknown"; const ms = Math.max(0, Date.now() - Date.parse(iso)); if (!Number.isFinite(ms)) return "unknown"; const m = Math.floor(ms / 60000); if (m < 1) return "now"; if (m < 60) return `${m}m`; const h = Math.floor(m / 60); if (h < 48) return `${h}h`; return `${Math.floor(h / 24)}d`; }
+function statusObject(root: string, pool: Pool, staffing: StaffingFile, snap: Snapshot) {
+  const live = [
+    ...snap.workers.live.map((s) => ({ ...s, roleKey: "workers" as Role, role: "worker", idleSince: s.lastActivityAt })),
+    ...snap.reviewers.live.map((s) => ({ ...s, roleKey: "reviewers" as Role, role: "verifier", idleSince: null })),
+  ].filter((s) => s.entry && staffing.seats?.[s.name]);
+  const seats = live.sort((a, b) => a.name.localeCompare(b.name)).map((s) => {
+    const entry = s.entry!;
+    const poolEntry = pool.entries[entry];
+    const roleDef = pool.roles[s.roleKey];
+    return { seat: s.name, role: s.role, harness: poolEntry?.harness ?? "-", model: roleModel(roleDef, entry), subscription: subscriptionLabel(pool, entry), state: s.busy ? "busy" : `idle since ${ageSince(s.idleSince)}`, source: "staffed" };
+  });
+  const roles = Object.fromEntries((["workers", "reviewers"] as Role[]).map((role) => {
+    const def = pool.roles[role];
+    const used = role === "workers" ? snap.workers.live.length : snap.reviewers.live.length;
+    const rateLimited = def?.entries.filter((e) => staffing.rateLimited?.[e]).length ?? 0;
+    return [role, { used, min: def?.min ?? 0, max: def?.max ?? 0, freeSubscriptions: freeSubscriptions(pool, staffing, role), rateLimited }];
+  }));
+  return { seats, roles, lastDecision: lastDecisionLine(root), jev: jevConfig().configured ? "configured" : "not configured" };
+}
+function printStatus(root: string, pool: Pool, staffing: StaffingFile, snap: Snapshot, json: boolean): void {
+  const status = statusObject(root, pool, staffing, snap);
+  if (json) { console.log(JSON.stringify(status, null, 2)); return; }
+  for (const s of status.seats) console.log(`${s.seat} | ${s.role} | ${s.harness} | ${s.model} | ${s.subscription} | ${s.state} | ${s.source}`);
+  for (const role of ["workers", "reviewers"] as const) {
+    const r = status.roles[role];
+    console.log(`${role}: ${r.used} live of ${r.min}..${r.max} (free subscriptions: ${r.freeSubscriptions}, rate-limited: ${r.rateLimited})`);
+  }
+  console.log(`last decision: ${status.lastDecision ?? "-"}`);
+  console.log(`jev: ${status.jev}`);
+}
 function runAdapter(args: string[]): { status: number; text: string } { const r = spawnSync("bun", ["seats/adapter.ts", ...args], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); return { status: r.status ?? 1, text: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() }; }
 function registerSeat(root: string, staffing: StaffingFile, role: Role, seat: string, entry: string) { staffing.seats[seat] = { role: role === "workers" ? "worker" : "verifier", entry, addedAt: new Date().toISOString() }; writeStaffing(root, staffing); }
 function unregisterSeat(root: string, staffing: StaffingFile, seat: string) { delete staffing.seats[seat]; writeStaffing(root, staffing); }
@@ -198,10 +232,10 @@ export async function main(argv = process.argv.slice(2), root = ROOT): Promise<v
   const cmd = argv[0] ?? "check";
   if (!hasPool(root)) { console.log("staffing: no pool (fixed roster)"); return; }
   const pool = loadPool(root), dry = argv.includes("--dry-run"), json = argv.includes("--json");
-  if (cmd === "status") { console.log(JSON.stringify(readStaffing(root), null, 2)); return; }
+  let staffing = readStaffing(root); syncRateLimitedFromState(root, staffing); writeStaffing(root, staffing);
+  if (cmd === "status") { const snap = fleetSnapshot(root, { since: { isaHead: staffing.lastCheck?.isaHead ?? null, at: staffing.lastCheck?.at } }); printStatus(root, pool, staffing, snap, json); return; }
   const fd = acquireLock(); if (fd === null) { console.log("staffing: check already running"); return; }
   try {
-    let staffing = readStaffing(root); syncRateLimitedFromState(root, staffing); writeStaffing(root, staffing);
     if (cmd === "flag") { const entry = argv[1]; const reason = argv.slice(argv.indexOf("--reason") + 1).join(" ") || "manual flag"; staffing.rateLimited ??= {}; staffing.rateLimited[entry] = { at: new Date().toISOString(), detail: reason }; writeStaffing(root, staffing); console.log(`staffing: flagged ${entry}: ${reason}`); return; }
     if (cmd === "probe") { const entry = argv[1]; if (!entry) usage(); const r = runAdapter(["probe", "--entry", entry]); if (r.status === 0) { delete staffing.rateLimited?.[entry]; writeStaffing(root, staffing); } console.log(r.text || (r.status === 0 ? "OK" : `probe failed ${r.status}`)); process.exitCode = r.status === 0 ? 0 : r.status; return; }
     const snap = fleetSnapshot(root, { since: { isaHead: staffing.lastCheck?.isaHead ?? null, at: staffing.lastCheck?.at } });

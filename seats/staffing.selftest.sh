@@ -91,6 +91,25 @@ PY
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e4' <<<"$OUT" || fail "fourth add did not use e4: $OUT"
 run env BD_READY_COUNT=6 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'reason="at limit: workers 4/4"' <<<"$OUT" && pass 'G4-18/G4-23 burst grows 1→4 then G4-16 clamps at max' || fail "at max clamp failed: $OUT"
+run bun seats/staffing.ts status
+if [ $RC -eq 0 ] \
+  && [ "$(printf '%s\n' "$OUT" | grep -Ec '^worker-e[1-4] \| worker \| codex \| m[1-4] \| e[1-4] \| (busy|idle since .*) \| staffed$')" = 4 ] \
+  && grep -q '^workers: 4 live of 1..4 (free subscriptions: 0, rate-limited: 0)$' <<<"$OUT" \
+  && grep -q '^reviewers: 0 live of 0..2 (free subscriptions: 2, rate-limited: 0)$' <<<"$OUT" \
+  && grep -q '^last decision: .*decision=nothing .*workers=4/1..4' <<<"$OUT" \
+  && grep -q '^jev: not configured$' <<<"$OUT" \
+  && ! grep -Eq '/Users/|/home/|~/' <<<"$OUT"; then pass 'G4-38 staffing status lists live seats, counts, last decision, Jev state and no account dirs'
+else fail "staffing status output wrong or leaked path: $OUT"; fi
+JSON_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts status --json 2>&1)"; JSON_RC=$?
+if [ $JSON_RC -eq 0 ] && JSON_OUT="$JSON_OUT" node - <<'PY'
+const s=JSON.parse(process.env.JSON_OUT);
+if (s.seats.length!==4) process.exit(1);
+if (s.roles.workers.used!==4 || s.roles.workers.min!==1 || s.roles.workers.max!==4 || s.roles.workers.freeSubscriptions!==0) process.exit(2);
+if (s.roles.reviewers.used!==0 || s.roles.reviewers.min!==0 || s.roles.reviewers.max!==2 || s.roles.reviewers.freeSubscriptions!==2) process.exit(3);
+if (s.seats.some(r => !r.seat || !r.role || !r.harness || !r.model || !r.subscription || !r.state || r.source!=='staffed')) process.exit(4);
+if (JSON.stringify(s).match(/\/Users\/|\/home\/|~\//)) process.exit(5);
+PY
+then pass 'G4-38 staffing status --json carries the same scrubbed counts and seat fields'; else fail "staffing status json wrong rc=$JSON_RC out=$JSON_OUT"; fi
 rm -f "$ROOT/seats/staffing.json" "$ROOT/seats/state.json" "$ROOT/spawn-models.log"; rm -rf "$ROOT/.wheelhouse-worktrees"; mkdir -p "$ROOT/.wheelhouse-worktrees"
 run bun seats/staffing.ts flag e1 --reason synthetic-limit; run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'seat=worker-e2' <<<"$OUT" && pass 'G4-24 rate-limited entry is skipped' || fail "rate limit skip failed: $OUT"

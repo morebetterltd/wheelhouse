@@ -1263,6 +1263,16 @@ else fail "status did not survive adapter restart (exit $RC): $OUT"; fi
 if ! says "account fixture-human-account"; then
   pass "status still works for a roster with no account.label"
 else fail "status carried a label from a different roster into an unlabeled seat: $OUT"; fi
+if ! says "staffing:"; then pass "adapter status has no staffing trailer without a pool"
+else fail "adapter status printed staffing trailer without pool: $OUT"; fi
+mkdir -p "$HOME_FIX/.pi-seats-proj/rv1"
+cat > "$PROJ/seats/pool.json" <<'JSON'
+{"version":1,"entries":{"rv1":{"harness":"codex","provider":"openai","models":["rv"],"account":{"dir":"~/.pi-seats-proj/rv1","authRoute":"env"}}},"roles":{"reviewers":{"min":0,"max":1,"entries":["rv1"],"model":"rv"}}}
+JSON
+run status
+if [ $RC -eq 0 ] && says "staffing: workers 1/0..0 · reviewers 0/0..1 · see bun seats/staffing.ts status"; then pass "adapter status appends staffing trailer when a pool exists"
+else fail "adapter status missing staffing trailer with pool (rc=$RC): $OUT"; fi
+rm -f "$PROJ/seats/pool.json"
 
 phase "5. no tokens — identity never leaks into state or logs"
 if ! grep -q "$SENTINEL" "$STATE" && ! grep -rq "$SENTINEL" "$PROJ/seats/logs/"; then

@@ -354,6 +354,8 @@ seat worktree.
 
 `status` prints an `ORPHAN:` line only for a confirmed duplicate seat process: a candidate must not be a descendant of the recorded seat pid, must either hold the seat FIFO or predate the recorded pid, and must still be present on a second scan a few seconds later. The line includes the remedy (`inspect pid ..., then stop it or run bun seats/recover.ts`) so transient child tools are not reported as duplicate seats and genuine duplicates say what to do next.
 
+When `seats/pool.json` exists, `bun seats/adapter.ts status` also prints a staffing trailer with per-role live/min/max counts and points to `bun seats/staffing.ts status`. The staffing status command is the detailed operator view: one row per staffed live seat with role, harness, model, public subscription label (or entry name), busy/idle state, and whether it is staffed; then workers/reviewers used/min/max, free and rate-limited subscription counts, the last decision line, and whether Jev is configured. `--json` prints the same data as one object. Neither form prints account directories.
+
 `dispatch` prefixes the message with `Bead <bead-id>` and queues behind the
 current turn if the seat is mid-stream; redirecting the CURRENT turn is what
 `steer` is for. Before waiting for Pi's prompt acknowledgement, the adapter

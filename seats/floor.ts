@@ -181,6 +181,7 @@ interface Seat {
 function listSeats(): Seat[] {
   const roster = effectiveRoster(ROOT);
   const state = readJson(STATE_FILE)?.seats ?? {};
+  const staffed = new Set(Object.keys(readJson(path.join(ROOT, "seats", "staffing.json"))?.seats ?? {}));
   const names: string[] = [];
   for (const n of Object.keys(roster)) if (!roster[n]?.external) names.push(n);
   for (const n of Object.keys(state)) if (!names.includes(n)) names.push(n);
@@ -189,7 +190,7 @@ function listSeats(): Seat[] {
     role: roster[name]?.role ?? state[name]?.role ?? "?",
     provider: roster[name]?.provider ?? "-",
     model: roster[name]?.model ?? "-",
-    accountLabel: roster[name]?.account?.label ?? "-",
+    accountLabel: `${roster[name]?.account?.label ?? "-"}${staffed.has(name) ? " (pool)" : ""}`,
     record: state[name] ?? null,
     log: state[name]?.log ?? path.join(LOG_DIR, `${name}.jsonl`),
     errLog: path.join(LOG_DIR, `${name}.stderr.log`),
