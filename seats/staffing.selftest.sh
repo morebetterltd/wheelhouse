@@ -10,13 +10,13 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 ROOT="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/.wheelhouse-worktrees" "$BIN" "$HOME_FIX/.pi-seats-staff"
 printf 'namespace=staff\n' > "$ROOT/wheelhouse/.template-source"
-for e in e1 e2 e3 e4 rv1; do mkdir -p "$HOME_FIX/.pi-seats-staff/$e"; done
+for e in e1 e2 e3 e4 rv1 rv2; do mkdir -p "$HOME_FIX/.pi-seats-staff/$e"; done
 cp "$HERE/staffing.ts" "$ROOT/seats/staffing.ts"; cp "$HERE/pool.ts" "$ROOT/seats/pool.ts"; cp "$HERE/roster.ts" "$ROOT/seats/roster.ts"; cp "$HERE/fleet-snapshot.ts" "$ROOT/seats/fleet-snapshot.ts"; cp "$HERE/seat-activity.ts" "$ROOT/seats/seat-activity.ts"; cp "$HERE/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"; cp "$HERE/harness.ts" "$ROOT/seats/harness.ts"; cp "$HERE/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"; cp "$HERE/quota.ts" "$ROOT/seats/quota.ts"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"seats":{}}
 JSON
 cat > "$ROOT/seats/pool.json" <<'JSON'
-{"version":1,"idle_drop_minutes":30,"entries":{"e1":{"harness":"codex","provider":"openai","models":["m1"],"account":{"dir":"~/.pi-seats-staff/e1","authRoute":"env"}},"e2":{"harness":"codex","provider":"openai","models":["m2"],"account":{"dir":"~/.pi-seats-staff/e2","authRoute":"env"}},"e3":{"harness":"codex","provider":"openai","models":["m3"],"account":{"dir":"~/.pi-seats-staff/e3","authRoute":"env"}},"e4":{"harness":"codex","provider":"openai","models":["m4"],"account":{"dir":"~/.pi-seats-staff/e4","authRoute":"env"}},"rv1":{"harness":"codex","provider":"openai","models":["vr"],"account":{"dir":"~/.pi-seats-staff/rv1","authRoute":"env"}}},"roles":{"workers":{"min":1,"max":4,"entries":["e1","e2","e3","e4"],"model":{"e1":"m1","e2":"m2","e3":"m3","e4":"m4"}},"reviewers":{"min":0,"max":1,"entries":["rv1"],"model":"vr"}}}
+{"version":1,"idle_drop_minutes":30,"entries":{"e1":{"harness":"codex","provider":"openai","models":["m1"],"account":{"dir":"~/.pi-seats-staff/e1","authRoute":"env"}},"e2":{"harness":"codex","provider":"openai","models":["m2"],"account":{"dir":"~/.pi-seats-staff/e2","authRoute":"env"}},"e3":{"harness":"codex","provider":"openai","models":["m3"],"account":{"dir":"~/.pi-seats-staff/e3","authRoute":"env"}},"e4":{"harness":"codex","provider":"openai","models":["m4"],"account":{"dir":"~/.pi-seats-staff/e4","authRoute":"env"}},"rv1":{"harness":"codex","provider":"openai","models":["vr"],"account":{"dir":"~/.pi-seats-staff/rv1","authRoute":"env"}},"rv2":{"harness":"codex","provider":"openai","models":["vr2"],"account":{"dir":"~/.pi-seats-staff/rv2","authRoute":"env"}}},"roles":{"workers":{"min":1,"max":4,"entries":["e1","e2","e3","e4"],"model":{"e1":"m1","e2":"m2","e3":"m3","e4":"m4"}},"reviewers":{"min":0,"max":2,"entries":["rv1","rv2"],"model":{"rv1":"vr","rv2":"vr2"}}}}
 JSON
 ( cd "$ROOT" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats wheelhouse && git commit -q -m base )
 cat > "$BIN/bd" <<'SH'
@@ -31,9 +31,10 @@ PY
 fi
 if [ "$1" = list ]; then
   if [ "${BD_REVIEW:-0}" = 1 ]; then
-    cat <<'JSON'
-[{"id":"busy-bead","title":"Synthetic busy","status":"in_progress","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"review-bead","title":"Synthetic review","status":"open","labels":["needs-review"],"assignee":"worker-e1","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]
-JSON
+    python3 - <<'PY'
+import json, os
+print(json.dumps([{"id":"busy-bead","title":"Synthetic busy","status":"in_progress","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"review-bead","title":"Synthetic review","status":"open","labels":["needs-review"],"assignee":os.environ.get("BD_ASSIGNEE","worker-e1"),"issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]))
+PY
   else
     cat <<'JSON'
 [{"id":"busy-bead","title":"Synthetic busy","status":"in_progress","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]
@@ -199,8 +200,27 @@ run env BD_READY_COUNT=6 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'at limit: workers 1/1' <<<"$OUT" && pass 'G4-5 min=max pins worker scale-out' || fail "min=max failed: $OUT"
 run env BD_READY_COUNT=0 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && ! grep -q 'decision=drop-seat' <<<"$OUT" && pass 'G4-5 min=max pins empty queue against drop' || fail "min=max empty queue failed: $OUT"
-run env BD_READY_COUNT=0 bun seats/staffing.ts check --decision add-reviewer
-[ $RC -eq 0 ] && grep -q 'reason="reviewers: not yet scalable"' <<<"$OUT" && pass 'add-reviewer decision is clamped to not-yet-scalable in this bead' || fail "add-reviewer clamp failed: $OUT"
+rm -f "$ROOT/seats/staffing.json" "$ROOT/seats/state.json"; rm -rf "$ROOT/.wheelhouse-worktrees"; mkdir -p "$ROOT/.wheelhouse-worktrees"
+python3 - <<PY
+import json, pathlib, time
+pathlib.Path('$ROOT/seats/staffing.json').write_text(json.dumps({'version':1,'seats':{'worker-e1':{'role':'worker','entry':'e1','addedAt':'2026-01-01T00:00:00Z'}},'rateLimited':{}}, indent=2))
+PY
+run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
+[ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=verifier-rv1' <<<"$OUT" && ! grep -q 'decision=add-worker' <<<"$OUT" && pass 'G4-19 review backlog adds reviewer and not worker' || fail "reviewer add failed: $OUT"
+python3 - <<PY
+import json, pathlib
+pathlib.Path('$ROOT/seats/seats.json').write_text(json.dumps({'version':1,'seats':{}}, indent=2))
+pathlib.Path('$ROOT/seats/staffing.json').write_text(json.dumps({'version':1,'seats':{'worker-e1':{'role':'worker','entry':'e1','addedAt':'2026-01-01T00:00:00Z'},'verifier-rv1':{'role':'verifier','entry':'rv1','addedAt':'2026-01-01T00:00:00Z'}},'rateLimited':{'rv1':{'at':'2026-01-01T00:00:00Z','detail':'test keeps rv1 unavailable'}}}, indent=2))
+PY
+MARKER="$ROOT/seats/run/verify.verifier-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID0=$!; printf '{"pid":%s,"bead":"other-bead"}\n' "$MPID0" > "$MARKER"
+run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
+kill "$MPID0" 2>/dev/null || true; rm -f "$MARKER"
+[ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=verifier-rv2' <<<"$OUT" && pass 'G4-19 review backlog with no eligible free reviewer adds next reviewer' || fail "no eligible reviewer backlog failed: $OUT"
+MARKER="$ROOT/seats/run/verify.verifier-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID=$!; printf '{"pid":%s,"bead":"review-bead"}\n' "$MPID" > "$MARKER"
+run env BD_READY_COUNT=0 bun seats/staffing.ts drop verifier-rv1
+[ $RC -eq 0 ] && grep -q 'drop refused: verifier-rv1 is busy' <<<"$OUT" && kill "$MPID" 2>/dev/null && rm -f "$MARKER" && pass 'G4-19 reviewer with live verify marker is not dropped' || { kill "$MPID" 2>/dev/null || true; fail "busy reviewer drop failed: $OUT"; }
+run env BD_READY_COUNT=0 bun seats/staffing.ts drop verifier-rv1
+[ $RC -eq 0 ] && grep -q 'decision=drop-seat' <<<"$OUT" && pass 'G4-19 idle reviewer unregisters on drop' || fail "idle reviewer drop failed: $OUT"
 # Safe worktree removal refusals used by drop.
 git -C "$ROOT" worktree add --detach "$ROOT/.wheelhouse-worktrees/worker-dirty" HEAD >/dev/null 2>&1
 printf 'dirty\n' > "$ROOT/.wheelhouse-worktrees/worker-dirty/local.txt"

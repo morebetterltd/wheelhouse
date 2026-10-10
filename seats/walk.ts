@@ -62,6 +62,10 @@ function readRoster(): Record<string, SeatEntry> {
   return (JSON.parse(fs.readFileSync(ROSTER_FILE, "utf8")).seats ?? {}) as Record<string, SeatEntry>;
 }
 
+function walkMarkerLive(seat: string): boolean {
+  try { const m = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "run", `walk.${seat}.json`), "utf8")); process.kill(Number(m.pid), 0); return true; } catch { return false; }
+}
+
 function requireVerifierSeat(explicit: string | undefined): { name: string; entry: SeatEntry } {
   const roster = readRoster();
   if (explicit) {
@@ -73,8 +77,9 @@ function requireVerifierSeat(explicit: string | undefined): { name: string; entr
   }
   const verifiers = Object.entries(roster).filter(([, e]) => e.role === "verifier" && !e.external);
   if (verifiers.length === 0) refuse(`no non-external verifier seat in seats/seats.json`);
-  if (verifiers.length > 1) refuse(`multiple verifier seats (${verifiers.map(([n]) => n).join(", ")}) — pass --verifier <seat>`);
-  return { name: verifiers[0][0], entry: verifiers[0][1] };
+  const free = verifiers.find(([n]) => !walkMarkerLive(n));
+  if (!free) refuse(`all verifier seats busy (${verifiers.map(([n]) => n).join(", ")}) — retry later`);
+  return { name: free[0], entry: free[1] };
 }
 
 function providerEnvName(provider: string | undefined): string | undefined {
