@@ -469,6 +469,7 @@ else
   cp "$HERE/pool.ts" "$RPROJ/seats/pool.ts"
   cp "$HERE/roster.ts" "$RPROJ/seats/roster.ts"
   cp "$HERE/credential-shapes.ts" "$RPROJ/seats/credential-shapes.ts"
+  cp "$HERE/quota.ts" "$RPROJ/seats/quota.ts"
   cp "$BRIEFS" "$RPROJ/seats/briefs.ts"
   cp "$HARNESS" "$RPROJ/seats/harness.ts"
   cp "$HOST_BUDGET_TS" "$RPROJ/seats/host-budget.ts"
