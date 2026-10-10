@@ -8,6 +8,7 @@ import { fleetSnapshot, freeWorkers, freeReviewers, type Snapshot } from "./flee
 import { pidAlive } from "./seat-activity";
 import { removeSeatWorktree } from "./seat-worktree";
 import { QUOTA_RE } from "./quota";
+import { askChoice, jevConfig } from "./jev";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
@@ -15,7 +16,7 @@ const LOG_FILE = path.join(ROOT, "seats", "logs", "staffing.log");
 const LOCK_FILE = path.join(RUN_DIR, "staffing.lock");
 type Role = "workers" | "reviewers";
 type DecisionKind = "add-worker" | "add-reviewer" | "drop-seat" | "nothing";
-export interface Decision { kind: DecisionKind; role?: Role; seat?: string; entry?: string; reason: string; decider: string }
+export interface Decision { kind: DecisionKind; role?: Role; seat?: string; entry?: string; reason: string; decider: string; confidence?: number }
 
 function stop(msg: string): never { console.error(`STOP: ${msg}`); process.exit(2); }
 function sleep(ms: number) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
@@ -83,6 +84,60 @@ export function decide(snap: Snapshot, pool: Pool, staffing: StaffingFile, overr
   if (reviewerRole && snap.reviewers.live.length > reviewerRole.min && idleReviewer) return { kind: "drop-seat", role: "reviewers", seat: idleReviewer.name, entry: idleReviewer.entry ?? undefined, reason: "idle past drop window", decider: "rule" };
   return { kind: "nothing", reason: "nothing to do", decider: "rule" };
 }
+function truncTitle(s: string): string { return s.length <= 80 ? s : `${s.slice(0, 77)}...`; }
+function freeSubscriptions(pool: Pool, staffing: StaffingFile, role: Role): number {
+  const roleDef = pool.roles[role]; if (!roleDef) return 0;
+  const occupied = occupiedEntries(pool.root, staffing);
+  return roleDef.entries.filter((e) => !occupied.has(e) && !staffing.rateLimited?.[e]).length;
+}
+function jevContext(snap: Snapshot, pool: Pool, staffing: StaffingFile) {
+  const w = pool.roles.workers, r = pool.roles.reviewers;
+  return {
+    counts: {
+      ready: snap.readyCount,
+      chained: snap.chainedCount,
+      overlapping: snap.overlapCount,
+      reviewBacklog: snap.reviewBacklog.length,
+      workers: { live: snap.workers.live.length, idle: snap.workers.idle, busy: snap.workers.busy, min: w?.min ?? 0, max: w?.max ?? 0, freeSubscriptions: freeSubscriptions(pool, staffing, "workers") },
+      reviewers: { live: snap.reviewers.live.length, idle: snap.reviewers.idle, busy: snap.reviewers.busy, min: r?.min ?? 0, max: r?.max ?? 0, freeSubscriptions: freeSubscriptions(pool, staffing, "reviewers") },
+    },
+    changes: { isaChangedSinceLastCheck: snap.changes.isaChanged, newEpicsSinceLastCheck: snap.changes.newEpics },
+    ready: snap.ready.map((x) => ({ title: truncTitle(x.title), chained: x.chained, group: x.groupKey ?? null })),
+  };
+}
+function choiceDecision(choice: string): DecisionKind | null {
+  if (choice === "add_worker") return "add-worker";
+  if (choice === "add_reviewer") return "add-reviewer";
+  if (choice === "drop_seat") return "drop-seat";
+  if (choice === "nothing") return "nothing";
+  return null;
+}
+function roleForKind(kind: DecisionKind): Role | undefined { return kind === "add-worker" ? "workers" : kind === "add-reviewer" ? "reviewers" : kind === "drop-seat" ? "workers" : undefined; }
+async function decideWithJev(snap: Snapshot, pool: Pool, staffing: StaffingFile, override?: DecisionKind): Promise<Decision> {
+  const rule = decide(snap, pool, staffing, override);
+  if (override) return rule;
+  const cfg = jevConfig();
+  if (!cfg.configured) return { ...rule, reason: `jev skipped: ${cfg.why}; ${rule.reason}` };
+  const ans = await askChoice({
+    text: "Given this fleet state, should we add a worker, add a reviewer, drop a seat, or do nothing this check?",
+    options: [
+      { id: "add_worker", label: "add worker" },
+      { id: "add_reviewer", label: "add reviewer" },
+      { id: "drop_seat", label: "drop seat" },
+      { id: "nothing", label: "nothing" },
+    ],
+    context: jevContext(snap, pool, staffing),
+  });
+  if (!ans.ok) return { ...rule, reason: `jev skipped: ${ans.why}; ${rule.reason}` };
+  if (ans.choice === "other") return { ...rule, reason: `jev skipped: other; ${rule.reason}` };
+  if (ans.confidence < 0.5) return { ...rule, reason: `jev skipped: low confidence ${ans.confidence.toFixed(2)}; ${rule.reason}` };
+  const kind = choiceDecision(ans.choice);
+  if (!kind) return { ...rule, reason: `jev skipped: unknown choice; ${rule.reason}` };
+  const role = roleForKind(kind);
+  const seat = kind === "drop-seat" ? snap.workers.live.filter((w) => !w.busy).sort((a,b)=>String(a.lastActivityAt ?? "").localeCompare(String(b.lastActivityAt ?? "")))[0]?.name : undefined;
+  return { kind, role, seat, reason: `jev choice ${ans.choice} probabilities=${JSON.stringify(ans.probabilities)}`, decider: "jev", confidence: ans.confidence };
+}
+
 export function clamp(decision: Decision, snap: Snapshot, pool: Pool, staffing: StaffingFile): Decision {
   if (decision.kind === "add-worker") {
     const role = pool.roles.workers; if (!role) return { kind: "nothing", reason: "workers not pooled", decider: decision.decider };
@@ -109,7 +164,8 @@ export function clamp(decision: Decision, snap: Snapshot, pool: Pool, staffing: 
 function lineFor(decision: Decision, snap: Snapshot, pool: Pool): string {
   const w = pool.roles.workers, r = pool.roles.reviewers;
   const esc = decision.reason.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim();
-  return `${new Date().toISOString()} decision=${decision.kind} decider=${decision.decider} conf=0.00 ready=${snap.readyCount} chained=${snap.chainedCount} overlap=${snap.overlapCount} backlog=${snap.reviewBacklog.length} workers=${snap.workers.live.length}/${w?.min ?? 0}..${w?.max ?? 0} reviewers=${snap.reviewers.live.length}/${r?.min ?? 0}..${r?.max ?? 0} seat=${decision.seat ?? "-"} entry=${decision.entry ?? "-"} reason="${esc}"`;
+  const conf = Math.max(0, Math.min(1, decision.confidence ?? 0)).toFixed(2);
+  return `${new Date().toISOString()} decision=${decision.kind} decider=${decision.decider} conf=${conf} ready=${snap.readyCount} chained=${snap.chainedCount} overlap=${snap.overlapCount} backlog=${snap.reviewBacklog.length} workers=${snap.workers.live.length}/${w?.min ?? 0}..${w?.max ?? 0} reviewers=${snap.reviewers.live.length}/${r?.min ?? 0}..${r?.max ?? 0} seat=${decision.seat ?? "-"} entry=${decision.entry ?? "-"} reason="${esc}"`;
 }
 function logDecision(line: string) { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, line + "\n"); console.log(line); }
 function runAdapter(args: string[]): { status: number; text: string } { const r = spawnSync("bun", ["seats/adapter.ts", ...args], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); return { status: r.status ?? 1, text: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() }; }
@@ -155,16 +211,16 @@ export async function main(argv = process.argv.slice(2), root = ROOT): Promise<v
     let staffing = readStaffing(root); syncRateLimitedFromState(root, staffing); writeStaffing(root, staffing);
     if (cmd === "flag") { const entry = argv[1]; const reason = argv.slice(argv.indexOf("--reason") + 1).join(" ") || "manual flag"; staffing.rateLimited ??= {}; staffing.rateLimited[entry] = { at: new Date().toISOString(), detail: reason }; writeStaffing(root, staffing); console.log(`staffing: flagged ${entry}: ${reason}`); return; }
     if (cmd === "probe") { const entry = argv[1]; if (!entry) usage(); const r = runAdapter(["probe", "--entry", entry]); if (r.status === 0) { delete staffing.rateLimited?.[entry]; writeStaffing(root, staffing); } console.log(r.text || (r.status === 0 ? "OK" : `probe failed ${r.status}`)); process.exitCode = r.status === 0 ? 0 : r.status; return; }
-    const snap = fleetSnapshot(root);
+    const snap = fleetSnapshot(root, { since: { isaHead: staffing.lastCheck?.isaHead ?? null, at: staffing.lastCheck?.at } });
     let d: Decision;
     if (cmd === "add") { const role = argv[1] as Role; d = clamp({ kind: role === "reviewers" ? "add-reviewer" : "add-worker", role, reason: "manual add", decider: "rule" }, snap, pool, staffing); }
     else if (cmd === "drop") { const role = (staffing.seats?.[argv[1]]?.role === "verifier" ? "reviewers" : "workers") as Role; d = clamp({ kind: "drop-seat", role, seat: argv[1], reason: "manual drop", decider: "rule" }, snap, pool, staffing); }
-    else if (cmd === "check") d = clamp(decide(snap, pool, staffing, argv.includes("--decision") ? argv[argv.indexOf("--decision") + 1] as DecisionKind : undefined), snap, pool, staffing);
+    else if (cmd === "check") d = clamp(await decideWithJev(snap, pool, staffing, argv.includes("--decision") ? argv[argv.indexOf("--decision") + 1] as DecisionKind : undefined), snap, pool, staffing);
     else usage();
     if (!dry) {
       if (d.kind === "add-worker" || d.kind === "add-reviewer") d = applyAdd(root, pool, staffing, d);
       else if (d.kind === "drop-seat") d = applyDrop(root, staffing, d, snap);
-      staffing = readStaffing(root); staffing.lastCheck = { at: new Date().toISOString(), decision: d }; writeStaffing(root, staffing);
+      staffing = readStaffing(root); staffing.lastCheck = { at: new Date().toISOString(), isaHead: snap.changes.isaHead, decision: d }; writeStaffing(root, staffing);
     }
     const line = lineFor(d, snap, pool); logDecision(line); if (json) console.log(JSON.stringify({ decision: d, snapshot: snap }, null, 2));
   } finally { releaseLock(fd); }
