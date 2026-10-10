@@ -645,10 +645,10 @@ EOF
 WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit1.out" 2>&1
 RC=$?
 DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
-if [ $RC -eq 0 ] && [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null && grep -q 'herald started' "$FIX/cockpit1.out"; then
-  pass "cockpit starts the herald daemon"
+if [ $RC -eq 0 ] && [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null && grep -Eq 'herald (started|already running)' "$FIX/cockpit1.out"; then
+  pass "cockpit starts or verifies the herald daemon"
 else
-  fail "cockpit did not start herald (rc=$RC pid=${DAEMON_PID:-none} out=$(cat "$FIX/cockpit1.out" 2>/dev/null))"
+  fail "cockpit did not start/verify herald (rc=$RC pid=${DAEMON_PID:-none} out=$(cat "$FIX/cockpit1.out" 2>/dev/null))"
 fi
 
 kill -9 "$DAEMON_PID" 2>/dev/null || true

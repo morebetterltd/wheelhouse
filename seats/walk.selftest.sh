@@ -200,7 +200,13 @@ run_stream_case(){
   if [ "$harness" != pi ]; then
     bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='$harness'; j.seats.verifier.provider='$([ "$harness" = claude-code ] && printf anthropic || printf openai-codex)'; j.seats.verifier.model='stream-fixture'; j.seats.verifier.account.authRoute='$([ "$harness" = claude-code ] && printf oauth || printf env)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
   fi
-  rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STREAM_FILE="$stream" bun seats/walk.ts 'claim' --surface product:fixture --out "$outdir" 2>&1) || rc=$?
+  if [ "$harness" = claude-code ]; then
+    rm -f "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
+    printf '{"oauthAccount":{"accountUuid":"fixture-oauth"}}\n' > "$HOME_FIX/.pi-seats-$ns/verifier/.claude.json"
+  fi
+  local codex_key_env=""
+  [ "$harness" = codex ] && codex_key_env="OPENAI_CODEX_API_KEY=fixture-key"
+  rc=0; out=$(cd "$proj" && env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STREAM_FILE="$stream" $codex_key_env bun seats/walk.ts 'claim' --surface product:fixture --out "$outdir" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] && pass "$name final-message stream exits WALKED-DONE" || fail "$name stream rc=$rc output=$out"
   printf '%s\n' "$out" | grep -q 'VERDICT: WALKED-DONE' && pass "$name final-message stream prints verdict" || fail "$name stream missing verdict: $out"
   [ -s "$outdir/walk.json" ] && grep -q '"verdict": "WALKED-DONE"' "$outdir/walk.json" && pass "$name final-message stream writes verdict file" || fail "$name stream missing verdict file: $(cat "$outdir/walk.json" 2>/dev/null)"
@@ -234,8 +240,10 @@ if grep -q "$proj/seats/bin" "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/
 phase 'mixed harness verifier walks use the selected driver'
 proj="$FIX/proj-mixed-walk"; ns="walk-mixed"; build_proj "$proj" "$ns"
 bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+rm -f "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
+printf '{"oauthAccount":{"accountUuid":"fixture-oauth"}}\n' > "$HOME_FIX/.pi-seats-$ns/verifier/.claude.json"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-claude" 2>&1) || rc=$?
-if [ "$rc" -eq 0 ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'claude-code walk one-shot uses claude driver environment, not pi'; else fail "claude-code walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
+if [ "$rc" -eq 0 ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'claude-code oauth walk one-shot uses claude driver environment, not pi'; else fail "claude-code oauth walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
 if grep -q '"--output-format","stream-json"' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q '"--verbose"' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot requests stream-json output with --verbose'; else fail "claude-code walk one-shot missing stream-json/--verbose argv: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
 if grep -q 'Fixture walker brief' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && ! grep -q 'contracts/VERIFIER.md' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot carries verifier brief text, not the path'; else fail "claude-code walk one-shot carried path or missed brief text: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
 if ! grep -q -- 'permission-mode\|allowed-tools\|disallowed-tools' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot omits tool permission flags when the seat has no tool lists'; else fail "claude-code walk one-shot unexpectedly carried tool permission flags: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
@@ -252,6 +260,7 @@ if [ "$rc" -eq 0 ] && bun -e '
   if (args.indexOf("--allowed-tools") > args.indexOf("--model") || args.indexOf("--disallowed-tools") > args.indexOf("--model")) process.exit(4);
 ' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot passes tool lists before --model with a following flag and prompt last'; else fail "claude-code walk one-shot tool-list argv order wrong (rc=$rc argv=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null))"; fi
 bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/env.json"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-codex" 2>&1) || rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-$ns/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-$ns/verifier/env.json"; then pass 'codex walk one-shot uses codex driver environment, not pi'; else fail "codex walk one-shot wrong rc=$rc out=$out env=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/null)"; fi
