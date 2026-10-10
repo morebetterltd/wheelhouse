@@ -556,13 +556,51 @@ function configuredIdleRegex(): RegExp | null {
   }
 }
 
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
+
 function paneTextHasActiveMarkers(paneText: string): boolean {
-  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(paneText)
-    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(paneText)
-    || /\besc to interrupt\b/i.test(paneText);
+  const plain = stripAnsi(paneText);
+  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(plain)
+    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(plain)
+    || /\besc to interrupt\b/i.test(plain);
 }
 
 const IDLE_PROMPT_LINE_RE = /^\s*(?:[>❯](?:[\s\u00a0]{8,}[A-Za-z0-9_.:-]+)?|Human:|You:)\s*$/;
+function promptLineLooksIdle(line: string): boolean {
+  const plain = stripAnsi(line);
+  if (/^\s*(?:Human:|You:)\s*$/.test(plain)) return true;
+  if (!/^\s*[>❯]/.test(plain)) return false;
+  let dim = false, gray = false;
+  const visible: { ch: string; suggestion: boolean }[] = [];
+  for (let i = 0; i < line.length;) {
+    const m = line.slice(i).match(/^\x1b\[([0-9;?]*)m/);
+    if (m) {
+      const codes = (m[1] || "0").split(";").map((v) => Number(v || 0));
+      if (codes.includes(0)) { dim = false; gray = false; }
+      if (codes.includes(2)) dim = true;
+      if (codes.includes(22)) dim = false;
+      if (codes.includes(39)) gray = false;
+      for (let j = 0; j + 2 < codes.length; j++) if (codes[j] === 38 && codes[j + 1] === 5 && codes[j + 2] >= 240 && codes[j + 2] <= 252) gray = true;
+      i += m[0].length;
+      continue;
+    }
+    const ch = Array.from(line.slice(i))[0];
+    visible.push({ ch, suggestion: dim || gray });
+    i += ch.length;
+  }
+  const prompt = visible.findIndex((v) => v.ch === "❯" || v.ch === ">");
+  if (prompt < 0 || visible.slice(0, prompt).some((v) => !/\s/.test(v.ch))) return false;
+  let after = visible.slice(prompt + 1);
+  while (after.length && /\s/.test(after[after.length - 1].ch)) after = after.slice(0, -1);
+  if (after.length === 0) return true;
+  const afterText = after.map((v) => v.ch).join("");
+  if (/^[\s\u00a0]{8,}[A-Za-z0-9_.:-]+$/.test(afterText)) return true;
+  const label = afterText.match(/[\s\u00a0]{8,}[A-Za-z0-9_.:-]+$/);
+  const beforeLabel = label ? after.slice(0, afterText.length - label[0].length) : after;
+  const content = beforeLabel.filter((v) => !/\s/.test(v.ch));
+  return content.length > 0 && content.every((v) => v.suggestion);
+}
 
 function paneTextLooksIdleClaude(paneText: string): boolean {
   // Claude Code's current prompt UI is a bordered input box: an empty prompt
@@ -573,7 +611,7 @@ function paneTextLooksIdleClaude(paneText: string): boolean {
   if (paneTextHasActiveMarkers(paneText)) return false;
   const custom = configuredIdleRegex();
   if (custom?.test(paneText)) return true;
-  return paneText.split(/\r?\n/).some((line) => IDLE_PROMPT_LINE_RE.test(line)) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
+  return paneText.split(/\r?\n/).some((line) => promptLineLooksIdle(line)) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(stripAnsi(paneText));
 }
 
 function sleepSync(ms: number): void {
@@ -582,14 +620,14 @@ function sleepSync(ms: number): void {
 
 function stablePaneText(paneText: string): string {
   const lines = paneText.split(/\r?\n/);
-  const prompt = lines.findIndex((l) => IDLE_PROMPT_LINE_RE.test(l));
-  if (prompt >= 0) return lines.slice(0, prompt + 1).join("\n");
-  return lines.filter((l) => !/\b(?:tokens|ctx|context|model|cost|elapsed|status|lifeos)\b/i.test(l)).join("\n");
+  const prompt = lines.findIndex((l) => promptLineLooksIdle(l));
+  if (prompt >= 0) return stripAnsi(lines.slice(0, prompt + 1).join("\n"));
+  return stripAnsi(lines.join("\n")).split(/\r?\n/).filter((l) => !/\b(?:tokens|ctx|context|model|cost|elapsed|status|lifeos)\b/i.test(l)).join("\n");
 }
 
 function captureCommanderPane(): { command: string; text: string; stableText: string } | null {
   const command = tmuxOutput(["display-message", "-p", "-t", TMUX_PANE, "#{pane_current_command}"]);
-  const text = tmuxOutput(["capture-pane", "-p", "-J", "-t", TMUX_PANE, "-S", "-200"]);
+  const text = tmuxOutput(["capture-pane", "-p", "-e", "-J", "-t", TMUX_PANE, "-S", "-200"]);
   return { command, text, stableText: stablePaneText(text) };
 }
 

@@ -67,6 +67,7 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   display-message) printf '%s\n' "${FAKE_TMUX_COMMAND:-claude}" ;;
   capture-pane)
+    [ -n "${FAKE_TMUX_CAPTURE_ARGS_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_TMUX_CAPTURE_ARGS_LOG"
     if [ -n "${FAKE_TMUX_CAPTURE_SEQUENCE:-}" ]; then
       state="${FAKE_TMUX_SEQUENCE_STATE:?}"
       idx=0; [ -f "$state" ] && idx="$(cat "$state")"
@@ -355,6 +356,27 @@ seed_log_cursor worker-1.jsonl 0
 RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-prompt-with-unsent-wake.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "typed-but-unsent wake phrase remains not-idle and is not duplicated"
 else fail "typed-but-unsent wake phrase was treated idle (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG" "$FIX/capture-args.log"
+printf '%s\n' '{"type":"agent_end","messages":["gray suggestion settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-gray-suggestion-prompt.txt" FAKE_TMUX_CAPTURE_ARGS_LOG="$FIX/capture-args.log" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null && grep -q -- '-e' "$FIX/capture-args.log"; then pass "gray prompt suggestion from capture-pane -e is classified idle and poked"
+else fail "gray prompt suggestion was not treated idle or capture-pane lacked -e (rc=$RC out=$OUT args=$(cat "$FIX/capture-args.log" 2>/dev/null || echo none) send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf '%s\n' '{"type":"agent_end","messages":["styled esc busy settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/busy-styled-esc-to-interrupt.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "styled esc-to-interrupt active marker remains not-idle"
+else fail "styled esc-to-interrupt pane was treated idle (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf '%s\n' '{"type":"agent_end","messages":["normal typed settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/busy-normal-typed-prompt.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "normally styled typed prompt text remains not-idle"
+else fail "normally styled typed prompt was treated idle (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["idle prose working thinking settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
