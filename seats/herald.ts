@@ -562,17 +562,18 @@ function paneTextHasActiveMarkers(paneText: string): boolean {
     || /\besc to interrupt\b/i.test(paneText);
 }
 
+const IDLE_PROMPT_LINE_RE = /^\s*(?:[>❯](?:[\s\u00a0]{8,}[A-Za-z0-9_.:-]+)?|Human:|You:)\s*$/;
+
 function paneTextLooksIdleClaude(paneText: string): boolean {
-  // Claude Code's current prompt UI is a bordered input box: a standalone
-  // `❯` prompt line followed by a status/footer line. During a turn that
-  // same box can still be visible below an active status line, so exclude the
-  // measured active markers first. Wrapper launches can render their own idle
-  // prompt, so WHEELHOUSE_HERALD_IDLE_RE lets an install add the wrapper's
-  // exact idle signature without changing the safe active-marker exclusions.
+  // Claude Code's current prompt UI is a bordered input box: an empty prompt
+  // line (`❯`) followed by status/footer lines. Some wrappers render a
+  // right-aligned pane label on the same otherwise-empty prompt line; accept
+  // that only when it is separated by a wide run of spaces so typed-but-unsent
+  // input such as "check the fleet inbox" remains NOT idle.
   if (paneTextHasActiveMarkers(paneText)) return false;
   const custom = configuredIdleRegex();
   if (custom?.test(paneText)) return true;
-  return /(?:^|\n)\s*(?:[>❯]|Human:|You:)\s*(?:\n|$)/.test(paneText) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
+  return paneText.split(/\r?\n/).some((line) => IDLE_PROMPT_LINE_RE.test(line)) || /(?:^|\n).*claude.*(?:idle|ready|waiting)/i.test(paneText);
 }
 
 function sleepSync(ms: number): void {
@@ -581,7 +582,7 @@ function sleepSync(ms: number): void {
 
 function stablePaneText(paneText: string): string {
   const lines = paneText.split(/\r?\n/);
-  const prompt = lines.findIndex((l) => /^\s*(?:[>❯]|Human:|You:)\s*$/.test(l));
+  const prompt = lines.findIndex((l) => IDLE_PROMPT_LINE_RE.test(l));
   if (prompt >= 0) return lines.slice(0, prompt + 1).join("\n");
   return lines.filter((l) => !/\b(?:tokens|ctx|context|model|cost|elapsed|status|lifeos)\b/i.test(l)).join("\n");
 }
