@@ -171,10 +171,21 @@ export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "ve
   return dir;
 }
 
+function makeWritableRecursive(p: string): void {
+  try {
+    const st = fs.lstatSync(p);
+    if (st.isSymbolicLink()) return;
+    try { fs.chmodSync(p, st.mode | 0o200); } catch {}
+    if (st.isDirectory()) for (const name of fs.readdirSync(p)) makeWritableRecursive(path.join(p, name));
+  } catch {}
+}
+
 function removeScratchWorktree(repoRoot: string, dir: string): void {
+  makeWritableRecursive(dir);
   try {
     execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { stdio: "ignore" });
   } catch {
+    makeWritableRecursive(dir);
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
     try { execFileSync("git", ["-C", repoRoot, "worktree", "prune"], { stdio: "ignore" }); } catch {}
   }
