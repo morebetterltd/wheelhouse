@@ -381,6 +381,16 @@ if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG"
 else fail "scan target did not poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
+mkdir -p "$PROJ/wheelhouse"; printf 'namespace=fixture-ns\n' > "$PROJ/wheelhouse/.template-source"
+printf '%s\n' '{"type":"agent_end","messages":["synthetic namespace scan target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+PANES="$(printf '%%20\twh-project\tbridge\t0\t%s\n%%21\twh-fixture-ns\tbridge\t0\t%s' "$PROJ" "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%20\t%s\n%%21\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && grep -qx -- '-t %21 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"target": "%21"' "$PROJ/seats/run/herald.target.json"; then pass "scan prefers .template-source namespace over directory basename"
+else fail "namespace scan did not prefer namespace session (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
+rm -f "$PROJ/wheelhouse/.template-source"
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 printf '{"paneId":"%%88","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic wrong root target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
@@ -388,6 +398,15 @@ RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMU
 LAST_POKED="$(node -e 'const fs=require("fs"); const f=process.argv[1]; const s=fs.existsSync(f)?JSON.parse(fs.readFileSync(f,"utf8")):{}; console.log(s.lastPokedInboxSize===undefined?"unset":s.lastPokedInboxSize)' "$PROJ/seats/herald.state.json")"
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke refused .*reason=wrong-root .*target=%88 .*resolvedBy=cockpit-file' "$POKE_LOG" && grep -q '"status": "wrong-root"' "$PROJ/seats/run/herald.target.json" && [ "$LAST_POKED" = unset ]; then pass "wrong-root target is refused without send or lastPokedInboxSize"
 else fail "wrong-root target was not refused safely (rc=$RC out=$OUT sends=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
+printf '{"paneId":"%%88","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
+printf '%s\n' '{"type":"agent_end","messages":["synthetic stale commander file target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+PANES="$(printf '%%11\twh-project\tbridge\t0\t%s' "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s\n%%11\t%s' "$FIX/outside" "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "scan"' "$PROJ/seats/run/herald.target.json"; then pass "stale commander-pane.json falls through to pane scan"
+else fail "stale commander-pane.json did not fall through to scan (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic target appears later"]}' > "$PROJ/seats/logs/worker-1.jsonl"
