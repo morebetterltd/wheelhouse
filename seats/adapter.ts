@@ -65,7 +65,7 @@ import { resolveRoleBrief } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
 import { effectiveRoster } from "./roster";
-import { hasPool } from "./pool";
+import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, pidAlive, pidHoldsPath } from "./seat-activity";
@@ -1313,6 +1313,15 @@ function cmdProbe(name: string): void {
   clearCapacityAfterProbe(name);
 }
 
+function cmdProbeEntry(entryName: string): void {
+  const pool = loadPool(ROOT);
+  const role = pool.roles.workers?.entries.includes(entryName) ? "workers" : pool.roles.reviewers?.entries.includes(entryName) ? "reviewers" : null;
+  if (!role) die(`pool entry ${entryName} is not listed by a role`);
+  const entry = seatEntryFor(pool, role, entryName);
+  const seat = `${role === "workers" ? "worker" : "verifier"}-${entryName}`;
+  driverForSeat(seat, entry, "adapter probe --entry").probe(seat, entry);
+}
+
 async function cmdResume(name: string): Promise<void> {
   const rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" in seats/state.json — spawn it instead`);
@@ -2018,6 +2027,10 @@ async function main(): Promise<void> {
       if (rest.length !== 1 && rest.length !== 2) die("usage: adapter.ts spawn <seat> [bead-id] [--base <ref>]");
       return cmdSpawn(validateSeatName(rest[0]), rest[1] !== undefined ? validateSegment("bead id", rest[1]) : undefined, baseRef);
     case "probe":
+      if (rest[0] === "--entry") {
+        if (rest.length !== 2) die("usage: adapter.ts probe --entry <entry>");
+        return cmdProbeEntry(validateSeatName(rest[1]));
+      }
       if (rest.length !== 1) die("usage: adapter.ts probe <seat>");
       return cmdProbe(validateSeatName(rest[0]));
     case "dispatch":

@@ -63,7 +63,7 @@ PROD="$ROOT/product"
 WTS="$ROOT/.wheelhouse-worktrees"
 mkdir -p "$PROD" "$WTS" "$ROOT/seats"
 cp "$PRUNE" "$ROOT/seats/prune.ts"
-cp "$(dirname "$PRUNE")/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"
+for f in seat-worktree.ts roster.ts pool.ts harness.ts credential-shapes.ts; do cp "$(dirname "$PRUNE")/$f" "$ROOT/seats/$f"; done
 chmod +x "$ROOT/seats/prune.ts"
 
 git -C "$ROOT" init -q -b main
@@ -223,7 +223,7 @@ BUSY="$FIX/busy-container"
 mkdir -p "$BUSY/seats" "$BUSY/.wheelhouse-bench.lock" "$BUSY/product/.wheelhouse-build"
 printf '{"seats":{}}\n' > "$BUSY/seats/state.json"
 cp "$PRUNE" "$BUSY/seats/prune.ts"
-cp "$(dirname "$PRUNE")/seat-worktree.ts" "$BUSY/seats/seat-worktree.ts"
+for f in seat-worktree.ts roster.ts pool.ts harness.ts credential-shapes.ts; do cp "$(dirname "$PRUNE")/$f" "$BUSY/seats/$f"; done
 chmod +x "$BUSY/seats/prune.ts"
 printf 'active-lock\n' > "$BUSY/.wheelhouse-bench.lock/pid"
 printf 'busy-cache\n' > "$BUSY/product/.wheelhouse-build/cache.txt"
@@ -288,7 +288,7 @@ phase 'prune --yes refuses while a rostered seat is mid-turn'
 MID="$FIX/midturn"
 mkdir -p "$MID/seats" "$MID/product/.wheelhouse-build"
 cp "$PRUNE" "$MID/seats/prune.ts"
-cp "$(dirname "$PRUNE")/seat-worktree.ts" "$MID/seats/seat-worktree.ts"
+for f in seat-worktree.ts roster.ts pool.ts harness.ts credential-shapes.ts; do cp "$(dirname "$PRUNE")/$f" "$MID/seats/$f"; done
 chmod +x "$MID/seats/prune.ts"
 MID_FIFO="$MID/seats/mid.stdin"
 MID_LOG="$MID/seats/mid.jsonl"
@@ -374,7 +374,7 @@ cleanup_ext(){ for p in ${EXT_PIDS[@]+"${EXT_PIDS[@]}"}; do kill "$p" >/dev/null
 trap cleanup_ext EXIT INT TERM
 mk_install(){ # $1 root: container git repo, nested product repo with a bare origin at $1.origin.git, prune.ts in place
   mkdir -p "$1/product" "$1/seats"
-  cp "$PRUNE" "$1/seats/prune.ts"; cp "$(dirname "$PRUNE")/seat-worktree.ts" "$1/seats/seat-worktree.ts"
+  cp "$PRUNE" "$1/seats/prune.ts"; for f in seat-worktree.ts roster.ts pool.ts harness.ts credential-shapes.ts; do cp "$(dirname "$PRUNE")/$f" "$1/seats/$f"; done
   git -C "$1" init -q -b main
   git -C "$1/product" init -q -b main
   git -C "$1/product" config user.email selftest@example.invalid

@@ -44,6 +44,7 @@ The main files here:
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
 - `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and verifier markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
+- `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi
@@ -689,6 +690,7 @@ bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/walk.selftest.sh
 bash seats/prune.selftest.sh
+bash seats/staffing.selftest.sh
 bash seats/never-lose-work.selftest.sh
 bash seats/intent-check.selftest.sh
 bash seats/specimen-leak.selftest.sh
