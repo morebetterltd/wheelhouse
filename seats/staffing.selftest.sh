@@ -4,7 +4,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing.XXXXXX")" || exit 2
 PIDS=""
-cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
+cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; pkill -f "$FIX" >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
@@ -74,6 +74,8 @@ run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && grep -q 'worker-e1 m1' "$ROOT/spawn-models.log" && pass 'G4-15 add-worker places first listed free entry with role model' || fail "add-worker failed rc=$RC out=$OUT"
 run env BD_READY_COUNT=3 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && grep -q 'reason="nothing to do"' <<<"$OUT" && pass 'G4-15 free worker exists with ready work -> nothing' || fail "free-worker row failed: $OUT"
+READY_IDLE_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e 'import { decide } from "./seats/staffing.ts"; const old="2026-01-01T00:00:00.000Z"; const snap={at:new Date().toISOString(),ready:[{id:"ready-1",title:"Synthetic ready"}],readyCount:1,chainedCount:0,overlapCount:0,reviewBacklog:[],workers:{live:[{name:"worker-e1",busy:false,lastActivityAt:old,entry:"e1"},{name:"worker-e2",busy:false,lastActivityAt:old,entry:"e2"}],idle:2,busy:0},reviewers:{live:[],idle:0,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}}; const pool={root:process.cwd(),entries:{},roles:{workers:{min:1,max:4,entries:["e1","e2"],model:"m"},reviewers:{min:0,max:1,entries:[],model:"r"}},idle_drop_minutes:30}; console.log(JSON.stringify(decide(snap, pool, {version:1,seats:{},rateLimited:{}})));' 2>&1)"; READY_IDLE_RC=$?
+[ $READY_IDLE_RC -eq 0 ] && grep -q '"kind":"nothing"' <<<"$READY_IDLE_OUT" && pass 'G4-15 ready work + idle seat above min -> nothing' || fail "ready-idle drop guard failed rc=$READY_IDLE_RC out=$READY_IDLE_OUT"
 python3 - <<PY
 import json; p='$ROOT/seats/state.json'; j=json.load(open(p)); j['seats']['worker-e1']['lastBead']='busy-bead'; json.dump(j,open(p,'w'))
 PY
@@ -93,6 +95,52 @@ run bun seats/staffing.ts flag e1 --reason synthetic-limit; run env BD_READY_COU
 [ $RC -eq 0 ] && grep -q 'seat=worker-e2' <<<"$OUT" && pass 'G4-24 rate-limited entry is skipped' || fail "rate limit skip failed: $OUT"
 run bun seats/staffing.ts probe e1 >/dev/null; run env BD_READY_COUNT=1 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'seat=worker-e1' <<<"$OUT" && pass 'G4-24 probe OK clears rate limit for next add' || fail "probe clear failed: $OUT"
+# G4-25 against the real adapter: fake codex records the JSON-RPC thread/start models.
+REAL="$FIX/real-adapter"; mkdir -p "$REAL/seats/logs" "$REAL/seats/run" "$REAL/contracts" "$REAL/wheelhouse" "$REAL/.wheelhouse-worktrees" "$REAL/bin"
+printf 'namespace=staff\n' > "$REAL/wheelhouse/.template-source"; printf '# Fleet: Worker\n\nfixture brief\n' > "$REAL/contracts/WORKER.md"
+for f in staffing.ts adapter.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts briefs.ts host-budget.ts; do cp "$HERE/$f" "$REAL/seats/$f"; done
+cp -R "$HERE/drivers" "$REAL/seats/drivers"
+cp "$ROOT/seats/pool.json" "$REAL/seats/pool.json"
+python3 - <<PY
+import json
+p='$REAL/seats/pool.json'; j=json.load(open(p))
+for e in j['entries'].values(): e['harness']='pi'
+json.dump(j,open(p,'w'))
+PY
+printf '{"version":1,"seats":{}}\n' > "$REAL/seats/seats.json"
+cat > "$REAL/bin/bd" <<'SH'
+#!/usr/bin/env bash
+if [ "$1 $2" = "ready --json" ]; then printf '[{"id":"ready-real","title":"Synthetic ready","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]\n'; exit 0; fi
+if [ "$1" = list ]; then printf '[]\n'; exit 0; fi
+exit 0
+SH
+chmod +x "$REAL/bin/bd"
+cat > "$REAL/bin/pi" <<SH
+#!/usr/bin/env python3
+import json, os, sys, time
+open('$REAL/pi-argv.log','a').write(json.dumps(sys.argv[1:])+'\n')
+agent=os.environ.get('PI_CODING_AGENT_DIR','$REAL')
+os.makedirs(os.path.join(agent,'sessions'), exist_ok=True)
+session=os.path.join(agent,'sessions','fixture.jsonl')
+open(session,'a').write(json.dumps({'type':'session-start'})+'\n')
+for line in sys.stdin:
+    if not line.strip(): continue
+    cmd=json.loads(line); cid=cmd.get('id')
+    if cmd.get('type') == 'get_state':
+        print(json.dumps({'id':cid,'type':'response','command':'get_state','success':True,'data':{'isStreaming':False,'sessionId':'fixture','sessionFile':session,'model':'fixture-model'}}), flush=True)
+    elif cmd.get('type') == 'prompt':
+        print(json.dumps({'id':cid,'type':'response','command':'prompt','success':True}), flush=True)
+        print(json.dumps({'type':'agent_end','messages':[]}), flush=True)
+    else:
+        print(json.dumps({'id':cid,'type':'response','command':cmd.get('type'),'success':False,'error':'unsupported'}), flush=True)
+while True: time.sleep(60)
+SH
+chmod +x "$REAL/bin/pi"
+(cd "$REAL" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats contracts wheelhouse && git commit -q -m base)
+REAL_ENV="HOME=$HOME_FIX PATH=$REAL/bin:$BIN:$PATH WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 CODEX_LOG=$REAL/codex-argv.log CODEX_JSON_LOG=$REAL/codex-json.log"
+RC=0; OUT="$(cd "$REAL" && env HOME="$HOME_FIX" PATH="$REAL/bin:$BIN:$PATH" WHEELHOUSE_CLEANUP=0 OPENAI_API_KEY=fixture-key bun seats/staffing.ts check 2>&1)" || RC=$?
+RC2=0; OUT2="$(cd "$REAL" && env HOME="$HOME_FIX" PATH="$REAL/bin:$BIN:$PATH" WHEELHOUSE_CLEANUP=0 OPENAI_API_KEY=fixture-key bun seats/staffing.ts check --decision add-worker 2>&1)" || RC2=$?
+if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && grep -q -- '"--model", "m1"' "$REAL/pi-argv.log" && grep -q -- '"--model", "m2"' "$REAL/pi-argv.log"; then pass 'G4-25 real adapter passes role model per entry to fake pi'; else fail "real adapter model handoff failed rc=$RC/$RC2 out=$OUT/$OUT2 argv=$(cat "$REAL/pi-argv.log" 2>/dev/null || echo none)"; fi
 # No free subscription while under max: staffing records occupy every entry.
 python3 - <<PY
 import json, pathlib
@@ -159,7 +207,7 @@ printf 'dirty\n' > "$ROOT/.wheelhouse-worktrees/worker-dirty/local.txt"
 if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e 'import { removeSeatWorktree } from "./seats/seat-worktree.ts"; try { removeSeatWorktree(process.cwd(), "worker-dirty"); process.exit(1); } catch (e) { if (!String(e.message).includes("real changes")) process.exit(2); }'); then pass 'drop worktree removal refuses dirty worktrees'; else fail 'dirty worktree refusal failed'; fi
 git -C "$ROOT/.wheelhouse-worktrees/worker-dirty" reset --hard >/dev/null 2>&1; git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-dirty" >/dev/null 2>&1
 git -C "$ROOT" worktree add --detach "$ROOT/.wheelhouse-worktrees/worker-unpushed" HEAD >/dev/null 2>&1
-if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_SEAT_PUSH=on bun -e 'import { removeSeatWorktree } from "./seats/seat-worktree.ts"; try { removeSeatWorktree(process.cwd(), "worker-unpushed"); process.exit(1); } catch (e) { if (!String(e.message).includes("not on a remote")) process.exit(2); }'); then pass 'drop worktree removal refuses unpushed tips when seat_push=on'; else fail 'unpushed-tip refusal failed'; fi
+if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" env -u WHEELHOUSE_SEAT_PUSH bun -e 'import { removeSeatWorktree } from "./seats/seat-worktree.ts"; try { removeSeatWorktree(process.cwd(), "worker-unpushed"); process.exit(1); } catch (e) { if (!String(e.message).includes("not on a remote")) process.exit(2); }'); then pass 'drop worktree removal refuses unpushed tips by default seat_push=on'; else fail 'default unpushed-tip refusal failed'; fi
 git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-unpushed" >/dev/null 2>&1
 # log line fields/reasons.
 LOG_LINES=$(wc -l < "$ROOT/seats/logs/staffing.log" | tr -d ' ')

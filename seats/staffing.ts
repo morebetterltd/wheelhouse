@@ -75,6 +75,8 @@ export function decide(snap: Snapshot, pool: Pool, staffing: StaffingFile, overr
   const cutoff = Date.now() - idleMinutes * 60_000;
   const idle = snap.workers.live.filter((w) => !w.busy && w.lastActivityAt && Date.parse(w.lastActivityAt) < cutoff);
   idle.sort((a, b) => Date.parse(a.lastActivityAt!) - Date.parse(b.lastActivityAt!) || a.name.localeCompare(b.name));
+  // Commander ruling: do not drop idle workers while ready work exists; the
+  // idle worker should receive work, and dropping it would fight scale-out.
   if (workerRole && snap.readyCount === 0 && snap.workers.live.length > workerRole.min && idle[0]) return { kind: "drop-seat", role: "workers", seat: idle[0].name, entry: idle[0].entry ?? undefined, reason: "idle past drop window", decider: "rule" };
   return { kind: "nothing", reason: "nothing to do", decider: "rule" };
 }

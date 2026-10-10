@@ -212,6 +212,7 @@ build_proj() {   # $1 = project dir, $2 = seat namespace
   cp "$HERE/pool.ts" "$proj/seats/pool.ts"
   cp "$HERE/roster.ts" "$proj/seats/roster.ts"
   cp "$HERE/credential-shapes.ts" "$proj/seats/credential-shapes.ts"
+  cp "$HERE/quota.ts" "$proj/seats/quota.ts"
   cp "$FLOOR" "$proj/seats/floor.ts"
   cp "$BRIEFS" "$proj/seats/briefs.ts"
   cp "$HARNESS" "$proj/seats/harness.ts"
