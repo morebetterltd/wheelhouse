@@ -181,9 +181,9 @@ The herald also runs `bun seats/alerts.ts check` on its alert cadence. Those wat
 
 A commander turn may use the shorthand instead: end the final assistant message with an `@principal:` block. The Claude Code Stop hook (`bash seats/principal-sentinel.sh`) turns that block into the same durable need. A request that exists only in scrollback is a defect.
 
-The commander drains the Dispatch Office inbox for `need-answered` and `need-message` rows with `bun seats/herald.ts --drain`. Read the full thread with `bun seats/needs.ts show <id>`; `show` marks that need read and clears the fleet-gate line that says `N answer(s) waiting to be read — bun seats/needs.ts list --unread` once every human answer/message has been read. Act on the answer, follow up with `bun seats/needs.ts say <id> <text>` if the human needs more context, and close it with `bun seats/needs.ts close <id> --reason <reason>` only when the ask is complete. A need is never closed merely because the first answer arrived; the desk keeps the thread live, with reply and message controls, until the commander closes it.
+The commander drains the Dispatch Office inbox for `need-answered` and `need-message` rows with `bun seats/herald.ts --drain`. Read the full thread with `bun seats/needs.ts show <id>`; `show` marks that need read and clears the unread count in `bun seats/needs.ts list --unread` once every human answer/message has been read. Act on the answer, follow up with `bun seats/needs.ts say <id> <text>` if the human needs more context, and close it with `bun seats/needs.ts close <id> --reason <reason>` only when the ask is complete. A need is never closed merely because the first answer arrived; the desk keeps the thread live, with reply and message controls, until the commander closes it.
 
-`commander-inbox-poll.sh` never advances `seats/inbox.cursor`; it prints a visual `check the fleet inbox` hint at most once per new inbox size. The commander still has to run `bun seats/herald.ts --drain` (or respond to a herald poke by doing so). `fleet-gate.sh` recomputes unread-need reminders on every commander turn from `seats/needs.jsonl`, independent of inbox cursor state.
+`commander-inbox-poll.sh` never advances `seats/inbox.cursor`; it prints a visual `check the fleet inbox` hint at most once per new inbox size. The commander still has to run `bun seats/herald.ts --drain` (or respond to a herald poke by doing so). Optional `fleet-gate.sh` prompt wiring only displays the latest `seats/run/fleet-snapshot.json`; it does not recompute unread needs.
 
 For the human, the local desk is the standing surface: read `seats/run/desk.port` or run `seats/cockpit.sh --desk` and open the printed URL. `/needs` shows the open requests and reply boxes. `/board` is the human's read-only kanban; the floor remains the commander's live seat view.
 
@@ -300,16 +300,16 @@ Dispatch Office inbox (`bun seats/herald.ts --drain`, following any human-answer
 bead to a seat — and only then any commander-owned chore (machinery sync,
 selftests, upgrades, ISA edits). A chore that reads as high-priority in
 yesterday's handoff is still a chore: it waits behind the first dispatch, not
-ahead of it. This is the ordering `seats/fleet-gate.sh` checks on every
-commander turn (wired as a `UserPromptSubmit` hook per
-`generated/CLAUDE.md.example`) — it prints the loud "seats cold with ready
-work" line specifically to catch a commander that has started reading a
-chore instead. A real 2026-09-02 incident on this template's own fleet was
-exactly that: the commander read the handoff's numbered "first actions" as
-its own to-do list, took a machinery-sync item as a chore to do itself, and
-spent roughly 40 tool calls on it before a single seat was spawned — caught
-only because the principal noticed and asked, out loud, whether the fleet
-had even started.
+ahead of it. The Dispatch Office herald now watches that ordering through the
+`cold-seats-ready-work` and `idle-fleet-ready-work` alerts and pokes only when
+something changes. `seats/fleet-gate.sh` is optional: if an install keeps it as
+a `UserPromptSubmit` hook, it is only a snapshot reader for
+`seats/run/fleet-snapshot.json`, not the detector. A real 2026-09-02 incident
+on this template's own fleet was exactly that: the commander read the handoff's
+numbered "first actions" as its own to-do list, took a machinery-sync item as a
+chore to do itself, and spent roughly 40 tool calls on it before a single seat
+was spawned — caught only because the principal noticed and asked, out loud,
+whether the fleet had even started.
 
 Then archive the handoff — after ingesting, not before:
 
