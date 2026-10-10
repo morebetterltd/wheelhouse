@@ -373,16 +373,8 @@ SENTINEL='SENTINEL-TOKEN-9c2e'
 build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   local proj="$1" ns="$2" src="$3" d
   mkdir -p "$proj/seats" "$proj/contracts"
+  selftest_copy_seat_runtime "$proj" "$VERIFY_DIR"
   cp "$src" "$proj/seats/verify.ts"
-  cp "$BRIEFS" "$proj/seats/briefs.ts"
-  cp "$HARNESS" "$proj/seats/harness.ts"
-  cp "$VERIFY_DIR/pool.ts" "$proj/seats/pool.ts"
-  cp "$VERIFY_DIR/roster.ts" "$proj/seats/roster.ts"
-  cp "$VERIFY_DIR/credential-shapes.ts" "$proj/seats/credential-shapes.ts"
-  cp "$VERIFY_DIR/seat-worktree.ts" "$proj/seats/seat-worktree.ts"
-  cp "$FINAL_ASSISTANT" "$proj/seats/final-assistant-message.ts"
-  cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
-  cp "$HERALD" "$proj/seats/herald.ts"
   printf '# Crew: Reviewer\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/REVIEWER.md"
   printf 'tracked fixture seat file\n' > "$proj/seats/README.md"
@@ -435,16 +427,8 @@ BENCH
 build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.ts source
   local umb="$1" ns="$2" src="$3" product="$1/product"
   mkdir -p "$umb/seats" "$umb/contracts" "$umb/wheelhouse" "$product"
+  selftest_copy_seat_runtime "$umb" "$VERIFY_DIR"
   cp "$src" "$umb/seats/verify.ts"
-  cp "$BRIEFS" "$umb/seats/briefs.ts"
-  cp "$HARNESS" "$umb/seats/harness.ts"
-  cp "$VERIFY_DIR/pool.ts" "$umb/seats/pool.ts"
-  cp "$VERIFY_DIR/roster.ts" "$umb/seats/roster.ts"
-  cp "$VERIFY_DIR/credential-shapes.ts" "$umb/seats/credential-shapes.ts"
-  cp "$VERIFY_DIR/seat-worktree.ts" "$umb/seats/seat-worktree.ts"
-  cp "$FINAL_ASSISTANT" "$umb/seats/final-assistant-message.ts"
-  cp "$HOST_BUDGET_TS" "$umb/seats/host-budget.ts"
-  cp "$HERALD" "$umb/seats/herald.ts"
   printf '# Crew: Reviewer\n\numbrella reviewer brief.\n' > "$umb/contracts/REVIEWER.md"
   printf 'product-repo=product\n' > "$umb/wheelhouse/.template-source"
   cat > "$umb/seats/seats.json" <<EOF

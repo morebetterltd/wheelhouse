@@ -38,7 +38,7 @@ s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
 PY
 }
 PROJ="$FIX/proj"; mkdir -p "$PROJ/seats" "$PROJ/wheelhouse"
-cp "$DESK" "$PROJ/seats/desk.ts"; cp "$NEEDS" "$PROJ/seats/needs.ts"
+selftest_copy_seat_runtime "$PROJ" "$HERE"
 cat > "$PROJ/wheelhouse/.template-source" <<'EOF'
 namespace=demo
 EOF

@@ -11,7 +11,7 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
 ROOT="$FIX/project"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/run" "$ROOT/seats/logs" "$ROOT/wheelhouse" "$BIN" "$HOME_FIX"
-for f in alerts.ts fleet-snapshot.ts roster.ts pool.ts seat-activity.ts seat-worktree.ts credential-shapes.ts harness.ts needs.ts template-drift.sh herald.ts lock.ts; do cp "$HERE/$f" "$ROOT/seats/$f"; done
+selftest_copy_seat_runtime "$ROOT" "$HERE"
 chmod +x "$ROOT/seats/template-drift.sh"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"seats":{"worker-a":{"role":"worker","runtime":"pi","account":{"dir":"~/.pi-seats-alerts/worker-a"}},"commander":{"role":"commander","external":true}}}

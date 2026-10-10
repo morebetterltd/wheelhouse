@@ -114,17 +114,7 @@ chmod +x "$BIN/claude" "$BIN/codex"
 build_proj(){
   local proj="$1" ns="$2"
   mkdir -p "$proj/seats" "$proj/contracts" "$HOME_FIX/.pi-seats-$ns/verifier"
-  cp "$WALK" "$proj/seats/walk.ts"
-  cp "$VERIFY" "$proj/seats/verify.ts"
-  cp "$HARNESS" "$proj/seats/harness.ts"
-  cp "$HERE/pool.ts" "$proj/seats/pool.ts"
-  cp "$HERE/roster.ts" "$proj/seats/roster.ts"
-  cp "$HERE/credential-shapes.ts" "$proj/seats/credential-shapes.ts"
-  cp "$HERE/seat-worktree.ts" "$proj/seats/seat-worktree.ts"
-  cp "$FINAL_ASSISTANT" "$proj/seats/final-assistant-message.ts"
-  cp "$BRIEFS" "$proj/seats/briefs.ts"
-  cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
-  cp "$SCRUB" "$proj/seats/evidence-scrub.sh"
+  selftest_copy_seat_runtime "$proj" "$HERE"
   chmod +x "$proj/seats/walk.ts" "$proj/seats/evidence-scrub.sh"
   cat > "$proj/contracts/VERIFIER.md" <<'EOF'
 # Crew: Verifier

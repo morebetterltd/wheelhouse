@@ -26,7 +26,7 @@ trap cleanup EXIT INT TERM
 
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats" "$PROJ/bin"
-cp "$GATE" "$PROJ/seats/fleet-gate.sh"
+selftest_copy_seat_runtime "$PROJ" "$HERE"
 chmod +x "$PROJ/seats/fleet-gate.sh"
 ( cd "$PROJ" && git init -q && git remote add origin git@github.com:fixture-owner/fixture-product.git )
 

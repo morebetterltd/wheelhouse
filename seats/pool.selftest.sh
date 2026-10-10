@@ -10,7 +10,7 @@ fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 ROOT="$FIX/proj"; HOME_FIX="$FIX/home"; BIN="$FIX/bin"
 mkdir -p "$ROOT/seats" "$ROOT/wheelhouse" "$HOME_FIX/.pi-seats-pooltest/pool/a" "$HOME_FIX/.pi-seats-pooltest/pool/b" "$HOME_FIX/.pi-seats-pooltest/pool/c" "$HOME_FIX/.pi-seats-pooltest/pool/codex-a" "$HOME_FIX/.pi-seats-pooltest/pool/claude-b" "$HOME_FIX/.pi-seats-pooltest/pool/openrouter-c" "$BIN"
 printf 'namespace=pooltest\n' > "$ROOT/wheelhouse/.template-source"
-cp "$HERE/pool.ts" "$ROOT/seats/pool.ts"; cp "$HERE/roster.ts" "$ROOT/seats/roster.ts"; cp "$HERE/harness.ts" "$ROOT/seats/harness.ts"; cp "$HERE/seat-worktree.ts" "$ROOT/seats/seat-worktree.ts"; cp "$HERE/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"; cp "$HERE/seat-env.sh" "$ROOT/seats/seat-env.sh"; chmod +x "$ROOT/seats/seat-env.sh"
+selftest_copy_seat_runtime "$ROOT" "$HERE"; chmod +x "$ROOT/seats/seat-env.sh"
 for tool in pi claude codex; do printf '#!/usr/bin/env sh\nexit 0\n' > "$BIN/$tool"; chmod +x "$BIN/$tool"; done
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"commander":{"role":"commander","external":true},"seats":{"observer":{"role":"researcher","external":true}}}
