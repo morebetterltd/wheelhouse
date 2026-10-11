@@ -625,13 +625,14 @@ AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "between-tool-calls Claude UI is unstable across the idle window and deferred without poking"
 else fail "between-tool-calls fixture received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
+node -e 'const fs=require("fs"); const stateFile=process.argv[1]; const inbox=process.argv[2]; const pane="wh-demo:bridge.0"; const s=JSON.parse(fs.readFileSync(stateFile,"utf8")); const oldSize=fs.existsSync(inbox)?fs.statSync(inbox).size:0; s.firstDeferredAtByPane={...(s.firstDeferredAtByPane||{}), [pane]: Date.now()-10000}; s.firstDeferredInboxSizeByPane={...(s.firstDeferredInboxSizeByPane||{}), [pane]: oldSize}; fs.writeFileSync(stateFile, JSON.stringify(s,null,2)+"\n");' "$PROJ/seats/herald.state.json" "$PROJ/seats/inbox.jsonl"
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done third"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "fixture mid-turn Claude UI is logged deferred/not-idle and not poked"
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "new inbox row with stale deferred timer is deferred when Claude is mid-turn"
 else fail "mid-turn Claude received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
@@ -697,15 +698,25 @@ else
   fail "cockpit did not start/verify herald (rc=$RC pid=${DAEMON_PID:-none} out=$(cat "$FIX/cockpit1.out" 2>/dev/null))"
 fi
 
+SUPERVISOR_PID="$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)"
+[ -n "$SUPERVISOR_PID" ] && kill "$SUPERVISOR_PID" 2>/dev/null || true
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [ -z "$SUPERVISOR_PID" ] && break
+  kill -0 "$SUPERVISOR_PID" 2>/dev/null || break
+  sleep 0.1
+done
+rm -f "$PROJ/seats/run/supervisor.pid"
+CURRENT_DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
+[ -n "$CURRENT_DAEMON_PID" ] && DAEMON_PID="$CURRENT_DAEMON_PID"
 kill -9 "$DAEMON_PID" 2>/dev/null || true
 sleep 0.4
-WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit2.out" 2>&1
+WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 PATH="$FIX/bin:$PATH" "$PROJ/seats/cockpit.sh" --herald demo > "$FIX/cockpit2.out" 2>&1
 RC=$?
 REVIVED_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && [ -n "$REVIVED_PID" ] && [ "$REVIVED_PID" != "$DAEMON_PID" ] && kill -0 "$REVIVED_PID" 2>/dev/null && grep -q 'herald dead:' "$FIX/cockpit2.out" && grep -q 'herald started' "$FIX/cockpit2.out"; then
-  pass "cockpit verifies and restarts a dead herald on re-run"
+  pass "cockpit --herald verifies and restarts a dead herald without supervisor racing the assertion"
 else
-  fail "cockpit did not revive herald (rc=$RC old=${DAEMON_PID:-none} new=${REVIVED_PID:-none} out=$(cat "$FIX/cockpit2.out" 2>/dev/null))"
+  fail "cockpit --herald did not revive herald (rc=$RC old=${DAEMON_PID:-none} new=${REVIVED_PID:-none} out=$(cat "$FIX/cockpit2.out" 2>/dev/null))"
 fi
 
 if grep -R "wheelhouse_truncated_bytes" "$PROJ/seats/logs" >/dev/null 2>&1 || true; then :; fi
@@ -719,16 +730,27 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   [ -s "$ROOT_GONE/seats/run/herald.pid" ] && break
   sleep 0.05
 done
-rm -rf "$ROOT_GONE"
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  kill -0 "$ROOT_GONE_PID" 2>/dev/null || break
+for _ in 1 2 3 4 5; do
+  rm -rf "$ROOT_GONE"
+  [ ! -e "$ROOT_GONE" ] && break
   sleep 0.1
 done
-if ! kill -0 "$ROOT_GONE_PID" 2>/dev/null && grep -q 'project root disappeared' "$FIX/root-gone.err" 2>/dev/null; then
-  pass "herald exits within one scan when its project root disappears"
-else
-  fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
+if [ -e "$ROOT_GONE" ]; then
+  fail "fixture root-gone directory could not be removed before disappearance assertion"
   kill "$ROOT_GONE_PID" 2>/dev/null || true
+else
+  for _ in $(seq 1 50); do
+    kill -0 "$ROOT_GONE_PID" 2>/dev/null || break
+    sleep 0.1
+  done
+  ROOT_GONE_STAT="$(ps -p "$ROOT_GONE_PID" -o stat= 2>/dev/null | tr -d ' ' || true)"
+  if { ! kill -0 "$ROOT_GONE_PID" 2>/dev/null || case "$ROOT_GONE_STAT" in Z*) true;; *) false;; esac; } && grep -q 'project root disappeared' "$FIX/root-gone.err" 2>/dev/null; then
+    pass "herald exits when its project root disappears"
+    wait "$ROOT_GONE_PID" 2>/dev/null || true
+  else
+    fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID stat=${ROOT_GONE_STAT:-none} out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
+    kill "$ROOT_GONE_PID" 2>/dev/null || true
+  fi
 fi
 
 if [ $FAIL -eq 0 ]; then
