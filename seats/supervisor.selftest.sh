@@ -38,6 +38,59 @@ unset WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY
 if grep -q 'desk started: pid' "$FIX/reset.out" && grep -q '"crashLoop": false' "$PROJ/seats/run/supervisor.state.json"; then pass "reset clears crash-loop and restarts"; else fail "reset failed out=$(cat "$FIX/reset.out") state=$(cat "$PROJ/seats/run/supervisor.state.json")"; fi
 status
 if grep -Eq '^herald RUNNING pid [0-9]+' "$FIX/status.out" && grep -Eq '^desk RUNNING pid [0-9]+' "$FIX/status.out" && grep -q '^courier SKIPPED' "$FIX/status.out"; then pass "--status prints daemon lines"; else fail "status shape wrong: $(cat "$FIX/status.out")"; fi
+
+cat > "$PROJ/seats/adapter.ts" <<'TS'
+#!/usr/bin/env bun
+import * as fs from "node:fs";
+import * as path from "node:path";
+const root = path.resolve(import.meta.dir, "..");
+fs.mkdirSync(path.join(root, "seats", "run"), { recursive: true });
+fs.appendFileSync(path.join(root, "seats", "run", "adapter-calls.log"), process.argv.slice(2).join(" ") + "\n");
+process.exit(0);
+TS
+chmod +x "$PROJ/seats/adapter.ts"
+printf '{"seats":{"worker-dead":{"pid":999999,"lastBead":"bead-live","cwd":"%s","log":"%s/seats/logs/worker-dead.jsonl"},"worker-stopped":{"pid":null,"stoppedAt":"2026-01-01T00:00:00.000Z","lastBead":"bead-old","cwd":"%s","log":"%s/seats/logs/worker-stopped.jsonl"}}}\n' "$PROJ" "$PROJ" "$PROJ" "$PROJ" > "$PROJ/seats/state.json"
+: > "$PROJ/seats/run/adapter-calls.log"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SEAT_RECOVERY_SECONDS=0.2 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+sleep 0.25
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SEAT_RECOVERY_SECONDS=0.2 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+if grep -q '^resume worker-dead$' "$PROJ/seats/run/adapter-calls.log" && ! grep -q 'worker-stopped' "$PROJ/seats/run/adapter-calls.log" && grep -q 'seat worker-dead resumed after dead pid 999999' "$PROJ/seats/logs/cockpit-recovery.log"; then pass "supervisor recovery resumes dead seats and ignores gracefully stopped seats"; else fail "recovery did not call only resume worker-dead calls=$(cat "$PROJ/seats/run/adapter-calls.log" 2>/dev/null) log=$(cat "$PROJ/seats/logs/cockpit-recovery.log" 2>/dev/null)"; fi
+
+cat > "$PROJ/seats/prune.ts" <<'TS'
+#!/usr/bin/env bun
+import * as fs from "node:fs";
+import * as path from "node:path";
+const root = path.resolve(import.meta.dir, "..");
+fs.mkdirSync(path.join(root, "seats", "run"), { recursive: true });
+fs.appendFileSync(path.join(root, "seats", "run", "prune-calls.log"), process.argv.slice(2).join(" ") + "\n");
+TS
+chmod +x "$PROJ/seats/prune.ts"
+printf 'cleanup=on\n' > "$PROJ/wheelhouse/.template-source"
+rm -f "$PROJ/seats/run/prune-calls.log" "$PROJ/seats/run/supervisor.state.json"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T02:59:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+c1="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T03:00:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+for _ in $(seq 1 20); do [ -s "$PROJ/seats/run/prune-calls.log" ] && break; sleep 0.05; done
+c2="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T03:30:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+sleep 0.1
+c3="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-02T03:00:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+for _ in $(seq 1 20); do [ "$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)" -ge 2 ] && break; sleep 0.05; done
+c4="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+if [ "$c1" = 0 ] && [ "$c2" = 1 ] && [ "$c3" = 1 ] && [ "$c4" = 2 ]; then pass "nightly cleanup runs once per local day at configured hour"; else fail "cleanup cadence wrong c1=$c1 c2=$c2 c3=$c3 c4=$c4 state=$(cat "$PROJ/seats/run/supervisor.state.json" 2>/dev/null)"; fi
+printf 'cleanup=off\n' > "$PROJ/wheelhouse/.template-source"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-03T03:00:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+sleep 0.1
+c5="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+if [ "$c5" = 2 ]; then pass "cleanup=off disables nightly cleanup"; else fail "cleanup=off still ran cleanup count=$c5"; fi
+CLEAN_CAN="$FIX/cleanup-canary"; mkdir -p "$CLEAN_CAN/seats"; cp "$PROJ/seats/supervisor.sh" "$CLEAN_CAN/seats/supervisor.sh"; perl -0pi -e 's/supervisor_state_set lastCleanupDay "\$day"/true/' "$CLEAN_CAN/seats/supervisor.sh"
+printf 'cleanup=on\n' > "$PROJ/wheelhouse/.template-source"; rm -f "$PROJ/seats/run/prune-calls.log" "$PROJ/seats/run/supervisor.state.json"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-04T03:00:00 "$CLEAN_CAN/seats/supervisor.sh" --once) >/dev/null 2>&1
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-04T03:30:00 "$CLEAN_CAN/seats/supervisor.sh" --once) >/dev/null 2>&1
+for _ in $(seq 1 20); do [ "$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)" -ge 2 ] && break; sleep 0.05; done
+cc="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+if [ "$cc" -ge 2 ]; then pass "canary: removing lastCleanupDay makes same-day cleanup run twice"; else fail "cleanup canary did not prove daily guard coverage count=$cc"; fi
 # canary: if crashLoop marker is removed, the no-fourth-restart property fails.
 CAN="$FIX/canary"; mkdir -p "$CAN/seats"; cp "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; perl -0pi -e 's/j\.crashLoop=rs\.length>=3;/j.crashLoop=false;/' "$CAN/seats/supervisor.sh"
 if cmp -s "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; then fail "canary edit did not change supervisor"; else
