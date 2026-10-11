@@ -33,14 +33,12 @@ cleanup() {
   [ -n "$pids" ] && kill $pids >/dev/null 2>&1 || true
   pkill -f "$FIX/project/seats/herald.ts" >/dev/null 2>&1 || true
   pkill -f "$FIX/project/seats/desk.ts" >/dev/null 2>&1 || true
-  pkill -f "$FIX/project/seats/commander-inbox-poll.sh" >/dev/null 2>&1 || true
   sleep 0.2
   for pid in $pids; do
     kill -0 "$pid" >/dev/null 2>&1 && kill -9 "$pid" >/dev/null 2>&1 || true
   done
   pkill -9 -f "$FIX/project/seats/herald.ts" >/dev/null 2>&1 || true
   pkill -9 -f "$FIX/project/seats/desk.ts" >/dev/null 2>&1 || true
-  pkill -9 -f "$FIX/project/seats/commander-inbox-poll.sh" >/dev/null 2>&1 || true
   selftest_remove_fixture_dir "$FIX"
 }
 trap cleanup EXIT INT TERM
@@ -72,12 +70,6 @@ if (process.argv.includes("--status")) {
 fs.writeFileSync(path.join(run, "desk.port"), `http://127.0.0.1:${process.env.WHEELHOUSE_DESK_PORT || "42042"}/needs\n`);
 setInterval(() => {}, 1000);
 EOF
-cat > "$PROJ/seats/commander-inbox-poll.sh" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "poll-root=${WHEELHOUSE_COMMANDER_POLL_ROOT:-}" >> "$(dirname "$0")/logs/poll.fixture.log"
-while :; do sleep 1; done
-EOF
-chmod +x "$PROJ/seats/commander-inbox-poll.sh"
 cat > "$PROJ/seats/desk-watchdog.sh" <<'EOF'
 #!/usr/bin/env bash
 mkdir -p "$(dirname "$0")/run" "$(dirname "$0")/logs"
@@ -196,25 +188,19 @@ rm -f "$PROJ/seats/run/herald.pid"
 
 WHEELHOUSE_TMUX_SOCKET="$SOCK" tmux -L "$SOCK" new-session -d -s wh-pane -n bridge -c "$PROJ" "$PROJ/seats/cockpit.sh --pane-commander"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
-  [ -n "$POLL_PID" ] && kill -0 "$POLL_PID" 2>/dev/null && grep -q "poll-root=$PROJ" "$PROJ/seats/logs/poll.fixture.log" 2>/dev/null && break
+  [ -s "$PROJ/seats/run/commander-pane.json" ] && break
   sleep 0.1
 done
 POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
-if [ -n "$POLL_PID" ] && kill -0 "$POLL_PID" 2>/dev/null && grep -q "poll-root=$PROJ" "$PROJ/seats/logs/poll.fixture.log" 2>/dev/null; then
-  pass "cockpit --pane-commander starts commander-inbox-poll.sh bound to the pane"
-else
-  fail "cockpit --pane-commander did not start poll (pid=${POLL_PID:-none} log=$(cat "$PROJ/seats/logs/poll.fixture.log" 2>/dev/null || echo none))"
-fi
 PANE0="$(tmux -L "$SOCK" list-panes -t wh-pane:bridge -F '#{pane_id}' | sed -n '1p')"
 RECORDED_PANE="$(node -e 'const fs=require("fs"); const f=process.argv[1]; try { console.log(JSON.parse(fs.readFileSync(f,"utf8")).paneId || "") } catch { console.log("") }' "$PROJ/seats/run/commander-pane.json")"
-if [ -n "$PANE0" ] && [ "$RECORDED_PANE" = "$PANE0" ]; then
-  pass "cockpit --pane-commander writes commander-pane.json for bridge pane 0"
+PANE_TEXT="$(tmux -L "$SOCK" capture-pane -p -t wh-pane:bridge.0 -S -80 2>/dev/null || true)"
+if [ -n "$PANE0" ] && [ "$RECORDED_PANE" = "$PANE0" ] && [ -z "$POLL_PID" ] && ! printf '%s\n' "$PANE_TEXT" | grep -q 'commander-inbox-poll'; then
+  pass "cockpit --pane-commander records pane target and does not start retired commander poll"
 else
-  fail "commander-pane.json did not record bridge pane 0 (pane0=${PANE0:-none} recorded=${RECORDED_PANE:-none} file=$(cat "$PROJ/seats/run/commander-pane.json" 2>/dev/null || echo missing))"
+  fail "cockpit --pane-commander poll retirement failed (pid=${POLL_PID:-none} pane0=${PANE0:-none} recorded=${RECORDED_PANE:-none} text=$PANE_TEXT file=$(cat "$PROJ/seats/run/commander-pane.json" 2>/dev/null || echo missing))"
 fi
 tmux -L "$SOCK" kill-session -t wh-pane >/dev/null 2>&1 || true
-kill "$POLL_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/commander-inbox-poll.pid"
 
 ( cd "$PROJ" && with_timeout 5 bash -c 'bash seats/cockpit.sh --herald piped | cat' ) > "$FIX/herald-piped.out" 2>&1

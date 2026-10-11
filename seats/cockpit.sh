@@ -39,25 +39,6 @@ pid_alive() {
   kill -0 "$1" 2>/dev/null
 }
 
-ensure_commander_poll() {
-  if [ ! -x "$HERE/commander-inbox-poll.sh" ]; then
-    echo "commander inbox poll not installed beside cockpit; skipping pane poll"
-    return 0
-  fi
-  mkdir -p "$HERE/run" "$HERE/logs"
-  poll_pid_file="$HERE/run/commander-inbox-poll.pid"
-  if [ -f "$poll_pid_file" ]; then
-    poll_pid="$(cat "$poll_pid_file" 2>/dev/null || true)"
-    if pid_alive "$poll_pid"; then
-      echo "commander inbox poll already running: pid $poll_pid"
-      return 0
-    fi
-    rm -f "$poll_pid_file"
-  fi
-  (cd "$ROOT" && WHEELHOUSE_COMMANDER_POLL_ROOT="$ROOT" "$HERE/commander-inbox-poll.sh" >> "$HERE/logs/commander-inbox-poll.out.log" 2>> "$HERE/logs/commander-inbox-poll.stderr.log" & echo $! > "$poll_pid_file")
-  echo "commander inbox poll started: pid $(cat "$poll_pid_file" 2>/dev/null || echo '?')"
-}
-
 ensure_herald() { WHEELHOUSE_DAEMONS_ROOT="$ROOT" . "$HERE/daemons.sh"; start_herald || exit $?; }
 ensure_desk() { WHEELHOUSE_DAEMONS_ROOT="$ROOT" . "$HERE/daemons.sh"; start_desk || exit $?; }
 ensure_courier() { WHEELHOUSE_DAEMONS_ROOT="$ROOT" . "$HERE/daemons.sh"; start_courier || exit $?; }
@@ -128,13 +109,12 @@ case "${1:-}" in
     PANE_JSON="$(printf '%s' "$pane_id" | sed 's/\\/\\\\/g; s/"/\\"/g')"
     SESSION_JSON="$(printf '%s' "$pane_session" | sed 's/\\/\\\\/g; s/"/\\"/g')"
     printf '{ "paneId": "%s", "session": "%s", "root": "%s", "writtenAt": "%s" }\n' "$PANE_JSON" "$SESSION_JSON" "$ROOT_JSON" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$HERE/run/commander-pane.json"
-    ensure_commander_poll
     cat <<EOF
 
   ┌─ COMMANDER PANE ──────────────────────────────────────────────┐
   │ This is the commander's seat. Launch your interactive         │
   │ commander here yourself — the cockpit never does it for you.  │
-  │ cockpit has started commander-inbox-poll.sh for visual hints; │
+  │ Herald alerts target this pane through commander-pane.json;   │
   │ drain with: bun seats/herald.ts --drain                       │
   │ Needs desk: ${DESK_URL:-not started}                          │
   │                                                               │

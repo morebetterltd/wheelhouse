@@ -92,6 +92,21 @@ RC=0; OUT="$($LINT --namespace acme "$ACME_GOOD" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'namespace=acme'; then pass "--namespace option makes namespace explicit outside any install"
 else fail "--namespace explicit namespace check failed (rc=$RC): $OUT"; fi
 
+for phrase in \
+  'fleet-gate.sh runs as a UserPromptSubmit hook' \
+  'cockpit has started commander-inbox-poll' \
+  'make sure the herald is running' \
+  'seats/cockpit.sh --herald' \
+  'desk-watchdog' \
+  'courier-watchdog'
+do
+  BAD_RETIRED="$FIX/bad-retired-$(printf '%s' "$phrase" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-//; s/-$//').md"
+  printf 'Retired instruction: %s\n' "$phrase" > "$BAD_RETIRED"
+  RC=0; OUT="$(cd "$PROJECT" && "$LINT" "$BAD_RETIRED" 2>&1)" || RC=$?
+  if [ $RC -eq 1 ] && printf '%s\n' "$OUT" | grep -q 'uses retired mechanics prose'; then pass "planted negative: retired mechanics prose fails: $phrase"
+  else fail "retired mechanics prose was not caught for '$phrase' (rc=$RC): $OUT"; fi
+done
+
 if [ $FAIL -eq 0 ]; then
   echo "commander-voice-lint.selftest: PASS ($PASS checks, namespace=$NS)"
   exit 0
