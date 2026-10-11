@@ -118,6 +118,19 @@ BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
 
+phase "0. fixture cleanup catches cwd-only descendants"
+CWD_ONLY_DIR="$FIX/cwd-only-holder"
+mkdir -p "$CWD_ONLY_DIR"
+( cd "$CWD_ONLY_DIR" && exec sleep 1000 ) >/dev/null 2>&1 & CWD_ONLY_PID=$!
+sleep 0.1
+selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true
+if ! kill -0 "$CWD_ONLY_PID" 2>/dev/null; then
+  pass "adapter selftest cleanup kills a process whose only fixture reference is its cwd"
+else
+  fail "adapter selftest cleanup left cwd-only process alive under scratch (pid=$CWD_ONLY_PID cwd=$CWD_ONLY_DIR)"
+  kill "$CWD_ONLY_PID" >/dev/null 2>&1 || true
+fi
+
 # The stub pi: a long-lived RPC process. It records argv, honours
 # PI_CODING_AGENT_DIR, answers get_state/prompt/steer, appends to a session
 # file, resumes one via --session, and dies cleanly on SIGTERM. A prompt

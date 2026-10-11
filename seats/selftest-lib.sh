@@ -60,7 +60,27 @@ selftest_remove_fixture_dir() {
 selftest_fixture_processes() {
   root="${1:-}"
   [ -n "$root" ] || return 0
-  ps axww -o pid=,command= | grep -F "$root" | grep -v 'grep -F' | grep -v 'awk -v root' || true
+  caller_pid="${BASHPID:-$$}"
+  (
+    cd / || exit 0
+    {
+      ps axww -o pid=,command= | grep -F "$root" | grep -v 'grep -F' | grep -v 'awk -v root' || true
+      lsof_bin="$(command -v lsof 2>/dev/null || true)"
+      [ -n "$lsof_bin" ] || lsof_bin="/usr/sbin/lsof"
+      if [ -x "$lsof_bin" ]; then
+        lsof_out="${TMPDIR:-/tmp}/wheelhouse-selftest-lsof.$$.out"
+        "$lsof_bin" -d cwd -Fpcn > "$lsof_out" 2>/dev/null || true
+        awk -v root="$root" '
+          function flush(){ if(pid && cwd && (cwd == root || index(cwd, root "/") == 1)) print pid " " cmd " [cwd " cwd "]" }
+          /^p/ { flush(); pid=substr($0,2); cmd="?"; cwd=""; next }
+          /^c/ { cmd=substr($0,2); next }
+          /^n/ { cwd=substr($0,2); next }
+          END { flush() }
+        ' "$lsof_out" 2>/dev/null || true
+        rm -f "$lsof_out"
+      fi
+    } | awk -v self="$$" -v caller="$caller_pid" '$1 != self && $1 != caller && !seen[$1]++'
+  )
 }
 
 selftest_stop_fixture_adapters() {
@@ -99,9 +119,20 @@ selftest_cleanup_fixture_processes() {
 
   leaks="$(selftest_fixture_processes "$root" || true)"
   if [ -n "$leaks" ]; then
-    echo "selftest cleanup leak under $root:" >&2
-    printf '%s\n' "$leaks" >&2
-    return 1
+    sleep 0.2
+    stable=""
+    while IFS= read -r line; do
+      pid="${line%% *}"
+      [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && stable="${stable}${stable:+
+}$line"
+    done <<EOF
+$leaks
+EOF
+    if [ -n "$stable" ]; then
+      echo "selftest cleanup leak under $root:" >&2
+      printf '%s\n' "$stable" >&2
+      return 1
+    fi
   fi
   return 0
 }
