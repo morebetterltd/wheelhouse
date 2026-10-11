@@ -131,7 +131,7 @@ cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 
 ### The seats machinery comes too
 
-The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `seat-worktree.ts`, `verify.ts`, `walk.ts`, `needs.ts`, `desk.ts`, `principal-sentinel.sh`, `courier.ts`, `channels.ts`, `comms.ts`, `transports/` (including `transports/teams.ts`), `prune.ts`, `floor.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, their selftests, `seats.json.example`, `channels.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. Some copied selftests need template history as their fixture; they first use `wheelhouse/.template-source`'s `path=` if it is a live repository carrying `commit=`, otherwise they fetch `commit=` from `source=` into `wheelhouse/.template-cache/` under this install. What the copy can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/channels.json`, `seats/integration-refs.txt`, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/`, `seats/comms.jsonl` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
+The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `seat-worktree.ts`, `verify.ts`, `walk.ts`, `needs.ts`, `desk.ts`, `principal-sentinel.sh`, `courier.ts`, `channels.ts`, `comms.ts`, `transports/` (including `transports/teams.ts`), `prune.ts`, `floor.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, `pool.ts`, `roster.ts`, `staffing.ts`, `fleet-snapshot.ts`, `seat-activity.ts`, `jev.ts`, their selftests, `seats.json.example`, `channels.json.example`, `pool.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. Some copied selftests need template history as their fixture; they first use `wheelhouse/.template-source`'s `path=` if it is a live repository carrying `commit=`, otherwise they fetch `commit=` from `source=` into `wheelhouse/.template-cache/` under this install. What the copy can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/channels.json`, `seats/integration-refs.txt`, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/`, `seats/comms.jsonl` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
 
 ```bash
 mkdir -p seats
@@ -144,12 +144,12 @@ for f in "$TEMPLATE"/seats/*; do
   fi
 done
 if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
-for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
+for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/staffing.json' 'seats/verdicts/'; do
   grep -qxF "$e" .gitignore 2>/dev/null || printf '%s\n' "$e" >> .gitignore
 done
 ```
 
-`seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. Current template seats include optional dynamic-staffing pool support (`seats/pool.ts`, `seats/roster.ts`, `seats/pool.json.example`, and `seats/pool.selftest.sh`); copying the template files does not create `seats/pool.json`, so existing fixed-roster installs keep their current behavior unless they deliberately add a pool. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
+`seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. Current template seats include optional dynamic-staffing pool support (`seats/pool.ts`, `seats/roster.ts`, `seats/staffing.ts`, `seats/fleet-snapshot.ts`, `seats/seat-activity.ts`, `seats/jev.ts`, `seats/pool.json.example`, and their selftests); copying the template files does not create `seats/pool.json`, so existing fixed-roster installs keep their current behavior unless they deliberately add a pool. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
 
 ### Optional host build budget for existing installs
 
@@ -244,6 +244,62 @@ For the one seat being changed:
    ```
 
 The old harness session file remains history in `seats/state.json` until `reset` replaces that seat's record. Other seats' records and session files must not change; that is the falsifier for this procedure.
+
+### Move a fixed roster to a pool (optional)
+
+Existing fixed rosters remain valid. If the principal declines dynamic staffing, do nothing: leave `seats/seats.json` and `seats/state.json` byte-for-byte as they were, write no `seats/pool.json`, and verify the fixed-roster path:
+
+```bash
+cp seats/seats.json seats/seats.json.before-pool
+cp seats/state.json seats/state.json.before-pool 2>/dev/null || true
+rm -f seats/pool.json
+bun seats/pool.ts check      # expect: pool: none (fixed roster)
+diff -u seats/seats.json.before-pool seats/seats.json
+test ! -e seats/state.json.before-pool || diff -u seats/state.json.before-pool seats/state.json
+```
+
+If the principal accepts dynamic staffing, walk the same records current `BOOTSTRAP.md` question 11 asks for. Use the `Fixed roster`/`Dynamic staffing` choice language, Q8's harness labels (`pi`, `claude-code`, `codex`), and live model/provider sources for the selected harness; never pick models from memory. A role whose `min` equals `max` is fine. The read-back table is `entry | harness | provider | models | login folder | label | auth route`, followed by `role | min | max | entries | model`. Each pool entry normally starts from one existing fixed worker or verifier login: reuse that row's existing `account.dir` as the pool entry's `account.dir`, because that login is keyed to the directory and moving it would force a re-login. Add any new subscriptions as new entries under `~/.pi-seats-<namespace>/pool/<entry>`. Do not copy a login directory.
+
+Then move the roster in this order:
+
+1. Confirm the old fixed worker and verifier seats are idle; wait or stop if they are busy.
+
+   ```bash
+   bun seats/adapter.ts status
+   ```
+
+2. Write `seats/pool.json` with one entry per carried worker/verifier login plus any new subscription entries. Set `roles.workers` and/or `roles.reviewers` with `min`, `max`, entries, and model. `reviewers` are the `verify.ts` role and replace fixed `role: "verifier"` rows.
+
+3. Run the validator before editing the roster; it should refuse while same-role fixed rows still exist. That STOP is the guard proving the pool will not silently double-count the same login:
+
+   ```bash
+   bun seats/pool.ts check    # expect STOP: the pool replaces the fixed roster for workers/reviewers
+   ```
+
+   Remove only the fixed worker rows for `roles.workers` and only the fixed verifier rows for `roles.reviewers` from `seats/seats.json`. Keep `commander`, `designer`, `researcher`, and any other non-pooled role. Run `bun seats/pool.ts check` again until it is clean.
+
+4. Stop old fixed worker processes after their rows have moved out of the fixed roster; old `seats/state.json` records may remain as history until reset.
+
+   ```bash
+   bun seats/adapter.ts stop <old-worker-seat>
+   ```
+
+5. Run one staffing check per expected live pooled seat, then read the status. A pooled worker appears as `worker-<entry>`; a pooled reviewer appears as `verifier-<entry>`.
+
+   ```bash
+   bun seats/staffing.ts check
+   bun seats/staffing.ts status
+   ```
+
+6. Smoke dispatch to a staffed worker seat the same way the harness-switch section smokes a changed fixed seat.
+
+   ```bash
+   bun seats/adapter.ts dispatch <staffed-worker-seat> <scratch-bead-id> 'Smoke check after pool move: reply OK and stop.'
+   ```
+
+7. Commit `seats/pool.json` and the edited `seats/seats.json` together. Do not commit `seats/staffing.json`, `seats/state.json`, `seats/run/`, or `seats/logs/`.
+
+`bun seats/pool.ts check` also refuses a pool entry whose login folder is under another namespace root and an entry that uses the commander's own login folder. Those are not warnings: fix the account directory before running a staffed seat.
 
 If your install already has a verifier entry, this upgrade changes what that role means: `wheelhouse/crew/VERIFIER.md` is now the consumer-surface walker, dispatched by `bun seats/walk.ts` for ISA claims, not the bead-review verdict pass. Keep or repoint the verifier to a cheap tool-capable model (for example a GLM-class OpenRouter row when the seat's own live `pi --list-models` prints it), because the empty context is what matters, not the model's depth. Fill `wheelhouse/crew/VERIFIER.md`'s `## This project` section with this install's named surfaces — README/front door or first morning for a template-style fleet, upgrade runbook from a real baseline when one exists, or the product's staging URL/emulator/launch command/API/CLI surface. If there is no walkable consumer surface yet, write the honest gap: `no consumer surface yet — walks impossible, claims close not-walked`. Existing ISA claims that already say `Not walked:` remain valid history; this upgrade does not demand retro-walking them.
 
@@ -392,6 +448,7 @@ Do not split on the first occurrence of the words "this project", and do not spl
   diff wheelhouse/runbooks/<the-file> "$TEMPLATE/runbooks/<the-file>"
   ```
 - **Stakeholder channel docs and machinery are present.** Before relying on declared-channel communication, confirm `seats/channels.json` is install-owned (not copied from the template), `seats/channels.json.example` remains placeholder-only, and `bun seats/channels.ts check` succeeds once you have declared real channels.
+- **Dynamic-staffing machinery is present and inert when unconfigured.** Run `bash seats/pool.selftest.sh`, `bash seats/staffing.selftest.sh`, `bash seats/staffing-live.selftest.sh`, `bash seats/fleet-snapshot.selftest.sh`, and `bash seats/jev.selftest.sh` after the seats copy. With no `seats/pool.json`, `bun seats/pool.ts check` must print `pool: none (fixed roster)` and `bun seats/staffing.ts check` must print `staffing: no pool (fixed roster)`.
 - **Newly-arrived contracts have an EMPTY project half, and the check above cannot tell you so.** The integrity check compares contract halves; the project-half check confirms the heading exists. A contract copied whole in step 4 satisfies both while carrying nothing but the template's guidance comments. That is not a failure and should not be made one — the template's own rule is that a guidance comment stays until you have content for it — but it is not evidence either, and "my project sections diffed clean" is trivially true for a file that never had one.
 
   So name them and act on them. Step 4 printed `new, copied whole:` for each; for every file it named:
