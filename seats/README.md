@@ -153,8 +153,11 @@ that bound holds whether or not this file exists.
 The template ships `seats/bin/cargo` and `seats/bin/dotnet` as symlinks to one
 plain-bash shim. Keep `seats/bin` even when a fleet does not opt in: without
 `seats/host-budget.json` it is inert because PATH is not rewritten, and the
-selftests use the shipped shims to prove the opt-in path still works. The frozen
-host contract is:
+selftests use the shipped shims to prove the opt-in path still works. When the
+budget is enabled, run product check scripts only with `seats/bin` first on
+`PATH`; a script that says bare `cargo build` or `cargo test` must resolve to
+`seats/bin/cargo`, not to the toolchain binary directly. The frozen host contract
+is:
 
 - blocking `flock(2)` on `~/.cache/wheelhouse-build.lock` by default, held for the
   whole tool invocation by Perl's standard `Fcntl` binding (car fleets that
