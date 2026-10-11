@@ -668,17 +668,14 @@ cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 JSONL
 seed_log_cursor worker-1.jsonl 0
 RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-never-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
-selftest_copy_seat_runtime "$PROJ" "$ROOT/seats"
-POLL_RC=0; POLL_OUT="$(chmod +x "$PROJ/seats/commander-inbox-poll.sh" && WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$PROJ/seats/commander-inbox-poll.sh" --once 2>&1)" || POLL_RC=$?
-CURSOR_AFTER_POLL="$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo 0)"
-POLL_OUT2="$(WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$PROJ/seats/commander-inbox-poll.sh" --once 2>&1)"; POLL2_RC=$?
+CURSOR_AFTER_DEFER="$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo 0)"
 BEFORE_IDLE_SENDS="$(line_count "$SEND_LOG")"
 IDLE_RC=0; IDLE_OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || IDLE_RC=$?
 AFTER_IDLE_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$POLL_RC" -eq 0 ] && [ "$POLL2_RC" -eq 0 ] && [ "$IDLE_RC" -eq 0 ] && grep -q 'poke deferred .*reason=not-idle' "$POKE_LOG" 2>/dev/null && printf '%s\n' "$POLL_OUT" | grep -q 'check the fleet inbox' && [ -z "$POLL_OUT2" ] && [ "$CURSOR_AFTER_POLL" = 0 ] && [ "$AFTER_IDLE_SENDS" = "$((BEFORE_IDLE_SENDS+1))" ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then
-  pass "commander poll prints one visual hint without draining; herald later pokes when idle"
+if [ $RC -eq 0 ] && [ "$IDLE_RC" -eq 0 ] && grep -q 'poke deferred .*reason=not-idle' "$POKE_LOG" 2>/dev/null && [ "$CURSOR_AFTER_DEFER" = 0 ] && [ "$AFTER_IDLE_SENDS" = "$((BEFORE_IDLE_SENDS+1))" ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then
+  pass "deferred herald wake leaves inbox durable and later pokes when idle"
 else
-  fail "poll/herald wake behavior wrong (herald_rc=$RC poll_rc=$POLL_RC/$POLL2_RC idle_rc=$IDLE_RC herald_out=$OUT idle_out=$IDLE_OUT poll_out=$POLL_OUT poll2=$POLL_OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) cursor=$CURSOR_AFTER_POLL)"
+  fail "herald wake retry behavior wrong (herald_rc=$RC idle_rc=$IDLE_RC herald_out=$OUT idle_out=$IDLE_OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) cursor=$CURSOR_AFTER_DEFER)"
 fi
 
 # Cockpit supervision: fake tmux is enough because the claim here is that

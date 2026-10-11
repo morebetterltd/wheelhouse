@@ -16,8 +16,17 @@ So when you read a stage below, the question is never "was that passed along cor
 - The work graph is initialised and `bd ready` lists something.
 - Cockpit turns tmux mouse scrolling on and keeps 50,000 lines of pane history; opt out with `WHEELHOUSE_COCKPIT_MOUSE=0 seats/cockpit.sh` if you prefer native terminal selection. Scroll with the wheel, or press tmux prefix then `[` and use arrows/PageUp (`q` leaves copy mode); with mouse on, hold Option/Shift on macOS terminals to select text.
 - Cockpit keeps the bridge window to the commander/floor two-pane layout; subagent panes split into the bridge are moved into their own tmux windows automatically.
-- The commander drains the Dispatch Office inbox at session start with `bun seats/herald.ts --drain`, after every dispatch, and whenever the herald or commander-pane poll prints the constant phrase `check the fleet inbox`. Human answers to needs arrive as inbox rows too; read the full thread with the row's `bun seats/needs.ts show <id>` command. `cockpit.sh --pane-commander` starts a wrapper-independent visual poll inside the commander pane automatically. The poke and poll phrase are only wake-up hints; correctness comes from the commander running `--drain` on the durable inbox.
+- The commander drains the Dispatch Office inbox at session start with `bun seats/herald.ts --drain`, after every dispatch, and whenever the herald pokes with the constant phrase `check the fleet inbox`. Human answers to needs arrive as inbox rows too; read the full thread with the row's `bun seats/needs.ts show <id>` command. The poke is only a wake-up hint; correctness comes from the commander running `--drain` on the durable inbox.
 - You know whether `wheelhouse/crew/bench.sh` is the shipped stub or a real bench. If it is the stub, no verdict may claim the software runs, and that is deliberate. See `wheelhouse/crew/BENCH.md`.
+
+## What the machinery does without you
+
+- The herald aims itself at the commander pane through `seats/run/commander-pane.json`; `seats/run/herald.target.json` records how it resolved and validated the target.
+- The supervisor keeps the herald, desk, and declared courier alive; `seats/run/supervisor.state.json` records crash-loop holds, and `seats/logs/supervisor.out.log` / `.stderr.log` hold the run output.
+- The supervisor runs dead-seat recovery on its tick; recovery decisions are appended to `seats/logs/cockpit-recovery.log` and seat logs.
+- The supervisor schedules the nightly cleanup reaper; `seats/logs/cleanup.log` is the audit trail for every removal or keep.
+- Alerts land as Dispatch Office rows in `seats/inbox.jsonl`; sustained or human-owned alerts also open needs in `seats/needs.jsonl` through `needs.ts`.
+- `seats/run/fleet-snapshot.json` is the status snapshot; optional prompt status readers display it rather than recomputing fleet liveness.
 
 ## When one human holds every seat
 
@@ -183,7 +192,7 @@ A commander turn may use the shorthand instead: end the final assistant message 
 
 The commander drains the Dispatch Office inbox for `need-answered` and `need-message` rows with `bun seats/herald.ts --drain`. Read the full thread with `bun seats/needs.ts show <id>`; `show` marks that need read and clears the unread count in `bun seats/needs.ts list --unread` once every human answer/message has been read. Act on the answer, follow up with `bun seats/needs.ts say <id> <text>` if the human needs more context, and close it with `bun seats/needs.ts close <id> --reason <reason>` only when the ask is complete. A need is never closed merely because the first answer arrived; the desk keeps the thread live, with reply and message controls, until the commander closes it.
 
-`commander-inbox-poll.sh` never advances `seats/inbox.cursor`; it prints a visual `check the fleet inbox` hint at most once per new inbox size. The commander still has to run `bun seats/herald.ts --drain` (or respond to a herald poke by doing so). Optional `fleet-gate.sh` prompt wiring only displays the latest `seats/run/fleet-snapshot.json`; it does not recompute unread needs.
+Optional prompt-status wiring only displays the latest `seats/run/fleet-snapshot.json`; it does not recompute unread needs or advance `seats/inbox.cursor`. The commander still has to run `bun seats/herald.ts --drain` when the herald pokes.
 
 For the human, the local desk is the standing surface: read `seats/run/desk.port` or run `seats/cockpit.sh --desk` and open the printed URL. `/needs` shows the open requests and reply boxes. `/board` is the human's read-only kanban; the floor remains the commander's live seat view.
 
@@ -209,7 +218,7 @@ For the human, the local desk is the standing surface: read `seats/run/desk.port
 
 There is no fixed rhythm to prescribe. The shape that worked:
 
-- Start by reading the graph, listing open needs (`bun seats/needs.ts list`), and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`), then make sure the supervisor is running (`seats/cockpit.sh <namespace>` starts or verifies `seats/supervisor.sh`; `seats/cockpit.sh --herald` only starts/checks the herald and does not aim it) and the cockpit commander pane has launched the commander-pane visual poll. If an inbox row reports a human answer or message, read the full need with `bun seats/needs.ts show <id>`. The floor is the commander's live view; the desk board (`seats/cockpit.sh --desk`, then `/board`) is the human's read-only kanban. Deadline beads and anything blocking others first.
+- Start by reading the graph, listing open needs (`bun seats/needs.ts list`), and draining the Dispatch Office inbox (`bun seats/herald.ts --drain`). If an inbox row reports a human answer or message, read the full need with `bun seats/needs.ts show <id>`. The floor is the commander's live view; the desk board is the human's read-only kanban. Deadline tasks and anything blocking others first.
 - Dispatch one bead per seat, and let the seat finish before adding another.
 - Review as soon as work lands, so the author still has the context to fix a bounce cheaply.
 - Merge in batches if you like, but confirm each tip against its reported head individually.
