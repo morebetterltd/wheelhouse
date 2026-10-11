@@ -42,6 +42,12 @@ needles=[
   'fix: remove <seat> from seats/seats.json or remove <role> from the pool',
   'bun seats/adapter.ts probe --entry <entry>',
   'with a dynamic worker pool, run `bun seats/staffing.ts check` now',
+  'Use Q8\'s harness-round labels exactly',
+  'PI_CODING_AGENT_DIR="$HOME/.pi-seats-<namespace>/pool/<entry>" pi --list-models',
+  'optional public label',
+  'a role whose `min` equals its `max` is fine',
+  'entry | harness | provider | models | login folder | label | auth route',
+  'At wake, read `bun seats/staffing.ts status` beside `bun seats/adapter.ts status` when a pool exists',
 ]
 missing=[n for n in needles if n not in text]
 if missing:
@@ -59,11 +65,13 @@ SKIP="$FIX/skip"; copy_pool_runtime "$SKIP"
 cat > "$SKIP/seats/seats.json" <<'JSON'
 {"version":1,"seats":{"worker-1":{"role":"worker","harness":"pi","provider":"openai","model":"gpt-4o","account":{"dir":"~/.pi-seats-scratch/worker-1","authRoute":"oauth"}}}}
 JSON
+cp "$SKIP/seats/seats.json" "$SKIP/seats/seats.before.json"
+rm -f "$SKIP/seats/pool.json"
 OUT="$(cd "$SKIP" && HOME="$SKIP/home" bun seats/pool.ts check 2>&1)"; RC=$?
-if [ "$RC" -eq 0 ] && [ "$OUT" = 'pool: none (fixed roster)' ] && [ ! -e "$SKIP/seats/pool.json" ]; then
-  pass "skip path leaves seats/pool.json absent and validator says fixed roster"
+if [ "$RC" -eq 0 ] && [ "$OUT" = 'pool: none (fixed roster)' ] && [ ! -e "$SKIP/seats/pool.json" ] && cmp -s "$SKIP/seats/seats.before.json" "$SKIP/seats/seats.json"; then
+  pass "skip path leaves seats/pool.json absent, preserves seats.json, and validator says fixed roster"
 else
-  fail "skip path rc=$RC out=$OUT pool_exists=$([ -e "$SKIP/seats/pool.json" ] && echo yes || echo no)"
+  fail "skip path rc=$RC out=$OUT pool_exists=$([ -e "$SKIP/seats/pool.json" ] && echo yes || echo no) seats_changed=$(! cmp -s "$SKIP/seats/seats.before.json" "$SKIP/seats/seats.json" && echo yes || echo no)"
 fi
 
 phase "3. generated pool loads through pool.ts after same-role fixed rows are removed"
