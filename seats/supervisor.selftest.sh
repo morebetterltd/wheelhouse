@@ -39,6 +39,42 @@ if grep -q 'desk started: pid' "$FIX/reset.out" && grep -q '"crashLoop": false' 
 status
 if grep -Eq '^herald RUNNING pid [0-9]+' "$FIX/status.out" && grep -Eq '^desk RUNNING pid [0-9]+' "$FIX/status.out" && grep -q '^courier SKIPPED' "$FIX/status.out"; then pass "--status prints daemon lines"; else fail "status shape wrong: $(cat "$FIX/status.out")"; fi
 
+printf 'namespace=launchfixture\ncleanup=on\n' > "$PROJ/wheelhouse/.template-source"
+LAUNCH_HOME="$FIX/home"; mkdir -p "$LAUNCH_HOME"
+if command -v launchctl >/dev/null 2>&1; then launchctl list > "$FIX/launchctl.before" 2>&1 || true; else printf 'launchctl absent\n' > "$FIX/launchctl.before"; fi
+RC=0; OUT="$(cd "$PROJ" && HOME="$LAUNCH_HOME" WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$PROJ/seats/supervisor.sh" install-launchd --home "$LAUNCH_HOME" --print 2>&1)" || RC=$?
+printf '%s\n' "$OUT" > "$FIX/install-launchd.out"
+PLIST="$LAUNCH_HOME/Library/LaunchAgents/com.wheelhouse.launchfixture.supervisor.plist"
+if command -v launchctl >/dev/null 2>&1; then launchctl list > "$FIX/launchctl.after" 2>&1 || true; else printf 'launchctl absent\n' > "$FIX/launchctl.after"; fi
+if [ $RC -eq 0 ] && [ -f "$PLIST" ] && grep -q "launchctl bootstrap gui/$UID $PLIST" "$FIX/install-launchd.out" && grep -q "launchctl bootout gui/$UID $PLIST" "$FIX/install-launchd.out" && cmp -s "$FIX/launchctl.before" "$FIX/launchctl.after"; then pass "install-launchd writes fixture plist and only prints launchctl commands"; else fail "install-launchd output/launchctl proof wrong rc=$RC out=$OUT before=$(cat "$FIX/launchctl.before") after=$(cat "$FIX/launchctl.after")"; fi
+if command -v plutil >/dev/null 2>&1; then
+  if plutil -lint "$PLIST" >/dev/null 2>"$FIX/plutil.err"; then pass "launchd plist passes plutil -lint"; else fail "plutil -lint failed: $(cat "$FIX/plutil.err")"; fi
+else
+  pass "launchd plist lint skipped: plutil absent"
+fi
+if python3 - "$PLIST" "$PROJ" <<'PY'
+import plistlib, sys
+plist, root = sys.argv[1], sys.argv[2]
+with open(plist, 'rb') as f: data = plistlib.load(f)
+assert data['Label'] == 'com.wheelhouse.launchfixture.supervisor'
+assert data['ProgramArguments'] == ['/bin/bash', root + '/seats/supervisor.sh']
+assert data['WorkingDirectory'] == root
+assert data['RunAtLoad'] is True
+assert data['KeepAlive'] is True
+assert data['ProcessType'] == 'Interactive'
+assert data['StandardOutPath'] == root + '/seats/logs/supervisor.launchd.out.log'
+assert data['StandardErrorPath'] == root + '/seats/logs/supervisor.launchd.err.log'
+PY
+then pass "launchd plist names fixture root, ProgramArguments, and Interactive process type"; else fail "launchd plist fields wrong: $(cat "$PLIST" 2>/dev/null)"; fi
+RC=0; OUT="$(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$PROJ/seats/supervisor.sh" print-systemd 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q '^ExecStart=/bin/bash ' && printf '%s\n' "$OUT" | grep -q 'seats/supervisor.sh' && printf '%s\n' "$OUT" | grep -q '^Restart=always'; then pass "print-systemd prints equivalent user unit"; else fail "print-systemd wrong rc=$RC out=$OUT"; fi
+before_restarts="$(grep -c 'restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
+echo $$ > "$PROJ/seats/run/supervisor.pid"
+RC=0; OUT="$(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_SECONDS=0 "$PROJ/seats/supervisor.sh" 2>&1)" || RC=$?
+after_restarts="$(grep -c 'restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
+if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'supervisor already running' && [ "$before_restarts" = "$after_restarts" ]; then pass "second supervisor exits 0 when pid file names a live process"; else fail "second supervisor did not exit cleanly rc=$RC out=$OUT before=$before_restarts after=$after_restarts"; fi
+if ! grep -Eq '^[[:space:]]*launchctl[[:space:]]+(bootstrap|bootout|kickstart)' "$PROJ/seats/supervisor.sh"; then pass "supervisor never executes launchctl bootstrap/bootout/kickstart"; else fail "supervisor contains executable launchctl mutator"; fi
+
 cat > "$PROJ/seats/adapter.ts" <<'TS'
 #!/usr/bin/env bun
 import * as fs from "node:fs";

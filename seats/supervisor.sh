@@ -16,6 +16,8 @@ supervisor_state_set(){ node -e 'const fs=require("fs"),path=require("path"); co
 last_stderr(){ tail -5 "$LOGS/$1.stderr.log" 2>/dev/null || true; }
 restart_cmd(){ case "$1" in herald) start_herald;; desk) start_desk;; courier) start_courier;; esac; }
 should_run(){ [ "$1" != courier ] || principal_channel_declared; }
+namespace(){ v="$(sed -n 's/^namespace=//p' "$ROOT/wheelhouse/.template-source" 2>/dev/null | tail -1)"; [ -n "$v" ] && printf '%s\n' "$v" || basename "$ROOT"; }
+xml_escape(){ node -e 'const s=process.argv[1]||""; process.stdout.write(s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"));' "$1"; }
 
 append_alert(){
   d="$1"; first="$2"; detail="$3"; mkdir -p "$SEATS"
@@ -68,10 +70,93 @@ tick(){ tick_daemon herald; tick_daemon desk; tick_daemon courier; tick_recovery
 status(){ for d in herald desk courier; do if ! should_run "$d"; then echo "$d SKIPPED"; continue; fi; rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | grep -q '"crashLoop":true' && echo 1 || echo 0)"; if [ "$crash" = 1 ]; then since="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log((j.restarts||[])[0]||"")})')"; echo "$d CRASH-LOOP since $since"; elif daemon_alive "$d"; then echo "$d RUNNING pid $(cat "$RUN/$d.pid")"; else echo "$d DEAD"; fi; done; }
 resetd(){ d="$1"; state_set "$d" '{"restarts":[],"crashLoop":false}'; restart_cmd "$d"; }
 
+install_launchd(){
+  home="$HOME"; print_plist=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --home) shift; home="${1:?--home requires a directory}" ;;
+      --print) print_plist=1 ;;
+      *) echo "usage: seats/supervisor.sh install-launchd [--home <dir>] [--print]" >&2; return 2 ;;
+    esac
+    shift
+  done
+  ns="$(namespace)"
+  case "$ns" in ""|*/*|*" "*|*[!A-Za-z0-9_.-]*) echo "STOP: namespace must be one launchd-safe segment (A-Za-z0-9_.-), got: $ns" >&2; return 2 ;; esac
+  label="com.wheelhouse.$ns.supervisor"
+  plist_dir="$home/Library/LaunchAgents"; plist="$plist_dir/$label.plist"
+  mkdir -p "$plist_dir" "$LOGS"
+  eroot="$(xml_escape "$ROOT")"; elog="$(xml_escape "$LOGS")"; eplist="$(xml_escape "$plist")"; elabel="$(xml_escape "$label")"
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$elabel</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$eroot/seats/supervisor.sh</string>
+  </array>
+  <key>WorkingDirectory</key><string>$eroot</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>$elog/supervisor.launchd.out.log</string>
+  <key>StandardErrorPath</key><string>$elog/supervisor.launchd.err.log</string>
+</dict>
+</plist>
+EOF
+  echo "wrote $plist"
+  if [ "$print_plist" = 1 ]; then
+    echo "--- $plist ---"
+    cat "$plist"
+    echo "--- end plist ---"
+  fi
+  echo "To load:   launchctl bootstrap gui/$UID $plist"
+  echo "To unload: launchctl bootout gui/$UID $plist"
+}
+
+print_systemd(){
+  ns="$(namespace)"
+  case "$ns" in ""|*/*|*" "*) echo "STOP: namespace must be one systemd-safe segment, got: $ns" >&2; return 2 ;; esac
+  cat <<EOF
+# Save as ~/.config/systemd/user/wheelhouse-$ns-supervisor.service
+[Unit]
+Description=Wheelhouse supervisor ($ns)
+
+[Service]
+Type=simple
+WorkingDirectory=$ROOT
+ExecStart=/bin/bash $ROOT/seats/supervisor.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:$LOGS/supervisor.systemd.out.log
+StandardError=append:$LOGS/supervisor.systemd.err.log
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+run_loop(){
+  mkdir -p "$RUN" "$LOGS"
+  old="$(cat "$PID_FILE" 2>/dev/null || true)"
+  if [ -z "${WHEELHOUSE_SUPERVISOR_STARTED_BY_COCKPIT:-}" ] && [ -n "$old" ] && [ "$old" != "$$" ] && pid_alive "$old"; then
+    echo "supervisor already running: pid $old"
+    return 0
+  fi
+  echo $$ > "$PID_FILE"
+  trap 'rm -f "$PID_FILE"; exit 0' INT TERM
+  trap 'rm -f "$PID_FILE"' EXIT
+  while :; do tick; sleep "$INTERVAL"; done
+}
+
 case "${1:-}" in
   --once) tick ;;
   --status) status ;;
+  install-launchd) shift; install_launchd "$@" ;;
+  print-systemd) print_systemd ;;
   reset) resetd "${2:?daemon required}" ;;
-  "") mkdir -p "$RUN" "$LOGS"; echo $$ > "$PID_FILE"; trap 'rm -f "$PID_FILE"; exit 0' INT TERM; trap 'rm -f "$PID_FILE"' EXIT; while :; do tick; sleep "$INTERVAL"; done ;;
-  *) echo "usage: seats/supervisor.sh [--once|--status|reset <daemon>]" >&2; exit 2 ;;
+  "") run_loop ;;
+  *) echo "usage: seats/supervisor.sh [--once|--status|install-launchd [--home <dir>] [--print]|print-systemd|reset <daemon>]" >&2; exit 2 ;;
 esac
