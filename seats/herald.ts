@@ -698,6 +698,18 @@ function promptLineLooksIdle(line: string): boolean {
   const prompt = visible.findIndex((v) => v.ch === "❯" || v.ch === ">");
   if (prompt < 0 || visible.slice(0, prompt).some((v) => !/\s/.test(v.ch))) return false;
   let after = visible.slice(prompt + 1);
+  let gapRun = 0;
+  for (let i = 0; i < after.length; i++) {
+    if (/^[\s\u00a0]$/.test(after[i].ch)) {
+      gapRun++;
+      if (gapRun >= 8) {
+        after = after.slice(0, i - gapRun + 1);
+        break;
+      }
+    } else {
+      gapRun = 0;
+    }
+  }
   while (after.length && /\s/.test(after[after.length - 1].ch)) after = after.slice(0, -1);
   if (after.length === 0) return true;
   const afterText = after.map((v) => v.ch).join("");
