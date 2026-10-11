@@ -33,13 +33,15 @@ text=open(sys.argv[1]).read()
 needles=[
   '10. **Stakeholder channels',
   '11. **Dynamic staffing — optional.',
-  'Keep fixed roster',
-  'Configure dynamic staffing pool',
+  'Fixed roster',
+  'Dynamic staffing',
   'write no `seats/pool.json`',
   'The absence of this file is the fixed-roster switch',
   'Every generated pool must load through `pool.ts`',
   'a `roles.workers` pool means no non-external `role: "worker"` entries remain in `seats.json`',
   'fix: remove <seat> from seats/seats.json or remove <role> from the pool',
+  'bun seats/adapter.ts probe --entry <entry>',
+  'with a dynamic worker pool, run `bun seats/staffing.ts check` now',
 ]
 missing=[n for n in needles if n not in text]
 if missing:
