@@ -309,6 +309,17 @@ if [ $MID_RC -ne 0 ] && printf '%s\n' "$MID_OUT" | grep -q 'worker-busy' && prin
 [ -d "$MID/product/.wheelhouse-build" ] && pass 'mid-turn guarded cache remains after refused prune --yes' || fail 'mid-turn guarded cache was removed'
 kill "$MID_PID" >/dev/null 2>&1 || true
 
+phase 'prune --yes restores write permission before rm action'
+MANUAL_RO="$FIX/manual-readonly-rm"
+mkdir -p "$MANUAL_RO/readonly-subdir"
+printf 'locked\n' > "$MANUAL_RO/readonly-subdir/file.txt"
+chmod 555 "$MANUAL_RO/readonly-subdir"
+printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\nrun-scratch\t1\t%s\t%s\t\t1\t1.0B\trm\tread-only fixture\n' "$ROOT" "$MANUAL_RO" > "$FIX/manual-readonly-scan.tsv"
+set +e
+MANUAL_RO_RC=0; MANUAL_RO_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/manual-readonly-scan.tsv" --yes --categories run-scratch 2>&1) || MANUAL_RO_RC=$?
+set -e
+if [ $MANUAL_RO_RC -eq 0 ] && [ ! -e "$MANUAL_RO" ] && printf '%s\n' "$MANUAL_RO_OUT" | grep -q "PRUNED rm run-scratch $MANUAL_RO"; then pass 'prune --yes removes an rm row containing a mode-555 subdirectory'; else chmod -R u+w "$MANUAL_RO" 2>/dev/null || true; fail "manual read-only rm row was not removed (exit $MANUAL_RO_RC): $MANUAL_RO_OUT"; fi
+
 phase 'prune --yes rechecks live seat anchors from reviewed scan files'
 printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\norphaned-worktree\t1\t%s\t%s\t\t1\t1.0B\trm\tstale reviewed scan fixture\n' "$ROOT" "$WTS/$LIVE_ID" > "$FIX/stale-live-scan.tsv"
 set +e
@@ -459,7 +470,12 @@ phase 'ISC-45/56 run folder kept while a live process has its cwd inside'
 RUN_ID=$(ext_bead 'closed bead with occupied run folder'); mkdir -p "$ERUNS/$RUN_ID-x"; printf 'scratch\n' > "$ERUNS/$RUN_ID-x/file.txt"
 ( cd "$ERUNS/$RUN_ID-x" && exec sleep 1000 ) >/dev/null 2>&1 & RUN_PID=$!; EXT_PIDS+=("$RUN_PID")
 OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
-[ "$RC" -eq 0 ] && [ -d "$ERUNS/$RUN_ID-x" ] && printf '%s\n' "$OUT" | grep -q "kept needs-review $ERUNS/$RUN_ID-x reason=live process has its cwd" && pass 'run folder kept with "live process has its cwd" while occupied' || fail "occupied run folder rc=$RC: $OUT"
+[ "$RC" -eq 0 ] && [ -d "$ERUNS/$RUN_ID-x" ] \
+  && printf '%s\n' "$OUT" | grep -q "kept needs-review $ERUNS/$RUN_ID-x reason=live process has its cwd" \
+  && printf '%s\n' "$OUT" | grep -q "pid $RUN_PID" \
+  && printf '%s\n' "$OUT" | grep -q "command sleep" \
+  && printf '%s\n' "$OUT" | grep -q "cwd $ERUNS/$RUN_ID-x" \
+  && pass 'run folder kept with holder pid, command, and cwd while occupied' || fail "occupied run folder did not name holder rc=$RC: $OUT"
 kill "$RUN_PID" >/dev/null 2>&1; wait "$RUN_PID" 2>/dev/null
 OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ ! -e "$ERUNS/$RUN_ID-x" ] && printf '%s\n' "$OUT" | grep -q "removed run-scratch $ERUNS/$RUN_ID-x " && pass 'run folder removed on the next cleanup once the process is gone' || fail "freed run folder rc=$RC: $OUT"
