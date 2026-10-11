@@ -83,7 +83,7 @@ ensure_supervisor() {
     if pid_alive "$old_pid"; then echo "supervisor already running: pid $old_pid"; return 0; fi
     echo "supervisor dead: pid ${old_pid:-?}; restarting"; rm -f "$pid_file"
   fi
-  (cd "$ROOT" && WHEELHOUSE_SUPERVISOR_ROOT="$ROOT" nohup "$HERE/supervisor.sh" >> "$HERE/logs/supervisor.out.log" 2>> "$HERE/logs/supervisor.stderr.log" & echo $! > "$pid_file")
+  (cd "$ROOT" && WHEELHOUSE_SUPERVISOR_ROOT="$ROOT" WHEELHOUSE_SUPERVISOR_STARTED_BY_COCKPIT=1 nohup "$HERE/supervisor.sh" >> "$HERE/logs/supervisor.out.log" 2>> "$HERE/logs/supervisor.stderr.log" & echo $! > "$pid_file")
   new_pid="$(cat "$pid_file" 2>/dev/null || true)"; sleep 0.2
   if pid_alive "$new_pid"; then echo "supervisor started: pid $new_pid"; return 0; fi
   echo "STOP: supervisor failed to start; see $HERE/logs/supervisor.stderr.log" >&2; exit 1
