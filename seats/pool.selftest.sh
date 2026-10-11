@@ -101,6 +101,11 @@ import json; p='$ROOT/seats/seats.json'; j=json.load(open(p)); j['seats']['fixed
 PY
 expect_refusal 'fixed worker plus pool workers is refused' 'the pool replaces the fixed roster for workers'
 cat > "$ROOT/seats/seats.json" <<'JSON'
+{"version":1,"commander":{"role":"commander","external":true},"seats":{"fixed-worker":{"role":"worker","harness":"codex","provider":"openai","model":"worker-model","account":{"dir":"~/.pi-seats-pooltest/pool/a","authRoute":"oauth"}}}}
+JSON
+write_valid_pool
+expect_refusal 'fixed worker sharing the pool login reports roster replacement first' 'the pool replaces the fixed roster for workers'
+cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"commander":{"role":"commander","external":true},"seats":{"observer":{"role":"researcher","external":true}}}
 JSON
 write_valid_pool
