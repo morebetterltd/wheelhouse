@@ -2020,7 +2020,8 @@ const [cmd, ...argvRest] = process.argv.slice(2);
 
 // SPLICE 6/6 (seat worktrees): `--base <ref>` on spawn/dispatch names the
 // ref a NEW bead branch is cut from (default: the bead's `Integration:` line,
-// then WHEELHOUSE_WORKTREE_BASE, then origin's default branch).
+// then WHEELHOUSE_WORKTREE_BASE, then merge-target= in .template-source, then
+// origin's default branch).
 let baseRef: string | null = null;
 const rest: string[] = [];
 for (let i = 0; i < argvRest.length; i++) {
