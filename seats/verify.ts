@@ -452,10 +452,10 @@ interface OneShotRunResult {
 function runOneShot(
   bin: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; marker?: { seat: string; bead: string } }
+  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; harness: HarnessName; marker?: { seat: string; bead: string } }
 ): Promise<OneShotRunResult> {
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     const markerFile = opts.marker ? path.join(ROOT, "seats", "run", `verify.${opts.marker.seat}.json`) : null;
     if (markerFile) {
       fs.mkdirSync(path.dirname(markerFile), { recursive: true });
@@ -467,6 +467,8 @@ function runOneShot(
     let stderrBytes = 0;
     let done = false;
     let sawOutput = false;
+    let sawFinalVerdictMessage = false;
+    let finalKillTimer: ReturnType<typeof setTimeout> | null = null;
     let noEventTimer: ReturnType<typeof setTimeout> | null = null;
     const out = () => Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8");
     const err = () => Buffer.concat(stderrChunks, stderrBytes).toString("utf8");
@@ -475,15 +477,31 @@ function runOneShot(
       done = true;
       clearTimeout(firstOutputTimer);
       if (noEventTimer) clearTimeout(noEventTimer);
+      if (finalKillTimer) clearTimeout(finalKillTimer);
       if (markerFile) { try { fs.unlinkSync(markerFile); } catch {} }
       resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error });
+    };
+    const killProcessGroup = (signal: NodeJS.Signals) => {
+      if (!child.pid) return;
+      try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch {} }
     };
     const killFor = (code: string, message: string) => {
       const error: Error & { code?: string } = new Error(message);
       error.code = code;
-      try { child.kill("SIGTERM"); } catch {}
-      setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 1000).unref?.();
+      killProcessGroup("SIGTERM");
+      setTimeout(() => killProcessGroup("SIGKILL"), 1000).unref?.();
       finish({ error });
+    };
+    const reapAfterFinalVerdict = () => {
+      if (sawFinalVerdictMessage || done) return;
+      const stdout = out();
+      if (liveVerdictCandidates(stdout, opts.harness).length === 0 || livePushCandidates(stdout, opts.harness).length === 0) return;
+      sawFinalVerdictMessage = true;
+      finalKillTimer = setTimeout(() => {
+        killProcessGroup("SIGTERM");
+        setTimeout(() => killProcessGroup("SIGKILL"), 1000).unref?.();
+      }, 100);
+      finalKillTimer.unref?.();
     };
     const firstOutputTimer = setTimeout(() => {
       if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT", `no verifier output within ${opts.firstOutputTimeoutMs}ms`);
@@ -506,11 +524,12 @@ function runOneShot(
       }
       chunks.push(chunk);
       setBytes(next);
+      reapAfterFinalVerdict();
     };
     child.stdout?.on("data", (chunk: Buffer) => collect(stdoutChunks, () => stdoutBytes, (n) => { stdoutBytes = n; }, chunk));
     child.stderr?.on("data", (chunk: Buffer) => collect(stderrChunks, () => stderrBytes, (n) => { stderrBytes = n; }, chunk));
     child.on("error", (error: Error & { code?: string }) => finish({ error }));
-    child.on("close", (status, signal) => finish({ status, signal }));
+    child.on("close", (status, signal) => finish(sawFinalVerdictMessage && signal ? { status: 0, signal: null } : { status, signal }));
   });
 }
 
@@ -1239,6 +1258,7 @@ async function main(): Promise<void> {
     firstOutputTimeoutMs,
     noEventTimeoutMs,
     maxBuffer: 64 * 1024 * 1024,
+    harness: verifierHarness,
     marker: { seat: verifierSeat, bead: beadId },
   });
   const elapsedMs = Date.now() - startedAt;
