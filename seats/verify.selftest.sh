@@ -174,7 +174,7 @@ if (process.env.STUB_CLOBBER_CORE_WORKTREE_REPO) {
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 if (process.env.STUB_RUN_BENCH === "1") {
   const cp = require("child_process");
-  const outDir = path.join(agentDir, "bench-out");
+  const outDir = path.join(process.cwd(), "bench-out");
   fs.mkdirSync(outDir, { recursive: true });
   const bench = path.join(process.env.WHEELHOUSE_ROOT || "", "wheelhouse", "crew", "bench.sh");
   const res = cp.spawnSync(bench, ["artifact-fixture", outDir], { encoding: "utf8" });
@@ -232,6 +232,8 @@ if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
 }
 if (process.env.STUB_BD_READONLY_CHECK === "1") {
   const cp = require("child_process");
+  const readonlyInstall = path.join(path.dirname(process.cwd()), "readonly-install");
+  fs.mkdirSync(path.join(readonlyInstall, ".beads"), { recursive: true });
   const cases = [
     ["show", ["show", "bead-1"]],
     ["comments", ["comments", "bead-1"]],
@@ -239,10 +241,32 @@ if (process.env.STUB_BD_READONLY_CHECK === "1") {
     ["update", ["update", "bead-1", "--add-label", "needs-review"]],
     ["actor-close", ["--actor", "x", "close", "bead-1"]],
   ].map(([name, args]) => {
-    const r = cp.spawnSync("bd", args, { input: "body\n", encoding: "utf8" });
+    const r = cp.spawnSync("bd", args, { cwd: readonlyInstall, input: "body\n", encoding: "utf8" });
     return { name, status: r.status, stdout: r.stdout, stderr: r.stderr };
   });
   fs.writeFileSync(path.join(agentDir, "bd-readonly-check.json"), JSON.stringify(cases, null, 2));
+}
+if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
+  const cp = require("child_process");
+  const scratchGraph = path.join(process.cwd(), "bd-scratch");
+  const siblingInstall = path.join(path.dirname(process.cwd()), "sibling-install");
+  const arbitraryCwd = path.join(path.dirname(process.cwd()), "arbitrary-cwd");
+  fs.mkdirSync(scratchGraph, { recursive: true });
+  fs.mkdirSync(path.join(siblingInstall, ".beads"), { recursive: true });
+  fs.mkdirSync(arbitraryCwd, { recursive: true });
+  const run = (name, cwd, args, env = {}) => {
+    const r = cp.spawnSync("bd", args, { cwd, env: { ...process.env, ...env }, input: "body\n", encoding: "utf8" });
+    return { name, cwd, args, status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  const cases = [
+    run("scratch-init", scratchGraph, ["init", "--skip-agents"]),
+    run("scratch-create", scratchGraph, ["create", "scratch bead"]),
+    run("sibling-create", siblingInstall, ["create", "sibling bead"]),
+    run("arbitrary-create", arbitraryCwd, ["create", "arbitrary bead"]),
+    run("scratch-beads-dir-outside", scratchGraph, ["create", "override bead"], { BEADS_DIR: path.join(siblingInstall, ".beads") }),
+    run("scratch-db-override", scratchGraph, ["--db", path.join(siblingInstall, ".beads", "beads.db"), "create", "override bead"]),
+  ];
+  fs.writeFileSync(path.join(agentDir, "bd-readonly-scope-check.json"), JSON.stringify(cases, null, 2));
 }
 const reply = process.env.STUB_REPLY_FILE;
 let text = reply ? fs.readFileSync(reply, "utf8") : "";
@@ -359,9 +383,13 @@ cat > "$BIN/bd" <<'STUB'
 #!/usr/bin/env bash
 set -u
 readonly=0
-while [ "${1:-}" = "--readonly" ] || [ "${1:-}" = "--actor" ]; do
-  if [ "${1:-}" = "--readonly" ]; then readonly=1; shift; continue; fi
-  if [ "${1:-}" = "--actor" ]; then shift 2; continue; fi
+while true; do
+  case "${1:-}" in
+    --readonly) readonly=1; shift; continue ;;
+    --actor|--db|--database) shift 2; continue ;;
+    --db=*|--database=*) shift; continue ;;
+  esac
+  break
 done
 verb="${1:-}"
 case "$verb" in
@@ -829,6 +857,24 @@ for (const k of ['comment', 'update', 'actor-close']) {
 NODE
 then pass "verifier one-shot bd is read-only: show/comments work, comment/update/--actor close fail"
 else fail "verifier bd readonly shim failed (rc=$RC out=$OUT check=$(cat "$BD_RO_CHECK" 2>/dev/null))"; fi
+cat > "$REPLY" <<EOF
+Checked readonly bd shim scope.
+VERDICT: APPROVE
+EOF
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_READONLY_SCOPE_CHECK=1 STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-bd-scope fleet/bead-1 worker-1 2>&1)" || RC=$?
+BD_SCOPE_CHECK="${VARGV%argv.json}bd-readonly-scope-check.json"
+if [ $RC -eq 0 ] && node - "$BD_SCOPE_CHECK" <<'NODE'
+const fs = require('fs');
+const rows = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const by = Object.fromEntries(rows.map(r => [r.name, r]));
+if (by['scratch-init'].status !== 0 || by['scratch-create'].status !== 0) process.exit(1);
+for (const k of ['sibling-create', 'arbitrary-create', 'scratch-beads-dir-outside', 'scratch-db-override']) {
+  if (by[k].status === 0) process.exit(1);
+  if (!/not allowed in read-only mode/.test(`${by[k].stdout}\n${by[k].stderr}`)) process.exit(1);
+}
+NODE
+then pass "verifier bd shim is writable only under its scratch root; sibling install, arbitrary cwd, and db overrides stay read-only"
+else fail "verifier bd readonly scope failed (rc=$RC out=$OUT check=$(cat "$BD_SCOPE_CHECK" 2>/dev/null))"; fi
 
 # --- scratch cwd: construction, not contract discipline ---------------------
 # The verifier's process cwd must be A repository the branch's ref resolves
