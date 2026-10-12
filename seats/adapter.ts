@@ -898,7 +898,7 @@ function processCwd(pid: number): string | null {
 }
 
 function logFilterShell(): string {
-  const script = `const readline=require('readline'); const limit=Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES||65536); function trim(v){ if(typeof v==='string' && Buffer.byteLength(v)>limit){ const b=Buffer.from(v); return b.subarray(0,limit).toString('utf8')+'\\n[wheelhouse log truncated '+(b.length-limit)+' bytes; full output remains in the pi session file]'; } if(Array.isArray(v)) return v.map(trim); if(v&&typeof v==='object'){ for(const k of Object.keys(v)) v[k]=trim(v[k]); } return v;} const rl=readline.createInterface({input:process.stdin}); rl.on('line',l=>{try{const o=JSON.parse(l); if(o.type==='tool_execution_update'){const before=Buffer.byteLength(l); const t=trim(o); const after=Buffer.byteLength(JSON.stringify(t)); if(after<before) t.wheelhouse_truncated_bytes=before-after; process.stdout.write(JSON.stringify(t)+'\\n');} else process.stdout.write(l+'\\n');}catch{process.stdout.write(l+'\\n')}});`;
+  const script = `const readline=require('readline'); const limit=Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES||65536); function trim(v){ if(typeof v==='string' && Buffer.byteLength(v)>limit){ const b=Buffer.from(v); return b.subarray(0,limit).toString('utf8')+'\\n[wheelhouse log truncated '+(b.length-limit)+' bytes; full output remains in the pi session file]'; } if(Array.isArray(v)) return v.map(trim); if(v&&typeof v==='object'){ for(const k of Object.keys(v)) v[k]=trim(v[k]); } return v;} function isDelta(o){const ev=o&&typeof o==='object'?(o.assistantMessageEvent||o.delta||o):null; const t=String(ev&&ev.type||''); return o&&o.type==='message_update'&&/_delta$/.test(t);} const rl=readline.createInterface({input:process.stdin}); rl.on('line',l=>{try{const o=JSON.parse(l); if(isDelta(o)) return; if(o.type==='tool_execution_update'){const before=Buffer.byteLength(l); const t=trim(o); const after=Buffer.byteLength(JSON.stringify(t)); if(after<before) t.wheelhouse_truncated_bytes=before-after; process.stdout.write(JSON.stringify(t)+'\\n');} else process.stdout.write(l+'\\n');}catch{process.stdout.write(l+'\\n')}});`;
   return `'${process.execPath.replace(/'/g, `'\\''`)}' -e '${script.replace(/'/g, `'\\''`)}'`;
 }
 
@@ -1399,6 +1399,7 @@ async function cmdReset(name: string): Promise<void> {
     state.seats[name].sessionId = null;
     state.seats[name].sessionFile = null;
     state.seats[name].pid = null;
+    delete (state.seats[name] as any).cwd;
     writeState(state); // reset-record
   }
   await driverForSeat(name, entry, "adapter reset").launch(name, entry, null, cwd); // null sessionFile: cold, no --session
@@ -1944,6 +1945,7 @@ async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<
   }
   rec.pid = null;
   rec.stoppedAt = new Date().toISOString();
+  delete (rec as any).cwd;
   writeState(state);
   return `seat ${name} stopped; session ${rec.sessionId} kept for resume`;
 }
@@ -1953,6 +1955,10 @@ async function cmdStop(name: string): Promise<void> {
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
+    if ((rec as any).cwd !== undefined) {
+      delete (rec as any).cwd;
+      writeState(state);
+    }
     console.log(`seat ${name} is not running`);
     return;
   }
@@ -2014,7 +2020,8 @@ const [cmd, ...argvRest] = process.argv.slice(2);
 
 // SPLICE 6/6 (seat worktrees): `--base <ref>` on spawn/dispatch names the
 // ref a NEW bead branch is cut from (default: the bead's `Integration:` line,
-// then WHEELHOUSE_WORKTREE_BASE, then origin's default branch).
+// then WHEELHOUSE_WORKTREE_BASE, then merge-target= in .template-source, then
+// origin's default branch).
 let baseRef: string | null = null;
 const rest: string[] = [];
 for (let i = 0; i < argvRest.length; i++) {

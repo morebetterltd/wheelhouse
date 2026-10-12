@@ -358,6 +358,20 @@ else
   fail "eviction-horizon duplicate reached the commander: lines=$(line_count "$DRAIN3") out=$(cat "$DRAIN3" 2>/dev/null)"
 fi
 
+CRASH_ROOT="$FIX/crash-window"
+mkdir -p "$CRASH_ROOT/seats/logs" "$CRASH_ROOT/seats/run"
+printf '%s\n' '{"logs":{"seats/logs/worker-1.jsonl":{"offset":0}}}' > "$CRASH_ROOT/seats/herald.state.json"
+printf '%s\n' '{"type":"agent_end","messages":["crash window settle"]}' > "$CRASH_ROOT/seats/logs/worker-1.jsonl"
+CRASH_RC=0; WHEELHOUSE_HERALD_ROOT="$CRASH_ROOT" WHEELHOUSE_TEST_CRASH_AFTER_INBOX_APPEND=1 bun "$ROOT/seats/herald.ts" --once > "$FIX/crash-window-first.out" 2>&1 || CRASH_RC=$?
+FIRST_ROWS="$(line_count "$CRASH_ROOT/seats/inbox.jsonl")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_ROOT="$CRASH_ROOT" bun "$ROOT/seats/herald.ts" --once 2>&1)" || RC=$?
+SECOND_ROWS="$(line_count "$CRASH_ROOT/seats/inbox.jsonl")"
+if [ "$CRASH_RC" = 99 ] && [ "$FIRST_ROWS" = 1 ] && [ $RC -eq 0 ] && [ "$SECOND_ROWS" = 1 ]; then
+  pass "append-before-state crash window neither loses nor duplicates an inbox row"
+else
+  fail "append-before-state crash window unsafe (crash_rc=$CRASH_RC first=$FIRST_ROWS rc=$RC second=$SECOND_ROWS out=$OUT)"
+fi
+
 # Fresh fixture for poke tests so state/inbox cursor from the drain phase does
 # not suppress a legitimate poke.
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$SEND_LOG"
@@ -731,7 +745,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.05
 done
 for _ in 1 2 3 4 5; do
-  rm -rf "$ROOT_GONE"
+  rm -rf "$ROOT_GONE" 2>/dev/null
   [ ! -e "$ROOT_GONE" ] && break
   sleep 0.1
 done
@@ -739,7 +753,7 @@ if [ -e "$ROOT_GONE" ]; then
   fail "fixture root-gone directory could not be removed before disappearance assertion"
   kill "$ROOT_GONE_PID" 2>/dev/null || true
 else
-  for _ in $(seq 1 50); do
+  for _ in $(seq 1 100); do
     kill -0 "$ROOT_GONE_PID" 2>/dev/null || break
     sleep 0.1
   done

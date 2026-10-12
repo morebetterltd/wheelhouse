@@ -110,6 +110,7 @@ mkdir -p wheelhouse
   echo "commit=$(git -C "$TEMPLATE" rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "path=$TEMPLATE"
   echo "product-repo=$(pwd -P)"
+  echo "merge-target="
   echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "upgraded="
   echo "namespace="
@@ -143,7 +144,7 @@ TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 
 **`path=` is the one field that is expected to die, and that is a decision rather than an oversight.** The README has you clone into `mktemp -d`, so the path you just recorded points into a directory the OS reclaims — routinely before the first upgrade wants it. A durable clone kept beside the project was the alternative and was not taken: it is a second copy of the contracts that ages silently, and every reader who finds it then has to work out whether it or `commit=` is the truth. `source=` and `commit=` are the durable half, and step 5's integrity check refreshes an install-local cache from `source=` the moment it finds the path dead — the same recovery `runbooks/UPGRADE.md` needs anyway, so the temporary path costs a clone at the moment of use rather than a stale directory for the life of the project. Record it, and expect it to be gone later.
 
-`installed=` records when this project first installed and is never rewritten afterwards; `upgraded=` is the one an upgrade updates. The `commit=` line is the provenance record. It is what tells a future reader which version of the contracts this project installed, and it is the baseline the upgrade path in the README compares against. Without it, "re-copy the contracts" has nothing to diff from.
+`installed=` records when this project first installed and is never rewritten afterwards; `upgraded=` is the one an upgrade updates. The `commit=` line is the provenance record. It is what tells a future reader which version of the contracts this project installed, and it is the baseline the upgrade path in the README compares against. Without it, "re-copy the contracts" has nothing to diff from. `merge-target=` is filled after the interview records the principal-confirmed integration branch; seat dispatch uses it for fresh worker branches before falling back to `origin/HEAD`, because a repository's default branch is not necessarily this fleet's merge target.
 
 **A clone of an empty or unpushed repository exits 0.** It creates the directory, prints nothing alarming, and leaves you with nothing to install. If the files above are missing, STOP and tell the principal the template is empty or unreachable — do not proceed, and do not reconstruct the contracts from memory or from this document. A wheelhouse whose contracts were invented by the installer is worse than no wheelhouse, because it looks like the real thing.
 
@@ -330,9 +331,18 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 ### Record what the interview decided — the machine copies, before anything derives from them
 
-Four writes close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
+Five writes close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
 
-**First, the namespace, into `wheelhouse/.template-source`** — the machine record, the value `seats/seat-env.sh` is invoked with:
+**First, the merge target, into `wheelhouse/.template-source`** — the machine record for the principal-confirmed branch new fleet branches integrate into:
+
+```bash
+sed -i.bak "s|^merge-target=.*|merge-target=<the merge target branch>|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+grep '^merge-target=' wheelhouse/.template-source  # read it back; adapter dispatch uses this before origin/HEAD
+```
+
+Record the branch name (`main`, `staging`, `release/next`) rather than a mutable local checkout answer. The adapter resolves it as `origin/<name>` when that exists.
+
+**Then the namespace, into `wheelhouse/.template-source`** — the machine record, the value `seats/seat-env.sh` is invoked with:
 
 ```bash
 sed -i.bak "s|^namespace=.*|namespace=<the namespace>|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak

@@ -99,12 +99,37 @@ function projectRootExists(): boolean {
   }
 }
 
+function readInboxSeen(): string[] {
+  if (!fs.existsSync(INBOX)) return [];
+  const ids: string[] = [];
+  try {
+    const lines = fs.readFileSync(INBOX, "utf8").split(/\n/).filter(Boolean);
+    for (const line of lines) {
+      try {
+        const row = JSON.parse(line);
+        if (typeof row?.id === "string" && row.id) ids.push(row.id);
+      } catch { /* ignore corrupt inbox rows for dedupe rebuild */ }
+    }
+  } catch { return []; }
+  return ids.slice(-MAX_SEEN);
+}
+
+let currentSeen = readInboxSeen();
+
+function rememberSeen(seen: Set<string>): void {
+  currentSeen = Array.from(seen).slice(-MAX_SEEN);
+}
+
 function readState(): HeraldState {
-  if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
+  if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: currentSeen };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, firstDeferredInboxSizeByPane: parsed.firstDeferredInboxSizeByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
+    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: currentSeen, lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, firstDeferredInboxSizeByPane: parsed.firstDeferredInboxSizeByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
   } catch (e: any) {
+    if (!projectRootExists()) {
+      console.error(`herald: project root disappeared (${ROOT}); exiting`);
+      process.exit(0);
+    }
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
 }
@@ -112,7 +137,9 @@ function readState(): HeraldState {
 let stateWriteCounter = 0;
 
 function writeState(state: HeraldState): void {
-  const body = JSON.stringify(state, null, 2) + "\n";
+  fs.mkdirSync(SEATS_DIR, { recursive: true });
+  const { seen: _seen, ...persisted } = state;
+  const body = JSON.stringify(persisted) + "\n";
   for (let attempt = 0; attempt < 2; attempt++) {
     const tmp = `${STATE_FILE}.${process.pid}.${stateWriteCounter++}.tmp`;
     try {
@@ -148,6 +175,12 @@ function writeState(state: HeraldState): void {
 function appendInbox(obj: unknown): void {
   fs.mkdirSync(SEATS_DIR, { recursive: true });
   fs.appendFileSync(INBOX, JSON.stringify(obj) + "\n");
+  if (process.env.WHEELHOUSE_TEST_CRASH_AFTER_INBOX_APPEND === "1") process.exit(99);
+}
+
+function isStreamingDeltaEvent(obj: any): boolean {
+  const ev = obj?.assistantMessageEvent ?? obj?.delta ?? obj;
+  return obj?.type === "message_update" && typeof ev?.type === "string" && /_delta$/.test(ev.type);
 }
 
 function logFiles(): string[] {
@@ -891,13 +924,14 @@ function scanOnce(): number {
   const state = readState();
   const seen = new Set(state.seen);
   let appended = 0;
+  let stateDirty = false;
   for (const file of logFiles()) {
     const rel = path.relative(ROOT, file);
     const priorRecord = state.logs[rel];
     if (!priorRecord) {
       const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
       state.logs[rel] = { offset: size };
-      writeState(state);
+      stateDirty = true;
       continue;
     }
     const prior = priorRecord.offset;
@@ -905,7 +939,12 @@ function scanOnce(): number {
       let obj: any;
       try { obj = JSON.parse(rec.line); } catch {
         state.logs[rel] = { offset: rec.endOffset };
-        writeState(state);
+        stateDirty = true;
+        return;
+      }
+      if (isStreamingDeltaEvent(obj)) {
+        state.logs[rel] = { offset: rec.endOffset };
+        stateDirty = true;
         return;
       }
       const candidate = classify(obj);
@@ -931,18 +970,19 @@ function scanOnce(): number {
         }
       }
       state.logs[rel] = { offset: rec.endOffset };
-      state.seen = Array.from(seen).slice(-MAX_SEEN);
-      writeState(state); // per-line persistence closes append-before-state crash window
+      stateDirty = true;
     });
     if (batch.linesRead === 0 && batch.offset !== prior) {
       state.logs[rel] = { offset: batch.offset };
-      writeState(state);
+      stateDirty = true;
     }
   }
   appended += scanNeeds(state, seen);
   appended += scanComms(state, seen);
+  rememberSeen(seen);
+  state.seen = currentSeen;
   const clocked = runStaffingClock(state) || runAlertsClock(state);
-  if (clocked) writeState(state);
+  if (clocked || stateDirty) writeState(state);
   pokeCommanderIfSafe(state);
   return appended;
 }
@@ -1047,7 +1087,15 @@ async function daemon(): Promise<void> {
       console.error(`herald: project root disappeared (${ROOT}); exiting`);
       return;
     }
-    scanOnce();
+    try {
+      scanOnce();
+    } catch (e) {
+      if (!projectRootExists()) {
+        console.error(`herald: project root disappeared (${ROOT}); exiting`);
+        return;
+      }
+      throw e;
+    }
     await new Promise((r) => setTimeout(r, INTERVAL_MS));
   }
 }

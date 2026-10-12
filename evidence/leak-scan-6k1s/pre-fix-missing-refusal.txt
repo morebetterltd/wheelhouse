@@ -1,0 +1,4 @@
+seat worker-x: created worktree [fixture-root]/fixture-project/.wheelhouse-worktrees/worker-x on fleet/demo-aa11 from origin/main
+seat worker-x: pushed fleet/demo-aa11 to origin before leaving it
+seat worker-x: switched [fixture-root]/fixture-project/.wheelhouse-worktrees/worker-x from fleet/demo-aa11 to fleet/demo-bb22 from origin/main
+MISSING_REFUSAL: switched and pushed synthetic leak
