@@ -303,6 +303,8 @@ cat > "$BIN/bd" <<'BDSTUB'
 #!/usr/bin/env bash
 case "$1" in
   ready) printf '[{"id":"fixture-ready"}]\n' ;;
+  show)
+    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf '[]\n'; fi ;;
   list)
     status=""
     for a in "$@"; do case "$a" in --status=*) status="${a#--status=}" ;; esac; done
@@ -1869,6 +1871,22 @@ run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"
 
 phase "7b. seat worktree lifecycle — push gate, base switch, reopen, occupied, placeholder, cleanup, lock"
+UMB_WT_PROJ="$FIX/umbrella-worktree-proj"
+build_proj "$UMB_WT_PROJ" umbwt
+mkdir -p "$UMB_WT_PROJ/product" "$UMB_WT_PROJ/wheelhouse"
+printf 'product-repo=product\n' > "$UMB_WT_PROJ/wheelhouse/.template-source"
+fgit -C "$UMB_WT_PROJ/product" init -q -b main
+printf 'product\n' > "$UMB_WT_PROJ/product/product.txt"
+fgit -C "$UMB_WT_PROJ/product" add product.txt
+fgit -C "$UMB_WT_PROJ/product" commit -qm "product base"
+BD_UMB_WT="$FIX/bd-umbrella-worktree.txt"
+printf 'fixture umbrella worktree bead\n\nDESCRIPTION\n\n  Repo: UMBRELLA\n' > "$BD_UMB_WT"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_SHOW_FILE="$BD_UMB_WT" bun "$UMB_WT_PROJ/seats/adapter.ts" spawn worker-1 bead-umb 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && fgit -C "$UMB_WT_PROJ" rev-parse --verify -q refs/heads/fleet/bead-umb >/dev/null \
+  && ! fgit -C "$UMB_WT_PROJ/product" rev-parse --verify -q refs/heads/fleet/bead-umb >/dev/null; then
+  pass "repo routing: Repo: UMBRELLA creates the seat worktree branch in the umbrella repo, not product"
+else fail "repo routing: Repo: UMBRELLA worktree landed in wrong repo (rc=$RC root_branch=$(fgit -C "$UMB_WT_PROJ" rev-parse --verify -q refs/heads/fleet/bead-umb 2>/dev/null || true) product_branch=$(fgit -C "$UMB_WT_PROJ/product" rev-parse --verify -q refs/heads/fleet/bead-umb 2>/dev/null || true) out=$OUT)"; fi
+env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 bun "$UMB_WT_PROJ/seats/adapter.ts" stop worker-1 >/dev/null 2>&1 || true
 WT_PROJ="$FIX/worktree-proj"
 build_proj "$WT_PROJ" wt
 RUN_PROJ="$WT_PROJ"; STATE="$WT_PROJ/seats/state.json"; LOG="$WT_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-wt/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-wt/worker-1/cwd.txt"

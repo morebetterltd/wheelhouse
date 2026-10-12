@@ -202,17 +202,24 @@ export function resolveBase(root: string, beadId: string, explicit?: string | nu
   refuse(`no base ref resolves for bead ${beadId} (tried ${candidates.join(", ")}); pass --base <ref>`);
 }
 
-function integrationLineFor(root: string, beadId: string): string | null {
-  if (process.env.WHEELHOUSE_SKIP_BD === "1") return null;
+function beadText(root: string, beadId: string): string {
+  if (process.env.WHEELHOUSE_SKIP_BD === "1") return "";
   const r = spawnSync("bd", ["show", beadId, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000 });
-  if (r.status !== 0 || !r.stdout) return null;
-  let text = "";
+  if (r.status !== 0 || !r.stdout) return "";
   try {
     const j = JSON.parse(r.stdout);
     const b = Array.isArray(j) ? j[0] : j;
-    text = [b?.title, b?.description, b?.notes, b?.design, b?.body].filter((s) => typeof s === "string").join("\n");
-  } catch { text = r.stdout; }
-  const m = text.match(/^\s*Integration:\s*([^\s`'"]+)/m);
+    return [b?.title, b?.description, b?.notes, b?.design, b?.body].filter((s) => typeof s === "string").join("\n");
+  } catch { return r.stdout; }
+}
+
+function integrationLineFor(root: string, beadId: string): string | null {
+  const m = beadText(root, beadId).match(/^\s*Integration:\s*([^\s`'"]+)/m);
+  return m ? m[1] : null;
+}
+
+function repoLineFor(root: string, beadId: string): string | null {
+  const m = beadText(root, beadId).match(/^\s*Repo:\s*([^\s`'"]+)/mi);
   return m ? m[1] : null;
 }
 
@@ -424,7 +431,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   const recordedLegacy = rec?.cwd && recordedLegacyBead && statuses.get(recordedLegacyBead) !== "closed" && fs.existsSync(rec.cwd) ? rec.cwd : null;
   const namedLegacy = path.join(worktreesDir(root), o.beadId);
   const legacy = recordedLegacy ?? (fs.existsSync(namedLegacy) ? namedLegacy : null);
-  const repo = gitRepoFor(root, legacy ?? seatTarget);
+  const repo = gitRepoFor(root, legacy ?? seatTarget, o.beadId);
   const registered = registeredWorktrees(repo);
   const atLegacy = legacy ? registered.find((w) => samePath(w.path, legacy)) : undefined;
   if (atLegacy && (!rec?.pid || !pidAlive(rec.pid ?? null)) && !fs.existsSync(seatTarget)) {
@@ -588,10 +595,14 @@ export function productRepoFor(root: string): string | null {
  * umbrella layout. An existing target's own repository wins first, because the
  * seat may already have been hand-created or may belong to the product repo
  * even when the umbrella root is itself a git repository. */
-export function gitRepoFor(root: string, target: string): string {
+export function gitRepoFor(root: string, target: string, beadId?: string): string {
   if (fs.existsSync(target)) {
     const common = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], target);
     if (common.ok && common.out) return path.dirname(common.out);
+  }
+  if (beadId && /^UMBRELLA$/i.test(repoLineFor(root, beadId) ?? "")) {
+    if (git(root, ["rev-parse", "--is-inside-work-tree"]).ok) return git(root, ["rev-parse", "--show-toplevel"]).out || root;
+    refuse(`${root} is not a git repository, but bead ${beadId} declares Repo: UMBRELLA`);
   }
   const product = productRepoFor(root);
   if (product) {
