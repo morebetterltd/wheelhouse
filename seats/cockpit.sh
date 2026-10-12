@@ -156,10 +156,13 @@ NS="${1:-$(basename "$ROOT")}"
 S="wh-$NS"
 WHEELHOUSE_DAEMONS_ROOT="$ROOT" . "$HERE/daemons.sh"
 
-recover_dead_seats
-ensure_desk
-ensure_courier
-ensure_supervisor
+if [ "${WHEELHOUSE_COCKPIT_DAEMONS:-1}" != "0" ]; then
+  recover_dead_seats
+  ensure_desk
+  ensure_courier
+  ensure_herald
+  ensure_supervisor
+fi
 DESK_URL="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
 export DESK_URL
 
@@ -232,8 +235,10 @@ if tmx has-session -t "=$S" 2>/dev/null; then
   fi
   install_resize_hook
   install_session_options
-  ensure_herald
-  ensure_supervisor
+  if [ "${WHEELHOUSE_COCKPIT_DAEMONS:-1}" != "0" ]; then
+    ensure_herald
+    ensure_supervisor
+  fi
   echo "bridge already built: $S (re-run is attach, never a duplicate)"
   attach
   exit 0
@@ -243,8 +248,10 @@ fi
 tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander"
 
 spawn_floor_pane || exit 1
-ensure_herald
-ensure_supervisor
+if [ "${WHEELHOUSE_COCKPIT_DAEMONS:-1}" != "0" ]; then
+  ensure_herald
+  ensure_supervisor
+fi
 install_resize_hook
 
 # Status bar: project on the left, the key hints on the right.

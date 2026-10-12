@@ -307,7 +307,7 @@ EOF
 cat > "$PROJ/seats/state.json" <<EOF
 {"seats":{"closed-seat":{"pid":999991,"lastBead":"closed-bead","cwd":"$PROJ/closed-work","log":"$PROJ/seats/logs/closed-seat.jsonl"},"open-clean":{"pid":999992,"lastBead":"open-bead","cwd":"$PROJ/clean-work","log":"$PROJ/seats/logs/open-clean.jsonl"},"open-dirty":{"pid":999993,"lastBead":"open-bead","cwd":"$PROJ/open-work","log":"$PROJ/seats/logs/open-dirty.jsonl"}}}
 EOF
-PATH="$RECOVERY_BIN:$(dirname "$(command -v tmux)"):$(dirname "$(command -v bun)"):/usr/bin:/bin" WHEELHOUSE_TMUX_SOCKET="$SOCK" "$PROJ/seats/cockpit.sh" recovery > "$FIX/recovery.out" 2>&1
+PATH="$RECOVERY_BIN:$(dirname "$(command -v bun)"):/usr/bin:/bin" WHEELHOUSE_DAEMONS_ROOT="$PROJ" bash -c '. "$1"; recover_dead_seats' _ "$PROJ/seats/daemons.sh" > "$FIX/recovery.out" 2>&1
 RECOVERY_RC=$?
 if [ $RECOVERY_RC -eq 0 ] && grep -q 'seat closed-seat cold-reset after changed brief (recorded bead closed-bead is closed)' "$FIX/recovery.out" && grep -q 'seat open-clean cold-reset after changed brief (recorded cwd has no uncommitted or unpushed work)' "$FIX/recovery.out" && grep -q '^closed-seat$' "$PROJ/seats/logs/reset.fixture.log" && grep -q '^open-clean$' "$PROJ/seats/logs/reset.fixture.log" && grep -q 'left dead after changed brief; recorded bead open-bead is not closed and recorded cwd has uncommitted or unpushed work' "$FIX/recovery.out" && ! grep -q '^open-dirty$' "$PROJ/seats/logs/reset.fixture.log" && grep -q 'left dead after changed brief' "$PROJ/seats/logs/open-dirty.jsonl"; then
   pass "cockpit cold-resets changed-brief closed/safe seats and leaves unsafe open work dead"
