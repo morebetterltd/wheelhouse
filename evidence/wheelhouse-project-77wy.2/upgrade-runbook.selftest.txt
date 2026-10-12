@@ -1,0 +1,20 @@
+ok 1 - host budget docs keep seats/bin inert unless host-budget.json opts in
+ok 2 - stakeholder-channel upgrade docs name channels, comms, specimens, and read-back
+ok 3 - zsh step 0 baseline reconstruction reads commit:path with braces
+ok 4 - zsh step 3 runbook loop reads real baseline and reports byte-equal files current
+From [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-2/.wheelhouse-runs/wheelhouse-project-77wy.2/tmp2/wheelhouse-upgrade-selftest.OeZQz0/reused-cache-source
+   0f7e7b0..7d0bf58  main       -> origin/main
+ok 5 - step 1 reused cache fast-forwards local branch to origin target
+ok 6 - step 6 stale-cache guard STOPs when origin target differs from BASE
+ok 7 - step 8 broad wheelhouse add stages untracked files under wheelhouse
+ok 8 - step 4 heading report separates new headings from reordered existing headings
+ok 9 - installed-layout fixture without selftest-lib.sh fails honestly instead of passing
+ok 10 - installed-layout copied upgrade-runbook selftest uses live path= when it carries commit=
+ok 11 - installed-layout dead path= fetches commit= from reachable source= into git-excluded install-local cache
+ok 12 - installed-layout dead path= with unreachable source= refuses by named source reason
+ok 13 - installed-layout missing .template-source fails legibly with source= and commit= expectation
+ok 14 - installed-layout bad path= without source= fails legibly before raw git fatal
+ok 15 - hrun reports failing adapter commands with a not ok line
+ok 16 - harness switch pi -> claude-code -> pi leaves pre-field and untouched seats intact
+upgrade-runbook.selftest: PASS (16 checks)
+rc=0
