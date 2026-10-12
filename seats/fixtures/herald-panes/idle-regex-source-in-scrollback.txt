@@ -1,0 +1,23 @@
+Synthetic tool output showing source text:
+/[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i
+/\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i
+This is scrollback only.
+filler 01
+filler 02
+filler 03
+filler 04
+filler 05
+filler 06
+filler 07
+filler 08
+filler 09
+filler 10
+filler 11
+filler 12
+filler 13
+filler 14
+filler 15
+
+──────────────── synthetic input ────────────────
+❯                                                    cockpit
+  GENERIC STATUS: ready

@@ -15,8 +15,7 @@ finish(){ selftest_remove_fixture_dir "$FIX"; if [ "$FAILED" -eq 0 ]; then echo 
 trap finish EXIT
 
 mkdir -p "$FIX/proj/seats" "$FIX/proj/wheelhouse"
-cp "$SCRIPT" "$FIX/proj/seats/principal-sentinel.sh"
-cp "$NEEDS" "$FIX/proj/seats/needs.ts"
+selftest_copy_seat_runtime "$FIX/proj" "$HERE"
 chmod +x "$FIX/proj/seats/principal-sentinel.sh"
 printf 'namespace=sentinel\n' > "$FIX/proj/wheelhouse/.template-source"
 

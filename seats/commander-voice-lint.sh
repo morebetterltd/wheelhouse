@@ -49,25 +49,46 @@ ISSUE_SUFFIX='[0-9a-z]{3,8}(\.[0-9]+)?'
 FULL_ID_RE="\\b${NS_RE}-${ISSUE_SUFFIX}\\b"
 PAREN_BARE_ID_RE="\\(${ISSUE_SUFFIX}\\)"
 
+RETIRED_MECHANICS_PROSE='fleet-gate.sh runs as a UserPromptSubmit hook
+cockpit has started commander-inbox-poll
+make sure the herald is running
+seats/cockpit.sh --herald
+desk-watchdog
+courier-watchdog'
+
 FAIL=0
 for file in "$@"; do
   if [ ! -f "$file" ]; then
     echo "UNRUNNABLE: file not found: $file" >&2
     exit 2
   fi
-  if grep -nEi '\bbeads?\b' "$file"; then
-    echo "FAIL commander-voice: $file uses bead/beads; name the human task, intent, or outcome instead"
-    FAIL=1
+  case "$file" in
+    */runbooks/*.md|runbooks/*.md|*/generated/*.example|generated/*.example) SKIP_VOICE_JARGON=1 ;;
+    *) SKIP_VOICE_JARGON=0 ;;
+  esac
+  if [ "$SKIP_VOICE_JARGON" -eq 0 ]; then
+    if grep -nEi '\bbeads?\b' "$file"; then
+      echo "FAIL commander-voice: $file uses bead/beads; name the human task, intent, or outcome instead"
+      FAIL=1
+    fi
+    if grep -nE "$FULL_ID_RE" "$file"; then
+      echo "FAIL commander-voice: $file uses a bare work id; name the task or outcome instead"
+      FAIL=1
+    fi
+    if grep -Eo "$PAREN_BARE_ID_RE" "$file" | grep -E '[0-9]' >/dev/null; then
+      grep -nE "$PAREN_BARE_ID_RE" "$file"
+      echo "FAIL commander-voice: $file uses a bare work id; name the task or outcome instead"
+      FAIL=1
+    fi
   fi
-  if grep -nE "$FULL_ID_RE" "$file"; then
-    echo "FAIL commander-voice: $file uses a bare work id; name the task or outcome instead"
-    FAIL=1
-  fi
-  if grep -Eo "$PAREN_BARE_ID_RE" "$file" | grep -E '[0-9]' >/dev/null; then
-    grep -nE "$PAREN_BARE_ID_RE" "$file"
-    echo "FAIL commander-voice: $file uses a bare work id; name the task or outcome instead"
-    FAIL=1
-  fi
+  printf '%s\n' "$RETIRED_MECHANICS_PROSE" | while IFS= read -r phrase; do
+    [ -n "$phrase" ] || continue
+    if grep -nF "$phrase" "$file"; then
+      echo "FAIL commander-voice: $file uses retired mechanics prose: $phrase"
+      exit 1
+    fi
+  done
+  if [ $? -ne 0 ]; then FAIL=1; fi
 done
 
 if [ "$FAIL" -ne 0 ]; then

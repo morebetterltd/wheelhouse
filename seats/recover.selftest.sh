@@ -192,17 +192,7 @@ chmod +x "$BIN/pi"
 # beside adapter.ts, with state under the same seats/.
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats" "$PROJ/contracts"
-cp "$ADAPTER" "$PROJ/seats/adapter.ts"
-cp "$(dirname "$ADAPTER")/seat-worktree.ts" "$PROJ/seats/seat-worktree.ts"
-cp "$HERE/seat-activity.ts" "$PROJ/seats/seat-activity.ts"
-cp "$HERE/pool.ts" "$PROJ/seats/pool.ts"
-cp "$HERE/roster.ts" "$PROJ/seats/roster.ts"
-cp "$HERE/credential-shapes.ts" "$PROJ/seats/credential-shapes.ts"
-cp "$HERE/quota.ts" "$PROJ/seats/quota.ts"
-cp "$RECOVER" "$PROJ/seats/recover.ts"
-cp "$BRIEFS" "$PROJ/seats/briefs.ts"
-cp "$HARNESS" "$PROJ/seats/harness.ts"
-cp "$HOST_BUDGET_TS" "$PROJ/seats/host-budget.ts"
+selftest_copy_seat_runtime "$PROJ" "$HERE"
 printf '# Fleet: Worker\n\nfixture brief.\n' > "$PROJ/contracts/WORKER.md"
 cat > "$PROJ/seats/seats.json" <<EOF
 {
