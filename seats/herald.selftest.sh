@@ -703,8 +703,7 @@ fi
 
 SUPERVISOR_PID="$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)"
 [ -n "$SUPERVISOR_PID" ] && kill "$SUPERVISOR_PID" 2>/dev/null || true
-sleep 0.2
-[ -n "$SUPERVISOR_PID" ] && kill -KILL "$SUPERVISOR_PID" 2>/dev/null || true
+for _ in $(seq 1 20); do [ -z "$SUPERVISOR_PID" ] || ! kill -0 "$SUPERVISOR_PID" 2>/dev/null && break; sleep 0.1; done
 rm -f "$PROJ/seats/run/supervisor.pid"
 CURRENT_DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 [ -n "$CURRENT_DAEMON_PID" ] && DAEMON_PID="$CURRENT_DAEMON_PID"
