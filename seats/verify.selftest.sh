@@ -370,6 +370,13 @@ case "$verb" in
     exit 0 ;;
   comments)
     printf 'fixture comments\n'; exit 0 ;;
+  init)
+    if [ "$readonly" = 1 ]; then printf "operation '%s' is not allowed in read-only mode\n" "$verb" >&2; exit 1; fi
+    mkdir -p .beads; printf 'fixture graph\n' > .beads/fixture; exit 0 ;;
+  create)
+    if [ "$readonly" = 1 ]; then printf "operation '%s' is not allowed in read-only mode\n" "$verb" >&2; exit 1; fi
+    [ -d .beads ] || { printf 'no beads database found\n' >&2; exit 1; }
+    printf '{"id":"fixture-bead"}\n'; exit 0 ;;
   comment|update|close)
     if [ "$readonly" = 1 ]; then printf "operation '%s' is not allowed in read-only mode\n" "$verb" >&2; exit 1; fi
     printf 'write allowed unexpectedly\n' >&2; exit 0 ;;
@@ -430,7 +437,13 @@ build_installed_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.
   printf '# Crew: Reviewer\n\ninstalled-layout reviewer brief.\n' > "$proj/wheelhouse/crew/REVIEWER.md"
   cat > "$proj/wheelhouse/crew/bench.sh" <<'BENCH'
 #!/usr/bin/env bash
-printf 'machine-local bench ran: artifact=%s out=%s\n' "${1:-}" "${2:-}"
+set -eu
+artifact="${1:-}"; out="${2:-}"
+printf 'machine-local bench ran: artifact=%s out=%s\n' "$artifact" "$out"
+mkdir -p "$out/bd-fixture"
+cd "$out/bd-fixture"
+bd init --skip-agents >/dev/null
+bd create 'bench scratch bead' --json >/dev/null
 exit 42
 BENCH
   chmod +x "$proj/wheelhouse/crew/bench.sh"
@@ -617,8 +630,8 @@ BENCH_RUN="$HOME_FIX/.pi-seats-installed/verifier/bench-run.json"
 if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null \
   && grep -q '"rc": 42' "$BENCH_RUN" 2>/dev/null \
   && ! grep -q '"rc": 127' "$BENCH_RUN" 2>/dev/null; then
-  pass "installed layout: machine-local bench resolves via WHEELHOUSE_ROOT and runs (rc != 127)"
-else fail "installed layout: machine-local bench did not run via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
+  pass "installed layout: machine-local bench resolves via WHEELHOUSE_ROOT and runs with a writable scratch bd graph (rc != 127)"
+else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
 MISS_PROJ="$FIX/missing-brief-proj"
 build_proj "$MISS_PROJ" missing "$VERIFY"
 rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"
