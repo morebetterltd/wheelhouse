@@ -281,15 +281,21 @@ if (process.env.STUB_SILENT === "1") {
     process.stdout.write(JSON.stringify({type:"tool_execution_end",toolName:"bash",exitCode:0})+"\n");
   }
   setTimeout(() => {}, 10000);
-} else if (process.env.STUB_SLOW_TOOL_OUTPUT === "1") {
+} else if (process.env.STUB_SLOW_TOOL_OUTPUT === "1" || process.env.STUB_LONG_TOOL_PROGRESS === "1") {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
   const write = (obj) => process.stdout.write(JSON.stringify(obj)+"\n");
   if (streamRequested) {
     write({type:"tool_execution_start",toolName:"bash",args:{cmd:"slow selftest"}});
-    setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 1"}), 80);
-    setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 2"}), 160);
-    setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), 240);
-    setTimeout(() => { write({type:"message_end",message:{role:"assistant",content:text}}); process.exit(Number(process.env.STUB_EXIT || 0)); }, 320);
+    if (process.env.STUB_LONG_TOOL_PROGRESS === "1") {
+      for (let i = 1; i <= 6; i++) setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:`still running ${i}`}), i * 100);
+      setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), 700);
+      setTimeout(() => { write({type:"message_end",message:{role:"assistant",content:text}}); process.exit(Number(process.env.STUB_EXIT || 0)); }, 760);
+    } else {
+      setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 1"}), 80);
+      setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 2"}), 160);
+      setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), 240);
+      setTimeout(() => { write({type:"message_end",message:{role:"assistant",content:text}}); process.exit(Number(process.env.STUB_EXIT || 0)); }, 320);
+    }
   } else {
     process.stdout.write(text);
     process.exit(Number(process.env.STUB_EXIT || 0));
@@ -726,6 +732,10 @@ OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIM
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "no-event watchdog does not trip while a long-running tool keeps streaming output"
 else fail "no-event watchdog tripped on a still-streaming tool (exit $RC): $OUT"; fi
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$RUN_PROJ/seats/verify.ts" bead-progress-past-total fleet/bead-1 worker-1 verifier --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
+  pass "tool progress beyond total timeout reaches a verdict instead of being killed"
+else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$RUN_PROJ/seats/verify.ts" bead-silent fleet/bead-1 worker-1 verifier --timeout-ms 5000 --first-output-timeout-ms 300 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && says "verifier emitted no stdout/stderr within 300ms" && says "first-output deadline" && says "--first-output-timeout-ms"; then
   pass "silent verifier stops on the first-output deadline with an actionable reason"
