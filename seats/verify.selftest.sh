@@ -144,7 +144,7 @@ fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the verifier), not rely on an operator
 // export reaching this one-shot process.
-fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, WHEELHOUSE_REAL_BD: process.env.WHEELHOUSE_REAL_BD ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
 if (process.env.STUB_GIT_INIT_REPO) {
   const cp = require("child_process");
   const repo = process.env.STUB_GIT_INIT_REPO;
@@ -474,8 +474,9 @@ artifact="${1:-}"; out="${2:-}"
 printf 'machine-local bench ran: artifact=%s out=%s\n' "$artifact" "$out"
 scratch="$out/bd-fixture"
 mkdir -p "$scratch"
-real_bd="$(PATH="${PATH#*:}" command -v bd)"
-[ -n "$real_bd" ] || { echo "could not find real bd outside verifier shim" >&2; exit 1; }
+real_bd="${WHEELHOUSE_REAL_BD:-}"
+[ -n "$real_bd" ] || { echo "WHEELHOUSE_REAL_BD is not set" >&2; exit 1; }
+[ -x "$real_bd" ] || { echo "WHEELHOUSE_REAL_BD is not executable: $real_bd" >&2; exit 1; }
 (
   cd "$scratch"
   "$real_bd" init --skip-agents >/dev/null
@@ -667,7 +668,7 @@ BENCH_RUN="$HOME_FIX/.pi-seats-installed/verifier/bench-run.json"
 if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null \
   && grep -q '"rc": 42' "$BENCH_RUN" 2>/dev/null \
   && ! grep -q '"rc": 127' "$BENCH_RUN" 2>/dev/null; then
-  pass "installed layout: machine-local bench resolves via WHEELHOUSE_ROOT and runs with a writable scratch bd graph (rc != 127)"
+  pass "installed-layout stub bench receives WHEELHOUSE_REAL_BD and writes only its scratch BEADS_DIR graph"
 else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
 MISS_PROJ="$FIX/missing-brief-proj"
 build_proj "$MISS_PROJ" missing "$VERIFY"
