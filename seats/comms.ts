@@ -46,9 +46,9 @@ function parseArgs(argv:string[]):{pos:string[]; stdin:boolean; from?:string; so
 }
 function textFromArgs(pos:string[], stdin:boolean):string { if(stdin) return fs.readFileSync(0,"utf8").replace(/\r\n/g,"\n"); return pos.join(" "); }
 function isClosedRequest(rows: CommsRow[], id: string): boolean { return rows.some((r:any) => (r.type === "relayed" || r.type === "declined") && r.id === id); }
-function rosterSeatActors(): Set<string> {
+export function rosterSeatActors(root = ROOT): Set<string> {
   const out = new Set<string>();
-  const file = path.join(ROOT, "seats", "seats.json");
+  const file = path.join(root, "seats", "seats.json");
   if (!fs.existsSync(file)) return out;
   let parsed: any;
   try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch(e:any) { stop(`cannot parse seats/seats.json: ${e.message}`, 2); }
