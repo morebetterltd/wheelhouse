@@ -307,6 +307,14 @@ if (process.env.STUB_SILENT === "1") {
     process.stdout.write(JSON.stringify({type:"tool_execution_end",toolName:"bash",exitCode:0})+"\n");
   }
   setTimeout(() => {}, 10000);
+} else if (process.env.STUB_HANG_CHILD_AFTER_RESULT === "1") {
+  if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
+  const cp = require("child_process");
+  const child = cp.spawn(process.execPath, ["-e", "setTimeout(()=>{}, 10000)"], { stdio: ["ignore", "inherit", "inherit"] });
+  fs.writeFileSync(path.join(agentDir, "hanging-child-pid.txt"), String(child.pid));
+  if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n");
+  else process.stdout.write(text);
+  process.exit(0);
 } else if (process.env.STUB_SLOW_TOOL_OUTPUT === "1" || process.env.STUB_LONG_TOOL_PROGRESS === "1") {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
   const write = (obj) => process.stdout.write(JSON.stringify(obj)+"\n");
@@ -816,6 +824,25 @@ OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIM
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "no-event watchdog does not trip while a long-running tool keeps streaming output"
 else fail "no-event watchdog tripped on a still-streaming tool (exit $RC): $OUT"; fi
+cat > "$REPLY" <<'EOF'
+Reviewer wrote the final machine lines before a background child inherited stdout.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED
+EOF
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_HANG_CHILD_AFTER_RESULT=1 bun "$RUN_PROJ/seats/verify.ts" bead-post-result-hang fleet/bead-1 worker-1 verifier --timeout-ms 5000 --no-event-timeout-ms 300 2>&1)"; RC=$?
+HANG_CHILD_PID="$(cat "$HOME_FIX/.pi-seats-alpha/verifier/hanging-child-pid.txt" 2>/dev/null || true)"
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q 'VERDICT: APPROVE' "$VDIR/bead-post-result-hang.md" 2>/dev/null; then
+  pass "post-result background child cannot keep verify open after final VERDICT/PUSH lines"
+else fail "post-result background child kept verify open or verdict was not recorded (exit $RC child=$HANG_CHILD_PID): $OUT"; fi
+if [ -n "$HANG_CHILD_PID" ]; then
+  for _ in $(seq 1 20); do kill -0 "$HANG_CHILD_PID" 2>/dev/null || break; sleep 0.1; done
+fi
+if [ -z "$HANG_CHILD_PID" ] || ! kill -0 "$HANG_CHILD_PID" 2>/dev/null; then
+  pass "post-result background child process group is reaped"
+else
+  kill "$HANG_CHILD_PID" 2>/dev/null || true
+  fail "post-result background child survived verifier cleanup (pid=$HANG_CHILD_PID)"
+fi
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$RUN_PROJ/seats/verify.ts" bead-progress-past-total fleet/bead-1 worker-1 verifier --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "tool progress beyond total timeout reaches a verdict instead of being killed"
