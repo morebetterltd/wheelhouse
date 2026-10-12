@@ -798,6 +798,18 @@ else fail "silent verifier partial output missing: $(cat "$SILENT_PARTIAL" 2>/de
 rm -f "$SILENT_PARTIAL"
 
 phase "1. APPROVE — verdict parsed, recorded, exit 0, and what was launched"
+mkdir -p "$PROJ/wheelhouse"
+cat > "$PROJ/wheelhouse/INTEGRATOR.md" <<'EOF'
+# The Integrator
+
+## This project
+
+### Push authority and its scope
+Fixture standing authority: reviewers may approve pushing origin for this install when evidence supports it.
+
+### Reserved list (principal-only, per action)
+Fixture reserved: releases/tags only.
+EOF
 cat > "$REPLY" <<EOF
 Checked the done: diff at $TIP adds the thing the bead asks for.
 \$ git show --stat fleet/bead-1
@@ -840,9 +852,20 @@ if (!prompt.includes('exactly one plain-text VERDICT line and exactly one plain-
 if (!prompt.includes('never inside a Markdown code fence')) process.exit(1);
 if (!prompt.includes('Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.')) process.exit(1);
 if (!/^VERDICT: APPROVE \| BOUNCE \| DISCOVER$/m.test(prompt)) process.exit(1);
-if (!/^PUSH: <the line REVIEWER\.md specifies>$/m.test(prompt)) process.exit(1);
+if (!/^PUSH: APPROVE <remote> — verified: <what you checked> \| HOLD — <why> \| NOT CONSIDERED \[<why>\]$/m.test(prompt)) process.exit(1);
 NODE
 then pass "prompt closes with unfenced plain-text VERDICT/PUSH instructions"; else fail "prompt does not clearly forbid fenced verdict lines: $(cat "$VARGV" 2>/dev/null)"; fi
+if node - "$VARGV" <<'NODE'
+const fs = require('fs');
+const argv = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const prompt = argv[argv.length - 1] || '';
+if (!prompt.includes('Install push authority for this verifier run')) process.exit(1);
+if (!prompt.includes('### Push authority and its scope')) process.exit(1);
+if (!prompt.includes('Fixture standing authority: reviewers may approve pushing origin')) process.exit(1);
+if (!prompt.includes('### Reserved list (principal-only, per action)')) process.exit(1);
+if (!prompt.includes('Fixture reserved: releases/tags only')) process.exit(1);
+NODE
+then pass "prompt carries install push authority and reserved-list excerpts"; else fail "prompt is missing install push authority excerpts: $(cat "$VARGV" 2>/dev/null)"; fi
 if grep -q '"BEADS_ACTOR":"verifier"' "${VARGV%argv.json}env.json" 2>/dev/null; then
   pass "the ephemeral verifier's own env carries BEADS_ACTOR=verifier, with no operator export"
 else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:verifier set by verify.ts itself"; fi
@@ -934,6 +957,16 @@ run_without_default_push bead-1-annotated fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q "verdict: APPROVE at pinned $TIP; branch has since moved on origin to moved-tip, same tree" "$VDIR/bead-1-annotated.md" 2>/dev/null; then
   pass "annotated APPROVE verdict and trailing PUSH text parse"
 else fail "annotated APPROVE/PUSH did not parse (exit $RC): $OUT file=$(cat "$VDIR/bead-1-annotated.md" 2>/dev/null)"; fi
+
+cat > "$REPLY" <<'EOF'
+Push line with remote detail after the remote name.
+VERDICT: APPROVE
+PUSH: APPROVE origin (github.com/morebetterltd/wheelhouse, main) — verified: base..tip is one commit; tip matches reviewed SHA; added lines scanned
+EOF
+run_without_default_push bead-push-detail fleet/bead-1 worker-1
+if [ $RC -eq 0 ] && grep -q 'push: APPROVE origin (github.com/morebetterltd/wheelhouse, main) — verified:' "$VDIR/bead-push-detail.md" 2>/dev/null; then
+  pass "PUSH APPROVE parser accepts parenthetical remote detail before verified dash"
+else fail "PUSH APPROVE parser rejected parenthetical remote detail (exit $RC): $OUT file=$(cat "$VDIR/bead-push-detail.md" 2>/dev/null)"; fi
 
 printf 'base\n' > "$PROJ/canonical-guard.txt"
 git -C "$PROJ" add canonical-guard.txt && git -C "$PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m canonical-guard
