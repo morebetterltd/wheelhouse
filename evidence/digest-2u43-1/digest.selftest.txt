@@ -1,5 +1,5 @@
 ok 1 - empty digest prints sections in order with bracketed text
-ok 2 - shipped rows require a named task and carry SHAs verdict push rounds and verdict path
+ok 2 - shipped rows carry main merge details and goal-branch closes, including branch-only reasons
 ok 3 - open and cleared needs print, including need without machine bead
 ok 4 - bounce rows use bd titles, reasons, rework state, and window filtering
 ok 5 - distress rows print details elapsed recovery and still-failing summary
