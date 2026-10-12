@@ -31,6 +31,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { effectiveRoster } from "./roster";
@@ -272,6 +273,83 @@ export function credentialScanSummary(repo: string, remote: string, branch: stri
   return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
 }
 
+export interface PublicStateScanHit { path: string; line: string; kind: string }
+
+function diffBaseForPublish(repo: string, remote: string, branch: string, headSha: string): string | null {
+  const remoteTip = remoteTrackingTip(repo, remote, branch);
+  if (remoteTip) return remoteTip;
+  for (const ref of [`refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/main`, `refs/remotes/${remote}/master`, "main", "master"]) {
+    const mb = git(repo, ["merge-base", headSha, ref]);
+    if (mb.ok && mb.out) return mb.out;
+  }
+  return null;
+}
+
+function addedLineHits(repo: string, base: string | null, headSha: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
+  if (patterns.length === 0) return [];
+  const args = base ? ["diff", "--unified=0", `${base}..${headSha}`, "--", "."] : ["show", "--format=", "--unified=0", headSha, "--", "."];
+  const r = git(repo, args);
+  if (!r.ok) return [{ path: "git diff", line: "0", kind: "state scan failed" }];
+  const hits: PublicStateScanHit[] = [];
+  let file = "?";
+  let nextLine = 0;
+  for (const line of r.out.split("\n")) {
+    if (line.startsWith("+++ b/")) { file = line.slice(6); continue; }
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (h) { nextLine = Number(h[1]); continue; }
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      const text = line.slice(1);
+      for (const p of patterns) if (p.re.test(text)) { hits.push({ path: file, line: String(nextLine), kind: p.kind }); break; }
+      nextLine++;
+    } else if (!line.startsWith("-")) {
+      nextLine++;
+    }
+  }
+  return hits;
+}
+
+function escapeRe(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function installBeadPrefixes(root: string): string[] {
+  const env = (process.env.WHEELHOUSE_LEAK_BEAD_PREFIX || "").split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+  const out = new Set(env);
+  if (process.env.WHEELHOUSE_SKIP_BD !== "1") {
+    const r = spawnSync("bd", ["list", "--limit", "20", "--json"], { cwd: root, encoding: "utf8", timeout: 10000 });
+    if (r.status === 0) {
+      try {
+        const rows = JSON.parse(r.stdout || "[]");
+        for (const row of Array.isArray(rows) ? rows : []) {
+          const id = String(row?.id ?? "");
+          const m = id.match(/^(.+)-[a-z0-9]{4}(?:\.\d+)?$/);
+          if (m) out.add(m[1]);
+        }
+      } catch { /* ignore bd output shape drift; explicit env/test fixtures still work */ }
+    }
+  }
+  return Array.from(out).filter((s) => /^[A-Za-z0-9_.-]+$/.test(s));
+}
+
+function publicStatePatterns(root: string): { kind: string; re: RegExp }[] {
+  const patterns: { kind: string; re: RegExp }[] = [];
+  for (const prefix of installBeadPrefixes(root)) patterns.push({ kind: "install bead id", re: new RegExp(`\\b${escapeRe(prefix)}-[a-z0-9]{4}(?:\\.\\d+)?\\b`, "i") });
+  const home = os.homedir();
+  if (home && home !== "/") patterns.push({ kind: "home path", re: new RegExp(escapeRe(home), "i") });
+  const deny = path.join(root, "seats", "run", "leak-terms");
+  try {
+    for (const line of fs.readFileSync(deny, "utf8").split(/\r?\n/)) {
+      const term = line.trim();
+      if (term && !term.startsWith("#")) patterns.push({ kind: "deny term", re: new RegExp(escapeRe(term), "i") });
+    }
+  } catch { /* install-local deny file is optional and never committed */ }
+  return patterns;
+}
+
+export function publicStateScanSummary(root: string, repo: string, remote: string, branch: string, headSha: string): string | null {
+  const hits = addedLineHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha, publicStatePatterns(root));
+  if (hits.length === 0) return null;
+  return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
+}
+
 export interface EnsureOptions {
   root: string;
   seat: string;
@@ -410,6 +488,12 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     const credentialHits = credentialScanSummary(repo, remote, currentBranch, headSha);
     if (credentialHits) {
       const msg = `credential scan failed for ${currentBranch}: ${credentialHits}; refusing to push. The seat stays on ${currentBranch} in ${target}.`;
+      note(`seat ${o.seat}: ${msg}`);
+      refuse(msg);
+    }
+    const stateHits = publicStateScanSummary(root, repo, remote, currentBranch, headSha);
+    if (stateHits) {
+      const msg = `public state scan failed for ${currentBranch}: ${stateHits}; refusing to push. The seat stays on ${currentBranch} in ${target}.`;
       note(`seat ${o.seat}: ${msg}`);
       refuse(msg);
     }
