@@ -107,6 +107,7 @@ function digestWindow(u?: URL): DigestWindow {
   const rawHours = params?.get("hours") || "24";
   const until = rawUntil ? new Date(rawUntil) : new Date();
   const hours = Number(rawHours);
+  if (!Number.isFinite(hours) || hours <= 0) throw new BadDigestWindow("invalid digest window");
   const since = rawSince ? new Date(rawSince) : new Date(until.getTime() - hours * 3600000);
   try { since.toISOString(); until.toISOString(); } catch { throw new BadDigestWindow("invalid digest window"); }
   const win = { since: since.toISOString(), until: until.toISOString() };
