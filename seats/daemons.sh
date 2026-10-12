@@ -123,7 +123,7 @@ recover_dead_seats() {
 
 wait_pid_file() {
   file="$1"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$file" ] && break; sleep 0.05; done
+  for _ in $(seq 1 50); do [ -s "$file" ] && break; sleep 0.1; done
 }
 
 principal_channel_declared() {
@@ -140,7 +140,7 @@ start_herald() {
   rm -f "$pid_file"; tmp="$pid_file.$$"; rm -f "$tmp"
   ( cd "$DAEMONS_ROOT" || exit 1; exec </dev/null >> "$DAEMONS_LOGS/herald.out.log" 2>> "$DAEMONS_LOGS/herald.stderr.log"; WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" WHEELHOUSE_HERALD_ROOT="$DAEMONS_ROOT" nohup bun "$DAEMONS_SEATS/herald.ts" & echo $! > "$tmp"; disown $! 2>/dev/null || true ) </dev/null >/dev/null 2>/dev/null &
   disown $! 2>/dev/null || true; wait_pid_file "$tmp"; [ -s "$tmp" ] && mv -f "$tmp" "$pid_file"
-  new="$(cat "$pid_file" 2>/dev/null || true)"; sleep 0.2
+  new="$(cat "$pid_file" 2>/dev/null || true)"; for _ in $(seq 1 50); do pid_alive "$new" && break; sleep 0.1; done
   if pid_alive "$new"; then echo "herald started: pid $new"; return 0; fi
   echo "STOP: herald failed to start; see $DAEMONS_LOGS/herald.stderr.log" >&2; return 1
 }
@@ -155,7 +155,7 @@ start_desk() {
   rm -f "$pid_file"; tmp="$pid_file.$$"; rm -f "$tmp"
   ( cd "$DAEMONS_ROOT" || exit 1; exec </dev/null >> "$DAEMONS_LOGS/desk.out.log" 2>> "$DAEMONS_LOGS/desk.stderr.log"; WHEELHOUSE_DESK_ROOT="$DAEMONS_ROOT" nohup bun "$DAEMONS_SEATS/desk.ts" & echo $! > "$tmp"; disown $! 2>/dev/null || true ) </dev/null >/dev/null 2>/dev/null &
   disown $! 2>/dev/null || true; wait_pid_file "$tmp"; [ -s "$tmp" ] && mv -f "$tmp" "$pid_file"
-  new="$(cat "$pid_file" 2>/dev/null || true)"; for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$DAEMONS_RUN/desk.port" ] && pid_alive "$new" && break; sleep 0.1; done
+  new="$(cat "$pid_file" 2>/dev/null || true)"; for _ in $(seq 1 50); do [ -s "$DAEMONS_RUN/desk.port" ] && pid_alive "$new" && break; sleep 0.1; done
   url="$(cat "$DAEMONS_RUN/desk.port" 2>/dev/null || true)"
   if pid_alive "$new"; then echo "desk started: pid $new${url:+ — $url}"; return 0; fi
   echo "STOP: desk failed to start; see $DAEMONS_LOGS/desk.stderr.log" >&2; return 1
@@ -172,7 +172,7 @@ start_courier() {
   rm -f "$pid_file"; tmp="$pid_file.$$"; rm -f "$tmp"
   ( cd "$DAEMONS_ROOT" || exit 1; exec </dev/null >> "$DAEMONS_LOGS/courier.out.log" 2>> "$DAEMONS_LOGS/courier.stderr.log"; WHEELHOUSE_COURIER_ROOT="$DAEMONS_ROOT" nohup bun "$DAEMONS_SEATS/courier.ts" & echo $! > "$tmp"; disown $! 2>/dev/null || true ) </dev/null >/dev/null 2>/dev/null &
   disown $! 2>/dev/null || true; wait_pid_file "$tmp"; [ -s "$tmp" ] && mv -f "$tmp" "$pid_file"
-  new="$(cat "$pid_file" 2>/dev/null || true)"; sleep 0.2
+  new="$(cat "$pid_file" 2>/dev/null || true)"; for _ in $(seq 1 50); do pid_alive "$new" && break; sleep 0.1; done
   if pid_alive "$new"; then echo "courier started: pid $new"; return 0; fi
   echo "STOP: courier failed to start; see $DAEMONS_LOGS/courier.stderr.log" >&2; return 1
 }

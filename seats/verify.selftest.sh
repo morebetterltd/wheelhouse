@@ -144,7 +144,7 @@ fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the verifier), not rely on an operator
 // export reaching this one-shot process.
-fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
+fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, WHEELHOUSE_REAL_BD: process.env.WHEELHOUSE_REAL_BD ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
 if (process.env.STUB_GIT_INIT_REPO) {
   const cp = require("child_process");
   const repo = process.env.STUB_GIT_INIT_REPO;
@@ -174,7 +174,7 @@ if (process.env.STUB_CLOBBER_CORE_WORKTREE_REPO) {
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 if (process.env.STUB_RUN_BENCH === "1") {
   const cp = require("child_process");
-  const outDir = path.join(agentDir, "bench-out");
+  const outDir = path.join(process.cwd(), "bench-out");
   fs.mkdirSync(outDir, { recursive: true });
   const bench = path.join(process.env.WHEELHOUSE_ROOT || "", "wheelhouse", "crew", "bench.sh");
   const res = cp.spawnSync(bench, ["artifact-fixture", outDir], { encoding: "utf8" });
@@ -232,6 +232,8 @@ if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
 }
 if (process.env.STUB_BD_READONLY_CHECK === "1") {
   const cp = require("child_process");
+  const readonlyInstall = path.join(path.dirname(process.cwd()), "readonly-install");
+  fs.mkdirSync(path.join(readonlyInstall, ".beads"), { recursive: true });
   const cases = [
     ["show", ["show", "bead-1"]],
     ["comments", ["comments", "bead-1"]],
@@ -239,10 +241,34 @@ if (process.env.STUB_BD_READONLY_CHECK === "1") {
     ["update", ["update", "bead-1", "--add-label", "needs-review"]],
     ["actor-close", ["--actor", "x", "close", "bead-1"]],
   ].map(([name, args]) => {
-    const r = cp.spawnSync("bd", args, { input: "body\n", encoding: "utf8" });
+    const r = cp.spawnSync("bd", args, { cwd: readonlyInstall, input: "body\n", encoding: "utf8" });
     return { name, status: r.status, stdout: r.stdout, stderr: r.stderr };
   });
   fs.writeFileSync(path.join(agentDir, "bd-readonly-check.json"), JSON.stringify(cases, null, 2));
+}
+if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
+  const cp = require("child_process");
+  const scratchGraph = path.join(process.cwd(), "bd-scratch");
+  const siblingInstall = path.join(path.dirname(process.cwd()), "sibling-install");
+  const arbitraryCwd = path.join(path.dirname(process.cwd()), "arbitrary-cwd");
+  fs.mkdirSync(scratchGraph, { recursive: true });
+  fs.mkdirSync(path.join(siblingInstall, ".beads"), { recursive: true });
+  fs.mkdirSync(arbitraryCwd, { recursive: true });
+  const run = (name, cwd, args, env = {}) => {
+    const r = cp.spawnSync("bd", args, { cwd, env: { ...process.env, ...env }, input: "body\n", encoding: "utf8" });
+    return { name, cwd, args, status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  const cases = [
+    run("scratch-create", scratchGraph, ["create", "scratch bead"]),
+    run("scratch-c-redirect", scratchGraph, ["-C", siblingInstall, "create", "redirect bead"]),
+    run("scratch-directory-redirect", scratchGraph, ["--directory", siblingInstall, "create", "redirect bead"]),
+    run("scratch-global", scratchGraph, ["--global", "create", "global bead"]),
+    run("scratch-beads-dir-outside", scratchGraph, ["create", "override bead"], { BEADS_DIR: path.join(siblingInstall, ".beads") }),
+    run("scratch-db-override", scratchGraph, ["--db", path.join(siblingInstall, ".beads", "beads.db"), "create", "override bead"]),
+    run("scratch-database-override", scratchGraph, ["--database", "other_database", "create", "override bead"]),
+    run("arbitrary-create", arbitraryCwd, ["create", "arbitrary bead"]),
+  ];
+  fs.writeFileSync(path.join(agentDir, "bd-readonly-scope-check.json"), JSON.stringify(cases, null, 2));
 }
 const reply = process.env.STUB_REPLY_FILE;
 let text = reply ? fs.readFileSync(reply, "utf8") : "";
@@ -359,9 +385,15 @@ cat > "$BIN/bd" <<'STUB'
 #!/usr/bin/env bash
 set -u
 readonly=0
-while [ "${1:-}" = "--readonly" ] || [ "${1:-}" = "--actor" ]; do
-  if [ "${1:-}" = "--readonly" ]; then readonly=1; shift; continue; fi
-  if [ "${1:-}" = "--actor" ]; then shift 2; continue; fi
+while true; do
+  case "${1:-}" in
+    --readonly) readonly=1; shift; continue ;;
+    -C|--directory) shift 2; continue ;;
+    --actor|--db|--database) shift 2; continue ;;
+    --db=*|--database=*|--directory=*) shift; continue ;;
+    --global) shift; continue ;;
+  esac
+  break
 done
 verb="${1:-}"
 case "$verb" in
@@ -370,6 +402,13 @@ case "$verb" in
     exit 0 ;;
   comments)
     printf 'fixture comments\n'; exit 0 ;;
+  init)
+    if [ "$readonly" = 1 ]; then printf "operation '%s' is not allowed in read-only mode\n" "$verb" >&2; exit 1; fi
+    mkdir -p .beads; printf 'fixture graph\n' > .beads/fixture; exit 0 ;;
+  create)
+    if [ "$readonly" = 1 ]; then printf "operation '%s' is not allowed in read-only mode\n" "$verb" >&2; exit 1; fi
+    [ -d .beads ] || { printf 'no beads database found\n' >&2; exit 1; }
+    printf '{"id":"fixture-bead"}\n'; exit 0 ;;
   comment|update|close)
     if [ "$readonly" = 1 ]; then printf "operation '%s' is not allowed in read-only mode\n" "$verb" >&2; exit 1; fi
     printf 'write allowed unexpectedly\n' >&2; exit 0 ;;
@@ -430,7 +469,19 @@ build_installed_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.
   printf '# Crew: Reviewer\n\ninstalled-layout reviewer brief.\n' > "$proj/wheelhouse/crew/REVIEWER.md"
   cat > "$proj/wheelhouse/crew/bench.sh" <<'BENCH'
 #!/usr/bin/env bash
-printf 'machine-local bench ran: artifact=%s out=%s\n' "${1:-}" "${2:-}"
+set -eu
+artifact="${1:-}"; out="${2:-}"
+printf 'machine-local bench ran: artifact=%s out=%s\n' "$artifact" "$out"
+scratch="$out/bd-fixture"
+mkdir -p "$scratch"
+real_bd="${WHEELHOUSE_REAL_BD:-}"
+[ -n "$real_bd" ] || { echo "WHEELHOUSE_REAL_BD is not set" >&2; exit 1; }
+[ -x "$real_bd" ] || { echo "WHEELHOUSE_REAL_BD is not executable: $real_bd" >&2; exit 1; }
+(
+  cd "$scratch"
+  "$real_bd" init --skip-agents >/dev/null
+  BEADS_DIR="$scratch/.beads" "$real_bd" create 'bench scratch bead' --json >/dev/null
+)
 exit 42
 BENCH
   chmod +x "$proj/wheelhouse/crew/bench.sh"
@@ -617,8 +668,8 @@ BENCH_RUN="$HOME_FIX/.pi-seats-installed/verifier/bench-run.json"
 if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null \
   && grep -q '"rc": 42' "$BENCH_RUN" 2>/dev/null \
   && ! grep -q '"rc": 127' "$BENCH_RUN" 2>/dev/null; then
-  pass "installed layout: machine-local bench resolves via WHEELHOUSE_ROOT and runs (rc != 127)"
-else fail "installed layout: machine-local bench did not run via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
+  pass "installed-layout stub bench receives WHEELHOUSE_REAL_BD and writes only its scratch BEADS_DIR graph"
+else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
 MISS_PROJ="$FIX/missing-brief-proj"
 build_proj "$MISS_PROJ" missing "$VERIFY"
 rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"
@@ -816,6 +867,24 @@ for (const k of ['comment', 'update', 'actor-close']) {
 NODE
 then pass "verifier one-shot bd is read-only: show/comments work, comment/update/--actor close fail"
 else fail "verifier bd readonly shim failed (rc=$RC out=$OUT check=$(cat "$BD_RO_CHECK" 2>/dev/null))"; fi
+cat > "$REPLY" <<EOF
+Checked readonly bd shim scope.
+VERDICT: APPROVE
+EOF
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_READONLY_SCOPE_CHECK=1 STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-bd-scope fleet/bead-1 worker-1 2>&1)" || RC=$?
+BD_SCOPE_CHECK="${VARGV%argv.json}bd-readonly-scope-check.json"
+if [ $RC -eq 0 ] && node - "$BD_SCOPE_CHECK" <<'NODE'
+const fs = require('fs');
+const rows = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const by = Object.fromEntries(rows.map(r => [r.name, r]));
+for (const k of ['scratch-create', 'scratch-c-redirect', 'scratch-directory-redirect', 'scratch-global', 'scratch-beads-dir-outside', 'scratch-db-override', 'scratch-database-override', 'arbitrary-create']) {
+  if (!by[k]) process.exit(1);
+  if (by[k].status === 0) process.exit(1);
+  if (!/not allowed in read-only mode/.test(`${by[k].stdout}\n${by[k].stderr}`)) process.exit(1);
+}
+NODE
+then pass "verifier bd shim is read-only for scratch cwd, -C/--directory, --global, --db/--database, BEADS_DIR, and arbitrary cwd"
+else fail "verifier bd readonly scope failed (rc=$RC out=$OUT check=$(cat "$BD_SCOPE_CHECK" 2>/dev/null))"; fi
 
 # --- scratch cwd: construction, not contract discipline ---------------------
 # The verifier's process cwd must be A repository the branch's ref resolves
