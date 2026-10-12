@@ -114,13 +114,22 @@ function readInboxSeen(): string[] {
   return ids.slice(-MAX_SEEN);
 }
 
+let currentSeen = readInboxSeen();
+
+function rememberSeen(seen: Set<string>): void {
+  currentSeen = Array.from(seen).slice(-MAX_SEEN);
+}
+
 function readState(): HeraldState {
-  const seen = readInboxSeen();
-  if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen };
+  if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: currentSeen };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen, lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, firstDeferredInboxSizeByPane: parsed.firstDeferredInboxSizeByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
+    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: currentSeen, lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, firstDeferredInboxSizeByPane: parsed.firstDeferredInboxSizeByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
   } catch (e: any) {
+    if (!projectRootExists()) {
+      console.error(`herald: project root disappeared (${ROOT}); exiting`);
+      process.exit(0);
+    }
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
 }
@@ -957,6 +966,8 @@ function scanOnce(): number {
   }
   appended += scanNeeds(state, seen);
   appended += scanComms(state, seen);
+  rememberSeen(seen);
+  state.seen = currentSeen;
   const clocked = runStaffingClock(state) || runAlertsClock(state);
   if (clocked || stateDirty) writeState(state);
   pokeCommanderIfSafe(state);
@@ -1063,7 +1074,15 @@ async function daemon(): Promise<void> {
       console.error(`herald: project root disappeared (${ROOT}); exiting`);
       return;
     }
-    scanOnce();
+    try {
+      scanOnce();
+    } catch (e) {
+      if (!projectRootExists()) {
+        console.error(`herald: project root disappeared (${ROOT}); exiting`);
+        return;
+      }
+      throw e;
+    }
     await new Promise((r) => setTimeout(r, INTERVAL_MS));
   }
 }
