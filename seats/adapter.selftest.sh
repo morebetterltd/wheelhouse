@@ -1328,9 +1328,9 @@ else fail "stop did not terminate pid $PID_BEFORE (exit $RC)"; fi
 if [ -z "$(state_get pid)" ] && [ -n "$(state_get sessionFile)" ]; then
   pass "state keeps the session but drops the pid"
 else fail "stopped state is wrong (pid=$(state_get pid))"; fi
-if [ -z "$(state_get cwd)" ]; then
-  pass "stop clears the recorded cwd so a stopped seat cannot pin a worktree"
-else fail "stop left a recorded cwd behind: $(state_get cwd)"; fi
+if [ "$(state_get cwd)" = "$PROJ/.wheelhouse-worktrees/worker-1" ]; then
+  pass "stop keeps the recorded cwd so resume returns warm to the seat worktree"
+else fail "stop did not keep the seat worktree cwd for resume (cwd=$(state_get cwd))"; fi
 
 run resume worker-1 >/dev/null 2>&1
 PID_BEFORE="$(state_get pid)"
@@ -1364,6 +1364,7 @@ check_resume() {   # $1 = label; expects a stopped seat with a recorded session
     pass "${label}: resume still carries BEADS_ACTOR=worker-1"
   else fail "${label}: resumed seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
 }
+SESS="$(state_get sessionFile)"
 SESS_LINES_BEFORE=$(wc -l < "$SESS" | tr -d ' ')
 check_resume "resume"
 if grep -q '"resumed"' "$SESS" && [ "$(wc -l < "$SESS" | tr -d ' ')" -gt "$SESS_LINES_BEFORE" ]; then
