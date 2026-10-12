@@ -793,41 +793,28 @@ function findOnPath(bin: string, searchPath = process.env.PATH ?? ""): string | 
   return null;
 }
 
-function nearestBeadsRoot(start: string): string | null {
-  let cur = fs.realpathSync(start);
-  while (true) {
-    if (fs.existsSync(path.join(cur, ".beads"))) return cur;
-    const parent = path.dirname(cur);
-    if (parent === cur) return null;
-    cur = parent;
-  }
-}
-
 export function readonlyBdPath(root: string, basePath: string, scratchCwd: string): string {
   const realBd = findOnPath("bd", basePath);
   if (!realBd) return basePath;
   const shimDir = path.join(scratchCwd, ".wheelhouse-readonly-bin");
   fs.mkdirSync(shimDir, { recursive: true });
   const shim = path.join(shimDir, "bd");
-  const realRoot = fs.realpathSync(root);
   const realScratch = fs.realpathSync(scratchCwd);
-  const realGraphRoot = nearestBeadsRoot(root);
   fs.writeFileSync(shim, `#!/usr/bin/env bash
 set -u
 real_bd=${JSON.stringify(realBd)}
-real_root=${JSON.stringify(realRoot)}
 real_scratch=${JSON.stringify(realScratch)}
-real_graph=${JSON.stringify(realGraphRoot || "")}
 cwd=$(pwd -P 2>/dev/null || pwd)
-case "$cwd/" in
-  "$real_root"/*|"$real_scratch"/*) exec "$real_bd" --readonly "$@" ;;
+case "$cwd" in
+  "$real_scratch"|"$real_scratch"/*) ;;
+  *) exec "$real_bd" --readonly "$@" ;;
 esac
-if [ -n "$real_graph" ]; then
-  case "$cwd/" in
-    */.wheelhouse-runs/*) ;;
-    "$real_graph"/*) exec "$real_bd" --readonly "$@" ;;
+[ -z "\${BEADS_DIR:-}" ] || exec "$real_bd" --readonly "$@"
+for arg in "$@"; do
+  case "$arg" in
+    --db|--database|--db=*|--database=*) exec "$real_bd" --readonly "$@" ;;
   esac
-fi
+done
 exec "$real_bd" "$@"
 `);
   fs.chmodSync(shim, 0o755);
