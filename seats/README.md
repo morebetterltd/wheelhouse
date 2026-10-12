@@ -36,9 +36,9 @@ The main files here:
 - `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
   and maps its verdict to an exit code. Its timeout knobs are liveness
   watchdogs rather than a wall-clock cap: `--first-output-timeout-ms` bounds
-  silence before any output, and `WHEELHOUSE_VERIFY_TIMEOUT_MS` or
-  `--timeout-ms` bounds a stall with no verifier stream event once output is
-  flowing.
+  silence before any output; once output is flowing, the stall limit is the
+  smaller of `--timeout-ms` / `WHEELHOUSE_VERIFY_TIMEOUT_MS` and
+  `--no-event-timeout-ms` / `WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS`.
 - `prune.ts` — scan/cleanup/prune: `cleanup` is the automatic never-lose-work reaper the adapter runs on bead close and `seats/supervisor.sh` schedules nightly fleet-wide; `scan` plus `prune --from-file` is the reviewed exceptions path a person drives, dry-run by default. `wheelhouse/.template-source` may set `cleanup=off` or `cleanup=report` for installs whose authority forbids automatic deletion.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
@@ -504,7 +504,7 @@ The exit code IS the verdict, so the commander's scripts can branch on it:
 | `3` | DISCOVER — the bead itself needs the commander's judgment |
 | `1` | error — no verdict exists: a STOP, a dead pi, a timeout, or output with no (or an ambiguous) `VERDICT:` line. Never treat as a verdict. |
 
-The default post-output stall watchdog is 900000 ms (15 minutes). Override it for one invocation/repository with `--timeout-ms <ms>` when a verifier may legitimately go quiet between stream events for longer, or set `WHEELHOUSE_VERIFY_TIMEOUT_MS=<ms>` in the environment; an explicit flag wins over the environment. This is not a wall-clock cap on the whole verifier turn: after output begins, progress resets the watchdog. Separate knobs cover first-output silence (`--first-output-timeout-ms` / `WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS`) and the no-event watchdog (`--no-event-timeout-ms` / `WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS`). On timeout, `verify.ts` writes `seats/verdicts/<bead-id>.partial.md`, prints elapsed time and the last tool/phase it saw, and exits 1. A timeout is not a provider/auth failure and does not start the probe cadence.
+The post-output stall watchdog is the smaller of `--timeout-ms` / `WHEELHOUSE_VERIFY_TIMEOUT_MS` and `--no-event-timeout-ms` / `WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS`. With defaults of 900000 ms for `--timeout-ms` and 600000 ms for `--no-event-timeout-ms`, the effective default quiet-period limit is 600000 ms (10 minutes). This is not a wall-clock cap on the whole verifier turn: after output begins, each stream event resets the watchdog. To allow a verifier to legitimately go quiet between stream events for longer, raise `--no-event-timeout-ms <ms>`; for quiet periods longer than the `--timeout-ms` value, raise `--timeout-ms <ms>` too. Explicit flags win over their environment variables. Separate knobs cover first-output silence (`--first-output-timeout-ms` / `WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS`). On timeout, `verify.ts` writes `seats/verdicts/<bead-id>.partial.md`, prints elapsed time and the last tool/phase it saw, and exits 1. A timeout is not a provider/auth failure and does not start the probe cadence.
 
 DISCOVER files no beads. The verifier's proposal is recorded for the
 commander, who decides what the graph should say about it — a verifier
