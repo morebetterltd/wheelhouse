@@ -359,11 +359,17 @@ if (process.env.STUB_STREAM_FILE) {
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 const streamRequested = process.argv.includes("--output-format") && process.argv[process.argv.indexOf("--output-format") + 1] === "stream-json";
-if (streamRequested) {
+if (process.env.STUB_CLAUDE_QUOTED_VERDICT_MIDRUN === "1" && streamRequested) {
+  process.on("SIGTERM", () => process.exit(143));
+  const quoted = "Prior reviewer output quoted for context:\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\nStill investigating.";
+  process.stdout.write(JSON.stringify({type:"assistant",message:{role:"assistant",content:[{type:"text",text:quoted}]}})+"\n");
+  setTimeout(() => process.stdout.write(JSON.stringify({type:"assistant",message:{role:"assistant",content:[{type:"text",text}]}})+"\n"), 250);
+  setTimeout(() => { process.stdout.write(JSON.stringify({type:"result",subtype:"success",result:text})+"\n"); process.exit(Number(process.env.STUB_EXIT || "0")); }, 350);
+} else if (streamRequested) {
   process.stdout.write(JSON.stringify({type:"assistant",message:{role:"assistant",content:[{type:"text",text}]}})+"\n");
   process.stdout.write(JSON.stringify({type:"result",subtype:"success",result:text})+"\n");
 } else process.stdout.write(text);
-process.exit(Number(process.env.STUB_EXIT || "0"));
+if (process.env.STUB_CLAUDE_QUOTED_VERDICT_MIDRUN !== "1") process.exit(Number(process.env.STUB_EXIT || "0"));
 STUB
 cat > "$BIN/codex" <<'STUB'
 #!/usr/bin/env node
@@ -1176,6 +1182,21 @@ else fail "claude-code verifier one-shot carried path or missed brief text: $(ca
 if ! grep -q -- 'permission-mode\|allowed-tools\|disallowed-tools' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
   pass "claude-code verifier one-shot omits tool permission flags when the seat has no tool lists"
 else fail "claude-code verifier one-shot unexpectedly carried tool permission flags: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
+cat > "$REPLY" <<'EOF'
+Finished after quoting the previous review without being reaped mid-run.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED — fixture
+EOF
+rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLAUDE_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-quoted-verdict fleet/bead-1 worker-1 verifier --no-event-timeout-ms 1000 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143"; then
+  pass "claude-code quoted mid-run verdict is not reaped before the final result event"
+else fail "claude-code quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
+cat > "$REPLY" <<'EOF'
+Mixed harness verifier checked.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED — fixture
+EOF
 bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
 run bead-1 fleet/bead-1 worker-1

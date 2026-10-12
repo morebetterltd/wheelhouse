@@ -346,6 +346,25 @@ function livePushCandidates(stdout: string, harness: HarnessName): FinalLineCand
   return liveLineCandidates(stdout, harness, "PUSH");
 }
 
+function sawFinalReviewerResult(stdout: string, harness: HarnessName): boolean {
+  for (const raw of stdout.split(/\r?\n/)) {
+    if (!raw.trim().startsWith("{")) continue;
+    try {
+      const event = JSON.parse(raw);
+      if (harness === "claude-code") {
+        if (event?.type === "result") return true;
+      } else if (harness === "codex") {
+        if (event?.type === "turn.completed") return true;
+      } else {
+        const role = event?.message?.role ?? event?.role ?? event?.message?.author?.role ?? event?.author?.role;
+        if (event?.type === "turn_end") return true;
+        if (event?.type === "message_end" && role === "assistant") return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
 function writeRawVerifierOutput(stdout: string): string {
   fs.mkdirSync(VERDICTS_DIR, { recursive: true });
   const rawFile = path.join(VERDICTS_DIR, ".raw.md");
@@ -495,6 +514,7 @@ function runOneShot(
     const reapAfterFinalVerdict = () => {
       if (sawFinalVerdictMessage || done) return;
       const stdout = out();
+      if (!sawFinalReviewerResult(stdout, opts.harness)) return;
       if (liveVerdictCandidates(stdout, opts.harness).length === 0 || livePushCandidates(stdout, opts.harness).length === 0) return;
       sawFinalVerdictMessage = true;
       finalKillTimer = setTimeout(() => {
@@ -529,7 +549,7 @@ function runOneShot(
     child.stdout?.on("data", (chunk: Buffer) => collect(stdoutChunks, () => stdoutBytes, (n) => { stdoutBytes = n; }, chunk));
     child.stderr?.on("data", (chunk: Buffer) => collect(stderrChunks, () => stderrBytes, (n) => { stderrBytes = n; }, chunk));
     child.on("error", (error: Error & { code?: string }) => finish({ error }));
-    child.on("close", (status, signal) => finish(sawFinalVerdictMessage && signal ? { status: 0, signal: null } : { status, signal }));
+    child.on("close", (status, signal) => finish(sawFinalVerdictMessage && (signal || status === 143) ? { status: 0, signal: null } : { status, signal }));
   });
 }
 
