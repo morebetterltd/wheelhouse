@@ -452,6 +452,7 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 - the intent layer and prune machinery's other paths are covered by the upgrade mechanics above: `GRAPH.md` and `INTEGRATOR.md` contract halves move through the splice list, `RUNNING_THE_LOOP.md` and the retired `prune-worktrees.sh` pointer move through the runbook copy, and `seats/intent-check.sh` plus `seats/prune.ts` move through the seats copy; verify those outputs rather than hand-editing them here;
 - every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install;
 - the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
+- installs predating `github-report=` have no line, which the publisher reads as off; append `github-report=off` and `github-report-routes=` to `wheelhouse/.template-source` so the record is explicit, and point at `BOOTSTRAP.md`'s publishing question if the principal wants it on.
 
 ### Adopt the autonomy mandate in existing installs
 

@@ -74,7 +74,7 @@ bd create "Report <tool> issue: <what broke>" --labels template-report -d "<evid
 
 On the build stamped above the create-time flag is `--labels` (there is no `--label` on `bd create`; that spelling belongs to `bd list`'s filter), and a bead already filed without it takes the label with `bd update <id> --add-label template-report`. A `Report <tool> issue:` bead without the label is the known failure this section exists to prevent: it reads correctly to a human and is invisible to the harvest.
 
-**If this fleet is not running on the machine that owns the template, the label alone reaches nobody.** It marks the bead in a graph the template's maintainers cannot see, so file the finding as a GitHub issue on the template's repository as well — `github.com/morebetterltd/wheelhouse` for an install from that template, or whatever remote `wheelhouse/.template-source` records if you installed from a fork.
+**If this fleet is not running on the machine that owns the template, the label alone reaches nobody.** It marks the bead in a graph the template's maintainers cannot see, so file the finding as a GitHub issue on the template's repository as well — `github.com/morebetterltd/wheelhouse` for an install from that template, or whatever remote `wheelhouse/.template-source` records if you installed from a fork. With `github-report=on` in `wheelhouse/.template-source`, the commander runs `bun seats/report-issues.ts publish --yes` and the issue URL lands on the task as its external reference, which is what stops it being filed twice. With the switch off, the hand-filed issue's URL goes on the task the same way: `bd update <id> --external-ref <url>`.
 
 ## This project
 
