@@ -1929,10 +1929,23 @@ if [ $RC -ne 0 ] && says "public state scan failed" && says "deny-leak.txt:1" &&
 else fail "push gate: install-local deny term was not refused safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
 fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
 rm -f "$WT_PROJ/seats/run/leak-terms"
-run dispatch worker-1 bead-p2 "second bead after the remote is back"
-if [ $RC -eq 0 ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1 | grep -q 'origin/' && [ "$(wt_branch "$WT")" = "fleet/bead-p2" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ]; then
-  pass "push gate: with the remote restored and the credential commit removed, dispatch pushes fleet/bead-p1 to origin and moves the seat to fleet/bead-p2 without relaunching"
-else fail "push gate: restored remote dispatch failed (exit $RC remote=$(fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1) branch=$(wt_branch "$WT")): $OUT"; fi
+fgit -C "$WT_PROJ" checkout -q main
+mkdir -p "$WT_PROJ/main-credential-history"
+for i in $(seq 1 30); do
+  printf 'main history credential-shaped fixture %s: xoxb-%020d\n' "$i" "$i" > "$WT_PROJ/main-credential-history/leak-$i.txt"
+  fgit -C "$WT_PROJ" add "main-credential-history/leak-$i.txt"
+  fgit -C "$WT_PROJ" commit -qm "main credential-shaped history fixture $i"
+done
+fgit -C "$WT_PROJ" push -q origin main
+fgit -C "$WT" fetch -q origin main
+fgit -C "$WT" merge -q --no-edit origin/main
+SCAN_START_MS="$(node -e 'console.log(Date.now())')"
+run dispatch worker-1 bead-p2 "second bead after merged-main history"
+SCAN_END_MS="$(node -e 'console.log(Date.now())')"
+SCAN_ELAPSED_MS=$((SCAN_END_MS - SCAN_START_MS))
+if [ $RC -eq 0 ] && [ "$SCAN_ELAPSED_MS" -lt 10000 ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1 | grep -q 'origin/' && [ "$(wt_branch "$WT")" = "fleet/bead-p2" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ]; then
+  pass "push gate: clean branch with 30 merged-main credential-shaped commits scans added lines only and switches in ${SCAN_ELAPSED_MS}ms"
+else fail "push gate: restored remote dispatch failed or scanned merged-main history (exit $RC elapsed=${SCAN_ELAPSED_MS}ms remote=$(fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1) branch=$(wt_branch "$WT")): $OUT"; fi
 if says "pushed fleet/bead-p1 to origin" && wait_for "$LOG" 'echo: Bead bead-p2' 5; then
   pass "push gate: the push is announced and the new bead's prompt round-trips"
 else fail "push gate: no push announcement or prompt did not land: $OUT"; fi

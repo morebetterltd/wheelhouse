@@ -268,27 +268,33 @@ export function remoteTrackingTip(root: string, remote: string, branch: string):
 export function pushMarkerPath(root: string, seat: string): string { return path.join(root, "seats", "run", `push.${seat}.json`); }
 
 
-function commitsToPublish(repo: string, remote: string, branch: string, headSha: string): string[] {
-  const remoteTip = remoteTrackingTip(repo, remote, branch);
-  const args = remoteTip ? ["rev-list", `${remoteTip}..${headSha}`] : ["rev-list", headSha, `--not`, `--remotes=${remote}`];
-  const r = git(repo, args);
-  if (!r.ok) return [headSha];
-  return r.out.split("\n").map((s) => s.trim()).filter(Boolean);
-}
-
 export interface CredentialScanHit { commit: string; path: string; line: string; text: string }
-export function credentialShapeHits(repo: string, commits: string[]): CredentialScanHit[] {
-  if (commits.length === 0) return [];
-  const r = git(repo, ["grep", "-I", "-n", "-E", CREDENTIAL_SHAPE_RE, ...commits, "--", "."]);
-  if (!r.ok && r.code !== 1) return [{ commit: "scan", path: "git grep", line: "0", text: r.err || r.out || "credential scan failed" }];
-  return r.out.split("\n").filter(Boolean).map((line) => {
-    const m = line.match(/^([^:]+):([^:]+):(\d+):(.*)$/);
-    return m ? { commit: m[1], path: m[2], line: m[3], text: m[4] } : { commit: "scan", path: "git grep", line: "0", text: line };
-  });
+export function credentialShapeHits(repo: string, base: string | null, headSha: string): CredentialScanHit[] {
+  const args = base ? ["diff", "--unified=0", `${base}..${headSha}`, "--", "."] : ["show", "--format=", "--unified=0", headSha, "--", "."];
+  const r = git(repo, args);
+  if (!r.ok) return [{ commit: "scan", path: "git diff", line: "0", text: r.err || r.out || "credential scan failed" }];
+  const hits: CredentialScanHit[] = [];
+  const credentialRe = new RegExp(CREDENTIAL_SHAPE_RE);
+  let file = "?";
+  let nextLine = 0;
+  for (const line of r.out.split("\n")) {
+    if (line.startsWith("+++ b/")) { file = line.slice(6); continue; }
+    if (line === "+++ /dev/null") { file = "?"; continue; }
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (h) { nextLine = Number(h[1]); continue; }
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      const text = line.slice(1);
+      if (credentialRe.test(text)) hits.push({ commit: headSha, path: file, line: String(nextLine), text });
+      nextLine++;
+    } else if (!line.startsWith("-")) {
+      nextLine++;
+    }
+  }
+  return hits;
 }
 
 export function credentialScanSummary(repo: string, remote: string, branch: string, headSha: string): string | null {
-  const hits = credentialShapeHits(repo, commitsToPublish(repo, remote, branch, headSha));
+  const hits = credentialShapeHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha);
   if (hits.length === 0) return null;
   return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
 }
