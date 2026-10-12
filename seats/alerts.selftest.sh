@@ -25,7 +25,7 @@ github-issue-repos=fixture/repo
 EOF
 cat > "$ROOT/seats/template-drift.sh" <<'SH'
 #!/usr/bin/env bash
-if [ "${DRIFT_ON:-0}" = 1 ]; then printf '{"error":null,"modified":["README.md"],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; else printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; fi
+if [ "${DRIFT_ON:-0}" = 1 ]; then printf '{"error":null,"modified":["README.md"],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; elif [ "${DRIFT_AHEAD:-0}" = 1 ]; then printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":2,"comparedAgainst":"fixture"}\n'; else printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; fi
 SH
 chmod +x "$ROOT/seats/template-drift.sh"
 printf '{"seats":{}}\n' > "$ROOT/seats/state.json"
@@ -119,6 +119,11 @@ clear_runtime; DRIFT_ON=1 run_alert bun seats/alerts.ts check --json
 for i in 1 2 3; do DRIFT_ON=1 run_alert bun seats/alerts.ts check --json; done; [ "$(inbox_count)" = 1 ] && pass 'template-drift stays quiet over 3 active runs' || fail "drift not quiet"
 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared template-drift' "$ROOT/seats/logs/alerts.log" && pass 'template-drift clears' || fail "drift clear failed"
+rm -f "$ROOT/seats/run/fleet-snapshot.json" "$ROOT/seats/inbox.jsonl" "$ROOT/seats/logs/alerts.log"
+DRIFT_AHEAD=1 run_alert bun seats/alerts.ts check --json
+[ $RC -eq 0 ] && active template-drift && pass 'template-drift fires when template main is ahead without file drift' || fail "drift ahead failed rc=$RC out=$OUT"
+run_alert bun seats/alerts.ts check --json
+[ $RC -eq 0 ] && grep -q 'alert cleared template-drift' "$ROOT/seats/logs/alerts.log" && pass 'template-drift ahead clears' || fail "drift ahead clear failed"
 
 phase 'failure and stale lock handling'
 old_at="$(node -e 'console.log(require(process.argv[1]).at)' "$ROOT/seats/run/fleet-snapshot.json")"
