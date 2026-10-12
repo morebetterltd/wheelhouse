@@ -159,6 +159,7 @@ WHEELHOUSE_DAEMONS_ROOT="$ROOT" . "$HERE/daemons.sh"
 recover_dead_seats
 ensure_desk
 ensure_courier
+ensure_herald
 ensure_supervisor
 DESK_URL="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
 export DESK_URL
