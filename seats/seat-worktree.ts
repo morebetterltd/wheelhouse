@@ -128,7 +128,7 @@ function legacyBeadOpen(root: string, wt: RegisteredWorktree, state: StateLike, 
   const name = path.basename(wt.path);
   const st = statuses.get(name);
   if (st) return st !== "closed";
-  if (Object.values(state.seats ?? {}).some((rec) => rec?.cwd && samePath(rec.cwd, wt.path))) return true;
+  if (Object.values(state.seats ?? {}).some((rec) => rec?.cwd && pidAlive(rec.pid ?? null) && samePath(rec.cwd, wt.path))) return true;
   return true;
 }
 
@@ -163,18 +163,38 @@ export function refExists(root: string, ref: string): boolean {
   return git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok;
 }
 
+function templateSourceValue(root: string, key: string): string | null {
+  try {
+    const text = fs.readFileSync(path.join(root, "wheelhouse", ".template-source"), "utf8");
+    const m = text.match(new RegExp(`^${key}=(.*)$`, "m"));
+    const value = m?.[1]?.trim() ?? "";
+    return value || null;
+  } catch { return null; }
+}
+
+function pushBaseCandidate(candidates: string[], ref: string | null): void {
+  if (!ref) return;
+  if (!ref.includes("/") && !ref.startsWith("refs/")) candidates.push(`origin/${ref}`);
+  candidates.push(ref);
+}
+
+function pushIntegrationBaseCandidate(root: string, candidates: string[], ref: string | null): void {
+  if (!ref) return;
+  if (!ref.includes("/") || !refExists(root, ref)) candidates.push(`origin/${ref}`);
+  candidates.push(ref);
+}
+
 /** Which base a bead branches from. Explicit wins, then the bead's own
  * `Integration:` line (via bd, when available), then the install's env
- * default, then the remote's default branch, then local main/master/HEAD. */
+ * default, then the install's recorded merge target, then the remote's default
+ * branch, then local main/master/HEAD. */
 export function resolveBase(root: string, beadId: string, explicit?: string | null, bdRoot: string = root): string {
   const candidates: string[] = [];
   if (explicit) candidates.push(explicit);
   const fromBead = integrationLineFor(bdRoot, beadId);
-  if (fromBead) {
-    if (!fromBead.includes("/") || !refExists(root, fromBead)) candidates.push(`origin/${fromBead}`);
-    candidates.push(fromBead);
-  }
+  if (fromBead) pushIntegrationBaseCandidate(root, candidates, fromBead);
   if (process.env.WHEELHOUSE_WORKTREE_BASE) candidates.push(process.env.WHEELHOUSE_WORKTREE_BASE);
+  pushBaseCandidate(candidates, templateSourceValue(bdRoot, "merge-target"));
   const originHead = git(root, ["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]);
   if (originHead.ok && originHead.out) candidates.push(originHead.out);
   candidates.push("origin/main", "origin/master", "main", "master", "HEAD");
@@ -384,14 +404,18 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   const remote = o.remote ?? process.env.WHEELHOUSE_PUSH_REMOTE ?? "origin";
   const seatPush = o.seatPush ?? "on";
 
-  // 1. one seat per worktree
+  // 1. one live seat per worktree. Stopped/dead seats may retain stale cwd
+  // records from crashes or older adapters; those records must not pin a
+  // worktree forever.
   for (const [other, rec] of Object.entries(o.state.seats ?? {})) {
-    if (other === o.seat || !rec?.cwd) continue;
+    if (other === o.seat || !rec?.cwd || !pidAlive(rec.pid ?? null)) continue;
     if (samePath(rec.cwd, seatTarget)) refuse(`worktree ${seatTarget} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
   }
 
   const rec = o.state.seats?.[o.seat];
-  const recordedLegacy = rec?.cwd && isLegacyWorktree(root, rec.cwd, o.roster) && fs.existsSync(rec.cwd) ? rec.cwd : null;
+  const statuses = beadStatuses(root);
+  const recordedLegacyBead = rec?.cwd && isLegacyWorktree(root, rec.cwd, o.roster) ? path.basename(rec.cwd) : null;
+  const recordedLegacy = rec?.cwd && recordedLegacyBead && statuses.get(recordedLegacyBead) !== "closed" && fs.existsSync(rec.cwd) ? rec.cwd : null;
   const namedLegacy = path.join(worktreesDir(root), o.beadId);
   const legacy = recordedLegacy ?? (fs.existsSync(namedLegacy) ? namedLegacy : null);
   const repo = gitRepoFor(root, legacy ?? seatTarget);
@@ -412,7 +436,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   let atTarget = registeredWorktrees(repo).find((w) => samePath(w.path, target));
   if (atTarget?.branch && (path.basename(target) === o.beadId || rec?.lastBead === o.beadId)) branch = atTarget.branch;
   for (const [other, otherRec] of Object.entries(o.state.seats ?? {})) {
-    if (other === o.seat || !otherRec?.cwd) continue;
+    if (other === o.seat || !otherRec?.cwd || !pidAlive(otherRec.pid ?? null)) continue;
     if (samePath(otherRec.cwd, target)) refuse(`worktree ${target} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
   }
   const marker = path.join(target, PLACEHOLDER_MARKER);
@@ -446,7 +470,6 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
 
   if (!atTarget) {
     // 3. cap gates creation only
-    const statuses = beadStatuses(root);
     const live = fleetWorktrees(root, repo).filter((w) => {
       if (fs.existsSync(path.join(w.path, PLACEHOLDER_MARKER))) return false;
       if (!isLegacyWorktree(root, w.path, o.roster)) return true;

@@ -96,6 +96,9 @@ if [ "$TEMPLATE" = "$ROOT" ]; then
   grep -qF 'seats/comms.ts send' "$TEMPLATE/generated/CLAUDE.md.example" || fail "generated CLAUDE specimen missing seats/comms.ts send"
   grep -qF 'inbound' "$TEMPLATE/generated/CLAUDE.md.example" || fail "generated CLAUDE specimen missing inbound rule"
   pass "stakeholder-channel upgrade docs name channels, comms, specimens, and read-back"
+  grep -qF 'merge-target' "$TEMPLATE/runbooks/UPGRADE.md" || fail "UPGRADE.md missing merge-target migration"
+  grep -qF 'merge-target=' "$TEMPLATE/BOOTSTRAP.md" || fail "BOOTSTRAP.md missing merge-target install record"
+  pass "merge-target install and upgrade docs record the dispatch base"
 fi
 
 PROJ="$TMP/project"
