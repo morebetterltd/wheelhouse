@@ -26,7 +26,17 @@ FIX="$(cd "$FIX" && pwd -P)"
 SRC="$FIX/source"
 ORIGIN="$FIX/origin.git"
 INSTALL="$FIX/install"
-mkdir -p "$SRC" "$INSTALL/wheelhouse"
+BIN="$FIX/bin"
+mkdir -p "$SRC" "$INSTALL/wheelhouse" "$BIN"
+cat > "$BIN/bd" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "show" ] && [ "\$2" = "bead-integration" ]; then
+  printf '%s\n' '{"id":"bead-integration","description":"Integration: fleet/goal\\n"}'
+  exit 0
+fi
+printf '{}\n'
+EOF
+chmod +x "$BIN/bd"
 git -C "$SRC" init -q -b main
 git -C "$SRC" config user.email seat-worktree-selftest@example.invalid
 git -C "$SRC" config user.name 'Seat Worktree Selftest'
@@ -34,6 +44,11 @@ printf 'main\n' > "$SRC/file.txt"
 git -C "$SRC" add file.txt && git -C "$SRC" commit -qm main
 git -C "$SRC" branch staging
 STAGING_SHA="$(git -C "$SRC" rev-parse staging)"
+git -C "$SRC" switch -q -c fleet/goal
+printf 'goal integration\n' > "$SRC/goal.txt"
+git -C "$SRC" add goal.txt && git -C "$SRC" commit -qm 'goal integration'
+GOAL_SHA="$(git -C "$SRC" rev-parse fleet/goal)"
+git -C "$SRC" switch -q main
 printf 'default branch only\n' > "$SRC/default.txt"
 git -C "$SRC" add default.txt && git -C "$SRC" commit -qm 'default branch moves ahead'
 MAIN_SHA="$(git -C "$SRC" rev-parse main)"
@@ -68,8 +83,26 @@ else
   fail "new seat branch did not start from recorded merge target: $(cat "$OUT" 2>/dev/null)"
 fi
 
+OUT="$FIX/integration-base.out"
+if env PATH="$BIN:$PATH" INSTALL="$INSTALL" MODULE="$ROOT/seats/seat-worktree.ts" EXPECT="$GOAL_SHA" bun -e '
+const { ensureSeatWorktree, seatWorktreeDir } = await import(process.env.MODULE);
+const { execFileSync } = await import("node:child_process");
+const install = process.env.INSTALL;
+const result = ensureSeatWorktree({ root: install, beadId: "bead-integration", seat: "worker-2", state: { seats: {} }, roster: { "worker-1": {}, "worker-2": {} }, seatPush: "off" });
+const target = seatWorktreeDir(install, "worker-2");
+if (result.base !== "origin/fleet/goal") throw new Error(`base ${result.base}`);
+if (result.target !== target) throw new Error(`target ${result.target}`);
+const head = execFileSync("git", ["-C", target, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+if (head !== process.env.EXPECT) throw new Error(`HEAD ${head} !== ${process.env.EXPECT}`);
+console.log(JSON.stringify({ base: result.base, head }));
+' > "$OUT" 2>&1; then
+  pass "Integration: fleet/<goal> resolves to origin/fleet/<goal> when only the remote ref exists"
+else
+  fail "Integration remote-only goal ref did not resolve before merge-target/origin-HEAD: $(cat "$OUT" 2>/dev/null)"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
-  echo "seat-worktree.selftest: PASS (1 checks)"
+  echo "seat-worktree.selftest: PASS (2 checks)"
 else
   echo "seat-worktree.selftest: FAIL ($FAILED failure(s))"
   exit 1

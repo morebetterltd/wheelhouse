@@ -178,6 +178,12 @@ function pushBaseCandidate(candidates: string[], ref: string | null): void {
   candidates.push(ref);
 }
 
+function pushIntegrationBaseCandidate(root: string, candidates: string[], ref: string | null): void {
+  if (!ref) return;
+  if (!ref.includes("/") || !refExists(root, ref)) candidates.push(`origin/${ref}`);
+  candidates.push(ref);
+}
+
 /** Which base a bead branches from. Explicit wins, then the bead's own
  * `Integration:` line (via bd, when available), then the install's env
  * default, then the install's recorded merge target, then the remote's default
@@ -186,7 +192,7 @@ export function resolveBase(root: string, beadId: string, explicit?: string | nu
   const candidates: string[] = [];
   if (explicit) candidates.push(explicit);
   const fromBead = integrationLineFor(bdRoot, beadId);
-  if (fromBead) pushBaseCandidate(candidates, fromBead);
+  if (fromBead) pushIntegrationBaseCandidate(root, candidates, fromBead);
   if (process.env.WHEELHOUSE_WORKTREE_BASE) candidates.push(process.env.WHEELHOUSE_WORKTREE_BASE);
   pushBaseCandidate(candidates, templateSourceValue(bdRoot, "merge-target"));
   const originHead = git(root, ["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]);
