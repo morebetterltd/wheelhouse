@@ -356,7 +356,8 @@ share one. `bun seats/adapter.ts dispatch <seat> <bead> <text> [--base <ref>]`
 prepares it before the seat sees the bead: `git switch -c fleet/<bead> <base>`
 for a new bead, or `git switch fleet/<bead>` for a reopened one so its old
 commits are kept. The base is `--base` if given, else the bead's
-`Integration:` line, else `WHEELHOUSE_WORKTREE_BASE`, else origin's default
+`Integration:` line, else `WHEELHOUSE_WORKTREE_BASE`, else the install's
+`merge-target=` in `wheelhouse/.template-source`, else origin's default
 branch. Before a seat moves from one bead to the next, the adapter pushes the
 previous bead's branch to origin; a failed push is written to the seat log as
 "push failed" and blocks the move, and so do real uncommitted changes in the
