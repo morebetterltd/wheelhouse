@@ -7,18 +7,31 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PATTERN="${WHEELHOUSE_SELFTEST_SWEEP_PATTERN:-$ROOT/seats/*.selftest.sh}"
 LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-${TMPDIR:-/tmp}/wheelhouse-selftest-sweep.lock}"
 SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
-TAKEOVER_LOCK="${LOCK}.takeover"
 CURRENT_SUITE_PID=""
 
 say(){ printf '%s\n' "$*"; }
 info(){ say "$*" >&2; }
 
-holder_pid(){ [ -f "$LOCK/pid" ] && sed -n '1p' "$LOCK/pid" 2>/dev/null || true; }
+lock_read_field(){
+  local key="$1"
+  if [ -d "$LOCK" ]; then
+    case "$key" in
+      pid) [ -f "$LOCK/pid" ] && sed -n '1p' "$LOCK/pid" 2>/dev/null || true ;;
+      started) [ -f "$LOCK/started" ] && sed -n '1p' "$LOCK/started" 2>/dev/null || true ;;
+      root) [ -f "$LOCK/root" ] && sed -n '1p' "$LOCK/root" 2>/dev/null || true ;;
+      pattern) [ -f "$LOCK/pattern" ] && sed -n '1p' "$LOCK/pattern" 2>/dev/null || true ;;
+    esac
+    return 0
+  fi
+  [ -f "$LOCK" ] || return 0
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$LOCK" 2>/dev/null || true
+}
+holder_pid(){ lock_read_field pid; }
 holder_desc(){
   local pid started root
   pid="$(holder_pid)"
-  started="$(sed -n '1p' "$LOCK/started" 2>/dev/null || true)"
-  root="$(sed -n '1p' "$LOCK/root" 2>/dev/null || true)"
+  started="$(lock_read_field started)"
+  root="$(lock_read_field root)"
   printf 'pid=%s%s%s' "${pid:-unknown}" "${started:+ started=$started}" "${root:+ root=$root}"
 }
 pid_alive(){
@@ -32,35 +45,60 @@ pid_alive(){
   return 1
 }
 
-try_remove_stale_lock(){
-  local pid desc
-  if ! mkdir "$TAKEOVER_LOCK" 2>/dev/null; then return 1; fi
-  pid="$(holder_pid)"
-  if [ -z "$pid" ]; then
-    desc="missing pid"
-  elif pid_alive "$pid"; then
-    rmdir "$TAKEOVER_LOCK" 2>/dev/null || true
+write_lock_candidate(){
+  local path="$1"
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'started=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'root=%s\n' "$ROOT"
+    printf 'pattern=%s\n' "$PATTERN"
+  } > "$path"
+}
+
+try_atomic_acquire(){
+  local parent base candidate
+  parent="$(dirname "$LOCK")"
+  base="$(basename "$LOCK")"
+  candidate="$parent/.${base}.$$.$RANDOM.new"
+  write_lock_candidate "$candidate" || { rm -f "$candidate"; return 1; }
+  if [ -e "$LOCK" ]; then
+    rm -f "$candidate"
     return 1
-  else
-    desc="dead pid $pid"
   fi
+  if ln "$candidate" "$LOCK" 2>/dev/null; then
+    rm -f "$candidate"
+    return 0
+  fi
+  rm -f "$candidate"
+  return 1
+}
+
+try_remove_stale_lock(){
+  local pid stale moved_pid desc
+  pid="$(holder_pid)"
+  if [ -n "$pid" ] && pid_alive "$pid"; then return 1; fi
+  stale="$LOCK.stale.$$.$RANDOM"
+  if ! mv "$LOCK" "$stale" 2>/dev/null; then return 1; fi
+  if [ -d "$stale" ]; then
+    moved_pid="$(sed -n '1p' "$stale/pid" 2>/dev/null || true)"
+  else
+    moved_pid="$(awk -F= '$1 == "pid" { sub(/^[^=]*=/, ""); print; exit }' "$stale" 2>/dev/null || true)"
+  fi
+  if [ -n "$moved_pid" ] && pid_alive "$moved_pid"; then
+    mv "$stale" "$LOCK" 2>/dev/null || true
+    return 1
+  fi
+  if [ -n "$moved_pid" ]; then desc="dead pid $moved_pid"; else desc="missing pid"; fi
   info "selftest-sweep: removing stale lock $LOCK held by $desc"
-  rm -rf "$LOCK"
-  rmdir "$TAKEOVER_LOCK" 2>/dev/null || true
+  rm -rf "$stale"
   return 0
 }
 
 acquire_lock(){
   local printed=0
   while :; do
-    if mkdir "$LOCK" 2>/dev/null; then
-      printf '%s\n' "$$" > "$LOCK/pid"
-      date -u +%Y-%m-%dT%H:%M:%SZ > "$LOCK/started"
-      printf '%s\n' "$ROOT" > "$LOCK/root"
-      printf '%s\n' "$PATTERN" > "$LOCK/pattern"
-      return 0
-    fi
-    if try_remove_stale_lock; then
+    if try_atomic_acquire; then return 0; fi
+    if [ -e "$LOCK" ] && try_remove_stale_lock; then
       printed=0
       continue
     fi
@@ -73,13 +111,13 @@ acquire_lock(){
 }
 
 release_lock(){
-  if [ -f "$LOCK/pid" ] && [ "$(holder_pid)" = "$$" ]; then rm -rf "$LOCK"; fi
+  if [ -f "$LOCK" ] && [ "$(holder_pid)" = "$$" ]; then rm -f "$LOCK"; fi
 }
 interrupt_sweep(){
   local rc="$1"
   trap - INT TERM
   if [ -n "$CURRENT_SUITE_PID" ] && kill -0 "$CURRENT_SUITE_PID" 2>/dev/null; then
-    kill -TERM "$CURRENT_SUITE_PID" 2>/dev/null || true
+    kill -TERM -- "-$CURRENT_SUITE_PID" 2>/dev/null || kill -TERM "$CURRENT_SUITE_PID" 2>/dev/null || true
     wait "$CURRENT_SUITE_PID" 2>/dev/null || true
   fi
   release_lock
@@ -103,7 +141,7 @@ failures=0
 for suite in "${suites[@]}"; do
   [ -f "$suite" ] || continue
   say "selftest-sweep: START $suite"
-  bash "$suite" &
+  perl -MPOSIX=setsid -e 'setsid or die "setsid: $!\n"; exec @ARGV or die "exec @ARGV: $!\n"' bash "$suite" &
   CURRENT_SUITE_PID=$!
   wait "$CURRENT_SUITE_PID"
   rc=$?
