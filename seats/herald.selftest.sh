@@ -585,9 +585,9 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["cooldown suppressed"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-RC=0; OUT="$(FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=60000 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=cooldown .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "per-pane cooldown defers a second immediate poke"
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=cooldown .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "per-pane cooldown defers a second poke inside an explicit 60s window"
 else fail "cooldown did not defer second poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 sleep 0.02
@@ -723,7 +723,7 @@ pass "truncated tool_execution_update payloads are harmless to herald's log read
 
 ROOT_GONE="$FIX/root-gone"
 mkdir -p "$ROOT_GONE/seats/logs" "$ROOT_GONE/seats/run"
-printf '%s\n' '{"logs":{},"seen":[],"alerts":{"lastCheckAt":"2999-01-01T00:00:00Z"}}' > "$ROOT_GONE/seats/herald.state.json"
+printf '%s\n' '{"logs":{},"seen":[],"alerts":{"lastCheckAt":"2999-01-01T00:00:00Z"},"staffing":{"lastCheckAt":"2999-01-01T00:00:00Z"}}' > "$ROOT_GONE/seats/herald.state.json"
 WHEELHOUSE_HERALD_ROOT="$ROOT_GONE" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=20 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=20 bun "$ROOT/seats/herald.ts" > "$FIX/root-gone.out" 2> "$FIX/root-gone.err" &
 ROOT_GONE_PID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
