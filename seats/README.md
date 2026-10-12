@@ -486,6 +486,11 @@ work for reading the graph, but graph-writing verbs such as `bd comment`,
 before they can mutate the bead store. Roster-level Claude Code
 `disallowedTools` entries for `bd` remain useful belt-and-braces, but graph
 read-only enforcement does not depend on enumerating every write verb.
+When a machine-local bench needs to create a fixture Beads graph, the
+verifier environment also exports `WHEELHOUSE_REAL_BD` as the absolute path
+to the real `bd` binary behind the shim. Bench code must call
+`${WHEELHOUSE_REAL_BD:-bd}` with its own scratch `BEADS_DIR`; bare `bd`
+through `PATH` remains the read-only shim inside the verifier process.
 
 `process.on("exit", ...)` cannot run on SIGKILL, so killing the dispatcher
 process mid-verification leaves the scratch worktree (and its `git
