@@ -1227,6 +1227,7 @@ async function main(): Promise<void> {
     `Your process cwd is a detached scratch worktree for the branch repository. Prefer relative searches from this cwd.`,
     `Do not recursively grep the live Branch repository path's seats/logs or seats/verdicts runtime dirs; if you must search that path, exclude seats/logs and seats/verdicts/*.partial*.`,
     `Confirm the branch still resolves to the SHA above before relying on your reading.`,
+    `Interview-mode bench is unavailable inside this verifier sandbox: do not run bench.sh --mode interview or any equivalent interview-mode bench here. If the bead's done depends on interview-mode claims, do not accept the author's retained output as your own proof; route those claims to named non-author seat ${verifierSeat} (distinct from author seat ${authorSeat}) for out-of-sandbox verification, and report that routing in the verdict evidence.`,
     `If the branch moves while you are reviewing but the pinned SHA remains an ancestor, render the verdict on the pinned SHA and name the move, for example:`,
     `VERDICT: APPROVE — at pinned tip ${tip}; branch has since moved to <new-tip> (<N> commits appended, history unrewritten)`,
     `PUSH: NOT CONSIDERED — branch moved; re-verify at <new-tip> before publish`,
