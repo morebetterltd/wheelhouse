@@ -259,12 +259,14 @@ if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
     return { name, cwd, args, status: r.status, stdout: r.stdout, stderr: r.stderr };
   };
   const cases = [
-    run("scratch-init", scratchGraph, ["init", "--skip-agents"]),
     run("scratch-create", scratchGraph, ["create", "scratch bead"]),
-    run("sibling-create", siblingInstall, ["create", "sibling bead"]),
-    run("arbitrary-create", arbitraryCwd, ["create", "arbitrary bead"]),
+    run("scratch-c-redirect", scratchGraph, ["-C", siblingInstall, "create", "redirect bead"]),
+    run("scratch-directory-redirect", scratchGraph, ["--directory", siblingInstall, "create", "redirect bead"]),
+    run("scratch-global", scratchGraph, ["--global", "create", "global bead"]),
     run("scratch-beads-dir-outside", scratchGraph, ["create", "override bead"], { BEADS_DIR: path.join(siblingInstall, ".beads") }),
     run("scratch-db-override", scratchGraph, ["--db", path.join(siblingInstall, ".beads", "beads.db"), "create", "override bead"]),
+    run("scratch-database-override", scratchGraph, ["--database", "other_database", "create", "override bead"]),
+    run("arbitrary-create", arbitraryCwd, ["create", "arbitrary bead"]),
   ];
   fs.writeFileSync(path.join(agentDir, "bd-readonly-scope-check.json"), JSON.stringify(cases, null, 2));
 }
@@ -386,8 +388,10 @@ readonly=0
 while true; do
   case "${1:-}" in
     --readonly) readonly=1; shift; continue ;;
+    -C|--directory) shift 2; continue ;;
     --actor|--db|--database) shift 2; continue ;;
-    --db=*|--database=*) shift; continue ;;
+    --db=*|--database=*|--directory=*) shift; continue ;;
+    --global) shift; continue ;;
   esac
   break
 done
@@ -468,10 +472,15 @@ build_installed_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.
 set -eu
 artifact="${1:-}"; out="${2:-}"
 printf 'machine-local bench ran: artifact=%s out=%s\n' "$artifact" "$out"
-mkdir -p "$out/bd-fixture"
-cd "$out/bd-fixture"
-bd init --skip-agents >/dev/null
-bd create 'bench scratch bead' --json >/dev/null
+scratch="$out/bd-fixture"
+mkdir -p "$scratch"
+real_bd="$(PATH="${PATH#*:}" command -v bd)"
+[ -n "$real_bd" ] || { echo "could not find real bd outside verifier shim" >&2; exit 1; }
+(
+  cd "$scratch"
+  "$real_bd" init --skip-agents >/dev/null
+  BEADS_DIR="$scratch/.beads" "$real_bd" create 'bench scratch bead' --json >/dev/null
+)
 exit 42
 BENCH
   chmod +x "$proj/wheelhouse/crew/bench.sh"
@@ -867,13 +876,13 @@ if [ $RC -eq 0 ] && node - "$BD_SCOPE_CHECK" <<'NODE'
 const fs = require('fs');
 const rows = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const by = Object.fromEntries(rows.map(r => [r.name, r]));
-if (by['scratch-init'].status !== 0 || by['scratch-create'].status !== 0) process.exit(1);
-for (const k of ['sibling-create', 'arbitrary-create', 'scratch-beads-dir-outside', 'scratch-db-override']) {
+for (const k of ['scratch-create', 'scratch-c-redirect', 'scratch-directory-redirect', 'scratch-global', 'scratch-beads-dir-outside', 'scratch-db-override', 'scratch-database-override', 'arbitrary-create']) {
+  if (!by[k]) process.exit(1);
   if (by[k].status === 0) process.exit(1);
   if (!/not allowed in read-only mode/.test(`${by[k].stdout}\n${by[k].stderr}`)) process.exit(1);
 }
 NODE
-then pass "verifier bd shim is writable only under its scratch root; sibling install, arbitrary cwd, and db overrides stay read-only"
+then pass "verifier bd shim is read-only for scratch cwd, -C/--directory, --global, --db/--database, BEADS_DIR, and arbitrary cwd"
 else fail "verifier bd readonly scope failed (rc=$RC out=$OUT check=$(cat "$BD_SCOPE_CHECK" 2>/dev/null))"; fi
 
 # --- scratch cwd: construction, not contract discipline ---------------------
