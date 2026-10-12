@@ -361,7 +361,8 @@ share one. `bun seats/adapter.ts dispatch <seat> <bead> <text> [--base <ref>]`
 prepares it before the seat sees the bead: `git switch -c fleet/<bead> <base>`
 for a new bead, or `git switch fleet/<bead>` for a reopened one so its old
 commits are kept. The base is `--base` if given, else the bead's
-`Integration:` line, else `WHEELHOUSE_WORKTREE_BASE`, else origin's default
+`Integration:` line, else `WHEELHOUSE_WORKTREE_BASE`, else the install's
+`merge-target=` in `wheelhouse/.template-source`, else origin's default
 branch. Before a seat moves from one bead to the next, the adapter pushes the
 previous bead's branch to origin; a failed push is written to the seat log as
 "push failed" and blocks the move, and so do real uncommitted changes in the
@@ -702,6 +703,14 @@ bun seats/prune.ts categories
 `seats/integration-refs.txt` is install-owned configuration, like `seats/host-budget.json`. It lists extra integration refs one per line; blank lines and `#` comments are allowed. Matching is exact on the branch name (`fleet/goal-x` also matches a containing ref such as `origin/fleet/goal-x`) and does not widen `fleet/` prefixes. A listed ref is itself never pruned as a stale branch. When a commander creates a goal branch, they add that branch here so closed work merged to the goal branch can be pruned before the goal reaches `main`.
 
 ## Proving it still works
+
+For the full host sweep, run the locked runner instead of an ad-hoc loop:
+
+```bash
+bash seats/selftest-sweep.sh
+```
+
+It runs `seats/*.selftest.sh` serially and holds a host-wide lock so another seat or install on the same machine waits rather than starting a second full sweep. Individual suites are still run directly when only a touched surface needs proof:
 
 ```bash
 bash seats/evidence-scrub.selftest.sh

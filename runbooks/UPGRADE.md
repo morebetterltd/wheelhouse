@@ -40,6 +40,7 @@ Then write the file:
   echo "commit=<the commit you recovered, or 'unknown'>"
   echo "path=<disposable cache path, filled in step 1>"
   echo "product-repo=$(pwd -P)"
+  echo "merge-target=<the branch reviewed work integrates into, e.g. main or staging>"
   echo "installed=<date if you know it, else 'unknown'>"
   echo "github-issue-watch="
   echo "github-issue-repos="
@@ -55,6 +56,16 @@ Then write the file:
 `commit=unknown` is honest and still useful — the integrity check runs on it, you just do not get the behind-versus-damaged diagnosis in step 5 until your next upgrade sets a real one. `path=` is the one field expected to die: it is only a cache hint. Existing installs may record a stale path into some other checkout; that is now harmless as long as `source=` and `commit=` are correct.
 
 The `github-issue-*` lines are optional alerts configuration; append them to older `.template-source` files if you want the defaults visible before changing them. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login). `seats/alerts.ts` writes the result into `seats/run/fleet-snapshot.json`; the optional fleet-gate reader only displays active alert names from that snapshot.
+
+The `merge-target` line is the install's principal-confirmed integration branch. Fresh per-seat branches use it before `origin/HEAD`, because GitHub's default branch is not necessarily the branch this fleet merges into. Existing installs upgrading over a `.template-source` without this line must add it now:
+
+```bash
+grep -q '^merge-target=' wheelhouse/.template-source \
+  && sed -i.bak "s|^merge-target=.*|merge-target=<the merge target branch>|" wheelhouse/.template-source \
+  || echo "merge-target=<the merge target branch>" >> wheelhouse/.template-source
+rm -f wheelhouse/.template-source.bak
+grep '^merge-target=' wheelhouse/.template-source
+```
 
 The `seat_push`, `seat_worktrees`, and `cleanup` lines are install policy switches read by the copied seat machinery from this same committed file. Omit them to keep today's template defaults: `seat_push=on` lets cross-bead dispatch publish the previous branch before moving; `seat_worktrees=per-seat` lets the adapter create and switch `.wheelhouse-worktrees/<seat>`; `cleanup=on` runs automatic closed-bead cleanup. Installs whose recorded authority forbids one of those actions may set the independent opt-outs: `seat_push=off` means the adapter never pushes, `seat_worktrees=per-task` means the adapter does not create, move, or switch worktrees and instead uses the cwd already recorded by the install, and `cleanup=off` disables automatic cleanup while `cleanup=report` writes the would-remove cleanup report without deleting anything.
 
@@ -97,6 +108,9 @@ grep -q '^product-repo=' wheelhouse/.template-source \
   && sed -i.bak "s|^product-repo=.*|product-repo=$(pwd -P)|" wheelhouse/.template-source \
   || echo "product-repo=$(pwd -P)" >> wheelhouse/.template-source
 rm -f wheelhouse/.template-source.bak
+# One-time for installs older than merge-target=: replace the placeholder with the branch reviewed work integrates into.
+grep -q '^merge-target=' wheelhouse/.template-source || echo "merge-target=<the merge target branch>" >> wheelhouse/.template-source
+grep '^merge-target=' wheelhouse/.template-source
 ```
 
 If you prefer a one-off clone, make it with `mktemp -d`; do not record a durable checkout inside another project. `source=` plus `commit=` are the durable provenance. `path=` is disposable in the same sense BOOTSTRAP records it: it may point at a cache that is deleted later, and every copied selftest that needs template history must recover by fetching `commit=` from `source=` rather than depending on that path.

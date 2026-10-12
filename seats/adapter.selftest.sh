@@ -1017,6 +1017,12 @@ else fail "seat cwd after dispatch was $(cat "$CWD_FILE" 2>/dev/null) — expect
 if wt_registered "$PROJ" "$SEAT_WT" && [ "$(wt_branch "$SEAT_WT")" = "fleet/bead-x" ] && says "created worktree"; then
   pass "first dispatch created the seat worktree: registered by git worktree list and on fleet/bead-x"
 else fail "seat worktree not created as expected (registered=$(wt_registered "$PROJ" "$SEAT_WT" && echo yes || echo no) branch=$(wt_branch "$SEAT_WT")): $OUT"; fi
+env HOME="$HOME_FIX" STATE="$STATE" CLAIMED_CWD="$SEAT_WT" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=require(f); s.seats["dead-peer"]={pid:999999999,cwd:process.env.CLAIMED_CWD,lastBead:"dead-peer"}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+run dispatch worker-1 bead-x "dead peer cwd claim should not block"
+if [ $RC -eq 0 ] && ! says "occupied by seat dead-peer" && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$SEAT_WT" ]; then
+  pass "dispatch ignores another seat's recorded cwd when that seat's pid is dead"
+else fail "dead peer recorded cwd blocked dispatch or moved the seat (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null)): $OUT"; fi
+env HOME="$HOME_FIX" STATE="$STATE" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=require(f); delete s.seats["dead-peer"]; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 if [ "$(fgit -C "$SEAT_WT" rev-parse HEAD)" = "$(fgit -C "$PROJ" rev-parse origin/main)" ] && [ -z "$(fgit -C "$SEAT_WT" status --porcelain)" ]; then
   pass "the new bead branch was cut from origin/main and the worktree is clean"
 else fail "bead branch base/cleanliness wrong: HEAD=$(fgit -C "$SEAT_WT" rev-parse HEAD) origin/main=$(fgit -C "$PROJ" rev-parse origin/main) status=$(fgit -C "$SEAT_WT" status --porcelain)"; fi
@@ -1094,6 +1100,37 @@ RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG
 if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes' 5 && grep -q 'wheelhouse log truncated' "$LOG"; then
   pass "tool_execution_update payload is trimmed in the seat log with byte count noted"
 else fail "tool_execution_update payload was not trimmed (exit $RC): $OUT"; fi
+
+DELTA_STREAM="$FIX/delta-stream.jsonl"
+DELTA_SLICE="$FIX/delta-filtered.jsonl"
+cat > "$DELTA_STREAM" <<'JSONL'
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"keystroke"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"private"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","delta":"{\"cmd\""}}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"tool_execution_start","toolCallId":"delta-tool","toolName":"Bash","args":{"cmd":"true"}}
+{"type":"tool_execution_end","toolCallId":"delta-tool","toolName":"Bash","result":{"isError":false,"output":"ok"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"echo: DELTAS payload"}]}}
+{"type":"agent_end","messages":[]}
+{"id":"delta-response","type":"response","command":"prompt","success":true}
+JSONL
+python3 - "$RUN_PROJ/seats/adapter.ts" "$FIX/log-filter.js" <<'PY'
+import re,sys
+src,out=sys.argv[1:]
+s=open(src).read()
+m=re.search(r"const script = `([\s\S]*?)`;\n  return", s)
+if not m: raise SystemExit("could not extract logFilterShell script")
+open(out,"w").write(m.group(1))
+PY
+RC=0; node "$FIX/log-filter.js" < "$DELTA_STREAM" > "$DELTA_SLICE" 2> "$FIX/log-filter.err" || RC=$?
+DELTA_COUNT="$(python3 - "$DELTA_SLICE" <<'PY'
+import sys
+print(open(sys.argv[1]).read().count('_delta'))
+PY
+)"
+if [ $RC -eq 0 ] && [ "$DELTA_COUNT" = 0 ] && grep -q '"type":"message_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_end"' "$DELTA_SLICE" && grep -q 'echo: DELTAS payload' "$DELTA_SLICE" && grep -q '"type":"response"' "$DELTA_SLICE"; then
+  pass "message_update *_delta stream frames are dropped while settle, tool, and response events remain"
+else fail "delta filtering wrong (exit $RC delta_count=$DELTA_COUNT err=$(cat "$FIX/log-filter.err" 2>/dev/null) slice=$(cat "$DELTA_SLICE" 2>/dev/null))"; fi
 
 printf '%s\n' '{"type":"filler","text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}' '{"type":"agent_end","messages":[]}' >> "$LOG"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
@@ -1291,6 +1328,9 @@ else fail "stop did not terminate pid $PID_BEFORE (exit $RC)"; fi
 if [ -z "$(state_get pid)" ] && [ -n "$(state_get sessionFile)" ]; then
   pass "state keeps the session but drops the pid"
 else fail "stopped state is wrong (pid=$(state_get pid))"; fi
+if [ -z "$(state_get cwd)" ]; then
+  pass "stop clears the recorded cwd so a stopped seat cannot pin a worktree"
+else fail "stop left a recorded cwd behind: $(state_get cwd)"; fi
 
 run resume worker-1 >/dev/null 2>&1
 PID_BEFORE="$(state_get pid)"
@@ -1339,6 +1379,15 @@ else fail "reset exited ${RC}: $OUT"; fi
 if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
   pass "reset's cold respawn still carries BEADS_ACTOR=worker-1"
 else fail "reset's respawned seat env.json was $(cat "${ARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:worker-1"; fi
+RESETFAIL_PROJ="$FIX/reset-fail-proj"
+build_proj "$RESETFAIL_PROJ" resetfail
+RUN_PROJ="$RESETFAIL_PROJ"; STATE="$RESETFAIL_PROJ/seats/state.json"; LOG="$RESETFAIL_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-resetfail/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-resetfail/worker-1/cwd.txt"
+run spawn worker-1 bead-resetfail
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_FAIL_ONCE='fixture reset launch failure' bun "$RUN_PROJ/seats/adapter.ts" reset worker-1 2>&1)" || RC=$?
+if [ $RC -ne 0 ] && [ -z "$(state_get cwd)" ] && [ -z "$(state_get sessionFile)" ]; then
+  pass "reset clears cwd before cold respawn, so a failed reset cannot leave a stale worktree claim"
+else fail "reset failure left cwd/session claim behind (exit $RC cwd=$(state_get cwd) session=$(state_get sessionFile)): $OUT"; fi
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 run stop worker-1
 
 phase "6a. resume after mid-tool death surfaces a stalled seat and herald row"
@@ -1373,6 +1422,7 @@ OLD_SESS="$(state_get sessionFile)"
 # stale registration itself and recreates the worktree on the next dispatch.
 rm -rf "$SEAT_WT"
 run stop worker-1 >/dev/null 2>&1
+env HOME="$HOME_FIX" STATE="$STATE" MISSING_CWD="$SEAT_WT" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=require(f); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 run dispatch worker-1 bead-z "hello after prune"
 if [ $RC -eq 0 ]; then pass "pruned cwd dispatch: stopped-seat dispatch exits 0 via fallback"
 else fail "pruned cwd dispatch: exited ${RC}: $OUT"; fi
@@ -1419,6 +1469,7 @@ build_proj "$CLEAN_PROJ" cleanup
 RUN_PROJ="$CLEAN_PROJ"; STATE="$CLEAN_PROJ/seats/state.json"; LOG="$CLEAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cleanup/worker-1/argv.json"
 run spawn worker-1
 run stop worker-1 >/dev/null 2>&1
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$CLEAN_PROJ" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=require(f); s.seats["worker-1"].cwd=process.env.CWD; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_STALL_ONCE=2000 STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)" || RC=$?
 CLEAN_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | head -1)"
 if [ $RC -ne 0 ] && says "launch-only cleanup" && says "SIGKILL" && [ -n "$CLEAN_PID" ] && ! kill -0 "$CLEAN_PID" 2>/dev/null; then
@@ -1736,8 +1787,14 @@ run dispatch worker-1 open-bead "same legacy bead again"
 if [ $RC -eq 0 ] && { [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$LEG_PROJ" worker-1)" ] || [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$LEG_WTS/open-bead" ]; } && [ "$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")" = "fleet/open-bead" ]; then
   pass "legacy worktrees: redispatching the open bead reuses or adopts its legacy worktree"
 else fail "legacy worktrees: open legacy bead was not reused/adopted (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null) branch=$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")): $OUT"; fi
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/closed-1" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"closed-1",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+run dispatch worker-1 closed-override "closed legacy cwd must not override the seat worktree"
+if [ $RC -eq 0 ] && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$LEG_PROJ" worker-1)" ] && [ "$(wt_branch "$(seat_wt "$LEG_PROJ" worker-1)")" = "fleet/closed-override" ]; then
+  pass "legacy worktrees: a recorded cwd for a closed bead does not override the new bead's seat worktree"
+else fail "legacy worktrees: closed-bead recorded cwd overrode the seat worktree (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null) branch=$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")): $OUT"; fi
+LEG_MISSING_CWD="$(cat "$CWD_FILE" 2>/dev/null)"
 run stop worker-1 >/dev/null 2>&1
-LEG_MISSING_CWD="$(state_get cwd)"
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_MISSING_CWD" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"closed-override",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 fgit -C "$LEG_PROJ" worktree remove --force "$LEG_MISSING_CWD" >/dev/null 2>&1 || rm -rf "$LEG_MISSING_CWD"
 run resume worker-1
 if [ $RC -ne 0 ] && says "refusing to resume a worker in the repo root"; then
@@ -1956,7 +2013,7 @@ else fail "push gate: stale lease did not refuse safely (exit $RC branch=$(wt_br
 
 # ISC-63: two seats never share a worktree.
 OCC_PID_BEFORE="$(state_get pid)"
-env HOME="$HOME_FIX" HOLDER="$WT" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-2"]={pid:null,cwd:process.env.HOLDER,lastBead:"bead-o0",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+env HOME="$HOME_FIX" HOLDER="$WT" HOLDER_PID="$$" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-2"]={pid:Number(process.env.HOLDER_PID),cwd:process.env.HOLDER,lastBead:"bead-o0",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 run dispatch worker-1 bead-o1 "into an occupied worktree"
 if [ $RC -ne 0 ] && says "occupied by seat worker-2" && says "two seats never share a worktree"; then
   pass "occupied worktree: dispatch exits non-zero naming the occupying seat (ISC-63)"
