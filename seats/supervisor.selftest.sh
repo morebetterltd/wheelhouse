@@ -46,7 +46,9 @@ RC=0; OUT="$(cd "$PROJ" && HOME="$LAUNCH_HOME" WHEELHOUSE_SUPERVISOR_ROOT="$PROJ
 printf '%s\n' "$OUT" > "$FIX/install-launchd.out"
 PLIST="$LAUNCH_HOME/Library/LaunchAgents/com.wheelhouse.launchfixture.supervisor.plist"
 if command -v launchctl >/dev/null 2>&1; then launchctl list > "$FIX/launchctl.after" 2>&1 || true; else printf 'launchctl absent\n' > "$FIX/launchctl.after"; fi
-if [ $RC -eq 0 ] && [ -f "$PLIST" ] && grep -q "launchctl bootstrap gui/$UID $PLIST" "$FIX/install-launchd.out" && grep -q "launchctl bootout gui/$UID $PLIST" "$FIX/install-launchd.out" && cmp -s "$FIX/launchctl.before" "$FIX/launchctl.after"; then pass "install-launchd writes fixture plist and only prints launchctl commands"; else fail "install-launchd output/launchctl proof wrong rc=$RC out=$OUT before=$(cat "$FIX/launchctl.before") after=$(cat "$FIX/launchctl.after")"; fi
+before_label_count="$(grep -c 'com\.wheelhouse\.launchfixture\.supervisor' "$FIX/launchctl.before" 2>/dev/null || true)"
+after_label_count="$(grep -c 'com\.wheelhouse\.launchfixture\.supervisor' "$FIX/launchctl.after" 2>/dev/null || true)"
+if [ $RC -eq 0 ] && [ -f "$PLIST" ] && grep -q "launchctl bootstrap gui/$UID $PLIST" "$FIX/install-launchd.out" && grep -q "launchctl bootout gui/$UID $PLIST" "$FIX/install-launchd.out" && [ "$before_label_count" = 0 ] && [ "$after_label_count" = 0 ]; then pass "install-launchd writes fixture plist and does not load its launchd label"; else fail "install-launchd output/launchctl proof wrong rc=$RC out=$OUT before_label_count=$before_label_count after_label_count=$after_label_count"; fi
 if command -v plutil >/dev/null 2>&1; then
   if plutil -lint "$PLIST" >/dev/null 2>"$FIX/plutil.err"; then pass "launchd plist passes plutil -lint"; else fail "plutil -lint failed: $(cat "$FIX/plutil.err")"; fi
 else
@@ -69,10 +71,33 @@ then pass "launchd plist names fixture root, ProgramArguments, and Interactive p
 RC=0; OUT="$(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$PROJ/seats/supervisor.sh" print-systemd 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q '^ExecStart=/bin/bash ' && printf '%s\n' "$OUT" | grep -q 'seats/supervisor.sh' && printf '%s\n' "$OUT" | grep -q '^Restart=always'; then pass "print-systemd prints equivalent user unit"; else fail "print-systemd wrong rc=$RC out=$OUT"; fi
 before_restarts="$(grep -c 'restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
-echo $$ > "$PROJ/seats/run/supervisor.pid"
-RC=0; OUT="$(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_SECONDS=0 "$PROJ/seats/supervisor.sh" 2>&1)" || RC=$?
+rm -f "$PROJ/seats/run/supervisor.pid"
+(cd "$PROJ" && exec env WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_STARTED_BY_COCKPIT=1 WHEELHOUSE_SUPERVISOR_SECONDS=0.1 "$PROJ/seats/supervisor.sh") > "$FIX/supervisor-holder.out" 2>&1 &
+holder_pid=$!
+for _ in $(seq 1 30); do [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" = "$holder_pid" ] && break; sleep 0.05; done
+holder_pid="$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || printf '%s' "$holder_pid")"
+(cd "$PROJ" && exec env WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_SECONDS=0.1 "$PROJ/seats/supervisor.sh") > "$FIX/supervisor-contender.out" 2>&1 &
+contender_pid=$!
+sleep 0.35
 after_restarts="$(grep -c 'restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
-if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'supervisor already running' && [ "$before_restarts" = "$after_restarts" ]; then pass "second supervisor exits 0 when pid file names a live process"; else fail "second supervisor did not exit cleanly rc=$RC out=$OUT before=$before_restarts after=$after_restarts"; fi
+if kill -0 "$holder_pid" 2>/dev/null && kill -0 "$contender_pid" 2>/dev/null && [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" = "$holder_pid" ] && [ "$before_restarts" = "$after_restarts" ]; then pass "launchd-style supervisor waits on live cockpit holder instead of exiting and churning"; else fail "contender did not wait holder=$holder_pid contender=$contender_pid pidfile=$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null) holder_alive=$(kill -0 "$holder_pid" 2>/dev/null; echo $?) contender_alive=$(kill -0 "$contender_pid" 2>/dev/null; echo $?) before=$before_restarts after=$after_restarts out=$(cat "$FIX/supervisor-contender.out" 2>/dev/null)"; fi
+kill "$holder_pid" 2>/dev/null || true
+sleep 0.1
+kill -KILL "$holder_pid" 2>/dev/null || true
+wait "$holder_pid" 2>/dev/null || true
+kill "$contender_pid" 2>/dev/null || true
+for _ in $(seq 1 20); do kill -0 "$contender_pid" 2>/dev/null || break; sleep 0.05; done
+
+echo $$ > "$PROJ/seats/run/supervisor.pid"
+(cd "$PROJ" && exec env WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_SECONDS=0.1 "$PROJ/seats/supervisor.sh") > "$FIX/supervisor-reused-pid.out" 2>&1 &
+takeover_pid=$!
+for _ in $(seq 1 30); do [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" != "$$" ] && break; sleep 0.05; done
+takeover_live_pid="$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)"
+if [ -n "$takeover_live_pid" ] && [ "$takeover_live_pid" != "$$" ] && kill -0 "$takeover_live_pid" 2>/dev/null && grep -q 'non-supervisor process' "$FIX/supervisor-reused-pid.out"; then pass "reused supervisor pid fixture is treated as stale and taken over"; else fail "reused pid did not take over takeover=$takeover_pid live=${takeover_live_pid:-none} alive=$(kill -0 "${takeover_live_pid:-$takeover_pid}" 2>/dev/null; echo $?) pidfile=$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null) out=$(cat "$FIX/supervisor-reused-pid.out" 2>/dev/null)"; fi
+if [ "${takeover_live_pid:-$takeover_pid}" != "$$" ]; then
+  kill "${takeover_live_pid:-$takeover_pid}" 2>/dev/null || true
+  for _ in $(seq 1 20); do kill -0 "${takeover_live_pid:-$takeover_pid}" 2>/dev/null || break; sleep 0.05; done
+fi
 if ! grep -Eq '^[[:space:]]*launchctl[[:space:]]+(bootstrap|bootout|kickstart)' "$PROJ/seats/supervisor.sh"; then pass "supervisor never executes launchctl bootstrap/bootout/kickstart"; else fail "supervisor contains executable launchctl mutator"; fi
 
 cat > "$PROJ/seats/adapter.ts" <<'TS'

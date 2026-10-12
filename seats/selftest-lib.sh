@@ -20,6 +20,15 @@ selftest_fixture_refused() {
   echo "STOP: unsafe selftest fixture path: ${fixture:-<empty>} ($reason)" >&2
   return 2
 }
+selftest_has_fixture_marker() {
+  path="${1:-}"
+  [ -n "$path" ] || return 1
+  while [ -n "$path" ] && [ "$path" != "/" ]; do
+    [ -f "$path/.wheelhouse-selftest-fixture" ] && return 0
+    path="$(dirname "$path")"
+  done
+  return 1
+}
 selftest_make_fixture_dir() {
   template="${1:-}"
   [ -n "$template" ] || { echo "STOP: mktemp fixture template is empty" >&2; return 2; }
@@ -45,6 +54,45 @@ selftest_copy_seat_runtime() {
   [ ! -d "$src_seats/transports" ] || { rm -rf "$dest_root/seats/transports"; cp -R "$src_seats/transports" "$dest_root/seats/transports"; }
 }
 
+selftest_shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\''/g")"; }
+
+selftest_scratch_graph() {
+  graph_root="${1:-}"
+  [ -n "$graph_root" ] || { echo "STOP: selftest_scratch_graph needs a destination directory" >&2; return 2; }
+  bd_bin="$(command -v bd 2>/dev/null || true)"
+  [ -n "$bd_bin" ] || { echo "STOP: selftest_scratch_graph requires bd on PATH" >&2; return 2; }
+  parent="$(dirname "$graph_root")"
+  mkdir -p "$parent" || { echo "STOP: selftest_scratch_graph could not create parent: $parent" >&2; return 2; }
+  graph_root="$(cd "$parent" && pwd -P)/$(basename "$graph_root")"
+  repo="$(selftest_lib_root)"
+  cwd="$SELFTEST_INVOCATION_PWD"
+  if selftest_path_contains "$graph_root" "$repo" || selftest_path_contains "$graph_root" "$cwd"; then
+    echo "STOP: selftest_scratch_graph destination must be outside the install/worktree: $graph_root" >&2
+    return 2
+  fi
+  if ! selftest_has_fixture_marker "$parent"; then
+    echo "STOP: selftest_scratch_graph destination must live under selftest_make_fixture_dir: $graph_root" >&2
+    return 2
+  fi
+  rm -rf "$graph_root"
+  mkdir -p "$graph_root"
+  init_log="$graph_root/bd-init.log"
+  if ! (cd "$graph_root" && "$bd_bin" init --non-interactive --skip-agents -p scratch) >"$init_log" 2>&1; then
+    echo "STOP: bd init failed for scratch graph $graph_root:" >&2
+    cat "$init_log" >&2
+    return 2
+  fi
+  wrapper_dir="$graph_root/bin"
+  mkdir -p "$wrapper_dir"
+  cat > "$wrapper_dir/bd" <<EOF
+#!/usr/bin/env bash
+exec $(selftest_shell_quote "$bd_bin") -C $(selftest_shell_quote "$graph_root") "\$@"
+EOF
+  chmod +x "$wrapper_dir/bd"
+  printf 'export WHEELHOUSE_SELFTEST_BD_ROOT=%s\n' "$(selftest_shell_quote "$graph_root")"
+  printf 'export PATH=%s:"$PATH"\n' "$(selftest_shell_quote "$wrapper_dir")"
+}
+
 selftest_remove_fixture_dir() {
   fixture="${1:-}"
   [ -n "$fixture" ] || return 0
@@ -60,7 +108,27 @@ selftest_remove_fixture_dir() {
 selftest_fixture_processes() {
   root="${1:-}"
   [ -n "$root" ] || return 0
-  ps axww -o pid=,command= | grep -F "$root" | grep -v 'grep -F' | grep -v 'awk -v root' || true
+  caller_pid="${BASHPID:-$$}"
+  (
+    cd / || exit 0
+    {
+      ps axww -o pid=,command= | grep -F "$root" | grep -v 'grep -F' | grep -v 'awk -v root' || true
+      lsof_bin="$(command -v lsof 2>/dev/null || true)"
+      [ -n "$lsof_bin" ] || lsof_bin="/usr/sbin/lsof"
+      if [ -x "$lsof_bin" ]; then
+        lsof_out="${TMPDIR:-/tmp}/wheelhouse-selftest-lsof.$$.out"
+        "$lsof_bin" -d cwd -Fpcn > "$lsof_out" 2>/dev/null || true
+        awk -v root="$root" '
+          function flush(){ if(pid && cwd && (cwd == root || index(cwd, root "/") == 1)) print pid " " cmd " [cwd " cwd "]" }
+          /^p/ { flush(); pid=substr($0,2); cmd="?"; cwd=""; next }
+          /^c/ { cmd=substr($0,2); next }
+          /^n/ { cwd=substr($0,2); next }
+          END { flush() }
+        ' "$lsof_out" 2>/dev/null || true
+        rm -f "$lsof_out"
+      fi
+    } | awk -v self="$$" -v caller="$caller_pid" '$1 != self && $1 != caller && !seen[$1]++'
+  )
 }
 
 selftest_stop_fixture_adapters() {
@@ -99,9 +167,20 @@ selftest_cleanup_fixture_processes() {
 
   leaks="$(selftest_fixture_processes "$root" || true)"
   if [ -n "$leaks" ]; then
-    echo "selftest cleanup leak under $root:" >&2
-    printf '%s\n' "$leaks" >&2
-    return 1
+    sleep 0.2
+    stable=""
+    while IFS= read -r line; do
+      pid="${line%% *}"
+      [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && stable="${stable}${stable:+
+}$line"
+    done <<EOF
+$leaks
+EOF
+    if [ -n "$stable" ]; then
+      echo "selftest cleanup leak under $root:" >&2
+      printf '%s\n' "$stable" >&2
+      return 1
+    fi
   fi
   return 0
 }

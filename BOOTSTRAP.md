@@ -23,7 +23,7 @@ It runs before step 2 rather than alongside it, even though step 2 is where the 
 
 Six are worth checking before the interview; harness-specific seat binaries are checked after question 8 chooses them. Everything else the procedure runs — `sed`, `grep`, `diff`, `cp`, `mv`, `find`, `mktemp`, `date`, `basename`, `cut`, `ls`, `xargs`, `ps`, `tail`, `printf`, `rm`, `mkdir`, `cat`, `env` — is the POSIX baseline that ships with macOS and every Linux. Checking for those would fail nothing and teach installers to skip the block, which is the same reason step 2 checks the contracts by name rather than counting them.
 
-Deliberately NOT on the list: `gh`. Nothing in `BOOTSTRAP.md`, `runbooks/` or `contracts/` invokes it — measured by grep, not assumed — so do not install it on this file's account. If you add a tool to the list, measure the same way: the list is only worth what it was checked against.
+Deliberately NOT on the list: `gh`. The grep now hits this sentence, the opt-in publishing question, and the `.template-source` paragraph below; the runbook/contract prose documents the same optional path without invoking `gh`. `seats/report-issues.ts` and `seats/alerts.ts`'s issue watch are the two optional users of `gh`, both off or no-op when `gh` is absent, so `gh` is still not a prerequisite. If you add a tool to the list, measure the same way: the list is only worth what it was checked against.
 
 `bun` is still unconditional because it runs the adapter, verifier/walker dispatchers, prune tool and floor for every local seat harness. `claude` is unconditional for the commander: the commander seat is a Claude Code session in the install root, and it is the one seat every install has. `pi`, `claude`, and `codex` as seat harness binaries are checked again after question 8, once the roster says which harnesses any non-external seats actually use; a no-worker install should not fail because a seat harness it never chose is absent.
 
@@ -118,6 +118,8 @@ mkdir -p wheelhouse
   echo "github-issue-include-labels="
   echo "github-issue-exclude-labels="
   echo "github-issue-author="
+  echo "github-report=off"
+  echo "github-report-routes="
   echo "seat_push=on"
   echo "seat_worktrees=per-seat"
   echo "cleanup=on"
@@ -128,6 +130,8 @@ cat wheelhouse/.template-source
 `namespace=` is written empty here and filled at the end of step 3's interview, because its value comes from an answer that has not been given yet. It is this project's seat namespace: the value `seats/seat-env.sh` is invoked with, and the one that names this project's seat root (`$HOME/.pi-seats-<namespace>`), which is what keeps two fleets' seat directories apart on one machine. It lives in this file rather than in a file of its own because `.template-source` is already per-install and already read by other steps.
 
 The `github-issue-*` lines are install-owned alerts configuration. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login). `seats/alerts.ts` writes the result into `seats/run/fleet-snapshot.json`; the optional fleet-gate reader only displays active alert names from that snapshot.
+
+The `github-report=off` line is the written default for publishing template-class findings: only the literal `github-report=on` enables the commander-run publisher, `seats/report-issues.ts`. `github-report-routes=` empty means the single default route `template-report -> <owner/repo>` parsed from this file's `source=` line; add a product route as `<label>:<owner/repo>`, separated by commas or semicolons. The publisher is commander-run, dry-run by default, scrubs issue bodies with `seats/evidence-scrub.sh`, refuses credential-shaped text, and uses `gh`'s own login rather than any token under `seats/run/`.
 
 The `seat_push=on`, `seat_worktrees=per-seat`, and `cleanup=on` lines record the default install policy for seat machinery. Leave them at the default unless this install's recorded authority requires an opt-out: `seat_push=off` means the adapter never pushes branches, `seat_worktrees=per-task` means the adapter uses the install's existing task worktree instead of creating/moving `.wheelhouse-worktrees/<seat>`, and `cleanup=off` disables automatic cleanup while `cleanup=report` writes a would-remove report without deleting.
 
@@ -313,6 +317,16 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    The round ends in a read-back table, before anything is written: `name | kind | destination | audience | read | members`. If the answer was `No stakeholder channels`, the table is empty and the record still says so.
 
+
+11. **Publishing findings to GitHub: opt in only.** Default first: "My default is off: template-class findings stay as `Report <tool> issue:` tasks in the graph, and `wheelhouse/GRAPH.md` tells you to file them on the template repo by hand when this machine is not the template owner's. If you want the commander to publish them with one command, we turn on `github-report`; it needs `gh` installed and signed in as a login you are willing to post issues under (the template repo is public), seats never run it, and every body is scrubbed and refused if it carries a credential shape." With `AskUserQuestion`, offer labels exactly `github-report=off` and `github-report=on`. If the answer is `github-report=on`, also ask for extra routes as `<label>:<owner/repo>`, default none; empty routes keep the single default route `template-report` to the template repository parsed from `source=`.
+
+   Write the answers into `wheelhouse/.template-source` with the same `sed -i.bak ... && rm -f` shape the namespace write uses, then read them back:
+
+   ```bash
+   sed -i.bak "s|^github-report=.*|<github-report=off or github-report=on>|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+   sed -i.bak "s|^github-report-routes=.*|github-report-routes=<comma-separated routes or empty>|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+   grep -E '^github-report(-routes)?=' wheelhouse/.template-source
+   ```
 
 ### Record what the interview decided — the machine copies, before anything derives from them
 
