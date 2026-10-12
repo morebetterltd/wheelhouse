@@ -128,6 +128,8 @@ For any diff that touches `seats/cockpit.sh`, reviewer bench evidence includes b
 
 For any diff that touches `seats/adapter.ts` status rendering, liveness checks, orphan detection, or process/FIFO ownership, reviewer bench evidence includes `bash seats/legibility.selftest.sh`. The legibility suite exercises the multi-seat failure-state fixture through `adapter.ts status` and `floor.ts --once`, so adapter-only evidence is incomplete for that path.
 
+When review calls for the full `seats/*.selftest.sh` sweep, run `bash seats/selftest-sweep.sh`; do not hand-roll a loop over the suite files. The runner takes the host-wide sweep lock and runs the suites serially.
+
 ### When the bench outlives the review turn
 
 Some benches take seconds and some take half an hour. The clause above does not care, and neither does the merge policy resting on it: the bench is still yours to run. What a long one changes is not the obligation but whether the obligation fits inside your own lifetime.
