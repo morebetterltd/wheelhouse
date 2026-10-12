@@ -57,6 +57,17 @@ path=$TEMPLATE
 EOF
 ( cd "$TEMPLATE" && git archive "$COMMIT2" | tar -x -C "$INSTALL" )
 run; [ $RC -eq 0 ] && [ -z "$OUT" ] && pass 'clean install exits 0 with no findings' || fail "clean failed rc=$RC out=$OUT"
+cat > "$INSTALL/wheelhouse/ISA.md" <<'EOF'
+# Install-specific ISA
+EOF
+cat > "$INSTALL/wheelhouse/INTEGRATOR.md" <<'EOF'
+# Install-specific integrator notes
+EOF
+mkdir -p "$INSTALL/wheelhouse/fleet" "$INSTALL/wheelhouse/crew"
+cat > "$INSTALL/wheelhouse/fleet/LOCAL.md" <<'EOF'
+# Local fleet notes
+EOF
+run; [ $RC -eq 0 ] && [ -z "$OUT" ] && pass 'install-owned wheelhouse docs are not local-only drift' || fail "install-owned docs drifted rc=$RC out=$OUT"
 cat > "$INSTALL/wheelhouse/.template-source" <<EOF
 source=$FIX/unreachable-source-must-not-be-used
 commit=$COMMIT2
@@ -64,6 +75,11 @@ path=$TEMPLATE
 EOF
 run; [ $RC -eq 0 ] && [ -z "$OUT" ] && pass 'path containing commit is sufficient; unreachable source is not fetched'
 printf "export const herald = 'install edit';\n" > "$INSTALL/seats/herald.ts"
+cat > "$INSTALL/wheelhouse/.template-forks" <<'EOF'
+seats/herald.ts # local herald behavior intentionally differs for this install
+EOF
+run; [ $RC -eq 0 ] && [ -z "$OUT" ] && pass 'declared fork with reason is not drift' || fail "declared fork drifted rc=$RC out=$OUT"
+rm -f "$INSTALL/wheelhouse/.template-forks"
 run; [ $RC -eq 1 ] && grep -q '^MODIFIED seats/herald.ts$' <<<"$OUT" && pass 'edited template seat file reports MODIFIED' || fail "modified failed rc=$RC out=$OUT"
 printf 'local tool\n' > "$INSTALL/seats/commander-watch.ts"
 run; [ $RC -eq 1 ] && grep -q '^LOCAL-ONLY seats/commander-watch.ts$' <<<"$OUT" && pass 'install-only seat file reports LOCAL-ONLY' || fail "local-only failed rc=$RC out=$OUT"
