@@ -27,6 +27,7 @@ The main files here:
 - `channels.ts` — reads and validates install-owned `seats/channels.json` declarations for principal/stakeholder channels.
 - `comms.ts` — the single declared-channel send gate; sends by channel name, confirms read-back, and records refs in ignored `seats/comms.jsonl`.
 - `report-issues.ts` — commander-run, opt-in publisher for `template-report` tasks: dry-runs or files routed GitHub issues with scrubbed bodies, dedupe, and `external-ref` writeback.
+- `digest.ts` — read-only fleet digest for a time window: shipped work, open/cleared needs, review/sent-back work, failures, and alerts in commander, human, or JSON form.
 - `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban.
 - `principal-sentinel.sh` — Claude Code Stop hook that turns final assistant `@principal:` lines into durable needs.
 - `courier.ts` — optional transport daemon for off-machine replies; Telegram lives under `transports/`.
@@ -89,6 +90,10 @@ Ledger event schema:
 - `sent`: `{type:"sent", id, at, transport, ref}` records an outbound transport delivery and is ignored by `show`/`list` state folding.
 
 `show` and `list` fold events by id into state `open`, `answered`, or `closed`.
+
+## Digest
+
+`bun seats/digest.ts [--since <iso>] [--until <iso>] [--hours N] [--human] [--json]` reads existing fleet records only: `seats/inbox.jsonl`, `seats/needs.jsonl`, verdict files, `bd list`, and the product repo's git log. Default output is commander Markdown with ids and verdict paths; `--human` removes install-local ids and is suitable for a human-facing need or desk page; `--json` returns the structure the desk can render. The default window is the last 24 hours ending now; `--since`/`--until` pin it exactly.
 
 ### Claude Code Stop hook for `@principal:`
 
