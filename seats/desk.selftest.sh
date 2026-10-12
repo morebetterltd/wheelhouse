@@ -173,7 +173,7 @@ if grep -q 'Write the guide' "$FIX/board.html" && grep -q 'Build the package' "$
 if ! grep -Eq '<(form|button|input|textarea)([ >])' "$FIX/board.html" && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/board")" = 404 ]; then pass "board has no write controls and no POST route"; else fail "board exposed write controls or POST route"; fi
 if ! grep -Eq 'demo-[a-z0-9-]+' "$FIX/board.html"; then pass "board HTML hides namespace ids"; else fail "board HTML leaked ids: $(grep -Eo 'demo-[a-z0-9-]+' "$FIX/board.html" | sort -u | tr '\n' ' ')"; fi
 SINCE="2026-09-21T00:00:00Z"; UNTIL="2026-09-22T00:00:00Z"; DIGEST_Q="since=$SINCE&until=$UNTIL"
-curl -fsS "http://127.0.0.1:$P/digest?$DIGEST_Q" > "$FIX/digest.html" || fail "GET /digest failed"
+for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P/digest?$DIGEST_Q" > "$FIX/digest.html" 2>/dev/null || true; grep -q 'Ship the button' "$FIX/digest.html" 2>/dev/null && break; sleep 0.1; done
 curl -fsS "http://127.0.0.1:$P/api/digest.json?$DIGEST_Q" > "$FIX/digest.json" || fail "GET /api/digest.json failed"
 if python3 - "$FIX/digest.html" <<'PY'
 import sys
@@ -194,6 +194,9 @@ PY
 then pass "GET /api/digest.json matches digest.ts --json for the same window"; else fail "digest JSON differed: api=$(cat "$FIX/digest.json" 2>/dev/null)"; fi
 if ! grep -Eiq 'demo-[a-z0-9-]+|bead' "$FIX/digest.html"; then pass "digest HTML hides namespace ids and the word bead"; else fail "digest HTML leaked ids or bead: $(grep -Eio 'demo-[a-z0-9-]+|bead' "$FIX/digest.html" | sort -u | tr '\n' ' ')"; fi
 if ! grep -Eq '<(form|button|input|textarea)([ >])' "$FIX/digest.html" && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/digest")" = 404 ] && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/api/digest.json")" = 404 ]; then pass "digest has no write controls and no POST routes"; else fail "digest exposed write controls or POST routes"; fi
+curl -fsS "http://127.0.0.1:$P/digest" > "$FIX/digest-default.html" || fail "GET /digest default failed"
+if grep -q 'Digest: last 24 h' "$FIX/digest-default.html" && ! grep -q "$SINCE" "$FIX/digest-default.html"; then pass "query-window digest does not overwrite the default digest snapshot or heading"; else fail "query-window digest overwrote default heading: $(grep -Eo 'Digest: [^<]+' "$FIX/digest-default.html" | head -1)"; fi
+if [ "$(curl -sS -o "$FIX/digest-bad.txt" -w '%{http_code}' "http://127.0.0.1:$P/digest?since=garbage")" = 400 ] && [ "$(curl -sS -o "$FIX/digest-bad-api.txt" -w '%{http_code}' "http://127.0.0.1:$P/api/digest.json?hours=not-a-number")" = 400 ]; then pass "bad digest window input returns 400 instead of stale content"; else fail "bad digest window input did not return 400: page=$(cat "$FIX/digest-bad.txt" 2>/dev/null) api=$(cat "$FIX/digest-bad-api.txt" 2>/dev/null)"; fi
 if grep -q 'Digest: last 24 h' "$FIX/board.html" && grep -q 'Digest: last 24 h' "$FIX/needs.html"; then pass "/board and /needs link to digest"; else fail "board or needs missing digest link"; fi
 DIGEST_CAN="$FIX/digest-canary.ts"; cp "$PROJ/seats/desk.ts" "$DIGEST_CAN"
 python3 - "$DIGEST_CAN" <<'PY'
@@ -237,6 +240,21 @@ start=time.time(); urllib.request.urlretrieve(sys.argv[1], sys.argv[2]); print(i
 PY
 )"
 if [ "$NEEDS_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd refresh never runs in a request: /needs answers in under 1s and desk survives"; else fail "slow bd blocked /needs or killed desk (ms=$NEEDS_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
+# Let any startup digest build finish so this leg measures the query-window path,
+# not a refresh already in progress from process startup.
+sleep 5
+DIGEST_MS="$(python3 - "http://127.0.0.1:$PSLOW/digest?hours=1" "$FIX/slow-digest.html" <<'PY'
+import sys, time, urllib.request
+start=time.time(); urllib.request.urlretrieve(sys.argv[1], sys.argv[2]); print(int((time.time()-start)*1000))
+PY
+)"
+if [ "$DIGEST_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd digest window is scheduled off the request path and answers in under 1s"; else fail "slow bd digest window blocked request or killed desk (ms=$DIGEST_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
+NEEDS_DURING_DIGEST_MS="$(python3 - "http://127.0.0.1:$PSLOW/needs" "$FIX/slow-needs-during-digest.html" <<'PY'
+import sys, time, urllib.request
+start=time.time(); urllib.request.urlretrieve(sys.argv[1], sys.argv[2]); print(int((time.time()-start)*1000))
+PY
+)"
+if [ "$NEEDS_DURING_DIGEST_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd digest build does not block another desk request"; else fail "slow bd digest build blocked another request or killed desk (ms=$NEEDS_DURING_DIGEST_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
 kill "$SLOW_PID" 2>/dev/null || true; wait "$SLOW_PID" 2>/dev/null || true
 # Desk restart supervision moved to seats/supervisor.selftest.sh; this selftest
 # covers desk behavior only.
