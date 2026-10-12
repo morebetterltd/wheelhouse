@@ -555,6 +555,13 @@ run_stream() {  # $1 = JSONL stream file, remaining args pass through
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
+run_with_bd_show() {  # $1 = bd-show file, remaining args pass through
+  local bdfile="$1"
+  shift
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_BD_SHOW_FILE="$bdfile" \
+    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+  RC=$?
+}
 run_source_check() {  # $1 = bd-show file, remaining args pass through
   local bdfile="$1"
   shift
@@ -705,6 +712,32 @@ if grep -q "branch-repo: $UMB_PROJ/product" "$UMB_PROJ/seats/verdicts/bead-umbre
    && grep -q "evidence/bench.log — exists, .* bytes, non-empty — OK" "$UMB_PROJ/seats/verdicts/bead-umbrella-default.md" 2>/dev/null; then
   pass "umbrella layout: default repo records the product repo and product-relative evidence floor check"
 else fail "umbrella layout: default repo verdict did not record product repo and evidence check"; fi
+( cd "$UMB_PROJ" &&
+  git checkout -q -b fleet/bead-ambiguous &&
+  printf 'umbrella branch work\n' > umbrella-work.txt &&
+  git add umbrella-work.txt &&
+  git -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella-work ) || { echo "selftest: could not build ambiguous umbrella branch" >&2; exit 2; }
+( cd "$UMB_PROJ/product" && git branch fleet/bead-ambiguous ) || { echo "selftest: could not build ambiguous product branch" >&2; exit 2; }
+UMB_AMBIG_TIP="$(git -C "$UMB_PROJ" rev-parse fleet/bead-ambiguous)"
+PROD_AMBIG_TIP="$(git -C "$UMB_PROJ/product" rev-parse fleet/bead-ambiguous)"
+BD_UMBRELLA_REPO="$FIX/bd-umbrella-repo.txt"
+cat > "$BD_UMBRELLA_REPO" <<EOF
+fixture ambiguous repo bead
+
+DESCRIPTION
+
+  Repo: UMBRELLA
+EOF
+cat > "$REPLY" <<EOF
+Checked umbrella repo tip $UMB_AMBIG_TIP, not product tip $PROD_AMBIG_TIP.
+VERDICT: APPROVE
+EOF
+run_with_bd_show "$BD_UMBRELLA_REPO" bead-umbrella-ambiguous fleet/bead-ambiguous worker-1
+if [ $RC -eq 0 ] && grep -q "branch-repo: $UMB_PROJ" "$UMB_PROJ/seats/verdicts/bead-umbrella-ambiguous.md" 2>/dev/null \
+   && grep -q "tip: $UMB_AMBIG_TIP" "$UMB_PROJ/seats/verdicts/bead-umbrella-ambiguous.md" 2>/dev/null \
+   && ! grep -q "tip: $PROD_AMBIG_TIP" "$UMB_PROJ/seats/verdicts/bead-umbrella-ambiguous.md" 2>/dev/null; then
+  pass "umbrella layout: Repo: UMBRELLA pins the umbrella branch when the same branch exists in product"
+else fail "umbrella layout: Repo: UMBRELLA did not pin umbrella branch (exit $RC): $OUT verdict=$(cat "$UMB_PROJ/seats/verdicts/bead-umbrella-ambiguous.md" 2>/dev/null)"; fi
 RUN_PROJ="$PROJ"
 VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 
