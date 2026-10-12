@@ -24,7 +24,7 @@ A bench must satisfy all eight of these. They are stack-agnostic on purpose — 
 
    The output directory is where the bench puts it, not where it survives. Clause 1 leaves that directory to whoever invokes the bench, so it is routinely a scratch path with the lifetime of a shell session. Anything a verdict goes on to cite moves from there into a home the graph can reach first: `wheelhouse/GRAPH.md`'s *Where evidence lives* is the rule, and it governs the citation rather than the bench. Write the bench so that move is possible — self-contained files under the output directory, no absolute paths baked into what it emits.
 
-6. **It always tears down.** On success, on failure, and on interrupt. A leaked environment costs the next run silently, and silent costs are the expensive kind.
+6. **It always tears down.** On success, on failure, and on interrupt. A leaked environment costs the next run silently, and silent costs are the expensive kind. If the bench needs to exercise every shipped seat selftest, it runs `bash seats/selftest-sweep.sh` rather than its own `for seats/*.selftest.sh` loop, so the host-wide sweep lock serializes it with other seats and installs.
 
    Every ad-hoc build, derived-data directory, review-output directory, simulator artifact, or other scratch artifact the bench or its caller creates for a bead lives under `<container>/.wheelhouse-runs/<bead-id>/...`, not a bare `/tmp` path. Any simulator created for the run is named `<bead-id>-*` so the closed-bead scratch pruner can identify it later.
 
