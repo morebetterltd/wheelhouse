@@ -1399,6 +1399,7 @@ async function cmdReset(name: string): Promise<void> {
     state.seats[name].sessionId = null;
     state.seats[name].sessionFile = null;
     state.seats[name].pid = null;
+    delete (state.seats[name] as any).cwd;
     writeState(state); // reset-record
   }
   await driverForSeat(name, entry, "adapter reset").launch(name, entry, null, cwd); // null sessionFile: cold, no --session
@@ -1944,6 +1945,7 @@ async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<
   }
   rec.pid = null;
   rec.stoppedAt = new Date().toISOString();
+  delete (rec as any).cwd;
   writeState(state);
   return `seat ${name} stopped; session ${rec.sessionId} kept for resume`;
 }
@@ -1953,6 +1955,10 @@ async function cmdStop(name: string): Promise<void> {
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
+    if ((rec as any).cwd !== undefined) {
+      delete (rec as any).cwd;
+      writeState(state);
+    }
     console.log(`seat ${name} is not running`);
     return;
   }
