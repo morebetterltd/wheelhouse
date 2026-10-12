@@ -1,0 +1,12 @@
+ok 1 - github-report absent -> off and no calls
+ok 2 - github-report=on, no gh -> skipped no bd
+ok 3 - dry-run lists and creates nothing
+ok 4 - --yes creates once, scrubs body, writes external-ref
+ok 5 - marker dedupe links without create
+ok 6 - existing github external-ref skipped
+ok 7 - credential-shaped body refused without leaking match
+ok 8 - rostered BEADS_ACTOR stops before calls
+ok 9 - routes select candidates by label
+ok 10 - normalized-title dedupe links without create
+ok 11 - default route from github source and bad source STOP
+report-issues.selftest: PASS (11 legs)
