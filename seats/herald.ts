@@ -99,14 +99,6 @@ function projectRootExists(): boolean {
   }
 }
 
-function projectRootGoneError(): Error & { code: string } {
-  return Object.assign(new Error(`project root disappeared (${ROOT})`), { code: "WHEELHOUSE_PROJECT_ROOT_GONE" });
-}
-
-function isProjectRootGoneError(e: unknown): boolean {
-  return (e as any)?.code === "WHEELHOUSE_PROJECT_ROOT_GONE";
-}
-
 function readInboxSeen(): string[] {
   if (!fs.existsSync(INBOX)) return [];
   const ids: string[] = [];
@@ -192,19 +184,11 @@ function isStreamingDeltaEvent(obj: any): boolean {
 }
 
 function logFiles(): string[] {
-  if (!fs.existsSync(LOG_DIR)) {
-    if (!projectRootExists() || !fs.existsSync(SEATS_DIR)) throw projectRootGoneError();
-    return [];
-  }
-  try {
-    return fs.readdirSync(LOG_DIR)
-      .filter((name) => name.endsWith(".jsonl") && name !== "inbox.jsonl")
-      .sort()
-      .map((name) => path.join(LOG_DIR, name));
-  } catch (e: any) {
-    if (e?.code === "ENOENT" && (!projectRootExists() || !fs.existsSync(SEATS_DIR))) throw projectRootGoneError();
-    throw e;
-  }
+  if (!fs.existsSync(LOG_DIR)) return [];
+  return fs.readdirSync(LOG_DIR)
+    .filter((name) => name.endsWith(".jsonl") && name !== "inbox.jsonl")
+    .sort()
+    .map((name) => path.join(LOG_DIR, name));
 }
 
 function readCompleteLines(file: string, offset: number, onLine: (rec: { line: string; offset: number; endOffset: number }) => void): { offset: number; linesRead: number } {
@@ -842,22 +826,14 @@ export function launchDetached(name: string, argv: string[], intervalMs: number,
   const job = detachedJobs[name] ?? (detachedJobs[name] = { child: null, lastLaunchAt: 0 });
   if (job.child && job.child.pid && pidAlive(job.child.pid)) return false;
   if (now - job.lastLaunchAt < intervalMs) return false;
-  if (!projectRootExists() || !fs.existsSync(SEATS_DIR)) throw projectRootGoneError();
-  let fd: number | undefined;
-  try {
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    fd = fs.openSync(logFile, "a");
-    const child = spawn(argv[0], argv.slice(1), { cwd: ROOT, detached: true, stdio: ["ignore", fd, fd] });
-    child.unref();
-    job.child = child;
-    job.lastLaunchAt = now;
-    return true;
-  } catch (e: any) {
-    if (e?.code === "ENOENT" && (!projectRootExists() || !fs.existsSync(SEATS_DIR))) throw projectRootGoneError();
-    throw e;
-  } finally {
-    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
-  }
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  const fd = fs.openSync(logFile, "a");
+  const child = spawn(argv[0], argv.slice(1), { cwd: ROOT, detached: true, stdio: ["ignore", fd, fd] });
+  try { fs.closeSync(fd); } catch {}
+  child.unref();
+  job.child = child;
+  job.lastLaunchAt = now;
+  return true;
 }
 
 function staffingIntervalMs(): number {
@@ -1114,7 +1090,7 @@ async function daemon(): Promise<void> {
     try {
       scanOnce();
     } catch (e) {
-      if (isProjectRootGoneError(e) || !projectRootExists()) {
+      if (!projectRootExists()) {
         console.error(`herald: project root disappeared (${ROOT}); exiting`);
         return;
       }
