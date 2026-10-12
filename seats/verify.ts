@@ -799,23 +799,8 @@ export function readonlyBdPath(root: string, basePath: string, scratchCwd: strin
   const shimDir = path.join(scratchCwd, ".wheelhouse-readonly-bin");
   fs.mkdirSync(shimDir, { recursive: true });
   const shim = path.join(shimDir, "bd");
-  const realScratch = fs.realpathSync(scratchCwd);
   fs.writeFileSync(shim, `#!/usr/bin/env bash
-set -u
-real_bd=${JSON.stringify(realBd)}
-real_scratch=${JSON.stringify(realScratch)}
-cwd=$(pwd -P 2>/dev/null || pwd)
-case "$cwd" in
-  "$real_scratch"|"$real_scratch"/*) ;;
-  *) exec "$real_bd" --readonly "$@" ;;
-esac
-[ -z "\${BEADS_DIR:-}" ] || exec "$real_bd" --readonly "$@"
-for arg in "$@"; do
-  case "$arg" in
-    --db|--database|--db=*|--database=*) exec "$real_bd" --readonly "$@" ;;
-  esac
-done
-exec "$real_bd" "$@"
+exec ${JSON.stringify(realBd)} --readonly "$@"
 `);
   fs.chmodSync(shim, 0o755);
   return `${shimDir}${path.delimiter}${basePath}`;
