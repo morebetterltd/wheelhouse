@@ -142,25 +142,12 @@ function writeState(state: HeraldState): void {
   const body = JSON.stringify(persisted) + "\n";
   for (let attempt = 0; attempt < 2; attempt++) {
     const tmp = `${STATE_FILE}.${process.pid}.${stateWriteCounter++}.tmp`;
-    try {
-      fs.mkdirSync(SEATS_DIR, { recursive: true });
-      fs.writeFileSync(tmp, body);
-    } catch (e: any) {
-      if (e?.code === "ENOENT" && !projectRootExists()) {
-        console.error(`herald: project root disappeared (${ROOT}); exiting`);
-        process.exit(0);
-      }
-      throw e;
-    }
+    fs.writeFileSync(tmp, body);
     if (process.env.WHEELHOUSE_TEST_DELETE_HERALD_TMP === "1" && attempt === 0) fs.rmSync(tmp, { force: true });
     try {
       fs.renameSync(tmp, STATE_FILE);
       return;
     } catch (e: any) {
-      if (e?.code === "ENOENT" && !projectRootExists()) {
-        console.error(`herald: project root disappeared (${ROOT}); exiting`);
-        process.exit(0);
-      }
       if ((e?.code === "ENOENT" || e?.code === "EEXIST") && attempt === 0) {
         process.stderr.write(`herald state rename ${e.code}; retrying once: ${tmp} -> ${STATE_FILE}\n`);
         continue;
