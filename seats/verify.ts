@@ -15,6 +15,12 @@
  * The comparison happens BEFORE anything is spawned, against canonicalized
  * paths, and an identical pair is a loud STOP, not a warning.
  *
+ * The verifier process sees a read-only `bd` shim first on PATH so it cannot
+ * write any host graph by accident. For machine-local benches that need their
+ * own fixture graph, verify.ts also exports `WHEELHOUSE_REAL_BD` as the absolute
+ * path to the real bd binary the shim delegates to; benches must pair it with
+ * their own scratch BEADS_DIR rather than calling bare `bd` through PATH.
+ *
  * The verdict and the verifier's full output land in
  * seats/verdicts/<bead-id>.md — a WORKING COPY for the commander, not an
  * evidence home. wheelhouse/GRAPH.md names the two homes evidence may live
@@ -808,7 +814,9 @@ export function readonlyBdPath(root: string, basePath: string, scratchCwd: strin
   const shimDir = path.join(scratchCwd, ".wheelhouse-readonly-bin");
   fs.mkdirSync(shimDir, { recursive: true });
   const shim = path.join(shimDir, "bd");
-  fs.writeFileSync(shim, `#!/usr/bin/env bash\nexec ${JSON.stringify(realBd)} --readonly "$@"\n`);
+  fs.writeFileSync(shim, `#!/usr/bin/env bash
+exec ${JSON.stringify(realBd)} --readonly "$@"
+`);
   fs.chmodSync(shim, 0o755);
   return `${shimDir}${path.delimiter}${basePath}`;
 }
@@ -989,6 +997,42 @@ function sourceAccessPromptLines(snapshots: SourceSnapshot[]): string[] {
   ];
 }
 
+function sectionByHeading(text: string, heading: string): string | null {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start < 0) return null;
+  const out: string[] = [];
+  for (let i = start; i < lines.length; i++) {
+    if (i > start && /^#{2,3}\s+/.test(lines[i])) break;
+    out.push(lines[i]);
+  }
+  return out.join("\n").trim() || null;
+}
+
+function integratorPathCandidates(root: string): string[] {
+  return [
+    path.join(root, "wheelhouse", "INTEGRATOR.md"),
+    path.join(path.dirname(root), "wheelhouse", "INTEGRATOR.md"),
+    path.join(path.dirname(path.dirname(root)), "wheelhouse", "INTEGRATOR.md"),
+  ];
+}
+
+function pushAuthorityPromptLines(root: string): string[] {
+  const p = integratorPathCandidates(root).find((candidate) => fs.existsSync(candidate));
+  if (!p) return [``, `Install push authority: no wheelhouse/INTEGRATOR.md found from ${root}; if push authority is missing, HOLD with that reason.`];
+  let text = "";
+  try { text = fs.readFileSync(p, "utf8"); } catch { return [``, `Install push authority file exists but was not readable: ${p}; if push authority is missing, HOLD with that reason.`]; }
+  const authority = sectionByHeading(text, "### Push authority and its scope");
+  const reserved = sectionByHeading(text, "### Reserved list (principal-only, per action)");
+  return [
+    ``,
+    `Install push authority for this verifier run (read from ${p}):`,
+    authority ?? `### Push authority and its scope\n<not found in ${p}>`,
+    ``,
+    reserved ?? `### Reserved list (principal-only, per action)\n<not found in ${p}>`,
+  ];
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const evidencePaths: string[] = [];
@@ -1145,6 +1189,7 @@ async function main(): Promise<void> {
     claim,
     ...evidencePrompt,
     ...sourcePrompt,
+    ...pushAuthorityPromptLines(ROOT),
     ``,
     `Verify whether the bead's stated done holds at that SHA, per your brief.`,
     `Your process cwd is a detached scratch worktree for the branch repository. Prefer relative searches from this cwd.`,
@@ -1156,7 +1201,7 @@ async function main(): Promise<void> {
     `DISCOVER is reserved for a discovery that displaces the judgment, not for an appended branch tip; the integrator/publisher refuses any tip other than the verdict's pinned SHA until the new tip is re-verified.`,
     `End with exactly one plain-text VERDICT line and exactly one plain-text PUSH line, never inside a Markdown code fence:`,
     `VERDICT: APPROVE | BOUNCE | DISCOVER`,
-    `PUSH: <the line REVIEWER.md specifies>`,
+    `PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED [<why>]`,
     `Evidence goes above those two closing lines. Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.`,
     `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
   ].join("\n");
@@ -1164,11 +1209,14 @@ async function main(): Promise<void> {
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   const startedAt = Date.now();
-  const oneShotPath = readonlyBdPath(ROOT, hostBudgetPath(ROOT), scratchCwd);
+  const basePath = hostBudgetPath(ROOT);
+  const realBd = findOnPath("bd", basePath) ?? "";
+  const oneShotPath = readonlyBdPath(ROOT, basePath, scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
     PATH: oneShotPath,
     WHEELHOUSE_ROOT: ROOT,
+    WHEELHOUSE_REAL_BD: realBd,
     BEADS_ACTOR: beadsActorFor(verifierSeat),
   });
   const res = await runOneShot(oneShot.bin, oneShot.args, {
@@ -1235,7 +1283,7 @@ async function main(): Promise<void> {
         pushLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
     );
   }
-  if (!/^PUSH:\s*(APPROVE\s+\S+\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
+  if (!/^PUSH:\s*(APPROVE\s+\S+(?:\s+(?![—-]\s+verified:).+?)?\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
     die(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> [detail] | HOLD — <why> [detail] | NOT CONSIDERED [detail]`);
   }
   // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part

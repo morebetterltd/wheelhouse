@@ -31,6 +31,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { effectiveRoster } from "./roster";
@@ -127,7 +128,7 @@ function legacyBeadOpen(root: string, wt: RegisteredWorktree, state: StateLike, 
   const name = path.basename(wt.path);
   const st = statuses.get(name);
   if (st) return st !== "closed";
-  if (Object.values(state.seats ?? {}).some((rec) => rec?.cwd && samePath(rec.cwd, wt.path))) return true;
+  if (Object.values(state.seats ?? {}).some((rec) => rec?.cwd && pidAlive(rec.pid ?? null) && samePath(rec.cwd, wt.path))) return true;
   return true;
 }
 
@@ -162,18 +163,38 @@ export function refExists(root: string, ref: string): boolean {
   return git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok;
 }
 
+function templateSourceValue(root: string, key: string): string | null {
+  try {
+    const text = fs.readFileSync(path.join(root, "wheelhouse", ".template-source"), "utf8");
+    const m = text.match(new RegExp(`^${key}=(.*)$`, "m"));
+    const value = m?.[1]?.trim() ?? "";
+    return value || null;
+  } catch { return null; }
+}
+
+function pushBaseCandidate(candidates: string[], ref: string | null): void {
+  if (!ref) return;
+  if (!ref.includes("/") && !ref.startsWith("refs/")) candidates.push(`origin/${ref}`);
+  candidates.push(ref);
+}
+
+function pushIntegrationBaseCandidate(root: string, candidates: string[], ref: string | null): void {
+  if (!ref) return;
+  if (!ref.includes("/") || !refExists(root, ref)) candidates.push(`origin/${ref}`);
+  candidates.push(ref);
+}
+
 /** Which base a bead branches from. Explicit wins, then the bead's own
  * `Integration:` line (via bd, when available), then the install's env
- * default, then the remote's default branch, then local main/master/HEAD. */
+ * default, then the install's recorded merge target, then the remote's default
+ * branch, then local main/master/HEAD. */
 export function resolveBase(root: string, beadId: string, explicit?: string | null, bdRoot: string = root): string {
   const candidates: string[] = [];
   if (explicit) candidates.push(explicit);
   const fromBead = integrationLineFor(bdRoot, beadId);
-  if (fromBead) {
-    if (!fromBead.includes("/") || !refExists(root, fromBead)) candidates.push(`origin/${fromBead}`);
-    candidates.push(fromBead);
-  }
+  if (fromBead) pushIntegrationBaseCandidate(root, candidates, fromBead);
   if (process.env.WHEELHOUSE_WORKTREE_BASE) candidates.push(process.env.WHEELHOUSE_WORKTREE_BASE);
+  pushBaseCandidate(candidates, templateSourceValue(bdRoot, "merge-target"));
   const originHead = git(root, ["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]);
   if (originHead.ok && originHead.out) candidates.push(originHead.out);
   candidates.push("origin/main", "origin/master", "main", "master", "HEAD");
@@ -272,6 +293,83 @@ export function credentialScanSummary(repo: string, remote: string, branch: stri
   return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
 }
 
+export interface PublicStateScanHit { path: string; line: string; kind: string }
+
+function diffBaseForPublish(repo: string, remote: string, branch: string, headSha: string): string | null {
+  const remoteTip = remoteTrackingTip(repo, remote, branch);
+  if (remoteTip) return remoteTip;
+  for (const ref of [`refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/main`, `refs/remotes/${remote}/master`, "main", "master"]) {
+    const mb = git(repo, ["merge-base", headSha, ref]);
+    if (mb.ok && mb.out) return mb.out;
+  }
+  return null;
+}
+
+function addedLineHits(repo: string, base: string | null, headSha: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
+  if (patterns.length === 0) return [];
+  const args = base ? ["diff", "--unified=0", `${base}..${headSha}`, "--", "."] : ["show", "--format=", "--unified=0", headSha, "--", "."];
+  const r = git(repo, args);
+  if (!r.ok) return [{ path: "git diff", line: "0", kind: "state scan failed" }];
+  const hits: PublicStateScanHit[] = [];
+  let file = "?";
+  let nextLine = 0;
+  for (const line of r.out.split("\n")) {
+    if (line.startsWith("+++ b/")) { file = line.slice(6); continue; }
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (h) { nextLine = Number(h[1]); continue; }
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      const text = line.slice(1);
+      for (const p of patterns) if (p.re.test(text)) { hits.push({ path: file, line: String(nextLine), kind: p.kind }); break; }
+      nextLine++;
+    } else if (!line.startsWith("-")) {
+      nextLine++;
+    }
+  }
+  return hits;
+}
+
+function escapeRe(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function installBeadPrefixes(root: string): string[] {
+  const env = (process.env.WHEELHOUSE_LEAK_BEAD_PREFIX || "").split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+  const out = new Set(env);
+  if (process.env.WHEELHOUSE_SKIP_BD !== "1") {
+    const r = spawnSync("bd", ["list", "--limit", "20", "--json"], { cwd: root, encoding: "utf8", timeout: 10000 });
+    if (r.status === 0) {
+      try {
+        const rows = JSON.parse(r.stdout || "[]");
+        for (const row of Array.isArray(rows) ? rows : []) {
+          const id = String(row?.id ?? "");
+          const m = id.match(/^(.+)-[a-z0-9]{4}(?:\.\d+)?$/);
+          if (m) out.add(m[1]);
+        }
+      } catch { /* ignore bd output shape drift; explicit env/test fixtures still work */ }
+    }
+  }
+  return Array.from(out).filter((s) => /^[A-Za-z0-9_.-]+$/.test(s));
+}
+
+function publicStatePatterns(root: string): { kind: string; re: RegExp }[] {
+  const patterns: { kind: string; re: RegExp }[] = [];
+  for (const prefix of installBeadPrefixes(root)) patterns.push({ kind: "install bead id", re: new RegExp(`\\b${escapeRe(prefix)}-[a-z0-9]{4}(?:\\.\\d+)?\\b`, "i") });
+  const home = os.homedir();
+  if (home && home !== "/") patterns.push({ kind: "home path", re: new RegExp(escapeRe(home), "i") });
+  const deny = path.join(root, "seats", "run", "leak-terms");
+  try {
+    for (const line of fs.readFileSync(deny, "utf8").split(/\r?\n/)) {
+      const term = line.trim();
+      if (term && !term.startsWith("#")) patterns.push({ kind: "deny term", re: new RegExp(escapeRe(term), "i") });
+    }
+  } catch { /* install-local deny file is optional and never committed */ }
+  return patterns;
+}
+
+export function publicStateScanSummary(root: string, repo: string, remote: string, branch: string, headSha: string): string | null {
+  const hits = addedLineHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha, publicStatePatterns(root));
+  if (hits.length === 0) return null;
+  return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
+}
+
 export interface EnsureOptions {
   root: string;
   seat: string;
@@ -306,14 +404,18 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   const remote = o.remote ?? process.env.WHEELHOUSE_PUSH_REMOTE ?? "origin";
   const seatPush = o.seatPush ?? "on";
 
-  // 1. one seat per worktree
+  // 1. one live seat per worktree. Stopped/dead seats may retain stale cwd
+  // records from crashes or older adapters; those records must not pin a
+  // worktree forever.
   for (const [other, rec] of Object.entries(o.state.seats ?? {})) {
-    if (other === o.seat || !rec?.cwd) continue;
+    if (other === o.seat || !rec?.cwd || !pidAlive(rec.pid ?? null)) continue;
     if (samePath(rec.cwd, seatTarget)) refuse(`worktree ${seatTarget} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
   }
 
   const rec = o.state.seats?.[o.seat];
-  const recordedLegacy = rec?.cwd && isLegacyWorktree(root, rec.cwd, o.roster) && fs.existsSync(rec.cwd) ? rec.cwd : null;
+  const statuses = beadStatuses(root);
+  const recordedLegacyBead = rec?.cwd && isLegacyWorktree(root, rec.cwd, o.roster) ? path.basename(rec.cwd) : null;
+  const recordedLegacy = rec?.cwd && recordedLegacyBead && statuses.get(recordedLegacyBead) !== "closed" && fs.existsSync(rec.cwd) ? rec.cwd : null;
   const namedLegacy = path.join(worktreesDir(root), o.beadId);
   const legacy = recordedLegacy ?? (fs.existsSync(namedLegacy) ? namedLegacy : null);
   const repo = gitRepoFor(root, legacy ?? seatTarget);
@@ -334,7 +436,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   let atTarget = registeredWorktrees(repo).find((w) => samePath(w.path, target));
   if (atTarget?.branch && (path.basename(target) === o.beadId || rec?.lastBead === o.beadId)) branch = atTarget.branch;
   for (const [other, otherRec] of Object.entries(o.state.seats ?? {})) {
-    if (other === o.seat || !otherRec?.cwd) continue;
+    if (other === o.seat || !otherRec?.cwd || !pidAlive(otherRec.pid ?? null)) continue;
     if (samePath(otherRec.cwd, target)) refuse(`worktree ${target} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
   }
   const marker = path.join(target, PLACEHOLDER_MARKER);
@@ -368,7 +470,6 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
 
   if (!atTarget) {
     // 3. cap gates creation only
-    const statuses = beadStatuses(root);
     const live = fleetWorktrees(root, repo).filter((w) => {
       if (fs.existsSync(path.join(w.path, PLACEHOLDER_MARKER))) return false;
       if (!isLegacyWorktree(root, w.path, o.roster)) return true;
@@ -410,6 +511,12 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     const credentialHits = credentialScanSummary(repo, remote, currentBranch, headSha);
     if (credentialHits) {
       const msg = `credential scan failed for ${currentBranch}: ${credentialHits}; refusing to push. The seat stays on ${currentBranch} in ${target}.`;
+      note(`seat ${o.seat}: ${msg}`);
+      refuse(msg);
+    }
+    const stateHits = publicStateScanSummary(root, repo, remote, currentBranch, headSha);
+    if (stateHits) {
+      const msg = `public state scan failed for ${currentBranch}: ${stateHits}; refusing to push. The seat stays on ${currentBranch} in ${target}.`;
       note(`seat ${o.seat}: ${msg}`);
       refuse(msg);
     }
