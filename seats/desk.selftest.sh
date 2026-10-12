@@ -42,6 +42,7 @@ PROJ="$FIX/proj"; mkdir -p "$PROJ/seats" "$PROJ/wheelhouse"
 selftest_copy_seat_runtime "$PROJ" "$HERE"
 cat > "$PROJ/wheelhouse/.template-source" <<'EOF'
 namespace=demo
+product-repo=product
 EOF
 cat > "$PROJ/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-open","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Choose lunch","body":"Pick a meal","options":[{"label":"A","text":"Soup"},{"label":"B","text":"Salad"}],"default":"A; applies after noon","consequence":"We order the default.","machine":{"bead":"demo-ab12","seat":"worker-1"}}
@@ -92,6 +93,12 @@ cat <<'JSON'
 JSON
 EOF
 chmod +x "$PROJ/bin/bd"
+PRODUCT="$PROJ/product"; mkdir -p "$PRODUCT"; git -C "$PRODUCT" init -q; git -C "$PRODUCT" config user.email selftest@example.invalid; git -C "$PRODUCT" config user.name selftest
+printf base > "$PRODUCT/file.txt"; git -C "$PRODUCT" add file.txt; GIT_AUTHOR_DATE=2026-09-20T00:00:00Z GIT_COMMITTER_DATE=2026-09-20T00:00:00Z git -C "$PRODUCT" commit -q -m base; git -C "$PRODUCT" checkout -q -b feat; printf feat >> "$PRODUCT/file.txt"; git -C "$PRODUCT" commit -am 'demo-merged Ship the button' -q; SECOND="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" checkout -q main; printf main > "$PRODUCT/main.txt"; git -C "$PRODUCT" add main.txt; git -C "$PRODUCT" commit -q -m main; GIT_AUTHOR_DATE=2026-09-21T12:00:00Z GIT_COMMITTER_DATE=2026-09-21T12:00:00Z git -C "$PRODUCT" merge --no-ff -q feat -m 'Merge demo-merged Ship the button'; MERGE="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" remote add origin https://github.com/example/product.git
+cat > "$PROJ/seats/inbox.jsonl" <<'EOF'
+{"at":"2026-09-21T12:10:00Z","seat":"verifier-gate","class":"settle","state":"terminal","title":"verifier gate verdict — demo-bounce","detail":"VERDICT: BOUNCE — tests failed"}
+{"at":"2026-09-21T12:20:00Z","seat":"worker-1","class":"settle","state":"terminal","title":"seat turn settled — demo-review","detail":"done"}
+EOF
 P="$(port)"
 (cd "$PROJ" && exec env PATH="$PROJ/bin:$PATH" WHEELHOUSE_DESK_ROOT="$PROJ" WHEELHOUSE_DESK_PORT="$P" bun "$PROJ/seats/desk.ts" > "$FIX/desk.out" 2> "$FIX/desk.err") & PID=$!
 for _ in $(seq 1 50); do [ -s "$PROJ/seats/run/desk.port" ] && curl -fsS "http://127.0.0.1:$P/needs" > "$FIX/needs.html" 2>/dev/null && break; sleep 0.1; done
@@ -150,7 +157,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$PREC_CAN"; then
   fail "canary: could not disable board de-duplication; test proves nothing"
 else
   mkdir -p "$FIX/preccan/seats" "$FIX/preccan/wheelhouse" "$FIX/preccan/bin"
-  cp "$PREC_CAN" "$FIX/preccan/seats/desk.ts"; cp "$NEEDS" "$FIX/preccan/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/preccan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/preccan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/preccan/seats/"; cp "$PROJ/bin/bd" "$FIX/preccan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/preccan/wheelhouse/.template-source"
+  cp "$PREC_CAN" "$FIX/preccan/seats/desk.ts"; cp "$NEEDS" "$FIX/preccan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/preccan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/preccan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/preccan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/preccan/seats/"; cp "$PROJ/bin/bd" "$FIX/preccan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/preccan/wheelhouse/.template-source"
   PPREC="$(port)"; (cd "$FIX/preccan" && exec env PATH="$FIX/preccan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/preccan" WHEELHOUSE_DESK_PORT="$PPREC" bun "$FIX/preccan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$PPREC/api/board.json" > "$FIX/precedence-canary.json" 2>/dev/null || true; grep -q 'Finished but still in progress' "$FIX/precedence-canary.json" 2>/dev/null && break; sleep 0.1; done
   if python3 - "$FIX/precedence-canary.json" <<'PY'
@@ -165,6 +172,46 @@ fi
 if grep -q 'Write the guide' "$FIX/board.html" && grep -q 'Build the package' "$FIX/board.html" && grep -q 'sent back' "$FIX/board.html" && grep -q 'Open need' "$FIX/board.html"; then pass "GET /board renders board cards and need link"; else fail "GET /board missing expected card text"; fi
 if ! grep -Eq '<(form|button|input|textarea)([ >])' "$FIX/board.html" && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/board")" = 404 ]; then pass "board has no write controls and no POST route"; else fail "board exposed write controls or POST route"; fi
 if ! grep -Eq 'demo-[a-z0-9-]+' "$FIX/board.html"; then pass "board HTML hides namespace ids"; else fail "board HTML leaked ids: $(grep -Eo 'demo-[a-z0-9-]+' "$FIX/board.html" | sort -u | tr '\n' ' ')"; fi
+SINCE="2026-09-21T00:00:00Z"; UNTIL="2026-09-22T00:00:00Z"; DIGEST_Q="since=$SINCE&until=$UNTIL"
+curl -fsS "http://127.0.0.1:$P/digest?$DIGEST_Q" > "$FIX/digest.html" || fail "GET /digest failed"
+curl -fsS "http://127.0.0.1:$P/api/digest.json?$DIGEST_Q" > "$FIX/digest.json" || fail "GET /api/digest.json failed"
+if python3 - "$FIX/digest.html" <<'PY'
+import sys
+h=open(sys.argv[1]).read()
+order=['Shipped','Blocked on you','In review','Sent back','Failed and why']
+pos=[h.index(f'<h2>{x}</h2>') for x in order]
+assert pos==sorted(pos)
+assert 'Ship the button' in h and 'commit ' in h and 'https://github.com/example/product/commit/' in h
+assert '<a href="/needs">need</a>' in h
+PY
+then pass "GET /digest renders ordered sections with shipped commit link and need link"; else fail "GET /digest missing expected digest content: $(cat "$FIX/digest.html" 2>/dev/null)"; fi
+if python3 - "$FIX/digest.json" <(WHEELHOUSE_DIGEST_ROOT="$PROJ" PATH="$PROJ/bin:$PATH" bun "$PROJ/seats/digest.ts" --json --since "$SINCE" --until "$UNTIL") <<'PY'
+import json, sys
+left=json.load(open(sys.argv[1])); right=json.load(open(sys.argv[2]))
+left.pop('window',None); right.pop('window',None)
+assert left==right
+PY
+then pass "GET /api/digest.json matches digest.ts --json for the same window"; else fail "digest JSON differed: api=$(cat "$FIX/digest.json" 2>/dev/null)"; fi
+if ! grep -Eiq 'demo-[a-z0-9-]+|bead' "$FIX/digest.html"; then pass "digest HTML hides namespace ids and the word bead"; else fail "digest HTML leaked ids or bead: $(grep -Eio 'demo-[a-z0-9-]+|bead' "$FIX/digest.html" | sort -u | tr '\n' ' ')"; fi
+if ! grep -Eq '<(form|button|input|textarea)([ >])' "$FIX/digest.html" && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/digest")" = 404 ] && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/api/digest.json")" = 404 ]; then pass "digest has no write controls and no POST routes"; else fail "digest exposed write controls or POST routes"; fi
+if grep -q 'Digest: last 24 h' "$FIX/board.html" && grep -q 'Digest: last 24 h' "$FIX/needs.html"; then pass "/board and /needs link to digest"; else fail "board or needs missing digest link"; fi
+DIGEST_CAN="$FIX/digest-canary.ts"; cp "$PROJ/seats/desk.ts" "$DIGEST_CAN"
+python3 - "$DIGEST_CAN" <<'PY'
+import sys
+p=sys.argv[1]
+s=open(p).read()
+s=s.replace('.replace(new RegExp(`\\\\b${namespace().replace(/[.*+?^${}()|[\\]\\\\]/g,"\\\\$&")}-[a-z0-9_.-]+\\\\b`,"ig"),"work item")','')
+open(p,'w').write(s)
+PY
+if cmp -s "$PROJ/seats/desk.ts" "$DIGEST_CAN"; then
+  fail "canary: could not disable digest id filter; test proves nothing"
+else
+  mkdir -p "$FIX/digestcan/seats" "$FIX/digestcan/wheelhouse" "$FIX/digestcan/bin" "$FIX/digestcan/product"
+  cp "$DIGEST_CAN" "$FIX/digestcan/seats/desk.ts"; cp "$NEEDS" "$FIX/digestcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/digestcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/digestcan/seats/needs.jsonl"; cp "$PROJ/seats/inbox.jsonl" "$FIX/digestcan/seats/inbox.jsonl"; cp "$PROJ/seats/seats.json" "$FIX/digestcan/seats/seats.json" 2>/dev/null || true; cp "$PROJ/bin/bd" "$FIX/digestcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/digestcan/wheelhouse/.template-source"; cp -R "$PROJ/product/." "$FIX/digestcan/product/"
+  P4="$(port)"; (cd "$FIX/digestcan" && exec env PATH="$FIX/digestcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/digestcan" WHEELHOUSE_DESK_PORT="$P4" bun "$FIX/digestcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
+  for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P4/digest?$DIGEST_Q" > "$FIX/digest-canary.html" 2>/dev/null || true; grep -q 'demo-merged' "$FIX/digest-canary.html" 2>/dev/null && break; sleep 0.1; done
+  if grep -q 'demo-merged' "$FIX/digest-canary.html"; then pass "canary: disabling digest id filter leaks demo- in the page"; else fail "canary did not expose digest id leak: $(cat "$FIX/digest-canary.html" 2>/dev/null)"; fi
+fi
 if ! grep -q 'demo-ab12' "$FIX/needs.html" && ! grep -qi 'worker-1\|seat\|bead' "$FIX/needs.html"; then pass "HTML hides machine bead id and seat jargon"; else fail "HTML leaked machine fields: $(grep -oi 'demo-ab12\|worker-1\|seat\|bead' "$FIX/needs.html" | sort -u | tr '\n' ' ')"; fi
 before="$(grep -c '"type":"answered"' "$PROJ/seats/needs.jsonl")"
 curl -fsS -X POST -d 'text=Salad&choice=B' "http://127.0.0.1:$P/api/needs/need-open/answer" >/dev/null || fail "POST answer failed"
@@ -207,7 +254,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$ANSWERED_CAN"; then
   fail "canary: could not make answered needs inactive; test proves nothing"
 else
   mkdir -p "$FIX/answeredcan/seats" "$FIX/answeredcan/wheelhouse"
-  cp "$ANSWERED_CAN" "$FIX/answeredcan/seats/desk.ts"; cp "$NEEDS" "$FIX/answeredcan/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/answeredcan/seats/needs.jsonl"
+  cp "$ANSWERED_CAN" "$FIX/answeredcan/seats/desk.ts"; cp "$NEEDS" "$FIX/answeredcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/answeredcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/answeredcan/seats/needs.jsonl"
   PANS="$(port)"; (cd "$FIX/answeredcan" && exec env WHEELHOUSE_DESK_ROOT="$FIX/answeredcan" WHEELHOUSE_DESK_PORT="$PANS" bun "$FIX/answeredcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$PANS/needs" > "$FIX/answered-canary.html" 2>/dev/null && break; sleep 0.1; done
   if ! grep -q 'action="/api/needs/need-old/message"' "$FIX/answered-canary.html"; then pass "canary: making answered needs inactive removes controls and is caught"; else fail "canary did not remove answered controls"; fi
@@ -222,7 +269,7 @@ s=s.replace('<p>${esc(n.opened.body)}</p>', '<p>${esc(n.opened.body)}</p><p>${es
 p.write_text(s)
 PY
 if cmp -s "$PROJ/seats/desk.ts" "$CAN"; then fail "canary: could not make needs page print machine.bead; test proves nothing"; fi
-mkdir -p "$FIX/canproj/seats" "$FIX/canproj/wheelhouse"; cp "$CAN" "$FIX/canproj/seats/desk.ts"; cp "$NEEDS" "$FIX/canproj/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/canproj/seats/needs.jsonl"
+mkdir -p "$FIX/canproj/seats" "$FIX/canproj/wheelhouse"; cp "$CAN" "$FIX/canproj/seats/desk.ts"; cp "$NEEDS" "$FIX/canproj/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/canproj/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/canproj/seats/needs.jsonl"
 P2="$(port)"; (cd "$FIX/canproj" && exec env WHEELHOUSE_DESK_ROOT="$FIX/canproj" WHEELHOUSE_DESK_PORT="$P2" bun "$FIX/canproj/seats/desk.ts" >/dev/null 2>&1) & PID=$!
 for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$P2/needs" > "$FIX/canary.html" 2>/dev/null && break; sleep 0.1; done
 if grep -q 'demo-ab12' "$FIX/canary.html"; then pass "canary: rendering machine.bead is caught"; else fail "canary did not expose machine.bead leak"; fi
@@ -240,7 +287,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$BOARD_CAN"; then
   fail "canary: could not make board print ids; test proves nothing"
 else
   mkdir -p "$FIX/boardcan/seats" "$FIX/boardcan/wheelhouse" "$FIX/boardcan/bin"
-  cp "$BOARD_CAN" "$FIX/boardcan/seats/desk.ts"; cp "$NEEDS" "$FIX/boardcan/seats/needs.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/boardcan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/boardcan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/boardcan/seats/"; cp "$PROJ/bin/bd" "$FIX/boardcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/boardcan/wheelhouse/.template-source"
+  cp "$BOARD_CAN" "$FIX/boardcan/seats/desk.ts"; cp "$NEEDS" "$FIX/boardcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/boardcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/boardcan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/boardcan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/boardcan/seats/"; cp "$PROJ/bin/bd" "$FIX/boardcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/boardcan/wheelhouse/.template-source"
   P3="$(port)"; (cd "$FIX/boardcan" && exec env PATH="$FIX/boardcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/boardcan" WHEELHOUSE_DESK_PORT="$P3" bun "$FIX/boardcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P3/board" > "$FIX/board-canary.html" 2>/dev/null || true; grep -q 'demo-ready' "$FIX/board-canary.html" 2>/dev/null && break; sleep 0.1; done
   if grep -q 'demo-ready' "$FIX/board-canary.html"; then pass "canary: a board copy that prints ids is caught"; else fail "canary did not expose board id leak"; fi
