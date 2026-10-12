@@ -8,6 +8,7 @@ cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; selftest_remove
 trap cleanup EXIT INT TERM
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
+export WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS="${WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS:-120000}"
 ROOT="$FIX/proj"; BIN="$FIX/bin"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/contracts" "$BIN" "$FIX/home/.pi-seats-snap/worker" "$FIX/home/.pi-seats-snap/verifier"
 printf 'namespace=snap\n' > "$ROOT/wheelhouse/.template-source"
 printf '# Synthetic ISA\n' > "$ROOT/wheelhouse/ISA.md"
