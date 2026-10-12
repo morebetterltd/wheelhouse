@@ -698,6 +698,14 @@ bun seats/prune.ts categories
 
 ## Proving it still works
 
+For the full host sweep, run the locked runner instead of an ad-hoc loop:
+
+```bash
+bash seats/selftest-sweep.sh
+```
+
+It runs `seats/*.selftest.sh` serially and holds a host-wide lock so another seat or install on the same machine waits rather than starting a second full sweep. Individual suites are still run directly when only a touched surface needs proof:
+
 ```bash
 bash seats/evidence-scrub.selftest.sh
 bash seats/seat-env.selftest.sh
