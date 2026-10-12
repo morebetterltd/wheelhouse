@@ -1095,6 +1095,37 @@ if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes
   pass "tool_execution_update payload is trimmed in the seat log with byte count noted"
 else fail "tool_execution_update payload was not trimmed (exit $RC): $OUT"; fi
 
+DELTA_STREAM="$FIX/delta-stream.jsonl"
+DELTA_SLICE="$FIX/delta-filtered.jsonl"
+cat > "$DELTA_STREAM" <<'JSONL'
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"keystroke"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"private"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","delta":"{\"cmd\""}}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"tool_execution_start","toolCallId":"delta-tool","toolName":"Bash","args":{"cmd":"true"}}
+{"type":"tool_execution_end","toolCallId":"delta-tool","toolName":"Bash","result":{"isError":false,"output":"ok"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"echo: DELTAS payload"}]}}
+{"type":"agent_end","messages":[]}
+{"id":"delta-response","type":"response","command":"prompt","success":true}
+JSONL
+python3 - "$RUN_PROJ/seats/adapter.ts" "$FIX/log-filter.js" <<'PY'
+import re,sys
+src,out=sys.argv[1:]
+s=open(src).read()
+m=re.search(r"const script = `([\s\S]*?)`;\n  return", s)
+if not m: raise SystemExit("could not extract logFilterShell script")
+open(out,"w").write(m.group(1))
+PY
+RC=0; node "$FIX/log-filter.js" < "$DELTA_STREAM" > "$DELTA_SLICE" 2> "$FIX/log-filter.err" || RC=$?
+DELTA_COUNT="$(python3 - "$DELTA_SLICE" <<'PY'
+import sys
+print(open(sys.argv[1]).read().count('_delta'))
+PY
+)"
+if [ $RC -eq 0 ] && [ "$DELTA_COUNT" = 0 ] && grep -q '"type":"message_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_end"' "$DELTA_SLICE" && grep -q 'echo: DELTAS payload' "$DELTA_SLICE" && grep -q '"type":"response"' "$DELTA_SLICE"; then
+  pass "message_update *_delta stream frames are dropped while settle, tool, and response events remain"
+else fail "delta filtering wrong (exit $RC delta_count=$DELTA_COUNT err=$(cat "$FIX/log-filter.err" 2>/dev/null) slice=$(cat "$DELTA_SLICE" 2>/dev/null))"; fi
+
 printf '%s\n' '{"type":"filler","text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}' '{"type":"agent_end","messages":[]}' >> "$LOG"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=100 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "last-event agent_end" && [ -s "$LOG.1" ] && [ ! -s "$LOG" ]; then
