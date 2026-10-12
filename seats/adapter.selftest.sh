@@ -415,7 +415,7 @@ build_proj "$PROJ" alpha
 # override case sets WHEELHOUSE_BEADS_ACTOR_WORKER_1 explicitly instead.
 # WHEELHOUSE_SKIP_BD=1: the fixture beads have no bead store, so the adapter
 # must not ask `bd show` for an Integration: line when it resolves a base.
-run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 FIXTURE_BD_CLOSED_FILE="${FIXTURE_BD_CLOSED_FILE:-}" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_LEAK_BEAD_PREFIX=demo FIXTURE_BD_CLOSED_FILE="${FIXTURE_BD_CLOSED_FILE:-}" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
@@ -1855,6 +1855,33 @@ if [ $RC -ne 0 ] && says "credential scan failed" && says "leak.txt:1" && [ "$(w
   pass "push gate: credential scan refuses the pre-switch push and leaves the seat on its branch"
 else fail "push gate: credential scan did not refuse safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
 fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
+printf 'synthetic public task id demo-aa11 must not ship\n' > "$WT/state-leak.txt"
+fgit -C "$WT" add state-leak.txt
+fgit -C "$WT" commit -qm "synthetic bead id leak"
+run dispatch worker-1 bead-p2 "second bead with a synthetic install id fixture"
+if [ $RC -ne 0 ] && says "public state scan failed" && says "state-leak.txt:1" && [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ] && ! fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 >/dev/null; then
+  pass "push gate: public state scan refuses a synthetic install bead id before push"
+else fail "push gate: synthetic install id was not refused safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
+fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
+printf 'synthetic home path %s must not ship\n' "$HOME_FIX" > "$WT/home-leak.txt"
+fgit -C "$WT" add home-leak.txt
+fgit -C "$WT" commit -qm "synthetic home path leak"
+run dispatch worker-1 bead-p2 "second bead with a fake HOME fixture"
+if [ $RC -ne 0 ] && says "public state scan failed" && says "home-leak.txt:1" && [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ] && ! fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 >/dev/null; then
+  pass "push gate: public state scan refuses an added fake HOME path before push"
+else fail "push gate: fake HOME path was not refused safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
+fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
+mkdir -p "$WT_PROJ/seats/run"
+printf '# comments ignored\nfictional-client-codename\n' > "$WT_PROJ/seats/run/leak-terms"
+printf 'synthetic deny term fictional-client-codename must not ship\n' > "$WT/deny-leak.txt"
+fgit -C "$WT" add deny-leak.txt
+fgit -C "$WT" commit -qm "synthetic deny term leak"
+run dispatch worker-1 bead-p2 "second bead with an install-local deny fixture"
+if [ $RC -ne 0 ] && says "public state scan failed" && says "deny-leak.txt:1" && [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ] && ! fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 >/dev/null; then
+  pass "push gate: public state scan refuses an install-local deny term before push"
+else fail "push gate: install-local deny term was not refused safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
+fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
+rm -f "$WT_PROJ/seats/run/leak-terms"
 run dispatch worker-1 bead-p2 "second bead after the remote is back"
 if [ $RC -eq 0 ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1 | grep -q 'origin/' && [ "$(wt_branch "$WT")" = "fleet/bead-p2" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ]; then
   pass "push gate: with the remote restored and the credential commit removed, dispatch pushes fleet/bead-p1 to origin and moves the seat to fleet/bead-p2 without relaunching"
