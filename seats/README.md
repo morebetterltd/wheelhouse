@@ -91,15 +91,16 @@ Ledger event schema:
 
 `show` and `list` fold events by id into state `open`, `answered`, or `closed`.
 
-## Digest
-
-`bun seats/digest.ts [--since <iso>] [--until <iso>] [--hours N] [--human] [--json]` reads existing fleet records only: `seats/inbox.jsonl`, `seats/needs.jsonl`, verdict files, `bd list`, and the product repo's git log. Default output is commander Markdown with ids and verdict paths; `--human` removes install-local ids and is suitable for a human-facing need or desk page; `--json` returns the structure the desk can render. The default window is the last 24 hours ending now; `--since`/`--until` pin it exactly.
-
 ### Claude Code Stop hook for `@principal:`
 
 Wire the commander session's Stop hook to `bash seats/principal-sentinel.sh` so a commander turn can end with an `@principal:` line instead of trusting scrollback. The hook reads Claude Code's JSON stdin, respects `stop_hook_active`, and exits 0 on every path. It uses `last_assistant_message` when Claude supplies it, otherwise it reads `transcript_path` and extracts only the last top-level `type:"assistant"` record. If any line in that assistant text begins `@principal:`, the hook sends that line through the end of the assistant message to `bun seats/needs.ts open --from-stdin --source <session_id>:<assistant uuid>`. The source makes repeated Stop-hook runs for the same assistant message idempotent.
 
 Measured on this machine with `claude --version` = `2.1.278 (Claude Code)`, a real Stop-hook stdin object contained these top-level fields: `background_tasks`, `cwd`, `effort`, `hook_event_name`, `last_assistant_message`, `permission_mode`, `prompt_id`, `session_crons`, `session_id`, `stop_hook_active`, and `transcript_path`. In that capture, `last_assistant_message` was a string, `stop_hook_active` was a boolean, `effort` was an object, and `background_tasks` / `session_crons` were arrays. The transcript's last assistant row was verified to contain top-level `uuid`, `sessionId`, `type`, `timestamp`, `requestId`, plus `message.content[]` text blocks. Unverified: whether every Claude Code mode supplies `last_assistant_message`, whether Stop-hook input ever includes a message UUID directly, and whether non-print interactive turns add fields not seen in this one-shot capture.
+
+## Digest
+
+`bun seats/digest.ts [--since <iso>] [--until <iso>] [--hours N] [--human] [--json]` reads existing fleet records only: `seats/inbox.jsonl`, `seats/needs.jsonl`, verdict files, `bd list`, and the product repo's git log. Default output is commander Markdown with ids and verdict paths; `--human` removes install-local ids and is suitable for a human-facing need or desk page; `--json` returns the structure the desk can render. The default window is the last 24 hours ending now; `--since`/`--until` pin it exactly.
+
 ## Transports — optional off-machine replies
 
 The local desk is enough for a machine-local operator. A transport is optional machinery for reaching the human away from the machine. The courier is started by `seats/cockpit.sh` only when `seats/channels.json` declares one channel with `audience: "principal"`; a legacy token file alone is inert at cockpit startup. Legacy destination files (`seats/run/telegram.allow` for Telegram, `seats/run/slack.channel` for Slack) remain only for manual/back-compat courier runs when no principal channel is declared. With no declared principal channel, `seats/cockpit.sh --courier` prints `courier skipped: no declared principal channel` and exits 0; the needs ledger and desk still work.
