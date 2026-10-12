@@ -6,6 +6,7 @@ JSON=0
 [ "${1:-}" = "--json" ] && { JSON=1; ROOT="${2:-$(pwd -P)}"; }
 [ "${2:-}" = "--json" ] && JSON=1
 SRC_FILE="$ROOT/wheelhouse/.template-source"
+FORKS_FILE="$ROOT/wheelhouse/.template-forks"
 
 json_escape() { python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().rstrip("\n")))'; }
 fail_compare() {
@@ -46,7 +47,26 @@ is_wanted() {
   return 1
 }
 is_contract_half() { case "$1" in wheelhouse/crew/*.md) case "${1#wheelhouse/crew/}" in */*) return 1;; *) return 0;; esac;; wheelhouse/fleet/*.md) case "${1#wheelhouse/fleet/}" in */*) return 1;; *) return 0;; esac;; wheelhouse/*.md) case "${1#wheelhouse/}" in */*) return 1;; *) return 0;; esac;; *) return 1;; esac; }
+is_install_owned() { case "$1" in wheelhouse/*.md|wheelhouse/crew/*.md|wheelhouse/fleet/*.md) return 0;; *) return 1;; esac; }
 split_contract() { awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}' "$1"; }
+fork_reason() {
+  [ -f "$FORKS_FILE" ] || return 1
+  awk -v want="$1" '
+    /^[[:space:]]*($|#)/ { next }
+    {
+      line=$0
+      sub(/^[[:space:]]+/, "", line)
+      split(line, parts, /[[:space:]]+#|[[:space:]]+-[[:space:]]+|[[:space:]]+because[[:space:]]+/)
+      path=parts[1]
+      sub(/[[:space:]]+$/, "", path)
+      reason=line
+      sub("^" path, "", reason)
+      sub(/^[[:space:]]*(#|-|because)?[[:space:]]*/, "", reason)
+      if (path == want && reason != "") found=1
+    }
+    END { exit found ? 0 : 1 }
+  ' "$FORKS_FILE"
+}
 template_content() {
   p="$1"
   if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null | awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}'
@@ -64,16 +84,19 @@ git -C "$REPO" ls-tree -r --name-only "$commit" -- seats runbooks wheelhouse 2>/
 modified=""; local_only=""; missing=""
 while IFS= read -r p; do
   [ -n "$p" ] || continue
-  if ! grep -qxF "$p" "$TMP/template"; then local_only="${local_only}${p}
-"; continue; fi
+  if ! grep -qxF "$p" "$TMP/template"; then
+    if is_install_owned "$p" || fork_reason "$p"; then continue; fi
+    local_only="${local_only}${p}
+"; continue
+  fi
   template_content "$p" > "$TMP/t"; install_content "$p" > "$TMP/i"
-  cmp -s "$TMP/t" "$TMP/i" || modified="${modified}${p}
-"
+  cmp -s "$TMP/t" "$TMP/i" || { fork_reason "$p" || modified="${modified}${p}
+"; }
 done < "$TMP/install"
 while IFS= read -r p; do
   [ -n "$p" ] || continue
-  grep -qxF "$p" "$TMP/install" || missing="${missing}${p}
-"
+  grep -qxF "$p" "$TMP/install" || { fork_reason "$p" || missing="${missing}${p}
+"; }
 done < "$TMP/template"
 
 ahead="null"; headref=""
