@@ -46,8 +46,17 @@
  * bead claim itself already has to the dispatch.
  *
  * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
- *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>]
+ *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]
+ *          [--timeout-ms <ms>] [--first-output-timeout-ms <ms>]
  *          [--no-event-timeout-ms <ms>]
+ *
+ * Timeout knobs are liveness watchdogs, not a wall-clock cap on the whole
+ * verifier turn. --first-output-timeout-ms bounds silence before the first
+ * output. After output begins, each stream event resets the stall watchdog;
+ * the effective quiet-period limit is the smaller of --timeout-ms (default
+ * 900000 ms) and --no-event-timeout-ms (default 600000 ms), so the default
+ * post-output stall limit is 600000 ms. To allow a longer quiet period, raise
+ * --no-event-timeout-ms too; for quiet periods over 900000 ms, raise both.
  *
  * Single-repo installs need no configuration: --repo defaults to ROOT. Umbrella
  * installs with wheelhouse/.template-source product-repo= also need no
@@ -1013,7 +1022,7 @@ async function main(): Promise<void> {
   sweepStaleScratchWorktrees(repoRoot);
   const [beadId, branch, authorSeat, verifierArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--no-event-timeout-ms <ms>]");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
   }
   setVerifierGateBead(beadId);
   const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
