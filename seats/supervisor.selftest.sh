@@ -46,7 +46,9 @@ RC=0; OUT="$(cd "$PROJ" && HOME="$LAUNCH_HOME" WHEELHOUSE_SUPERVISOR_ROOT="$PROJ
 printf '%s\n' "$OUT" > "$FIX/install-launchd.out"
 PLIST="$LAUNCH_HOME/Library/LaunchAgents/com.wheelhouse.launchfixture.supervisor.plist"
 if command -v launchctl >/dev/null 2>&1; then launchctl list > "$FIX/launchctl.after" 2>&1 || true; else printf 'launchctl absent\n' > "$FIX/launchctl.after"; fi
-if [ $RC -eq 0 ] && [ -f "$PLIST" ] && grep -q "launchctl bootstrap gui/$UID $PLIST" "$FIX/install-launchd.out" && grep -q "launchctl bootout gui/$UID $PLIST" "$FIX/install-launchd.out" && cmp -s "$FIX/launchctl.before" "$FIX/launchctl.after"; then pass "install-launchd writes fixture plist and only prints launchctl commands"; else fail "install-launchd output/launchctl proof wrong rc=$RC out=$OUT before=$(cat "$FIX/launchctl.before") after=$(cat "$FIX/launchctl.after")"; fi
+before_label_count="$(grep -c 'com\.wheelhouse\.launchfixture\.supervisor' "$FIX/launchctl.before" 2>/dev/null || true)"
+after_label_count="$(grep -c 'com\.wheelhouse\.launchfixture\.supervisor' "$FIX/launchctl.after" 2>/dev/null || true)"
+if [ $RC -eq 0 ] && [ -f "$PLIST" ] && grep -q "launchctl bootstrap gui/$UID $PLIST" "$FIX/install-launchd.out" && grep -q "launchctl bootout gui/$UID $PLIST" "$FIX/install-launchd.out" && [ "$before_label_count" = 0 ] && [ "$after_label_count" = 0 ]; then pass "install-launchd writes fixture plist and does not load its launchd label"; else fail "install-launchd output/launchctl proof wrong rc=$RC out=$OUT before_label_count=$before_label_count after_label_count=$after_label_count"; fi
 if command -v plutil >/dev/null 2>&1; then
   if plutil -lint "$PLIST" >/dev/null 2>"$FIX/plutil.err"; then pass "launchd plist passes plutil -lint"; else fail "plutil -lint failed: $(cat "$FIX/plutil.err")"; fi
 else

@@ -697,15 +697,21 @@ else
   fail "cockpit did not start/verify herald (rc=$RC pid=${DAEMON_PID:-none} out=$(cat "$FIX/cockpit1.out" 2>/dev/null))"
 fi
 
+SUPERVISOR_PID="$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)"
+[ -n "$SUPERVISOR_PID" ] && kill "$SUPERVISOR_PID" 2>/dev/null || true
+for _ in $(seq 1 20); do [ -z "$SUPERVISOR_PID" ] || ! kill -0 "$SUPERVISOR_PID" 2>/dev/null && break; sleep 0.1; done
+rm -f "$PROJ/seats/run/supervisor.pid"
+CURRENT_DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
+[ -n "$CURRENT_DAEMON_PID" ] && DAEMON_PID="$CURRENT_DAEMON_PID"
 kill -9 "$DAEMON_PID" 2>/dev/null || true
 sleep 0.4
-WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit2.out" 2>&1
+WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 PATH="$FIX/bin:$PATH" "$PROJ/seats/cockpit.sh" --herald demo > "$FIX/cockpit2.out" 2>&1
 RC=$?
 REVIVED_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && [ -n "$REVIVED_PID" ] && [ "$REVIVED_PID" != "$DAEMON_PID" ] && kill -0 "$REVIVED_PID" 2>/dev/null && grep -q 'herald dead:' "$FIX/cockpit2.out" && grep -q 'herald started' "$FIX/cockpit2.out"; then
-  pass "cockpit verifies and restarts a dead herald on re-run"
+  pass "cockpit --herald verifies and restarts a dead herald without supervisor racing the assertion"
 else
-  fail "cockpit did not revive herald (rc=$RC old=${DAEMON_PID:-none} new=${REVIVED_PID:-none} out=$(cat "$FIX/cockpit2.out" 2>/dev/null))"
+  fail "cockpit --herald did not revive herald (rc=$RC old=${DAEMON_PID:-none} new=${REVIVED_PID:-none} out=$(cat "$FIX/cockpit2.out" 2>/dev/null))"
 fi
 
 if grep -R "wheelhouse_truncated_bytes" "$PROJ/seats/logs" >/dev/null 2>&1 || true; then :; fi

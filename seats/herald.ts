@@ -69,6 +69,7 @@ interface HeraldState {
   lastPokedInboxSize?: number;
   lastPokedByPane?: Record<string, number>;
   firstDeferredAtByPane?: Record<string, number>;
+  firstDeferredInboxSizeByPane?: Record<string, number>;
   staffing?: { lastCheckAt?: string };
   alerts?: { lastCheckAt?: string };
 }
@@ -102,7 +103,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: [] };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
+    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: Array.isArray(parsed.seen) ? parsed.seen : [], lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, firstDeferredInboxSizeByPane: parsed.firstDeferredInboxSizeByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
   } catch (e: any) {
     die(`cannot parse ${STATE_FILE}: ${e.message}`);
   }
@@ -836,7 +837,10 @@ function pokeCommanderIfSafe(state: HeraldState): void {
     logPoke("dropped", `reason=already-drained inbox=${inboxSize} cursor=${drainCursor}`);
     state.lastPokedInboxSize = inboxSize;
     const target = resolveCommanderPane();
-    if (target.status === "ok" && target.target) state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [target.target]: 0 };
+    if (target.status === "ok" && target.target) {
+      state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [target.target]: 0 };
+      state.firstDeferredInboxSizeByPane = { ...(state.firstDeferredInboxSizeByPane ?? {}), [target.target]: 0 };
+    }
     writeState(state);
     return;
   }
@@ -846,11 +850,13 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   const lastPoked = state.lastPokedByPane?.[pane] ?? 0;
   if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${pane} inbox=${inboxSize}`); return; }
   const idle = commanderPaneIdleClaude(pane);
-  const firstDeferred = state.firstDeferredAtByPane?.[pane] ?? 0;
+  const deferredInboxSize = state.firstDeferredInboxSizeByPane?.[pane] ?? 0;
+  const firstDeferred = deferredInboxSize === inboxSize ? (state.firstDeferredAtByPane?.[pane] ?? 0) : 0;
   const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && lastCommanderPaneStableForPoke;
   if (!idle && !escalated) {
     const first = firstDeferred || Date.now();
     state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [pane]: first };
+    state.firstDeferredInboxSizeByPane = { ...(state.firstDeferredInboxSizeByPane ?? {}), [pane]: inboxSize };
     writeState(state);
     logPoke("deferred", `reason=not-idle pane=${pane} inbox=${inboxSize}`);
     return;
@@ -865,6 +871,7 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   state.lastPokedInboxSize = inboxSize;
   state.lastPokedByPane = { ...(state.lastPokedByPane ?? {}), [pane]: Date.now() };
   state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [pane]: 0 };
+  state.firstDeferredInboxSizeByPane = { ...(state.firstDeferredInboxSizeByPane ?? {}), [pane]: 0 };
   writeState(state);
 }
 
