@@ -15,6 +15,12 @@
  * The comparison happens BEFORE anything is spawned, against canonicalized
  * paths, and an identical pair is a loud STOP, not a warning.
  *
+ * The verifier process sees a read-only `bd` shim first on PATH so it cannot
+ * write any host graph by accident. For machine-local benches that need their
+ * own fixture graph, verify.ts also exports `WHEELHOUSE_REAL_BD` as the absolute
+ * path to the real bd binary the shim delegates to; benches must pair it with
+ * their own scratch BEADS_DIR rather than calling bare `bd` through PATH.
+ *
  * The verdict and the verifier's full output land in
  * seats/verdicts/<bead-id>.md — a WORKING COPY for the commander, not an
  * evidence home. wheelhouse/GRAPH.md names the two homes evidence may live
@@ -808,7 +814,9 @@ export function readonlyBdPath(root: string, basePath: string, scratchCwd: strin
   const shimDir = path.join(scratchCwd, ".wheelhouse-readonly-bin");
   fs.mkdirSync(shimDir, { recursive: true });
   const shim = path.join(shimDir, "bd");
-  fs.writeFileSync(shim, `#!/usr/bin/env bash\nexec ${JSON.stringify(realBd)} --readonly "$@"\n`);
+  fs.writeFileSync(shim, `#!/usr/bin/env bash
+exec ${JSON.stringify(realBd)} --readonly "$@"
+`);
   fs.chmodSync(shim, 0o755);
   return `${shimDir}${path.delimiter}${basePath}`;
 }
@@ -1164,11 +1172,14 @@ async function main(): Promise<void> {
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   const startedAt = Date.now();
-  const oneShotPath = readonlyBdPath(ROOT, hostBudgetPath(ROOT), scratchCwd);
+  const basePath = hostBudgetPath(ROOT);
+  const realBd = findOnPath("bd", basePath) ?? "";
+  const oneShotPath = readonlyBdPath(ROOT, basePath, scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
     PATH: oneShotPath,
     WHEELHOUSE_ROOT: ROOT,
+    WHEELHOUSE_REAL_BD: realBd,
     BEADS_ACTOR: beadsActorFor(verifierSeat),
   });
   const res = await runOneShot(oneShot.bin, oneShot.args, {

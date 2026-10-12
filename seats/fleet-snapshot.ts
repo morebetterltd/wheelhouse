@@ -7,6 +7,7 @@ import { agentSettledEvent, lastActivityAt, lastEvent, pidAlive } from "./seat-a
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
+const BD_TIMEOUT_MS = Number(process.env.WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS || "30000");
 
 export interface ReadyItem { id: string; title: string; chained: boolean; groupKey: string | null }
 export interface BacklogItem { id: string; title: string; authorSeat: string | null; authorAccountDir: string | null }
@@ -17,7 +18,7 @@ export interface Snapshot { at: string; ready: ReadyItem[]; readyCount: number; 
 function stop(msg: string): never { throw new Error(`STOP: ${msg}`); }
 function readJson(file: string): any { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } }
 function runBd(root: string, args: string[]): any[] {
-  const r = spawnSync("bd", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000, maxBuffer: 16 * 1024 * 1024 });
+  const r = spawnSync("bd", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: BD_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
   if (r.status !== 0) stop(`bd ${args.join(" ")} failed (${r.status ?? r.error?.message}): ${(r.stderr || r.stdout || "").trim()}`);
   try { return JSON.parse(r.stdout || "[]"); } catch (e: any) { stop(`bd ${args.join(" ")} did not return JSON: ${e.message}`); }
 }

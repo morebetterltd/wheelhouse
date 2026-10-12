@@ -224,7 +224,7 @@ render() { # floor-file args...
   local f="$1"; shift
   RC=0; OUT="$(env PATH="$RUN_PATH" COLUMNS=180 LINES=70 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$f" --once "$@" 2>&1)" || RC=$?
 }
-has() { printf '%s\n' "$OUT" | grep -q "$1"; }
+has() { grep -q "$1" <<< "$OUT"; }
 
 # --- phase 1: pinned seat's events render, humanized -------------------------
 phase "phase 1: spotlight renders the pinned seat's events"
@@ -252,7 +252,7 @@ else fail "transcript rendered empty [say] rows: $EMPTY_SAY_ROWS"; fi
 if [ "$TOOL_ROWS" = 1 ] && has '\[tool\] read README.md.*# Fixture title'; then pass "transcript has one updated row for the tool call"
 else fail "transcript tool rows wrong (count=$TOOL_ROWS): $(printf '%s\n' "$OUT" | grep '\[tool\]' || true)"; fi
 has 'The fix is complete and ready for review\.' && pass "assistant prose appears verbatim" || fail "assistant prose missing from transcript: $OUT"
-if printf '%s\n' "$OUT" | grep -q 'streaming chunk that must not render\|text_delta\|toolcall_delta\|message_update'; then
+if grep -q 'streaming chunk that must not render\|text_delta\|toolcall_delta\|message_update' <<< "$OUT"; then
   fail "streaming/delta frame rendered as its own row: $OUT"
 else
   pass "streaming/delta frames do not render rows"
@@ -323,7 +323,7 @@ render "$PROJ/seats/floor.ts" --pin 1
 has " RED"   && has " AMBER" && has " GREEN" \
   && pass "cue words RED/AMBER/GREEN all present" || fail "cue words missing"
 has '\[0\] STATUS' && pass "rail has the [0] STATUS cell" || fail "no [0] STATUS row"
-if printf '%s\n' "$OUT" | grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T'; then
+if grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' <<< "$OUT"; then
   fail "rail exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | head -1)"
 else
   pass "rail exposes humanized ages, not raw epoch/ISO timestamps"
@@ -336,7 +336,7 @@ render "$PROJ/seats/floor.ts" --pin 0
 has "bd ready: 2"   && pass "STATUS shows bd ready count"       || fail "no bd ready count in STATUS"
 has "last bead wh-rev-9" && pass "STATUS shows per-seat detail" || fail "no per-seat detail in STATUS"
 has "last activity 12s ago" && pass "STATUS uses humanized last-activity age" || fail "STATUS did not show humanized last activity"
-if printf '%s\n' "$OUT" | grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T'; then
+if grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' <<< "$OUT"; then
   fail "STATUS exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | head -1)"
 else
   pass "STATUS exposes humanized ages, not raw epoch/ISO timestamps"
@@ -426,7 +426,7 @@ else
   crun() {
     RC=0
     out_file="$FIX/cockpit-crun.out"
-    env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null > "$out_file" 2>&1 || RC=$?
+    env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" WHEELHOUSE_COCKPIT_DAEMONS=0 WHEELHOUSE_COCKPIT_RECOVERY=0 TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null > "$out_file" 2>&1 || RC=$?
     OUT="$(cat "$out_file" 2>/dev/null || true)"
   }
   crun
