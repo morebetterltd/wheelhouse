@@ -1945,7 +1945,10 @@ async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<
   }
   rec.pid = null;
   rec.stoppedAt = new Date().toISOString();
-  delete (rec as any).cwd;
+  // Keep the recorded cwd with the session: stop/stop-all are warm-pause
+  // operations, and resume must return the seat to the same worktree. Dead
+  // seat records no longer occupy worktrees in seat-worktree.ts, so preserving
+  // this path does not resurrect the pre-#76 stale-cwd blocker.
   writeState(state);
   return `seat ${name} stopped; session ${rec.sessionId} kept for resume`;
 }
