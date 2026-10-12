@@ -600,20 +600,45 @@ function targetFromCommanderFile(): { target: string; resolvedBy: ResolvedBy } |
   return null;
 }
 
+function projectNamespace(): string {
+  try {
+    const m = fs.readFileSync(path.join(ROOT, "wheelhouse", ".template-source"), "utf8").match(/^namespace=(.+)$/m);
+    if (m?.[1]?.trim()) return m[1].trim();
+  } catch {}
+  return path.basename(ROOT);
+}
+
 function scanCommanderPane(): { target: string; resolvedBy: ResolvedBy } | null {
   let out = "";
   try { out = tmuxOutput(["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_index}\t#{pane_current_path}"]); }
   catch { return null; }
   const rows = out.split(/\r?\n/).map((line) => line.split("\t")).filter((r) => r.length >= 5 && r[2] === "bridge" && r[3] === "0" && pathUnderRoot(r.slice(4).join("\t")));
   if (rows.length === 0) return null;
-  const want = `wh-${path.basename(ROOT)}`.toLowerCase();
+  const want = `wh-${projectNamespace()}`.toLowerCase();
   const preferred = rows.find((r) => r[1].toLowerCase() === want) ?? rows[0];
   return { target: preferred[0], resolvedBy: "scan" };
 }
 
 function resolveCommanderPane(): CommanderTarget {
   const envTarget = TMUX_PANE || (TMUX_SESSION ? `${TMUX_SESSION}:bridge.0` : "");
-  const candidate = envTarget ? { target: envTarget, resolvedBy: "env" as ResolvedBy } : (targetFromCommanderFile() ?? scanCommanderPane());
+  if (envTarget) {
+    const next = validateTarget(envTarget, "env");
+    writeTarget(next);
+    return next;
+  }
+  const fileCandidate = targetFromCommanderFile();
+  if (fileCandidate) {
+    const fileTarget = validateTarget(fileCandidate.target, fileCandidate.resolvedBy);
+    if (fileTarget.status === "ok") { writeTarget(fileTarget); return fileTarget; }
+    const scanned = scanCommanderPane();
+    if (scanned) {
+      const scanTarget = validateTarget(scanned.target, scanned.resolvedBy);
+      if (scanTarget.status === "ok") { writeTarget(scanTarget); return scanTarget; }
+    }
+    writeTarget(fileTarget);
+    return fileTarget;
+  }
+  const candidate = scanCommanderPane();
   const next = candidate ? validateTarget(candidate.target, candidate.resolvedBy) : { target: "", resolvedBy: "scan" as ResolvedBy, status: "missing" as TargetStatus, reason: "missing", checkedAt: new Date().toISOString() };
   writeTarget(next);
   return next;
@@ -632,11 +657,19 @@ function configuredIdleRegex(): RegExp | null {
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 function stripAnsi(s: string): string { return s.replace(ANSI_RE, ""); }
 
+function liveStatusText(paneText: string): string {
+  const plainLines = stripAnsi(paneText).split(/\r?\n/);
+  const prompt = plainLines.findLastIndex((line) => promptLineLooksIdle(line));
+  if (prompt < 0) return plainLines.slice(-12).join("\n");
+  const start = Math.max(0, prompt - 12);
+  return plainLines.slice(start, prompt).join("\n");
+}
+
 function paneTextHasActiveMarkers(paneText: string): boolean {
-  const plain = stripAnsi(paneText);
-  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(plain)
-    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(plain)
-    || /\besc to interrupt\b/i.test(plain);
+  const live = liveStatusText(paneText);
+  return /[✶✽✻✢✳✷✸✹].*\b(thinking|working|fiddle-faddling|esc to interrupt)\b/i.test(live)
+    || /\b(thinking|working|fiddle-faddling|running|esc to interrupt)\b[^\n]*\([^\n]*(thinking|tool|running|esc)/i.test(live)
+    || /\besc to interrupt\b/i.test(live);
 }
 
 const IDLE_PROMPT_LINE_RE = /^\s*(?:[>❯](?:[\s\u00a0]{8,}[A-Za-z0-9_.:-]+)?|Human:|You:)\s*$/;
@@ -665,6 +698,18 @@ function promptLineLooksIdle(line: string): boolean {
   const prompt = visible.findIndex((v) => v.ch === "❯" || v.ch === ">");
   if (prompt < 0 || visible.slice(0, prompt).some((v) => !/\s/.test(v.ch))) return false;
   let after = visible.slice(prompt + 1);
+  let gapRun = 0;
+  for (let i = 0; i < after.length; i++) {
+    if (/^[\s\u00a0]$/.test(after[i].ch)) {
+      gapRun++;
+      if (gapRun >= 8) {
+        after = after.slice(0, i - gapRun + 1);
+        break;
+      }
+    } else {
+      gapRun = 0;
+    }
+  }
   while (after.length && /\s/.test(after[after.length - 1].ch)) after = after.slice(0, -1);
   if (after.length === 0) return true;
   const afterText = after.map((v) => v.ch).join("");
@@ -802,7 +847,7 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   if (POKE_COOLDOWN_MS > 0 && lastPoked > 0 && Date.now() - lastPoked < POKE_COOLDOWN_MS) { logPoke("deferred", `reason=cooldown pane=${pane} inbox=${inboxSize}`); return; }
   const idle = commanderPaneIdleClaude(pane);
   const firstDeferred = state.firstDeferredAtByPane?.[pane] ?? 0;
-  const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && lastCommanderPaneStableForPoke && !lastCommanderPaneHadActiveMarkersForPoke;
+  const escalated = !idle && firstDeferred > 0 && POKE_ESCALATE_MS > 0 && Date.now() - firstDeferred >= POKE_ESCALATE_MS && lastCommanderPaneStableForPoke;
   if (!idle && !escalated) {
     const first = firstDeferred || Date.now();
     state.firstDeferredAtByPane = { ...(state.firstDeferredAtByPane ?? {}), [pane]: first };

@@ -46,8 +46,17 @@
  * bead claim itself already has to the dispatch.
  *
  * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
- *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>]
+ *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]
+ *          [--timeout-ms <ms>] [--first-output-timeout-ms <ms>]
  *          [--no-event-timeout-ms <ms>]
+ *
+ * Timeout knobs are liveness watchdogs, not a wall-clock cap on the whole
+ * verifier turn. --first-output-timeout-ms bounds silence before the first
+ * output. After output begins, each stream event resets the stall watchdog;
+ * the effective quiet-period limit is the smaller of --timeout-ms (default
+ * 900000 ms) and --no-event-timeout-ms (default 600000 ms), so the default
+ * post-output stall limit is 600000 ms. To allow a longer quiet period, raise
+ * --no-event-timeout-ms too; for quiet periods over 900000 ms, raise both.
  *
  * Single-repo installs need no configuration: --repo defaults to ROOT. Umbrella
  * installs with wheelhouse/.template-source product-repo= also need no
@@ -171,10 +180,21 @@ export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "ve
   return dir;
 }
 
+function makeWritableRecursive(p: string): void {
+  try {
+    const st = fs.lstatSync(p);
+    if (st.isSymbolicLink()) return;
+    try { fs.chmodSync(p, st.mode | 0o200); } catch {}
+    if (st.isDirectory()) for (const name of fs.readdirSync(p)) makeWritableRecursive(path.join(p, name));
+  } catch {}
+}
+
 function removeScratchWorktree(repoRoot: string, dir: string): void {
+  makeWritableRecursive(dir);
   try {
     execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { stdio: "ignore" });
   } catch {
+    makeWritableRecursive(dir);
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
     try { execFileSync("git", ["-C", repoRoot, "worktree", "prune"], { stdio: "ignore" }); } catch {}
   }
@@ -447,7 +467,6 @@ function runOneShot(
     const finish = (result: Partial<OneShotRunResult>) => {
       if (done) return;
       done = true;
-      clearTimeout(totalTimer);
       clearTimeout(firstOutputTimer);
       if (noEventTimer) clearTimeout(noEventTimer);
       if (markerFile) { try { fs.unlinkSync(markerFile); } catch {} }
@@ -460,13 +479,15 @@ function runOneShot(
       setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 1000).unref?.();
       finish({ error });
     };
-    const totalTimer = setTimeout(() => killFor("ETIMEDOUT", `timed out after ${opts.timeoutMs}ms`), opts.timeoutMs);
     const firstOutputTimer = setTimeout(() => {
       if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT", `no verifier output within ${opts.firstOutputTimeoutMs}ms`);
     }, opts.firstOutputTimeoutMs);
     const resetNoEventTimer = () => {
       if (noEventTimer) clearTimeout(noEventTimer);
-      noEventTimer = setTimeout(() => killFor("WHEELHOUSE_NO_EVENT_TIMEOUT", `model stalled after ${opts.noEventTimeoutMs}ms with no verifier stream event`), opts.noEventTimeoutMs);
+      const stallMs = Math.min(opts.noEventTimeoutMs, opts.timeoutMs);
+      const code = opts.timeoutMs <= opts.noEventTimeoutMs ? "ETIMEDOUT" : "WHEELHOUSE_NO_EVENT_TIMEOUT";
+      const message = code === "ETIMEDOUT" ? `timed out after ${opts.timeoutMs}ms with no verifier stream event` : `model stalled after ${opts.noEventTimeoutMs}ms with no verifier stream event`;
+      noEventTimer = setTimeout(() => killFor(code, message), stallMs);
     };
     const collect = (chunks: Buffer[], current: () => number, setBytes: (n: number) => void, chunk: Buffer) => {
       sawOutput = true;
@@ -1001,7 +1022,7 @@ async function main(): Promise<void> {
   sweepStaleScratchWorktrees(repoRoot);
   const [beadId, branch, authorSeat, verifierArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--no-event-timeout-ms <ms>]");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
   }
   setVerifierGateBead(beadId);
   const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);

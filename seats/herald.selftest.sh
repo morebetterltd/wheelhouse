@@ -381,6 +381,16 @@ if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG"
 else fail "scan target did not poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
+mkdir -p "$PROJ/wheelhouse"; printf 'namespace=fixture-ns\n' > "$PROJ/wheelhouse/.template-source"
+printf '%s\n' '{"type":"agent_end","messages":["synthetic namespace scan target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+PANES="$(printf '%%20\twh-project\tbridge\t0\t%s\n%%21\twh-fixture-ns\tbridge\t0\t%s' "$PROJ" "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%20\t%s\n%%21\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && grep -qx -- '-t %21 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"target": "%21"' "$PROJ/seats/run/herald.target.json"; then pass "scan prefers .template-source namespace over directory basename"
+else fail "namespace scan did not prefer namespace session (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
+rm -f "$PROJ/wheelhouse/.template-source"
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 printf '{"paneId":"%%88","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic wrong root target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
@@ -388,6 +398,15 @@ RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMU
 LAST_POKED="$(node -e 'const fs=require("fs"); const f=process.argv[1]; const s=fs.existsSync(f)?JSON.parse(fs.readFileSync(f,"utf8")):{}; console.log(s.lastPokedInboxSize===undefined?"unset":s.lastPokedInboxSize)' "$PROJ/seats/herald.state.json")"
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke refused .*reason=wrong-root .*target=%88 .*resolvedBy=cockpit-file' "$POKE_LOG" && grep -q '"status": "wrong-root"' "$PROJ/seats/run/herald.target.json" && [ "$LAST_POKED" = unset ]; then pass "wrong-root target is refused without send or lastPokedInboxSize"
 else fail "wrong-root target was not refused safely (rc=$RC out=$OUT sends=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
+printf '{"paneId":"%%88","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
+printf '%s\n' '{"type":"agent_end","messages":["synthetic stale commander file target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+PANES="$(printf '%%11\twh-project\tbridge\t0\t%s' "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s\n%%11\t%s' "$FIX/outside" "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "scan"' "$PROJ/seats/run/herald.target.json"; then pass "stale commander-pane.json falls through to pane scan"
+else fail "stale commander-pane.json did not fall through to scan (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic target appears later"]}' > "$PROJ/seats/logs/worker-1.jsonl"
@@ -438,6 +457,13 @@ if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*
 else fail "gray prompt suggestion was not treated idle or capture-pane lacked -e (rc=$RC out=$OUT args=$(cat "$FIX/capture-args.log" 2>/dev/null || echo none) send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf '%s\n' '{"type":"agent_end","messages":["gray suggestion with stray prompt row settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-gray-suggestion-stray-prompt-row.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "gray prompt suggestion with stray text after a wide gap is classified idle"
+else fail "gray prompt suggestion with stray prompt-row text was not treated idle (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["styled esc busy settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
 RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/busy-styled-esc-to-interrupt.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
@@ -459,6 +485,20 @@ if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*
 else fail "idle prompt with working/thinking prose was misclassified busy (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf '%s\n' '{"type":"agent_end","messages":["idle busy-looking scrollback prose settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-busy-prose-in-scrollback.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "busy-looking prose in scrollback is not classified busy"
+else fail "busy-looking prose in scrollback blocked poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf '%s\n' '{"type":"agent_end","messages":["idle regex source scrollback settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle-regex-source-in-scrollback.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "herald regex source in scrollback is not classified busy"
+else fail "herald regex source in scrollback blocked poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf 'settled but wrapper not idle; commander prose says still working and thinking\n' > "$FIX/wrapper-not-idle.txt"
 printf '%s\n' '{"type":"agent_end","messages":["escalate settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
@@ -467,6 +507,16 @@ node -e 'const fs=require("fs"); const f=process.argv[1]; const s=JSON.parse(fs.
 RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC2=$?
 if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke escalated .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "deferred poke escalates after bounded window when stable pane text has bare working/thinking prose"
 else fail "deferred poke did not escalate (rc=$RC/$RC2 out=$OUT/$OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none))"; fi
+
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
+printf 'settled but wrapper not idle; scrollback says still running (tool path)\n' > "$FIX/wrapper-not-idle-busy-looking.txt"
+printf '%s\n' '{"type":"agent_end","messages":["escalate busy-looking scrollback settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+seed_log_cursor worker-1.jsonl 0
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle-busy-looking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+node -e 'const fs=require("fs"); const f=process.argv[1]; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.firstDeferredAtByPane={"wh-demo:bridge.0":1}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")' "$PROJ/seats/herald.state.json"
+RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-not-idle-busy-looking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC2=$?
+if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke escalated .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "escalation is not blocked by busy-looking scrollback"
+else fail "busy-looking scrollback blocked escalation (rc=$RC/$RC2 out=$OUT/$OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf 'stable transcript\n❯\nLifeOS status repaint 1 tokens=10\n' > "$FIX/repaint-1.txt"
@@ -484,11 +534,11 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$PO
   for i in $(seq 1 60); do printf 'status filler %s\n' "$i"; done
   printf '❯\nLifeOS status footer\n'
 } > "$FIX/wide-mid-turn.txt"
-printf '%s\n' '{"type":"agent_end","messages":["wide mid turn settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
+printf '%s\n' '{"type":"agent_end","messages":["wide old spinner settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
 RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$FIX/wide-mid-turn.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "wide capture sees spinner above prompt and classifies mid-turn pane not idle"
-else fail "wide mid-turn fixture was considered idle (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
+if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "wide capture ignores old spinner outside live status area"
+else fail "old spinner outside live status area blocked poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["drained while busy"]}' > "$PROJ/seats/logs/worker-1.jsonl"
@@ -618,25 +668,21 @@ cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 JSONL
 seed_log_cursor worker-1.jsonl 0
 RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-never-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
-POLL_RC=0; POLL_OUT="$(cp "$ROOT/seats/herald.ts" "$PROJ/seats/herald.ts" && cp "$ROOT/seats/commander-inbox-poll.sh" "$PROJ/seats/commander-inbox-poll.sh" && chmod +x "$PROJ/seats/commander-inbox-poll.sh" && WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$PROJ/seats/commander-inbox-poll.sh" --once 2>&1)" || POLL_RC=$?
-CURSOR_AFTER_POLL="$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo 0)"
-POLL_OUT2="$(WHEELHOUSE_COMMANDER_POLL_ROOT="$PROJ" "$PROJ/seats/commander-inbox-poll.sh" --once 2>&1)"; POLL2_RC=$?
+CURSOR_AFTER_DEFER="$(cat "$PROJ/seats/inbox.cursor" 2>/dev/null || echo 0)"
 BEFORE_IDLE_SENDS="$(line_count "$SEND_LOG")"
 IDLE_RC=0; IDLE_OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || IDLE_RC=$?
 AFTER_IDLE_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$POLL_RC" -eq 0 ] && [ "$POLL2_RC" -eq 0 ] && [ "$IDLE_RC" -eq 0 ] && grep -q 'poke deferred .*reason=not-idle' "$POKE_LOG" 2>/dev/null && printf '%s\n' "$POLL_OUT" | grep -q 'check the fleet inbox' && [ -z "$POLL_OUT2" ] && [ "$CURSOR_AFTER_POLL" = 0 ] && [ "$AFTER_IDLE_SENDS" = "$((BEFORE_IDLE_SENDS+1))" ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then
-  pass "commander poll prints one visual hint without draining; herald later pokes when idle"
+if [ $RC -eq 0 ] && [ "$IDLE_RC" -eq 0 ] && grep -q 'poke deferred .*reason=not-idle' "$POKE_LOG" 2>/dev/null && [ "$CURSOR_AFTER_DEFER" = 0 ] && [ "$AFTER_IDLE_SENDS" = "$((BEFORE_IDLE_SENDS+1))" ] && grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then
+  pass "deferred herald wake leaves inbox durable and later pokes when idle"
 else
-  fail "poll/herald wake behavior wrong (herald_rc=$RC poll_rc=$POLL_RC/$POLL2_RC idle_rc=$IDLE_RC herald_out=$OUT idle_out=$IDLE_OUT poll_out=$POLL_OUT poll2=$POLL_OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) cursor=$CURSOR_AFTER_POLL)"
+  fail "herald wake retry behavior wrong (herald_rc=$RC idle_rc=$IDLE_RC herald_out=$OUT idle_out=$IDLE_OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) cursor=$CURSOR_AFTER_DEFER)"
 fi
 
 # Cockpit supervision: fake tmux is enough because the claim here is that
 # cockpit.sh starts/verifies/restarts the herald before it builds or attaches
 # the bridge. The fake records a session so the second run takes the idempotent
 # existing-session path.
-cp "$ROOT/seats/herald.ts" "$PROJ/seats/herald.ts"
-cp "$ROOT/seats/cockpit.sh" "$PROJ/seats/cockpit.sh"
-cp "$ROOT/seats/daemons.sh" "$ROOT/seats/supervisor.sh" "$PROJ/seats/"
+selftest_copy_seat_runtime "$PROJ" "$ROOT/seats"
 chmod +x "$PROJ/seats/cockpit.sh" "$PROJ/seats/daemons.sh" "$PROJ/seats/supervisor.sh"
 cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);

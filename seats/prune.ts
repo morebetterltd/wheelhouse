@@ -279,6 +279,38 @@ function liveCwdInside(p: string, live: Set<string>): string | null {
   for (const cwd of live) for (const w of wanted) if (insideOf(cwd, w)) return cwd;
   return null;
 }
+interface LiveCwdHolder { pid: number; command: string; cwd: string }
+function liveCwdHolders(): LiveCwdHolder[] | null {
+  const candidates = process.env.WHEELHOUSE_LSOF ? [process.env.WHEELHOUSE_LSOF] : ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"];
+  for (const lsof of candidates) {
+    const r = spawnSync(lsof, ["-d", "cwd", "-Fpcn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+    if (r.error || typeof r.stdout !== "string" || r.stdout.length === 0) continue;
+    const holders: LiveCwdHolder[] = [];
+    let current: Partial<LiveCwdHolder> = {};
+    const flush = () => { if (current.pid && current.cwd) holders.push({ pid: current.pid, command: current.command ?? "?", cwd: path.resolve(current.cwd) }); };
+    for (const line of r.stdout.split("\n")) {
+      if (!line) continue;
+      if (line.startsWith("p")) { flush(); current = { pid: Number(line.slice(1)) }; }
+      else if (line.startsWith("c")) current.command = line.slice(1);
+      else if (line.startsWith("n")) current.cwd = line.slice(1);
+    }
+    flush();
+    return holders;
+  }
+  return null;
+}
+function liveCwdHolderInside(p: string): LiveCwdHolder | null {
+  const holders = liveCwdHolders();
+  if (!holders) return null;
+  const wanted = [path.resolve(p)];
+  const rp = realpathOr(p); if (rp && rp !== wanted[0]) wanted.push(rp);
+  for (const h of holders) for (const w of wanted) if (insideOf(h.cwd, w)) return h;
+  return null;
+}
+function liveCwdReason(p: string, cwd: string): string {
+  const h = liveCwdHolderInside(p);
+  return h ? `live process has its cwd in ${h.cwd} (pid ${h.pid} command ${h.command} cwd ${h.cwd})` : `live process has its cwd in ${cwd}`;
+}
 /** Commands that look like a push in flight, with their cwd (from the same lsof pass). */
 function pushInProgress(root: string, p: string, live: Set<string> | null): string | null {
   const runDir = path.join(root, "seats", "run");
@@ -447,7 +479,7 @@ function scanBeadRuns(root: string, beads: Map<string, string>, seats: Map<strin
       if (b[1] !== "closed") { rows.push(row("needs-review", false, root, d, "", "none", `scratch belongs to bead ${b[0]} which is ${b[1]}`)); continue; }
       if (live === null) { rows.push(row("needs-review", false, root, d, "", "none", "cannot verify: lsof unavailable")); continue; }
       const cwd = liveCwdInside(d, live);
-      if (cwd) { rows.push(row("needs-review", false, root, d, "", "none", `live process has its cwd in ${cwd}; scratch belongs to closed bead ${b[0]}`)); continue; }
+      if (cwd) { rows.push(row("needs-review", false, root, d, "", "none", `${liveCwdReason(d, cwd)}; scratch belongs to closed bead ${b[0]}`)); continue; }
       rows.push(row("run-scratch", true, root, d, "", "rm", `scratch belongs to closed bead ${b[0]}`));
     }
   }
@@ -700,7 +732,7 @@ function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
     if (cats && !cats.has(r.category)) { skipped++; continue; }
     if (!r.safe || NEVER.has(r.category)) { skipped++; continue; }
     if (!yes) { reclaimed += r.size_bytes; console.log(`DRY-RUN ${r.action} ${r.category} ${r.path}`); continue; }
-    if (r.action === "rm") fs.rmSync(r.path, { recursive: true, force: true });
+    if (r.action === "rm") { makeWritable(r.path); fs.rmSync(r.path, { recursive: true, force: true }); }
     else if (r.action === "worktree") {
       const branch = r.branch;
       const sha = run("git", ["rev-parse", "HEAD"], r.path).out;
@@ -766,6 +798,13 @@ function underAllowed(root: string, p: string): boolean {
   const rp = path.resolve(p);
   return [FLEET_CONTAINER, RUNS_DIRNAME, ".wheelhouse-build"].some((d) => insideOf(rp, path.join(root, d)) && rp !== path.join(root, d));
 }
+function makeWritable(p: string): void {
+  try {
+    const st = fs.lstatSync(p);
+    fs.chmodSync(p, st.mode | 0o200);
+    if (st.isDirectory() && !st.isSymbolicLink()) for (const child of fs.readdirSync(p)) makeWritable(path.join(p, child));
+  } catch {}
+}
 
 type CleanupPolicy = "on" | "off" | "report";
 function templateSourceSetting(root: string, key: string): string | null {
@@ -814,7 +853,7 @@ function cleanup(o: CleanupOptions): number {
       const live = liveCwds(true);
       if (live === null) { emit(`${dry}kept ${r.category} ${r.path} reason=cannot verify: lsof unavailable`); kept++; continue; }
       const cwd = liveCwdInside(r.path, live);
-      if (cwd) { emit(`${dry}kept ${r.category} ${r.path} reason=live process has its cwd in ${cwd}`); kept++; continue; }
+      if (cwd) { emit(`${dry}kept ${r.category} ${r.path} reason=${liveCwdReason(r.path, cwd)}`); kept++; continue; }
       const anchor = seatAnchorWithin(r.path, seatAnchors(root));
       if (anchor) { emit(`${dry}kept ${r.category} ${r.path} reason=seat-anchor: ${anchor}`); kept++; continue; }
       if (r.action === "worktree") {
@@ -825,6 +864,7 @@ function cleanup(o: CleanupOptions): number {
       }
       if (o.dryRun) { emit(`dry-run would remove ${r.category} ${r.path} bytes=${r.size_bytes} reason=${r.reason}`); removed++; freed += r.size_bytes; continue; }
       try {
+        makeWritable(r.path);
         let tagged = "";
         if (r.action === "worktree") {
           const sha = run("git", ["rev-parse", "HEAD"], r.path).out;

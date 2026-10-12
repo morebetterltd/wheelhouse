@@ -71,7 +71,14 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
-cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"; return 0; }
+cleanup() {
+  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+  if [ -n "$FIX" ] && [ -e "$FIX" ]; then
+    chmod -R u+w "$FIX" 2>/dev/null || true
+    selftest_remove_fixture_dir "$FIX"
+  fi
+  return 0
+}
 trap cleanup EXIT INT TERM
 
 # --- fixture -----------------------------------------------------------------
@@ -274,15 +281,21 @@ if (process.env.STUB_SILENT === "1") {
     process.stdout.write(JSON.stringify({type:"tool_execution_end",toolName:"bash",exitCode:0})+"\n");
   }
   setTimeout(() => {}, 10000);
-} else if (process.env.STUB_SLOW_TOOL_OUTPUT === "1") {
+} else if (process.env.STUB_SLOW_TOOL_OUTPUT === "1" || process.env.STUB_LONG_TOOL_PROGRESS === "1") {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
   const write = (obj) => process.stdout.write(JSON.stringify(obj)+"\n");
   if (streamRequested) {
     write({type:"tool_execution_start",toolName:"bash",args:{cmd:"slow selftest"}});
-    setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 1"}), 80);
-    setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 2"}), 160);
-    setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), 240);
-    setTimeout(() => { write({type:"message_end",message:{role:"assistant",content:text}}); process.exit(Number(process.env.STUB_EXIT || 0)); }, 320);
+    if (process.env.STUB_LONG_TOOL_PROGRESS === "1") {
+      for (let i = 1; i <= 6; i++) setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:`still running ${i}`}), i * 100);
+      setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), 700);
+      setTimeout(() => { write({type:"message_end",message:{role:"assistant",content:text}}); process.exit(Number(process.env.STUB_EXIT || 0)); }, 760);
+    } else {
+      setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 1"}), 80);
+      setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 2"}), 160);
+      setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), 240);
+      setTimeout(() => { write({type:"message_end",message:{role:"assistant",content:text}}); process.exit(Number(process.env.STUB_EXIT || 0)); }, 320);
+    }
   } else {
     process.stdout.write(text);
     process.exit(Number(process.env.STUB_EXIT || 0));
@@ -373,16 +386,8 @@ SENTINEL='SENTINEL-TOKEN-9c2e'
 build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   local proj="$1" ns="$2" src="$3" d
   mkdir -p "$proj/seats" "$proj/contracts"
+  selftest_copy_seat_runtime "$proj" "$VERIFY_DIR"
   cp "$src" "$proj/seats/verify.ts"
-  cp "$BRIEFS" "$proj/seats/briefs.ts"
-  cp "$HARNESS" "$proj/seats/harness.ts"
-  cp "$VERIFY_DIR/pool.ts" "$proj/seats/pool.ts"
-  cp "$VERIFY_DIR/roster.ts" "$proj/seats/roster.ts"
-  cp "$VERIFY_DIR/credential-shapes.ts" "$proj/seats/credential-shapes.ts"
-  cp "$VERIFY_DIR/seat-worktree.ts" "$proj/seats/seat-worktree.ts"
-  cp "$FINAL_ASSISTANT" "$proj/seats/final-assistant-message.ts"
-  cp "$HOST_BUDGET_TS" "$proj/seats/host-budget.ts"
-  cp "$HERALD" "$proj/seats/herald.ts"
   printf '# Crew: Reviewer\n\nfixture brief — the stub never reads it, the argv check does.\n' \
     > "$proj/contracts/REVIEWER.md"
   printf 'tracked fixture seat file\n' > "$proj/seats/README.md"
@@ -435,16 +440,8 @@ BENCH
 build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.ts source
   local umb="$1" ns="$2" src="$3" product="$1/product"
   mkdir -p "$umb/seats" "$umb/contracts" "$umb/wheelhouse" "$product"
+  selftest_copy_seat_runtime "$umb" "$VERIFY_DIR"
   cp "$src" "$umb/seats/verify.ts"
-  cp "$BRIEFS" "$umb/seats/briefs.ts"
-  cp "$HARNESS" "$umb/seats/harness.ts"
-  cp "$VERIFY_DIR/pool.ts" "$umb/seats/pool.ts"
-  cp "$VERIFY_DIR/roster.ts" "$umb/seats/roster.ts"
-  cp "$VERIFY_DIR/credential-shapes.ts" "$umb/seats/credential-shapes.ts"
-  cp "$VERIFY_DIR/seat-worktree.ts" "$umb/seats/seat-worktree.ts"
-  cp "$FINAL_ASSISTANT" "$umb/seats/final-assistant-message.ts"
-  cp "$HOST_BUDGET_TS" "$umb/seats/host-budget.ts"
-  cp "$HERALD" "$umb/seats/herald.ts"
   printf '# Crew: Reviewer\n\numbrella reviewer brief.\n' > "$umb/contracts/REVIEWER.md"
   printf 'product-repo=product\n' > "$umb/wheelhouse/.template-source"
   cat > "$umb/seats/seats.json" <<EOF
@@ -681,11 +678,18 @@ cat > "$REPLY" <<'EOF'
 Read the mounted source snapshot and confirmed writes fail.
 VERDICT: APPROVE
 EOF
-run_source_check "$BD_SOURCE" bead-source fleet/bead-1 worker-1 verifier
+VERIFY_RO_TMP="$FIX/verify-ro-tmp"; mkdir -p "$VERIFY_RO_TMP"
+TMPDIR="$VERIFY_RO_TMP" run_source_check "$BD_SOURCE" bead-source fleet/bead-1 worker-1 verifier
 SOURCE_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/source-check.txt"
 if [ $RC -eq 0 ] && grep -q '"readable": true' "$SOURCE_CHECK" 2>/dev/null && grep -q '"writeFailed": true' "$SOURCE_CHECK" 2>/dev/null; then
   pass "source snapshots: verifier can read the bead-declared sibling and writes to the mounted copy fail"
 else fail "source snapshots: read/write assertion failed (exit $RC): $OUT check=$(cat "$SOURCE_CHECK" 2>/dev/null)"; fi
+if ! find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -exec test ! -w '{}' \; -print -quit | grep -q .; then
+  pass "source snapshots: cleanup restores/removes read-only snapshot trees"
+else
+  chmod -R u+w "$VERIFY_RO_TMP" 2>/dev/null || true
+  fail "source snapshots: read-only snapshot tree left under TMPDIR: $(find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -print 2>/dev/null | head -5)"
+fi
 if grep -q '"undeclaredAbsent": true' "$SOURCE_CHECK" 2>/dev/null; then
   pass "source snapshots: undeclared sibling source is not mounted or named"
 else fail "source snapshots: undeclared sibling source was reachable or named: $(cat "$SOURCE_CHECK" 2>/dev/null)"; fi
@@ -728,6 +732,10 @@ OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIM
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "no-event watchdog does not trip while a long-running tool keeps streaming output"
 else fail "no-event watchdog tripped on a still-streaming tool (exit $RC): $OUT"; fi
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$RUN_PROJ/seats/verify.ts" bead-progress-past-total fleet/bead-1 worker-1 verifier --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
+  pass "tool progress beyond total timeout reaches a verdict instead of being killed"
+else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$RUN_PROJ/seats/verify.ts" bead-silent fleet/bead-1 worker-1 verifier --timeout-ms 5000 --first-output-timeout-ms 300 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && says "verifier emitted no stdout/stderr within 300ms" && says "first-output deadline" && says "--first-output-timeout-ms"; then
   pass "silent verifier stops on the first-output deadline with an actionable reason"

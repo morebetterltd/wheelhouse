@@ -14,7 +14,7 @@ printf '# Synthetic ISA\n' > "$ROOT/wheelhouse/ISA.md"
 git -C "$ROOT" init -q -b main
 git -C "$ROOT" add wheelhouse/ISA.md wheelhouse/.template-source
 git -C "$ROOT" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture-isa
-cp "$HERE/fleet-snapshot.ts" "$ROOT/seats/fleet-snapshot.ts"; cp "$HERE/seat-activity.ts" "$ROOT/seats/seat-activity.ts"; cp "$HERE/roster.ts" "$ROOT/seats/roster.ts"; cp "$HERE/pool.ts" "$ROOT/seats/pool.ts"; cp "$HERE/harness.ts" "$ROOT/seats/harness.ts"; cp "$HERE/credential-shapes.ts" "$ROOT/seats/credential-shapes.ts"
+selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"seats":{"worker-1":{"role":"worker","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/worker","authRoute":"oauth"}},"verifier":{"role":"verifier","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/verifier","authRoute":"oauth"}}}}
 JSON

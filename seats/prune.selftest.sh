@@ -62,8 +62,7 @@ ROOT="$FIX/container"
 PROD="$ROOT/product"
 WTS="$ROOT/.wheelhouse-worktrees"
 mkdir -p "$PROD" "$WTS" "$ROOT/seats"
-cp "$PRUNE" "$ROOT/seats/prune.ts"
-for f in seat-worktree.ts roster.ts pool.ts harness.ts credential-shapes.ts; do cp "$(dirname "$PRUNE")/$f" "$ROOT/seats/$f"; done
+selftest_copy_seat_runtime "$ROOT" "$(dirname "$PRUNE")"
 chmod +x "$ROOT/seats/prune.ts"
 
 git -C "$ROOT" init -q -b main
@@ -222,8 +221,7 @@ export PATH="$FAKEBIN:$PATH"
 BUSY="$FIX/busy-container"
 mkdir -p "$BUSY/seats" "$BUSY/.wheelhouse-bench.lock" "$BUSY/product/.wheelhouse-build"
 printf '{"seats":{}}\n' > "$BUSY/seats/state.json"
-cp "$PRUNE" "$BUSY/seats/prune.ts"
-for f in seat-worktree.ts roster.ts pool.ts harness.ts credential-shapes.ts; do cp "$(dirname "$PRUNE")/$f" "$BUSY/seats/$f"; done
+selftest_copy_seat_runtime "$BUSY" "$(dirname "$PRUNE")"
 chmod +x "$BUSY/seats/prune.ts"
 printf 'active-lock\n' > "$BUSY/.wheelhouse-bench.lock/pid"
 printf 'busy-cache\n' > "$BUSY/product/.wheelhouse-build/cache.txt"
@@ -287,8 +285,7 @@ if grep -q 'DRY-RUN branch stale-branch' "$FIX/stale-branch-dry.out" && grep -q 
 phase 'prune --yes refuses while a rostered seat is mid-turn'
 MID="$FIX/midturn"
 mkdir -p "$MID/seats" "$MID/product/.wheelhouse-build"
-cp "$PRUNE" "$MID/seats/prune.ts"
-for f in seat-worktree.ts roster.ts pool.ts harness.ts credential-shapes.ts; do cp "$(dirname "$PRUNE")/$f" "$MID/seats/$f"; done
+selftest_copy_seat_runtime "$MID" "$(dirname "$PRUNE")"
 chmod +x "$MID/seats/prune.ts"
 MID_FIFO="$MID/seats/mid.stdin"
 MID_LOG="$MID/seats/mid.jsonl"
@@ -311,6 +308,17 @@ set +e
 if [ $MID_RC -ne 0 ] && printf '%s\n' "$MID_OUT" | grep -q 'worker-busy' && printf '%s\n' "$MID_OUT" | grep -q 'mid-turn'; then pass 'prune --yes STOPs naming the mid-turn seat'; else fail "mid-turn prune did not STOP as specified (exit $MID_RC): $MID_OUT"; fi
 [ -d "$MID/product/.wheelhouse-build" ] && pass 'mid-turn guarded cache remains after refused prune --yes' || fail 'mid-turn guarded cache was removed'
 kill "$MID_PID" >/dev/null 2>&1 || true
+
+phase 'prune --yes restores write permission before rm action'
+MANUAL_RO="$FIX/manual-readonly-rm"
+mkdir -p "$MANUAL_RO/readonly-subdir"
+printf 'locked\n' > "$MANUAL_RO/readonly-subdir/file.txt"
+chmod 555 "$MANUAL_RO/readonly-subdir"
+printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\nrun-scratch\t1\t%s\t%s\t\t1\t1.0B\trm\tread-only fixture\n' "$ROOT" "$MANUAL_RO" > "$FIX/manual-readonly-scan.tsv"
+set +e
+MANUAL_RO_RC=0; MANUAL_RO_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/manual-readonly-scan.tsv" --yes --categories run-scratch 2>&1) || MANUAL_RO_RC=$?
+set -e
+if [ $MANUAL_RO_RC -eq 0 ] && [ ! -e "$MANUAL_RO" ] && printf '%s\n' "$MANUAL_RO_OUT" | grep -q "PRUNED rm run-scratch $MANUAL_RO"; then pass 'prune --yes removes an rm row containing a mode-555 subdirectory'; else chmod -R u+w "$MANUAL_RO" 2>/dev/null || true; fail "manual read-only rm row was not removed (exit $MANUAL_RO_RC): $MANUAL_RO_OUT"; fi
 
 phase 'prune --yes rechecks live seat anchors from reviewed scan files'
 printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\norphaned-worktree\t1\t%s\t%s\t\t1\t1.0B\trm\tstale reviewed scan fixture\n' "$ROOT" "$WTS/$LIVE_ID" > "$FIX/stale-live-scan.tsv"
@@ -374,7 +382,7 @@ cleanup_ext(){ for p in ${EXT_PIDS[@]+"${EXT_PIDS[@]}"}; do kill "$p" >/dev/null
 trap cleanup_ext EXIT INT TERM
 mk_install(){ # $1 root: container git repo, nested product repo with a bare origin at $1.origin.git, prune.ts in place
   mkdir -p "$1/product" "$1/seats"
-  cp "$PRUNE" "$1/seats/prune.ts"; for f in seat-worktree.ts roster.ts pool.ts harness.ts credential-shapes.ts; do cp "$(dirname "$PRUNE")/$f" "$1/seats/$f"; done
+  selftest_copy_seat_runtime "$1" "$(dirname "$PRUNE")"
   git -C "$1" init -q -b main
   git -C "$1/product" init -q -b main
   git -C "$1/product" config user.email selftest@example.invalid
@@ -462,10 +470,20 @@ phase 'ISC-45/56 run folder kept while a live process has its cwd inside'
 RUN_ID=$(ext_bead 'closed bead with occupied run folder'); mkdir -p "$ERUNS/$RUN_ID-x"; printf 'scratch\n' > "$ERUNS/$RUN_ID-x/file.txt"
 ( cd "$ERUNS/$RUN_ID-x" && exec sleep 1000 ) >/dev/null 2>&1 & RUN_PID=$!; EXT_PIDS+=("$RUN_PID")
 OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
-[ "$RC" -eq 0 ] && [ -d "$ERUNS/$RUN_ID-x" ] && printf '%s\n' "$OUT" | grep -q "kept needs-review $ERUNS/$RUN_ID-x reason=live process has its cwd" && pass 'run folder kept with "live process has its cwd" while occupied' || fail "occupied run folder rc=$RC: $OUT"
+[ "$RC" -eq 0 ] && [ -d "$ERUNS/$RUN_ID-x" ] \
+  && printf '%s\n' "$OUT" | grep -q "kept needs-review $ERUNS/$RUN_ID-x reason=live process has its cwd" \
+  && printf '%s\n' "$OUT" | grep -q "pid $RUN_PID" \
+  && printf '%s\n' "$OUT" | grep -q "command sleep" \
+  && printf '%s\n' "$OUT" | grep -q "cwd $ERUNS/$RUN_ID-x" \
+  && pass 'run folder kept with holder pid, command, and cwd while occupied' || fail "occupied run folder did not name holder rc=$RC: $OUT"
 kill "$RUN_PID" >/dev/null 2>&1; wait "$RUN_PID" 2>/dev/null
 OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ ! -e "$ERUNS/$RUN_ID-x" ] && printf '%s\n' "$OUT" | grep -q "removed run-scratch $ERUNS/$RUN_ID-x " && pass 'run folder removed on the next cleanup once the process is gone' || fail "freed run folder rc=$RC: $OUT"
+RO_ID=$(ext_bead 'closed bead with read-only scratch'); mkdir -p "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources/allowed-sibling"
+printf 'readonly\n' > "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources/allowed-sibling/file.txt"
+chmod -R a-w "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources"
+OUT=$(ext_cleanup --bead "$RO_ID"); RC=$?
+[ "$RC" -eq 0 ] && [ ! -e "$ERUNS/$RO_ID-run" ] && printf '%s\n' "$OUT" | grep -q "removed run-scratch $ERUNS/$RO_ID-run " && pass 'cleanup removes closed-bead scratch containing a read-only source snapshot subtree' || { chmod -R u+w "$ERUNS/$RO_ID-run" 2>/dev/null || true; fail "read-only scratch cleanup rc=$RC: $OUT"; }
 
 phase 'ISC-46/138 concurrent cleanups, lock refusal, and a race with another remover'
 CA_ID=$(ext_bead 'concurrent close A'); CB_ID=$(ext_bead 'concurrent close B')

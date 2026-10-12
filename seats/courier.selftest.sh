@@ -16,23 +16,65 @@ command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-courier-selftest.XXXXXX")" || exit 2
 PASS=0; FAIL=0; SERVER_PID=""; COURIER_PID=""; WATCHDOG_PID=""
-sweep_fixture_couriers(){
+wait_child_exit(){
+  local pid="$1" label="$2" grace_ms="${3:-1500}" waited=0 step=100 stat=""
+  [ -n "$pid" ] || return 0
+  while kill -0 "$pid" 2>/dev/null; do
+    stat="$(ps -p "$pid" -o stat= 2>/dev/null | tr -d ' ')"
+    case "$stat" in *Z*) wait "$pid" 2>/dev/null || true; return 0;; esac
+    if [ "$waited" -ge "$grace_ms" ]; then
+      kill -9 "$pid" 2>/dev/null || true
+      break
+    fi
+    sleep 0.1
+    waited=$((waited + step))
+  done
+  waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    stat="$(ps -p "$pid" -o stat= 2>/dev/null | tr -d ' ')"
+    case "$stat" in *Z*) wait "$pid" 2>/dev/null || true; return 0;; esac
+    if [ "$waited" -ge 1000 ]; then
+      fail "$label child $pid survived SIGKILL during cleanup"
+      return 1
+    fi
+    sleep 0.1
+    waited=$((waited + step))
+  done
+  wait "$pid" 2>/dev/null || true
+  return 0
+}
+stop_child(){
+  local pid="$1" label="$2" grace_ms="${3:-1500}"
+  [ -n "$pid" ] || return 0
+  kill "$pid" 2>/dev/null || true
+  wait_child_exit "$pid" "$label" "$grace_ms"
+}
+fixture_courier_pids(){
   [ -n "${FIX:-}" ] || return 0
   for pid in $(pgrep -f 'seats/courier\.ts' 2>/dev/null || true); do
     [ -n "$pid" ] || continue
     if lsof -p "$pid" 2>/dev/null | grep -qF "$FIX"; then
-      kill "$pid" 2>/dev/null || true
+      printf '%s\n' "$pid"
     fi
+  done
+}
+sweep_fixture_couriers(){
+  [ -n "${FIX:-}" ] || return 0
+  for pid in $(fixture_courier_pids); do
+    kill "$pid" 2>/dev/null || true
+  done
+  sleep 0.1
+  for pid in $(fixture_courier_pids); do
+    kill -9 "$pid" 2>/dev/null || true
   done
   return 0
 }
 stop_courier(){
   [ -n "${COURIER_PID:-}" ] || return 0
-  kill "$COURIER_PID" 2>/dev/null || true
-  wait "$COURIER_PID" 2>/dev/null || true
+  stop_child "$COURIER_PID" "courier" 1500
   COURIER_PID=""
 }
-cleanup(){ stop_courier; [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null || true; [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; sweep_fixture_couriers; selftest_cleanup_fixture_processes "${FIX:-}" ""; selftest_remove_fixture_dir "$FIX"; }
+cleanup(){ stop_courier; [ -n "$WATCHDOG_PID" ] && stop_child "$WATCHDOG_PID" "watchdog" 500; [ -n "$SERVER_PID" ] && stop_child "$SERVER_PID" "fake endpoint" 1500; sweep_fixture_couriers; selftest_cleanup_fixture_processes "${FIX:-}" ""; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
@@ -43,7 +85,7 @@ PY
 }
 make_proj(){
   local p="$1"; mkdir -p "$p/seats/transports" "$p/seats/run" "$p/seats/logs" "$p/wheelhouse"
-  cp "$COURIER" "$p/seats/courier.ts"; cp "$NEEDS" "$p/seats/needs.ts"; cp "$COMMS" "$p/seats/comms.ts"; cp "$CHANNELS" "$p/seats/channels.ts"; cp "$TELEGRAM" "$p/seats/transports/telegram.ts"; cp "$SLACK" "$p/seats/transports/slack.ts"; cp "$TEAMS" "$p/seats/transports/teams.ts"; cp "$INDEX" "$p/seats/transports/index.ts"; cp "$TRANSPORT" "$p/seats/transports/transport.ts"
+  selftest_copy_seat_runtime "$p" "$HERE"
   printf 'namespace=demo\n' > "$p/wheelhouse/.template-source"
   printf 'TESTTOKEN\n' > "$p/seats/run/telegram.token"; chmod 600 "$p/seats/run/telegram.token"
   printf '111\n' > "$p/seats/run/telegram.allow"
@@ -106,7 +148,7 @@ EOF
 }
 start_courier_daemon(){
   local root="$1" interval="$2" err="$3"
-  (cd "$root" && exec env WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_COURIER_INTERVAL_MS="$interval" bun seats/courier.ts >/dev/null 2> "$err") &
+  (cd "$root" && exec env WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS="${WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS:-1000}" WHEELHOUSE_COURIER_INTERVAL_MS="$interval" bun seats/courier.ts >/dev/null 2> "$err") &
   COURIER_PID=$!
 }
 requests(){ python3 - <<'PY' "$FIX/requests.jsonl"
@@ -219,5 +261,8 @@ EOF
 start_courier_daemon "$WATCH" 100 "$FIX/watch.err"
 printf '%s\n' "$COURIER_PID" > "$WATCH/seats/run/courier.pid"
 # Courier restart supervision moved to seats/supervisor.selftest.sh; this selftest covers courier behavior only.
+stop_courier
+survivors="$(fixture_courier_pids)"
+if [ -z "${COURIER_PID:-}" ] && [ -z "$survivors" ]; then pass "courier daemon started by this test is stopped before exit"; else fail "courier child survived cleanup check survivors=${survivors:-none}"; fi
 if [ "$FAIL" -eq 0 ]; then echo "courier.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "courier.selftest: FAIL ($FAIL failed, $PASS passed)" >&2; exit 1

@@ -1,0 +1,22 @@
+Synthetic commander prose in scrollback:
+The previous operation is still running (tool paths were checked).
+This line is old output, not the live status area.
+filler 01
+filler 02
+filler 03
+filler 04
+filler 05
+filler 06
+filler 07
+filler 08
+filler 09
+filler 10
+filler 11
+filler 12
+filler 13
+filler 14
+filler 15
+
+──────────────── synthetic input ────────────────
+❯                                                    cockpit
+  GENERIC STATUS: ready

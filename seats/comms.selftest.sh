@@ -13,8 +13,7 @@ pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 port(){ bun -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats/transports" "$ROOT/seats/run"
-cp "$HERE/comms.ts" "$HERE/channels.ts" "$HERE/needs.ts" "$HERE/herald.ts" "$ROOT/seats/"
-cp "$HERE/transports/"*.ts "$ROOT/seats/transports/"
+selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"commander":{"role":"commander","external":true},"seats":{"worker-1":{"role":"worker"},"reviewer":{"role":"reviewer"}}}
 JSON
