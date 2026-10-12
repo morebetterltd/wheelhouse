@@ -738,7 +738,7 @@ pass "truncated tool_execution_update payloads are harmless to herald's log read
 ROOT_GONE="$FIX/root-gone"
 mkdir -p "$ROOT_GONE/seats/logs" "$ROOT_GONE/seats/run"
 printf '%s\n' '{"logs":{},"seen":[],"alerts":{"lastCheckAt":"2999-01-01T00:00:00Z"},"staffing":{"lastCheckAt":"2999-01-01T00:00:00Z"}}' > "$ROOT_GONE/seats/herald.state.json"
-WHEELHOUSE_HERALD_ROOT="$ROOT_GONE" WHEELHOUSE_HERALD_INTERVAL_MS=1 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=20 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=20 bun "$ROOT/seats/herald.ts" > "$FIX/root-gone.out" 2> "$FIX/root-gone.err" &
+WHEELHOUSE_HERALD_ROOT="$ROOT_GONE" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=20 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=20 bun "$ROOT/seats/herald.ts" > "$FIX/root-gone.out" 2> "$FIX/root-gone.err" &
 ROOT_GONE_PID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   [ -s "$ROOT_GONE/seats/run/herald.pid" ] && break
