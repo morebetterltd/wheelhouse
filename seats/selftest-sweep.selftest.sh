@@ -32,8 +32,7 @@ set -eu
 : "${SWEEP_ID:?}"
 : "${SWEEP_EVENTS:?}"
 printf '%s start\n' "$SWEEP_ID" >> "$SWEEP_EVENTS"
-if [ "${SWEEP_ID}" = A ]; then
-  : "${SWEEP_RELEASE:?}"
+if [ -n "${SWEEP_RELEASE:-}" ]; then
   while [ ! -f "$SWEEP_RELEASE" ]; do sleep 0.05; done
 fi
 printf '%s end\n' "$SWEEP_ID" >> "$SWEEP_EVENTS"
@@ -73,8 +72,83 @@ else
   fail "stale lock was not recovered (rc=$RC_STALE err=$(cat "$FIX/stale.err" 2>/dev/null))"
 fi
 
+RACE="$FIX/race.lock"
+mkdir -p "$RACE"
+printf '999999999\n' > "$RACE/pid"
+RELEASE_RACE="$FIX/release-race"
+SWEEP_RELEASE="$RELEASE_RACE" SWEEP_ID=D SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$RACE" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/race-D.out" 2> "$FIX/race-D.err" &
+PID_D=$!
+SWEEP_RELEASE="$RELEASE_RACE" SWEEP_ID=E SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$RACE" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/race-E.out" 2> "$FIX/race-E.err" &
+PID_E=$!
+for _ in $(seq 1 100); do grep -Eq '^[DE] start$' "$EVENTS" 2>/dev/null && break; sleep 0.05; done
+sleep 0.2
+REMOVE_COUNT="$(grep -h -c 'removing stale lock' "$FIX/race-D.err" "$FIX/race-E.err" 2>/dev/null | awk '{s += $1} END {print s + 0}')"
+: > "$RELEASE_RACE"
+wait "$PID_D"; RC_D=$?
+wait "$PID_E"; RC_E=$?
+if [ "$RC_D" -eq 0 ] && [ "$RC_E" -eq 0 ] && [ "$REMOVE_COUNT" -eq 1 ]; then
+  pass "exactly one waiter wins stale-lock takeover"
+else
+  fail "stale-lock takeover was not single-winner (rcD=$RC_D rcE=$RC_E remove_count=$REMOVE_COUNT D.err=$(cat "$FIX/race-D.err" 2>/dev/null) E.err=$(cat "$FIX/race-E.err" 2>/dev/null))"
+fi
+
+NO_PID="$FIX/no-pid.lock"
+mkdir -p "$NO_PID"
+SWEEP_ID=F SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$NO_PID" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/no-pid.out" 2> "$FIX/no-pid.err"
+RC_NO_PID=$?
+if [ "$RC_NO_PID" -eq 0 ] && grep -q 'held by missing pid' "$FIX/no-pid.err"; then
+  pass "pid-less stale lock is recovered before running"
+else
+  fail "pid-less stale lock was not recovered (rc=$RC_NO_PID err=$(cat "$FIX/no-pid.err" 2>/dev/null))"
+fi
+
+EPERM="$FIX/eperm.lock"
+mkdir -p "$EPERM"
+printf '1\n' > "$EPERM/pid"
+SWEEP_ID=G SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$EPERM" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/eperm.out" 2> "$FIX/eperm.err" &
+PID_G=$!
+sleep 0.2
+if [ -d "$EPERM" ] && grep -q 'waiting for host-wide lock' "$FIX/eperm.err" && ! grep -q 'removing stale lock' "$FIX/eperm.err"; then
+  pass "EPERM holder pid is treated as live instead of stale"
+else
+  fail "EPERM holder pid was not treated as live (err=$(cat "$FIX/eperm.err" 2>/dev/null))"
+fi
+kill -TERM "$PID_G" 2>/dev/null || true
+wait "$PID_G" 2>/dev/null || true
+rm -rf "$EPERM"
+
+TERM_SUITES="$FIX/term-suites"
+TERM_LOCK="$FIX/term.lock"
+TERM_EVENTS="$FIX/term-events.log"
+TERM_STARTED="$FIX/term-started"
+mkdir -p "$TERM_SUITES"
+cat > "$TERM_SUITES/one.selftest.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf 'one start\n' >> "$TERM_EVENTS"
+: > "$TERM_STARTED"
+while :; do sleep 0.05; done
+EOF
+cat > "$TERM_SUITES/two.selftest.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf 'two start\n' >> "$TERM_EVENTS"
+EOF
+chmod +x "$TERM_SUITES"/*.selftest.sh
+TERM_EVENTS="$TERM_EVENTS" TERM_STARTED="$TERM_STARTED" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$TERM_SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$TERM_LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/term.out" 2> "$FIX/term.err" &
+PID_TERM=$!
+for _ in $(seq 1 100); do [ -f "$TERM_STARTED" ] && break; sleep 0.05; done
+kill -TERM "$PID_TERM" 2>/dev/null || true
+wait "$PID_TERM"; RC_TERM=$?
+TERM_ORDER="$(tr '\n' '|' < "$TERM_EVENTS" 2>/dev/null || true)"
+if [ "$RC_TERM" -eq 143 ] && [ "$TERM_ORDER" = 'one start|' ] && [ ! -d "$TERM_LOCK" ]; then
+  pass "TERM stops the running fixture suite, skips later suites, and releases the lock"
+else
+  fail "TERM did not stop cleanly (rc=$RC_TERM order=$TERM_ORDER lock=$(ls -d "$TERM_LOCK" 2>/dev/null || true) out=$(cat "$FIX/term.out" 2>/dev/null) err=$(cat "$FIX/term.err" 2>/dev/null))"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
-  echo "selftest-sweep.selftest: PASS (3 checks)"
+  echo "selftest-sweep.selftest: PASS (7 checks)"
 else
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"
   exit 1

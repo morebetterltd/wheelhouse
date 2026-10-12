@@ -7,6 +7,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PATTERN="${WHEELHOUSE_SELFTEST_SWEEP_PATTERN:-$ROOT/seats/*.selftest.sh}"
 LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-${TMPDIR:-/tmp}/wheelhouse-selftest-sweep.lock}"
 SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
+TAKEOVER_LOCK="${LOCK}.takeover"
+CURRENT_SUITE_PID=""
 
 say(){ printf '%s\n' "$*"; }
 info(){ say "$*" >&2; }
@@ -19,10 +21,37 @@ holder_desc(){
   root="$(sed -n '1p' "$LOCK/root" 2>/dev/null || true)"
   printf 'pid=%s%s%s' "${pid:-unknown}" "${started:+ started=$started}" "${root:+ root=$root}"
 }
-pid_alive(){ local pid="$1"; [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+pid_alive(){
+  local pid="$1" err
+  [ -n "$pid" ] || return 1
+  if kill -0 "$pid" 2>/dev/null; then return 0; fi
+  err="$(kill -0 "$pid" 2>&1 >/dev/null || true)"
+  case "$err" in
+    *"Operation not permitted"*|*"operation not permitted"*|*"not permitted"*) return 0 ;;
+  esac
+  return 1
+}
+
+try_remove_stale_lock(){
+  local pid desc
+  if ! mkdir "$TAKEOVER_LOCK" 2>/dev/null; then return 1; fi
+  pid="$(holder_pid)"
+  if [ -z "$pid" ]; then
+    desc="missing pid"
+  elif pid_alive "$pid"; then
+    rmdir "$TAKEOVER_LOCK" 2>/dev/null || true
+    return 1
+  else
+    desc="dead pid $pid"
+  fi
+  info "selftest-sweep: removing stale lock $LOCK held by $desc"
+  rm -rf "$LOCK"
+  rmdir "$TAKEOVER_LOCK" 2>/dev/null || true
+  return 0
+}
 
 acquire_lock(){
-  local printed=0 pid
+  local printed=0
   while :; do
     if mkdir "$LOCK" 2>/dev/null; then
       printf '%s\n' "$$" > "$LOCK/pid"
@@ -31,10 +60,8 @@ acquire_lock(){
       printf '%s\n' "$PATTERN" > "$LOCK/pattern"
       return 0
     fi
-    pid="$(holder_pid)"
-    if [ -n "$pid" ] && ! pid_alive "$pid"; then
-      info "selftest-sweep: removing stale lock $LOCK held by dead pid $pid"
-      rm -rf "$LOCK"
+    if try_remove_stale_lock; then
+      printed=0
       continue
     fi
     if [ "$printed" = 0 ]; then
@@ -48,7 +75,19 @@ acquire_lock(){
 release_lock(){
   if [ -f "$LOCK/pid" ] && [ "$(holder_pid)" = "$$" ]; then rm -rf "$LOCK"; fi
 }
-trap release_lock EXIT INT TERM
+interrupt_sweep(){
+  local rc="$1"
+  trap - INT TERM
+  if [ -n "$CURRENT_SUITE_PID" ] && kill -0 "$CURRENT_SUITE_PID" 2>/dev/null; then
+    kill -TERM "$CURRENT_SUITE_PID" 2>/dev/null || true
+    wait "$CURRENT_SUITE_PID" 2>/dev/null || true
+  fi
+  release_lock
+  exit "$rc"
+}
+trap release_lock EXIT
+trap 'interrupt_sweep 130' INT
+trap 'interrupt_sweep 143' TERM
 
 acquire_lock
 
@@ -64,10 +103,14 @@ failures=0
 for suite in "${suites[@]}"; do
   [ -f "$suite" ] || continue
   say "selftest-sweep: START $suite"
-  if bash "$suite"; then
+  bash "$suite" &
+  CURRENT_SUITE_PID=$!
+  wait "$CURRENT_SUITE_PID"
+  rc=$?
+  CURRENT_SUITE_PID=""
+  if [ "$rc" -eq 0 ]; then
     say "selftest-sweep: PASS $suite"
   else
-    rc=$?
     say "selftest-sweep: FAIL $suite rc=$rc"
     failures=$((failures + 1))
   fi
