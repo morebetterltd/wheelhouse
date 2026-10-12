@@ -59,6 +59,9 @@ run_herald_status_fixture() {
   WHEELHOUSE_HERALD_ROOT="$PROJ" PATH="$FIX/bin:$PATH" bun "$ROOT/seats/herald.ts" --status
 }
 
+private_port() { bun -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
+HERALD_SELFTEST_DESK_PORT="${WHEELHOUSE_HERALD_SELFTEST_DESK_PORT:-$(private_port)}"
+
 line_count() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
 json_count() {
   local expr="$1"
@@ -689,7 +692,7 @@ cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
 
-WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit1.out" 2>&1
+WHEELHOUSE_DESK_PORT="$HERALD_SELFTEST_DESK_PORT" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit1.out" 2>&1
 RC=$?
 DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null && grep -Eq 'herald (started|already running)' "$FIX/cockpit1.out"; then
@@ -707,7 +710,7 @@ CURRENT_DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 [ -n "$CURRENT_DAEMON_PID" ] && DAEMON_PID="$CURRENT_DAEMON_PID"
 kill -9 "$DAEMON_PID" 2>/dev/null || true
 sleep 0.4
-WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 PATH="$FIX/bin:$PATH" "$PROJ/seats/cockpit.sh" --herald demo > "$FIX/cockpit2.out" 2>&1
+WHEELHOUSE_DESK_PORT="$HERALD_SELFTEST_DESK_PORT" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 PATH="$FIX/bin:$PATH" "$PROJ/seats/cockpit.sh" --herald demo > "$FIX/cockpit2.out" 2>&1
 RC=$?
 REVIVED_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && [ -n "$REVIVED_PID" ] && [ "$REVIVED_PID" != "$DAEMON_PID" ] && kill -0 "$REVIVED_PID" 2>/dev/null && grep -q 'herald dead:' "$FIX/cockpit2.out" && grep -q 'herald started' "$FIX/cockpit2.out"; then
@@ -721,6 +724,7 @@ pass "truncated tool_execution_update payloads are harmless to herald's log read
 
 ROOT_GONE="$FIX/root-gone"
 mkdir -p "$ROOT_GONE/seats/logs" "$ROOT_GONE/seats/run"
+printf '%s\n' '{"logs":{},"seen":[],"alerts":{"lastCheckAt":"2999-01-01T00:00:00Z"}}' > "$ROOT_GONE/seats/herald.state.json"
 WHEELHOUSE_HERALD_ROOT="$ROOT_GONE" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=20 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=20 bun "$ROOT/seats/herald.ts" > "$FIX/root-gone.out" 2> "$FIX/root-gone.err" &
 ROOT_GONE_PID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
