@@ -59,6 +59,9 @@ run_herald_status_fixture() {
   WHEELHOUSE_HERALD_ROOT="$PROJ" PATH="$FIX/bin:$PATH" bun "$ROOT/seats/herald.ts" --status
 }
 
+private_port() { bun -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
+HERALD_SELFTEST_DESK_PORT="${WHEELHOUSE_HERALD_SELFTEST_DESK_PORT:-$(private_port)}"
+
 line_count() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
 json_count() {
   local expr="$1"
@@ -596,9 +599,9 @@ cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["cooldown suppressed"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-RC=0; OUT="$(FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=60000 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=cooldown .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "per-pane cooldown defers a second immediate poke"
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=cooldown .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "per-pane cooldown defers a second poke inside an explicit 60s window"
 else fail "cooldown did not defer second poke (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 sleep 0.02
@@ -639,13 +642,14 @@ AFTER_SENDS="$(line_count "$SEND_LOG")"
 if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "between-tool-calls Claude UI is unstable across the idle window and deferred without poking"
 else fail "between-tool-calls fixture received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
+node -e 'const fs=require("fs"); const stateFile=process.argv[1]; const inbox=process.argv[2]; const pane="wh-demo:bridge.0"; const s=JSON.parse(fs.readFileSync(stateFile,"utf8")); const oldSize=fs.existsSync(inbox)?fs.statSync(inbox).size:0; s.firstDeferredAtByPane={...(s.firstDeferredAtByPane||{}), [pane]: Date.now()-10000}; s.firstDeferredInboxSizeByPane={...(s.firstDeferredInboxSizeByPane||{}), [pane]: oldSize}; fs.writeFileSync(stateFile, JSON.stringify(s,null,2)+"\n");' "$PROJ/seats/herald.state.json" "$PROJ/seats/inbox.jsonl"
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["done third"]}
 JSONL
 BEFORE_SENDS="$(line_count "$SEND_LOG")"
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=1 FAKE_TMUX_COMMAND=bun FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/mid-turn-thinking.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 AFTER_SENDS="$(line_count "$SEND_LOG")"
-if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "fixture mid-turn Claude UI is logged deferred/not-idle and not poked"
+if [ $RC -eq 0 ] && [ "$BEFORE_SENDS" = "$AFTER_SENDS" ] && grep -q 'poke deferred .*reason=not-idle .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "new inbox row with stale deferred timer is deferred when Claude is mid-turn"
 else fail "mid-turn Claude received a poke or was not logged deferred/not-idle (before=$BEFORE_SENDS after=$AFTER_SENDS out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null) log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 cat >> "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
@@ -702,7 +706,7 @@ cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
 
-WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit1.out" 2>&1
+WHEELHOUSE_DESK_PORT="$HERALD_SELFTEST_DESK_PORT" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit1.out" 2>&1
 RC=$?
 DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null && grep -Eq 'herald (started|already running)' "$FIX/cockpit1.out"; then
@@ -719,7 +723,7 @@ CURRENT_DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 [ -n "$CURRENT_DAEMON_PID" ] && DAEMON_PID="$CURRENT_DAEMON_PID"
 kill -9 "$DAEMON_PID" 2>/dev/null || true
 sleep 0.4
-WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 PATH="$FIX/bin:$PATH" "$PROJ/seats/cockpit.sh" --herald demo > "$FIX/cockpit2.out" 2>&1
+WHEELHOUSE_DESK_PORT="$HERALD_SELFTEST_DESK_PORT" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 PATH="$FIX/bin:$PATH" "$PROJ/seats/cockpit.sh" --herald demo > "$FIX/cockpit2.out" 2>&1
 RC=$?
 REVIVED_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && [ -n "$REVIVED_PID" ] && [ "$REVIVED_PID" != "$DAEMON_PID" ] && kill -0 "$REVIVED_PID" 2>/dev/null && grep -q 'herald dead:' "$FIX/cockpit2.out" && grep -q 'herald started' "$FIX/cockpit2.out"; then
