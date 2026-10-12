@@ -926,6 +926,16 @@ if (!prompt.includes('### Reserved list (principal-only, per action)')) process.
 if (!prompt.includes('Fixture reserved: releases/tags only')) process.exit(1);
 NODE
 then pass "prompt carries install push authority and reserved-list excerpts"; else fail "prompt is missing install push authority excerpts: $(cat "$VARGV" 2>/dev/null)"; fi
+if node - "$VARGV" <<'NODE'
+const fs = require('fs');
+const argv = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const prompt = argv[argv.length - 1] || '';
+if (!prompt.includes('Interview-mode bench is unavailable inside this verifier sandbox')) process.exit(1);
+if (!prompt.includes('do not run bench.sh --mode interview')) process.exit(1);
+if (!prompt.includes('route those claims to named non-author seat verifier')) process.exit(1);
+if (!prompt.includes('distinct from author seat worker-1')) process.exit(1);
+NODE
+then pass "prompt routes unavailable interview-mode claims to a named non-author seat"; else fail "prompt is missing interview-mode routing instructions: $(cat "$VARGV" 2>/dev/null)"; fi
 if grep -q '"BEADS_ACTOR":"verifier"' "${VARGV%argv.json}env.json" 2>/dev/null; then
   pass "the ephemeral verifier's own env carries BEADS_ACTOR=verifier, with no operator export"
 else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:verifier set by verify.ts itself"; fi
