@@ -15,7 +15,7 @@ const ALERTS_LOG = path.join(SEATS, "logs", "alerts.log");
 const BD_TIMEOUT_MS = 5000;
 
 type Any = Record<string, any>;
-type Digest = { window:{since:string;until:string}; namespace:string; seats:{role:string;provider:string;model:string}[]; shipped:Any[]; blocked:Any[]; cleared:Any[]; inReview:Any[]; sentBack:Any[]; failed:{summary:{events:number;stillFailing:number};items:Any[]}; alerts:Any[] };
+export type Digest = { window:{since:string;until:string}; namespace:string; seats:{role:string;provider:string;model:string}[]; shipped:Any[]; blocked:Any[]; cleared:Any[]; inReview:Any[]; sentBack:Any[]; failed:{summary:{events:number;stillFailing:number};items:Any[]}; alerts:Any[] };
 
 function arg(name:string){ const i=process.argv.indexOf(name); return i>=0 ? process.argv[i+1] : undefined; }
 function has(name:string){ return process.argv.includes(name); }
@@ -61,7 +61,7 @@ function summarizeSeats(rows:{role:string;provider:string;model:string}[]){ cons
 function branchFromReason(reason:string, defaultBranch="main"){ const m=String(reason||"").match(/\b(?:origin\/)?(fleet\/[A-Za-z0-9_.-]+)\b/); if(!m) return ""; const b=m[1].replace(/^origin\//,""); return b===defaultBranch || b.endsWith(`/${defaultBranch}`) ? "" : b; }
 function ageText(minutes:any){ const m=Math.max(0, Math.floor(Number(minutes)||0)); const h=Math.floor(m/60), mm=m%60; return h ? `${h}h${mm?` ${mm}m`:""}` : `${m}m`; }
 function withId(title:any, id:any, human=false){ const t=String(title||""), i=String(id||""); return human||!i||t.includes(i) ? t : `${t} (${i})`; }
-function buildDigest(sinceIso:string, untilIso:string):Digest{
+export function buildDigest(sinceIso:string, untilIso:string):Digest{
   const since=parseTime(sinceIso), until=parseTime(untilIso), inbox=readJsonl(INBOX);
   const closed=bdList(["--status","closed"]), review=bdList(["--label","needs-review"]);
   const merges=gitMerges(sinceIso, untilIso);
