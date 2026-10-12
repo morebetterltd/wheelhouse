@@ -69,6 +69,29 @@ tick_cleanup(){
 tick(){ tick_daemon herald; tick_daemon desk; tick_daemon courier; tick_recovery; tick_cleanup; }
 status(){ for d in herald desk courier; do if ! should_run "$d"; then echo "$d SKIPPED"; continue; fi; rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | grep -q '"crashLoop":true' && echo 1 || echo 0)"; if [ "$crash" = 1 ]; then since="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log((j.restarts||[])[0]||"")})')"; echo "$d CRASH-LOOP since $since"; elif daemon_alive "$d"; then echo "$d RUNNING pid $(cat "$RUN/$d.pid")"; else echo "$d DEAD"; fi; done; }
 resetd(){ d="$1"; state_set "$d" '{"restarts":[],"crashLoop":false}'; restart_cmd "$d"; }
+supervisor_holder_alive(){
+  pid="$1"
+  [ -n "${pid:-}" ] && [ "$pid" != "$$" ] || return 1
+  pid_alive "$pid" || return 1
+  stat="$(ps -p "$pid" -o stat= 2>/dev/null || true)"
+  case "$stat" in *Z*) return 1 ;; esac
+  cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  case "$cmd" in
+    *"$SEATS/supervisor.sh"*) return 0 ;;
+  esac
+  return 1
+}
+wait_for_supervisor_holder(){
+  pid="$1"
+  echo "supervisor already running: pid $pid; waiting for it to exit"
+  while supervisor_holder_alive "$pid"; do sleep "$INTERVAL"; done
+  sleep 0.1
+  echo "supervisor holder exited: pid $pid; taking over"
+}
+remove_supervisor_pid_file(){
+  cur="$(cat "$PID_FILE" 2>/dev/null || true)"
+  [ "$cur" = "$$" ] && rm -f "$PID_FILE"
+}
 
 install_launchd(){
   home="$HOME"; print_plist=0
@@ -141,13 +164,16 @@ EOF
 run_loop(){
   mkdir -p "$RUN" "$LOGS"
   old="$(cat "$PID_FILE" 2>/dev/null || true)"
-  if [ -z "${WHEELHOUSE_SUPERVISOR_STARTED_BY_COCKPIT:-}" ] && [ -n "$old" ] && [ "$old" != "$$" ] && pid_alive "$old"; then
-    echo "supervisor already running: pid $old"
-    return 0
+  if [ -z "${WHEELHOUSE_SUPERVISOR_STARTED_BY_COCKPIT:-}" ] && [ -n "$old" ] && [ "$old" != "$$" ]; then
+    if supervisor_holder_alive "$old"; then
+      wait_for_supervisor_holder "$old"
+    elif pid_alive "$old"; then
+      echo "supervisor pid file names a non-supervisor process: pid $old; taking over"
+    fi
   fi
   echo $$ > "$PID_FILE"
-  trap 'rm -f "$PID_FILE"; exit 0' INT TERM
-  trap 'rm -f "$PID_FILE"' EXIT
+  trap 'remove_supervisor_pid_file; exit 0' INT TERM
+  trap 'remove_supervisor_pid_file' EXIT
   while :; do tick; sleep "$INTERVAL"; done
 }
 
