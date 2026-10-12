@@ -576,8 +576,20 @@ function defaultRepoArgFromTemplateSource(): string | undefined {
   return undefined;
 }
 
-function resolveRepoRoot(repoArg: string | undefined): string {
-  const effectiveRepoArg = repoArg ?? defaultRepoArgFromTemplateSource();
+function repoDeclarationFromClaim(claim: string): string | null {
+  const m = claim.match(/^\s*Repo:\s*([^\s`'"]+)/mi);
+  return m ? m[1] : null;
+}
+
+function repoArgFromClaim(claim: string): string | undefined {
+  const declared = repoDeclarationFromClaim(claim);
+  if (!declared) return undefined;
+  if (/^UMBRELLA$/i.test(declared)) return ".";
+  return declared;
+}
+
+function resolveRepoRoot(repoArg: string | undefined, claim?: string): string {
+  const effectiveRepoArg = repoArg ?? (claim ? repoArgFromClaim(claim) : undefined) ?? defaultRepoArgFromTemplateSource();
   if (!effectiveRepoArg) return ROOT;
   const expanded = expandTilde(effectiveRepoArg);
   const abs = path.resolve(ROOT, expanded);
@@ -1062,20 +1074,22 @@ async function main(): Promise<void> {
       positional.push(argv[i]);
     }
   }
-  const repoRoot = resolveRepoRoot(repoArg);
-  sweepStaleScratchWorktrees(repoRoot);
+  const earlyRepoRoot = resolveRepoRoot(repoArg);
+  sweepStaleScratchWorktrees(earlyRepoRoot);
   const [beadId, branch, authorSeat, verifierArg] = positional;
   if (!beadId || !branch || !authorSeat) {
     die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
   }
   setVerifierGateBead(beadId);
-  const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
-  const firstOutputTimeoutMs = Number(firstOutputTimeoutArg || process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
-  const noEventTimeoutMs = Number(noEventTimeoutArg || process.env.WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS || DEFAULT_NO_EVENT_TIMEOUT_MS);
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
   if (verifierArg) validateSegment("seat name", verifierArg);
-
+  const claim = beadClaim(beadId);
+  const repoRoot = resolveRepoRoot(repoArg, claim);
+  if (path.resolve(repoRoot) !== path.resolve(earlyRepoRoot)) sweepStaleScratchWorktrees(repoRoot);
+  const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
+  const firstOutputTimeoutMs = Number(firstOutputTimeoutArg || process.env.WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS || DEFAULT_FIRST_OUTPUT_TIMEOUT_MS);
+  const noEventTimeoutMs = Number(noEventTimeoutArg || process.env.WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS || DEFAULT_NO_EVENT_TIMEOUT_MS);
   let brief: string;
   try {
     brief = resolveRoleBrief(ROOT, "reviewer");
@@ -1155,7 +1169,6 @@ async function main(): Promise<void> {
           `be delivered — the dispatcher will refuse it as malformed.`,
         ];
 
-  const claim = beadClaim(beadId);
   const sourceDeclarations = parseSourceDeclarations(claim, repoRoot);
 
   // cwd is a throwaway scratch worktree, not ROOT and not a bead's
