@@ -44,5 +44,46 @@ else
   fail "lint: selftests must use selftest_copy_seat_runtime instead of copying core runtime files by name"
 fi
 
+if command -v bd >/dev/null 2>&1; then
+  REAL_BD="$(command -v bd)"
+  INSTALL="$FIX/install-graph"
+  mkdir -p "$INSTALL"
+  if (cd "$INSTALL" && "$REAL_BD" init --non-interactive --skip-agents -p install >/dev/null 2>"$FIX/install-bd-init.err"); then
+    count_install(){ (cd "$INSTALL" && "$REAL_BD" list --json) | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'; }
+    before_count="$(count_install)"
+    INSIDE="$INSTALL/inside-install"
+    mkdir -p "$INSIDE"
+    (cd "$INSIDE" && "$REAL_BD" create 'canary reaches parent graph' --json >/dev/null)
+    after_canary_count="$(count_install)"
+    if [ "$after_canary_count" -gt "$before_count" ]; then
+      pass "canary: bd create from a scratch dir inside an install reaches the parent graph without helper"
+    else
+      fail "canary: inner bd create did not reach fixture install graph (before=$before_count after=$after_canary_count)"
+    fi
+    before_isolated_count="$after_canary_count"
+    scratch_env="$(selftest_scratch_graph "$FIX/isolated-bd")"
+    scratch_rc=$?
+    if [ $scratch_rc -eq 0 ]; then
+      eval "$scratch_env"
+      SCRATCH_WORK="$WHEELHOUSE_SELFTEST_BD_ROOT/work"
+      mkdir -p "$SCRATCH_WORK"
+      (cd "$SCRATCH_WORK" && bd create 'isolated helper row' --json >/dev/null)
+      after_isolated_count="$(count_install)"
+      scratch_count="$(cd "$SCRATCH_WORK" && bd list --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+      if [ "$after_isolated_count" = "$before_isolated_count" ] && [ "$scratch_count" -ge 1 ]; then
+        pass "selftest_scratch_graph isolates bd create from the fixture install graph"
+      else
+        fail "selftest_scratch_graph did not isolate graph writes (install before=$before_isolated_count after=$after_isolated_count scratch=$scratch_count)"
+      fi
+    else
+      fail "selftest_scratch_graph failed for fixture path"
+    fi
+  else
+    fail "fixture install bd init failed: $(cat "$FIX/install-bd-init.err")"
+  fi
+else
+  pass "SKIP selftest_scratch_graph isolation: bd not on PATH"
+fi
+
 if [ $FAIL -eq 0 ]; then echo "selftest-lib.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "selftest-lib.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1

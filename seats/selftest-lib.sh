@@ -20,6 +20,15 @@ selftest_fixture_refused() {
   echo "STOP: unsafe selftest fixture path: ${fixture:-<empty>} ($reason)" >&2
   return 2
 }
+selftest_has_fixture_marker() {
+  path="${1:-}"
+  [ -n "$path" ] || return 1
+  while [ -n "$path" ] && [ "$path" != "/" ]; do
+    [ -f "$path/.wheelhouse-selftest-fixture" ] && return 0
+    path="$(dirname "$path")"
+  done
+  return 1
+}
 selftest_make_fixture_dir() {
   template="${1:-}"
   [ -n "$template" ] || { echo "STOP: mktemp fixture template is empty" >&2; return 2; }
@@ -43,6 +52,45 @@ selftest_copy_seat_runtime() {
   find "$src_seats" -maxdepth 1 \( -name '*.ts' -o -name '*.sh' \) ! -name '*.selftest.sh' -type f -exec cp -f {} "$dest_root/seats/" \;
   [ ! -d "$src_seats/drivers" ] || { rm -rf "$dest_root/seats/drivers"; cp -R "$src_seats/drivers" "$dest_root/seats/drivers"; }
   [ ! -d "$src_seats/transports" ] || { rm -rf "$dest_root/seats/transports"; cp -R "$src_seats/transports" "$dest_root/seats/transports"; }
+}
+
+selftest_shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\''/g")"; }
+
+selftest_scratch_graph() {
+  graph_root="${1:-}"
+  [ -n "$graph_root" ] || { echo "STOP: selftest_scratch_graph needs a destination directory" >&2; return 2; }
+  bd_bin="$(command -v bd 2>/dev/null || true)"
+  [ -n "$bd_bin" ] || { echo "STOP: selftest_scratch_graph requires bd on PATH" >&2; return 2; }
+  parent="$(dirname "$graph_root")"
+  mkdir -p "$parent" || { echo "STOP: selftest_scratch_graph could not create parent: $parent" >&2; return 2; }
+  graph_root="$(cd "$parent" && pwd -P)/$(basename "$graph_root")"
+  repo="$(selftest_lib_root)"
+  cwd="$SELFTEST_INVOCATION_PWD"
+  if selftest_path_contains "$graph_root" "$repo" || selftest_path_contains "$graph_root" "$cwd"; then
+    echo "STOP: selftest_scratch_graph destination must be outside the install/worktree: $graph_root" >&2
+    return 2
+  fi
+  if ! selftest_has_fixture_marker "$parent"; then
+    echo "STOP: selftest_scratch_graph destination must live under selftest_make_fixture_dir: $graph_root" >&2
+    return 2
+  fi
+  rm -rf "$graph_root"
+  mkdir -p "$graph_root"
+  init_log="$graph_root/bd-init.log"
+  if ! (cd "$graph_root" && "$bd_bin" init --non-interactive --skip-agents -p scratch) >"$init_log" 2>&1; then
+    echo "STOP: bd init failed for scratch graph $graph_root:" >&2
+    cat "$init_log" >&2
+    return 2
+  fi
+  wrapper_dir="$graph_root/bin"
+  mkdir -p "$wrapper_dir"
+  cat > "$wrapper_dir/bd" <<EOF
+#!/usr/bin/env bash
+exec $(selftest_shell_quote "$bd_bin") -C $(selftest_shell_quote "$graph_root") "\$@"
+EOF
+  chmod +x "$wrapper_dir/bd"
+  printf 'export WHEELHOUSE_SELFTEST_BD_ROOT=%s\n' "$(selftest_shell_quote "$graph_root")"
+  printf 'export PATH=%s:"$PATH"\n' "$(selftest_shell_quote "$wrapper_dir")"
 }
 
 selftest_remove_fixture_dir() {
