@@ -1,0 +1,9 @@
+placeholder grep selftest: worker evidence discipline sentences
+  ok    WORKER.md carries the three evidence-discipline sentences
+placeholder grep selftest: binary evidence fixture
+  ok    text-only grep ignores a PNG carrying the {{ byte pair
+
+placeholder grep selftest: planted text placeholder
+  ok    text placeholder still fails the prescribed check
+placeholder-grep.selftest: PASS (3 legs)
+rc=0

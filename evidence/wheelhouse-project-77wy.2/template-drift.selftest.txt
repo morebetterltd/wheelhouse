@@ -1,0 +1,13 @@
+  ok    ahead-by 1 is reported when template main has advanced
+  ok    clean install exits 0 with no findings
+  ok    path containing commit is sufficient; unreachable source is not fetched
+  ok    edited template seat file reports MODIFIED
+  ok    install-only seat file reports LOCAL-ONLY
+  ok    deleted template seat file reports MISSING
+  ok    contract split ignores project-half-only changes
+  ok    contract-half changes report MODIFIED
+  ok    --json shape includes arrays and comparedAgainst
+  ok    unreachable path and source exits 3 without false clean
+  ok    canary: removing split rule makes project-half leg fail
+template-drift.selftest.sh works on this machine.
+rc=0
