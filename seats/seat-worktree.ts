@@ -300,8 +300,55 @@ export function credentialShapeHits(repo: string, base: string | null, headSha: 
   return hits;
 }
 
+function remoteReachableRefs(repo: string, remote: string): string[] {
+  const r = git(repo, ["for-each-ref", "--format=%(refname)", `refs/remotes/${remote}`]);
+  if (!r.ok) return [];
+  return r.out.split("\n").map((s) => s.trim()).filter((s) => s && !s.endsWith("/HEAD"));
+}
+
+function newlyPublishedCommits(repo: string, remote: string, headSha: string): string[] | null {
+  const refs = remoteReachableRefs(repo, remote);
+  if (refs.length === 0) return null;
+  const r = git(repo, ["rev-list", "--reverse", headSha, "--not", ...refs]);
+  if (!r.ok) return null;
+  return r.out.split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+function credentialShapeHitsInPatch(patch: string, commit: string): CredentialScanHit[] {
+  const hits: CredentialScanHit[] = [];
+  const credentialRe = new RegExp(CREDENTIAL_SHAPE_RE);
+  let file = "?";
+  let nextLine = 0;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("+++ b/")) { file = line.slice(6); continue; }
+    if (line === "+++ /dev/null") { file = "?"; continue; }
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (h) { nextLine = Number(h[1]); continue; }
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      const text = line.slice(1);
+      if (credentialRe.test(text)) hits.push({ commit, path: file, line: String(nextLine), text });
+      nextLine++;
+    } else if (!line.startsWith("-") && nextLine > 0) {
+      nextLine++;
+    }
+  }
+  return hits;
+}
+
+export function credentialShapeHitsForPublish(repo: string, remote: string, branch: string, headSha: string): CredentialScanHit[] {
+  const commits = newlyPublishedCommits(repo, remote, headSha);
+  if (!commits) return credentialShapeHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha);
+  const hits: CredentialScanHit[] = [];
+  for (const commit of commits) {
+    const r = git(repo, ["show", "--format=", "--unified=0", commit, "--", "."]);
+    if (!r.ok) return [{ commit: "scan", path: "git show", line: "0", text: r.err || r.out || "credential scan failed" }];
+    hits.push(...credentialShapeHitsInPatch(r.out, commit));
+  }
+  return hits;
+}
+
 export function credentialScanSummary(repo: string, remote: string, branch: string, headSha: string): string | null {
-  const hits = credentialShapeHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha);
+  const hits = credentialShapeHitsForPublish(repo, remote, branch, headSha);
   if (hits.length === 0) return null;
   return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
 }
@@ -318,15 +365,11 @@ function diffBaseForPublish(repo: string, remote: string, branch: string, headSh
   return null;
 }
 
-function addedLineHits(repo: string, base: string | null, headSha: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
-  if (patterns.length === 0) return [];
-  const args = base ? ["diff", "--unified=0", `${base}..${headSha}`, "--", "."] : ["show", "--format=", "--unified=0", headSha, "--", "."];
-  const r = git(repo, args);
-  if (!r.ok) return [{ path: "git diff", line: "0", kind: "state scan failed" }];
+function addedLineHitsInPatch(patch: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
   const hits: PublicStateScanHit[] = [];
   let file = "?";
   let nextLine = 0;
-  for (const line of r.out.split("\n")) {
+  for (const line of patch.split("\n")) {
     if (line.startsWith("+++ b/")) { file = line.slice(6); continue; }
     const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
     if (h) { nextLine = Number(h[1]); continue; }
@@ -334,9 +377,30 @@ function addedLineHits(repo: string, base: string | null, headSha: string, patte
       const text = line.slice(1);
       for (const p of patterns) if (p.re.test(text)) { hits.push({ path: file, line: String(nextLine), kind: p.kind }); break; }
       nextLine++;
-    } else if (!line.startsWith("-")) {
+    } else if (!line.startsWith("-") && nextLine > 0) {
       nextLine++;
     }
+  }
+  return hits;
+}
+
+function addedLineHits(repo: string, base: string | null, headSha: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
+  if (patterns.length === 0) return [];
+  const args = base ? ["diff", "--unified=0", `${base}..${headSha}`, "--", "."] : ["show", "--format=", "--unified=0", headSha, "--", "."];
+  const r = git(repo, args);
+  if (!r.ok) return [{ path: "git diff", line: "0", kind: "state scan failed" }];
+  return addedLineHitsInPatch(r.out, patterns);
+}
+
+function addedLineHitsForPublish(repo: string, remote: string, branch: string, headSha: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
+  if (patterns.length === 0) return [];
+  const commits = newlyPublishedCommits(repo, remote, headSha);
+  if (!commits) return addedLineHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha, patterns);
+  const hits: PublicStateScanHit[] = [];
+  for (const commit of commits) {
+    const r = git(repo, ["show", "--format=", "--unified=0", commit, "--", "."]);
+    if (!r.ok) return [{ path: "git show", line: "0", kind: "state scan failed" }];
+    hits.push(...addedLineHitsInPatch(r.out, patterns));
   }
   return hits;
 }
@@ -378,7 +442,7 @@ function publicStatePatterns(root: string): { kind: string; re: RegExp }[] {
 }
 
 export function publicStateScanSummary(root: string, repo: string, remote: string, branch: string, headSha: string): string | null {
-  const hits = addedLineHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha, publicStatePatterns(root));
+  const hits = addedLineHitsForPublish(repo, remote, branch, headSha, publicStatePatterns(root));
   if (hits.length === 0) return null;
   return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
 }
