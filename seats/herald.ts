@@ -823,9 +823,16 @@ export function launchDetached(name: string, argv: string[], intervalMs: number,
   return true;
 }
 
+function explicitIntervalMs(name: string): number | null {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return null;
+  const env = Number(raw);
+  return Number.isFinite(env) && env >= 0 ? Math.floor(env) : null;
+}
+
 function staffingIntervalMs(): number {
-  const env = Number(process.env.WHEELHOUSE_STAFFING_INTERVAL_MS ?? "");
-  if (Number.isFinite(env) && env >= 0) return Math.floor(env);
+  const env = explicitIntervalMs("WHEELHOUSE_STAFFING_INTERVAL_MS");
+  if (env !== null) return env;
   try {
     const pool = JSON.parse(fs.readFileSync(POOL_FILE, "utf8"));
     const seconds = Number(pool.check_interval_seconds ?? 60);
@@ -848,8 +855,7 @@ function runStaffingClock(state: HeraldState): boolean {
 }
 
 function alertsIntervalMs(): number {
-  const env = Number(process.env.WHEELHOUSE_ALERT_INTERVAL_MS ?? "");
-  return Number.isFinite(env) && env >= 0 ? Math.floor(env) : 60_000;
+  return explicitIntervalMs("WHEELHOUSE_ALERT_INTERVAL_MS") ?? 60_000;
 }
 
 function runAlertsClock(state: HeraldState): boolean {

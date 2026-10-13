@@ -69,6 +69,14 @@ clear_runtime(){ rm -f "$ROOT/seats/run/fleet-snapshot.json" "$ROOT/seats/inbox.
 quiet3(){ local before name; name="$1"; before="$(inbox_count)"; run_alert "$@"; run_alert bun seats/alerts.ts check --json; run_alert bun seats/alerts.ts check --json; [ "$(inbox_count)" = "$before" ]; }
 age_alert(){ node -e 'const fs=require("fs"); const f=process.argv[1], n=process.argv[2]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.alerts[n].since="2000-01-01T00:00:00.000Z"; fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n");' "$ROOT/seats/run/fleet-snapshot.json" "$1"; }
 
+phase 'interval parsing'
+clear_runtime; unset WHEELHOUSE_ALERT_INTERVAL_MS; run_alert bun seats/alerts.ts check --json; unset_interval="$(node -e 'console.log(require(process.argv[1]).intervalMs)' "$ROOT/seats/run/fleet-snapshot.json")"
+[ $RC -eq 0 ] && [ "$unset_interval" = 60000 ] && pass 'unset WHEELHOUSE_ALERT_INTERVAL_MS records default interval' || fail "unset interval rc=$RC interval=$unset_interval out=$OUT"
+clear_runtime; WHEELHOUSE_ALERT_INTERVAL_MS= run_alert bun seats/alerts.ts check --json; empty_interval="$(node -e 'console.log(require(process.argv[1]).intervalMs)' "$ROOT/seats/run/fleet-snapshot.json")"
+[ $RC -eq 0 ] && [ "$empty_interval" = 60000 ] && pass 'empty WHEELHOUSE_ALERT_INTERVAL_MS records default interval' || fail "empty interval rc=$RC interval=$empty_interval out=$OUT"
+clear_runtime; WHEELHOUSE_ALERT_INTERVAL_MS=0 run_alert bun seats/alerts.ts check --json; zero_interval="$(node -e 'console.log(require(process.argv[1]).intervalMs)' "$ROOT/seats/run/fleet-snapshot.json")"
+[ $RC -eq 0 ] && [ "$zero_interval" = 0 ] && pass 'explicit zero WHEELHOUSE_ALERT_INTERVAL_MS is honoured in snapshot' || fail "zero interval rc=$RC interval=$zero_interval out=$OUT"
+
 phase 'transition table, thresholds, clears'
 clear_runtime; BD_READY=1 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && active idle-fleet-ready-work && active cold-seats-ready-work && [ "$(inbox_count)" = 2 ] && pass 'ready work fires idle-fleet and cold-seats once' || fail "ready/cold failed rc=$RC out=$OUT inbox=$(inbox_count)"
