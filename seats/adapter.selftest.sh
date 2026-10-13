@@ -1969,6 +1969,42 @@ if says "pushed fleet/bead-p1 to origin" && wait_for "$LOG" 'echo: Bead bead-p2'
   pass "push gate: the push is announced and the new bead's prompt round-trips"
 else fail "push gate: no push announcement or prompt did not land: $OUT"; fi
 
+PUBLIC_PROJ="$FIX/public-main-state-proj"
+build_proj "$PUBLIC_PROJ" publicmain
+RUN_PROJ="$PUBLIC_PROJ"; STATE="$PUBLIC_PROJ/seats/state.json"; LOG="$PUBLIC_PROJ/seats/logs/worker-1.jsonl"
+PUBLIC_WT="$(seat_wt "$PUBLIC_PROJ")"
+PUBLIC_TERM='.wheelhouse-worktrees/worker-1/.wheelhouse-runs'
+run spawn worker-1 bead-pub1
+printf 'safe public branch work\n' > "$PUBLIC_WT/pub1.txt"
+fgit -C "$PUBLIC_WT" add pub1.txt
+fgit -C "$PUBLIC_WT" commit -qm "public branch work"
+fgit -C "$PUBLIC_WT" push -q origin fleet/bead-pub1
+fgit -C "$PUBLIC_PROJ" checkout -q main
+mkdir -p "$PUBLIC_PROJ/evidence/public-main"
+printf 'already public fixture path %s/bead-old/tmp/file.txt\n' "$PUBLIC_TERM" > "$PUBLIC_PROJ/evidence/public-main/run-path.txt"
+fgit -C "$PUBLIC_PROJ" add evidence/public-main/run-path.txt
+fgit -C "$PUBLIC_PROJ" commit -qm "main public run path fixture"
+fgit -C "$PUBLIC_PROJ" push -q origin main
+fgit -C "$PUBLIC_WT" fetch -q origin main
+fgit -C "$PUBLIC_WT" merge -q --no-edit origin/main
+mkdir -p "$PUBLIC_PROJ/seats/run"
+printf '%s\n' "$PUBLIC_TERM" > "$PUBLIC_PROJ/seats/run/leak-terms"
+PUBLIC_PID_BEFORE="$(state_get pid)"
+run dispatch worker-1 bead-pub2 "second bead after public main run path"
+if [ $RC -eq 0 ] && [ "$(wt_branch "$PUBLIC_WT")" = "fleet/bead-pub2" ] && [ "$(state_get pid)" = "$PUBLIC_PID_BEFORE" ]; then
+  pass "push gate: public state scan ignores flagged run paths already reachable from origin/main"
+else fail "push gate: public main run path blocked rotation (exit $RC branch=$(wt_branch "$PUBLIC_WT")): $OUT"; fi
+printf 'new fixture path %s/bead-new/tmp/file.txt\n' "$PUBLIC_TERM" > "$PUBLIC_WT/new-run-path.txt"
+fgit -C "$PUBLIC_WT" add new-run-path.txt
+fgit -C "$PUBLIC_WT" commit -qm "new run path leak"
+PUBLIC_PID_BEFORE="$(state_get pid)"
+run dispatch worker-1 bead-pub3 "third bead with a new run path fixture"
+if [ $RC -ne 0 ] && says "public state scan failed" && says "new-run-path.txt:1" && [ "$(wt_branch "$PUBLIC_WT")" = "fleet/bead-pub2" ] && [ "$(state_get pid)" = "$PUBLIC_PID_BEFORE" ]; then
+  pass "push gate: public state scan still refuses a newly added run path"
+else fail "push gate: new run path was not refused safely (exit $RC branch=$(wt_branch "$PUBLIC_WT")): $OUT"; fi
+run stop worker-1 >/dev/null 2>&1
+RUN_PROJ="$WT_PROJ"; STATE="$WT_PROJ/seats/state.json"; LOG="$WT_PROJ/seats/logs/worker-1.jsonl"
+
 # ISC-34: a bead on a different base switches the worktree cleanly.
 fgit -C "$WT_PROJ" worktree add -q "$FIX/wt-mayline-src" -b mayline-src main
 printf 'mayline\n' > "$FIX/wt-mayline-src/mayline.txt"

@@ -2,7 +2,7 @@ ok 1 - host budget docs keep seats/bin inert unless host-budget.json opts in
 ok 2 - stakeholder-channel upgrade docs name channels, comms, specimens, and read-back
 ok 3 - zsh step 0 baseline reconstruction reads commit:path with braces
 ok 4 - zsh step 3 runbook loop reads real baseline and reports byte-equal files current
-From [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-2/.wheelhouse-runs/wheelhouse-project-77wy.2/tmp2/wheelhouse-upgrade-selftest.OeZQz0/reused-cache-source
+From [scratch]/reused-cache-source
    0f7e7b0..7d0bf58  main       -> origin/main
 ok 5 - step 1 reused cache fast-forwards local branch to origin target
 ok 6 - step 6 stale-cache guard STOPs when origin target differs from BASE
