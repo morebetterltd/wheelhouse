@@ -246,6 +246,17 @@ if (process.env.STUB_BD_READONLY_CHECK === "1") {
   });
   fs.writeFileSync(path.join(agentDir, "bd-readonly-check.json"), JSON.stringify(cases, null, 2));
 }
+if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
+  const prompt = process.argv[process.argv.length - 1] || "";
+  const rc = (prompt.match(/^- rc: (\d+)/m) || [])[1] || "";
+  const log = (prompt.match(/^- log: (.+)$/m) || [])[1] || "";
+  let logText = "", ok = false;
+  try { logText = fs.readFileSync(log, "utf8"); ok = rc === "0" && logText.includes("fixture sweep PASS") && logText.includes("scratch bd create ok"); } catch (e) { logText = `read failed: ${e.message}`; }
+  fs.writeFileSync(path.join(agentDir, "sweep-prompt-check.json"), JSON.stringify({ rc, log, ok, logText }, null, 2));
+  const verdict = ok ? "APPROVE" : "BOUNCE";
+  process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`sweep evidence rc=${rc} log=${log}\nVERDICT: ${verdict}\nPUSH: NOT CONSIDERED — sweep rc=${rc} log=${log}\n`}})+"\n");
+  process.exit(0);
+}
 if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
   const cp = require("child_process");
   const scratchGraph = path.join(process.cwd(), "bd-scratch");
@@ -420,9 +431,10 @@ readonly=0
 while true; do
   case "${1:-}" in
     --readonly) readonly=1; shift; continue ;;
-    -C|--directory) shift 2; continue ;;
+    -C|--directory) cd "$2"; shift 2; continue ;;
+    --directory=*) cd "${1#--directory=}"; shift; continue ;;
     --actor|--db|--database) shift 2; continue ;;
-    --db=*|--database=*|--directory=*) shift; continue ;;
+    --db=*|--database=*) shift; continue ;;
     --global) shift; continue ;;
   esac
   break
@@ -611,6 +623,13 @@ run_bench_check() {  # args pass through to verify.ts
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
+run_sweep_prompt_check() {  # $1 = bd-show file, remaining args pass through
+  local bdfile="$1"
+  shift
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_SHOW_FILE="$bdfile" STUB_SWEEP_PROMPT_CHECK=1 \
+    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+  RC=$?
+}
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 VDIR="$PROJ/seats/verdicts"
@@ -709,6 +728,44 @@ if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-sea
   && ! grep -q '"rc": 127' "$BENCH_RUN" 2>/dev/null; then
   pass "installed-layout stub bench receives WHEELHOUSE_REAL_BD and writes only its scratch BEADS_DIR graph"
 else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
+
+phase "0a2. dispatcher-owned full sweep evidence for reviewer"
+SWEEP_PROJ="$FIX/sweep-proj"
+build_proj "$SWEEP_PROJ" sweep "$VERIFY"
+cat > "$SWEEP_PROJ/seats/selftest-sweep.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+[ -n "${WHEELHOUSE_REAL_BD:-}" ] || { echo 'missing WHEELHOUSE_REAL_BD'; exit 8; }
+[ -n "${BEADS_DIR:-}" ] || { echo 'missing scratch BEADS_DIR'; exit 7; }
+bd create 'sweep scratch bead' --json >/dev/null
+sleep 2
+printf 'scratch bd create ok\n'
+printf 'fixture sweep PASS\n'
+SH
+chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
+git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh
+git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
+git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
+SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
+SWEEP_BD_SHOW="$FIX/sweep-bd-show.txt"
+cat > "$SWEEP_BD_SHOW" <<'EOF'
+○ bead-sweep [task]
+
+DESCRIPTION
+
+  ## Done
+
+  The full seats/*.selftest.sh sweep passes.
+EOF
+RUN_PROJ="$SWEEP_PROJ"
+VARGV="$HOME_FIX/.pi-seats-sweep/verifier/argv.json"
+run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1 --timeout-ms 1000 --no-event-timeout-ms 1000 --first-output-timeout-ms 1000
+SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" 2>/dev/null && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" 2>/dev/null; then
+  pass "full-sweep done: dispatcher runs sweep at reviewed tip and reviewer cites rc/log"
+else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$SWEEP_CHECK" 2>/dev/null) verdict=$(cat "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" 2>/dev/null)"; fi
+RUN_PROJ="$INST_PROJ"
+VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
 MISS_PROJ="$FIX/missing-brief-proj"
 build_proj "$MISS_PROJ" missing "$VERIFY"
 rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"
