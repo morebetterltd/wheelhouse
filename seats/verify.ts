@@ -356,9 +356,7 @@ function sawFinalReviewerResult(stdout: string, harness: HarnessName): boolean {
       } else if (harness === "codex") {
         if (event?.type === "turn.completed") return true;
       } else {
-        const role = event?.message?.role ?? event?.role ?? event?.message?.author?.role ?? event?.author?.role;
-        if (event?.type === "turn_end") return true;
-        if (event?.type === "message_end" && role === "assistant") return true;
+        if (event?.type === "agent_end") return true;
       }
     } catch {}
   }
