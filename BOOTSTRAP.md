@@ -409,9 +409,12 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
   ```bash
   bd setup claude
   bd setup codex -o wheelhouse/AGENTS.md
+  seats/install-fleet-pre-push-guard.sh
   test -f .claude/settings.json || echo "FAIL bd setup claude did not write .claude/settings.json"
-  test -f CLAUDE.md || echo "FAIL bd setup claude did not write CLAUDE.md"
+  test -f CLAUDE.md || echo "FAIL bd setup claude did not create CLAUDE.md"
   test -f wheelhouse/AGENTS.md || echo "FAIL bd setup codex did not write wheelhouse/AGENTS.md"
+  test -x "$(git config --get core.hooksPath)/pre-push" || echo "FAIL fleet pre-push guard is not installed in core.hooksPath"
+  echo "fleet pre-push guard installed at $(git config --get core.hooksPath)/pre-push"
   ```
 
   `bd setup claude` is the explicit replacement for the SessionStart hook that `bd init --skip-agents` deliberately skipped. It may create or update `CLAUDE.md`; the next steps write the commander content into that same file, keeping bd's managed block. Do not run a setup command that writes root `AGENTS.md`, and do not let `bd init` claim `.agents/` wholesale.
