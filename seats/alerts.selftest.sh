@@ -122,14 +122,22 @@ for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done; [ "$(inbox_
 set_low_disk 0; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared low-disk' "$ROOT/seats/logs/alerts.log" && pass 'low-disk clears' || fail "low disk clear failed"
 
-clear_runtime; DRIFT_ON=1 run_alert bun seats/alerts.ts check --json
-[ $RC -eq 0 ] && active template-drift && pass 'template-drift --json is wired into the snapshot and alert' || fail "drift failed rc=$RC out=$OUT"
-for i in 1 2 3; do DRIFT_ON=1 run_alert bun seats/alerts.ts check --json; done; [ "$(inbox_count)" = 1 ] && pass 'template-drift stays quiet over 3 active runs' || fail "drift not quiet"
+clear_runtime; WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_ON=1 run_alert bun seats/alerts.ts check --json
+[ $RC -eq 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] && pass 'template-drift under hold threshold writes no inbox row' || fail "short drift fired too early rc=$RC out=$OUT inbox=$(inbox_count)"
 run_alert bun seats/alerts.ts check --json
-[ $RC -eq 0 ] && grep -q 'alert cleared template-drift' "$ROOT/seats/logs/alerts.log" && pass 'template-drift clears' || fail "drift clear failed"
+[ $RC -eq 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] && pass 'template-drift clearing before threshold stays quiet' || fail "short drift clear produced alert rc=$RC out=$OUT inbox=$(inbox_count)"
+WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_ON=1 run_alert bun seats/alerts.ts check --json
+age_alert template-drift
+WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_ON=1 run_alert bun seats/alerts.ts check --json
+[ $RC -eq 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] && pass 'template-drift held past threshold fires exactly once' || fail "held drift failed rc=$RC out=$OUT inbox=$(inbox_count)"
+for i in 1 2 3; do WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_ON=1 run_alert bun seats/alerts.ts check --json; done; [ "$(inbox_count)" = 1 ] && pass 'template-drift stays quiet over 3 active runs' || fail "drift not quiet"
+run_alert bun seats/alerts.ts check --json
+[ $RC -eq 0 ] && grep -q 'alert cleared template-drift' "$ROOT/seats/logs/alerts.log" && pass 'template-drift clears after firing' || fail "drift clear failed"
+WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_ON=1 run_alert bun seats/alerts.ts check --json
+[ $RC -eq 0 ] && ! active template-drift && [ "$(inbox_count)" = 1 ] && pass 'template-drift clear resets the hold clock' || fail "drift clock did not reset rc=$RC out=$OUT inbox=$(inbox_count)"
 rm -f "$ROOT/seats/run/fleet-snapshot.json" "$ROOT/seats/inbox.jsonl" "$ROOT/seats/logs/alerts.log"
-DRIFT_AHEAD=1 run_alert bun seats/alerts.ts check --json
-[ $RC -eq 0 ] && active template-drift && pass 'template-drift fires when template main is ahead without file drift' || fail "drift ahead failed rc=$RC out=$OUT"
+WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=0 DRIFT_AHEAD=1 run_alert bun seats/alerts.ts check --json
+[ $RC -eq 0 ] && active template-drift && pass 'template-drift fires when template main is ahead without file drift after hold threshold' || fail "drift ahead failed rc=$RC out=$OUT"
 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared template-drift' "$ROOT/seats/logs/alerts.log" && pass 'template-drift ahead clears' || fail "drift ahead clear failed"
 
