@@ -63,6 +63,7 @@ printf '%s\n' '{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}' > "$PROJ
 
 run_alert(){ OUT="$(cd "$PROJ" && env HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$PROJ" WHEELHOUSE_ALERT_INTERVAL_MS=60000 bun seats/alerts.ts check --json 2>&1)"; RC=$?; }
 run_gate(){ OUT="$(cd "$PROJ" && env PATH="$BIN:$PATH" bash seats/fleet-gate.sh 2>&1)"; RC=$?; }
+run_gate_from(){ OUT="$(cd "$1" && shift && env PATH="$BIN:$PATH" CLAUDE_PROJECT_DIR="$PROJ" "$@" 2>&1)"; RC=$?; }
 has(){ case "$OUT" in *"$1"*) return 0;; *) return 1;; esac; }
 mutate_snapshot(){ node - "$PROJ/seats/run/fleet-snapshot.json" "$@" <<'NODE'
 const fs = require('fs');
@@ -101,6 +102,23 @@ if [ $RC -eq 0 ] && [ "$OUT" = '🚢 FLEET: 2 seats live · 3 ready · 1 in revi
   pass 'fresh real-schema snapshot prints live, ready, review backlog, and no alerts'
 else
   fail "fresh snapshot output wrong rc=$RC out=$OUT"
+fi
+
+PRODUCT="$PROJ/product-checkout"
+mkdir -p "$PRODUCT/seats"
+cp "$PROJ/seats/fleet-gate.sh" "$PRODUCT/seats/fleet-gate.sh"
+chmod +x "$PRODUCT/seats/fleet-gate.sh"
+run_gate_from "$PRODUCT" bash seats/fleet-gate.sh
+if [ $RC -eq 0 ] && [ "$OUT" = '🚢 FLEET: no snapshot yet — run seats/cockpit.sh' ]; then
+  pass 'canary: cwd-relative documented hook from a nested checkout reads the nested missing snapshot'
+else
+  fail "cwd-relative hook canary output wrong rc=$RC out=$OUT"
+fi
+run_gate_from "$PRODUCT" bash -c 'bash "$CLAUDE_PROJECT_DIR/seats/fleet-gate.sh"'
+if [ $RC -eq 0 ] && [ "$OUT" = '🚢 FLEET: 2 seats live · 3 ready · 1 in review · alerts: none' ]; then
+  pass 'project-root-anchored hook command reads the real fleet snapshot from a nested checkout'
+else
+  fail "anchored hook output wrong rc=$RC out=$OUT"
 fi
 
 cp "$FIX/real-fleet-snapshot.json" "$PROJ/seats/run/fleet-snapshot.json"; mutate_snapshot fresh 'capacity-events,low-disk'
