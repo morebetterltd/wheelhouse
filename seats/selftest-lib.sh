@@ -76,6 +76,7 @@ selftest_scratch_graph() {
   fi
   rm -rf "$graph_root"
   mkdir -p "$graph_root"
+  git -C "$graph_root" init -q
   init_log="$graph_root/bd-init.log"
   if ! (cd "$graph_root" && "$bd_bin" init --non-interactive --skip-agents -p scratch) >"$init_log" 2>&1; then
     echo "STOP: bd init failed for scratch graph $graph_root:" >&2
