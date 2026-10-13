@@ -1,0 +1,37 @@
+Targeted suites:
+digest.selftest.sh rc=0
+digest.selftest: PASS (22 legs)
+supervisor.selftest.sh rc=0
+supervisor.selftest: PASS (19 checks)
+
+Scratch notify proof:
+notify_rc=0
+need_id=need-97ol
+show_rc=0
+{
+  "id": "need-97ol",
+  "state": "open",
+  "opened": {
+    "type": "opened",
+    "id": "need-97ol",
+    "at": "2026-10-13T01:43:03.776Z",
+    "kind": "notify",
+    "title": "Fleet digest — Oct 12, 2026",
+    "body": "# Fleet digest — scratch — Oct 11 at 06:00 AM EDT → Oct 12 at 06:00 AM EDT\nSeats: no rostered seats\n\n## Shipped\n- Night work shipped — merged abc1234, Oct 11 at 08:00 AM EDT; verdict: unknown; push: unknown; rounds=0\n\n## Blocked on you\n[Nothing open.]\n\n## In review\n[Nothing waiting.]\n\n## Sent back\n[Nothing sent back.]\n\n## Failed and why\n[Nothing failed.]\n\n## Alerts\n[None.]\n",
+    "options": [],
+    "machine": {
+      "source": "digest:2026-10-12T10:00:00.000Z"
+    }
+  },
+  "messages": [],
+  "read": {
+    "type": "read",
+    "id": "need-97ol",
+    "at": "2026-10-13T01:43:04.015Z",
+    "by": "commander",
+    "via": "show"
+  }
+}
+
+Full sweep:
+selftest-sweep: PASS (45 suite(s))

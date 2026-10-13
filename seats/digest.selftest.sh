@@ -126,5 +126,39 @@ NOBD="$(WHEELHOUSE_DIGEST_ROOT="$PROJ" PATH="$(dirname "$(command -v bun)"):/usr
 # 12 window edge
 if ! assert_contains "$OUT" 'outside old' && ! assert_contains "$OUT" 'outside new' && assert_contains "$OUT" 'disk low'; then pass "since/until exclude rows outside the window edges"; else fail "window filtering failed: $OUT"; fi
 
+# 18 notify opens one need, dedupes by source, writes digest.last, and uses digest.last for bare --notify
+printf '{"type":"closed","id":"need-open","at":"2026-01-01T10:05:00Z","reason":"selftest"}\n' >> "$PROJ/seats/needs.jsonl"
+rm -f "$PROJ/seats/run/digest.last" "$PROJ/seats/run/desk.port"
+opened_before="$(grep -c '"type":"opened"' "$PROJ/seats/needs.jsonl" 2>/dev/null || echo 0)"
+NID1="$(run_digest --notify --since "$SINCE" --until "$UNTIL" 2>"$FIX/notify.err")"; NRC1=$?
+opened_after="$(grep -c '"type":"opened"' "$PROJ/seats/needs.jsonl" 2>/dev/null || echo 0)"
+if [ $NRC1 -eq 0 ] && printf '%s' "$NID1" | grep -Eq '^need-[a-z0-9]+' && [ $((opened_after-opened_before)) -eq 1 ] && node -e 'const fs=require("fs"); const rows=fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).map(JSON.parse); const ev=rows.at(-1); const until=new Date(process.argv[2]).toISOString(); if(ev.type!=="opened"||ev.kind!=="notify"||ev.machine?.source!=="digest:"+until||!/Build the package/.test(ev.body)||!/\[Nothing open\.\]/.test(ev.body)||/Full page:/.test(ev.body)) process.exit(1);' "$PROJ/seats/needs.jsonl" "$UNTIL"; then pass "--notify opens one notify need through needs.ts with human digest body"; else fail "notify open failed rc=$NRC1 id=$NID1 before=$opened_before after=$opened_after err=$(cat "$FIX/notify.err") ledger=$(tail -3 "$PROJ/seats/needs.jsonl")"; fi
+NID2="$(run_digest --notify --since "$SINCE" --until "$UNTIL" 2>"$FIX/notify-rerun.err")"; NRC2=$?
+opened_rerun="$(grep -c '"type":"opened"' "$PROJ/seats/needs.jsonl" 2>/dev/null || echo 0)"
+if [ $NRC2 -eq 0 ] && [ "$NID2" = "$NID1" ] && [ "$opened_rerun" = "$opened_after" ]; then pass "--notify rerun for same until prints existing id and appends nothing"; else fail "notify rerun dedupe failed rc=$NRC2 id1=$NID1 id2=$NID2 opened_after=$opened_after opened_rerun=$opened_rerun err=$(cat "$FIX/notify-rerun.err")"; fi
+last_written="$(cat "$PROJ/seats/run/digest.last" 2>/dev/null || true)"
+BARE_ID="$(run_digest --notify 2>"$FIX/notify-bare.err")"; BARE_RC=$?
+BARE_JSON="$(WHEELHOUSE_NEEDS_ROOT="$PROJ" bun "$PROJ/seats/needs.ts" show "$BARE_ID" 2>/dev/null || true)"
+if [ "$last_written" = "$(node -e 'console.log(new Date(process.argv[1]).toISOString())' "$UNTIL")" ] && [ $BARE_RC -eq 0 ] && printf '%s' "$BARE_JSON" | grep -Eq 'Jan 01.*07:00 PM EST'; then pass "digest.last records until and bare --notify uses it as the next since"; else fail "digest.last/bare notify failed last=$last_written bare_rc=$BARE_RC body=$BARE_JSON err=$(cat "$FIX/notify-bare.err")"; fi
+printf 'http://127.0.0.1:65530/needs\n' > "$PROJ/seats/run/desk.port"
+DESK_UNTIL=2026-01-05T00:00:00.000Z
+DESK_ID="$(run_digest --notify --since 2026-01-04T00:00:00Z --until "$DESK_UNTIL" 2>"$FIX/notify-desk.err")"; DESK_RC=$?
+DESK_JSON="$(WHEELHOUSE_NEEDS_ROOT="$PROJ" bun "$PROJ/seats/needs.ts" show "$DESK_ID" 2>/dev/null || true)"
+if [ $DESK_RC -eq 0 ] && printf '%s' "$DESK_JSON" | grep -q 'Full page: http://127.0.0.1:65530/digest'; then pass "--notify appends Full page digest URL when desk.port exists"; else fail "notify desk URL missing rc=$DESK_RC id=$DESK_ID body=$DESK_JSON err=$(cat "$FIX/notify-desk.err")"; fi
+# Canary: if human rendering leaks ids, needs.ts refuses the notify and digest.last is not written.
+cp "$PROJ/seats/digest.ts" "$FIX/digest.good.ts"
+python3 - "$PROJ/seats/digest.ts" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); s=p.read_text()
+old='function humanText(s:string, ns:string){ return scrubLocalPaths(scrubAccountLabels(String(s||""))).replace(new RegExp(`\\\\b${escapeRegExp(ns)}-[a-z0-9_.-]+\\\\b`,"ig"),"work item").replace(/\\bbead\\b/ig,"task"); }'
+if old not in s: raise SystemExit(1)
+p.write_text(s.replace(old, 'function humanText(s:string, ns:string){ return String(s||""); }'))
+PY
+rm -f "$PROJ/seats/run/digest.last"
+CAN_RC=0; CAN_OUT="$(run_digest --notify --since "$SINCE" --until 2026-01-06T00:00:00Z 2>"$FIX/notify-canary.err")" || CAN_RC=$?
+mv "$FIX/digest.good.ts" "$PROJ/seats/digest.ts"
+if [ $CAN_RC -eq 2 ] && grep -q 'contains install-local id token\|contains forbidden human-facing token' "$FIX/notify-canary.err" && [ ! -e "$PROJ/seats/run/digest.last" ]; then pass "canary: id-leaking renderHuman makes --notify exit 2 without writing digest.last"; else fail "notify canary failed rc=$CAN_RC out=$CAN_OUT err=$(cat "$FIX/notify-canary.err") last=$(cat "$PROJ/seats/run/digest.last" 2>/dev/null)"; fi
+
 if [ $FAIL -eq 0 ]; then echo "digest.selftest: PASS ($PASS legs)"; exit 0; fi
 echo "digest.selftest: FAIL ($FAIL failure(s), $PASS pass(es))" >&2; exit 1

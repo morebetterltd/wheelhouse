@@ -47,6 +47,7 @@ now_ms(){ node -e 'const v=process.env.WHEELHOUSE_SUPERVISOR_NOW; console.log(v 
 local_day(){ node -e 'const d=new Date(Number(process.argv[1])); const p=n=>String(n).padStart(2,"0"); console.log(`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`);' "$1"; }
 local_hour(){ node -e 'const d=new Date(Number(process.argv[1])); console.log(String(d.getHours()).padStart(2,"0"));' "$1"; }
 cleanup_enabled(){ v="$(sed -n 's/^cleanup=//p' "$ROOT/wheelhouse/.template-source" 2>/dev/null | tail -1)"; [ "$v" != off ]; }
+digest_enabled(){ v="$(sed -n 's/^digest=//p' "$ROOT/wheelhouse/.template-source" 2>/dev/null | tail -1)"; [ "$v" != off ]; }
 tick_recovery(){
   command -v bun >/dev/null 2>&1 || return 0
   ms="$(now_ms)"; last="$(supervisor_state_get lastRecoveryMs)"; interval="${WHEELHOUSE_SEAT_RECOVERY_SECONDS:-60}"
@@ -66,7 +67,18 @@ tick_cleanup(){
   (cd "$ROOT" && exec </dev/null >> "$LOGS/prune-cleanup.out.log" 2>> "$LOGS/prune-cleanup.stderr.log"; WHEELHOUSE_PRUNE_ROOT="$ROOT" bun seats/prune.ts cleanup) &
   printf '%s cleanup started for %s (pid %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$day" "$!" >> "$OUT_LOG"
 }
-tick(){ tick_daemon herald; tick_daemon desk; tick_daemon courier; tick_recovery; tick_cleanup; }
+tick_digest(){
+  digest_enabled || return 0
+  [ -f "$SEATS/digest.ts" ] || return 0
+  command -v bun >/dev/null 2>&1 || return 0
+  ms="$(now_ms)"; day="$(local_day "$ms")"; hour="$(local_hour "$ms")"; want="$(node -e 'const n=Number(process.argv[1]||6); console.log(String(Number.isFinite(n)?n:6).padStart(2,"0"));' "${WHEELHOUSE_DIGEST_HOUR:-06}")"
+  [ "$hour" = "$want" ] || return 0
+  [ "$(supervisor_state_get lastDigestDay)" != "$day" ] || return 0
+  supervisor_state_set lastDigestDay "$day"
+  (cd "$ROOT" && exec </dev/null >> "$LOGS/digest.out.log" 2>> "$LOGS/digest.stderr.log"; WHEELHOUSE_DIGEST_ROOT="$ROOT" bun seats/digest.ts --notify) &
+  printf '%s digest started for %s (pid %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$day" "$!" >> "$OUT_LOG"
+}
+tick(){ tick_daemon herald; tick_daemon desk; tick_daemon courier; tick_recovery; tick_cleanup; tick_digest; }
 status(){ for d in herald desk courier; do if ! should_run "$d"; then echo "$d SKIPPED"; continue; fi; rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | grep -q '"crashLoop":true' && echo 1 || echo 0)"; if [ "$crash" = 1 ]; then since="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log((j.restarts||[])[0]||"")})')"; echo "$d CRASH-LOOP since $since"; elif daemon_alive "$d"; then echo "$d RUNNING pid $(cat "$RUN/$d.pid")"; else echo "$d DEAD"; fi; done; }
 resetd(){ d="$1"; state_set "$d" '{"restarts":[],"crashLoop":false}'; restart_cmd "$d"; }
 supervisor_holder_alive(){

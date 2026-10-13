@@ -152,6 +152,32 @@ printf 'cleanup=on\n' > "$PROJ/wheelhouse/.template-source"; rm -f "$PROJ/seats/
 for _ in $(seq 1 20); do [ "$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)" -ge 2 ] && break; sleep 0.05; done
 cc="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
 if [ "$cc" -ge 2 ]; then pass "canary: removing lastCleanupDay makes same-day cleanup run twice"; else fail "cleanup canary did not prove daily guard coverage count=$cc"; fi
+
+cat > "$PROJ/seats/digest.ts" <<'TS'
+#!/usr/bin/env bun
+import * as fs from "node:fs";
+import * as path from "node:path";
+const root = path.resolve(import.meta.dir, "..");
+fs.mkdirSync(path.join(root, "seats", "run"), { recursive: true });
+fs.appendFileSync(path.join(root, "seats", "run", "digest-calls.log"), process.argv.slice(2).join(" ") + "\n");
+TS
+chmod +x "$PROJ/seats/digest.ts"
+printf 'digest=on\n' > "$PROJ/wheelhouse/.template-source"
+rm -f "$PROJ/seats/run/digest-calls.log" "$PROJ/seats/run/supervisor.state.json"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T05:59:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+d1="$(grep -c '^--notify$' "$PROJ/seats/run/digest-calls.log" 2>/dev/null || echo 0)"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T06:00:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+for _ in $(seq 1 20); do [ -s "$PROJ/seats/run/digest-calls.log" ] && break; sleep 0.05; done
+d2="$(grep -c '^--notify$' "$PROJ/seats/run/digest-calls.log" 2>/dev/null || echo 0)"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T06:30:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+sleep 0.1
+d3="$(grep -c '^--notify$' "$PROJ/seats/run/digest-calls.log" 2>/dev/null || echo 0)"
+if [ "$d1" = 0 ] && [ "$d2" = 1 ] && [ "$d3" = 1 ] && grep -q 'digest started for 2026-01-01' "$PROJ/seats/logs/supervisor.out.log"; then pass "daily digest starts once per local day at configured hour"; else fail "digest cadence wrong d1=$d1 d2=$d2 d3=$d3 state=$(cat "$PROJ/seats/run/supervisor.state.json" 2>/dev/null) log=$(cat "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null)"; fi
+printf 'digest=off\n' > "$PROJ/wheelhouse/.template-source"
+(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-02T06:00:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+sleep 0.1
+d4="$(grep -c '^--notify$' "$PROJ/seats/run/digest-calls.log" 2>/dev/null || echo 0)"
+if [ "$d4" = 1 ]; then pass "digest=off disables daily digest"; else fail "digest=off still ran digest count=$d4"; fi
 # canary: if crashLoop marker is removed, the no-fourth-restart property fails.
 CAN="$FIX/canary"; mkdir -p "$CAN/seats"; cp "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; perl -0pi -e 's/j\.crashLoop=rs\.length>=3;/j.crashLoop=false;/' "$CAN/seats/supervisor.sh"
 if cmp -s "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; then fail "canary edit did not change supervisor"; else
