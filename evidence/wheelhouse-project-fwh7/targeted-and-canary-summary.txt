@@ -1,0 +1,60 @@
+== alerts.selftest.final tail ==
+  ok    template-drift --json is wired into the snapshot and alert
+  ok    template-drift stays quiet over 3 active runs
+  ok    template-drift clears
+  ok    template-drift fires when template main is ahead without file drift
+  ok    template-drift ahead clears
+
+failure and stale lock handling
+  ok    bd non-zero leaves previous snapshot intact and logs STOP
+  ok    stale alerts lock left by a dead pid is reclaimed
+  ok    live-pid alerts lock is respected
+
+readyWorkNobodyOnIt and herald clock
+  ok    one readyWorkNobodyOnIt definition and alerts/staffing call sites exist
+  ok    herald launches alerts child and snapshot appears without blocking the scan loop
+  ok    scan loop does not wait for a slow alerts child
+  ok    canary: removing runAlertsClock makes the herald snapshot leg fail
+
+canary
+  ok    canary: fire-on-every-run variant fails the stays-quiet leg
+alerts.selftest.sh works on this machine.
+
+== herald.selftest.final tail ==
+ok 50 - escalation is not blocked by busy-looking scrollback
+ok 51 - repainting trailing status line is stripped for stability and idle poke lands
+ok 52 - wide capture ignores old spinner outside live status area
+ok 53 - drained deferred inbox row is not poked later
+ok 54 - new inbox row after drain still pokes
+ok 55 - busy commander pane defers a distress poke without sending
+ok 56 - deferred distress poke is delivered once the commander pane is idle
+ok 57 - per-pane cooldown defers a second poke inside an explicit 60s window
+ok 58 - per-pane cooldown allows a later poke after the tunable interval
+ok 59 - pane-state gate prevents poke into a bare shell
+ok 60 - allowlist gate classifies a ❯-prompt bare shell not-idle and defers without poking
+ok 61 - between-tool-calls Claude UI is unstable across the idle window and deferred without poking
+ok 62 - new inbox row with stale deferred timer is deferred when Claude is mid-turn
+ok 63 - fixture tool-running Claude UI is not poked
+ok 64 - poke attempt with no configured pane is refused without dropping the pending wake
+ok 65 - wrapper-shaped idle prompt matched by WHEELHOUSE_HERALD_IDLE_RE receives the constant poke
+ok 66 - deferred herald wake leaves inbox durable and later pokes when idle
+ok 67 - cockpit starts or verifies the herald daemon
+ok 68 - cockpit --herald verifies and restarts a dead herald without supervisor racing the assertion
+ok 69 - truncated tool_execution_update payloads are harmless to herald's log reader shape
+ok 70 - unset herald alert/staffing intervals use defaults instead of relaunching immediately
+ok 71 - empty herald alert/staffing intervals use defaults instead of relaunching immediately
+ok 72 - explicit zero herald alert/staffing intervals are honoured
+ok 73 - herald exits when its project root disappears
+herald.selftest: PASS (73 checks)
+
+== alerts old-parse canary excerpt ==
+interval parsing
+  FAIL  unset interval rc=0 interval=0 out={"at":"2026-10-12T23:11:42.650Z","intervalMs":0,"snapshot":{"at":"2026-10-12T23:11:41.922Z","ready":[],"readyCount":0,"chainedCount":0,"overlapCount":0,"reviewBacklog":[],"workers":{"live":[],"busy":0,"idle":0},"reviewers":{"live":[],"busy":0,"idle":0},"changes":{"isaHead":null,"isaChanged":false,"newEpics":0}},"herald":{"pid":0,"alive":false,"target":null},"inbox":{"size":0,"cursor":0,"undrainedRows":0,"oldestUndrainedAt":null,"lagMs":0,"deferralStreak
+  FAIL  empty interval rc=0 interval=0 out={"at":"2026-10-12T23:11:43.508Z","intervalMs":0,"snapshot":{"at":"2026-10-12T23:11:43.119Z","ready":[],"readyCount":0,"chainedCount":0,"overlapCount":0,"reviewBacklog":[],"workers":{"live":[],"busy":0,"idle":0},"reviewers":{"live":[],"busy":0,"idle":0},"changes":{"isaHead":null,"isaChanged":false,"newEpics":0}},"herald":{"pid":0,"alive":false,"target":null},"inbox":{"size":0,"cursor":0,"undrainedRows":0,"oldestUndrainedAt":null,"lagMs":0,"deferralStreak
+alerts.selftest.sh FAIL (2 failure(s))
+
+== herald old-parse canary excerpt ==
+not ok 70 - default interval counts alerts=0 staffing=2 log=1791846823 staffing
+not ok 71 - empty interval counts alerts=0 staffing=3 log=1791846823 staffing
+not ok 72 - zero interval counts alerts=2 staffing=5 log=1791846823 staffing
+herald.selftest: FAIL (3 failure(s), 70 pass(es))
