@@ -307,13 +307,31 @@ if (process.env.STUB_SILENT === "1") {
     process.stdout.write(JSON.stringify({type:"tool_execution_end",toolName:"bash",exitCode:0})+"\n");
   }
   setTimeout(() => {}, 10000);
+} else if (process.env.STUB_PI_QUOTED_VERDICT_MIDRUN === "1") {
+  process.on("SIGTERM", () => process.exit(143));
+  if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
+  const write = (obj) => process.stdout.write(JSON.stringify(obj)+"\n");
+  if (streamRequested) {
+    write({type:"message_end",message:{role:"assistant",content:"Prior reviewer output quoted for context:\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\nStill investigating."}});
+    write({type:"turn_end",message:{role:"assistant"}});
+    setTimeout(() => write({type:"tool_execution_start",toolName:"bash",args:{cmd:"continue review"}}), 100);
+    setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), 180);
+    setTimeout(() => write({type:"message_end",message:{role:"assistant",content:text}}), 260);
+    setTimeout(() => write({type:"agent_end"}), 280);
+    setTimeout(() => process.exit(Number(process.env.STUB_EXIT || 0)), 500);
+  } else {
+    process.stdout.write(text);
+    process.exit(Number(process.env.STUB_EXIT || 0));
+  }
 } else if (process.env.STUB_HANG_CHILD_AFTER_RESULT === "1") {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
   const cp = require("child_process");
   const child = cp.spawn(process.execPath, ["-e", "setTimeout(()=>{}, 10000)"], { stdio: ["ignore", "inherit", "inherit"] });
   fs.writeFileSync(path.join(agentDir, "hanging-child-pid.txt"), String(child.pid));
-  if (streamRequested) process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n");
-  else process.stdout.write(text);
+  if (streamRequested) {
+    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n");
+    process.stdout.write(JSON.stringify({type:"agent_end"})+"\n");
+  } else process.stdout.write(text);
   process.exit(0);
 } else if (process.env.STUB_SLOW_TOOL_OUTPUT === "1" || process.env.STUB_LONG_TOOL_PROGRESS === "1") {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
@@ -359,11 +377,17 @@ if (process.env.STUB_STREAM_FILE) {
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 const streamRequested = process.argv.includes("--output-format") && process.argv[process.argv.indexOf("--output-format") + 1] === "stream-json";
-if (streamRequested) {
+if (process.env.STUB_CLAUDE_QUOTED_VERDICT_MIDRUN === "1" && streamRequested) {
+  process.on("SIGTERM", () => process.exit(143));
+  const quoted = "Prior reviewer output quoted for context:\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\nStill investigating.";
+  process.stdout.write(JSON.stringify({type:"assistant",message:{role:"assistant",content:[{type:"text",text:quoted}]}})+"\n");
+  setTimeout(() => process.stdout.write(JSON.stringify({type:"assistant",message:{role:"assistant",content:[{type:"text",text}]}})+"\n"), 250);
+  setTimeout(() => { process.stdout.write(JSON.stringify({type:"result",subtype:"success",result:text})+"\n"); process.exit(Number(process.env.STUB_EXIT || "0")); }, 350);
+} else if (streamRequested) {
   process.stdout.write(JSON.stringify({type:"assistant",message:{role:"assistant",content:[{type:"text",text}]}})+"\n");
   process.stdout.write(JSON.stringify({type:"result",subtype:"success",result:text})+"\n");
 } else process.stdout.write(text);
-process.exit(Number(process.env.STUB_EXIT || "0"));
+if (process.env.STUB_CLAUDE_QUOTED_VERDICT_MIDRUN !== "1") process.exit(Number(process.env.STUB_EXIT || "0"));
 STUB
 cat > "$BIN/codex" <<'STUB'
 #!/usr/bin/env node
@@ -843,6 +867,15 @@ else
   kill "$HANG_CHILD_PID" 2>/dev/null || true
   fail "post-result background child survived verifier cleanup (pid=$HANG_CHILD_PID)"
 fi
+cat > "$REPLY" <<'EOF'
+Finished after quoting the previous review without being reaped mid-run.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED
+EOF
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_PI_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-pi-quoted-verdict fleet/bead-1 worker-1 verifier --no-event-timeout-ms 1000 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143" && grep -q 'VERDICT: APPROVE' "$VDIR/bead-pi-quoted-verdict.md" 2>/dev/null; then
+  pass "pi quoted mid-run verdict is not reaped before agent_end"
+else fail "pi quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$RUN_PROJ/seats/verify.ts" bead-progress-past-total fleet/bead-1 worker-1 verifier --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "tool progress beyond total timeout reaches a verdict instead of being killed"
@@ -1186,6 +1219,21 @@ else fail "claude-code verifier one-shot carried path or missed brief text: $(ca
 if ! grep -q -- 'permission-mode\|allowed-tools\|disallowed-tools' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
   pass "claude-code verifier one-shot omits tool permission flags when the seat has no tool lists"
 else fail "claude-code verifier one-shot unexpectedly carried tool permission flags: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
+cat > "$REPLY" <<'EOF'
+Finished after quoting the previous review without being reaped mid-run.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED — fixture
+EOF
+rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLAUDE_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-quoted-verdict fleet/bead-1 worker-1 verifier --no-event-timeout-ms 1000 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143"; then
+  pass "claude-code quoted mid-run verdict is not reaped before the final result event"
+else fail "claude-code quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
+cat > "$REPLY" <<'EOF'
+Mixed harness verifier checked.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED — fixture
+EOF
 bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
 run bead-1 fleet/bead-1 worker-1
