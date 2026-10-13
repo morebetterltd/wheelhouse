@@ -28,7 +28,7 @@ function minutesValue(key:string, def:number):number{ const n=Number(templateVal
 function gbValue(key:string, def:number):number{ const n=Number(templateValue(key)); return Number.isFinite(n) ? n : def; }
 function acquireLock():number|null{ return acquirePidLock(LOCK); }
 function releaseLock(fd:number|null){ releasePidLock(LOCK, fd); }
-function intervalMs(){ const n=Number(process.env.WHEELHOUSE_ALERT_INTERVAL_MS ?? ""); return Number.isFinite(n)&&n>=0?Math.floor(n):DEFAULT_INTERVAL_MS; }
+function intervalMs(){ const raw=process.env.WHEELHOUSE_ALERT_INTERVAL_MS; if(raw===undefined||raw.trim()==="") return DEFAULT_INTERVAL_MS; const n=Number(raw); return Number.isFinite(n)&&n>=0?Math.floor(n):DEFAULT_INTERVAL_MS; }
 
 export function inboxStats(root=ROOT){
   const file=path.join(root,"seats","inbox.jsonl"); const cursorFile=path.join(root,"seats","inbox.cursor"); const log=path.join(root,"seats","logs","herald.out.log");

@@ -735,6 +735,51 @@ fi
 if grep -R "wheelhouse_truncated_bytes" "$PROJ/seats/logs" >/dev/null 2>&1 || true; then :; fi
 pass "truncated tool_execution_update payloads are harmless to herald's log reader shape"
 
+INTERVAL_ROOT="$FIX/interval-root"
+mkdir -p "$INTERVAL_ROOT/seats/run" "$INTERVAL_ROOT/seats/logs" "$INTERVAL_ROOT/seats"
+printf '{"logs":{},"seen":[]}
+' > "$INTERVAL_ROOT/seats/herald.state.json"
+printf '{"roles":{"worker":{"min":1,"max":1,"entries":["local"]}},"entries":{"local":{"provider":"codex","app":"openai-codex","auth":"oauth","model":"gpt-5.5"}},"check_interval_seconds":60}
+' > "$INTERVAL_ROOT/seats/pool.json"
+INTERVAL_BIN="$FIX/interval-bin"; mkdir -p "$INTERVAL_BIN"
+cat > "$INTERVAL_BIN/bun" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"seats/alerts.ts check"*) printf '%s alerts
+' "$(date +%s)" >> "${INTERVAL_LOG:?}"; exit 0 ;;
+  *"seats/staffing.ts check"*) printf '%s staffing
+' "$(date +%s)" >> "${INTERVAL_LOG:?}"; exit 0 ;;
+esac
+exit 0
+SH
+chmod +x "$INTERVAL_BIN/bun"
+REAL_BUN="$(command -v bun)"
+INTERVAL_LOG="$FIX/interval-launches.log"; : > "$INTERVAL_LOG"
+unset WHEELHOUSE_ALERT_INTERVAL_MS WHEELHOUSE_STAFFING_INTERVAL_MS
+WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
+sleep 0.2
+WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
+sleep 0.2
+DEFAULT_ALERTS="$(grep -c ' alerts$' "$INTERVAL_LOG" || true)"; DEFAULT_STAFFING="$(grep -c ' staffing$' "$INTERVAL_LOG" || true)"
+[ "$DEFAULT_ALERTS" = 1 ] && [ "$DEFAULT_STAFFING" = 1 ] && pass "unset herald alert/staffing intervals use defaults instead of relaunching immediately" || fail "default interval counts alerts=$DEFAULT_ALERTS staffing=$DEFAULT_STAFFING log=$(cat "$INTERVAL_LOG")"
+WHEELHOUSE_ALERT_INTERVAL_MS= WHEELHOUSE_STAFFING_INTERVAL_MS= WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
+sleep 0.2
+EMPTY_ALERTS="$(grep -c ' alerts$' "$INTERVAL_LOG" || true)"; EMPTY_STAFFING="$(grep -c ' staffing$' "$INTERVAL_LOG" || true)"
+[ "$EMPTY_ALERTS" = 1 ] && [ "$EMPTY_STAFFING" = 1 ] && pass "empty herald alert/staffing intervals use defaults instead of relaunching immediately" || fail "empty interval counts alerts=$EMPTY_ALERTS staffing=$EMPTY_STAFFING log=$(cat "$INTERVAL_LOG")"
+rm -f "$INTERVAL_ROOT/seats/pool.json"
+WHEELHOUSE_ALERT_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
+sleep 0.2
+WHEELHOUSE_ALERT_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
+sleep 0.2
+printf '{"roles":{"worker":{"min":1,"max":1,"entries":["local"]}},"entries":{"local":{"provider":"codex","app":"openai-codex","auth":"oauth","model":"gpt-5.5"}},"check_interval_seconds":60}
+' > "$INTERVAL_ROOT/seats/pool.json"
+WHEELHOUSE_STAFFING_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
+sleep 0.2
+WHEELHOUSE_STAFFING_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
+sleep 0.2
+ZERO_ALERTS="$(grep -c ' alerts$' "$INTERVAL_LOG" || true)"; ZERO_STAFFING="$(grep -c ' staffing$' "$INTERVAL_LOG" || true)"
+[ "$ZERO_ALERTS" -ge 3 ] && [ "$ZERO_STAFFING" -ge 3 ] && pass "explicit zero herald alert/staffing intervals are honoured" || fail "zero interval counts alerts=$ZERO_ALERTS staffing=$ZERO_STAFFING log=$(cat "$INTERVAL_LOG")"
+
 ROOT_GONE="$FIX/root-gone"
 mkdir -p "$ROOT_GONE/seats/logs" "$ROOT_GONE/seats/run"
 printf '%s\n' '{"logs":{},"seen":[],"alerts":{"lastCheckAt":"2999-01-01T00:00:00Z"},"staffing":{"lastCheckAt":"2999-01-01T00:00:00Z"}}' > "$ROOT_GONE/seats/herald.state.json"
