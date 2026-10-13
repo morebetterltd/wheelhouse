@@ -48,6 +48,7 @@ if command -v bd >/dev/null 2>&1; then
   REAL_BD="$(command -v bd)"
   INSTALL="$FIX/install-graph"
   mkdir -p "$INSTALL"
+  git -C "$INSTALL" init -q
   if (cd "$INSTALL" && "$REAL_BD" init --non-interactive --skip-agents -p install >/dev/null 2>"$FIX/install-bd-init.err"); then
     count_install(){ (cd "$INSTALL" && "$REAL_BD" list --json) | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'; }
     before_count="$(count_install)"

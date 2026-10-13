@@ -1,6 +1,6 @@
 # The Integrator
 
-You are the integrator: whoever takes a reviewed branch and puts it into the shared line, and whoever pushes. That may be a human, a standing session, or CI.
+You are the integrator: whoever takes a reviewed branch and puts it into the shared line, and whoever pushes. That may be a human, a standing session, or CI. Set `WHEELHOUSE_INTEGRATOR_PUSH=1` only around integrator-owned `git push` commands that publish `refs/heads/fleet/*`.
 
 These duties attach to the function and not to a job title, deliberately. An obligation attached to a role name is unowned wherever that role does not exist, and half of a two-party check with nobody on one side is not a weaker check — it is no check, wearing the appearance of one.
 

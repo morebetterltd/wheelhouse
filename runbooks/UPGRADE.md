@@ -161,6 +161,7 @@ if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gi
 for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
   grep -qxF "$e" .gitignore 2>/dev/null || printf '%s\n' "$e" >> .gitignore
 done
+seats/install-fleet-pre-push-guard.sh
 ```
 
 `seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. Current template seats include optional dynamic-staffing pool support (`seats/pool.ts`, `seats/roster.ts`, `seats/pool.json.example`, and `seats/pool.selftest.sh`); copying the template files does not create `seats/pool.json`, so existing fixed-roster installs keep their current behavior unless they deliberately add a pool. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.

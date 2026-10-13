@@ -50,8 +50,8 @@ export interface StateLike { seats: Record<string, SeatRecordLike> }
 export class SeatWorktreeError extends Error {}
 function refuse(msg: string): never { throw new SeatWorktreeError(msg); }
 
-export function git(root: string, args: string[], cwd?: string): { ok: boolean; out: string; err: string; code: number | null } {
-  const r = spawnSync("git", args, { cwd: cwd ?? root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+export function git(root: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): { ok: boolean; out: string; err: string; code: number | null } {
+  const r = spawnSync("git", args, { cwd: cwd ?? root, env: env ? { ...process.env, ...env } : process.env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
   return { ok: r.status === 0, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim(), code: r.status };
 }
 
@@ -540,7 +540,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     try {
       const lease = currentBranch.startsWith("fleet/") ? remoteTrackingTip(repo, remote, currentBranch) : null;
       const pushArgs = ["push", "-u", ...(lease ? [`--force-with-lease=refs/heads/${currentBranch}:${lease}`] : []), remote, `${currentBranch}:${currentBranch}`];
-      push = git(repo, pushArgs, target);
+      push = git(repo, pushArgs, target, { WHEELHOUSE_INTEGRATOR_PUSH: "1" });
     } finally {
       try { fs.rmSync(markerFile, { force: true }); } catch {}
     }
