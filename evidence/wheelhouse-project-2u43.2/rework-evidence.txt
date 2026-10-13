@@ -1,0 +1,25 @@
+Targeted suites (serial):
+desk.selftest.sh rc=0
+desk.selftest: PASS (32 checks)
+digest.selftest.sh rc=0
+digest.selftest: PASS (17 legs)
+cockpit.selftest.sh rc=0
+cockpit.selftest: PASS (28 checks)
+floor.selftest.sh rc=0
+floor.ts works on this machine.
+
+New desk leg:
+12:ok 12 - GET /digest?hours=N serves real digest content from a stable relative-window cache key
+
+Old-key canary:
+desk.selftest.sh with millisecond since/until key restored rc=1
+12:not ok 12 - GET /digest?hours=N did not serve current fixture content: <!doctype html><meta charset="utf-8"><title>Wheelhouse digest</title><style>body{font-family:system-ui;margin:2rem;max-width:70rem}section{border:1px solid #ddd;border-radius:10px;padding:1rem;margin:1rem 0}li{margin:.5rem 0}time{color:#555}.title{font-weight:700}</style><h1>Wheelhouse digest</h1><p>Digest: 2026-10-13T00:32:34.116Z → 2026-10-13T01:32:34.116Z</p><p>Seats: no rostered seats</p><section><h2>Shipped</h2><p>[Nothing merged.]</p></section><section><h2>Blocked on you</h2><p>[Nothing open.]</p></section><section><h2>In review</h2><p>[Nothing waiting.]</p></section><section><h2>Sent back</h2><p>[Nothing sent back.]</p></section><section><h2>Failed and why</h2><p>[Nothing failed.]</p></section>
+33:desk.selftest: FAIL (1 failed, 31 passed)
+
+Isolated desk browser/curl probe:
+port=62164
+before_listeners=0
+http_code=200
+content_matches=1
+after_listeners=0
+Scratch hours digest

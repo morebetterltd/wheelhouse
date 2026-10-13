@@ -117,6 +117,7 @@ case "${1:-}" in
   │ Herald alerts target this pane through commander-pane.json;   │
   │ drain with: bun seats/herald.ts --drain                       │
   │ Needs desk: ${DESK_URL:-not started}                          │
+  │ Digest: ${DESK_URL:+${DESK_URL%/needs}/digest}                │
   │                                                               │
   │     cd $ROOT
   │     claude                                                    │
