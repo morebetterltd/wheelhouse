@@ -99,7 +99,7 @@ Measured on this machine with `claude --version` = `2.1.278 (Claude Code)`, a re
 
 ## Digest
 
-`bun seats/digest.ts [--since <iso>] [--until <iso>] [--hours N] [--human] [--json]` reads existing fleet records only: `seats/inbox.jsonl`, `seats/needs.jsonl`, verdict files, `bd list`, and the product repo's git log. Default output is commander Markdown with ids and verdict paths; `--human` removes install-local ids and is suitable for a human-facing need or desk page; `--json` returns the structure the desk can render. The default window is the last 24 hours ending now; `--since`/`--until` pin it exactly.
+`bun seats/digest.ts [--since <iso>] [--until <iso>] [--hours N] [--human] [--json] [--notify]` reads existing fleet records only: `seats/inbox.jsonl`, `seats/needs.jsonl`, verdict files, `bd list`, and the product repo's git log. Default output is commander Markdown with ids and verdict paths; `--human` removes install-local ids and is suitable for a human-facing need or desk page; `--json` returns the structure the desk can render. The default window is the last 24 hours ending now; `--since`/`--until` pin it exactly. `--notify` opens one human-facing notify need through `seats/needs.ts open --source digest:<until-iso>` and writes the successful `until` to `seats/run/digest.last`; a later bare `--notify` starts at that recorded value instead of re-sending the previous window. When `seats/run/desk.port` exists, the notify body ends with `Full page: <desk-url>/digest`. The supervisor runs `--notify` once per local day at `WHEELHOUSE_DIGEST_HOUR` (default `06`) unless `wheelhouse/.template-source` says `digest=off`.
 
 ## Transports — optional off-machine replies
 
