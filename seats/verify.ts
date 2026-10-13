@@ -1046,6 +1046,71 @@ function sourceAccessPromptLines(snapshots: SourceSnapshot[]): string[] {
   ];
 }
 
+interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; error?: string }
+
+function claimRequiresFullSweep(claim: string): boolean {
+  return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
+}
+
+function shellQuote(s: string): string { return `'${s.replace(/'/g, `'\\''`)}'`; }
+
+function initScratchBdGraph(realBd: string, scratchCwd: string, env: NodeJS.ProcessEnv): { env: NodeJS.ProcessEnv; graph: string | null; warning?: string } {
+  if (!realBd) return { env, graph: null, warning: "bd not found on dispatcher PATH; sweep ran without a scratch graph override" };
+  const graph = path.join(scratchCwd, ".wheelhouse-verify-sweep-bd");
+  fs.mkdirSync(graph, { recursive: true });
+  try { execFileSync("git", ["-C", graph, "init", "-q"], { stdio: "ignore" }); } catch {}
+  const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graph, encoding: "utf8", env });
+  if (init.status !== 0) return { env, graph, warning: `scratch bd init failed (${init.status ?? init.signal}): ${(init.stderr || init.stdout || "").trim()}` };
+  const wrapperDir = path.join(graph, "bin");
+  fs.mkdirSync(wrapperDir, { recursive: true });
+  const wrapper = path.join(wrapperDir, "bd");
+  fs.writeFileSync(wrapper, `#!/usr/bin/env bash\nexec ${shellQuote(realBd)} -C ${shellQuote(graph)} "$@"\n`);
+  fs.chmodSync(wrapper, 0o755);
+  return { env: { ...env, PATH: `${wrapperDir}${path.delimiter}${env.PATH ?? ""}`, WHEELHOUSE_SELFTEST_BD_ROOT: graph, BEADS_DIR: path.join(graph, ".beads") }, graph };
+}
+
+function runFullSweepIfRequired(claim: string, scratchCwd: string, tip: string, realBd: string, basePath: string): SweepResult {
+  if (!claimRequiresFullSweep(claim)) return { required: false, rc: null, logPath: null, elapsedMs: 0, tip };
+  const logDir = path.join(VERDICTS_DIR, "sweeps");
+  fs.mkdirSync(logDir, { recursive: true });
+  const logPath = path.join(logDir, `${tip.slice(0, 12)}.selftest-sweep.log`);
+  const started = Date.now();
+  const baseEnv: NodeJS.ProcessEnv = { ...process.env, PATH: basePath, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_REAL_BD: realBd };
+  const scratch = initScratchBdGraph(realBd, scratchCwd, baseEnv);
+  const res = spawnSync("bash", ["seats/selftest-sweep.sh"], { cwd: scratchCwd, encoding: "utf8", env: scratch.env, maxBuffer: 256 * 1024 * 1024 });
+  const elapsedMs = Date.now() - started;
+  const output = [
+    `$ git -C ${scratchCwd} rev-parse HEAD`,
+    tip,
+    `$ bash seats/selftest-sweep.sh`,
+    `rc=${res.status ?? (res.signal ? `signal ${res.signal}` : "unknown")}`,
+    `elapsedMs=${elapsedMs}`,
+    scratch.graph ? `scratchBdGraph=${scratch.graph}` : `scratchBdGraph=<none>`,
+    scratch.warning ? `warning=${scratch.warning}` : null,
+    `--- stdout ---`,
+    res.stdout ?? "",
+    `--- stderr ---`,
+    res.stderr ?? "",
+    res.error ? `--- error ---\n${res.error.message}` : null,
+  ].filter((v) => v !== null).join("\n");
+  fs.writeFileSync(logPath, output);
+  return { required: true, rc: res.status ?? (res.signal ? 128 : 1), logPath, elapsedMs, tip, error: res.error?.message };
+}
+
+function sweepPromptLines(sweep: SweepResult): string[] {
+  if (!sweep.required) return [];
+  return [
+    ``,
+    `Full selftest sweep run by the dispatcher at the exact reviewed tip before this verifier spawn:`,
+    `- tip: ${sweep.tip}`,
+    `- command: bash seats/selftest-sweep.sh`,
+    `- rc: ${sweep.rc}`,
+    `- log: ${sweep.logPath}`,
+    `- elapsedMs: ${sweep.elapsedMs}`,
+    `This sweep ran outside your model command timeout, in the detached scratch worktree for the reviewed tip, with a writable scratch bd graph when bd was available. You must cite this rc and log path in your evidence. If rc is not 0, do not approve the full-sweep portion of Done.`,
+  ];
+}
+
 function sectionByHeading(text: string, heading: string): string | null {
   const lines = text.split(/\r?\n/);
   const start = lines.findIndex((line) => line.trim() === heading);
@@ -1222,9 +1287,13 @@ async function main(): Promise<void> {
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
   assertHostBuildLockAvailable();
+  const basePath = hostBudgetPath(ROOT);
+  const realBd = findOnPath("bd", basePath) ?? "";
   const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
+  const sweep = runFullSweepIfRequired(claim, scratchCwd, tip, realBd, basePath);
+  const sweepPrompt = sweepPromptLines(sweep);
 
   // --- the one-shot ---------------------------------------------------------
   const prompt = [
@@ -1239,6 +1308,7 @@ async function main(): Promise<void> {
     claim,
     ...evidencePrompt,
     ...sourcePrompt,
+    ...sweepPrompt,
     ...pushAuthorityPromptLines(ROOT),
     ``,
     `Verify whether the bead's stated done holds at that SHA, per your brief.`,
@@ -1260,8 +1330,6 @@ async function main(): Promise<void> {
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   const startedAt = Date.now();
-  const basePath = hostBudgetPath(ROOT);
-  const realBd = findOnPath("bd", basePath) ?? "";
   const oneShotPath = readonlyBdPath(ROOT, basePath, scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
@@ -1428,6 +1496,18 @@ async function main(): Promise<void> {
           `## Read-only source snapshots`,
           ``,
           ...sourceSnapshots.map((s) => `- ${s.original} — mounted read-only at ${s.mountedAt} (${s.bytes} bytes copied)`),
+        ]
+      : []),
+    ...(sweep.required
+      ? [
+          ``,
+          `## Dispatcher full-sweep result`,
+          ``,
+          `- tip: ${sweep.tip}`,
+          `- command: bash seats/selftest-sweep.sh`,
+          `- rc: ${sweep.rc}`,
+          `- log: ${sweep.logPath}`,
+          `- elapsedMs: ${sweep.elapsedMs}`,
         ]
       : []),
     ``,
