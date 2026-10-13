@@ -10,7 +10,7 @@ export function barePidAlive(pid: number | null | undefined): boolean {
 export function openPaths(pid: number): string[] {
   for (const lsof of ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"]) {
     try {
-      return execFileSync(lsof, ["-Fn", "-p", String(pid)], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+      return execFileSync(lsof, ["-Fn", "-p", String(pid)], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: Number(process.env.WHEELHOUSE_LSOF_TIMEOUT_MS ?? 2000), stdio: ["ignore", "pipe", "ignore"] })
         .split("\n").filter((l) => l.startsWith("n")).map((l) => l.slice(1));
     } catch (e: any) { if (e.code === "ENOENT") continue; return []; }
   }
@@ -21,6 +21,18 @@ export function pidHoldsPath(pid: number, p: string): boolean {
   const wanted = new Set([p]);
   try { wanted.add(fs.realpathSync(p)); } catch {}
   return openPaths(pid).some((n) => wanted.has(n));
+}
+
+function fifoHasReader(fifo: string): boolean {
+  try {
+    if (!fs.statSync(fifo).isFIFO()) return true;
+    const fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+    fs.closeSync(fd);
+    return true;
+  } catch (e: any) {
+    if (e?.code === "ENXIO") return false;
+    return true;
+  }
 }
 
 export function processStartMs(pid: number): number | null {
@@ -41,6 +53,7 @@ export function pidMatchesStartedAt(pid: number, startedAt?: string): boolean {
 export function pidAlive(pid: number | null | undefined, fifo?: string, startedAt?: string): boolean {
   if (!barePidAlive(pid)) return false;
   if (!fifo && !startedAt) return true;
+  if (fifo && fs.existsSync(fifo) && !fifoHasReader(fifo)) return false;
   return (fifo ? pidHoldsPath(pid!, fifo) : false) || pidMatchesStartedAt(pid!, startedAt);
 }
 
