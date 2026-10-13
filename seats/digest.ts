@@ -10,6 +10,9 @@ const ROOT = path.resolve(process.env.WHEELHOUSE_DIGEST_ROOT || DEFAULT_ROOT);
 const SEATS = path.join(ROOT, "seats");
 const TEMPLATE_SOURCE = path.join(ROOT, "wheelhouse", ".template-source");
 const INBOX = path.join(SEATS, "inbox.jsonl");
+const RUN = path.join(SEATS, "run");
+const DIGEST_LAST = path.join(RUN, "digest.last");
+const DESK_PORT = path.join(RUN, "desk.port");
 const VERDICTS = path.join(SEATS, "verdicts");
 const ALERTS_LOG = path.join(SEATS, "logs", "alerts.log");
 const BD_TIMEOUT_MS = 5000;
@@ -27,7 +30,7 @@ function short(s:any){ return String(s||"").slice(0,7); }
 function templateValue(k:string){ try{ const m=fs.readFileSync(TEMPLATE_SOURCE,"utf8").match(new RegExp(`^${k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}=(.*)$`,"m")); return m ? m[1].trim() : ""; }catch{return "";} }
 function namespace(){ return templateValue("namespace") || path.basename(ROOT); }
 function readJsonl(file:string):Any[]{ if(!fs.existsSync(file)) return []; return fs.readFileSync(file,"utf8").split(/\r?\n/).filter(Boolean).map((l,i)=>{ try{return JSON.parse(l)}catch(e:any){ return {at:"", title:`parse error line ${i+1}`, detail:e.message}; } }); }
-function run(cmd:string[], cwd=ROOT){ try{ return spawnSync(cmd[0],cmd.slice(1),{cwd,encoding:"utf8",timeout:BD_TIMEOUT_MS}); }catch(e:any){ return {status:127, stdout:"", stderr:String(e?.message||e)} as any; } }
+function run(cmd:string[], cwd=ROOT, opts:{input?:string; timeout?:number; env?:NodeJS.ProcessEnv}={}){ try{ return spawnSync(cmd[0],cmd.slice(1),{cwd,encoding:"utf8",timeout:opts.timeout??BD_TIMEOUT_MS,input:opts.input,env:opts.env}); }catch(e:any){ return {status:127, stdout:"", stderr:String(e?.message||e)} as any; } }
 function bdList(args:string[]):{rows:Any[]; unavailable:boolean}{ const r=run(["bd","list","--json","--limit","0",...args]); if(r.status!==0) return {rows:[], unavailable:true}; try{ const j=JSON.parse(r.stdout||"[]"); return {rows:Array.isArray(j)?j:[], unavailable:false}; }catch{return {rows:[], unavailable:false};} }
 function repoFromRemote(raw:string){ const s=String(raw||"").trim(); let m=s.match(/github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/); return m ? `${m[1]}/${m[2]}` : ""; }
 function productRepo(){ const p=templateValue("product-repo"); return p ? path.resolve(ROOT,p) : ROOT; }
@@ -113,4 +116,28 @@ function md(d:Digest, human=false){ const labels=accountLabels(); const safe=(s:
   return lines.join("\n")+"\n";
 }
 export function renderHuman(d:Digest){ const out=md(d,true); for(const line of out.split(/\r?\n/).filter(Boolean)) humanTextGuard(line,"digest human line",ROOT); return out; }
-if(import.meta.main){ const until=arg("--until") ? new Date(arg("--until")!) : new Date(); const since=arg("--since") ? new Date(arg("--since")!) : new Date(until.getTime()-Number(arg("--hours")||24)*3600000); const d=buildDigest(iso(since),iso(until)); if(has("--json")) console.log(JSON.stringify(d,null,2)); else process.stdout.write(has("--human")?renderHuman(d):md(d,false)); }
+function readDigestLast(): string { try { return fs.readFileSync(DIGEST_LAST, "utf8").trim(); } catch { return ""; } }
+function writeAtomic(file:string, data:string){ fs.mkdirSync(path.dirname(file),{recursive:true}); const tmp=`${file}.tmp.${process.pid}`; fs.writeFileSync(tmp,data); fs.renameSync(tmp,file); }
+function deskDigestUrl(): string {
+  try {
+    const raw=fs.readFileSync(DESK_PORT,"utf8").trim();
+    if(!raw) return "";
+    const u=new URL(raw);
+    u.pathname="/digest"; u.search=""; u.hash="";
+    return u.toString();
+  } catch { return ""; }
+}
+function windowArgs(useDigestLast=false){ const rawUntil=arg("--until"), rawSince=arg("--since"), rawHours=arg("--hours"); const until=rawUntil ? new Date(rawUntil) : new Date(); let since: Date; if(rawSince) since=new Date(rawSince); else if(rawHours!==undefined) since=new Date(until.getTime()-Number(rawHours)*3600000); else if(useDigestLast) { const last=readDigestLast(); since=last ? new Date(last) : new Date(until.getTime()-24*3600000); } else since=new Date(until.getTime()-24*3600000); try { until.toISOString(); since.toISOString(); } catch { throw new Error("invalid digest window"); } return { since, until }; }
+function notifyTitle(until:Date){ return `Fleet digest — ${until.toLocaleDateString(undefined,{month:"short",day:"2-digit",year:"numeric"})}`; }
+function notifyBody(d:Digest){ let body=renderHuman(d).trimEnd(); const desk=deskDigestUrl(); if(desk) body += `\n\nFull page: ${desk}`; return body + "\n"; }
+function notifyDigest(d:Digest): number {
+  const title=notifyTitle(new Date(d.window.until));
+  const body=notifyBody(d);
+  const source=`digest:${d.window.until}`;
+  const r=run(["bun","seats/needs.ts","open","--kind","notify","--source",source,"--title",title,"--body",body],ROOT,{timeout:BD_TIMEOUT_MS,env:{...process.env,WHEELHOUSE_NEEDS_ROOT:ROOT}});
+  if(r.status!==0){ process.stderr.write(r.stderr||r.stdout||"needs.ts open failed\n"); return 2; }
+  process.stdout.write(String(r.stdout||"").trim()+"\n");
+  writeAtomic(DIGEST_LAST, d.window.until+"\n");
+  return 0;
+}
+if(import.meta.main){ try { const notify=has("--notify"); const {since,until}=windowArgs(notify); const d=buildDigest(iso(since),iso(until)); if(notify) process.exit(notifyDigest(d)); if(has("--json")) console.log(JSON.stringify(d,null,2)); else process.stdout.write(has("--human")?renderHuman(d):md(d,false)); } catch(e:any){ process.stderr.write(`${e?.message||e}\n`); process.exit(2); } }
