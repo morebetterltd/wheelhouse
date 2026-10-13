@@ -556,6 +556,59 @@ kill -9 "$FOREIGN_PID" 2>/dev/null || true
 wait "$FOREIGN_PID" 2>/dev/null || true
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"
 
+phase "dead FIFO stop paths are bounded"
+DEAD_FIFO_PROJ="$FIX/dead-fifo-proj"
+build_proj "$DEAD_FIFO_PROJ" deadfifo
+RUN_PROJ="$DEAD_FIFO_PROJ"; STATE="$DEAD_FIFO_PROJ/seats/state.json"; LOG="$DEAD_FIFO_PROJ/seats/logs/worker-1.jsonl"
+mkdir -p "$DEAD_FIFO_PROJ/seats/run" "$DEAD_FIFO_PROJ/seats/logs"
+rm -f "$DEAD_FIFO_PROJ/seats/run/worker-1.stdin"
+mkfifo "$DEAD_FIFO_PROJ/seats/run/worker-1.stdin"
+: > "$LOG"
+env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" bun -e '
+  const fs = require("fs"), path = require("path");
+  const proj = process.env.PROJ;
+  const state = { seats: { "worker-1": { pid: 99999999, startedAt: "2026-01-01T00:00:00.000Z", accountDir: path.join(process.env.HOME, ".pi-seats-deadfifo", "worker-1"), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", "worker-1.stdin"), log: path.join(proj, "seats", "logs", "worker-1.jsonl"), sessionId: "s-dead", sessionFile: null } } };
+  fs.writeFileSync(path.join(proj, "seats", "state.json"), JSON.stringify(state, null, 2)+"\n");
+'
+RC=0; OUT="$(with_timeout 3 env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && says "seat worker-1 is not running"; then
+  pass "stop on a dead pid with unread FIFO returns not-running instead of hanging"
+else fail "stop on dead pid/unread FIFO did not return cleanly within timeout (rc=$RC): $OUT"; fi
+(sh -c 'while :; do sleep 1; done') & NO_READER_PID=$!
+env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" PID="$NO_READER_PID" bun -e '
+  const fs = require("fs"), path = require("path"), cp = require("child_process");
+  const proj = process.env.PROJ, pid = Number(process.env.PID);
+  const live = Date.parse(cp.spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).stdout.trim());
+  const state = { seats: { "worker-1": { pid, startedAt: new Date(live).toISOString(), accountDir: path.join(process.env.HOME, ".pi-seats-deadfifo", "worker-1"), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", "worker-1.stdin"), log: path.join(proj, "seats", "logs", "worker-1.jsonl"), sessionId: "s-noreader", sessionFile: null } } };
+  fs.writeFileSync(path.join(proj, "seats", "state.json"), JSON.stringify(state, null, 2)+"\n");
+'
+RC=0; OUT="$(with_timeout 6 env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_LSOF_TIMEOUT_MS=200 WHEELHOUSE_FIFO_WRITE_MS=200 WHEELHOUSE_RPC_TIMEOUT_MS=500 bun "$RUN_PROJ/seats/adapter.ts" stop-all 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && says "not running" && kill -0 "$NO_READER_PID" 2>/dev/null; then
+  pass "stop-all treats an unread FIFO as not-running and leaves the process alone"
+else fail "stop-all on unread FIFO was not bounded or signaled the wrong pid (rc=$RC alive=$(kill -0 "$NO_READER_PID" 2>/dev/null && echo yes || echo no)): $OUT"; fi
+BROKEN_ADAPTER="$FIX/adapter-blocking-fifo.ts"
+perl -0pe 's/fs\.constants\.O_WRONLY \| fs\.constants\.O_NONBLOCK/fs.constants.O_WRONLY/; s/\n  if \(fifo && fs\.existsSync\(fifo\) && !fifoHasReader\(fifo\)\) return false;//' "$ADAPTER" > "$BROKEN_ADAPTER"
+if ! cmp -s "$ADAPTER" "$BROKEN_ADAPTER"; then
+  selftest_copy_seat_runtime "$DEAD_FIFO_PROJ" "$ADAPTER_DIR"
+  cp "$BROKEN_ADAPTER" "$DEAD_FIFO_PROJ/seats/adapter.ts"
+  perl -0pi -e 's/\n  if \(fifo && fs\.existsSync\(fifo\) && !fifoHasReader\(fifo\)\) return false;//' "$DEAD_FIFO_PROJ/seats/seat-activity.ts"
+  env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" PID="$NO_READER_PID" bun -e '
+    const fs = require("fs"), path = require("path"), cp = require("child_process");
+    const proj = process.env.PROJ, pid = Number(process.env.PID);
+    const live = Date.parse(cp.spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).stdout.trim());
+    const state = { seats: { "worker-1": { pid, startedAt: new Date(live).toISOString(), accountDir: path.join(process.env.HOME, ".pi-seats-deadfifo", "worker-1"), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", "worker-1.stdin"), log: path.join(proj, "seats", "logs", "worker-1.jsonl"), sessionId: "s-noreader", sessionFile: null } } };
+    fs.writeFileSync(path.join(proj, "seats", "state.json"), JSON.stringify(state, null, 2)+"\n");
+  '
+  RC=0; OUT="$(with_timeout 1 env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_LSOF_TIMEOUT_MS=200 WHEELHOUSE_FIFO_WRITE_MS=200 WHEELHOUSE_RPC_TIMEOUT_MS=500 bun "$DEAD_FIFO_PROJ/seats/adapter.ts" stop-all 2>&1)" || RC=$?
+  if [ $RC -ne 0 ]; then pass "canary: blocking FIFO open makes stop-all exceed the bounded test timeout"
+  else fail "canary: blocking FIFO open unexpectedly returned: $OUT"; fi
+else
+  fail "canary could not remove O_NONBLOCK from fifoWrite"
+fi
+kill -9 "$NO_READER_PID" 2>/dev/null || true
+wait "$NO_READER_PID" 2>/dev/null || true
+RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"
+
 phase "installed layout — wheelhouse/fleet brief is preferred without contracts/"
 INST_PROJ="$FIX/installed-proj"
 build_installed_proj "$INST_PROJ" installed
