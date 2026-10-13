@@ -192,6 +192,14 @@ left.pop('window',None); right.pop('window',None)
 assert left==right
 PY
 then pass "GET /api/digest.json matches digest.ts --json for the same window"; else fail "digest JSON differed: api=$(cat "$FIX/digest.json" 2>/dev/null)"; fi
+HOURS_AT="$(python3 - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z'))
+PY
+)"
+printf '{"type":"opened","id":"need-hours","at":"%s","kind":"question","title":"Current hours question","body":"Prove relative windows serve content","options":[],"machine":{"bead":"demo-hours"}}\n' "$HOURS_AT" >> "$PROJ/seats/needs.jsonl"
+for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P/digest?hours=1" > "$FIX/digest-hours.html" 2>/dev/null || true; grep -q 'Current hours question' "$FIX/digest-hours.html" 2>/dev/null && break; sleep 0.1; done
+if grep -q 'Current hours question' "$FIX/digest-hours.html"; then pass "GET /digest?hours=N serves real digest content from a stable relative-window cache key"; else fail "GET /digest?hours=N did not serve current fixture content: $(cat "$FIX/digest-hours.html" 2>/dev/null)"; fi
 if ! grep -Eiq 'demo-[a-z0-9-]+|bead' "$FIX/digest.html"; then pass "digest HTML hides namespace ids and the word bead"; else fail "digest HTML leaked ids or bead: $(grep -Eio 'demo-[a-z0-9-]+|bead' "$FIX/digest.html" | sort -u | tr '\n' ' ')"; fi
 if ! grep -Eq '<(form|button|input|textarea)([ >])' "$FIX/digest.html" && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/digest")" = 404 ] && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/api/digest.json")" = 404 ]; then pass "digest has no write controls and no POST routes"; else fail "digest exposed write controls or POST routes"; fi
 curl -fsS "http://127.0.0.1:$P/digest" > "$FIX/digest-default.html" || fail "GET /digest default failed"

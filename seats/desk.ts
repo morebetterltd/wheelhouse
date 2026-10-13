@@ -37,7 +37,9 @@ const emptyBoard = (): Board => ({ generatedAt:new Date(0).toISOString(), column
 let boardSnapshot: Board = emptyBoard();
 let boardRefreshing = false;
 let digestSnapshot: Digest = emptyDigest();
-const digestCache = new Map<string, Digest>();
+const RAW_DIGEST_CACHE_MAX = Number(process.env.WHEELHOUSE_DESK_DIGEST_CACHE_MAX || "16");
+const DIGEST_CACHE_MAX = Number.isFinite(RAW_DIGEST_CACHE_MAX) ? Math.max(1, Math.floor(RAW_DIGEST_CACHE_MAX)) : 16;
+const digestCache = new Map<string, CacheEntry<Digest>>();
 const digestRefreshing = new Set<string>();
 
 function fnv1a(s: string): number { let h = 0x811c9dc5; for (let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h >>> 0; }
@@ -104,6 +106,7 @@ function digestWindow(u?: URL): DigestWindow {
   const params = u?.searchParams;
   const rawUntil = params?.get("until");
   const rawSince = params?.get("since");
+  const hasHours = !!params?.has("hours");
   const rawHours = params?.get("hours") || "24";
   const until = rawUntil ? new Date(rawUntil) : new Date();
   const hours = Number(rawHours);
@@ -111,10 +114,14 @@ function digestWindow(u?: URL): DigestWindow {
   const since = rawSince ? new Date(rawSince) : new Date(until.getTime() - hours * 3600000);
   try { since.toISOString(); until.toISOString(); } catch { throw new BadDigestWindow("invalid digest window"); }
   const win = { since: since.toISOString(), until: until.toISOString() };
-  return { ...win, key: `${win.since}\0${win.until}`, label: rawSince || rawUntil || params?.has("hours") ? `${win.since} → ${win.until}` : "last 24 h", isDefault: !(rawSince || rawUntil || params?.has("hours")) };
+  const key = rawSince || rawUntil ? `${win.since}\0${win.until}` : `hours:${hours}`;
+  return { ...win, key, label: rawSince || rawUntil || hasHours ? `${win.since} → ${win.until}` : "last 24 h", isDefault: !(rawSince || rawUntil || hasHours) };
 }
+function digestCacheGet(key: string): Digest | undefined { const hit=digestCache.get(key); if(!hit) return undefined; digestCache.delete(key); digestCache.set(key, hit); return hit.value; }
+function digestCacheSet(key: string, value: Digest){ digestCache.set(key, { at: Date.now(), value }); while(digestCache.size > DIGEST_CACHE_MAX){ const oldest=digestCache.keys().next().value; if(oldest === undefined) break; digestCache.delete(oldest); } }
+function digestCacheFresh(key: string): boolean { const hit=digestCache.get(key); return !!hit && Date.now()-hit.at < DIGEST_REFRESH_MS; }
 function scheduleDigestRefresh(win = digestWindow()){
-  if(digestRefreshing.has(win.key)) return;
+  if(digestRefreshing.has(win.key) || digestCacheFresh(win.key)) return;
   digestRefreshing.add(win.key);
   setTimeout(() => {
     (async () => {
@@ -129,7 +136,7 @@ function scheduleDigestRefresh(win = digestWindow()){
           worker.postMessage({ root: ROOT, module: digestModule, since: win.since, until: win.until });
         });
         if(!next) return;
-        digestCache.set(win.key, next);
+        digestCacheSet(win.key, next);
         if(win.isDefault) digestSnapshot = next;
       } catch {} finally { digestRefreshing.delete(win.key); }
     })();
@@ -140,7 +147,7 @@ function digestFor(u?: URL): { status: number; digest?: Digest; heading?: string
   try { win = digestWindow(u); } catch { return { status:400, error:"invalid digest window" }; }
   scheduleDigestRefresh(win);
   if(win.isDefault) return { status:200, digest:digestSnapshot, heading:`Digest: ${win.label}` };
-  return { status:200, digest:digestCache.get(win.key) || emptyDigest(win), heading:`Digest: ${win.label}` };
+  return { status:200, digest:digestCacheGet(win.key) || emptyDigest(win), heading:`Digest: ${win.label}` };
 }
 function localTime(at:any): string { const d=new Date(String(at||"")); if(!Number.isFinite(d.getTime())) return "unknown time"; return d.toLocaleString(undefined,{month:"short",day:"2-digit",hour:"2-digit",minute:"2-digit",timeZoneName:"short"}); }
 function shortSha(s:any): string { return String(s||"").slice(0,7); }
