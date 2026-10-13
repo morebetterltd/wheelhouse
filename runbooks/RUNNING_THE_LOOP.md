@@ -299,8 +299,10 @@ cadence rule above ("start by reading the graph, not the inbox") is about not
 letting messages outrank work; the handoff note is not an inbox, it is
 yesterday's commander writing to today's, and it says where the fleet actually
 stood at sign-off — which seats to `resume` and which to respawn, which
-verdicts are waiting, what the first dispatch should be. The graph still
-decides what the work IS; the note says where to stand while reading it.
+verdicts are waiting, what the first dispatch should be. The digest need (or
+`bun seats/digest.ts` for the same window) is the human's summary of the night;
+the commander still reads the graph, not the digest, to dispatch. The graph
+still decides what the work IS; the note says where to stand while reading it.
 
 **The order, explicitly, because reading it is not the same as doing it in
 this sequence:** recover (`bun seats/recover.ts` if this session followed a
