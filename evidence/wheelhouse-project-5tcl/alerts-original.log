@@ -1,0 +1,138 @@
+before: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+RUN ['bash', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-5tcl/unfixed/seats/alerts.selftest.sh']
+
+interval parsing
+  ok    unset WHEELHOUSE_ALERT_INTERVAL_MS records default interval
+  ok    empty WHEELHOUSE_ALERT_INTERVAL_MS records default interval
+  ok    explicit zero WHEELHOUSE_ALERT_INTERVAL_MS is honoured in snapshot
+
+transition table, thresholds, clears
+  ok    ready work fires idle-fleet and cold-seats once
+  ok    idle-fleet/cold-seats stay quiet over 3 active runs
+  ok    idle-fleet/cold-seats clear logs
+  ok    inbox-lag active younger than alert-human-after-minutes opens no need
+  ok    inbox-lag stays quiet over 3 active runs
+  ok    inbox-lag opens one human need after threshold
+  ok    inbox-lag clear closes its need
+  ok    commander-pane-invalid fires and escalates on first run
+  ok    commander-pane-invalid stays quiet over 3 active runs
+  ok    commander-pane-invalid clear closes its need
+  ok    capacity-events fires when state carries lastCapacityEvent
+  ok    capacity-events stays quiet over 3 active runs
+  ok    capacity-events fires again when the set changes
+  ok    capacity-events clears
+  ok    untriaged GitHub issues fire
+  ok    untriaged GitHub issues stay quiet over 3 active runs
+  ok    untriaged GitHub issues fire again when the set changes
+  ok    untriaged GitHub issues clear
+  ok    low-disk fires from statfs threshold
+  ok    low-disk stays quiet over 3 active runs
+  ok    low-disk clears
+  ok    template-drift --json is wired into the snapshot and alert
+  ok    template-drift stays quiet over 3 active runs
+  ok    template-drift clears
+  ok    template-drift fires when template main is ahead without file drift
+  ok    template-drift ahead clears
+
+shared PID lock recovery and ownership
+FAIL old empty and unparseable locks are reclaimed: stale lock must be acquired
+FAIL fresh empty lock is refused unchanged, then reclaimed after grace: stale lock must be acquired
+FAIL open malformed lock is preserved even when old, and reclaimed after close: stale lock must be acquired
+FAIL live owner is never replaced; failed PID write publishes no empty lock:
+ 8 |     };
+ 9 |     const { acquirePidLock } = await import("[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-5tcl/enclosing/tmp/wheelhouse-alerts.I2d4Qk/project/seats/lock.ts");
+10 |     let failed = false;
+11 |     try { acquirePidLock("[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-5tcl/enclosing/tmp/wheelhouse-alerts.I2d4Qk/lock-regressions/live.lock"); } catch (e) { if (e.message !== 'injected PID write failure') throw e; failed = true; }
+12 |     if (!injected || !failed) throw Error('write fault did not reach the lock module');
+13 |     if (fs.existsSync("[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-5tcl/enclosing/tmp/wheelhouse-alerts.I2d4Qk/lock-regressions/live.lock")) throw Error('failed write left an empty public lock');
+                                                                                                                                                                                                                           ^
+error: failed write left an empty public lock
+      at [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-3/[eval]:13:215
+
+Bun v1.3.1 (macOS arm64)
+
+
+1 !== 0
+
+FAIL release of an old handle cannot delete a replacement live owner: ENOENT: no such file or directory, open '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-5tcl/enclosing/tmp/wheelhouse-alerts.I2d4Qk/lock-regressions/replacement.lock'
+lock regression: FAIL (5 failure(s))
+  FAIL  shared lock regression failed
+  FAIL  incomplete alerts lock blocked snapshot rc=0 out={"ok":false,"locked":true}
+  FAIL  incomplete alerts lock blocked snapshot rc=0 out={"ok":false,"locked":true}
+
+failure and stale lock handling
+node:internal/modules/cjs/loader:1386
+  throw err;
+  ^
+
+Error: Cannot find module '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-5tcl/enclosing/tmp/wheelhouse-alerts.I2d4Qk/project/seats/run/fleet-snapshot.json'
+Require stack:
+- [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-3/[eval]
+    at Function._resolveFilename (node:internal/modules/cjs/loader:1383:15)
+    at defaultResolveImpl (node:internal/modules/cjs/loader:1025:19)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1030:22)
+    at Function._load (node:internal/modules/cjs/loader:1192:37)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Module.require (node:internal/modules/cjs/loader:1463:12)
+    at require (node:internal/modules/helpers:147:16)
+    at [eval]:1:13
+    at runScriptInThisContext (node:internal/vm:209:10) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [
+    '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-3/[eval]'
+  ]
+}
+
+Node.js v22.21.0
+node:internal/modules/cjs/loader:1386
+  throw err;
+  ^
+
+Error: Cannot find module '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-5tcl/enclosing/tmp/wheelhouse-alerts.I2d4Qk/project/seats/run/fleet-snapshot.json'
+Require stack:
+- [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-3/[eval]
+    at Function._resolveFilename (node:internal/modules/cjs/loader:1383:15)
+    at defaultResolveImpl (node:internal/modules/cjs/loader:1025:19)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1030:22)
+    at Function._load (node:internal/modules/cjs/loader:1192:37)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Module.require (node:internal/modules/cjs/loader:1463:12)
+    at require (node:internal/modules/helpers:147:16)
+    at [eval]:1:13
+    at runScriptInThisContext (node:internal/vm:209:10) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [
+    '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-3/[eval]'
+  ]
+}
+
+Node.js v22.21.0
+  FAIL  bd failure handling failed rc=0 old= new= out={"ok":false,"locked":true}
+  ok    stale alerts lock left by a dead pid is reclaimed
+  ok    live-pid alerts lock is respected
+
+readyWorkNobodyOnIt and herald clock
+  ok    one readyWorkNobodyOnIt definition and alerts/staffing call sites exist
+  ok    herald launches alerts child and snapshot appears without blocking the scan loop
+  ok    scan loop does not wait for a slow alerts child
+  ok    canary: removing runAlertsClock makes the herald snapshot leg fail
+
+canary
+  ok    canary: fire-on-every-run variant fails the stays-quiet leg
+alerts.selftest.sh FAIL (4 failure(s))
+after: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+umbrella safety: PASS (0 permitted new reflog entries); test exit=1

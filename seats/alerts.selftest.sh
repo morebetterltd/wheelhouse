@@ -133,6 +133,25 @@ DRIFT_AHEAD=1 run_alert bun seats/alerts.ts check --json
 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared template-drift' "$ROOT/seats/logs/alerts.log" && pass 'template-drift ahead clears' || fail "drift ahead clear failed"
 
+phase 'shared PID lock recovery and ownership'
+mkdir -p "$FIX/lock-regressions"
+if bun "$HERE/fixtures/lock-regression.ts" "$ROOT/seats/lock.ts" "$FIX/lock-regressions"; then
+  pass 'shared lock regression: incomplete locks recover without stealing live owners'
+else
+  fail 'shared lock regression failed'
+fi
+for content in '' 'not a pid'; do
+  rm -f "$ROOT/seats/run/fleet-snapshot.json"
+  printf '%s' "$content" > "$ROOT/seats/run/alerts.lock"
+  python3 - "$ROOT/seats/run/alerts.lock" <<'PY'
+import os, sys, time
+old = time.time() - 60
+os.utime(sys.argv[1], (old, old))
+PY
+  run_alert bun seats/alerts.ts check --json
+  [ $RC -eq 0 ] && [ -s "$ROOT/seats/run/fleet-snapshot.json" ] && [ ! -e "$ROOT/seats/run/alerts.lock" ] && pass "alerts writes a fresh snapshot after an old incomplete lock (${content:-empty})" || fail "incomplete alerts lock blocked snapshot rc=$RC out=$OUT"
+done
+
 phase 'failure and stale lock handling'
 old_at="$(node -e 'console.log(require(process.argv[1]).at)' "$ROOT/seats/run/fleet-snapshot.json")"
 cat > "$BIN/bd" <<'SH'

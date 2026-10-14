@@ -1,0 +1,46 @@
+before: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+RUN ['bash', 'seats/staffing.selftest.sh']
+  ok    staffing recovers an old empty shared PID lock and makes a decision
+  ok    G4-15 add-worker places first listed free entry with role model
+  ok    G4-15 free worker exists with ready work -> nothing
+  ok    G4-15 ready work + idle seat above min -> nothing
+  ok    G4-18/G4-23 burst grows 1→4 then G4-16 clamps at max
+  ok    G4-24 rate-limited entry is skipped
+  ok    G4-24 probe OK clears rate limit for next add
+  ok    G4-25 real adapter passes role model per entry to fake pi
+  ok    G4-26 all entries occupied -> no free subscription
+  ok    G4-20/G4-30 first idle shrink removes pid/state/worktree and frees entry
+  ok    G4-20 successive checks keep dropping oldest idle until min
+  ok    G4-31 drop clamp refuses below minimum
+  ok    drop-seat decision without a seat logs nothing
+  ok    G4-30 next add reuses the freed entry
+  ok    G4-29 busy in-progress seat is not dropped
+  ok    G4-37 concurrent checks add exactly one seat
+  ok    G4-5 min=max pins worker scale-out
+  ok    G4-5 min=max pins empty queue against drop
+  ok    G4-19 review backlog adds reviewer and not worker
+  ok    G4-19 review backlog with no eligible free reviewer adds next reviewer
+  ok    G4-35 decide counts backlog when only free reviewer shares author subscription
+  ok    G4-19 decide path drops idle reviewer above minimum
+  ok    G4-19 reviewer with live verify marker is not dropped
+  ok    G4-19 idle reviewer unregisters on drop
+  ok    drop worktree removal refuses dirty worktrees
+  ok    drop worktree removal refuses unpushed tips by default seat_push=on
+  ok    G4-39/G4-40 decision log has one parseable plain-English line per check
+  ok    no pool exits 0 and touches nothing
+  ok    canary: removing clamp makes the at-max leg fail
+staffing.selftest.sh works on this machine.
+after: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+umbrella safety: PASS (0 permitted new reflog entries); test exit=0

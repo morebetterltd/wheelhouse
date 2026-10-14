@@ -1,0 +1,11 @@
+./seats/alerts.ts:7:import { acquirePidLock, releasePidLock } from "./lock";
+./seats/alerts.ts:29:function acquireLock():number|null{ return acquirePidLock(LOCK); }
+./seats/alerts.ts:30:function releaseLock(fd:number|null){ releasePidLock(LOCK, fd); }
+./seats/lock.ts:49:export function acquirePidLock(file: string): number | null {
+./seats/lock.ts:74:export function releasePidLock(file: string, fd: number | null): void {
+./seats/staffing.ts:11:import { acquirePidLock, releasePidLock } from "./lock";
+./seats/staffing.ts:28:function acquireLock(): number | null { return acquirePidLock(LOCK_FILE); }
+./seats/staffing.ts:29:function releaseLock(fd: number | null) { releasePidLock(LOCK_FILE, fd); }
+./seats/fixtures/lock-regression.ts:9:const { acquirePidLock: acquire, releasePidLock: release } = await import(moduleFile);
+./seats/fixtures/lock-regression.ts:74:    const { acquirePidLock } = await import(${JSON.stringify(moduleFile)});
+./seats/fixtures/lock-regression.ts:76:    try { acquirePidLock(${JSON.stringify(file)}); } catch (e) { if (e.message !== 'injected PID write failure') throw e; failed = true; }

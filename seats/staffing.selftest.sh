@@ -71,6 +71,14 @@ $OUT
 EOF
 }
 # Fixture shape note: bd ready/list rows above were built after capturing real `bd ready --json` and `bd list --json`; ids/titles are synthetic.
+: > "$ROOT/seats/run/staffing.lock"
+python3 - "$ROOT/seats/run/staffing.lock" <<'PY'
+import os, sys, time
+old = time.time() - 60
+os.utime(sys.argv[1], (old, old))
+PY
+run env BD_READY_COUNT=1 bun seats/staffing.ts check --dry-run --decision add-worker
+[ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && [ ! -e "$ROOT/seats/run/staffing.lock" ] && pass 'staffing recovers an old empty shared PID lock and makes a decision' || fail "incomplete staffing lock blocked check rc=$RC out=$OUT"
 run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && grep -q 'worker-e1 m1' "$ROOT/spawn-models.log" && pass 'G4-15 add-worker places first listed free entry with role model' || fail "add-worker failed rc=$RC out=$OUT"
 run env BD_READY_COUNT=3 bun seats/staffing.ts check

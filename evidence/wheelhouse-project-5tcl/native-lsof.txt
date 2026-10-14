@@ -1,0 +1,11 @@
+Native tool capture before implementation
+
+command: lsof -t -- <owned-scratch>/probe.lock (open)
+stdout='10050\n'
+stderr=''
+exit='0\n'
+
+command: lsof -t -- <owned-scratch>/probe.lock (closed)
+stdout=''
+stderr=''
+exit='1\n'
