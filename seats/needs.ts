@@ -2,7 +2,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { rosterSeatActors } from "./seat-actors";
 const ROOT = path.resolve(process.env.WHEELHOUSE_NEEDS_ROOT || path.join(import.meta.dir, ".."));
 const SEATS_DIR = path.join(ROOT, "seats");
 const LEDGER = path.join(SEATS_DIR, "needs.jsonl");
@@ -19,7 +18,24 @@ export type NeedEvent =
 export interface Option { label:string; text:string }
 export interface NeedFold { id:string; state:"open"|"answered"|"closed"; opened:Extract<NeedEvent,{type:"opened"}>; messages:Extract<NeedEvent,{type:"message"}>[]; answer?:Extract<NeedEvent,{type:"answered"}>; closed?:Extract<NeedEvent,{type:"closed"}>; read?:Extract<NeedEvent,{type:"read"}> }
 function die(msg:string, code=1):never{ process.stderr.write(`STOP: ${msg}\n`); process.exit(code); }
-function enforceNeedIdentity(){ const actor=process.env.BEADS_ACTOR||""; if(actor && rosterSeatActors(ROOT,{excludeCommander:true}).has(actor)) die("seats do not open needs; write a line beginning @commander: in your own output and the commander opens the need",2); }
+// Copied from comms.ts rosterSeatActors, with the commander role exempted.
+function rosterSeatActors(root = ROOT): Set<string> {
+  const out = new Set<string>();
+  const file = path.join(root, "seats", "seats.json");
+  if (!fs.existsSync(file)) return out;
+  let parsed: any;
+  try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch(e:any) { die(`cannot parse seats/seats.json: ${e.message}`, 2); }
+  const seats = parsed?.seats && typeof parsed.seats === "object" ? parsed.seats : {};
+  for (const name of Object.keys(seats)) {
+    if (seats[name]?.role === "commander") continue;
+    out.add(name);
+    const env = `WHEELHOUSE_BEADS_ACTOR_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+    const override = process.env[env];
+    if (override) out.add(override);
+  }
+  return out;
+}
+function enforceNeedIdentity(){ const actor=process.env.BEADS_ACTOR||""; if(actor && rosterSeatActors().has(actor)) die("seats do not open needs; write a line beginning @commander: in your own output and the commander opens the need",2); }
 function warn(msg:string){ process.stderr.write(`WARN: ${msg}\n`); }
 function now(){ return new Date().toISOString(); }
 export function appendEvent(ev:NeedEvent){ fs.mkdirSync(SEATS_DIR,{recursive:true}); fs.appendFileSync(LEDGER, JSON.stringify(ev)+"\n"); }
