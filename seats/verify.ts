@@ -76,7 +76,7 @@
  */
 
 import * as crypto from "node:crypto";
-import { checkBeadContract, contractRemedy } from "./contract";
+import { checkBeadContract, contractRemedy, parseContract } from "./contract";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -930,6 +930,17 @@ function requireVerifierSeat(explicit: string | undefined, authorSeat: string): 
   return { name: free[0], entry: free[1] };
 }
 
+function beadClaim(beadId: string): string {
+  // Contract validation reads selected JSON fields; reviewers still need the
+  // full bd show record, including comments, labels and dependency context.
+  try {
+    const out = execFileSync("bd", ["show", beadId], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000 });
+    return `The bead, as \`bd show ${beadId}\` prints it from the dispatcher's machine:\n\n${out.trim()}`;
+  } catch {
+    return `The dispatcher could not run \`bd show ${beadId}\` — read the bead yourself (\`bd show ${beadId}\`) before judging anything against it.`;
+  }
+}
+
 function refuseUncontractedReview(beadId: string, errors: string[]): void {
   if (errors.length) die(contractRemedy(beadId, errors), 5);
 }
@@ -1117,7 +1128,12 @@ async function main(): Promise<void> {
   if (verifierArg) validateSegment("seat name", verifierArg);
   const contract = checkBeadContract(ROOT, beadId);
   refuseUncontractedReview(beadId, contract.errors); // contract-gate: before reviewer identity or harness spawn
-  const claim = `The bead, read with \`bd show ${beadId} --json\` from the dispatcher's root:\n\n${contract.text}`;
+  const claim = [
+    beadClaim(beadId),
+    ``,
+    `Parsed work contract (validated before reviewer spawn):`,
+    JSON.stringify(parseContract(contract.text ?? ""), null, 2),
+  ].join("\n");
   const repoRoot = resolveRepoRoot(repoArg, claim);
   if (path.resolve(repoRoot) !== path.resolve(earlyRepoRoot)) sweepStaleScratchWorktrees(repoRoot);
   const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);

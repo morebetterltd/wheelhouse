@@ -431,7 +431,9 @@ done
 verb="${1:-}"
 case "$verb" in
   show)
-    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi
+    if [[ " $* " = *" --json "* ]] && [ -n "${STUB_BD_JSON_SHOW_FILE:-}" ]; then
+      cat "$STUB_BD_JSON_SHOW_FILE"
+    elif [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi
     exit 0 ;;
   comments)
     printf 'fixture comments\n'; exit 0 ;;
@@ -1138,6 +1140,32 @@ run bead-1nb-expired fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && says "BENCH GAP EXPIRED" && grep -q "BENCH GAP EXPIRED" "$VDIR/bead-1nb-expired.md" 2>/dev/null; then
   pass "expired NOT BENCHED gap passes only with an explicit gate nudge"
 else fail "expired NOT BENCHED gap passed silently or failed wrong (exit $RC): $OUT verdict=$(cat "$VDIR/bead-1nb-expired.md" 2>/dev/null)"; fi
+
+phase "1a. full task context survives contract validation"
+# The real bd capture has a JSON array for validation and a rendered show
+# with COMMENTS/PARENT/BLOCKS. Those are separate views, not interchangeable.
+CONTEXT_SHOW="$FIX/review-context.txt"
+CONTEXT_JSON="$FIX/review-contract.json"
+node - "$WHEELHOUSE_CONTRACT_FIXTURE" "$CONTEXT_SHOW" "$CONTEXT_JSON" <<'NODE'
+const fs=require('fs');
+const [valid,raw,json]=process.argv.slice(2),description=fs.readFileSync(valid,'utf8');
+fs.writeFileSync(json,JSON.stringify([{id:'bead-review-context',title:'Fixture task',description}]));
+fs.writeFileSync(raw,description+'\nLABELS\n  fixture-review-label\nPARENT\n  fixture-parent-contract\nBLOCKS\n  fixture-dependent-contract\nCOMMENTS\n  fixture worker: FIXTURE_TASK_COMMENT_MUST_REACH_REVIEWER\n');
+NODE
+STUB_BD_JSON_SHOW_FILE="$CONTEXT_JSON" run_with_bd_show "$CONTEXT_SHOW" bead-review-context fleet/bead-1 worker-1
+if [ "$RC" -eq 0 ] && node - "$VARGV" "$CONTEXT_SHOW" <<'NODE'
+const fs=require('fs'),assert=require('assert');
+const argv=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),prompt=argv.at(-1);
+assert(prompt.includes('FIXTURE_TASK_COMMENT_MUST_REACH_REVIEWER'),'fixture task comment missing from assembled review prompt');
+for(const marker of ['fixture-review-label','fixture-parent-contract','fixture-dependent-contract']) assert(prompt.includes(marker));
+assert(prompt.includes(fs.readFileSync(process.argv[3],'utf8').trim()));
+const heading='Parsed work contract (validated before reviewer spawn):\n';
+assert(prompt.includes(heading));
+const parsed=JSON.parse(prompt.split(heading)[1].split('\nInstall push authority')[0].trim());
+assert(parsed.intent);assert(parsed.outcomes.length);assert.equal(parsed.outcomes[0].id,'O1');assert.deepEqual(parsed.errors,[]);
+NODE
+then pass "review prompt preserves fixture task comment, labels, dependencies and parsed contract"
+else fail "review prompt lost full bd show context or parsed contract rc=$RC"; fi
 
 phase "1b. branch moves mid-pass — verdict stays pinned, publish waits"
 MOVE_PROJ="$FIX/proj-move"
