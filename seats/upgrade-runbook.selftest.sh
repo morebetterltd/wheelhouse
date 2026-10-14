@@ -25,13 +25,13 @@ ensure_template_cache_ignored() {
 }
 
 template_root() {
-  local recorded="" source="" commit="" cache="" short=""
+  local recorded="" source="" commit="" cache="" short="" cache_root="" cache_real="" parent_real=""
   if [ -d "$ROOT/wheelhouse" ] && [ ! -d "$ROOT/contracts" ]; then
     [ -f "$TEMPLATE_SOURCE" ] || source_refusal "$TEMPLATE_SOURCE missing; expected source= and commit= lines (path= is only a disposable cache hint)"
     recorded=$(read_template_source_field path)
     source=$(read_template_source_field source)
     commit=$(read_template_source_field commit)
-    [ -n "$commit" ] || commit=$BASELINE
+    [[ "$commit" =~ ^[0-9a-f]{7,40}$ ]] || source_refusal "invalid commit='$commit'; expected 7-40 lowercase hexadecimal characters"
 
     if [ -n "$recorded" ] \
       && git -C "$recorded" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -42,14 +42,22 @@ template_root() {
 
     [ -n "$source" ] || source_refusal "$TEMPLATE_SOURCE has no source= line; cannot fetch commit=$commit (path=${recorded:-<empty>} is not usable)"
     short=$(printf '%s' "$commit" | cut -c1-12)
-    cache="$ROOT/wheelhouse/.template-cache/$short"
+    cache_root="$ROOT/wheelhouse/.template-cache"
+    cache="$cache_root/$short"
+    [ ! -L "$cache_root" ] || source_refusal "STOP: cache root is a symlink: $cache_root"
+    [ "$(cd "$ROOT/wheelhouse" && pwd -P)" = "$ROOT/wheelhouse" ] || source_refusal "STOP: wheelhouse is not the physical install directory"
+    mkdir -p "$cache_root" || source_refusal "STOP: cannot create cache root: $cache_root"
+    [ -d "$cache_root" ] && [ ! -L "$cache_root" ] || source_refusal "STOP: cache root is not a real directory: $cache_root"
+    cache_real=$(cd "$cache_root" && pwd -P) || source_refusal "STOP: cannot resolve cache root"
+    [ "$cache_real" = "$cache_root" ] || source_refusal "STOP: cache root escapes install: $cache_root"
+    parent_real=$(cd "$(dirname "$cache")" && pwd -P) || source_refusal "STOP: cannot resolve cache parent"
+    [ "$parent_real" = "$cache_real" ] && [ ! -L "$cache" ] || source_refusal "STOP: cache path escapes its real directory: $cache"
     if [ -d "$cache/.git" ] && git -C "$cache" cat-file -e "${commit}^{commit}" >/dev/null 2>&1; then
       printf '%s\n' "$cache"
       return 0
     fi
 
     ensure_template_cache_ignored
-    mkdir -p "$ROOT/wheelhouse/.template-cache"
     rm -rf "$cache"
     if ! git clone --quiet "$source" "$cache" >/dev/null 2>&1; then
       source_refusal "source=$source unreachable; cannot fetch commit=$commit after path=${recorded:-<empty>} was unusable"
@@ -62,6 +70,7 @@ template_root() {
   printf '%s\n' "$ROOT"
 }
 TEMPLATE=$(template_root)
+if [ "${WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY:-0}" = 1 ]; then printf '%s\n' "$TEMPLATE"; exit 0; fi
 TMP=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX") || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${TMP:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$TMP"; }
 trap cleanup EXIT
@@ -76,9 +85,140 @@ copy_installed_selftest() {
   cp "$ROOT/seats/selftest-lib.sh" "$dest/selftest-lib.sh"
 }
 
+cache_recovery_tests() {
+  local cases="$TMP/cache-cases" selected=${WHEELHOUSE_UPGRADE_CACHE_CASE:-all}
+  local helper=${WHEELHOUSE_UPGRADE_CACHE_HELPER:-$ROOT/seats/upgrade-runbook.selftest.sh}
+  local bootstrap=${WHEELHOUSE_UPGRADE_CACHE_BOOTSTRAP:-$TEMPLATE/BOOTSTRAP.md}
+  local upgrade=${WHEELHOUSE_UPGRADE_CACHE_RUNBOOK:-$TEMPLATE/runbooks/UPGRADE.md}
+  local name install value target rc expected needle good_sha cache_path
+  mkdir -p "$cases/bin" "$cases/source/contracts"
+  printf '# Fixture worker contract\n' > "$cases/source/contracts/WORKER.md"
+  git -C "$cases/source" init -q -b main
+  [ "$(git -C "$cases/source" rev-parse --show-toplevel)" = "$cases/source" ] || fail "cache fixture git root escaped"
+  git -C "$cases/source" add contracts/WORKER.md
+  git -C "$cases/source" -c user.email=selftest@local -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+  good_sha=$(git -C "$cases/source" rev-parse HEAD)
+  # Read the printed fence, stopping before BOOTSTRAP's separate integrity
+  # comparisons (/tmp/wh-* belong to i8sm, not this cache recovery test).
+  awk '
+    /^[[:space:]]*```bash$/ {f=1; b=""; next}
+    f && /^[[:space:]]*```$/ {if (b ~ /source-head/ && b ~ /TEMPLATE=/) {printf "%s", b; exit} f=0}
+    f {b=b $0 "\n"}
+  ' "$bootstrap" | awk '/# The pair list is positional/{exit} {print}' > "$cases/bootstrap.sh"
+  awk '
+    /^## 1\./ {s=1; next}
+    s && /^```bash$/ {f=1; next}
+    s && f && /^```$/ {exit}
+    s && f {print}
+  ' "$upgrade" | sed 's/^TARGET=main /TARGET=${CACHE_TEST_TARGET-main} /' > "$cases/upgrade.sh"
+  awk '
+    /^```bash$/ {f=1; b=""; next}
+    f && /^```$/ {if (b ~ /diff "\$BASE"/) {printf "%s", b; exit} f=0}
+    f {b=b $0 "\n"}
+  ' "$upgrade" > "$cases/diff.sh"
+  awk '
+    /^```bash$/ {f=1; b=""; next}
+    f && /^```$/ {if (b ~ /git commit -m "Upgrade wheelhouse contracts/) {printf "%s", b; exit} f=0}
+    f {b=b $0 "\n"}
+  ' "$upgrade" > "$cases/stamp.sh"
+  [ -s "$cases/bootstrap.sh" ] && [ -s "$cases/upgrade.sh" ] && [ -s "$cases/diff.sh" ] && [ -s "$cases/stamp.sh" ] || fail "printed cache recipe missing"
+  cat > "$cases/bin/git" <<'GITSTUB'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$CACHE_GIT_LOG"
+case "${1:-}" in
+  clone)
+    [ "${CACHE_CLONE_FAIL:-0}" != 1 ] || exit 1
+    last=''; for arg in "$@"; do last=$arg; done
+    mkdir -p "$last/.git" "$last/contracts"
+    printf '# Fixture worker contract\n' > "$last/contracts/WORKER.md"
+    ;;
+  -C) [ -d "$2/.git" ] || exit 1 ;;
+  add|status|commit) : ;;
+  *) echo 'unexpected fixture git command' >&2; exit 97;;
+esac
+GITSTUB
+  chmod +x "$cases/bin/git"
+  case "$selected" in all|helper-bad-commit|helper-invalid|helper-link|helper-parent-link|helper-good|bootstrap-link|bootstrap-parent-link|bootstrap-bad-commit|bootstrap-good|upgrade-link|upgrade-parent-link|upgrade-bad-commit|upgrade-target|upgrade-good|upgrade-diff-bad-commit|upgrade-stamp-bad-commit|helper-leaf-link|bootstrap-leaf-link|upgrade-leaf-link) ;; *) fail "unknown cache case: $selected";; esac
+  for name in helper-bad-commit helper-invalid helper-link helper-parent-link helper-good bootstrap-link bootstrap-parent-link bootstrap-bad-commit bootstrap-good upgrade-link upgrade-parent-link upgrade-bad-commit upgrade-target upgrade-good upgrade-diff-bad-commit upgrade-stamp-bad-commit helper-leaf-link bootstrap-leaf-link upgrade-leaf-link; do
+    [ "$selected" = all ] || [ "$selected" = "$name" ] || continue
+    install="$cases/$name"
+    mkdir -p "$install/seats" "$install/wheelhouse" "$install/outside/source-head" "$install/outside/main" "$install/outside/1234567" "$install/victim"
+    printf KEEP > "$install/victim/KEEP"
+    printf KEEP > "$install/outside/source-head/KEEP"
+    printf KEEP > "$install/outside/main/KEEP"
+    printf KEEP > "$install/outside/1234567/KEEP"
+    cp -f "$helper" "$install/seats/upgrade-runbook.selftest.sh"
+    cp -f "$ROOT/seats/selftest-lib.sh" "$install/seats/selftest-lib.sh"
+    value=1234567; target=main; expected=1; needle='STOP:'
+    case "$name" in
+      helper-*) expected=42 ;;
+    esac
+    case "$name" in
+      *bad-commit) value=${WHEELHOUSE_UPGRADE_CACHE_COMMIT-../../victim}; needle="invalid commit='$value'" ;;
+      helper-invalid) value=${WHEELHOUSE_UPGRADE_CACHE_COMMIT-unknown}; needle="invalid commit='$value'" ;;
+      helper-link|bootstrap-link|upgrade-link) ln -s "$install/outside" "$install/wheelhouse/.template-cache" ;;
+      upgrade-target) target=${WHEELHOUSE_UPGRADE_CACHE_TARGET-..}; needle='STOP: unsafe TARGET cache name' ;;
+      *-good) value=$good_sha; expected=0 ;;
+    esac
+    case "$name" in *leaf-link)
+      mkdir -p "$install/wheelhouse/.template-cache" "$install/outside/.git"
+      case "$name" in helper-*) cache_path=1234567;; bootstrap-*) cache_path=source-head;; *) cache_path=main;; esac
+      ln -s "$install/outside" "$install/wheelhouse/.template-cache/$cache_path"
+      ;;
+    esac
+    # A symlinked wheelhouse ancestor must fail the physical-directory check,
+    # even when .template-cache itself is a real directory.
+    case "$name" in *parent-link)
+      mv -f "$install/wheelhouse" "$install/owned-wheelhouse"
+      ln -s "$install/owned-wheelhouse" "$install/wheelhouse"
+      ;;
+    esac
+    printf 'source=%s\ncommit=%s\npath=%s\nnamespace=fixture\n' "$cases/source" "$value" "$install/dead-path" > "$install/wheelhouse/.template-source"
+    : > "$install/git.log"
+    rc=0
+    case "$name" in
+      helper-*)
+        if [ "$expected" = 0 ]; then
+          WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY=1 bash "$install/seats/upgrade-runbook.selftest.sh" > "$install/out" 2> "$install/err" || rc=$?
+        else
+          PATH="$cases/bin:$PATH" CACHE_GIT_LOG="$install/git.log" CACHE_CLONE_FAIL=1 WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY=1 bash "$install/seats/upgrade-runbook.selftest.sh" > "$install/out" 2> "$install/err" || rc=$?
+        fi
+        ;;
+      *)
+        case "$name" in bootstrap-*) cache_path="$cases/bootstrap.sh";; upgrade-diff-*) cache_path="$cases/diff.sh";; upgrade-stamp-*) cache_path="$cases/stamp.sh";; *) cache_path="$cases/upgrade.sh";; esac
+        if [ "$expected" = 0 ]; then
+          (cd "$install" && CACHE_TEST_TARGET="$target" bash -e "$cache_path") > "$install/out" 2> "$install/err" || rc=$?
+        else
+          (cd "$install" && PATH="$cases/bin:$PATH" CACHE_GIT_LOG="$install/git.log" CACHE_TEST_TARGET="$target" bash -e "$cache_path") > "$install/out" 2> "$install/err" || rc=$?
+        fi
+        ;;
+    esac
+    [ "$rc" -eq "$expected" ] || { cat "$install/out" "$install/err"; fail "$name: exit $rc expected $expected; victim=$(test -f "$install/victim/KEEP" && echo present || echo GONE) source-head=$(test -f "$install/outside/source-head/KEEP" && echo present || echo GONE) main=$(test -f "$install/outside/main/KEEP" && echo present || echo GONE)"; }
+    if [ "$expected" = 0 ]; then
+      case "$name" in
+        helper-good) cache_path="$install/wheelhouse/.template-cache/$(printf '%s' "$good_sha" | cut -c1-12)"; grep -qxF "$cache_path" "$install/out" || fail "$name: wrong returned cache path" ;;
+        bootstrap-good) cache_path="$install/wheelhouse/.template-cache/source-head" ;;
+        upgrade-good) cache_path="$install/wheelhouse/.template-cache/main" ;;
+      esac
+      git -C "$cache_path" cat-file -e "$good_sha^{commit}" || fail "$name: real local clone lacks commit"
+    else
+      grep -qF "$needle" "$install/err" && ! grep -q '^clone ' "$install/git.log" || { cat "$install/err"; fail "$name: no pre-action refusal (exit $rc); victim=$(test -f "$install/victim/KEEP" && echo present || echo GONE) source-head=$(test -f "$install/outside/source-head/KEEP" && echo present || echo GONE) main=$(test -f "$install/outside/main/KEEP" && echo present || echo GONE)"; }
+    fi
+    [ -f "$install/victim/KEEP" ] && [ -f "$install/outside/source-head/KEEP" ] && [ -f "$install/outside/main/KEEP" ] && [ -f "$install/outside/1234567/KEEP" ] || fail "$name: KEEP deleted"
+    pass "cache recovery $name: sentinel preserved, expected exit $rc"
+  done
+}
+
+if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" = 1 ]; then
+  cache_recovery_tests
+  echo "upgrade-runbook.selftest: PASS (cache recovery only; $PASS checks)"
+  exit 0
+fi
 command -v zsh >/dev/null 2>&1 || fail "zsh is required for this selftest"
 
 if [ "$TEMPLATE" = "$ROOT" ]; then
+  cache_recovery_tests
   if grep -q 'remove `seats/bin`' "$TEMPLATE/runbooks/UPGRADE.md"; then
     fail "UPGRADE.md still tells non-opt-in installs to remove seats/bin"
   fi
