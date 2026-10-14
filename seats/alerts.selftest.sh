@@ -73,7 +73,7 @@ age_alert(){ node -e 'const fs=require("fs"); const f=process.argv[1], n=process
 # Drift's consumer is the inbox: set membership, not categories/order/counts,
 # controls a fresh hold and a single raise. Test time is aged in owned state.
 drift_set_cases(){
-  local a b moved first signature since fired
+  local a b moved first current
   a='{"error":null,"modified":["b.ts","a.ts"],"localOnly":[],"missing":[],"aheadBy":0}'
   b='{"error":null,"modified":["c.ts"],"localOnly":[],"missing":[],"aheadBy":0}'
   moved='{"error":"comparison detail changed","modified":[],"localOnly":["b.ts","b.ts"],"missing":["a.ts"],"aheadBy":7}'
@@ -261,8 +261,13 @@ assert 'if(shouldFire)' in s, 'canary subject absent'
 s=s.replace('if(shouldFire)','if(next.active)')
 p.write_text(s)
 PY
-rm -f "$CAN/seats/inbox.jsonl" "$CAN/seats/run/fleet-snapshot.json"; (cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1 && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1); CCOUNT="$( [ -f "$CAN/seats/inbox.jsonl" ] && wc -l < "$CAN/seats/inbox.jsonl" | tr -d ' ' || echo 0 )"
-[ "$CCOUNT" -gt 2 ] && pass 'canary: fire-on-every-run variant fails the stays-quiet leg' || fail "canary did not produce repeated alert rows count=$CCOUNT"
+rm -f "$CAN/seats/inbox.jsonl" "$CAN/seats/run/fleet-snapshot.json"
+CAN_RC=0
+(cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1) || CAN_RC=$?
+CCOUNT_FIRST="$( [ -f "$CAN/seats/inbox.jsonl" ] && wc -l < "$CAN/seats/inbox.jsonl" | tr -d ' ' || echo 0 )"
+(cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1) || CAN_RC=$?
+CCOUNT="$( [ -f "$CAN/seats/inbox.jsonl" ] && wc -l < "$CAN/seats/inbox.jsonl" | tr -d ' ' || echo 0 )"
+[ "$CAN_RC" = 0 ] && [ "$CCOUNT_FIRST" -gt 0 ] && [ "$CCOUNT" -gt "$CCOUNT_FIRST" ] && pass 'canary: fire-on-every-run variant fails the stays-quiet leg' || fail "canary did not produce repeated alert rows rc=$CAN_RC first=$CCOUNT_FIRST after=$CCOUNT"
 
 if [ "$FAILED" -eq 0 ]; then echo 'alerts.selftest.sh works on this machine.'; exit 0; fi
 echo "alerts.selftest.sh FAIL ($FAILED failure(s))" >&2; exit 1
