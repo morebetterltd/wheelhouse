@@ -105,7 +105,26 @@ visit(process.argv[1]);console.log(JSON.stringify(rows));
 }
 ownership_tests(){
   local EVENTS="$FIX/ownership-events.log"
-  local case path before after rc
+  local case path before after rc pid
+  # Bun exits1 for missing/malformed programs too. Only the helper's reserved
+  # held result may retry; missing and broken helpers must fail once, before START.
+  for case in missing broken; do
+    local helper="$FIX/$case-helper.ts" calls="$FIX/$case-helper.calls"
+    if [ "$case" = broken ]; then
+      printf 'import fs from "node:fs";fs.appendFileSync(process.env.HELPER_CALLS!,"called\\n");process.exit(1);\n' > "$helper"
+    fi
+    path="$FIX/$case-helper.lock"
+    HELPER_CALLS="$calls" WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$helper" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/$case-helper.out" 2> "$FIX/$case-helper.err" &
+    pid=$!
+    for _ in $(seq 1 40); do kill -0 "$pid" 2>/dev/null || break; sleep 0.05; done
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid"; rc=$?
+    if [ "$rc" = 2 ] && [ ! -e "$path" ] && ! grep -q 'waiting for host-wide lock' "$FIX/$case-helper.err" && ! grep -q 'selftest-sweep: START ' "$FIX/$case-helper.out" && { [ "$case" = missing ] || [ "$(wc -l < "$calls" | tr -d ' ')" = 1 ]; }; then
+      pass "$case helper fails2 without retry, lock mutation or suite START"
+    else
+      fail "$case helper was mistaken for lock-held (rc=$rc)"
+    fi
+  done
   for case in plain extra nested bad-marker mismatch bad-time other-host link legacy-bad legacy-duplicate; do
     path="$FIX/invalid-$case.lock"
     case "$case" in
@@ -167,7 +186,7 @@ EOF
 }
 ownership_tests
 if [ "${WHEELHOUSE_SELFTEST_SWEEP_OWNERSHIP_ONLY:-0}" = 1 ]; then
-  [ "$FAILED" = 0 ] && { echo 'selftest-sweep.selftest: PASS (13 ownership checks)'; exit 0; }
+  [ "$FAILED" = 0 ] && { echo 'selftest-sweep.selftest: PASS (15 ownership checks)'; exit 0; }
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1
 fi
 
@@ -305,7 +324,7 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "selftest-sweep.selftest: PASS (24 checks)"
+  echo "selftest-sweep.selftest: PASS (26 checks)"
 else
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"
   exit 1
