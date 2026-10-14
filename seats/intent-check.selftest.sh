@@ -69,7 +69,7 @@ new_bead() {
   title=$2
   desc=$3
   ( cd "$dir" && bd create "$title" -d "$desc" --json ) |
-    sed -n 's/^[[:space:]]*"id": "\([^"]*\)".*/\1/p' | head -1
+    sed -n 's/^[[:space:]]*"id": "\([^"]*\)".*/\1/p' | sed -n '1p'
 }
 
 # 1. Clean state passes.

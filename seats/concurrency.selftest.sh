@@ -105,7 +105,7 @@ sweep_stale_fixtures() {
     while IFS= read -r sf; do
       [ -f "$sf" ] || continue
       for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
+        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
           kill "$pid" 2>/dev/null
           echo "swept: killed leaked seat pid $pid (held open files under $d)"
         fi
@@ -372,7 +372,7 @@ if [ $RC -ne 0 ] && says "dispatch failed"; then
   pass "quota-shaped dispatch fails loudly"
 else fail "quota-shaped dispatch did not fail (exit $RC): $OUT"; fi
 CAP="$(state_get worker-a lastCapacityEvent)"
-if [ -n "$CAP" ] && printf '%s' "$CAP" | grep -q '429 rate limit'; then
+if [ -n "$CAP" ] && printf '%s' "$CAP" | grep >/dev/null '429 rate limit'; then
   pass "state.json records lastCapacityEvent with the failure detail: $CAP"
 else fail "no lastCapacityEvent in state.json after quota failure (got: $CAP)"; fi
 run status
@@ -380,11 +380,11 @@ if says "CAPACITY: QUOTA"; then
   pass "adapter status surfaces the capacity event"
 else fail "status does not surface the capacity event: $OUT"; fi
 FLOOR_OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS=220 LINES=50 NO_COLOR=1 bun "$PROJ/seats/floor.ts" --once 2>&1)"
-if printf '%s' "$FLOOR_OUT" | grep -q 'AMBER.*PARKED/QUOTA.*bun seats/adapter.ts probe worker-a'; then
+if printf '%s' "$FLOOR_OUT" | grep >/dev/null 'AMBER.*PARKED/QUOTA.*bun seats/adapter.ts probe worker-a'; then
   pass "floor --once renders the AMBER PARKED/QUOTA line with the re-probe command"
-else fail "floor --once has no AMBER PARKED/QUOTA line: $(printf '%s' "$FLOOR_OUT" | grep -i 'worker-a' | head -3)"; fi
+else fail "floor --once has no AMBER PARKED/QUOTA line: $(printf '%s' "$FLOOR_OUT" | grep -i 'worker-a' | sed -n '1,3p')"; fi
 FLOOR_STATUS="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS=220 LINES=60 NO_COLOR=1 bun "$PROJ/seats/floor.ts" --once --pin 0 2>&1)"
-if printf '%s' "$FLOOR_STATUS" | grep -q 'capacity QUOTA '; then
+if printf '%s' "$FLOOR_STATUS" | grep >/dev/null 'capacity QUOTA '; then
   pass "floor STATUS cell shows per-account capacity state"
 else fail "floor STATUS cell missing capacity line"; fi
 run dispatch worker-a bead-ok "plain work, no quota"

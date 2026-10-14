@@ -262,9 +262,9 @@ else fail "could not kill the stub seat"; fi
 recover_run
 if [ $RC -eq 0 ]; then pass "recover exits 0"
 else fail "recover exited ${RC}: $OUT"; fi
-if seat_line worker-1 | grep -q 'DEAD'; then pass "killed seat classified DEAD"
+if seat_line worker-1 | grep >/dev/null 'DEAD'; then pass "killed seat classified DEAD"
 else fail "worker-1 not classified DEAD: $OUT"; fi
-if seat_line worker-1 | grep -q 'bead bead-98m'; then pass "the unfinished bead is named on the seat line"
+if seat_line worker-1 | grep >/dev/null 'bead bead-98m'; then pass "the unfinished bead is named on the seat line"
 else fail "lastBead bead-98m not named: $OUT"; fi
 if says "resume: bun $PROJ/seats/adapter.ts resume worker-1"; then
   pass "exact resume command printed"
@@ -273,7 +273,7 @@ if says "removed orphaned FIFO: $PROJ/seats/run/worker-1.stdin"; then
   pass "the killed seat's orphaned FIFO was removed and printed"
 else fail "orphaned FIFO of the killed seat not cleaned: $OUT"; fi
 
-RESUME_CMD="$(printf '%s\n' "$OUT" | sed -n 's/^  resume: \(.*\)   #.*$/\1/p' | head -1)"
+RESUME_CMD="$(printf '%s\n' "$OUT" | sed -n 's/^  resume: \(.*\)   #.*$/\1/p' | sed -n '1p')"
 RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" sh -c "$RESUME_CMD" 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "the printed resume command runs clean"
 else fail "printed resume command failed (exit $RC): $OUT"; fi
@@ -306,18 +306,18 @@ fs.writeFileSync('$STATE',JSON.stringify(s,null,2)+'\n');
 recover_run
 if [ $RC -eq 0 ]; then pass "fresh recover process exits 0"
 else fail "recover exited ${RC}: $OUT"; fi
-if seat_line worker-1 | grep -q 'RUNNING'; then pass "live seat classified RUNNING (holds its FIFO, despite a bare-pi ps line)"
+if seat_line worker-1 | grep >/dev/null 'RUNNING'; then pass "live seat classified RUNNING (holds its FIFO, despite a bare-pi ps line)"
 else fail "worker-1 should be RUNNING: $OUT"; fi
-if seat_line worker-dead | grep -q 'DEAD' && says "resume worker-dead"; then
+if seat_line worker-dead | grep >/dev/null 'DEAD' && says "resume worker-dead"; then
   pass "dead pid with intact session classified DEAD, resume offered"
 else fail "worker-dead misclassified: $OUT"; fi
-if seat_line worker-stale | grep -q 'STALE' && ! says "resume worker-stale"; then
+if seat_line worker-stale | grep >/dev/null 'STALE' && ! says "resume worker-stale"; then
   pass "entry with no session artifacts classified STALE, no resume offered"
 else fail "worker-stale misclassified: $OUT"; fi
-if seat_line worker-reuse | grep -q 'DEAD' && seat_line worker-reuse | grep -q 'reused or foreign'; then
+if seat_line worker-reuse | grep >/dev/null 'DEAD' && seat_line worker-reuse | grep >/dev/null 'reused or foreign'; then
   pass "live-but-reused pid classified DEAD and called out (restart hazard)"
 else fail "worker-reuse (pid held by 'sleep 300') misclassified: $OUT"; fi
-if seat_line worker-spoof | grep -q 'DEAD' && ! seat_line worker-spoof | grep -q 'RUNNING'; then
+if seat_line worker-spoof | grep >/dev/null 'DEAD' && ! seat_line worker-spoof | grep >/dev/null 'RUNNING'; then
   pass "argv spoof (tail -f on the role brief) classified DEAD — identity is fds, not command lines"
 else fail "worker-spoof (tail -f carrying the brief path in argv) misclassified: $OUT"; fi
 
@@ -330,9 +330,9 @@ s.seats['worker-ghost']={...w,pid:$DEADPID,lastBead:'bead-ghost'};
 fs.writeFileSync('$STATE',JSON.stringify(s,null,2)+'\n');
 "
 recover_run
-if seat_line worker-ghost | grep -q 'DEAD'; then pass "ghost sharing a RUNNING seat's session is DEAD"
+if seat_line worker-ghost | grep >/dev/null 'DEAD'; then pass "ghost sharing a RUNNING seat's session is DEAD"
 else fail "worker-ghost not DEAD: $OUT"; fi
-if says "REFUSED double-resume" && printf '%s\n' "$OUT" | grep -A1 '^worker-ghost ' | grep -q 'worker-1'; then
+if says "REFUSED double-resume" && printf '%s\n' "$OUT" | grep -A1 '^worker-ghost ' | grep >/dev/null 'worker-1'; then
   pass "resume REFUSED, naming who holds the session"
 else fail "no refusal naming worker-1: $OUT"; fi
 if ! says "resume worker-ghost"; then
@@ -359,7 +359,7 @@ PI_BEFORE="$(pi_count)"
 recover_run
 if cmp -s "$STATE" "$FIX/state.before"; then
   pass "state.json byte-identical after recover (no lastBead mutation, no re-dispatch record)"
-else fail "recover MUTATED state.json: $(diff "$FIX/state.before" "$STATE" | head -5)"; fi
+else fail "recover MUTATED state.json: $(diff "$FIX/state.before" "$STATE" | sed -n '1,5p')"; fi
 PI_AFTER="$(pi_count)"
 if [ "$PI_AFTER" = "$PI_BEFORE" ]; then
   pass "no pi spawned (bare-'pi'-titled process count: $PI_BEFORE before, $PI_AFTER after)"
@@ -399,7 +399,7 @@ else
     else
       fail "real pi's ps line is '$PS_LINE' after 20s — the title-rewrite premise changed; re-examine recover's identity mechanism AND this suite"
     fi
-    if lsof -Fn -p "$PROBE_PID" 2>/dev/null | grep -qF "n$RPDIR/probe.stdin"; then
+    if lsof -Fn -p "$PROBE_PID" 2>/dev/null | grep -F >/dev/null "n$RPDIR/probe.stdin"; then
       pass "real pi holds its stdin FIFO where lsof sees it — the identity mechanism recover relies on"
     else
       fail "lsof does not show the FIFO on the real pi — recover's fd-based identity would misclassify real seats"

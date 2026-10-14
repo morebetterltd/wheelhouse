@@ -87,9 +87,9 @@ case "$cmd" in
     case "$fmt" in
       '#{pane_current_command}') printf '%s\n' "${FAKE_TMUX_COMMAND:-claude}" ;;
       '#{pane_current_path}')
-        if [ -n "${FAKE_TMUX_MISSING_PANES:-}" ] && printf '%s\n' "$FAKE_TMUX_MISSING_PANES" | grep -qxF "$target"; then exit 1; fi
+        if [ -n "${FAKE_TMUX_MISSING_PANES:-}" ] && printf '%s\n' "$FAKE_TMUX_MISSING_PANES" | grep -xF >/dev/null "$target"; then exit 1; fi
         if [ -n "${FAKE_TMUX_PANE_PATHS:-}" ]; then
-          found="$(printf '%s\n' "$FAKE_TMUX_PANE_PATHS" | awk -v t="$target" -F '\t' '$1==t {print substr($0, index($0,$2)); exit}')"
+          found="$(printf '%s\n' "$FAKE_TMUX_PANE_PATHS" | awk -v t="$target" -F '\t' '$1==t && !found++ {print substr($0, index($0,$2))}')"
           [ -n "$found" ] && { printf '%s\n' "$found"; exit 0; }
         fi
         printf '%s\n' "${FAKE_TMUX_PANE_PATH:-${WHEELHOUSE_HERALD_ROOT:-$PWD}}" ;;
@@ -100,7 +100,7 @@ case "$cmd" in
     if [ -n "${FAKE_TMUX_CAPTURE_SEQUENCE:-}" ]; then
       state="${FAKE_TMUX_SEQUENCE_STATE:?}"
       idx=0; [ -f "$state" ] && idx="$(cat "$state")"
-      file="$(printf '%s' "$FAKE_TMUX_CAPTURE_SEQUENCE" | awk -v n=$((idx+1)) -v RS=':' 'NR==n { print; exit }')"
+      file="$(printf '%s' "$FAKE_TMUX_CAPTURE_SEQUENCE" | awk -v n=$((idx+1)) -v RS=':' 'NR==n { print }')"
       [ -n "$file" ] || file="$(printf '%s' "$FAKE_TMUX_CAPTURE_SEQUENCE" | awk -v RS=':' 'END { print }')"
       echo $((idx+1)) > "$state"
       cat "$file"
@@ -141,7 +141,7 @@ SEND_LOG="$FIX/send-keys.log"
 printf '%s\n' '{"type":"agent_end","messages":["rename retry settle"],"timestamp":"2026-09-10T00:00:00Z"}' > "$PROJ/seats/logs/rename-retry.jsonl"
 seed_log_cursor rename-retry.jsonl 0
 RC=0; OUT="$(WHEELHOUSE_TEST_DELETE_HERALD_TMP=1 run_herald --once 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'herald state rename ENOENT; retrying once' && [ "$(json_count 'r.class==="settle" && /rename retry settle/.test(r.detail)')" = 1 ]; then
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'herald state rename ENOENT; retrying once' && [ "$(json_count 'r.class==="settle" && /rename retry settle/.test(r.detail)')" = 1 ]; then
   pass "state tmp rename ENOENT is retried once and the herald survives"
 else
   fail "state tmp rename ENOENT killed herald or missed retry (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
@@ -157,14 +157,14 @@ node -e 'const fs=require("fs"); const file=process.argv[1]; const line=JSON.str
 PREEXISTING_SIZE="$(wc -c < "$PROJ/seats/logs/preexisting-large.jsonl" | tr -d ' ')"
 RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 STATE_OFFSET="$(node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log(s.logs["seats/logs/preexisting-large.jsonl"]?.offset ?? "missing")' "$PROJ/seats/herald.state.json" 2>/dev/null || echo missing)"
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 0 wake event' && [ "$(line_count "$PROJ/seats/inbox.jsonl")" = 0 ] && [ "$STATE_OFFSET" = "$PREEXISTING_SIZE" ]; then
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'appended 0 wake event' && [ "$(line_count "$PROJ/seats/inbox.jsonl")" = 0 ] && [ "$STATE_OFFSET" = "$PREEXISTING_SIZE" ]; then
   pass "pre-existing large cursorless log starts at EOF and yields zero stale events"
 else
   fail "cursorless large log was replayed or not cursorized (rc=$RC out=$OUT inbox=$(line_count "$PROJ/seats/inbox.jsonl") state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo missing))"
 fi
 node -e 'const fs=require("fs"); const file=process.argv[1]; const filler=JSON.stringify({type:"agent_start",message:"x".repeat(5000)})+"\n"; let out=""; while (Buffer.byteLength(out)<3*1024*1024) out+=filler; out+=JSON.stringify({type:"agent_end",messages:["incremental tail settle"]})+"\n"; fs.appendFileSync(file,out)' "$PROJ/seats/logs/preexisting-large.jsonl"
 RC=0; OUT="$(WHEELHOUSE_HERALD_READ_CHUNK_BYTES=4096 run_herald --once 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="settle" && /incremental tail settle/.test(r.detail)')" = 1 ]; then
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'appended 1 wake event' && [ "$(json_count 'r.class==="settle" && /incremental tail settle/.test(r.detail)')" = 1 ]; then
   pass "large log tail is read incrementally with a small chunk bound"
 else
   fail "small-chunk large-log tail did not produce exactly one new settle (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
@@ -179,7 +179,7 @@ cp "$COPYTRUNC_LOG" "$COPYTRUNC_LOG.1"
 : > "$COPYTRUNC_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["after copytruncate"]}' > "$COPYTRUNC_LOG"
 RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="settle" && /after copytruncate/.test(r.detail)')" = 1 ]; then
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'appended 1 wake event' && [ "$(json_count 'r.class==="settle" && /after copytruncate/.test(r.detail)')" = 1 ]; then
   pass "copy-truncate shrink resets the saved offset and herald reads the new current log"
 else
   fail "copy-truncate shrink did not reset herald offset (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
@@ -194,7 +194,7 @@ cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
 {"type":"answered","id":"need-demo","at":"2026-09-21T00:01:00.000Z","from":"human","via":"desk","text":"Soup"}
 JSONL
 RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="need-answered" && r.seat==="principal" && r.state==="terminal" && /answered — Lunch choice/.test(r.title) && r.detail.includes("Soup") && r.detail.includes("Read it: bun seats/needs.ts show need-demo") && r.source.log==="seats/needs.jsonl" && r.source.type==="answered"')" = 1 ]; then
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'appended 1 wake event' && [ "$(json_count 'r.class==="need-answered" && r.seat==="principal" && r.state==="terminal" && /answered — Lunch choice/.test(r.title) && r.detail.includes("Soup") && r.detail.includes("Read it: bun seats/needs.ts show need-demo") && r.source.log==="seats/needs.jsonl" && r.source.type==="answered"')" = 1 ]; then
   pass "human answered need appends one principal inbox row with needs.ts show command"
 else
   fail "human answered need did not append expected row (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
@@ -213,7 +213,7 @@ cat > "$PROJ/seats/comms.jsonl" <<'JSONL'
 JSONL
 RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
 RC2=0; OUT2="$(run_herald --once 2>&1)" || RC2=$?
-if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && echo "$OUT2" | grep -q 'appended 0 wake event' && [ "$(json_count 'r.class==="relay-request" && r.seat==="worker-1" && r.state==="input-required" && /relay request — partners/.test(r.title) && r.detail.includes("Need a word with Tyler") && r.detail.includes("bun seats/comms.ts relay relay-test") && r.source.log==="seats/comms.jsonl" && r.source.type==="request"')" = 1 ]; then
+if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && echo "$OUT" | grep >/dev/null 'appended 1 wake event' && echo "$OUT2" | grep >/dev/null 'appended 0 wake event' && [ "$(json_count 'r.class==="relay-request" && r.seat==="worker-1" && r.state==="input-required" && /relay request — partners/.test(r.title) && r.detail.includes("Need a word with Tyler") && r.detail.includes("bun seats/comms.ts relay relay-test") && r.source.log==="seats/comms.jsonl" && r.source.type==="request"')" = 1 ]; then
   pass "planted relay request appends one relay-request inbox row and does not duplicate on rescan"
 else
   fail "relay request herald leg failed (rc=$RC/$RC2 out=$OUT out2=$OUT2 inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
@@ -223,7 +223,7 @@ cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
 {"type":"message","id":"need-demo","at":"2026-09-21T00:02:00.000Z","from":"commander","via":"cli","text":"commander note"}
 JSONL
 RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 0 wake event' && [ "$(json_count 'r.detail && /commander note/.test(r.detail)')" = 0 ]; then
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'appended 0 wake event' && [ "$(json_count 'r.detail && /commander note/.test(r.detail)')" = 0 ]; then
   pass "commander-authored need message produces no inbox row"
 else
   fail "commander-authored need message produced a row (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
@@ -232,7 +232,7 @@ cat >> "$PROJ/seats/needs.jsonl" <<'JSONL'
 {"type":"message","id":"need-demo","at":"2026-09-21T00:03:00.000Z","from":"human","via":"desk","text":"More context"}
 JSONL
 RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 1 wake event' && [ "$(json_count 'r.class==="need-message" && r.state==="input-required" && /message — Lunch choice/.test(r.title) && r.detail.includes("More context") && r.detail.includes("Read it: bun seats/needs.ts show need-demo")')" = 1 ]; then
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'appended 1 wake event' && [ "$(json_count 'r.class==="need-message" && r.state==="input-required" && /message — Lunch choice/.test(r.title) && r.detail.includes("More context") && r.detail.includes("Read it: bun seats/needs.ts show need-demo")')" = 1 ]; then
   pass "human message on an answered need appends need-message input-required row"
 else
   fail "human need message did not append expected row (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
@@ -248,7 +248,7 @@ printf '%s\n' '{"type":"agent_end","messages":[{"role":"assistant","content":[{"
 seed_log_cursor worker-1.jsonl 0
 seed_log_cursor worker-2.jsonl 0
 RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 2 wake event' && [ "$(json_count 'r.class==="settle" && r.seat==="worker-1" && /wheelhouse-project-xtyh/.test(r.title) && /You hold bead wheelhouse-project-xtyh/.test(r.detail)')" = 1 ] && [ "$(json_count 'r.class==="settle" && r.seat==="worker-2" && /wheelhouse-project-xtyh-fresh/.test(r.title) && /Fresh log prompt head/.test(r.detail)')" = 1 ]; then
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'appended 2 wake event' && [ "$(json_count 'r.class==="settle" && r.seat==="worker-1" && /wheelhouse-project-xtyh/.test(r.title) && /You hold bead wheelhouse-project-xtyh/.test(r.detail)')" = 1 ] && [ "$(json_count 'r.class==="settle" && r.seat==="worker-2" && /wheelhouse-project-xtyh-fresh/.test(r.title) && /Fresh log prompt head/.test(r.detail)')" = 1 ]; then
   pass "settle rows use state.json prompt head for rotated and fresh current logs"
 else
   fail "settle rows did not use state.json prompt head (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true))"
@@ -300,7 +300,7 @@ cat "$ROOT/seats/fixtures/herald-events/agent-end-normal-stop.json"
 seed_log_cursor worker-1.jsonl 0
 
 RC=0; OUT="$(run_herald --once 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'appended 7 wake event'; then pass "captures settle, distress, sentinel, and non-retried error events without retry wakes"
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'appended 7 wake event'; then pass "captures settle, distress, sentinel, and non-retried error events without retry wakes"
 else fail "herald --once did not capture exactly seven events (rc=$RC): $OUT"; fi
 
 if [ "$(json_count 'r.class==="settle" && r.state==="terminal" && r.seat==="worker-1"')" = 2 ]; then pass "settle uses A2A terminal state"
@@ -435,7 +435,7 @@ if [ $RC1 -eq 0 ] && [ $RC2 -eq 0 ] && [ $RC3 -eq 0 ] && [ "$(line_count "$SEND_
 else fail "missing target retry failed (rc=$RC1/$RC2/$RC3 out=$OUT1/$OUT2/$OUT3 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
 STATUS_OUT="$(run_herald_status_fixture 2>&1 || true)"
-if printf '%s\n' "$STATUS_OUT" | grep -q '^target ok %77 resolvedBy=scan'; then pass "herald --status prints target line from herald.target.json"
+if printf '%s\n' "$STATUS_OUT" | grep >/dev/null '^target ok %77 resolvedBy=scan'; then pass "herald --status prints target line from herald.target.json"
 else fail "herald --status did not print target line: $STATUS_OUT"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
