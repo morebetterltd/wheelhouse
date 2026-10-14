@@ -72,9 +72,9 @@ function heldAlertRow(active:boolean, prior:AlertState|undefined, signature:stri
   const n=now();
   if(!active) return {active:false,since:null,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature};
   const sameSet=prior?.signature===signature;
+  if(sameSet&&prior?.active) return {...prior,active:true,signature};
   const firstSeen=sameSet ? prior?.since??n : n;
   if(Date.now()-Date.parse(firstSeen)<holdMs) return {active:false,since:firstSeen,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature};
-  if(sameSet&&prior?.active) return {...prior,active:true,signature};
   return {active:true,since:firstSeen,lastFiredAt:n,needId:prior?.needId??null,signature};
 }
 function appendInboxAlert(name:AlertName, detail:string){

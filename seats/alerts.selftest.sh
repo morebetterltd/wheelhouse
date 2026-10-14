@@ -73,7 +73,7 @@ age_alert(){ node -e 'const fs=require("fs"); const f=process.argv[1], n=process
 # Drift's consumer is the inbox: set membership, not categories/order/counts,
 # controls a fresh hold and a single raise. Test time is aged in owned state.
 drift_set_cases(){
-  local a b moved first current
+  local a b moved first current recent
   a='{"error":null,"modified":["b.ts","a.ts"],"localOnly":[],"missing":[],"aheadBy":0}'
   b='{"error":null,"modified":["c.ts"],"localOnly":[],"missing":[],"aheadBy":0}'
   moved='{"error":"comparison detail changed","modified":[],"localOnly":["b.ts","b.ts"],"missing":["a.ts"],"aheadBy":7}'
@@ -96,7 +96,11 @@ drift_set_cases(){
     WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$a" run_alert bun seats/alerts.ts check --json
     current="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
     [ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] && [ "$current" = "$first" ] || fail "legacy same-set signature restarted or re-raised: $current"
-    [ "$FAILED" = 0 ] && pass 'same drift set never re-raises or resets state: reorder, duplicates, category moves, aheadBy/error detail changes, persisted legacy signature'
+    recent="$(node -e 'const fs=require("fs"),f=process.argv[1],j=JSON.parse(fs.readFileSync(f,"utf8"));const a=j.alerts["template-drift"];a.since=new Date().toISOString();a.signature=JSON.stringify({e:null,m:["b.ts"],l:["a.ts"],mi:[],a:99});fs.writeFileSync(f,JSON.stringify(j));console.log(JSON.stringify({...a,signature:JSON.stringify(["a.ts","b.ts"])}));' "$ROOT/seats/run/fleet-snapshot.json")"
+    WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$a" run_alert bun seats/alerts.ts check --json
+    current="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
+    [ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] && [ "$current" = "$recent" ] || fail "recent already-active same set became pending: $current"
+    [ "$FAILED" = 0 ] && pass 'same drift set never re-raises or resets state: reorder, duplicates, category moves, aheadBy/error detail changes, persisted legacy signature (aged and recent)'
   fi
   if [ "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" != same ]; then
     WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$b" run_alert bun seats/alerts.ts check --json
