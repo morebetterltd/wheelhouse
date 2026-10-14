@@ -314,7 +314,15 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    For each selected kind, walk one channel at a time and collect exactly the fields `seats/channels.json` records: `name` (short, `[a-z0-9-]`, for example `partners` or `dev`), `kind` (the selected Telegram/Slack/Teams value), `destination`, `audience`, `members`, and `read`. Explain destination by kind: Slack is the channel, group, or DM id from channel details (`C...`, `G...`, or `D...`); Telegram is the principal's `@username` (paired to a chat id on first message) or a numeric chat id; Teams is `chats/<chat-id>` or `teams/<team-id>/channels/<channel-id>` from a Teams link. For Telegram or Slack, ask whether this is the one `principal` channel where the fleet reaches the principal; at most one channel may be `principal`, and every other channel is `stakeholders`. Ask who is there as member ids and display names, read the list back, and ask read permission as `read: yes` / `read: no` while saying: "Reading means inbound messages land in the commander's inbox as information; nothing anyone says there authorizes an action."
 
-   Say credentials once per kind selected, and do not ask for tokens: the token goes in `seats/run/<kind>.token` mode `0600` or the `WHEELHOUSE_<KIND>_TOKEN` environment variable; Teams may instead name `WHEELHOUSE_TEAMS_TOKEN_CMD`. Credentials never go in `seats/channels.json`, never in `seats/seats.json`, and never in git. Point to `seats/README.md`'s channel section for exact setup. Since question 4's reserved list includes communication outside the team, say that declaring stakeholder channels is the principal narrowing that reservation to exactly the channels in `seats/channels.json`, and write that same sentence into `wheelhouse/INTEGRATOR.md` beside the reserved list.
+   For every declared channel, tell the owner its credential location (channels of the same kind share one credential). Do not ask for, read back, or log a token; the owner provisions it outside the agent conversation:
+
+   | Kind | Environment variable in the commander/courier environment | Alternative owner-provisioned file (mode `0600`) |
+   |---|---|---|
+   | Slack | `WHEELHOUSE_SLACK_TOKEN` | `seats/run/slack.token` |
+   | Teams | `WHEELHOUSE_TEAMS_TOKEN` | `seats/run/teams.token` |
+   | Telegram | `WHEELHOUSE_TELEGRAM_TOKEN` | `seats/run/telegram.token` |
+
+   Teams may instead set `WHEELHOUSE_TEAMS_TOKEN_CMD` to a command whose stdout is a fresh bearer token. If a token already exists under another environment variable name, the owner must expose it under the name above without printing its value. Credentials never go in `seats/channels.json`, never in `seats/seats.json`, and never in git. After writing the declarations below, run `bun seats/channels.ts check --credentials` in the same environment that will run the commander/courier. Do not complete the channel step unless it exits 0 for every declaration; it checks non-empty credentials and file mode, prints names/presence only, and makes no network call (it does not prove authorization or channel access). Never use `cat` or an environment dump to prove credential presence. Point to `seats/README.md`'s channel section for exact setup. Since question 4's reserved list includes communication outside the team, say that declaring stakeholder channels is the principal narrowing that reservation to exactly the channels in `seats/channels.json`, and write that same sentence into `wheelhouse/INTEGRATOR.md` beside the reserved list.
 
    The round ends in a read-back table, before anything is written: `name | kind | destination | audience | read | members`. If the answer was `No stakeholder channels`, the table is empty and the record still says so.
 
@@ -358,10 +366,10 @@ An install upgrading over a `.template-source` that has no `namespace=` line at 
 **Then `seats/channels.json`, from question 10's read-back table** — the channel machine record, in the format `seats/channels.json.example` shows. Write `{"version":1,"channels":{}}` when the answer was `No stakeholder channels` and no principal channel was declared; a file that says "nobody" is a record, while an absent file is an unanswered install question. Read it back immediately:
 
 ```bash
-bun seats/channels.ts check    # expect either: channels: none declared (principal-only) / channels: <n> declared
+bun seats/channels.ts check --credentials    # require exit 0; names/presence only, then declared count (or none)
 ```
 
-Paste the line it prints into the install log.
+For every declared Slack, Teams or Telegram channel, have the owner provision its credential using question 10's exact locations before this check. A STOP names the missing kind's environment variable and mode-`0600` file; fix it and rerun, rather than completing the step or bypassing the send gate with a raw API call. Paste only the credential-free presence/count lines into the install log. An empty channel record still passes without credentials.
 
 ## 4. Provision the seats
 

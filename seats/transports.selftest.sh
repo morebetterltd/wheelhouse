@@ -16,14 +16,15 @@ selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$FIX/server.ts" <<'TS'
 import * as fs from "node:fs";
 const dir=process.env.STUB_DIR!; let msg=0;
-function append(row:any){ fs.appendFileSync(`${dir}/requests.jsonl`, JSON.stringify(row)+"\n"); }
+function append(row:any){ const line=JSON.stringify(row)+"\n"; fs.appendFileSync(`${dir}/requests.jsonl`, line); fs.appendFileSync(`${dir}/all-requests.jsonl`, line); }
 function rows(name:string){ try{return fs.readFileSync(`${dir}/${name}`,"utf8").split(/\n/).filter(Boolean).map(JSON.parse);}catch{return [];} }
 function remember(kind:string, row:any){ fs.appendFileSync(`${dir}/${kind}.jsonl`, JSON.stringify(row)+"\n"); }
 function hidden(){ return fs.existsSync(`${dir}/fail-readback`); }
 Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
  const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : undefined;
  const auth=req.headers.get("authorization")||"";
- append({method:req.method, url:u.pathname+u.search, body});
+ const loggedUrl=u.pathname.replace(/^\/bot[^/]+\//, "/bot[redacted]/")+u.search;
+ append({method:req.method, url:loggedUrl, body});
  if(u.pathname.includes("/sendMessage")){ msg++; const r={message_id:msg,chat:{id:body.chat_id},text:body.text}; remember("telegram", r); return Response.json({ok:true,result:r}); }
  if(u.pathname.endsWith("/chat.postMessage")){ msg++; const ts=`1790000000.${String(msg).padStart(6,"0")}`; if(!hidden()) remember("slack", {ts,channel:body.channel,user:"BOT",text:body.text,thread_ts:body.thread_ts}); return Response.json({ok:true,ts,message:{ts,text:body.text}}); }
  if(u.pathname.endsWith("/conversations.history")){ let messages=rows("slack.jsonl").filter((m:any)=>!body.oldest || Number(m.ts)>Number(body.oldest)); if(hidden()) messages=messages.map((m:any)=>({...m,text:"dropped"})); return Response.json({ok:true,messages}); }
@@ -132,22 +133,19 @@ base_env WHEELHOUSE_TEAMS_TOKEN_CMD="exit 9" bun "$FIX/check.ts" teams chats/cmd
 rm -f "$FIX/teams.jsonl" "$FIX/fail-readback"; : > "$FIX/requests.jsonl"
 base_env WHEELHOUSE_TEAMS_TOKEN=teams-token bun "$FIX/check.ts" teams chats/thread parent-msg >/dev/null 2>&1
 if grep -q '"url":"/chats/thread/messages/parent-msg/replies/m' "$FIX/requests.jsonl"; then pass 'teams threaded reply readBack fetches /messages/<parent>/replies/<id>'; else fail "teams threaded reply readBack URL wrong: $(cat "$FIX/requests.jsonl")"; fi
-# token leak check over full request log: URLs and bodies only; auth headers are deliberately not logged, and Telegram bot path is allowed.
+# Full-run log, not the last per-leg reset: no header values or bot tokens.
 SLACK_FIXTURE_TOKEN="$(printf 'xox%s-%s' b fixture)"
-TOKENS="tg-token $SLACK_FIXTURE_TOKEN teams-token teams-cmd-token"
-leak=""
-while IFS= read -r row; do
-  for tok in $TOKENS; do
-    [ -z "$tok" ] && continue
-    case "$row" in
-      *"$tok"*)
-        if printf '%s\n' "$row" | grep -F "/bot$tok/" >/dev/null 2>&1 && [ "$tok" = "tg-token" ]; then :; else leak="$leak$row
-"; fi
-        ;;
-    esac
-  done
-done < "$FIX/requests.jsonl"
-[ -z "$leak" ] && pass 'full-run request log keeps fixture tokens out of URLs and bodies except Telegram bot path' || fail "fixture token leaked into request log: $leak"
+TOKENS="tg-token $SLACK_FIXTURE_TOKEN teams-token teams-cmd-token telegram-file-token slack-file-token teams-file-token"
+leak=0
+[ -s "$FIX/all-requests.jsonl" ] || { fail 'full-run request log was not created'; leak=1; }
+if [ -f "$FIX/all-requests.jsonl" ]; then
+  while IFS= read -r row; do
+    for tok in $TOKENS; do
+      case "$row" in *"$tok"*) leak=1;; esac
+    done
+  done < "$FIX/all-requests.jsonl"
+fi
+[ "$leak" -eq 0 ] && pass 'full-run request log keeps all credential values out, including Telegram bot paths' || fail 'fixture credential leaked into request log (value withheld)'
 # canary: force teams readBack true and prove the drop leg would pass when it should fail.
 perl -0pe 's/return htmlText\(String\(json\?\.body\?\.content \?\? ""\)\) === text;/return true;/' "$ROOT/seats/transports/teams.ts" > "$ROOT/seats/transports/teams-bad.ts"
 rm -f "$FIX/teams.jsonl" "$FIX/fail-readback"; : > "$FIX/requests.jsonl"

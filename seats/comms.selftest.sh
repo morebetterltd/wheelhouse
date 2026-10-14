@@ -36,7 +36,8 @@ function remember(kind:string, row:any){ fs.appendFileSync(`${dir}/${kind}.jsonl
 function hidden(){ return fs.existsSync(`${dir}/fail-readback`); }
 Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
  const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : undefined;
- append({method:req.method, url:u.pathname+u.search, body});
+ const loggedUrl=u.pathname.replace(/^\/bot[^/]+\//, "/bot[redacted]/")+u.search;
+ append({method:req.method, url:loggedUrl, body});
  if(u.pathname.includes("/sendMessage")){ msg++; const r={message_id:msg,chat:{id:body.chat_id},text:body.text}; remember("telegram", r); return Response.json({ok:true,result:r}); }
  if(u.pathname.endsWith("/chat.postMessage")){ msg++; const ts=`1790000000.${String(msg).padStart(6,"0")}`; remember("slack", {ts,channel:body.channel,user:"BOT",text:body.text}); return Response.json({ok:true,ts,message:{ts,text:body.text}}); }
  if(u.pathname.endsWith("/conversations.history")){ const fail=`${dir}/fail-read-once`; if (fs.existsSync(fail)) { fs.unlinkSync(fail); return Response.json({ok:false,error:"fixture read failed"},{status:500}); } let messages=rows("slack.jsonl"); if(hidden()) messages=messages.map((m:any)=>({...m,text:"dropped"})); return Response.json({ok:true,messages}); }
@@ -99,7 +100,7 @@ if [ $rc -eq 1 ] && grep -q 'STOP: send unverified: slack read-back did not retu
 
 reset_logs
 base_env bun "$ROOT/seats/comms.ts" send principal hi > "$FIX/principal.out" 2>&1; rc=$?
-if [ $rc -eq 0 ] && grep -q '^sent principal 111:' "$FIX/principal.out" && [ "$(grep -c 'sendMessage' "$FIX/requests.jsonl")" -eq 1 ] && [ "$(count_rows sent)" -eq 1 ] && grep -q '"readBack":"echo"' "$ROOT/seats/comms.jsonl"; then pass 'telegram principal send records echo read-back'; else fail "telegram leg rc=$rc out=$(cat "$FIX/principal.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
+if [ $rc -eq 0 ] && grep -q '^sent principal 111:' "$FIX/principal.out" && [ "$(grep -c 'sendMessage' "$FIX/requests.jsonl")" -eq 1 ] && [ "$(count_rows sent)" -eq 1 ] && grep -q '"readBack":"echo"' "$ROOT/seats/comms.jsonl" && ! grep -Fq 'tg-token' "$FIX/requests.jsonl"; then pass 'telegram principal send records echo read-back without logging bot credential'; else fail "telegram send/logging leg rc=$rc (captured output withheld)"; fi
 
 reset_logs
 base_env bun "$ROOT/seats/comms.ts" send dev hi > "$FIX/dev.out" 2>&1; rc=$?
