@@ -70,6 +70,7 @@ import { hasPool, loadPool, seatEntryFor } from "./pool";
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, pidAlive, pidHoldsPath } from "./seat-activity";
 import { QUOTA_RE } from "./quota";
+import { acquirePidLock, releasePidLock } from "./lock";
 
 interface SeatDriver {
   readonly name: string;
@@ -421,30 +422,15 @@ function acquireStateLock(): number {
   const lock = path.join(SEATS_DIR, "state.lock");
   const deadline = Date.now() + Number(process.env.WHEELHOUSE_STATE_LOCK_TIMEOUT_MS || 5000);
   while (true) {
-    fs.mkdirSync(SEATS_DIR, { recursive: true });
-    try {
-      const fd = fs.openSync(lock, "wx", 0o600);
-      fs.writeFileSync(fd, `${process.pid}\n`);
-      return fd;
-    } catch (e: any) {
-      if (e?.code !== "EEXIST") throw e;
-      let owner: number | null = null;
-      try {
-        const raw = fs.readFileSync(lock, "utf8").trim();
-        owner = raw ? Number(raw) : null;
-      } catch {}
-      if (owner && !barePidAlive(owner)) {
-        try { fs.rmSync(lock, { force: true }); continue; } catch {}
-      }
-      if (Date.now() >= deadline) die(`timed out waiting for ${lock}`);
-      sleepMs(25);
-    }
+    const fd = acquirePidLock(lock);
+    if (fd !== null) return fd;
+    if (Date.now() >= deadline) die(`timed out waiting for ${lock}`);
+    sleepMs(25);
   }
 }
 
 function releaseStateLock(fd: number): void {
-  try { fs.closeSync(fd); } catch {}
-  try { fs.rmSync(path.join(SEATS_DIR, "state.lock"), { force: true }); } catch {}
+  releasePidLock(path.join(SEATS_DIR, "state.lock"), fd);
 }
 
 function writeState(state: State): void {
