@@ -8,15 +8,14 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 SWEEP="${1:-$HERE/selftest-sweep.sh}"
 [ -x "$SWEEP" ] || { echo "selftest: not executable: $SWEEP" >&2; exit 2; }
-export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$HERE/selftest-sweep-lock.py}"
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$HERE/selftest-sweep-lock.ts}"
 make_lock(){
-  python3 - "$1" "$2" <<'PY'
-import datetime,json,pathlib,socket,sys,uuid
-p=pathlib.Path(sys.argv[1]); p.mkdir()
-pid=int(sys.argv[2]); started=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-(p/'pid').write_text(str(pid)+'\n'); (p/'started').write_text(started+'\n')
-(p/'wheelhouse-selftest-sweep').write_text(json.dumps(dict(kind='wheelhouse-selftest-sweep',version=1,pid=pid,hostname=socket.gethostname(),started=started,token=uuid.uuid4().hex))+'\n')
-PY
+  bun -e '
+import fs from "node:fs"; import os from "node:os"; import p from "node:path";
+const [dir,pidText]=process.argv.slice(1),pid=Number(pidText),started=new Date().toISOString().replace(/\.\d{3}Z$/,"Z");
+fs.mkdirSync(dir); fs.writeFileSync(p.join(dir,"pid"),pid+"\n"); fs.writeFileSync(p.join(dir,"started"),started+"\n");
+fs.writeFileSync(p.join(dir,"wheelhouse-selftest-sweep"),JSON.stringify({kind:"wheelhouse-selftest-sweep",version:1,pid,hostname:os.hostname(),started,token:crypto.randomUUID().replace(/-/g,"")})+"\n");
+' "$1" "$2"
 }
 
 FAILED=0
@@ -95,18 +94,14 @@ fi
 
 # Every invalid-lock case must leave the whole record (including inode) intact.
 lock_snapshot(){
-  python3 - "$1" <<'PY'
-import hashlib,json,os,pathlib,stat,sys
-p=pathlib.Path(sys.argv[1]); rows=[]
-def visit(p):
- s=p.lstat(); row=[str(p),s.st_dev,s.st_ino,s.st_mode]
- if stat.S_ISLNK(s.st_mode): row.append(os.readlink(p))
- elif stat.S_ISREG(s.st_mode): row.append(hashlib.sha256(p.read_bytes()).hexdigest())
- rows.append(row)
- if stat.S_ISDIR(s.st_mode):
-  for c in sorted(p.iterdir()):visit(c)
-visit(p); print(json.dumps(rows))
-PY
+  bun -e '
+import fs from "node:fs"; import p from "node:path"; import {createHash} from "node:crypto";
+const rows:any[]=[];
+function visit(file:string){const s=fs.lstatSync(file,{bigint:true}),row:any[]=[file,String(s.dev),String(s.ino),String(s.mode)];
+if(s.isSymbolicLink())row.push(fs.readlinkSync(file));else if(s.isFile())row.push(createHash("sha256").update(fs.readFileSync(file)).digest("hex"));
+rows.push(row);if(s.isDirectory())for(const child of fs.readdirSync(file).sort())visit(p.join(file,child));}
+visit(process.argv[1]);console.log(JSON.stringify(rows));
+' "$1"
 }
 ownership_tests(){
   local EVENTS="$FIX/ownership-events.log"
@@ -125,10 +120,7 @@ ownership_tests(){
       bad-marker) printf '{broken\n' > "$path/wheelhouse-selftest-sweep" ;;
       mismatch) printf '999999998\n' > "$path/pid" ;;
       bad-time) printf 'not-a-time\n' > "$path/started" ;;
-      other-host) python3 - "$path/wheelhouse-selftest-sweep" <<'PY'
-import json,pathlib,sys
-p=pathlib.Path(sys.argv[1]);m=json.loads(p.read_text());m['hostname']='not-this-host';p.write_text(json.dumps(m)+'\n')
-PY
+      other-host) bun -e 'import fs from "node:fs";const p=process.argv[1],m=JSON.parse(fs.readFileSync(p,"utf8"));m.hostname="not-this-host";fs.writeFileSync(p,JSON.stringify(m)+"\n")' "$path/wheelhouse-selftest-sweep"
         ;;
       link) mv -f "$path" "$path.target"; ln -s "$path.target" "$path" ;;
     esac
@@ -183,13 +175,13 @@ RELEASE_A="$FIX/release-A"
 SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=A SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/A.out" 2> "$FIX/A.err" &
 PID_A=$!
 for _ in $(seq 1 100); do grep -q '^A start$' "$EVENTS" 2>/dev/null && break; sleep 0.05; done
-if python3 - "$LOCK" "$PID_A" <<'PY'
-import json,pathlib,socket,sys
-p=pathlib.Path(sys.argv[1]); assert p.is_dir() and not p.is_symlink()
-assert sorted(x.name for x in p.iterdir())==['pid','started','wheelhouse-selftest-sweep']
-m=json.loads((p/'wheelhouse-selftest-sweep').read_text()); assert m['pid']==int(sys.argv[2]) and m['hostname']==socket.gethostname()
-assert (p/'pid').read_text()==str(m['pid'])+'\n' and (p/'started').read_text()==m['started']+'\n'
-PY
+if bun -e '
+import fs from "node:fs";import p from "node:path";import os from "node:os";import assert from "node:assert/strict";
+const [dir,pid]=process.argv.slice(1);assert(fs.lstatSync(dir).isDirectory());
+assert.deepEqual(fs.readdirSync(dir).sort(),["pid","started","wheelhouse-selftest-sweep"]);
+const m=JSON.parse(fs.readFileSync(p.join(dir,"wheelhouse-selftest-sweep"),"utf8"));assert.equal(m.pid,Number(pid));assert.equal(m.hostname,os.hostname());
+assert.equal(fs.readFileSync(p.join(dir,"pid"),"utf8"),m.pid+"\n");assert.equal(fs.readFileSync(p.join(dir,"started"),"utf8"),m.started+"\n");
+' "$LOCK" "$PID_A"
 then
   pass "atomic acquire publishes a complete marked pid-bearing directory before waiters can see it"
 else

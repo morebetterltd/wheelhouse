@@ -10,10 +10,10 @@ LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-/tmp/wheelhouse-selftest-sweep.lock}"
 SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
 OWNED_LOCK=""
-LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$ROOT/seats/selftest-sweep-lock.py}"
+LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$ROOT/seats/selftest-sweep-lock.ts}"
 # Canonicalize the parent, not the leaf: a symlink at LOCK must be refused.
-LOCK="$(python3 -c 'import os,sys; p=sys.argv[1]; print(os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(p))),os.path.basename(p)))' "$LOCK")" || exit 2
-LOCK_TOKEN="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')" || exit 2
+LOCK="$(bun -e 'import fs from "node:fs"; import p from "node:path"; const s=process.argv[1]; console.log(p.join(fs.realpathSync(p.dirname(p.resolve(s))),p.basename(s)))' "$LOCK")" || exit 2
+LOCK_TOKEN="$(bun -e 'console.log(crypto.randomUUID().replace(/-/g,""))')" || exit 2
 
 say(){ printf '%s\n' "$*"; }
 info(){ say "$*" >&2; }
@@ -21,7 +21,7 @@ info(){ say "$*" >&2; }
 acquire_lock(){
   local printed=0 result rc
   while :; do
-    result="$(python3 "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
+    result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
       0) OWNED_LOCK="$result"; return 0 ;;
       1) ;;
@@ -38,7 +38,7 @@ acquire_lock(){
 release_lock(){
   local rc=0
   if [ -n "$OWNED_LOCK" ]; then
-    python3 "$LOCK_HELPER" release "$LOCK" "$$" "$LOCK_TOKEN" "$OWNED_LOCK" || rc=$?
+    bun "$LOCK_HELPER" release "$LOCK" "$$" "$LOCK_TOKEN" "$OWNED_LOCK" || rc=$?
     OWNED_LOCK=""
   fi
   return "$rc"
