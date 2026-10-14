@@ -33,6 +33,14 @@ cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_r
 trap cleanup EXIT INT TERM
 export HOME="$FIX/home"
 mkdir -p "$HOME"
+# bd init's hooks must not detach telemetry flushers into these worktrees.
+selftest_disable_bd_metrics "$FIX" || exit 2
+METRICS_CONFIG="$XDG_CONFIG_HOME/bd/config.yaml"
+if [ -f "$METRICS_CONFIG" ] && grep -Eq '^[[:space:]]+disabled: true$' "$METRICS_CONFIG"; then
+  pass 'fixture-owned bd metrics config disables detached telemetry flushers'
+else
+  fail 'fixture-owned bd metrics config does not disable detached telemetry flushers'
+fi
 
 phase 'reviewed-row deletion safety (fresh allocations only)'
 REVIEWED="$FIX/reviewed"
@@ -189,6 +197,26 @@ for (const format of ['jsonl','tsv']) {
   else { const cols = Object.keys(bad); fs.writeFileSync(file,'# wheelhouse-prune-scan-v1\t'+JSON.stringify([f.root])+'\n'+cols.join('\t')+'\n'+cols.map(c=>String(bad[c])).join('\t')+'\n'+cols.map(c=>c==='safe'?'not-a-number':String(bad[c])).join('\t')+'\n'); }
   const r = command('bun',['seats/prune.ts','prune','--from-file',file,'--yes'],f.root,f.env);
   check(r.rc === 2 && fs.existsSync(path.join(target,'KEEP')) && r.err.includes('row 2 field category'), format+' reports first bad row, not later syntax/coercion error');
+}
+{
+  const f = fixture('tmp-parent-alias'), physical = path.join(f.dir,'physical-tmp'), alias = path.join(f.dir,'tmp-alias');
+  fs.mkdirSync(physical); fs.symlinkSync(physical,alias);
+  // Real bd output, not a hand-modeled scan row: producer and consumer must
+  // agree when TMPDIR has a symlink ancestor (macOS /var -> /private/var).
+  const init = command('bd',['init','--non-interactive','--skip-agents','-p','aliascase'],f.root,f.env);
+  if (init.rc !== 0) throw new Error('alias fixture bd init failed: '+init.err);
+  const made = command('bd',['create','--title','Owned tmp alias fixture','--json'],f.root,f.env);
+  if (made.rc !== 0) throw new Error('alias bead create failed: '+made.err);
+  const id = JSON.parse(made.out).id;
+  if (!id || command('bd',['close',id],f.root,f.env).rc !== 0) throw new Error('alias closed bead absent');
+  const target = path.join(physical,id+'-scratch'); keep(target);
+  const aliasEnv = { ...f.env, TMPDIR: alias };
+  const produced = command('bun',['seats/prune.ts','scan','--format','json'],f.root,aliasEnv);
+  const rows = JSON.parse(produced.out), recorded = rows.find((r:any) => r.category === 'bead-tmp' && path.basename(r.path) === id+'-scratch');
+  const file = path.join(f.dir,'tmp-alias-scan.json'); fs.writeFileSync(file,produced.out);
+  const pruned = command('bun',['seats/prune.ts','prune','--from-file',file,'--yes','--categories','bead-tmp'],f.root,aliasEnv);
+  console.log(`MEASUREMENT tmp-parent-alias scanRc=${produced.rc} pruneRc=${pruned.rc} recorded=${JSON.stringify(recorded)} stdout=${JSON.stringify(pruned.out)} stderr=${JSON.stringify(pruned.err)}`);
+  check(produced.rc === 0 && recorded?.safe === 1 && recorded.path === target && pruned.rc === 0 && !fs.existsSync(target) && pruned.out.includes('PRUNED rm bead-tmp'), 'aliased TMPDIR producer records canonical target and reviewed consumer removes it');
 }
 console.log(`reviewed-row regression failures=${failures}`);
 // Positive wire controls: actual producer -> saved file -> actual consumer,
@@ -353,6 +381,8 @@ printf 'open runs scratch\n' > "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt"
 TMP_ROOT="${TMPDIR:-/private/tmp}"
 TMP_ROOT="${TMP_ROOT%/}"
 mkdir -p "$TMP_ROOT"
+# The scanner records physical paths, even if inherited TMPDIR is an alias.
+TMP_ROOT="$(cd "$TMP_ROOT" && pwd -P)"
 CLOSED_TMP="$TMP_ROOT/$CLOSED_ID-derivedData"
 OPEN_TMP="$TMP_ROOT/$OPEN_ID-derivedData"
 mkdir -p "$CLOSED_TMP" "$OPEN_TMP"
