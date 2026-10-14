@@ -29,6 +29,8 @@ Copied byte-for-byte into every project. Do not edit this section.
         surface: <where that consumer meets it>
         check: walk | read | run — <how that consumer would check it>
 
+  `Signal:` names the intake row (sig-<id>), the ISA claim gap (isa-gap: <claim>) or the install procedure the work came from; dispatch refuses a bead without it. The separate Signal gate is now active: `seats/contract.ts` checks the three forms and resolves posted intake ids when the ledger exists; a missing ledger prints an id-check-skipped line, while an existing unreadable or malformed ledger refuses. Skills enforcement arrives separately.
+
   Headers `Intent:` and `Outcomes:` stand alone at line start. Outcome ids are sequential and unique (`O1`, `O2`, …); each outcome's three fields are indented continuation lines. Choose one group and its fixed check kind, not the literal alternatives:
 
   | consumer group | check kind | consumer's check |

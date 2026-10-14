@@ -760,15 +760,18 @@ Until the herald writes the first snapshot it prints `🚢 FLEET: no snapshot ye
 
 ## Work contract shape gate
 
-`seats/contract.ts` parses the plain-text grammar in `wheelhouse/GRAPH.md`, **Every bead is a contract**. Every outcome names its consumer, surface and that consumer's check: person-on-surface → walk, person-reading → read, machine → run. Outcomes have sequential ids from O1; Intent is non-blank and precedes Outcomes. Signal and Skills are parsed but their enforcement is separate from this shape gate.
+`seats/contract.ts` parses the plain-text grammar in `wheelhouse/GRAPH.md`, **Every bead is a contract**. Every outcome names its consumer, surface and that consumer's check: person-on-surface → walk, person-reading → read, machine → run. Outcomes have sequential ids from O1; Intent is non-blank and precedes Outcomes. Signal is required at dispatch/review; Skills enforcement arrives separately.
 
 ```bash
 bun seats/contract.ts check <bead-id>
 bun seats/contract.ts check --file <path>
 bun seats/contract.ts audit
+bun seats/contract.ts trace <bead-id|merge-sha>
 ```
 
 `check` exits 0 for a valid contract, 2 for invalid shape (printing every error with bead/file, outcome and field), 3 for unreadable input. `audit` checks open and in_progress beads, prints one line per failing bead with its first error, and exits 0 if all pass, 1 if any are invalid, 3 if bd is unreadable. Root defaults to the script's parent directory, overridable with `WHEELHOUSE_CONTRACT_ROOT`. `readBeadText` reads `bd show <id> --json` from that root, joining title/description/notes/design/body, or accepting non-JSON stdout for plain-file stubs. With `WHEELHOUSE_SKIP_BD=1`, a readable `WHEELHOUSE_CONTRACT_FIXTURE` is required; a failed bd read may use that explicit fixture, but there is no empty-text pass. `lint-intent` is deliberately absent here; the intent skill supplies it separately.
+
+`Signal:` accepts `sig-<id>` (a posted row in `seats/intake.jsonl`), `isa-gap: <claim>` (shape `[A-Z]+[0-9-]+`, not ISA existence), or `install-procedure`. Missing/invalid Signal refuses naming the bead. A missing ledger prints an id-check-skipped line; an existing unreadable/malformed ledger refuses. With `WHEELHOUSE_SKIP_BD=1`, `WHEELHOUSE_INTAKE_FIXTURE=<ledger>` supplies it; an unset fixture prints the skip line. `trace` reads merge → contract → Signal → intake (and lists all matching merges when starting from a bead), exits 0 for a complete chain or 2 naming an unresolved link, and never writes Git, the graph or the ledger. Repo selection is the bead's `Repo:` paths (including `TEMPLATE (template/)`, `template/`, `TEMPLATE.`, or `UMBRELLA`), then `product-repo=`/`product-repos=`, then the root. SHA lookup also checks immediate child git roots before checking the bead's declared repos.
 
 Dispatch checks before RPC, state writes, worktree switching or launch. `WHEELHOUSE_DISPATCH_FORCE=1` cannot bypass it. `spawn <seat> <bead-id>` only prepares a worktree and sends no prompt, so it is not gated. `verify.ts` applies the same check before reviewer selection, refusing with exit 5.
 
