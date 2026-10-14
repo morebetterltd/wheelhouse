@@ -8,6 +8,16 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 SWEEP="${1:-$HERE/selftest-sweep.sh}"
 [ -x "$SWEEP" ] || { echo "selftest: not executable: $SWEEP" >&2; exit 2; }
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$HERE/selftest-sweep-lock.py}"
+make_lock(){
+  python3 - "$1" "$2" <<'PY'
+import datetime,json,pathlib,socket,sys,uuid
+p=pathlib.Path(sys.argv[1]); p.mkdir()
+pid=int(sys.argv[2]); started=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+(p/'pid').write_text(str(pid)+'\n'); (p/'started').write_text(started+'\n')
+(p/'wheelhouse-selftest-sweep').write_text(json.dumps(dict(kind='wheelhouse-selftest-sweep',version=1,pid=pid,hostname=socket.gethostname(),started=started,token=uuid.uuid4().hex))+'\n')
+PY
+}
 
 FAILED=0
 FIX=""
@@ -83,14 +93,107 @@ if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
   exit 0
 fi
 
+# Every invalid-lock case must leave the whole record (including inode) intact.
+lock_snapshot(){
+  python3 - "$1" <<'PY'
+import hashlib,json,os,pathlib,stat,sys
+p=pathlib.Path(sys.argv[1]); rows=[]
+def visit(p):
+ s=p.lstat(); row=[str(p),s.st_dev,s.st_ino,s.st_mode]
+ if stat.S_ISLNK(s.st_mode): row.append(os.readlink(p))
+ elif stat.S_ISREG(s.st_mode): row.append(hashlib.sha256(p.read_bytes()).hexdigest())
+ rows.append(row)
+ if stat.S_ISDIR(s.st_mode):
+  for c in sorted(p.iterdir()):visit(c)
+visit(p); print(json.dumps(rows))
+PY
+}
+ownership_tests(){
+  local EVENTS="$FIX/ownership-events.log"
+  local case path before after rc
+  for case in plain extra nested bad-marker mismatch bad-time other-host link legacy-bad legacy-duplicate; do
+    path="$FIX/invalid-$case.lock"
+    case "$case" in
+      plain) mkdir "$path"; printf 'KEEP\n' > "$path/KEEP" ;;
+      legacy-bad) printf 'pid=not-a-pid\n' > "$path" ;;
+      legacy-duplicate) printf 'pid=999999999\npid=999999998\n' > "$path" ;;
+      *) make_lock "$path" 999999999 ;;
+    esac
+    case "$case" in
+      extra) printf 'KEEP\n' > "$path/KEEP" ;;
+      nested) mkdir "$path/extra"; printf 'KEEP\n' > "$path/extra/KEEP" ;;
+      bad-marker) printf '{broken\n' > "$path/wheelhouse-selftest-sweep" ;;
+      mismatch) printf '999999998\n' > "$path/pid" ;;
+      bad-time) printf 'not-a-time\n' > "$path/started" ;;
+      other-host) python3 - "$path/wheelhouse-selftest-sweep" <<'PY'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]);m=json.loads(p.read_text());m['hostname']='not-this-host';p.write_text(json.dumps(m)+'\n')
+PY
+        ;;
+      link) mv -f "$path" "$path.target"; ln -s "$path.target" "$path" ;;
+    esac
+    before="$(lock_snapshot "$path")"
+    SWEEP_ID="invalid-$case" SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/invalid-$case.out" 2> "$FIX/invalid-$case.err"
+    rc=$?
+    after="$(lock_snapshot "$path" 2>/dev/null || true)"
+    if [ "$rc" = 2 ] && [ "$before" = "$after" ] && grep -q 'STOP: .* is not a selftest-sweep lock (' "$FIX/invalid-$case.err" && ! grep -q 'selftest-sweep: START ' "$FIX/invalid-$case.out"; then
+      pass "invalid $case lock STOPs2 without moving/removing any record"
+    else
+      fail "invalid $case lock mutated/ran (rc=$rc intact=$([ "$before" = "$after" ] && echo yes || echo NO))"
+    fi
+  done
+  # Shape from the real 6cb9dc9 atomic-file capture; normalize pid/root/pattern.
+  path="$FIX/legacy-valid.lock"
+  printf 'pid=999999999\nstarted=2026-10-14T21:32:07Z\nroot=/fixture\npattern=/fixture/*.selftest.sh\n' > "$path"
+  SWEEP_ID=legacy SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" bash "$SWEEP" > "$FIX/legacy.out" 2> "$FIX/legacy.err"
+  rc=$?
+  [ "$rc" = 0 ] && [ ! -e "$path" ] && grep -q '^legacy start$' "$EVENTS" && pass 'valid dead-pid legacy file is compatible and released' || fail "legacy compatibility failed rc=$rc"
+
+  # A suite replaces the lock with a new file bearing the SAME runner pid.
+  # PID equality alone must not authorize release of that replacement.
+  local replacement_suite="$FIX/replacement.selftest.sh"
+  cat > "$replacement_suite" <<'EOF'
+mv -f "$REPLACEMENT_LOCK" "$REPLACEMENT_LOCK.saved"
+printf 'pid=%s\n' "$PPID" > "$REPLACEMENT_LOCK"
+EOF
+  path="$FIX/replacement.lock"
+  REPLACEMENT_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$replacement_suite" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" bash "$SWEEP" > "$FIX/replacement.out" 2> "$FIX/replacement.err"
+  rc=$?
+  [ "$rc" = 0 ] && [ -f "$path" ] && [ -e "$path.saved" ] && pass 'release preserves replacement with same pid but different identity' || fail "release removed same-pid replacement (rc=$rc present=$([ -f "$path" ] && echo yes || echo GONE))"
+
+  # Termination before acquisition must not delete a file we did not publish.
+  path="$FIX/not-acquired.lock"
+  local pid_wait rc_wait
+  env TEST_LOCK="$path" TEST_SWEEP="$SWEEP" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash -c 'printf "pid=%s\n" "$$" > "$TEST_LOCK"; exec bash "$TEST_SWEEP"' > "$FIX/not-acquired.out" 2> "$FIX/not-acquired.err" &
+  pid_wait=$!
+  for _ in $(seq 1 100); do grep -q 'waiting for host-wide lock' "$FIX/not-acquired.err" && break; sleep 0.05; done
+  before="$(lock_snapshot "$path")"
+  kill -TERM "$pid_wait" 2>/dev/null || true
+  wait "$pid_wait"; rc_wait=$?
+  after="$(lock_snapshot "$path" 2>/dev/null || true)"
+  [ "$rc_wait" = 143 ] && [ "$before" = "$after" ] && pass 'TERM before acquisition preserves unowned same-pid legacy file' || fail "TERM removed never-acquired file (rc=$rc_wait intact=$([ "$before" = "$after" ] && echo yes || echo NO))"
+}
+ownership_tests
+if [ "${WHEELHOUSE_SELFTEST_SWEEP_OWNERSHIP_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] && { echo 'selftest-sweep.selftest: PASS (13 ownership checks)'; exit 0; }
+  echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1
+fi
+
 RELEASE_A="$FIX/release-A"
 SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=A SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/A.out" 2> "$FIX/A.err" &
 PID_A=$!
 for _ in $(seq 1 100); do grep -q '^A start$' "$EVENTS" 2>/dev/null && break; sleep 0.05; done
-if [ -f "$LOCK" ] && grep -q '^pid=' "$LOCK"; then
-  pass "atomic acquire publishes a pid-bearing lock file before waiters can see it"
+if python3 - "$LOCK" "$PID_A" <<'PY'
+import json,pathlib,socket,sys
+p=pathlib.Path(sys.argv[1]); assert p.is_dir() and not p.is_symlink()
+assert sorted(x.name for x in p.iterdir())==['pid','started','wheelhouse-selftest-sweep']
+m=json.loads((p/'wheelhouse-selftest-sweep').read_text()); assert m['pid']==int(sys.argv[2]) and m['hostname']==socket.gethostname()
+assert (p/'pid').read_text()==str(m['pid'])+'\n' and (p/'started').read_text()==m['started']+'\n'
+PY
+then
+  pass "atomic acquire publishes a complete marked pid-bearing directory before waiters can see it"
 else
-  fail "active lock was not a pid-bearing file (lock=$(ls -ld "$LOCK" 2>/dev/null || true) content=$(cat "$LOCK" 2>/dev/null || true))"
+  fail "active lock was not a complete marked directory"
 fi
 SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=B SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/B.out" 2> "$FIX/B.err" &
 PID_B=$!
@@ -111,8 +214,7 @@ else
 fi
 
 STALE="$FIX/stale.lock"
-mkdir -p "$STALE"
-printf '999999999\n' > "$STALE/pid"
+make_lock "$STALE" 999999999
 SWEEP_ID=C SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$STALE" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/stale.out" 2> "$FIX/stale.err"
 RC_STALE=$?
 if [ "$RC_STALE" -eq 0 ] && grep -q 'removing stale lock' "$FIX/stale.err"; then
@@ -122,8 +224,7 @@ else
 fi
 
 RACE="$FIX/race.lock"
-mkdir -p "$RACE"
-printf '999999999\n' > "$RACE/pid"
+make_lock "$RACE" 999999999
 RELEASE_RACE="$FIX/release-race"
 SWEEP_RELEASE="$RELEASE_RACE" SWEEP_ID=D SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$RACE" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/race-D.out" 2> "$FIX/race-D.err" &
 PID_D=$!
@@ -142,8 +243,8 @@ else
 fi
 
 ORPHANED_TAKEOVER="$FIX/orphaned-takeover.lock"
-mkdir -p "$ORPHANED_TAKEOVER" "$ORPHANED_TAKEOVER.takeover"
-printf '999999999\n' > "$ORPHANED_TAKEOVER/pid"
+make_lock "$ORPHANED_TAKEOVER" 999999999
+mkdir -p "$ORPHANED_TAKEOVER.takeover"
 SWEEP_ID=F SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$ORPHANED_TAKEOVER" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/orphaned-takeover.out" 2> "$FIX/orphaned-takeover.err"
 RC_ORPHANED=$?
 if [ "$RC_ORPHANED" -eq 0 ] && grep -q 'removing stale lock' "$FIX/orphaned-takeover.err"; then
@@ -155,17 +256,18 @@ rm -rf "$ORPHANED_TAKEOVER.takeover"
 
 NO_PID="$FIX/no-pid.lock"
 mkdir -p "$NO_PID"
+printf 'KEEP\n' > "$NO_PID/KEEP"
 SWEEP_ID=G SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$NO_PID" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/no-pid.out" 2> "$FIX/no-pid.err"
 RC_NO_PID=$?
-if [ "$RC_NO_PID" -eq 0 ] && grep -q 'held by missing pid' "$FIX/no-pid.err"; then
-  pass "legacy pid-less stale lock is recovered before running"
+# Deliberate H7 contract change: an unmarked directory is NOT a stale lock.
+if [ "$RC_NO_PID" -eq 2 ] && [ -f "$NO_PID/KEEP" ] && grep -q 'STOP: .* is not a selftest-sweep lock' "$FIX/no-pid.err" && ! grep -q '^G start$' "$EVENTS"; then
+  pass "unmarked pid-less directory STOPs with exit 2 and KEEP survives"
 else
-  fail "pid-less stale lock was not recovered (rc=$RC_NO_PID err=$(cat "$FIX/no-pid.err" 2>/dev/null))"
+  fail "unmarked directory was not refused (rc=$RC_NO_PID KEEP=$([ -f "$NO_PID/KEEP" ] && echo present || echo GONE) err=$(cat "$FIX/no-pid.err" 2>/dev/null))"
 fi
 
 EPERM="$FIX/eperm.lock"
-mkdir -p "$EPERM"
-printf '1\n' > "$EPERM/pid"
+make_lock "$EPERM" 1
 SWEEP_ID=H SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$EPERM" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/eperm.out" 2> "$FIX/eperm.err" &
 PID_G=$!
 sleep 0.2
@@ -211,7 +313,7 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "selftest-sweep.selftest: PASS (11 checks)"
+  echo "selftest-sweep.selftest: PASS (24 checks)"
 else
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"
   exit 1
