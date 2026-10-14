@@ -49,6 +49,17 @@ ROOT7="$FIX/discord"; mkroot "$ROOT7"; write_json "$ROOT7" '{"version":1,"channe
 ROOT8="$FIX/reed"; mkroot "$ROOT8"; write_json "$ROOT8" '{"version":1,"channels":{"bad":{"kind":"slack","destination":"C0EXAMPLE","audience":"stakeholders","reed":true}}}'; run "$ROOT8" check
 [ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep -q 'unknown key.*reed' && pass 'unknown channel key reed exits 2' || fail "reed rc=$RC: $OUT"
 
+phase 'A10: channels cannot bind any seat, role, or owner'
+for KEY in seat role owner; do
+  case "$KEY" in seat) VALUE=worker-1;; role) VALUE=producer;; owner) VALUE=reviewer;; esac
+  ROLE_ROOT="$FIX/forbidden-$KEY"; mkroot "$ROLE_ROOT"
+  write_json "$ROLE_ROOT" "{\"channels\":{\"fixture\":{\"kind\":\"slack\",\"destination\":\"C0EXAMPLE\",\"audience\":\"stakeholders\",\"$KEY\":\"$VALUE\"}}}"
+  run "$ROLE_ROOT" check
+  if [ "$RC" -eq 2 ]; then
+    case "$OUT" in *"unknown key \"$KEY\""*) pass "refused channel key $KEY (A10)";; *) fail "channel key $KEY refusal did not name the key: $OUT";; esac
+  else fail "channel key $KEY was not refused rc=$RC: $OUT"; fi
+done
+
 phase 'canary: duplicate-principal leg catches a broken loader'
 SAB="$FIX/channels-no-dup-check.ts"
 perl -0pe 's/if \(principalCount > 1\) fail\("at most one channel may have audience principal"\);/\/\/ duplicate principal check removed by canary/ or die "canary replacement missed\n"' "$CHANNELS" > "$SAB" || exit 2

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { channelByName, loadChannels, type Channel } from "./channels";
 import { humanTextGuard } from "./needs";
+import { rosterSeatActors as readRosterSeatActors } from "./seat-actors";
 import * as transportIndex from "./transports/index";
 import { demuxUpdates } from "./transports/telegram";
 import type { InboundMessage } from "./transports/transport";
@@ -21,7 +22,6 @@ type CommsRow =
 function now(){ return new Date().toISOString(); }
 function stop(msg:string, code=1):never{ process.stderr.write(`STOP: ${msg}\n`); process.exit(code); }
 function sha256(text:string):string{ return crypto.createHash("sha256").update(text).digest("hex"); }
-function actorEnvVar(name: string): string { return `WHEELHOUSE_BEADS_ACTOR_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`; }
 function readRows():CommsRow[]{
   if (!fs.existsSync(LEDGER)) return [];
   const out:CommsRow[] = [];
@@ -47,18 +47,7 @@ function parseArgs(argv:string[]):{pos:string[]; stdin:boolean; from?:string; so
 function textFromArgs(pos:string[], stdin:boolean):string { if(stdin) return fs.readFileSync(0,"utf8").replace(/\r\n/g,"\n"); return pos.join(" "); }
 function isClosedRequest(rows: CommsRow[], id: string): boolean { return rows.some((r:any) => (r.type === "relayed" || r.type === "declined") && r.id === id); }
 export function rosterSeatActors(root = ROOT): Set<string> {
-  const out = new Set<string>();
-  const file = path.join(root, "seats", "seats.json");
-  if (!fs.existsSync(file)) return out;
-  let parsed: any;
-  try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch(e:any) { stop(`cannot parse seats/seats.json: ${e.message}`, 2); }
-  const seats = parsed?.seats && typeof parsed.seats === "object" ? parsed.seats : {};
-  for (const name of Object.keys(seats)) {
-    out.add(name);
-    const override = process.env[actorEnvVar(name)];
-    if (override) out.add(override);
-  }
-  return out;
+  return readRosterSeatActors(root);
 }
 function enforceSendIdentity(channelName: string): void {
   const actor = process.env.BEADS_ACTOR || "";
