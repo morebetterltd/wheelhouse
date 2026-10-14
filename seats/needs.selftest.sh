@@ -35,12 +35,12 @@ run list; if [ $RC -eq 0 ] && says "$NEED open approval" && says "Pick the relea
 run say "$NEED" "Thanks, a short answer is enough."; if [ $RC -eq 0 ] && grep -q '"from":"commander"' "$ROOT/seats/needs.jsonl"; then pass "say appends a commander message"; else fail "say failed (rc=$RC): $OUT"; fi
 run answer "$NEED" yes --via desk; if [ $RC -eq 0 ]; then pass "answer exits 0"; else fail "answer failed (rc=$RC): $OUT"; fi
 run list --unread; if [ $RC -eq 0 ] && says "$NEED answered approval"; then pass "list --unread shows an unread human answer"; else fail "list --unread missed unread answer (rc=$RC): $OUT"; fi
-SHOW="$(json show "$NEED")"; if printf '%s\n' "$SHOW" | grep -q '"state": "answered"' && printf '%s\n' "$SHOW" | grep -q '"choice": "yes"' && printf '%s\n' "$SHOW" | grep -q '"type": "read"'; then pass "show folds answered state and records a read marker"; else fail "show did not fold answered state/read marker: $SHOW"; fi
+SHOW="$(json show "$NEED")"; if printf '%s\n' "$SHOW" | grep >/dev/null '"state": "answered"' && printf '%s\n' "$SHOW" | grep >/dev/null '"choice": "yes"' && printf '%s\n' "$SHOW" | grep >/dev/null '"type": "read"'; then pass "show folds answered state and records a read marker"; else fail "show did not fold answered state/read marker: $SHOW"; fi
 run list --unread; if [ $RC -eq 0 ] && ! says "$NEED"; then pass "show clears list --unread for the answer"; else fail "show did not clear unread answer (rc=$RC): $OUT"; fi
 run say "$NEED" "A commander follow-up does not make it unread."; run list --unread; if [ $RC -eq 0 ] && ! says "$NEED"; then pass "commander messages do not create unread human-answer state"; else fail "commander message made need unread (rc=$RC): $OUT"; fi
 run read "$NEED"; run list --unread; if [ $RC -eq 0 ] && ! says "$NEED"; then pass "explicit read command is idempotent and leaves no unread answer"; else fail "explicit read command left unread output (rc=$RC): $OUT"; fi
 run close "$NEED" --reason handled; [ $RC -eq 0 ] && pass "close exits 0" || fail "close failed (rc=$RC): $OUT"
-SHOW="$(json show "$NEED")"; if printf '%s\n' "$SHOW" | grep -q '"state": "closed"' && printf '%s\n' "$SHOW" | grep -q '"reason": "handled"'; then pass "show folds close into closed state"; else fail "show did not fold closed state: $SHOW"; fi
+SHOW="$(json show "$NEED")"; if printf '%s\n' "$SHOW" | grep >/dev/null '"state": "closed"' && printf '%s\n' "$SHOW" | grep >/dev/null '"reason": "handled"'; then pass "show folds close into closed state"; else fail "show did not fold closed state: $SHOW"; fi
 run list; if [ $RC -eq 0 ] && ! says "$NEED"; then pass "list hides closed needs by default"; else fail "closed need appeared without --all: $OUT"; fi
 run list --all; if [ $RC -eq 0 ] && says "$NEED closed"; then pass "list --all includes closed needs"; else fail "list --all missed closed need: $OUT"; fi
 phase "2. --from-stdin and --source dedupe"
@@ -55,7 +55,7 @@ run open --title x --body "this bead is blocked"; if [ $RC -eq 2 ] && says "bead
 run open --title "Ask worker-1" --body "Please decide" --source seat-warning; if [ $RC -eq 0 ] && says "WARN: human-facing text mentions roster seat worker-1"; then pass "rostered seat names warn but do not block"; else fail "seat-name warning missing or blocked open (rc=$RC): $OUT"; fi
 phase "4. WHEELHOUSE_NEEDS_ROOT override and JSON listing"
 [ -s "$ROOT/seats/needs.jsonl" ] && pass "ledger was written under WHEELHOUSE_NEEDS_ROOT" || fail "ledger was not written under WHEELHOUSE_NEEDS_ROOT"
-LIST_JSON="$(json list --json --all)"; if printf '%s\n' "$LIST_JSON" | grep -q '"id": "need-' && printf '%s\n' "$LIST_JSON" | grep -q '"state": "closed"'; then pass "list --json --all prints folded JSON state"; else fail "list --json --all output wrong: $LIST_JSON"; fi
+LIST_JSON="$(json list --json --all)"; if printf '%s\n' "$LIST_JSON" | grep >/dev/null '"id": "need-' && printf '%s\n' "$LIST_JSON" | grep >/dev/null '"state": "closed"'; then pass "list --json --all prints folded JSON state"; else fail "list --json --all output wrong: $LIST_JSON"; fi
 phase "5. unread human messages are durable until show"
 MSG_NEED="need-msg1"
 cat >> "$ROOT/seats/needs.jsonl" <<JSONL
@@ -63,7 +63,7 @@ cat >> "$ROOT/seats/needs.jsonl" <<JSONL
 {"type":"message","id":"$MSG_NEED","at":"2026-09-21T00:01:00.000Z","from":"human","via":"desk","text":"Here is the note"}
 JSONL
 run list --unread; if [ $RC -eq 0 ] && says "$MSG_NEED open question"; then pass "list --unread shows an unread human message"; else fail "list --unread missed human message (rc=$RC): $OUT"; fi
-SHOW="$(json show "$MSG_NEED")"; run list --unread; if [ $RC -eq 0 ] && ! says "$MSG_NEED" && printf '%s\n' "$SHOW" | grep -q '"type": "read"'; then pass "show clears unread human message"; else fail "show did not clear human message (rc=$RC out=$OUT show=$SHOW)"; fi
+SHOW="$(json show "$MSG_NEED")"; run list --unread; if [ $RC -eq 0 ] && ! says "$MSG_NEED" && printf '%s\n' "$SHOW" | grep >/dev/null '"type": "read"'; then pass "show clears unread human message"; else fail "show did not clear human message (rc=$RC out=$OUT show=$SHOW)"; fi
 phase "6. canary — refusal removal is caught"
 SAB="$FIX/needs-no-refusal.ts"
 perl -0pe 's/export function humanTextGuard\(text:string, where:string, root=ROOT\)\{.*?\nfunction seatNames/export function humanTextGuard(text:string, where:string, root=ROOT){ }\nfunction seatNames/s' "$SCRIPT" > "$SAB"

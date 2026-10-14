@@ -27,7 +27,7 @@ cat > "$GOOD" <<'MD'
 Ship the README install proof. Evidence needs the cold-install transcript and the reviewer rerun. Dispatch the task to worker one and keep the branch moving until review.
 MD
 RC=0; OUT="$(cd "$PROJECT" && "$LINT" "$GOOD" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q "commander-voice-lint: PASS (1 file(s), namespace=$NS)"; then pass "human task prose passes with fixture namespace"
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null "commander-voice-lint: PASS (1 file(s), namespace=$NS)"; then pass "human task prose passes with fixture namespace"
 else fail "human task prose failed (rc=$RC): $OUT"; fi
 
 GOOD_HYPHENS="$FIX/good-hyphens.md"
@@ -43,7 +43,7 @@ cat > "$BAD_BEAD" <<'MD'
 Dispatch the bead to worker one and ask for evidence.
 MD
 RC=0; OUT="$(cd "$PROJECT" && "$LINT" "$BAD_BEAD" 2>&1)" || RC=$?
-if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'uses bead/beads'; then pass "planted negative: bead wording fails"
+if [ $RC -eq 1 ] && echo "$OUT" | grep >/dev/null 'uses bead/beads'; then pass "planted negative: bead wording fails"
 else fail "bead wording was not caught (rc=$RC): $OUT"; fi
 
 BAD_ID="$FIX/bad-id.md"
@@ -51,7 +51,7 @@ cat > "$BAD_ID" <<'MD'
 Send releaf-d6xo to reviewer two after the selftest passes.
 MD
 RC=0; OUT="$(cd "$PROJECT" && "$LINT" "$BAD_ID" 2>&1)" || RC=$?
-if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'uses a bare work id'; then pass "planted negative: bare namespace id fails"
+if [ $RC -eq 1 ] && echo "$OUT" | grep >/dev/null 'uses a bare work id'; then pass "planted negative: bare namespace id fails"
 else fail "bare id was not caught (rc=$RC): $OUT"; fi
 
 BAD_3CHAR="$FIX/bad-3char.md"
@@ -59,7 +59,7 @@ cat > "$BAD_3CHAR" <<'MD'
 Shipped releaf-0pf to main.
 MD
 RC=0; OUT="$(cd "$PROJECT" && "$LINT" "$BAD_3CHAR" 2>&1)" || RC=$?
-if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'uses a bare work id'; then pass "planted negative: 3-character issue id fails"
+if [ $RC -eq 1 ] && echo "$OUT" | grep >/dev/null 'uses a bare work id'; then pass "planted negative: 3-character issue id fails"
 else fail "3-character issue id was not caught (rc=$RC): $OUT"; fi
 
 BAD_CHILD="$FIX/bad-child.md"
@@ -67,7 +67,7 @@ cat > "$BAD_CHILD" <<'MD'
 Continue releaf-er5m.2 after the merge.
 MD
 RC=0; OUT="$(cd "$PROJECT" && "$LINT" "$BAD_CHILD" 2>&1)" || RC=$?
-if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'uses a bare work id'; then pass "planted negative: child issue id fails"
+if [ $RC -eq 1 ] && echo "$OUT" | grep >/dev/null 'uses a bare work id'; then pass "planted negative: child issue id fails"
 else fail "child issue id was not caught (rc=$RC): $OUT"; fi
 
 BAD_BEFORE3="$FIX/bad-before3.md"
@@ -75,7 +75,7 @@ cat > "$BAD_BEFORE3" <<'MD'
 Same morning the commander synced this umbrella's seats/ + runbooks/ to 20a1c92 (q4v) BEFORE spawning a seat, caught by the principal.
 MD
 RC=0; OUT="$(cd "$PROJECT" && "$LINT" "$BAD_BEFORE3" 2>&1)" || RC=$?
-if [ $RC -eq 1 ] && echo "$OUT" | grep -q 'uses a bare work id'; then pass "planted negative: before-example #3 bare shorthand id fails"
+if [ $RC -eq 1 ] && echo "$OUT" | grep >/dev/null 'uses a bare work id'; then pass "planted negative: before-example #3 bare shorthand id fails"
 else fail "before-example #3 id was not caught (rc=$RC): $OUT"; fi
 
 FRESH="$FIX/fresh-seats"
@@ -83,13 +83,13 @@ mkdir -p "$FRESH"
 cp "$LINT" "$FRESH/commander-voice-lint.sh"
 chmod +x "$FRESH/commander-voice-lint.sh"
 RC=0; OUT="$(cd "$PROJECT" && "$FRESH/commander-voice-lint.sh" "$GOOD" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q "namespace=$NS"; then pass "fresh seats copy outside this umbrella uses fixture namespace"
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null "namespace=$NS"; then pass "fresh seats copy outside this umbrella uses fixture namespace"
 else fail "fresh seats copy did not run from fixture namespace (rc=$RC): $OUT"; fi
 
 ACME_GOOD="$FIX/acme-good.md"
 printf 'Ship the README install proof without naming internal ids.\n' > "$ACME_GOOD"
 RC=0; OUT="$($LINT --namespace acme "$ACME_GOOD" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'namespace=acme'; then pass "--namespace option makes namespace explicit outside any install"
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'namespace=acme'; then pass "--namespace option makes namespace explicit outside any install"
 else fail "--namespace explicit namespace check failed (rc=$RC): $OUT"; fi
 
 for phrase in \
@@ -103,7 +103,7 @@ do
   BAD_RETIRED="$FIX/bad-retired-$(printf '%s' "$phrase" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-//; s/-$//').md"
   printf 'Retired instruction: %s\n' "$phrase" > "$BAD_RETIRED"
   RC=0; OUT="$(cd "$PROJECT" && "$LINT" "$BAD_RETIRED" 2>&1)" || RC=$?
-  if [ $RC -eq 1 ] && printf '%s\n' "$OUT" | grep -q 'uses retired mechanics prose'; then pass "planted negative: retired mechanics prose fails: $phrase"
+  if [ $RC -eq 1 ] && printf '%s\n' "$OUT" | grep >/dev/null 'uses retired mechanics prose'; then pass "planted negative: retired mechanics prose fails: $phrase"
   else fail "retired mechanics prose was not caught for '$phrase' (rc=$RC): $OUT"; fi
 done
 

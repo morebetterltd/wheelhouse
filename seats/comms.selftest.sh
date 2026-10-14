@@ -63,7 +63,7 @@ if [ $rc -eq 2 ] && grep -q 'STOP: channel C08EXAMPLE is not declared in seats/c
 
 reset_logs
 base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms.ts" request partners "need a word with Tyler" > "$FIX/request.out" 2>&1; rc=$?; RELAY_ID="$(cat "$FIX/request.out" | tr -d '\r\n')"
-if [ $rc -eq 0 ] && echo "$RELAY_ID" | grep -Eq '^relay-[0-9a-z]{4}$' && [ "$(count_rows request)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'seat relay request records one request row and makes zero network calls'; else fail "request leg rc=$rc id=$RELAY_ID ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null) req=$(count_req) out=$(cat "$FIX/request.out")"; fi
+if [ $rc -eq 0 ] && echo "$RELAY_ID" | grep -E >/dev/null '^relay-[0-9a-z]{4}$' && [ "$(count_rows request)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'seat relay request records one request row and makes zero network calls'; else fail "request leg rc=$rc id=$RELAY_ID ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null) req=$(count_req) out=$(cat "$FIX/request.out")"; fi
 base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request1.out" 2>&1; rc=$?
 base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request2.out" 2>&1; rc2=$?
 HERALD_MATCHES="$(node -e 'const fs=require("fs"); const rows=fs.existsSync(process.argv[1])?fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse):[]; console.log(rows.filter(r=>r.class==="relay-request"&&r.seat==="worker-1"&&r.state==="input-required"&&r.detail.includes("relay "+process.argv[2])).length)' "$ROOT/seats/inbox.jsonl" "$RELAY_ID")"

@@ -88,7 +88,7 @@ run_planted_leg() {
   rc=0; out="$(run_grep)" || rc=$?
   set -e
   cd "$old" || exit 2
-  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -Eq 'Ebb|Tideline'; then
+  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -E >/dev/null 'Ebb|Tideline'; then
     pass "prescribed grep bites a planted whole-file generated specimen copy"
   else
     printf '%s\n' "$out" | scrub
@@ -104,7 +104,7 @@ run_negative_control() {
   set +e
   rc=0; out="$(WHEELHOUSE_SPECIMEN_LEAK_FORCE_MISS=1 bash "$0" 2>&1)" || rc=$?
   set -e
-  if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'FAIL  prescribed grep missed planted specimen copy'; then
+  if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep >/dev/null 'FAIL  prescribed grep missed planted specimen copy'; then
     pass "forced-miss planted specimen exits non-zero and prints FAIL"
   else
     printf '%s\n' "$out" | scrub

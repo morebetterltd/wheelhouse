@@ -159,7 +159,7 @@ chmod +x "$BIN/bd" "$BIN/bun" "$BIN/gh"
 cp "$FIX/real-fleet-snapshot.json" "$PROJ/seats/run/fleet-snapshot.json"; mutate_snapshot fresh
 TIME_OUT="$(cd "$PROJ" && perl -MTime::HiRes=time -e '$t=time; system(qw(bash seats/fleet-gate.sh)); printf "ELAPSED=%.3f\n", time-$t' 2>&1)"; TIME_RC=$?
 ELAPSED="$(printf '%s\n' "$TIME_OUT" | sed -n 's/^ELAPSED=//p' | tail -1)"
-if [ $TIME_RC -eq 0 ] && printf '%s\n' "$TIME_OUT" | grep -q '🚢 FLEET: 2 seats live' && ! printf '%s\n' "$TIME_OUT" | grep -q '2/2 seats live' && ELAPSED="$ELAPSED" perl -e 'exit(($ENV{ELAPSED}//9) < 1 ? 0 : 1)'; then
+if [ $TIME_RC -eq 0 ] && printf '%s\n' "$TIME_OUT" | grep >/dev/null '🚢 FLEET: 2 seats live' && ! printf '%s\n' "$TIME_OUT" | grep >/dev/null '2/2 seats live' && ELAPSED="$ELAPSED" perl -e 'exit(($ENV{ELAPSED}//9) < 1 ? 0 : 1)'; then
   pass 'reader finishes under 1s, uses no slow tools, and does not ask for absent rostered count'
 else
   fail "subsecond/no-slow-tools/no-rostered leg failed rc=$TIME_RC elapsed=${ELAPSED:-?} out=$TIME_OUT"

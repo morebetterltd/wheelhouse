@@ -81,7 +81,7 @@ sweep_stale_fixtures() {
     while IFS= read -r sf; do
       [ -f "$sf" ] || continue
       for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
+        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
           kill "$pid" 2>/dev/null
           echo "swept: killed leaked seat pid $pid (held open files under $d)"
         fi
@@ -332,10 +332,10 @@ if says "CAPACITY: QUOTA"; then
   pass "adapter status surfaces the CAPACITY line"
 else fail "adapter status has no CAPACITY line: $OUT"; fi
 render
-if seatline q-seat | grep -q "PARKED/QUOTA" && seatline q-seat | grep -q "bun seats/adapter.ts probe q-seat"; then
+if seatline q-seat | grep >/dev/null "PARKED/QUOTA" && seatline q-seat | grep >/dev/null "bun seats/adapter.ts probe q-seat"; then
   pass "floor: amber PARKED/QUOTA names the re-probe command"
 else fail "floor: no PARKED/QUOTA line for q-seat: $(seatline q-seat)"; fi
-if seatline q-seat | grep -q "AMBER"; then pass "floor: quota cue is AMBER"
+if seatline q-seat | grep >/dev/null "AMBER"; then pass "floor: quota cue is AMBER"
 else fail "floor: quota cue is not AMBER: $(seatline q-seat)"; fi
 cp "$PROJ/seats/seats.json" "$FIX/seats.before-roster-drop.json"
 env HOME="$HOME_FIX" ROSTER="$PROJ/seats/seats.json" bun -e '
@@ -367,13 +367,13 @@ inject_seat a-seat "$ME" ""
 # the rail's width budget truncates the tail of the line; render WIDE for the
 # full-command assertion (the distinctness checks below use the normal width).
 COLS=400 render
-if seatline a-seat | grep -q "AUTH DEAD" && seatline a-seat | grep -q "then /login in the REPL" && seatline a-seat | grep -q "api_key"; then
+if seatline a-seat | grep >/dev/null "AUTH DEAD" && seatline a-seat | grep >/dev/null "then /login in the REPL" && seatline a-seat | grep >/dev/null "api_key"; then
   pass "floor: red AUTH DEAD with the credential flow"
 else fail "floor: no AUTH DEAD line for a-seat: $(seatline a-seat)"; fi
 render
-if seatline a-seat | grep -q " RED"; then pass "floor: auth cue is RED"
+if seatline a-seat | grep >/dev/null " RED"; then pass "floor: auth cue is RED"
 else fail "floor: auth cue is not RED: $(seatline a-seat)"; fi
-if ! seatline a-seat | grep -q "QUOTA"; then
+if ! seatline a-seat | grep >/dev/null "QUOTA"; then
   pass "auth line is DISTINCT from the quota line"
 else fail "auth and quota render conflated: $(seatline a-seat)"; fi
 
@@ -388,23 +388,23 @@ sleep 0.3
 if ! kill -0 "$DPID" 2>/dev/null; then pass "d-seat pid $DPID SIGKILLed"
 else fail "could not kill d-seat pid $DPID"; fi
 render
-if seatline d-seat | grep -q "PROCESS GONE" && seatline d-seat | grep -q "d-seat.stderr.log"; then
+if seatline d-seat | grep >/dev/null "PROCESS GONE" && seatline d-seat | grep >/dev/null "d-seat.stderr.log"; then
   pass "floor: red PROCESS GONE names the stderr log"
 else fail "floor: no PROCESS GONE line naming the stderr log: $(seatline d-seat)"; fi
-if seatline d-seat | grep -q " RED"; then pass "floor: dead-process cue is RED"
+if seatline d-seat | grep >/dev/null " RED"; then pass "floor: dead-process cue is RED"
 else fail "floor: dead-process cue is not RED: $(seatline d-seat)"; fi
-if ! seatline d-seat | grep -q "AUTH"; then
+if ! seatline d-seat | grep >/dev/null "AUTH"; then
   pass "dead-process line is DISTINCT from the auth line"
 else fail "dead-process and auth render conflated: $(seatline d-seat)"; fi
 arun status
-if printf '%s\n' "$OUT" | grep "d-seat" | grep -q "DIED"; then
+if printf '%s\n' "$OUT" | grep "d-seat" | grep >/dev/null "DIED"; then
   pass "adapter status says DIED, not the calm STOPPED of a graceful stop"
 else fail "adapter status does not say DIED for the killed seat: $OUT"; fi
 if says "check" && says "d-seat.stderr.log"; then
   pass "adapter status points at the stderr log"
 else fail "adapter status DIED line does not name the stderr log: $OUT"; fi
 ROUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/recover.ts" 2>&1)"
-if printf '%s\n' "$ROUT" | grep "d-seat" | grep -q "DEAD"; then
+if printf '%s\n' "$ROUT" | grep "d-seat" | grep >/dev/null "DEAD"; then
   pass "recover.ts classifies the SIGKILLed seat DEAD"
 else fail "recover.ts did not classify d-seat DEAD: $ROUT"; fi
 
@@ -426,10 +426,10 @@ cat > "$PROJ/seats/logs/r-seat.jsonl" <<'EOF'
 EOF
 inject_seat r-seat "$ME" bead-rev
 render
-if seatline r-seat | grep -q "REVIEW BLOCKED" && seatline r-seat | grep -q "bead-rev"; then
+if seatline r-seat | grep >/dev/null "REVIEW BLOCKED" && seatline r-seat | grep >/dev/null "bead-rev"; then
   pass "floor: amber REVIEW BLOCKED names the bead"
 else fail "floor: no REVIEW BLOCKED line naming bead-rev: $(seatline r-seat)"; fi
-if ! seatline r-seat | grep -q "VERDICT LANDED" && ! seatline r-seat | grep -q "idle"; then
+if ! seatline r-seat | grep >/dev/null "VERDICT LANDED" && ! seatline r-seat | grep >/dev/null "idle"; then
   pass "a blocked review never renders as done or idle"
 else fail "blocked review rendered as done/idle: $(seatline r-seat)"; fi
 
@@ -466,10 +466,10 @@ cat > "$PROJ/seats/logs/e-seat.jsonl" <<'EOF'
 EOF
 inject_seat e-seat "$ME" bead-ev
 render
-if seatline e-seat | grep -q "EVIDENCE UNSATISFIED" && seatline e-seat | grep -q "bead-ev"; then
+if seatline e-seat | grep >/dev/null "EVIDENCE UNSATISFIED" && seatline e-seat | grep >/dev/null "bead-ev"; then
   pass "floor: EVIDENCE UNSATISFIED is its own state, naming the bead"
 else fail "floor: no EVIDENCE UNSATISFIED line for e-seat: $(seatline e-seat)"; fi
-if ! seatline e-seat | grep -q "APPROVE" && ! seatline e-seat | grep -q "VERDICT LANDED"; then
+if ! seatline e-seat | grep >/dev/null "APPROVE" && ! seatline e-seat | grep >/dev/null "VERDICT LANDED"; then
   pass "unsatisfied evidence never renders as APPROVE"
 else fail "unsatisfied evidence rendered as approval: $(seatline e-seat)"; fi
 # 5c: a truncated/malformed verdict file routes to a human, never to success.
@@ -481,10 +481,10 @@ cat > "$PROJ/seats/logs/u-seat.jsonl" <<'EOF'
 EOF
 inject_seat u-seat "$ME" bead-u
 render
-if seatline u-seat | grep -q "VERDICT UNREADABLE" && seatline u-seat | grep -q "routed to human"; then
+if seatline u-seat | grep >/dev/null "VERDICT UNREADABLE" && seatline u-seat | grep >/dev/null "routed to human"; then
   pass "floor: a malformed verdict file reads VERDICT UNREADABLE — routed to human"
 else fail "floor: no VERDICT UNREADABLE line for u-seat: $(seatline u-seat)"; fi
-if ! seatline u-seat | grep -q "idle" && ! seatline u-seat | grep -q "VERDICT LANDED"; then
+if ! seatline u-seat | grep >/dev/null "idle" && ! seatline u-seat | grep >/dev/null "VERDICT LANDED"; then
   pass "an unreadable verdict never renders as success"
 else fail "unreadable verdict rendered as success: $(seatline u-seat)"; fi
 
@@ -526,7 +526,7 @@ if cmp -s "$FLOOR" "$SAB1"; then
   fail "canary 1: sed no longer bites (no EVIDENCE UNSATISFIED line) — fix this test"
 else
   render "$SAB1"
-  if seatline e-seat | grep -q "EVIDENCE UNSATISFIED"; then
+  if seatline e-seat | grep >/dev/null "EVIDENCE UNSATISFIED"; then
     fail "canary 1: EVIDENCE UNSATISFIED survived its removal — these checks prove nothing"
   else pass "canary 1: cutting the EVIDENCE UNSATISFIED state is caught by phase 5's check"; fi
 fi
@@ -538,7 +538,7 @@ if cmp -s "$FLOOR" "$SAB2"; then
   fail "canary 2: sed no longer bites (no VERDICT UNREADABLE line) — fix this test"
 else
   render "$SAB2"
-  if seatline u-seat | grep -q "VERDICT UNREADABLE"; then
+  if seatline u-seat | grep >/dev/null "VERDICT UNREADABLE"; then
     fail "canary 2: VERDICT UNREADABLE survived its removal — these checks prove nothing"
   else pass "canary 2: cutting the VERDICT UNREADABLE state is caught by phase 5's check"; fi
 fi
@@ -552,8 +552,8 @@ if cmp -s "$FLOOR" "$SAB3"; then
 else
   render "$SAB3"
   CONFLATED=0
-  seatline a-seat | grep -q "AUTH DEAD" || CONFLATED=1          # auth wording gone
-  seatline a-seat | grep -q "QUOTA" && CONFLATED=1              # quota wording present
+  seatline a-seat | grep >/dev/null "AUTH DEAD" || CONFLATED=1          # auth wording gone
+  seatline a-seat | grep >/dev/null "QUOTA" && CONFLATED=1              # quota wording present
   if [ $CONFLATED -eq 1 ]; then
     pass "canary 3: forcing auth to wear quota's wording is caught by the distinctness checks"
   else
@@ -568,7 +568,7 @@ if cmp -s "$PROJ/seats/adapter.ts" "$SAB4"; then
   fail "canary 4: sed no longer bites (the died line moved) — fix this test"
 else
   SOUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$SAB4" status 2>&1)"
-  if printf '%s\n' "$SOUT" | grep "d-seat" | grep -q "DIED"; then
+  if printf '%s\n' "$SOUT" | grep "d-seat" | grep >/dev/null "DIED"; then
     fail "canary 4: DIED survived its removal — these checks prove nothing"
   else pass "canary 4: cutting DIED is caught by phase 3's adapter-status check"; fi
 fi
