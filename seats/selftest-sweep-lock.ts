@@ -220,7 +220,7 @@ function main(): number {
     if (snapshot) {
       if (alive(snapshot.marker.pid)) {
         console.log(`pid=${snapshot.marker.pid} started=${snapshot.marker.started}`);
-        return 1;
+        return 75; // Reserved EX_TEMPFAIL: validated lock held; runtime errors are fatal.
       }
       console.error(`selftest-sweep: removing stale lock ${lock} held by dead pid ${snapshot.marker.pid}`);
       removeValidated(parent, name, snapshot);

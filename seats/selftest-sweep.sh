@@ -11,6 +11,10 @@ SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
 OWNED_LOCK=""
 LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$ROOT/seats/selftest-sweep-lock.ts}"
+if [ ! -f "$LOCK_HELPER" ] || [ ! -r "$LOCK_HELPER" ]; then
+  printf 'STOP: selftest-sweep lock helper missing or unreadable: %s\n' "$LOCK_HELPER" >&2
+  exit 2
+fi
 # Canonicalize the parent, not the leaf: a symlink at LOCK must be refused.
 LOCK="$(bun -e 'import fs from "node:fs"; import p from "node:path"; const s=process.argv[1]; console.log(p.join(fs.realpathSync(p.dirname(p.resolve(s))),p.basename(s)))' "$LOCK")" || exit 2
 LOCK_TOKEN="$(bun -e 'console.log(crypto.randomUUID().replace(/-/g,""))')" || exit 2
@@ -24,8 +28,8 @@ acquire_lock(){
     result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
       0) OWNED_LOCK="$result"; return 0 ;;
-      1) ;;
-      *) exit 2 ;;
+      75) ;; # Reserved helper result: a validated live lock, not a Bun error.
+      *) info "STOP: selftest-sweep lock helper failed (exit $rc)"; exit 2 ;;
     esac
     if [ "$printed" = 0 ]; then
       info "selftest-sweep: waiting for host-wide lock $LOCK held by $result"
