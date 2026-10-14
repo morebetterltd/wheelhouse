@@ -48,8 +48,8 @@ Not a graduation either: the vendor is a per-seat roster field. Each entry in `s
 
 ## Adding seats
 
-**Start:** commander, one worker, one reviewer.
+**Start:** commander, producer, one worker, one reviewer. The producer is required and may be a commander subagent rather than a standing seat; the commander never writes the work's intent or outcomes.
 
-**Graduate to:** a second worker when the reviewer is idle waiting for work; a designer when the principal is spending more time decomposing beads than deciding direction.
+**Graduate to:** a second worker when the reviewer is idle waiting for work; a standing producer when the principal is spending more time decomposing beads than deciding direction. This changes the producer's form, not whether the role exists.
 
 Add a seat because a specific person in the loop is the bottleneck, not because the roster looks incomplete.

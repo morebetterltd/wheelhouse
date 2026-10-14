@@ -141,11 +141,35 @@ Read it. If nothing changed in `contracts/`, you are already current and there i
 
 ## 3. Copy what the template owns — the nine contracts by name, the runbooks, and the seats machinery
 
+### Designer becomes producer
+
+Run this **before the copy block below**, so step 4 splices into the renamed target and keeps your own `## This project` half byte-for-byte. If both names exist, stop and reconcile them by hand; never overwrite either territory.
+
+```bash
+check_producer_rename() {
+  test ! -e wheelhouse/crew/DESIGNER.md || {
+    echo "STOP: legacy planning brief remains; rename it before copying and splicing the producer brief" >&2
+    return 1
+  }
+}
+if [ -e wheelhouse/crew/DESIGNER.md ]; then
+  [ ! -e wheelhouse/crew/PRODUCER.md ] || { echo "STOP: both planning briefs exist; reconcile their territory before renaming" >&2; exit 1; }
+  git mv wheelhouse/crew/DESIGNER.md wheelhouse/crew/PRODUCER.md
+fi
+bun -e 'import fs from "node:fs"; const p="seats/seats.json", r=JSON.parse(fs.readFileSync(p,"utf8")); for(const [name,s] of Object.entries(r.seats ?? {})) if(s.role === "designer") { s.role="producer"; console.log("producer role changed: " + name); } fs.writeFileSync(p,JSON.stringify(r,null,2)+"\n");'
+```
+
+The roster rewrite changes roles, not seat keys or account directories. Update your `wheelhouse/fleet/SEATS.md` roster and declined-standing-session rows and your install's `CLAUDE.md` to say producer. The producer is required: if the install never took a designer, choose a standing producer or record `"producer": {"role": "producer", "external": true, "runtime": "commander-subagent"}` under `seats`, per BOOTSTRAP question 7. A subagent reads PRODUCER.md; the commander never writes intent or outcomes. For a Claude Code standing producer, adopt the read/graph-only tool limits in `seats/seats.json.example`; for Pi and Codex the brief is the limit. After copying the seats machinery, run `bun seats/roster.ts check` and repair any refusal before dispatch.
+
+Skipping the rename is data loss in disguise: the absent-file splice copies PRODUCER.md whole, while DESIGNER.md is left behind holding the only copy of your territory. Step 5 calls `check_producer_rename` and refuses that state. Keep this function in the upgrade shell; in a fresh shell, re-run this block before step 5. An install with no old brief gets PRODUCER.md whole via the ordinary absent-file path, with its empty template project scaffold.
+
+### Copy the contracts
+
 ```bash
 cp "$TEMPLATE/contracts/WORKER.md"   wheelhouse/fleet/WORKER.md.new
 cp "$TEMPLATE/contracts/SEATS.md"    wheelhouse/fleet/SEATS.md.new
 cp "$TEMPLATE/contracts/REVIEWER.md" wheelhouse/crew/REVIEWER.md.new
-cp "$TEMPLATE/contracts/DESIGNER.md" wheelhouse/crew/DESIGNER.md.new
+cp "$TEMPLATE/contracts/PRODUCER.md" wheelhouse/crew/PRODUCER.md.new
 cp "$TEMPLATE/contracts/VERIFIER.md" wheelhouse/crew/VERIFIER.md.new
 cp "$TEMPLATE/contracts/RESEARCHER.md" wheelhouse/crew/RESEARCHER.md.new
 mkdir -p wheelhouse/research/ # RESEARCHER.md cites this as the durable report destination.
@@ -331,7 +355,7 @@ targets=(
   wheelhouse/fleet/WORKER.md
   wheelhouse/fleet/SEATS.md
   wheelhouse/crew/REVIEWER.md
-  wheelhouse/crew/DESIGNER.md
+  wheelhouse/crew/PRODUCER.md
   wheelhouse/crew/VERIFIER.md
   wheelhouse/crew/BENCH.md
   wheelhouse/GRAPH.md
@@ -381,7 +405,7 @@ splice() {   # splice <new-contract> <your-file>
 splice wheelhouse/fleet/WORKER.md.new   wheelhouse/fleet/WORKER.md
 splice wheelhouse/fleet/SEATS.md.new    wheelhouse/fleet/SEATS.md
 splice wheelhouse/crew/REVIEWER.md.new  wheelhouse/crew/REVIEWER.md
-splice wheelhouse/crew/DESIGNER.md.new  wheelhouse/crew/DESIGNER.md
+splice wheelhouse/crew/PRODUCER.md.new  wheelhouse/crew/PRODUCER.md
 splice wheelhouse/crew/VERIFIER.md.new  wheelhouse/crew/VERIFIER.md
 splice wheelhouse/crew/RESEARCHER.md.new wheelhouse/crew/RESEARCHER.md
 splice wheelhouse/crew/BENCH.md.new     wheelhouse/crew/BENCH.md
@@ -399,6 +423,13 @@ Read the lines and decide. A `not in yours` heading that is genuinely new is a s
 Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A naive match has destroyed a contract file this way once already — it deleted a licensing-compliance rule while every automated check still passed. `BOOTSTRAP.md` states the same rule for the same reason; this is the operation it was stating it for.
 
 ## 5. Re-verify — the same checks the install runs
+
+- **The producer rename completed.** In the shell that ran the rename subsection, run the guard defined there. If you opened a new shell, run that subsection first; a missing function is not a passed check.
+
+  ```bash
+  check_producer_rename || { echo "STOP: producer rename not verified" >&2; exit 1; }
+  bun seats/roster.ts check || { echo "STOP: required producer missing or roster unreadable" >&2; exit 1; }
+  ```
 
 - **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all nine contract `.md` files, and no `FAIL` lines after them. That check is also this runbook's backstop: a contract missing from the copy list above never installs, and the check says so rather than passing quietly. Do not skip it on the grounds that the copies looked right. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
 - **Your bench is the file you had before, whichever file that was.** Step 3 copies nine named `.md` files, the contents of `runbooks/`, and the template's `seats/` files, and none of those lists can reach `wheelhouse/crew/bench.sh` — so the check is that nothing reached it, and it reads the same in both states:
