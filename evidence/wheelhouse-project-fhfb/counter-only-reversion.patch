@@ -1,0 +1,5 @@
+--- fixed/seats/recover.selftest.sh
++++ reverted/seats/recover.selftest.sh
+@@ -239 +239 @@
+-pi_count() { awk 'END { print NR + 0 }' "$PI_PIDS"; }
++pi_count() { ps -axo command= | sed 's/ *$//' | grep -cx pi | tr -d ' '; }
