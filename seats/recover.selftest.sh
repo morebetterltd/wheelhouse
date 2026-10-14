@@ -111,6 +111,10 @@ BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
 # /usr/sbin is where macOS keeps lsof; recover dies honestly without it.
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/sbin:/sbin:/usr/bin:/bin"
+# Only this fixture's executable writes this ledger, even when it exits quickly
+# or rewrites its title. Another fleet's bare `pi` can never enter this count.
+PI_PIDS="$FIX/pi-starts.pids"
+: > "$PI_PIDS"
 
 # Fake bd: if recover ever reaches for the graph, this logs the call and the
 # no-bd-calls assertion in phase 5 catches it.
@@ -133,6 +137,7 @@ cat > "$BIN/pi" <<STUB
 #!/usr/bin/env node
 process.title = "pi"; // the real pi does this too — ps shows NO argv
 const fs = require("fs"), path = require("path"), crypto = require("crypto");
+fs.appendFileSync("$PI_PIDS", String(process.pid) + "\n");
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
 const args = process.argv.slice(2);
@@ -231,7 +236,7 @@ recover_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/se
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seat_line() { printf '%s\n' "$OUT" | grep "^$1 "; }
 state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
-pi_count() { ps -axo command= | sed 's/ *$//' | grep -cx pi | tr -d ' '; }
+pi_count() { awk 'END { print NR + 0 }' "$PI_PIDS"; }
 
 # a pid that is definitely dead (spawned, then reaped)
 sleep 0.01 & DEADPID=$!
@@ -355,15 +360,16 @@ else fail "worker-1.stdin was removed while the seat is RUNNING"; fi
 
 phase "5. no duplicate integration — recover observes; its only writes are FIFO removals"
 cp "$STATE" "$FIX/state.before"
-PI_BEFORE="$(pi_count)"
+PI_BEFORE="$(pi_count)" || exit 2
+[ "$PI_BEFORE" -gt 0 ] || fail "fixture pi launch ledger is empty despite the completed spawn/resume"
 recover_run
 if cmp -s "$STATE" "$FIX/state.before"; then
   pass "state.json byte-identical after recover (no lastBead mutation, no re-dispatch record)"
 else fail "recover MUTATED state.json: $(diff "$FIX/state.before" "$STATE" | head -5)"; fi
-PI_AFTER="$(pi_count)"
+PI_AFTER="$(pi_count)" || exit 2
 if [ "$PI_AFTER" = "$PI_BEFORE" ]; then
-  pass "no pi spawned (bare-'pi'-titled process count: $PI_BEFORE before, $PI_AFTER after)"
-else fail "pi process count changed: $PI_BEFORE -> $PI_AFTER"; fi
+  pass "no pi spawned (fixture stub launches: $PI_BEFORE before, $PI_AFTER after)"
+else fail "fixture pi launch count changed: $PI_BEFORE -> $PI_AFTER"; fi
 if [ ! -s "$BD_LOG" ]; then
   pass "no bd calls (fake bd on PATH logged nothing)"
 else fail "recover called bd: $(cat "$BD_LOG")"; fi
@@ -463,6 +469,15 @@ EOF
   fi
   kill "$TAIL_PID" 2>/dev/null; TAIL_PID=""
 fi
+
+# A launch that exits before a host ps snapshot must still trip the counter.
+PI_BEFORE="$(pi_count)" || exit 2
+RC=0
+OUT="$(env -u PI_CODING_AGENT_DIR PATH="$RUN_PATH" "$BIN/pi" </dev/null 2>&1)" || RC=$?
+PI_AFTER="$(pi_count)" || exit 2
+if [ "$RC" -eq 1 ] && says "stub pi: no PI_CODING_AGENT_DIR" && [ "$PI_AFTER" -eq $((PI_BEFORE + 1)) ]; then
+  pass "canary: launch counter catches a short-lived fixture pi after it has exited"
+else fail "canary: own pi launch not detected ($PI_BEFORE -> $PI_AFTER, exit $RC): $OUT"; fi
 
 adapter_run stop worker-1
 
