@@ -98,7 +98,7 @@ else
   ok_real=1
   for entry in real-e1 real-e2; do
     agent="$REAL_HOME/.pi-seats-live/$entry"; fifo="$REAL_RUN/$entry.stdin"; mkfifo "$fifo"
-    env HOME="$REAL_HOME" PI_CODING_AGENT_DIR="$agent" ANTHROPIC_API_KEY="sk-selftest-dummy" WHEELHOUSE_TMUX_SOCKET="staffing-live-real-$$" WHEELHOUSE_HERALD_ROOT="$REAL_ROOT" "$REAL_PI" --mode rpc --provider anthropic 0<> "$fifo" >> "$REAL_RUN/$entry.log" 2>> "$REAL_RUN/$entry.err" &
+    env HOME="$REAL_HOME" PI_CODING_AGENT_DIR="$agent" ANTHROPIC_API_KEY="sk-selftest-dummy" WHEELHOUSE_TMUX_SOCKET="staffing-live-real-$$" WHEELHOUSE_HERALD_ROOT="$REAL_ROOT" "$REAL_PI" --mode rpc --provider anthropic --model claude-sonnet-4-5 0<> "$fifo" >> "$REAL_RUN/$entry.log" 2>> "$REAL_RUN/$entry.err" &
     pid=$!; REAL_PIDS="$REAL_PIDS $pid"
     seen=""
     for _ in $(seq 1 40); do seen="$(ps -p "$pid" -o command= 2>/dev/null | sed 's/ *$//')"; [ "$seen" = pi ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
