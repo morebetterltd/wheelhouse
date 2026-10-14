@@ -474,10 +474,17 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 After copying `seats/`, run:
 
 ```bash
-bun seats/contract.ts audit
+contract_audit_rc=0
+bun seats/contract.ts audit || contract_audit_rc=$?
+case "$contract_audit_rc" in
+  0) ;;
+  1) echo "Contract audit found legacy beads: repair their Intent: and Outcomes: before dispatch; continuing the upgrade sweep." ;;
+  *) echo "STOP: contract audit could not read the graph (exit $contract_audit_rc); repair the read failure before continuing." >&2
+     exit "$contract_audit_rc" ;;
+esac
 ```
 
-Each listed open or in_progress bead needs its `Intent:` and `Outcomes:` sections, with a consumer, surface and matching check per outcome, before the fleet can dispatch it. Use `wheelhouse/GRAPH.md`, **Every bead is a contract**, for the grammar; `bun seats/contract.ts check <bead-id>` prints every defect for one bead. Audit exits 1 for invalid contracts and 3 if the graph cannot be read: repair the read failure instead of treating it as an empty queue. `verify.ts` also refuses uncontracted work with exit 5; `WHEELHOUSE_DISPATCH_FORCE=1` does not bypass the dispatch gate. Signal and Skills are parsed here; their refusal gates are separate upgrades.
+Each listed open or in_progress bead needs its `Intent:` and `Outcomes:` sections, with a consumer, surface and matching check per outcome, before the fleet can dispatch it. Use `wheelhouse/GRAPH.md`, **Every bead is a contract**, for the grammar; `bun seats/contract.ts check <bead-id>` prints every defect for one bead. Audit exits 1 for invalid contracts and 3 if the graph cannot be read. The block reports legacy contracts without aborting the rest of the upgrade sweep, including under `set -e`; repair them before dispatch. An unreadable graph still stops the upgrade: repair the read failure instead of treating it as an empty queue. `verify.ts` also refuses uncontracted work with exit 5; `WHEELHOUSE_DISPATCH_FORCE=1` does not bypass the dispatch gate. Signal and Skills are parsed here; their refusal gates are separate upgrades.
 
 ### Adopt the autonomy mandate in existing installs
 
