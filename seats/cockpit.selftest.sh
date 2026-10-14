@@ -17,6 +17,8 @@ BRIDGE_GUARD="$HERE/bridge-guard.sh"
 [ -x "$BRIDGE_GUARD" ] || { echo "selftest: not executable: $BRIDGE_GUARD" >&2; exit 2; }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")" || exit 2
+. "$HERE/selftest-herald.sh"
+selftest_bind_herald_owner "$FIX" || exit 2
 SOCK="wheelhouse-cockpit-selftest.$$"
 PASS=0
 FAIL=0
@@ -41,7 +43,9 @@ cleanup() {
   pkill -9 -f "$FIX/project/seats/desk.ts" >/dev/null 2>&1 || true
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 
@@ -54,8 +58,10 @@ setInterval(() => {}, 1000);
 EOF
 cat > "$PROJ/seats/herald.ts" <<'EOF'
 import * as fs from "node:fs";
+import { fixtureOwner, fixtureOwnerAlive } from "./herald-owner";
+const owner = fixtureOwner(`${import.meta.dir}/..`);
 fs.writeFileSync(`${import.meta.dir}/run/herald.pid`, `${process.pid}\n`);
-setInterval(() => {}, 1000);
+setInterval(() => { if (!fixtureOwnerAlive(owner)) process.exit(0); }, 100);
 EOF
 cat > "$PROJ/seats/desk.ts" <<'EOF'
 import * as fs from "node:fs";

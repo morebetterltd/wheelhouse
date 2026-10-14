@@ -4,18 +4,24 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-supervisor.XXXXXX")" || exit 2
+. "$HERE/selftest-herald.sh"
+selftest_bind_herald_owner "$FIX" || exit 2
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/wheelhouse"
 selftest_copy_seat_runtime "$PROJ" "$HERE"; chmod +x "$PROJ/seats/supervisor.sh" "$PROJ/seats/daemons.sh"
 for d in herald desk courier; do cat > "$PROJ/seats/$d.ts" <<'TS'
 import * as fs from "node:fs";
+import { fixtureOwner, fixtureOwnerAlive } from "./herald-owner";
+const owner = import.meta.path.endsWith("/herald.ts") ? fixtureOwner(`${import.meta.dir}/..`) : null;
 if (import.meta.path.endsWith("/herald.ts")) fs.writeFileSync(`${import.meta.dir}/run/herald.pid`, `${process.pid}\n`);
 if (process.env.WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY === "1") { console.error("synthetic crash"); process.exit(42); }
-setInterval(() => {}, 1000);
+setInterval(() => { if (!fixtureOwnerAlive(owner)) process.exit(0); }, 100);
 TS
 done
 cat > "$PROJ/seats/needs.ts" <<'TS'

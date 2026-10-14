@@ -9,6 +9,15 @@ selftest_bind_herald_owner "$FIX"
 trap 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# Recorded child, but NOT a herald: a stale/unrelated PID must not be signaled.
+sleep 60 & NON_HERALD=$!
+selftest_stop_herald_child "$NON_HERALD"
+if kill -0 "$NON_HERALD" 2>/dev/null; then
+  echo 'ok - teardown refuses an unrelated direct child PID'
+  kill "$NON_HERALD"; wait "$NON_HERALD" 2>/dev/null || true
+else
+  echo 'not ok - teardown signaled an unrelated direct child PID' >&2; exit 1
+fi
 cat > "$FIX/owner.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -60,7 +69,11 @@ try:
     except subprocess.TimeoutExpired: refused=False; second.terminate(); out,err=second.communicate(timeout=3)
     print(f'singleton refusal: rc={second.returncode} stdout={out!r} stderr={err!r}',flush=True)
     check(refused and alive(first.pid) and (p/'seats/run/herald.pid').read_text().strip()==str(first.pid), 'second same-root daemon refuses in one line, leaves first and its PID intact')
-    other=launch(root('different-root')); check(alive(first.pid) and alive(other.pid), 'independent root can run its own herald'); other.terminate(); other.wait(timeout=3)
+    other=None
+    try: other=launch(root('different-root'))
+    except AssertionError: pass
+    check(other is not None and alive(first.pid) and alive(other.pid), 'independent root can run its own herald')
+    if other is not None: other.terminate(); other.wait(timeout=3)
     # Native launch helper, including a stale lock left by SIGKILL.
     first.kill(); first.wait(timeout=3)
     seats=p/'seats'; (seats/'herald.ts').symlink_to(here/'herald.ts')
@@ -89,5 +102,5 @@ finally:
     for pid in detached:
         if alive(pid): os.kill(pid,signal.SIGTERM); until(lambda:not alive(pid))
 if failures: print('herald-lifetime.selftest: FAIL ('+str(len(failures))+' checks)'); sys.exit(1)
-print('herald-lifetime.selftest: PASS (8 checks)')
+print('herald-lifetime.selftest: PASS (9 checks)')
 PY

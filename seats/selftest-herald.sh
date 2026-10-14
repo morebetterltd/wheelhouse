@@ -10,12 +10,20 @@ selftest_bind_herald_owner() {
   printf '%s\n%s\n%s\n%s\n' "$$" "$started" "$(id -u)" "$root" > "$root/.wheelhouse-herald-owner"
 }
 
-# Only the direct child recorded at our own exec launch is waited/stopped here.
+# A waited/reaped PID can be reused. Check the direct child relationship AND
+# herald command afresh before each signal, never a pidfile/prefix adoption.
+selftest_herald_child_is_ours() {
+  local identity
+  identity="$(ps -ww -p "$1" -o ppid=,command= 2>/dev/null)"
+  [ "$(printf '%s\n' "$identity" | awk '{print $1}')" = "$$" ] || return 1
+  case "$identity" in *bun*herald.ts*) return 0;; *) return 1;; esac
+}
 selftest_stop_herald_child() {
   local pid="${1:-}"
   [ -n "$pid" ] || return 0
+  selftest_herald_child_is_ours "$pid" || return 0
   kill -TERM "$pid" 2>/dev/null || true
-  for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
-  kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+  for _ in $(seq 1 30); do selftest_herald_child_is_ours "$pid" || break; sleep 0.1; done
+  selftest_herald_child_is_ours "$pid" && kill -KILL "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }
