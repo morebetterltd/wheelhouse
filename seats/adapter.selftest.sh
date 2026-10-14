@@ -35,6 +35,7 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ADAPTER="${1:-$HERE/adapter.ts}"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 ADAPTER_DIR="$(cd "$(dirname "$ADAPTER")" && pwd)"
 BRIEFS="$ADAPTER_DIR/briefs.ts"
 FLOOR="$ADAPTER_DIR/floor.ts"
@@ -155,6 +156,7 @@ if (mi !== -1) {
 }
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
+fs.appendFileSync(path.join(agentDir, "launches.jsonl"), JSON.stringify({pid:process.pid}) + "\n");
 // The adapter sets our cwd by construction (child_process spawn's cwd
 // option), not by telling us in a prompt to cd there. Recording it here
 // lets the selftest see what the OS-level cwd actually was, not what the
@@ -304,7 +306,7 @@ cat > "$BIN/bd" <<'BDSTUB'
 case "$1" in
   ready) printf '[{"id":"fixture-ready"}]\n' ;;
   show)
-    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf '[]\n'; fi ;;
+    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi ;;
   list)
     status=""
     for a in "$@"; do case "$a" in --status=*) status="${a#--status=}" ;; esac; done
@@ -419,6 +421,30 @@ build_proj "$PROJ" alpha
 # must not ask `bd show` for an Integration: line when it resolves a base.
 run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_LEAK_BEAD_PREFIX=demo FIXTURE_BD_CLOSED_FILE="${FIXTURE_BD_CLOSED_FILE:-}" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+RUN_PROJ="$PROJ"
+
+phase "contract gate: no-surface dispatch is refused before any side effect"
+REFUSE_PROJ="$FIX/contract-refusal"
+build_proj "$REFUSE_PROJ" contract-refusal
+RUN_PROJ="$REFUSE_PROJ"
+# Preparation-only spawn is deliberately not gated, even for an invalid bead.
+WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/outcome-no-surface.md" run spawn worker-1 prepared-bead
+[ "$RC" = 0 ] && pass 'spawn prepares an uncontracted bead without dispatching a prompt' || fail "preparation spawn rc=$RC: $OUT"
+run stop worker-1
+cp -f "$REFUSE_PROJ/seats/state.json" "$FIX/contract-state.before"
+fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/contract-worktrees.before"
+CONTRACT_WT="$(seat_wt "$REFUSE_PROJ")"
+fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/contract-status.before"
+LAUNCHES_BEFORE="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
+WHEELHOUSE_DISPATCH_FORCE=1 WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/outcome-no-surface.md" run dispatch worker-1 invalid-contract 'must never reach a seat'
+[ "$RC" = 1 ] && says 'invalid-contract is not a contract' && says 'invalid-contract: O1: surface: missing' && pass 'contract refusal: dispatch STOP names bead, outcome and surface; force cannot bypass' || fail "contract refusal: dispatch was not refused rc=$RC: $OUT"
+if cmp -s "$FIX/contract-state.before" "$REFUSE_PROJ/seats/state.json"; then pass 'contract refusal: seats/state.json byte-identical before and after'; else fail 'contract refusal: seats/state.json changed'; fi
+fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/contract-worktrees.after"
+fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/contract-status.after"
+if cmp -s "$FIX/contract-worktrees.before" "$FIX/contract-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/contract-status.after"; then pass 'contract refusal: seat worktree branch, HEAD, registration and status unchanged'; else fail 'contract refusal: seat worktree changed'; fi
+LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
+[ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ] && pass 'contract refusal: no process spawned' || fail 'contract refusal: a harness process was spawned'
+if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 RUN_PROJ="$PROJ"
 
 phase "0a. launch paths validate the whole roster before choosing a seat"

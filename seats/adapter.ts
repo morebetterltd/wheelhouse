@@ -57,6 +57,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
+import { checkBeadContract, contractRemedy } from "./contract";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1258,6 +1259,8 @@ function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatD
   return PI_DRIVER;
 }
 // SPLICE 3/6 (seat worktrees): spawn with a bead prepares the seat worktree.
+// spawn <seat> <bead-id> prepares a worktree but sends no prompt: contract
+// enforcement belongs to dispatch, not to this preparation-only command.
 async function cmdSpawn(name: string, beadId?: string, base: string | null = null): Promise<void> {
   const entry = requireSeat(name);
   const cwd = beadId ? prepareSeatCwd(name, entry, beadId, base) : ROOT;
@@ -1450,8 +1453,14 @@ async function healWedgedSeat(name: string, rec: SeatRecord, context: string): P
 // the bead's branch, relaunches only when the seat's cwd actually changes
 // (first dispatch from the root, or a pruned cwd), and kicks the closed-bead
 // cleanup for the bead the seat just left.
+function refuseUncontractedDispatch(beadId: string): void {
+  const contract = checkBeadContract(ROOT, beadId);
+  if (contract.errors.length) die(contractRemedy(beadId, contract.errors));
+}
+
 async function cmdDispatch(name: string, beadId: string, text: string, base: string | null = null, retriedWedged = false): Promise<void> {
   let rec = readState().seats[name];
+  refuseUncontractedDispatch(beadId); // contract-gate: before RPC, state writes, worktree changes or launch; force never bypasses
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
   // Looked up lazily: a running seat whose roster entry was removed can still
   // be dispatched into its current cwd, and its failures stay visible.
