@@ -12,6 +12,7 @@ fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
 ROOT="$FIX/project"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/run" "$ROOT/seats/logs" "$ROOT/wheelhouse" "$BIN" "$HOME_FIX"
 selftest_copy_seat_runtime "$ROOT" "$HERE"
+[ "$#" = 0 ] || cp -f "$1" "$ROOT/seats/alerts.ts"
 chmod +x "$ROOT/seats/template-drift.sh"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"seats":{"worker-a":{"role":"worker","runtime":"pi","account":{"dir":"~/.pi-seats-alerts/worker-a"}},"commander":{"role":"commander","external":true}}}
@@ -25,7 +26,7 @@ github-issue-repos=fixture/repo
 EOF
 cat > "$ROOT/seats/template-drift.sh" <<'SH'
 #!/usr/bin/env bash
-if [ "${DRIFT_ON:-0}" = 1 ]; then printf '{"error":null,"modified":["README.md"],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; elif [ "${DRIFT_AHEAD:-0}" = 1 ]; then printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":2,"comparedAgainst":"fixture"}\n'; else printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; fi
+if [ -n "${DRIFT_JSON:-}" ]; then printf '%s\n' "$DRIFT_JSON"; elif [ "${DRIFT_ON:-0}" = 1 ]; then printf '{"error":null,"modified":["README.md"],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; elif [ "${DRIFT_AHEAD:-0}" = 1 ]; then printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":2,"comparedAgainst":"fixture"}\n'; else printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; fi
 SH
 chmod +x "$ROOT/seats/template-drift.sh"
 printf '{"seats":{}}\n' > "$ROOT/seats/state.json"
@@ -68,6 +69,68 @@ PY
 clear_runtime(){ rm -f "$ROOT/seats/run/fleet-snapshot.json" "$ROOT/seats/inbox.jsonl" "$ROOT/seats/needs.jsonl" "$ROOT/seats/logs/alerts.log" "$ROOT/seats/inbox.cursor" "$ROOT/seats/run/herald.target.json" "$ROOT/seats/run/alerts.lock"; printf '{"seats":{}}\n' > "$ROOT/seats/state.json"; set_low_disk 0; }
 quiet3(){ local before name; name="$1"; before="$(inbox_count)"; run_alert "$@"; run_alert bun seats/alerts.ts check --json; run_alert bun seats/alerts.ts check --json; [ "$(inbox_count)" = "$before" ]; }
 age_alert(){ node -e 'const fs=require("fs"); const f=process.argv[1], n=process.argv[2]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.alerts[n].since="2000-01-01T00:00:00.000Z"; fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n");' "$ROOT/seats/run/fleet-snapshot.json" "$1"; }
+
+# Drift's consumer is the inbox: set membership, not categories/order/counts,
+# controls a fresh hold and a single raise. Test time is aged in owned state.
+drift_set_cases(){
+  local a b moved first signature since fired
+  a='{"error":null,"modified":["b.ts","a.ts"],"localOnly":[],"missing":[],"aheadBy":0}'
+  b='{"error":null,"modified":["c.ts"],"localOnly":[],"missing":[],"aheadBy":0}'
+  moved='{"error":"comparison detail changed","modified":[],"localOnly":["b.ts","b.ts"],"missing":["a.ts"],"aheadBy":7}'
+  clear_runtime
+  WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$a" run_alert bun seats/alerts.ts check --json
+  [ "$RC" = 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] || fail "set fixture did not start pending: $OUT"
+  age_alert template-drift
+  WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$a" run_alert bun seats/alerts.ts check --json
+  [ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] || fail "set fixture first raise missing: $OUT"
+  first="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
+  if [ "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" != changed ]; then
+    for variant in "$a" '{"modified":["a.ts","b.ts","a.ts"],"localOnly":[],"missing":[],"aheadBy":2}' "$moved"; do
+      WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$variant" run_alert bun seats/alerts.ts check --json
+      current="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
+      [ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] && [ "$current" = "$first" ] || fail "same-set re-raised or changed its clock/signature: rc=$RC rows=$(inbox_count) first=$first current=$current"
+    done
+    # Existing deployments persisted the old object-shaped signature. Preserve
+    # an already fired same set across this upgrade instead of re-holding it.
+    node -e 'const fs=require("fs"),f=process.argv[1],j=JSON.parse(fs.readFileSync(f,"utf8"));j.alerts["template-drift"].signature=JSON.stringify({e:null,m:["b.ts"],l:["a.ts"],mi:[],a:99});fs.writeFileSync(f,JSON.stringify(j));' "$ROOT/seats/run/fleet-snapshot.json"
+    WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$a" run_alert bun seats/alerts.ts check --json
+    current="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
+    [ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] && [ "$current" = "$first" ] || fail "legacy same-set signature restarted or re-raised: $current"
+    [ "$FAILED" = 0 ] && pass 'same drift set never re-raises or resets state: reorder, duplicates, category moves, aheadBy/error detail changes, persisted legacy signature'
+  fi
+  if [ "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" != same ]; then
+    WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$b" run_alert bun seats/alerts.ts check --json
+    [ "$RC" = 0 ] && ! active template-drift && [ "$(inbox_count)" = 1 ] || fail "changed set reused old hold: rc=$RC rows=$(inbox_count) out=$OUT"
+    age_alert template-drift
+    WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$b" run_alert bun seats/alerts.ts check --json
+    [ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 2 ] || fail "changed set did not re-raise after own hold: rc=$RC rows=$(inbox_count) out=$OUT"
+    WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$a" run_alert bun seats/alerts.ts check --json
+    [ "$RC" = 0 ] && ! active template-drift && [ "$(inbox_count)" = 2 ] || fail "returning set did not start its own hold"
+    age_alert template-drift
+    WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$a" run_alert bun seats/alerts.ts check --json
+    [ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 3 ] || fail "returning changed set did not re-raise after own hold"
+    [ "$FAILED" = 0 ] && pass 'changed drift set starts a fresh hold and re-raises exactly once; returning old set gets a new hold'
+  fi
+}
+phase 'drift file-set design'
+case "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" in all|same|changed) ;; *) echo 'invalid drift test case' >&2; exit 2;; esac
+drift_set_cases
+if [ "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" != all ]; then
+  [ "$FAILED" = 0 ] && { echo 'drift-set selftest: PASS'; exit 0; }
+  echo "drift-set selftest: FAIL ($FAILED failure(s))" >&2; exit 1
+fi
+
+phase 'empty drift set'
+clear_runtime
+WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_AHEAD=1 run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] || fail 'ahead-only empty set did not start pending'
+age_alert template-drift
+WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON='{"error":"first failure","modified":[],"localOnly":[],"missing":[],"aheadBy":0}' run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] || fail 'empty set restarted its hold when ahead became an error'
+empty_first="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
+WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON='{"error":"different detail","modified":[],"localOnly":[],"missing":[],"aheadBy":9}' run_alert bun seats/alerts.ts check --json
+empty_current="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 1 ] && [ "$empty_first" = "$empty_current" ] && pass 'ahead-only and error-only drift share one empty-set hold and never re-raise while persisting' || fail "empty set re-raised or reset state: $empty_current"
 
 phase 'interval parsing'
 clear_runtime; unset WHEELHOUSE_ALERT_INTERVAL_MS; run_alert bun seats/alerts.ts check --json; unset_interval="$(node -e 'console.log(require(process.argv[1]).intervalMs)' "$ROOT/seats/run/fleet-snapshot.json")"
@@ -194,7 +257,8 @@ from pathlib import Path
 import sys
 p=Path(sys.argv[1])
 s=p.read_text()
-s=s.replace('if(next.active&&(!was?.active||was.signature!==next.signature))','if(next.active)')
+assert 'if(shouldFire)' in s, 'canary subject absent'
+s=s.replace('if(shouldFire)','if(next.active)')
 p.write_text(s)
 PY
 rm -f "$CAN/seats/inbox.jsonl" "$CAN/seats/run/fleet-snapshot.json"; (cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1 && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1); CCOUNT="$( [ -f "$CAN/seats/inbox.jsonl" ] && wc -l < "$CAN/seats/inbox.jsonl" | tr -d ' ' || echo 0 )"

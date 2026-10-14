@@ -54,7 +54,29 @@ function stringArray(raw:string){ return raw.split(/[,;]/).map(s=>s.trim()).filt
 function githubInfo(){ const watch=templateValue("github-issue-watch"); const repos=githubIssueRepos(); if(["off","false","disabled","none","0"].includes(watch)) return {untriaged:null,repos}; if(spawnSync("gh",["--version"],{stdio:"ignore"}).status!==0) return {untriaged:null,repos}; const include=new Set(stringArray(templateValue("github-issue-include-labels"))); const exclude=new Set(stringArray(templateValue("github-issue-exclude-labels"))); const author=templateValue("github-issue-author"); const traced=(spawnSync("bd",["list","--status","open","--limit","0","--json"],{cwd:ROOT,encoding:"utf8"}).stdout||"")+"\n"+(spawnSync("bd",["list","--status","in_progress","--limit","0","--json"],{cwd:ROOT,encoding:"utf8"}).stdout||"")+"\n"+(spawnSync("bd",["list","--status","deferred","--limit","0","--json"],{cwd:ROOT,encoding:"utf8"}).stdout||""); const out:string[]=[]; for(const repo of repos){ const r=spawnSync("gh",["issue","list","-R",repo,"--state","open","--limit","100","--json","url,labels,author"],{encoding:"utf8",timeout:30000}); if(r.status!==0) return {untriaged:null,repos}; let issues:any[]=[]; try{issues=JSON.parse(r.stdout||"[]")}catch{} for(const issue of issues){ const labels=(issue.labels||[]).map((l:any)=>typeof l==="string"?l:l?.name).filter(Boolean); if(author&&issue.author?.login!==author) continue; if(include.size&&!labels.some((l:string)=>include.has(l))) continue; if(labels.some((l:string)=>exclude.has(l))) continue; if(issue.url&&!traced.includes(issue.url)) out.push(issue.url); } } return {untriaged:out.sort(),repos}; }
 function driftInfo(){ const script=path.join(SEATS,"template-drift.sh"); if(!fs.existsSync(script)) return {error:"template-drift.sh missing", modified:[], localOnly:[], missing:[], aheadBy:null}; const r=spawnSync("bash",[script,"--json",ROOT],{cwd:ROOT,encoding:"utf8",timeout:30000}); try { return JSON.parse(r.stdout||"{}"); } catch { return {error:(r.stderr||r.stdout||"template drift failed").trim(), modified:[], localOnly:[], missing:[], aheadBy:null}; } }
 function alertRow(active:boolean, prior:AlertState|undefined, signature=""):AlertState{ const n=now(); if(active){ if(prior?.active&&prior.signature===signature) return {...prior, active:true}; return {active:true,since:n,lastFiredAt:n,needId:prior?.needId??null,signature}; } return {active:false,since:null,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature}; }
-function heldAlertRow(active:boolean, prior:AlertState|undefined, signature:string, holdMs:number):AlertState{ const n=now(); if(!active) return {active:false,since:null,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature}; const firstSeen = prior?.since ?? n; if(Date.now()-Date.parse(firstSeen)<holdMs) return {active:false,since:firstSeen,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature}; if(prior?.active) return {...prior, active:true, signature}; return {active:true,since:firstSeen,lastFiredAt:n,needId:prior?.needId??null,signature}; }
+// The set is the sorted, de-duplicated union of modified, localOnly and
+// missing paths. Reordering, duplicates, category moves and aheadBy changes
+// don't re-raise. Ahead-only/error-only drift keeps its first hold as an
+// empty-path-set condition. Each changed set waits its own 10-minute hold;
+// a full clear resets the clock.
+function driftFileSetSignature(drift:any):string {
+  const candidates=Array.isArray(drift) ? drift : [drift.modified??drift.m, drift.localOnly??drift.l, drift.missing??drift.mi].flatMap(xs=>Array.isArray(xs)?xs:[]);
+  return JSON.stringify([...new Set(candidates.filter(p=>typeof p==="string"&&p.length>0))].sort());
+}
+function priorDriftSignature(signature:string|undefined):string {
+  if(!signature) return "";
+  try { const parsed=JSON.parse(signature); if(parsed && typeof parsed==="object") return driftFileSetSignature(parsed); } catch {}
+  return signature;
+}
+function heldAlertRow(active:boolean, prior:AlertState|undefined, signature:string, holdMs:number):AlertState {
+  const n=now();
+  if(!active) return {active:false,since:null,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature};
+  const sameSet=prior?.signature===signature;
+  const firstSeen=sameSet ? prior?.since??n : n;
+  if(Date.now()-Date.parse(firstSeen)<holdMs) return {active:false,since:firstSeen,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature};
+  if(sameSet&&prior?.active) return {...prior,active:true,signature};
+  return {active:true,since:firstSeen,lastFiredAt:n,needId:prior?.needId??null,signature};
+}
 function appendInboxAlert(name:AlertName, detail:string){
   fs.mkdirSync(SEATS,{recursive:true});
   const row={id:`alert-${name}-${Date.now()}`,at:now(),seat:"herald",class:"alert",state:"input-required",title:title(name),detail,source:{type:"alerts",name}};
@@ -76,10 +98,10 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
     "capacity-events":{on:capacity.seats.length>0,sig:capacity.seats.join("\n")},
     "low-disk":{on:disk.freeBytes!==null&&disk.freeBytes<disk.thresholdBytes,sig:""},
     "commander-pane-invalid":{on:herald.target?.status?herald.target.status!=="ok":false,sig:String(herald.target?.status??"")},
-    "template-drift":{on:!!(drift.error||(drift.modified?.length||drift.localOnly?.length||drift.missing?.length)||Number(drift.aheadBy||0)>0),sig:JSON.stringify({e:drift.error,m:drift.modified,l:drift.localOnly,mi:drift.missing,a:drift.aheadBy})},
+    "template-drift":{on:!!(drift.error||(drift.modified?.length||drift.localOnly?.length||drift.missing?.length)||Number(drift.aheadBy||0)>0),sig:driftFileSetSignature(drift)},
   };
   const alerts:Record<string,AlertState>={};
-  for(const name of Object.keys(active) as AlertName[]){ const was=priorAlerts[name]; const next=name==="template-drift" ? heldAlertRow(active[name].on,was,active[name].sig,TEMPLATE_DRIFT_ALERT_HOLD_MS) : alertRow(active[name].on,was,active[name].sig); const shouldFire = name==="template-drift" ? next.active&&!was?.active : next.active&&(!was?.active||was.signature!==next.signature); if(shouldFire){ appendLog(`alert fired ${name}`); appendInboxAlert(name, bodyFor(name)); } if(!next.active&&was?.active){ appendLog(`alert cleared ${name}`); if(was.needId) needClose(was.needId); next.needId=null; } if(next.active) maybeHuman(name,next); alerts[name]=next; }
+  for(const name of Object.keys(active) as AlertName[]){ const stored=priorAlerts[name]; const was=name==="template-drift"&&stored ? {...stored,signature:priorDriftSignature(stored.signature)} : stored; const next=name==="template-drift" ? heldAlertRow(active[name].on,was,active[name].sig,TEMPLATE_DRIFT_ALERT_HOLD_MS) : alertRow(active[name].on,was,active[name].sig); const shouldFire = next.active&&(!was?.active||was.signature!==next.signature); if(shouldFire){ appendLog(`alert fired ${name}`); appendInboxAlert(name, bodyFor(name)); } if(!next.active&&was?.active){ appendLog(`alert cleared ${name}`); if(was.needId) needClose(was.needId); next.needId=null; } if(next.active) maybeHuman(name,next); alerts[name]=next; }
   return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,github,drift,alerts};
 }
 export function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }
