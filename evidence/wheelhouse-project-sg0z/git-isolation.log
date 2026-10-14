@@ -1,0 +1,20 @@
+before: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+RUN ['bash', 'seats/git-isolation.selftest.sh']
+PASS fixture Git boundary audit (47 suite setups)
+PASS negative control: removing the ceiling moves only the throwaway enclosing HEAD (regression exits 1)
+PASS failed dispatch, fixture root, plain directory, nested repo, worktree and their subdirectories stay contained
+git-isolation.selftest: PASS
+after: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+umbrella safety: PASS (0 permitted new reflog entries); test exit=0
