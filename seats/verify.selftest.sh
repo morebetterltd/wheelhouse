@@ -246,6 +246,25 @@ if (process.env.STUB_BD_READONLY_CHECK === "1") {
   });
   fs.writeFileSync(path.join(agentDir, "bd-readonly-check.json"), JSON.stringify(cases, null, 2));
 }
+if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
+  const prompt = process.argv[process.argv.length - 1] || "";
+  const rc = (prompt.match(/^- rc: (\d+)/m) || [])[1] || "";
+  const log = (prompt.match(/^- log: (.+)$/m) || [])[1] || "";
+  let logText = "", ok = false;
+  try { logText = fs.readFileSync(log, "utf8"); ok = rc === "0" && logText.includes("fixture sweep PASS") && logText.includes("scratch bd create ok"); } catch (e) { logText = `read failed: ${e.message}`; }
+  fs.writeFileSync(path.join(agentDir, "sweep-prompt-check.json"), JSON.stringify({ rc, log, ok, logText }, null, 2));
+  const cp = require("child_process");
+  const readonly = cp.spawnSync("bd", ["create", "reviewer must not write"], { encoding: "utf8" });
+  if (!log) {
+    const attempted = cp.spawnSync("bash", ["seats/selftest-sweep.sh"], { timeout: 150, encoding: "utf8" });
+    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\n`}})+"\n");
+    process.exit(0);
+  }
+  const verdict = ok && readonly.status !== 0 ? "APPROVE" : "BOUNCE";
+  const citation = process.env.STUB_SWEEP_OMIT_CITATION === "1" ? "sweep omitted" : `sweep evidence rc=${rc} log=${log}`;
+  process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`${citation}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : verdict}\nPUSH: NOT CONSIDERED\n`}})+"\n");
+  process.exit(0);
+}
 if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
   const cp = require("child_process");
   const scratchGraph = path.join(process.cwd(), "bd-scratch");
@@ -420,9 +439,10 @@ readonly=0
 while true; do
   case "${1:-}" in
     --readonly) readonly=1; shift; continue ;;
-    -C|--directory) shift 2; continue ;;
+    -C|--directory) cd "$2"; shift 2; continue ;;
+    --directory=*) cd "${1#--directory=}"; shift; continue ;;
     --actor|--db|--database) shift 2; continue ;;
-    --db=*|--database=*|--directory=*) shift; continue ;;
+    --db=*|--database=*) shift; continue ;;
     --global) shift; continue ;;
   esac
   break
@@ -611,6 +631,13 @@ run_bench_check() {  # args pass through to verify.ts
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
+run_sweep_prompt_check() {  # $1 = bd-show file, remaining args pass through
+  local bdfile="$1"
+  shift
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_SHOW_FILE="$bdfile" STUB_SWEEP_PROMPT_CHECK=1 \
+    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+  RC=$?
+}
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 VDIR="$PROJ/seats/verdicts"
@@ -709,6 +736,110 @@ if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-sea
   && ! grep -q '"rc": 127' "$BENCH_RUN" 2>/dev/null; then
   pass "installed-layout stub bench receives WHEELHOUSE_REAL_BD and writes only its scratch BEADS_DIR graph"
 else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
+
+phase "0a2. dispatcher-owned full sweep evidence for reviewer"
+SWEEP_PROJ="$FIX/sweep-proj"
+build_proj "$SWEEP_PROJ" sweep "$VERIFY"
+# Real bd 1.2.2 may redirect a linked-worktree init to its shared ancestor;
+# keep graph setup in an independent primary repo with consistent cwd/PWD.
+SWEEP_BIN="$FIX/sweep-bin"; mkdir -p "$SWEEP_BIN"
+export STUB_SWEEP_BASE_BD="$BIN/bd" STUB_SWEEP_PWD_MARKER="$FIX/sweep-pwd.json"
+cat > "$SWEEP_BIN/bd" <<'JS'
+#!/usr/bin/env node
+const fs=require('fs'),cp=require('child_process');
+if(process.argv[2]==='where') {
+  console.log(JSON.stringify({path:fs.realpathSync(require('path').join(process.cwd(),'.beads'))})); process.exit(0);
+}
+if(process.argv[2]==='init') {
+  const cwd=fs.realpathSync(process.cwd()),pwd=process.env.PWD ? fs.realpathSync(process.env.PWD) : '';
+  const primary=fs.statSync(require('path').join(cwd,'.git')).isDirectory();
+  if(pwd!==cwd || !primary) { console.error('scratch bd init requires an isolated primary repo and consistent PWD'); process.exit(73); }
+  fs.writeFileSync(process.env.STUB_SWEEP_PWD_MARKER,JSON.stringify({cwd,pwd,primary}));
+}
+const r=cp.spawnSync(process.env.STUB_SWEEP_BASE_BD,process.argv.slice(2),{stdio:'inherit',env:process.env});
+if(r.status===0 && process.argv[2]==='init' && process.env.STUB_SWEEP_MUTATE_SETUP==='1') {
+  cp.execFileSync('git',['-c','user.name=selftest','-c','user.email=selftest@local','commit','--allow-empty','-qm','bad sweep setup'],{cwd:require('path').dirname(process.cwd())});
+}
+process.exit(r.status ?? 1);
+JS
+chmod +x "$SWEEP_BIN/bd"
+SWEEP_SAVED_RUN_PATH="$RUN_PATH"; RUN_PATH="$SWEEP_BIN:$RUN_PATH"
+cp -f "$VERIFY_DIR/selftest-sweep.sh" "$SWEEP_PROJ/seats/selftest-sweep.sh"
+cat > "$SWEEP_PROJ/seats/slowed.selftest.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+sleep 2
+[ -n "${WHEELHOUSE_REAL_BD:-}" ] || { echo 'missing WHEELHOUSE_REAL_BD'; exit 8; }
+printf 'sweep cwd tip=%s\n' "$(git rev-parse HEAD)"
+bd create 'sweep scratch bead' --json >/dev/null
+printf 'scratch bd create ok\n'
+printf 'fixture sweep PASS\n'
+if [ "${SWEEP_FIXTURE_MOVE_TIP:-0}" = 1 ]; then
+  git -c user.name=selftest -c user.email=selftest@local commit --allow-empty -qm 'bad suite mutation'
+fi
+exit "${SWEEP_FIXTURE_RC:-0}"
+SH
+chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
+git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/slowed.selftest.sh
+git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
+git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
+SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
+SWEEP_BD_SHOW="$FIX/sweep-bd-show.txt"
+cat > "$SWEEP_BD_SHOW" <<'EOF'
+○ bead-sweep [task]
+
+DESCRIPTION
+
+  ## Done
+
+  The full seats/*.selftest.sh sweep passes.
+EOF
+RUN_PROJ="$SWEEP_PROJ"
+VARGV="$HOME_FIX/.pi-seats-sweep/verifier/argv.json"
+SWEEP_LOCK="$FIX/review-sweep.lock"
+# First reproduce the old dispatch path: no precomputed evidence, model tool
+# budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
+# Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
+cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
+python3 - "$SWEEP_PROJ/seats/verify.ts" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); s=p.read_text(); s=s.replace('const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);', 'const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};'); p.write_text(s)
+PY
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
+if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
+cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
+# A real H4 holder outlives the reviewer's 3s watchdog; dispatcher must wait.
+bash -c 'printf "pid=%s\n" "$$" > "$1"; sleep 4; rm -f "$1"' _ "$SWEEP_LOCK" & HOLDER=$!
+while [ ! -f "$SWEEP_LOCK" ]; do sleep 0.01; done
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1 --timeout-ms 3000 --no-event-timeout-ms 3000 --first-output-timeout-ms 3000
+wait "$HOLDER"
+SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
+SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
+  pass "full-sweep done: exact tip, H4 wait outside model limit, scratch bd, reviewer cites rc/log"
+else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$SWEEP_CHECK" 2>/dev/null)"; fi
+if [ -f "$STUB_SWEEP_PWD_MARKER" ] && node -e 'const r=require(process.argv[1]); if(!r.primary || r.cwd!==r.pwd || require("path").basename(r.cwd)!==".wheelhouse-sweep-graph") process.exit(1)' "$STUB_SWEEP_PWD_MARKER"; then
+  pass "sweep graph init uses an independent primary repo and bound logical PWD"
+else fail "sweep graph init was not isolated from the reviewed repository"; fi
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_OMIT_CITATION=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-omit fleet/bead-1 worker-1
+[ $RC -eq 1 ] && says 'must cite full-sweep' && pass "full-sweep verdict without rc/log citation is refused" || fail "missing citation accepted rc=$RC out=$OUT"
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" SWEEP_FIXTURE_RC=7 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-failed fleet/bead-1 worker-1
+[ $RC -eq 1 ] && says 'APPROVE with failed full sweep' && pass "failed full sweep cannot be approved" || fail "failed sweep approved rc=$RC out=$OUT"
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_MUTATE_SETUP=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-setup-moved fleet/bead-1 worker-1
+SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
+if [ $RC -eq 1 ] && says 'APPROVE with failed full sweep' && grep -q 'changed reviewed tip' "$SWEEP_LOG"; then
+  pass "sweep setup cannot commit past the pinned reviewed tip"
+else fail "setup mutation of reviewed tip accepted rc=$RC out=$OUT"; fi
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" SWEEP_FIXTURE_MOVE_TIP=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-final-moved fleet/bead-1 worker-1
+SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
+if [ $RC -eq 1 ] && says 'APPROVE with failed full sweep' && grep -q 'changed reviewed tip' "$SWEEP_LOG"; then
+  pass "sweep suites cannot move the pinned reviewed tip"
+else fail "suite mutation of reviewed tip accepted rc=$RC out=$OUT"; fi
+RUN_PATH="$SWEEP_SAVED_RUN_PATH"
+unset STUB_SWEEP_BASE_BD STUB_SWEEP_PWD_MARKER
+RUN_PROJ="$INST_PROJ"
+VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
 MISS_PROJ="$FIX/missing-brief-proj"
 build_proj "$MISS_PROJ" missing "$VERIFY"
 rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"

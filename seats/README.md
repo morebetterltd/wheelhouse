@@ -499,6 +499,28 @@ to the real `bd` binary behind the shim. Bench code must call
 `${WHEELHOUSE_REAL_BD:-bd}` with its own scratch `BEADS_DIR`; bare `bd`
 through `PATH` remains the read-only shim inside the verifier process.
 
+When the dispatched task requires a full sweep (names `selftest-sweep.sh` or
+says the full `seats/*.selftest.sh` sweep passes), `verify.ts` runs
+`bash seats/selftest-sweep.sh` **before** starting the reviewer. It uses a
+separate detached worktree at the pinned tip, waits for the runner's host-wide
+H4 lock without a model-command timeout, and streams output to a unique
+`seats/verdicts/sweeps/<tip>.*.selftest-sweep.log`. The dispatcher initializes
+an isolated graph in a nested primary repository and links it at the sweep
+root's `.beads`: bd setup never initializes a shared ancestor graph or commits
+setup files into the reviewed history. Logical `PWD` and process cwd agree;
+the pinned HEAD is checked again after setup and after the suites. Real `bd`
+is supplied only to the sweep; suites still create their own fixture graphs. No writable graph or PATH override is
+passed to the reviewer. Live-login smoke legs are skipped explicitly with
+`WHEELHOUSE_SKIP_REAL_PI=1`; claims requiring those legs still need separate
+account-safe evidence. The reviewer receives the tip, rc and log path and must
+cite `rc=<number>` and that path in its final evidence. A failed sweep cannot
+be approved, and a verdict missing the citation is rejected. The verdict and
+log are working copies: transcribe decisive output to the task before citing
+it as durable graph evidence. A caller with its own hard per-command cap
+must launch this long-running dispatcher in the background (for example with
+`nohup`) and poll the retained log/verdict, rather than putting the whole
+dispatch under that caller's command timeout.
+
 `process.on("exit", ...)` cannot run on SIGKILL, so killing the dispatcher
 process mid-verification leaves the scratch worktree (and its `git
 worktree` registration) behind — same gap class recover.ts's fixture
