@@ -37,7 +37,7 @@ Then write the file:
 
 ```bash
 { echo "source=git@github.com:morebetterltd/wheelhouse.git"
-  echo "commit=<the commit you recovered, or 'unknown'>"
+  echo "commit=<the recovered lowercase hexadecimal commit, 7-40 characters>"
   echo "path=<disposable cache path, filled in step 1>"
   echo "product-repo=$(pwd -P)"
   echo "merge-target=<the branch reviewed work integrates into, e.g. main or staging>"
@@ -53,7 +53,7 @@ Then write the file:
 } > wheelhouse/.template-source
 ```
 
-`commit=unknown` is honest and still useful — the integrity check runs on it, you just do not get the behind-versus-damaged diagnosis in step 5 until your next upgrade sets a real one. `path=` is the one field expected to die: it is only a cache hint. Existing installs may record a stale path into some other checkout; that is now harmless as long as `source=` and `commit=` are correct.
+A historical `commit=unknown` may honestly record missing provenance, but cache recovery and integrity verification now REFUSE it. Resolve and record a lowercase hexadecimal commit (7-40 characters) before continuing; no path is removed on an invalid value. `path=` is the one field expected to die: it is only a cache hint. Existing installs may record a stale path into some other checkout; that is now harmless as long as `source=` and `commit=` are correct.
 
 The `github-issue-*` lines are optional alerts configuration; append them to older `.template-source` files if you want the defaults visible before changing them. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login). `seats/alerts.ts` writes the result into `seats/run/fleet-snapshot.json`; the optional fleet-gate reader only displays active alert names from that snapshot.
 
@@ -84,16 +84,28 @@ The install clones with `--depth 1`, which is enough to copy files and **not** e
 ```bash
 SOURCE=$(sed -n 's/^source=//p' wheelhouse/.template-source)
 BASE=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
+[[ "$BASE" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$BASE" >&2; exit 1; }
 TARGET=main     # the template ref you are upgrading TO: a branch, a tag, or a SHA
-CACHE=wheelhouse/.template-cache/${TARGET//[^A-Za-z0-9._-]/_}
-mkdir -p wheelhouse/.template-cache
+CACHE_NAME=${TARGET//[^A-Za-z0-9._-]/_}
+case "$CACHE_NAME" in ''|.*) printf "STOP: unsafe TARGET cache name='%s' from TARGET='%s'\n" "$CACHE_NAME" "$TARGET" >&2; exit 1;; esac
+ROOT="$(pwd -P)"
+CACHE_ROOT="$ROOT/wheelhouse/.template-cache"
+CACHE="$CACHE_ROOT/$CACHE_NAME"
+[ ! -L "$CACHE_ROOT" ] || { echo "STOP: cache root is a symlink: $CACHE_ROOT" >&2; exit 1; }
+[ "$(cd "$ROOT/wheelhouse" && pwd -P)" = "$ROOT/wheelhouse" ] || { echo "STOP: wheelhouse is not the physical install directory" >&2; exit 1; }
+mkdir -p "$CACHE_ROOT" || { echo "STOP: cannot create cache root: $CACHE_ROOT" >&2; exit 1; }
+[ -d "$CACHE_ROOT" ] && [ ! -L "$CACHE_ROOT" ] || { echo "STOP: cache root is not a real directory: $CACHE_ROOT" >&2; exit 1; }
+CACHE_REAL=$(cd "$CACHE_ROOT" && pwd -P) || { echo "STOP: cannot resolve cache root" >&2; exit 1; }
+[ "$CACHE_REAL" = "$CACHE_ROOT" ] || { echo "STOP: cache root escapes install: $CACHE_ROOT" >&2; exit 1; }
+CACHE_PARENT=$(cd "$(dirname "$CACHE")" && pwd -P) || { echo "STOP: cannot resolve cache parent" >&2; exit 1; }
+[ "$CACHE_PARENT" = "$CACHE_REAL" ] && [ ! -L "$CACHE" ] || { echo "STOP: cache path escapes its real directory: $CACHE" >&2; exit 1; }
 grep -qxF 'wheelhouse/.template-cache/' .gitignore 2>/dev/null || printf '%s\n' 'wheelhouse/.template-cache/' >> .gitignore
 
 if [ ! -d "$CACHE/.git" ]; then
   rm -rf "$CACHE"
   git clone "$SOURCE" "$CACHE"   # full history, local to this install
 fi
-TEMPLATE=$PWD/$CACHE
+TEMPLATE=$CACHE
 git -C "$TEMPLATE" fetch --tags origin
 git -C "$TEMPLATE" fetch origin
 git -C "$TEMPLATE" rev-parse "${TARGET:-main}" >/dev/null
@@ -102,7 +114,7 @@ if git -C "$TEMPLATE" rev-parse --verify --quiet "origin/${TARGET:-main}^{commit
   git -C "$TEMPLATE" merge --ff-only --quiet "origin/${TARGET:-main}" \
     || { echo "STOP: cache branch ${TARGET:-main} could not fast-forward to origin/${TARGET:-main}" >&2; exit 1; }
 fi
-[ "$BASE" = unknown ] || git -C "$TEMPLATE" cat-file -e "${BASE}^{commit}"
+git -C "$TEMPLATE" cat-file -e "${BASE}^{commit}"
 sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
 grep -q '^product-repo=' wheelhouse/.template-source \
   && sed -i.bak "s|^product-repo=.*|product-repo=$(pwd -P)|" wheelhouse/.template-source \
@@ -121,7 +133,8 @@ If you prefer a one-off clone, make it with `mktemp -d`; do not record a durable
 
 ```bash
 BASE=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
-git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ || true     # skip if BASE is 'unknown'; diff exits 1 when differences exist
+[[ "$BASE" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$BASE" >&2; exit 1; }
+git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ || true     # diff exits 1 when differences exist
 ```
 
 Read it. If nothing changed in `contracts/`, you are already current and there is nothing to do.
@@ -295,7 +308,7 @@ for f in "$TEMPLATE"/runbooks/*; do
 done
 ```
 
-`cp -p`, not `cp`: it preserves the file mode, so a runbook that ships executable arrives executable. This is load-bearing: some shipped runbooks are executable pointers, and the era when this directory carried more scripts is why it is written down. If your `commit=` is `unknown`, or the baseline read fails for any other reason, the comparison cannot run — there is no trusted baseline to compare against — and the runbook is reported as `baseline unreadable` rather than `YOURS`. That is the conservative direction on purpose: the cost is re-running before a possible hand-merge, against either a silently clobbered procedure or a spurious hand-merge queue you would not have noticed.
+`cp -p`, not `cp`: it preserves the file mode, so a runbook that ships executable arrives executable. This is load-bearing: some shipped runbooks are executable pointers, and the era when this directory carried more scripts is why it is written down. If the baseline read fails (for example, an older procedure left `commit=unknown`, which step 1 now refuses), the comparison cannot run — there is no trusted baseline to compare against — and the runbook is reported as `baseline unreadable` rather than `YOURS`. That is the conservative direction on purpose: the cost is re-running before a possible hand-merge, against either a silently clobbered procedure or a spurious hand-merge queue you would not have noticed.
 
 ## 4. Splice: new contract, your project section
 
@@ -545,7 +558,9 @@ git status --short
 ```
 
 ```bash
-NEW=$(sed -n 's/^commit=//p' wheelhouse/.template-source | cut -c1-12)
+NEW_COMMIT=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
+[[ "$NEW_COMMIT" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$NEW_COMMIT" >&2; exit 1; }
+NEW=$(printf '%s' "$NEW_COMMIT" | cut -c1-12)
 git add wheelhouse/ seats/ .gitignore CLAUDE.md .beads/
 for p in .claude/settings.json; do
   [ ! -e "$p" ] || git add "$p"

@@ -526,7 +526,9 @@ Run each of these and paste what it prints:
 - **Contract integrity — this one first, and stop if it fails.** (Upgrading rather than installing? `wheelhouse/runbooks/UPGRADE.md` is the procedure; it uses this same check, and step 0 there covers installs old enough to have no `.template-source` at all.) Every installed `## Contract` section must be byte-identical to the template's. Check each one:
 
   ```bash
-  ROOT="$PWD"
+  ROOT="$(pwd -P)"
+  COMMIT=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
+  [[ "$COMMIT" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$COMMIT" >&2; exit 1; }
   TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 
   # A missing or empty template path makes every comparison below vacuously true.
@@ -539,8 +541,16 @@ Run each of these and paste what it prints:
   if [ -z "$TEMPLATE" ] || [ ! -s "$TEMPLATE/contracts/WORKER.md" ]; then
     SOURCE=$(sed -n 's/^source=//p' wheelhouse/.template-source 2>/dev/null)
     if [ -n "$SOURCE" ]; then
-      TEMPLATE=$PWD/wheelhouse/.template-cache/source-head
-      mkdir -p wheelhouse/.template-cache
+      CACHE_ROOT="$ROOT/wheelhouse/.template-cache"
+      TEMPLATE="$CACHE_ROOT/source-head"
+      [ ! -L "$CACHE_ROOT" ] || { echo "STOP: cache root is a symlink: $CACHE_ROOT" >&2; exit 1; }
+      [ "$(cd "$ROOT/wheelhouse" && pwd -P)" = "$ROOT/wheelhouse" ] || { echo "STOP: wheelhouse is not the physical install directory" >&2; exit 1; }
+      mkdir -p "$CACHE_ROOT" || { echo "STOP: cannot create cache root: $CACHE_ROOT" >&2; exit 1; }
+      [ -d "$CACHE_ROOT" ] && [ ! -L "$CACHE_ROOT" ] || { echo "STOP: cache root is not a real directory: $CACHE_ROOT" >&2; exit 1; }
+      CACHE_REAL=$(cd "$CACHE_ROOT" && pwd -P) || { echo "STOP: cannot resolve cache root" >&2; exit 1; }
+      [ "$CACHE_REAL" = "$CACHE_ROOT" ] || { echo "STOP: cache root escapes install: $CACHE_ROOT" >&2; exit 1; }
+      CACHE_PARENT=$(cd "$(dirname "$TEMPLATE")" && pwd -P) || { echo "STOP: cannot resolve cache parent" >&2; exit 1; }
+      [ "$CACHE_PARENT" = "$CACHE_REAL" ] && [ ! -L "$TEMPLATE" ] || { echo "STOP: cache path escapes its real directory: $TEMPLATE" >&2; exit 1; }
       grep -qxF 'wheelhouse/.template-cache/' .gitignore 2>/dev/null || printf '%s\n' 'wheelhouse/.template-cache/' >> .gitignore
       echo "template path was dead; refreshing install-local cache from $SOURCE"
       if [ -d "$TEMPLATE/.git" ]; then
