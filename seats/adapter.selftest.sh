@@ -119,6 +119,7 @@ FIX="$(cd "$FIX" && pwd -P)"
 export WHEELHOUSE_CONTRACT_FIXTURE="$FIX/dispatch-contract.md"
 cat > "$WHEELHOUSE_CONTRACT_FIXTURE" <<'CONTRACT'
 Trace: adapter protocol selftest
+Signal: install-procedure
 Intent:
 Keep fixture dispatches exercising the adapter protocol and worktree lifecycle.
 Outcomes:
@@ -457,6 +458,16 @@ fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/contract-status.after"
 if cmp -s "$FIX/contract-worktrees.before" "$FIX/contract-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/contract-status.after"; then pass 'contract refusal: seat worktree branch, HEAD, registration and status unchanged'; else fail 'contract refusal: seat worktree changed'; fi
 LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
 [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ] && pass 'contract refusal: no process spawned' || fail 'contract refusal: a harness process was spawned'
+# K4: the shared gate must refuse before even a forced dispatch can launch.
+# These assertions are in addition to the sg0z ceiling fix, not a replacement.
+[ "$(fgit -C "$REFUSE_PROJ" rev-parse --show-toplevel)" = "$REFUSE_PROJ" ] && [ "$(fgit -C "$CONTRACT_WT" rev-parse --show-toplevel)" = "$CONTRACT_WT" ] || { fail 'Signal fixture git roots escaped'; exit 2; }
+sed '/^Signal:/d' "$FIX/dispatch-contract.md" > "$FIX/no-signal-contract.md"
+WHEELHOUSE_DISPATCH_FORCE=1 WHEELHOUSE_CONTRACT_FIXTURE="$FIX/no-signal-contract.md" run dispatch worker-1 missing-signal 'must never reach a seat'
+[ "$RC" = 1 ] && says 'missing-signal is not a contract' && says 'missing-signal: contract: Signal: missing' && pass 'Signal refusal: bead named; force cannot bypass' || fail "Signal refusal rc=$RC: $OUT"
+fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/signal-worktrees.after"
+fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/signal-status.after"
+LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
+if cmp -s "$FIX/contract-state.before" "$REFUSE_PROJ/seats/state.json" && cmp -s "$FIX/contract-worktrees.before" "$FIX/signal-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/signal-status.after" && [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ]; then pass 'Signal refusal: state, worktree and launch count unchanged'; else fail 'Signal refusal: side effect occurred'; fi
 if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 RUN_PROJ="$PROJ"
 phase "0a0. state lock recovers abandoned incomplete writers without stealing live owners"
