@@ -114,6 +114,18 @@ sweep_stale_fixtures
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+# Dispatch must pass the real contract gate too (fleet/producer enables it).
+export WHEELHOUSE_CONTRACT_FIXTURE="$FIX/dispatch-contract.md"
+cat > "$WHEELHOUSE_CONTRACT_FIXTURE" <<'CONTRACT'
+Trace: adapter protocol selftest
+Intent:
+Keep fixture dispatches exercising the adapter protocol and worktree lifecycle.
+Outcomes:
+- O1 The fixture seat receives the dispatched prompt.
+  consumer: machine — the selftest runner
+  surface: fixture seat event log and worktree
+  check: run — dispatch and assert the recorded prompt, state and branch
+CONTRACT
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
@@ -305,7 +317,7 @@ cat > "$BIN/bd" <<'BDSTUB'
 case "$1" in
   ready) printf '[{"id":"fixture-ready"}]\n' ;;
   show)
-    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf '[]\n'; fi ;;
+    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi ;;
   list)
     status=""
     for a in "$@"; do case "$a" in --status=*) status="${a#--status=}" ;; esac; done
