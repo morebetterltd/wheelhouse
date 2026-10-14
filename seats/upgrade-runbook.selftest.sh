@@ -219,8 +219,93 @@ if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" = 1 ]; then
 fi
 command -v zsh >/dev/null 2>&1 || fail "zsh is required for this selftest"
 
+producer_migration_tests() (
+  # No adapter, dispatch, remote, reset, or enclosing-repo discovery in this leg.
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+  export GIT_CEILING_DIRECTORIES="$TMP"
+  local runbook=${WHEELHOUSE_UPGRADE_RUNBOOK:-$TEMPLATE/runbooks/UPGRADE.md}
+  [ -f "$runbook" ] && [ -f "$TEMPLATE/contracts/PRODUCER.md" ] || fail "producer migration target source missing"
+  block() {
+    awk -v heading="$1" '
+      $0 ~ heading { section=1; next }
+      section && !fence && /^##/ { exit }
+      section && /^[[:space:]]*```bash$/ { fence=1; next }
+      section && fence && /^[[:space:]]*```$/ { exit }
+      section && fence { print }
+    ' "$runbook"
+  }
+  block '^### .* becomes producer$' > "$TMP/rename.sh"
+  block '^### Copy the contracts$' > "$TMP/copy.sh"
+  block '^## 4\\.' > "$TMP/splice.sh"
+  block '^## 5\\.' > "$TMP/reverify.sh"
+  local old_path old_role
+  # Retired identifiers have one source: the migration subsection itself.
+  old_path=$(awk '$1=="git" && $2=="mv" {print $3}' "$TMP/rename.sh")
+  # Negative runbooks remove the mv command, so derive from the guard as well.
+  [ -n "$old_path" ] || old_path=$(awk '$1=="test" && $2=="!" && $3=="-e" {print $4}' "$TMP/rename.sh")
+  case "$old_path" in wheelhouse/crew/*.md) ;; *) fail "migration old path missing or ambiguous: $old_path";; esac
+  old_role=$(basename "$old_path" .md | tr '[:upper:]' '[:lower:]')
+  for file in rename copy splice reverify; do [ -s "$TMP/$file.sh" ] || fail "missing printed $file block"; done
+  { printf 'set -e\nTEMPLATE=$1\n'; cat "$TMP/rename.sh" "$TMP/copy.sh" "$TMP/splice.sh"; } > "$TMP/migrate.sh"
+  { awk '/^check_producer_rename\(\)/ {f=1} f {print} f && /^}$/ {exit}' "$TMP/rename.sh"; cat "$TMP/reverify.sh"; } > "$TMP/check-rename.sh"
+  local selected=${WHEELHOUSE_UPGRADE_PRODUCER_CASE:-all}
+  case "$selected" in all|bash-existing|bash-absent|zsh-existing|zsh-absent|bash-existing-guard|bash-absent-guard|zsh-existing-guard|zsh-absent-guard) ;; *) fail "unknown producer migration case: $selected";; esac
+  for shell in bash zsh; do
+    for mode in existing absent; do
+      [ "$selected" = all ] || [ "$selected" = "$shell-$mode" ] || [ "$selected" = "$shell-$mode-guard" ] || continue
+      local project="$TMP/producer-$shell-$mode"
+      mkdir -p "$project/wheelhouse/crew" "$project/wheelhouse/fleet" "$project/seats"
+      git -C "$project" init -q -b main
+      [ -d "$project/.git" ] && [ "$(git -C "$project" rev-parse --show-toplevel)" = "$(cd "$project" && pwd -P)" ] || fail "migration fixture git root escaped: $project"
+      # Step 5's printed CLI reads only this fixture's metadata.
+      for source in roster.ts pool.ts harness.ts credential-shapes.ts; do cp -f "$ROOT/seats/$source" "$project/seats/$source"; done
+      if [ "$mode" = existing ]; then
+        printf '# Old planning contract\n\n## This project\n\n### The territory\n\nTerritory sentinel — local boundaries, not template prose.\nKeep these trailing spaces.  \n\n' > "$project/$old_path"
+        awk 'f{print} /^## This project$/{f=1}' "$project/$old_path" > "$project/before-half"
+        printf '{"seats":{"planner":{"role":"%s","account":{"dir":"fixture-account-unchanged"}}}}\n' "$old_role" > "$project/seats/seats.json"
+      else
+        printf '%s\n' '{"seats":{"producer":{"role":"producer","external":true,"runtime":"commander-subagent"}}}' > "$project/seats/seats.json"
+      fi
+      git -C "$project" add .
+      git -C "$project" -c user.name=selftest -c user.email=selftest@local -c commit.gpgsign=false commit -q -m fixture
+      [ "$(git -C "$project" rev-parse --show-toplevel)" = "$(cd "$project" && pwd -P)" ] || fail "migration fixture moved before commands"
+      (cd "$project" && "$shell" "$TMP/migrate.sh" "$TEMPLATE") > "$project/migration.out" 2> "$project/migration.err" || { cat "$project/migration.err"; fail "printed producer migration failed ($shell/$mode)"; }
+      [ -f "$project/wheelhouse/crew/PRODUCER.md" ] || fail "producer brief absent ($shell/$mode)"
+      if [ "$mode" = existing ]; then
+        awk 'f{print} /^## This project$/{f=1}' "$project/wheelhouse/crew/PRODUCER.md" > "$project/after-half"
+        cmp "$project/before-half" "$project/after-half" || fail "producer migration lost byte-identical installed territory ($shell)"
+        awk '/^## This project$/{exit} {print}' "$project/wheelhouse/crew/PRODUCER.md" > "$project/contract"
+        awk '/^## This project$/{exit} {print}' "$TEMPLATE/contracts/PRODUCER.md" > "$project/expected-contract"
+        cmp "$project/contract" "$project/expected-contract" || fail "producer migration contract differs ($shell)"
+        bun -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(r.seats.planner.role!=="producer" || r.seats.planner.account.dir!=="fixture-account-unchanged") process.exit(1)' "$project/seats/seats.json" || fail "producer role rewrite failed or account changed ($shell)"
+        grep -qx 'producer role changed: planner' "$project/migration.out" || fail "producer role rewrite did not name changed seat ($shell)"
+        [ ! -e "$project/$old_path" ] || fail "old brief remains ($shell)"
+      else
+        cmp "$TEMPLATE/contracts/PRODUCER.md" "$project/wheelhouse/crew/PRODUCER.md" || fail "absent producer was not copied whole ($shell)"
+      fi
+      (cd "$project" && "$shell" "$TMP/check-rename.sh") > "$project/check.out" 2> "$project/check.err" || fail "printed step 5 producer guard failed ($shell/$mode)"
+      if [ "$selected" != "$shell-$mode-guard" ]; then pass "PASS producer migration $mode ($shell): contract and territory checked"; fi
+      # The re-verify guard must catch an independently left-behind old brief.
+      printf 'leftover fixture brief\n' > "$project/$old_path"
+      local rc=0
+      (cd "$project" && "$shell" "$TMP/check-rename.sh") > "$project/leftover.out" 2> "$project/leftover.err" || rc=$?
+      [ "$rc" -eq 1 ] && grep -qF 'STOP: legacy planning brief remains' "$project/leftover.err" || fail "step 5 accepted leftover old brief ($shell/$mode rc=$rc)"
+      pass "PASS producer leftover guard ($shell/$mode)"
+    done
+  done
+)
+
+if [ "${WHEELHOUSE_UPGRADE_PRODUCER_ONLY:-0}" = 1 ]; then
+  producer_migration_tests
+  echo "upgrade-runbook.selftest: PASS (producer migration only: ${WHEELHOUSE_UPGRADE_PRODUCER_CASE:-all}; no adapter leg)"
+  exit 0
+fi
+# Installed history fixtures may resolve a source predating this migration.
 if [ "$TEMPLATE" = "$ROOT" ]; then
   cache_recovery_tests
+  producer_migration_tests
+  PASS=$((PASS+8))
+
   if grep -q 'remove `seats/bin`' "$TEMPLATE/runbooks/UPGRADE.md"; then
     fail "UPGRADE.md still tells non-opt-in installs to remove seats/bin"
   fi

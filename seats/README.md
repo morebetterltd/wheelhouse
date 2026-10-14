@@ -278,8 +278,10 @@ With no `seats/pool.json`, `seats.json` is still the full roster and all existin
 
 `bun seats/pool.ts check` validates a pool without reading credential files. It requires each entry to name a harness, provider, offered models, and an `account.dir` under this install's `$HOME/.pi-seats-<namespace>/pool/<entry>` root; `seats/seat-env.sh <namespace> --pool <entry>` provisions that directory. The pool refuses unknown harnesses, unknown keys, missing login folders, shared login directories, commander's login directories, role limits outside the listed entries, role models the entry does not offer, fixed-roster conflicts for the same role, and token-shaped strings. It records login folder paths and auth-route names, never credentials.
 
+`bun seats/roster.ts check` validates the required producer at install and after roster edits (optional `--root <install>`). It refuses fixed builder seats or a configured worker pool without a non-shadow `producer` entry. A standing producer or an explicit external commander-subagent producer satisfies the rule; the commander alone does not. Exit 0 is valid, 2 is refusal/unreadable input, 3 is usage. This is an explicit install check, not a new gate in every runtime roster reader; it reads roster/pool metadata only, not credentials, and changes nothing.
+
 `seats.json` is plain JSON with no comments, so its fields are documented
-here instead.
+here instead. The Claude Code producer in `seats/seats.json.example` carries A9's read/graph-only tool limits; for Pi and Codex producers the brief is the limit.
 
 Top level:
 
@@ -292,8 +294,11 @@ Each seat entry:
 
 | Field | What it is |
 |---|---|
-| `role` | What the seat does: `worker`, `reviewer`, `verifier`, `researcher`, or another installed brief. Free-form string; the crew briefs define what each role means. Installed fleets read `wheelhouse/fleet/WORKER.md` for workers and `wheelhouse/crew/<ROLE>.md` for other roles, with `contracts/<ROLE>.md` retained as the template-tree fallback. |
+| `role` | What the seat does: `producer` (required, judges signals and writes contracts), `worker`, `reviewer`, `verifier`, `researcher`, or another installed brief. Free-form string; the crew briefs define what each role means. Installed fleets read `wheelhouse/fleet/WORKER.md` for workers and `wheelhouse/crew/<ROLE>.md` for other roles, with `contracts/<ROLE>.md` retained as the template-tree fallback. |
 | `harness` | Optional harness driver, one of `pi`, `claude-code`, or `codex`; absent means `pi` for existing rosters. `account.dir` stays under the historical `~/.pi-seats-<namespace>/<seat>` root for every harness, but the driver reads it as `PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME` respectively. The adapter implements all three harnesses, validates the harness name before launch, and STOPs naming the seat rather than spawning the wrong harness. `claude-code` runs a resident shim around `claude -p --input-format stream-json --output-format stream-json`; `codex` runs a resident shim around `codex app-server`. Both emit the same FIFO/log protocol as a Pi seat and strip `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `OPENAI_API_KEY` from the child environment. |
+| `external` / `runtime` | A producer subagent of the commander is recorded with `"external": true, "runtime": "commander-subagent"`; it reads PRODUCER.md and is not provisioned or spawned by the adapter. The producer role remains required. |
+| `allowedTools` | Claude Code producer: `Read,Grep,Glob,Bash(bd:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*)`. These read/graph-only tools are A9's boundary in the roster example; for Pi and Codex producers the brief is the limit. |
+| `disallowedTools` | Claude Code producer: `Edit,Write,NotebookEdit`. It never edits product repos or judges built work. |
 | `shadow` | Optional boolean; absent means `false`. `"shadow": true` marks a mirror seat whose output is recorded but never gates or carries assigned work. The commander dispatches to a shadow seat only as a mirror of a gating dispatch, and its verdict or review comment is prefixed `SHADOW`; it informs the real reviewer/commander but never gates a merge. `seat-env.sh` and `adapter.ts` reject any present non-boolean value. |
 | `provider` | Whose model the seat runs (`anthropic`, `openai`, ...), narrowed by harness: `claude-code` is first-party `anthropic`, `codex` is `openai-codex` or `openai`, and `pi` uses Pi's provider list. Recorded so the roster answers "which vendor is this seat" without starting the seat. |
 | `model` | The model the seat is pinned to, in the provider's own id format. Pin reasoning effort by appending Pi's thinking-level suffix to this same string, for example `gpt-5.6-sol:high`. |
@@ -436,7 +441,7 @@ previous bead's branch to origin; a failed push is written to the seat log as
 seat worktree (deletions of once-committed build output under
 `.cargo-target-shared/` or `car-rs/.wt-target/` do not count). New worktrees
 are capped at the number of seats in `seats/seats.json` plus two. Seats in
-non-worker roles — reviewer, verifier, designer, researcher — run from the
+non-worker roles — reviewer, verifier, producer, researcher — run from the
 project root and take no slot; a roster entry may set `"worktree": true|false`
 to override its role's default. A `.pruned-placeholder` directory left by
 cleanup is recreated on the next dispatch; a placeholder holding anything else

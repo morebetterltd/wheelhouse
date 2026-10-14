@@ -2,9 +2,9 @@
 
 A standing agent fleet, over a shared work graph, installable on any project.
 
-The shape: a **commander** session where you argue direction, a **designer** that turns direction into implementable work, **workers** that implement one unit at a time on isolated branches, a **reviewer** that gates every diff with evidence and never reviews what it wrote, and an ephemeral **verifier** that turns a finished branch into a single verdict — never on the author's account. Work lives in a graph, not in chat. Nothing merges on a claim.
+The shape: a **commander** session where you argue direction, a required **producer** that judges every signal and writes the work's intent and outcomes (it may be a commander subagent), **workers** that implement one unit at a time on isolated branches, a **reviewer** that gates every diff with evidence and never reviews what it wrote, and an ephemeral **verifier** that turns a finished branch into a single verdict — never on the author's account. Work lives in a graph, not in chat. Nothing merges on a claim.
 
-The commander is a Claude Code session — yours. Every other seat is a persistent harness process the commander owns: each pinned to one account of its own and rostered to run on Pi, Claude Code, or Codex. That means subscription seats can sit beside API-key seats in the same fleet — for example a Claude Code worker, a Codex reviewer, and a Pi verifier — with the same adapter, graph, cockpit, review, and walk contracts. The roster recording who runs on what is a JSON file; the roles are briefs injected at spawn.
+The commander is a Claude Code session — yours. The producer may be its subagent; other standing seats are persistent harness processes the commander owns: each pinned to one account of its own and rostered to run on Pi, Claude Code, or Codex. That means subscription seats can sit beside API-key seats in the same fleet — for example a Claude Code worker, a Codex reviewer, and a Pi verifier — with the same adapter, graph, cockpit, review, and walk contracts. The roster recording who runs on what is a JSON file; the roles are briefs injected at spawn.
 
 This repo is the template. It ships the contracts those roles share, the seat machinery they run on, worked examples, and a bootstrap procedure that installs the whole thing into a project by interviewing you about that project.
 
@@ -58,7 +58,7 @@ Two things before you start:
   me. Do not work around it, and do not overwrite anything I already have.
 ```
 
-It will survey your repo, then interview you about the things it cannot derive: which repos the fleet changes, what proves a build actually works (that one is several questions), what is true when the first iteration is done, which actions stay yours alone, what authorizes a merge, and what your priorities mean. Then it walks your seat roster one seat at a time, and walks the seats you took a second time for their models — each seat taken gets a role and an account directory of its own, then its own harness, provider, auth route, and model pinned from that harness's live listing/probe rather than from anyone's memory, recorded in `seats/seats.json` (names and paths only; never a secret) — and declining every seat is a legitimate answer. Then it provisions the seats, writes the tree, verifies it, tells you what is stubbed, and closes the loop with a smoke dispatch through a real seat.
+It will survey your repo, then interview you about the things it cannot derive: which repos the fleet changes, what proves a build actually works (that one is several questions), what is true when the first iteration is done, which actions stay yours alone, what authorizes a merge, and what your priorities mean. Then it walks your seat roster one seat at a time, and walks the seats you took a second time for their models — each seat taken gets a role and an account directory of its own, then its own harness, provider, auth route, and model pinned from that harness's live listing/probe rather than from anyone's memory, recorded in `seats/seats.json` (names and paths only; never a secret) — and declining every optional standing session is legitimate, but the producer role is required and must still be recorded as a commander subagent or a standing seat. The commander never writes intent or outcomes. Then it provisions the seats, writes the tree, verifies it, tells you what is stubbed, and closes the loop with a smoke dispatch through a real seat.
 
 If you would rather read the template before installing anything, this is safe to paste into a terminal — it clones a copy you can browse and installs nothing:
 
@@ -93,7 +93,7 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
     ├── GRAPH.md                 contract
     ├── INTEGRATOR.md            contract + your push authority
     ├── crew/
-    │   ├── DESIGNER.md          contract + your project's territory
+    │   ├── PRODUCER.md          contract + your project's territory
     │   ├── REVIEWER.md          contract + your branch conventions
     │   ├── VERIFIER.md          contract — the one-shot verdict pass, never on the author's account
     │   ├── RESEARCHER.md        contract — sourced decision-grade research reports, no product edits
