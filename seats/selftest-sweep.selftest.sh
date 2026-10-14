@@ -6,7 +6,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
-SWEEP="$HERE/selftest-sweep.sh"
+SWEEP="${1:-$HERE/selftest-sweep.sh}"
 [ -x "$SWEEP" ] || { echo "selftest: not executable: $SWEEP" >&2; exit 2; }
 
 FAILED=0
@@ -38,6 +38,50 @@ fi
 printf '%s end\n' "$SWEEP_ID" >> "$SWEEP_EVENTS"
 EOF
 chmod +x "$SUITES/fixture.selftest.sh"
+
+# Exercise the default (override unset), but relocate only its constant /tmp
+# prefix into this fixture. Otherwise a full sweep would wait on its own lock.
+default_tmpdir_leg(){
+  local runner="$FIX/default-runner.sh" host="$FIX/default-host"
+  local tmp_a="$FIX/tmp-A" tmp_b="$FIX/tmp-B" events="$FIX/default-events.log"
+  local release="$FIX/default-release" pid_a pid_b rc_a rc_b order
+  mkdir -p "$host" "$tmp_a" "$tmp_b"
+  sed "/^LOCK=/s|/tmp|$host|g" "$SWEEP" > "$runner"
+  env -u WHEELHOUSE_SELFTEST_SWEEP_LOCK TMPDIR="$tmp_a" SWEEP_RELEASE="$release" SWEEP_ID=TA SWEEP_EVENTS="$events" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$runner" > "$FIX/TA.out" 2> "$FIX/TA.err" &
+  pid_a=$!
+  for _ in $(seq 1 100); do grep -q '^TA start$' "$events" 2>/dev/null && break; sleep 0.05; done
+  if ! grep -q '^TA start$' "$events" 2>/dev/null; then
+    : > "$release"; wait "$pid_a" || true
+    fail "default TMPDIR fixture first sweep never started"; return
+  fi
+  env -u WHEELHOUSE_SELFTEST_SWEEP_LOCK TMPDIR="$tmp_b" SWEEP_RELEASE="$release" SWEEP_ID=TB SWEEP_EVENTS="$events" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$runner" > "$FIX/TB.out" 2> "$FIX/TB.err" &
+  pid_b=$!
+  for _ in $(seq 1 100); do
+    grep -q 'waiting for host-wide lock' "$FIX/TB.err" && break
+    grep -q '^TB start$' "$events" 2>/dev/null && break
+    sleep 0.05
+  done
+  if grep -qF "waiting for host-wide lock $host/wheelhouse-selftest-sweep.lock" "$FIX/TB.err" && ! grep -q '^TB start$' "$events" 2>/dev/null; then
+    pass "different TMPDIRs share the default lock: second sweep waits on first"
+  else
+    fail "different TMPDIRs did not wait on default lock (err=$(cat "$FIX/TB.err") events=$(cat "$events"))"
+  fi
+  : > "$release"
+  wait "$pid_a"; rc_a=$?
+  wait "$pid_b"; rc_b=$?
+  order="$(tr '\n' '|' < "$events")"
+  if [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 0 ] && [ "$order" = 'TA start|TA end|TB start|TB end|' ]; then
+    pass "different TMPDIR default sweeps complete serially after release"
+  else
+    fail "different TMPDIR default sweep order wrong (rcA=$rc_a rcB=$rc_b order=$order)"
+  fi
+}
+default_tmpdir_leg
+if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" -eq 0 ] || { echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1; }
+  echo 'selftest-sweep.selftest: PASS (2 TMPDIR checks)'
+  exit 0
+fi
 
 RELEASE_A="$FIX/release-A"
 SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=A SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/A.out" 2> "$FIX/A.err" &
@@ -167,7 +211,7 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "selftest-sweep.selftest: PASS (9 checks)"
+  echo "selftest-sweep.selftest: PASS (11 checks)"
 else
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"
   exit 1
