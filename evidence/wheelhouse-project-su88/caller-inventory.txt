@@ -1,0 +1,21 @@
+State mutation path and shared lock callers
+seats/adapter.ts:73:import { acquirePidLock, releasePidLock } from "./lock";
+seats/adapter.ts:87:const STATE_FILE = path.join(SEATS_DIR, "state.json");
+seats/adapter.ts:413:  if (!fs.existsSync(STATE_FILE)) return { seats: {} };
+seats/adapter.ts:414:  return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+seats/adapter.ts:421:function acquireStateLock(): number {
+seats/adapter.ts:425:    const fd = acquirePidLock(lock);
+seats/adapter.ts:432:function releaseStateLock(fd: number): void {
+seats/adapter.ts:433:  releasePidLock(path.join(SEATS_DIR, "state.lock"), fd);
+seats/adapter.ts:438:  const fd = acquireStateLock();
+seats/adapter.ts:445:    if (fs.existsSync(STATE_FILE)) {
+seats/adapter.ts:447:        const current = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) as State;
+seats/adapter.ts:451:    const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+seats/adapter.ts:453:    fs.renameSync(tmp, STATE_FILE);
+seats/adapter.ts:455:    releaseStateLock(fd);
+seats/staffing.ts:11:import { acquirePidLock, releasePidLock } from "./lock";
+seats/staffing.ts:28:function acquireLock(): number | null { return acquirePidLock(LOCK_FILE); }
+seats/staffing.ts:29:function releaseLock(fd: number | null) { releasePidLock(LOCK_FILE, fd); }
+seats/alerts.ts:7:import { acquirePidLock, releasePidLock } from "./lock";
+seats/alerts.ts:29:function acquireLock():number|null{ return acquirePidLock(LOCK); }
+seats/alerts.ts:30:function releaseLock(fd:number|null){ releasePidLock(LOCK, fd); }
