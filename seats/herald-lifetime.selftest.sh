@@ -83,7 +83,11 @@ try:
     check(restart.returncode==0 and new!=first.pid and alive(new), 'daemons.sh restarts a dead herald with a stale singleton lock')
     os.kill(new,signal.SIGTERM); assert until(lambda:not alive(new))
     for mode, sig, expected in [('normal',None,0),('failure',None,23),('term',signal.SIGTERM,143),('int',signal.SIGINT,130),('kill',signal.SIGKILL,-9)]:
-        owner=subprocess.Popen(['bash',str(base/'owner.sh'),str(here),str(base),mode],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True); children.append(owner)
+        # The full runner launches suites asynchronously: Bash passes SIGINT
+        # ignored, and an owner Bash cannot trap a signal ignored on entry.
+        # Normalize only this fresh test child before exec; keep the INT proof
+        # meaningful in both direct and full-sweep configurations.
+        owner=subprocess.Popen(['bash',str(base/'owner.sh'),str(here),str(base),mode],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,preexec_fn=lambda:signal.signal(signal.SIGINT,signal.SIG_DFL)); children.append(owner)
         rec=base/(mode+'.record'); assert until(rec.exists), 'owner allocation record missing'
         proj,pid=rec.read_text().splitlines(); pid=int(pid); detached.append(pid)
         assert until(lambda:pathlib.Path(proj,'seats/run/herald.pid').exists()), 'owned herald never started'
