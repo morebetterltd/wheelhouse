@@ -1,0 +1,12 @@
+{
+  "command": [
+    "ps",
+    "-p",
+    "66860",
+    "-o",
+    "command="
+  ],
+  "exit": 0,
+  "stdout": "pi  \n",
+  "stderr": ""
+}
