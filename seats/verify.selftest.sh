@@ -41,6 +41,7 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 VERIFY_DIR="$(cd "$(dirname "$VERIFY")" && pwd)"
 BRIEFS="$VERIFY_DIR/briefs.ts"
 HARNESS="$VERIFY_DIR/harness.ts"
@@ -430,7 +431,9 @@ done
 verb="${1:-}"
 case "$verb" in
   show)
-    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf 'fixture bead\n'; fi
+    if [[ " $* " = *" --json "* ]] && [ -n "${STUB_BD_JSON_SHOW_FILE:-}" ]; then
+      cat "$STUB_BD_JSON_SHOW_FILE"
+    elif [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi
     exit 0 ;;
   comments)
     printf 'fixture comments\n'; exit 0 ;;
@@ -618,6 +621,15 @@ VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
 
+phase "contract gate: no-outcomes review is refused before harness spawn"
+# The gate-removed negative must reach a normally answering harness, not fail
+# because the reply fixture has not been created yet.
+printf 'VERDICT: APPROVE\n' > "$REPLY"
+run_with_bd_show "$HERE/fixtures/contracts/no-outcomes.md" bead-no-outcomes fleet/bead-1 worker-1
+[ "$RC" = 5 ] && says 'STOP:' && says 'bead-no-outcomes is not a contract' && says 'bead-no-outcomes: contract: Outcomes: missing' && pass 'contract refusal: review exits 5 naming bead and Outcomes' || fail "contract refusal: review expected exit 5, got $RC: $OUT"
+[ ! -f "$VINVOKED" ] && pass 'contract refusal: no reviewer harness spawned' || fail 'contract refusal: reviewer harness was spawned'
+if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
+
 phase "verifier gate STOP reaches the dispatch inbox"
 if [ -f "$PROJ/seats/inbox.jsonl" ]; then BEFORE_INBOX_LINES="$(wc -l < "$PROJ/seats/inbox.jsonl" | tr -d ' ')"; else BEFORE_INBOX_LINES=0; fi
 run bead-no-branch fleet/does-not-exist worker-1
@@ -753,7 +765,8 @@ else fail "umbrella layout: default repo verdict did not record product repo and
 UMB_AMBIG_TIP="$(git -C "$UMB_PROJ" rev-parse fleet/bead-ambiguous)"
 PROD_AMBIG_TIP="$(git -C "$UMB_PROJ/product" rev-parse fleet/bead-ambiguous)"
 BD_UMBRELLA_REPO="$FIX/bd-umbrella-repo.txt"
-cat > "$BD_UMBRELLA_REPO" <<EOF
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$BD_UMBRELLA_REPO"
+cat >> "$BD_UMBRELLA_REPO" <<EOF
 fixture ambiguous repo bead
 
 DESCRIPTION
@@ -780,7 +793,8 @@ mkdir -p "$ALLOWED_SIB" "$UNLISTED_SIB"
 printf 'allowed sibling source\n' > "$ALLOWED_SIB/allowed.txt"
 printf 'unlisted sibling source\n' > "$UNLISTED_SIB/secret.txt"
 BD_SOURCE="$FIX/bd-source.txt"
-cat > "$BD_SOURCE" <<EOF
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$BD_SOURCE"
+cat >> "$BD_SOURCE" <<EOF
 wheelhouse-source [BUG]
 
 DESCRIPTION
@@ -1126,6 +1140,32 @@ run bead-1nb-expired fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && says "BENCH GAP EXPIRED" && grep -q "BENCH GAP EXPIRED" "$VDIR/bead-1nb-expired.md" 2>/dev/null; then
   pass "expired NOT BENCHED gap passes only with an explicit gate nudge"
 else fail "expired NOT BENCHED gap passed silently or failed wrong (exit $RC): $OUT verdict=$(cat "$VDIR/bead-1nb-expired.md" 2>/dev/null)"; fi
+
+phase "1a. full task context survives contract validation"
+# The real bd capture has a JSON array for validation and a rendered show
+# with COMMENTS/PARENT/BLOCKS. Those are separate views, not interchangeable.
+CONTEXT_SHOW="$FIX/review-context.txt"
+CONTEXT_JSON="$FIX/review-contract.json"
+node - "$WHEELHOUSE_CONTRACT_FIXTURE" "$CONTEXT_SHOW" "$CONTEXT_JSON" <<'NODE'
+const fs=require('fs');
+const [valid,raw,json]=process.argv.slice(2),description=fs.readFileSync(valid,'utf8');
+fs.writeFileSync(json,JSON.stringify([{id:'bead-review-context',title:'Fixture task',description}]));
+fs.writeFileSync(raw,description+'\nLABELS\n  fixture-review-label\nPARENT\n  fixture-parent-contract\nBLOCKS\n  fixture-dependent-contract\nCOMMENTS\n  fixture worker: FIXTURE_TASK_COMMENT_MUST_REACH_REVIEWER\n');
+NODE
+STUB_BD_JSON_SHOW_FILE="$CONTEXT_JSON" run_with_bd_show "$CONTEXT_SHOW" bead-review-context fleet/bead-1 worker-1
+if [ "$RC" -eq 0 ] && node - "$VARGV" "$CONTEXT_SHOW" <<'NODE'
+const fs=require('fs'),assert=require('assert');
+const argv=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),prompt=argv.at(-1);
+assert(prompt.includes('FIXTURE_TASK_COMMENT_MUST_REACH_REVIEWER'),'fixture task comment missing from assembled review prompt');
+for(const marker of ['fixture-review-label','fixture-parent-contract','fixture-dependent-contract']) assert(prompt.includes(marker));
+assert(prompt.includes(fs.readFileSync(process.argv[3],'utf8').trim()));
+const heading='Parsed work contract (validated before reviewer spawn):\n';
+assert(prompt.includes(heading));
+const parsed=JSON.parse(prompt.split(heading)[1].split('\nInstall push authority')[0].trim());
+assert(parsed.intent);assert(parsed.outcomes.length);assert.equal(parsed.outcomes[0].id,'O1');assert.deepEqual(parsed.errors,[]);
+NODE
+then pass "review prompt preserves fixture task comment, labels, dependencies and parsed contract"
+else fail "review prompt lost full bd show context or parsed contract rc=$RC"; fi
 
 phase "1b. branch moves mid-pass — verdict stays pinned, publish waits"
 MOVE_PROJ="$FIX/proj-move"

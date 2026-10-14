@@ -469,6 +469,23 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 - the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
 - installs predating `github-report=` have no line, which the publisher reads as off; append `github-report=off` and `github-report-routes=` to `wheelhouse/.template-source` so the record is explicit, and point at `BOOTSTRAP.md`'s publishing question if the principal wants it on.
 
+### Dispatch refuses work that is not a contract
+
+After copying `seats/`, run:
+
+```bash
+contract_audit_rc=0
+bun seats/contract.ts audit || contract_audit_rc=$?
+case "$contract_audit_rc" in
+  0) ;;
+  1) echo "Contract audit found legacy beads: repair their Intent: and Outcomes: before dispatch; continuing the upgrade sweep." ;;
+  *) echo "STOP: contract audit could not read the graph (exit $contract_audit_rc); repair the read failure before continuing." >&2
+     exit "$contract_audit_rc" ;;
+esac
+```
+
+Each listed open or in_progress bead needs its `Intent:` and `Outcomes:` sections, with a consumer, surface and matching check per outcome, before the fleet can dispatch it. Use `wheelhouse/GRAPH.md`, **Every bead is a contract**, for the grammar; `bun seats/contract.ts check <bead-id>` prints every defect for one bead. Audit exits 1 for invalid contracts and 3 if the graph cannot be read. The block reports legacy contracts without aborting the rest of the upgrade sweep, including under `set -e`; repair them before dispatch. An unreadable graph still stops the upgrade: repair the read failure instead of treating it as an empty queue. `verify.ts` also refuses uncontracted work with exit 5; `WHEELHOUSE_DISPATCH_FORCE=1` does not bypass the dispatch gate. Signal and Skills are parsed here; their refusal gates are separate upgrades.
+
 ### Adopt the autonomy mandate in existing installs
 
 Ask the principal the same question current `BOOTSTRAP.md` asks: how far does the fleet take work? The default answer is **all the way** — merge, push, open and merge PRs, and deploy wherever the project has an automated deploy path — stopping only for this install's reserved actions or a genuine fork in product intent. Record the answer in `wheelhouse/INTEGRATOR.md`'s project section along with the explicit reserved list and the date. The mandate line must quote the principal directive verbatim: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done."
