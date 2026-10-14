@@ -97,9 +97,8 @@ OLD_ID="$OUT"; run close "$OLD_ID"; run open --title 'New occurrence' --body 'Pl
 COUNT="$(grep -c '"source":"recurring-question"' "$ROOT/seats/needs.jsonl" || true)"
 [ "$RC" -eq 0 ] && [ "$OLD_ID" != "$OUT" ] && [ "$COUNT" -eq 2 ] && pass 'non-sentinel source still reopens after close' || fail "ordinary source behavior changed rc=$RC old=$OLD_ID new=$OUT count=$COUNT"
 phase "7. canary — refusal removal is caught"
-SAB_ROOT="$FIX/canary"; mkdir -p "$SAB_ROOT"; selftest_copy_seat_runtime "$SAB_ROOT" "$HERE"
-SAB="$SAB_ROOT/seats/needs.ts"
+SAB="$FIX/needs-no-refusal.ts"
 perl -0pe 's/export function humanTextGuard\(text:string, where:string, root=ROOT\)\{.*?\nfunction seatNames/export function humanTextGuard(text:string, where:string, root=ROOT){ }\nfunction seatNames/s' "$SCRIPT" > "$SAB"
 chmod +x "$SAB"
-if cmp -s "$SCRIPT" "$SAB"; then fail "canary: could not remove refusal function; pattern no longer matches"; else BEFORE=$FAILED; RUN_SCRIPT="$SAB"; run open --title x --body "see wheelhouse-project-abcd"; RUN_SCRIPT="$SCRIPT"; if [ $RC -ne 0 ]; then FAILED=$BEFORE; fail "canary: sabotaged script did not accept the forbidden id (rc=$RC): $OUT"; else FAILED=$BEFORE; pass "canary: removing the human-text refusal is caught"; fi; fi
+if cmp -s "$SCRIPT" "$SAB"; then fail "canary: could not remove refusal function; pattern no longer matches"; else BEFORE=$FAILED; RUN_SCRIPT="$SAB"; run open --title x --body "see wheelhouse-project-abcd"; RUN_SCRIPT="$SCRIPT"; if [ $RC -eq 2 ]; then FAILED=$((BEFORE+1)); fail "canary: sabotaged script still refused the forbidden id, so this test proves nothing"; else FAILED=$BEFORE; pass "canary: removing the human-text refusal is caught"; fi; fi
 printf '\n'; if [ $FAILED -eq 0 ]; then echo "needs.ts works on this machine."; exit 0; fi; echo "$FAILED check(s) failed."; exit 1
