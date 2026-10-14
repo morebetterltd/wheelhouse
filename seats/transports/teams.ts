@@ -1,25 +1,11 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { channelToken, NoChannelCredential } from "./credentials";
 import type { ChannelTransport, InboundMessage } from "./transport";
 
 export class NoTeamsTransport extends Error {}
 
-function tokenFile(root: string): string { return path.join(root, "seats", "run", "teams.token"); }
 function tokenFrom(root: string): string {
-  if (process.env.WHEELHOUSE_TEAMS_TOKEN) return process.env.WHEELHOUSE_TEAMS_TOKEN;
-  const f = tokenFile(root);
-  if (fs.existsSync(f)) {
-    const mode = fs.statSync(f).mode & 0o777;
-    if (mode !== 0o600) throw new Error(`teams token file must be mode 0600, got ${mode.toString(8)}`);
-    return fs.readFileSync(f, "utf8").trim();
-  }
-  const cmd = process.env.WHEELHOUSE_TEAMS_TOKEN_CMD;
-  if (cmd) {
-    try { return execFileSync("bash", ["-lc", cmd], { encoding: "utf8", timeout: 10000 }).trim(); }
-    catch (e: any) { throw new Error(`teams token command failed: ${e?.message ?? e}`); }
-  }
-  throw new NoTeamsTransport("no teams token configured");
+  try { return channelToken(root, "teams"); }
+  catch (e) { if (e instanceof NoChannelCredential) throw new NoTeamsTransport(e.message); throw e; }
 }
 function abortMs(): number { const n=Number(process.env.WHEELHOUSE_TEAMS_FETCH_ABORT_MS || "10000"); return Number.isFinite(n) && n > 0 ? n : 10000; }
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, label: string): Promise<Response> {
