@@ -5,7 +5,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PATTERN="${WHEELHOUSE_SELFTEST_SWEEP_PATTERN:-$ROOT/seats/*.selftest.sh}"
-LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-${TMPDIR:-/tmp}/wheelhouse-selftest-sweep.lock}"
+# TMPDIR is per-run scratch; it must not split the host-wide lock domain.
+LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-/tmp/wheelhouse-selftest-sweep.lock}"
 SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
 
