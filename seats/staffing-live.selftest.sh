@@ -2,6 +2,7 @@
 set -u
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
+. "$(dirname "$SELFTEST_LIB")/selftest-herald.sh"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 REAL_PI="$(command -v pi 2>/dev/null || true)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing-live.XXXXXX")" || exit 2
@@ -9,8 +10,16 @@ PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 skip(){ PASS=$((PASS+1)); echo "ok $PASS - SKIP $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; [ "${WHEELHOUSE_KEEP_FIXTURE:-0}" = 1 ] || selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_bind_herald_owner "$FIX" || exit 2
+cleanup(){
+  selftest_stop_herald_child "${HERALD_PID:-}"
+  selftest_stop_herald_child "${CAN_PID:-}"
+  selftest_cleanup_fixture_processes "$FIX"
+  [ "${WHEELHOUSE_KEEP_FIXTURE:-0}" = 1 ] || selftest_remove_fixture_dir "$FIX"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 PROJ="$FIX/project"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/contracts" "$PROJ/wheelhouse" "$BIN" "$HOME_FIX/.pi-seats-live"
 for e in e1 e2 e3 rv1; do mkdir -p "$HOME_FIX/.pi-seats-live/$e"; done
 selftest_copy_seat_runtime "$PROJ" "$HERE"
@@ -55,7 +64,7 @@ process.stdin.resume();
 JS
 chmod +x "$BIN/pi"
 export HOME="$HOME_FIX" PATH="$BIN:$PATH" OPENAI_API_KEY=fixture-key LIVE_ENV_LOG="$FIX/env.jsonl" WHEELHOUSE_CLEANUP=0 WHEELHOUSE_HERALD_ROOT="$PROJ" WHEELHOUSE_HERALD_INTERVAL_MS=100 WHEELHOUSE_STAFFING_INTERVAL_MS=200
-(cd "$PROJ" && bun seats/herald.ts) > "$FIX/herald.out" 2> "$FIX/herald.err" & HERALD_PID=$!
+(cd "$PROJ" && exec bun seats/herald.ts) > "$FIX/herald.out" 2> "$FIX/herald.err" & HERALD_PID=$!
 for _ in $(seq 1 60); do
   [ -f "$PROJ/seats/staffing.json" ] && COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.keys(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).length)}catch{console.log(0)}' "$PROJ/seats/staffing.json") || COUNT=0
   [ -f "$PROJ/seats/state.json" ] && SCOUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$PROJ/seats/state.json") || SCOUNT=0
@@ -124,7 +133,7 @@ CLAIM1_RC=$?
 (cd "$PROJ" && bun seats/adapter.ts dispatch worker-e3 shared-task "double claim") > "$FIX/claim2.out" 2>&1; CLAIM_RC=$?
 [ $CLAIM1_RC -eq 0 ] && [ $CLAIM_RC -ne 0 ] && grep -q 'already assigned\|already has\|already checked out\|refusing' "$FIX/claim2.out" && pass "same task dispatched to second staffed seat is refused" || fail "double dispatch precondition/refusal wrong rc1=$CLAIM1_RC rc2=$CLAIM_RC first=$(cat "$FIX/claim1.out") second=$(cat "$FIX/claim2.out")"
 KILLPID=$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats["worker-e1"].pid)' "$PROJ/seats/state.json")
-kill -9 "$KILLPID" 2>/dev/null || true; kill "$HERALD_PID" 2>/dev/null || true
+kill -9 "$KILLPID" 2>/dev/null || true; selftest_stop_herald_child "$HERALD_PID"; HERALD_PID=""
 node -e 'const fs=require("fs"); const f=process.argv[1]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.seats["worker-unspawned"]={role:"worker",entry:"e3",addedAt:new Date().toISOString()}; fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")' "$PROJ/seats/staffing.json"
 (cd "$PROJ" && bun seats/recover.ts) > "$FIX/recover.out" 2>&1 || true
 if grep -q 'worker-e1.*DEAD.*staffed: e1' "$FIX/recover.out" && grep -q 'resume: bun .*adapter.ts resume worker-e1' "$FIX/recover.out" && grep -q 'worker-e2.*RUNNING' "$FIX/recover.out" && grep -q 'worker-unspawned.*STAFFED-UNSPAWNED.*spawn: bun .*adapter.ts spawn worker-unspawned' "$FIX/recover.out"; then pass "recover reports staffed dead, running, and unspawned seats"; else fail "recover staffed output wrong: $(cat "$FIX/recover.out")"; fi
@@ -140,9 +149,9 @@ p=Path(__import__('sys').argv[1]); s=p.read_text()
 s=s.replace('const launched = launchDetached("staffing", ["bun", "seats/staffing.ts", "check"], 0, STAFFING_OUT_LOG);', 'const launched = false; // canary disables real staffing launch')
 p.write_text(s)
 PY
-(cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" OPENAI_API_KEY=fixture-key LIVE_ENV_LOG="$FIX/canary-env.jsonl" WHEELHOUSE_CLEANUP=0 WHEELHOUSE_HERALD_ROOT="$CAN" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_STAFFING_INTERVAL_MS=50 bun seats/herald.ts) > "$FIX/canary-herald.out" 2> "$FIX/canary-herald.err" & CAN_PID=$!
+(cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" OPENAI_API_KEY=fixture-key LIVE_ENV_LOG="$FIX/canary-env.jsonl" WHEELHOUSE_CLEANUP=0 WHEELHOUSE_HERALD_ROOT="$CAN" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_STAFFING_INTERVAL_MS=50 exec bun seats/herald.ts) > "$FIX/canary-herald.out" 2> "$FIX/canary-herald.err" & CAN_PID=$!
 for _ in $(seq 1 20); do [ -f "$CAN/seats/state.json" ] && break; sleep 0.1; done
-kill "$CAN_PID" 2>/dev/null || true
+selftest_stop_herald_child "$CAN_PID"; CAN_PID=""
 CAN_STATE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$CAN/seats/state.json")
 [ "$CAN_STATE_COUNT" = 0 ] && pass "canary: disabling herald staffing launch makes the no-commander growth leg fail" || fail "canary broken herald still grew workers state=$CAN_STATE_COUNT"
 if [ "$FAIL" -eq 0 ]; then echo "staffing-live.selftest: PASS ($PASS checks)"; exit 0; fi

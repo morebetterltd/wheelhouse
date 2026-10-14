@@ -14,16 +14,21 @@ command -v node >/dev/null 2>&1 || { echo "selftest: node is required" >&2; exit
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-herald-selftest.XXXXXX")" || exit 2
+. "$SCRIPT_DIR/selftest-herald.sh"
+selftest_bind_herald_owner "$FIX" || exit 2
 PASS=0
 FAIL=0
 
 cleanup() {
   selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
-  if [ -n "${DAEMON_PID:-}" ]; then kill "$DAEMON_PID" 2>/dev/null || true; fi
-  if [ -n "${REVIVED_PID:-}" ]; then kill "$REVIVED_PID" 2>/dev/null || true; fi
+  # daemons.sh's detached heralds are bound to this fixture owner; deleting
+  # the root also terminates them even if the script is interrupted.
+  if [ -n "${ROOT_GONE_PID:-}" ]; then selftest_stop_herald_child "$ROOT_GONE_PID"; fi
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }

@@ -53,6 +53,8 @@ cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
 cat > "$PROJ/seats/herald.ts" <<'EOF'
+import * as fs from "node:fs";
+fs.writeFileSync(`${import.meta.dir}/run/herald.pid`, `${process.pid}\n`);
 setInterval(() => {}, 1000);
 EOF
 cat > "$PROJ/seats/desk.ts" <<'EOF'

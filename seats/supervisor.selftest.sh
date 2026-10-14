@@ -12,6 +12,8 @@ trap cleanup EXIT INT TERM
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/wheelhouse"
 selftest_copy_seat_runtime "$PROJ" "$HERE"; chmod +x "$PROJ/seats/supervisor.sh" "$PROJ/seats/daemons.sh"
 for d in herald desk courier; do cat > "$PROJ/seats/$d.ts" <<'TS'
+import * as fs from "node:fs";
+if (import.meta.path.endsWith("/herald.ts")) fs.writeFileSync(`${import.meta.dir}/run/herald.pid`, `${process.pid}\n`);
 if (process.env.WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY === "1") { console.error("synthetic crash"); process.exit(42); }
 setInterval(() => {}, 1000);
 TS

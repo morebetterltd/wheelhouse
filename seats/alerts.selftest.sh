@@ -4,8 +4,12 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-alerts.XXXXXX")" || exit 2
+. "$HERE/selftest-herald.sh"
+selftest_bind_herald_owner "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${TMUX_SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 FAILED=0
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
