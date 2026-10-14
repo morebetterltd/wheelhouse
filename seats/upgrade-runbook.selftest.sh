@@ -5,6 +5,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
+export WHEELHOUSE_CONTRACT_FIXTURE="$ROOT/seats/fixtures/contracts/valid.md"
 BASELINE=${WHEELHOUSE_UPGRADE_SELFTEST_BASELINE:-d8128d4}
 TEMPLATE_SOURCE="$ROOT/wheelhouse/.template-source"
 
