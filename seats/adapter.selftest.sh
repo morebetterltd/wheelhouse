@@ -421,6 +421,12 @@ run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELH
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
+phase "0a0. state lock recovers abandoned incomplete writers without stealing live owners"
+mkdir -p "$FIX/state-lock-cases"
+if bun "$HERE/fixtures/adapter-state-lock.ts" "$ADAPTER" "$FIX/state-lock-cases"; then
+  pass "state lock recovery, grace, open/live owners, safe release and atomic publication"
+else fail "adapter state-lock regression failed"; fi
+
 phase "0a. launch paths validate the whole roster before choosing a seat"
 BAD_ROSTER_PROJ="$FIX/bad-roster-proj"
 build_proj "$BAD_ROSTER_PROJ" badroster
