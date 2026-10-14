@@ -34,6 +34,188 @@ trap cleanup EXIT INT TERM
 export HOME="$FIX/home"
 mkdir -p "$HOME"
 
+phase 'reviewed-row deletion safety (fresh allocations only)'
+REVIEWED="$FIX/reviewed"
+mkdir -p "$REVIEWED"
+selftest_copy_seat_runtime "$REVIEWED" "$(dirname "$PRUNE")"
+cp -f "$PRUNE" "$REVIEWED/seats/prune.ts"
+cat > "$FIX/reviewed-rows.ts" <<'TS'
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+const base = process.argv[2];
+if (!fs.existsSync(path.join(path.dirname(base), '.wheelhouse-selftest-fixture'))) throw new Error('missing fresh fixture marker');
+let failures = 0;
+function check(ok: boolean, name: string, detail = '') { console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${detail ? ': ' + detail : ''}`); if (!ok) failures++; }
+function command(cmd: string, args: string[], cwd: string, env = process.env) {
+  const r = spawnSync(cmd, args, { cwd, env, encoding: 'utf8', timeout: 30000 });
+  if (r.error || r.signal) throw new Error(`${cmd} did not complete: ${r.error ?? r.signal}`);
+  return { rc: r.status, out: r.stdout ?? '', err: r.stderr ?? '' };
+}
+function fixture(name: string) {
+  const dir = fs.mkdtempSync(path.join(base, name + '-')), root = path.join(dir, 'install');
+  fs.mkdirSync(root); fs.cpSync(path.join(base, 'seats'), path.join(root, 'seats'), { recursive: true });
+  // Old prune walks upward looking for state. Stop that walk HERE, never at
+  // the enclosing installed fleet's state/FIFOs during a negative control.
+  fs.writeFileSync(path.join(root,'seats','state.json'), JSON.stringify({seats:{}}));
+  for (const args of [['init','-q','-b','main'], ['config','user.email','selftest@example.invalid'], ['config','user.name','selftest']]) {
+    const r = command('git', args, root); if (r.rc !== 0) throw new Error(r.err);
+  }
+  fs.writeFileSync(path.join(root, 'base.txt'), 'owned fixture\n');
+  for (const args of [['add','base.txt'], ['commit','-q','-m','base']]) if (command('git', args, root).rc !== 0) throw new Error('fixture commit failed');
+  const bin = path.join(dir, 'bin'); fs.mkdirSync(bin);
+  const log = path.join(dir, 'xcrun.log'); fs.writeFileSync(log, '');
+  fs.writeFileSync(path.join(bin, 'xcrun'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "' + log + '"\n', { mode: 0o755 });
+  const lsof = path.join(bin, 'lsof'); fs.writeFileSync(lsof, '#!/bin/sh\nprintf "p1\\nn/\\n"\n', { mode: 0o755 });
+  const env = { ...process.env, PATH: bin + ':' + process.env.PATH, WHEELHOUSE_LSOF: lsof };
+  return { dir, root, log, env };
+}
+function meta(root: string) { return { kind:'wheelhouse-prune-scan', version:1, root, roots:[root], safe:0, repo:root, path:root }; }
+function row(root: string, target: string, extra = {}) { return { category:'run-scratch', safe:1, repo:root, path:target, branch:'', size_bytes:1, size_human:'1.0B', action:'rm', reason:'fresh reviewed fixture', ...extra }; }
+function keep(target: string) { fs.mkdirSync(target, { recursive:true }); fs.writeFileSync(path.join(target, 'KEEP'), 'unrelated fixture sentinel\n'); }
+function invoke(f: ReturnType<typeof fixture>, rows: any[], header = meta(f.root), format = 'json') {
+  const file = path.join(f.dir, 'reviewed.' + format);
+  if (format === 'json') fs.writeFileSync(file, JSON.stringify([header,...rows]));
+  else if (format === 'jsonl') fs.writeFileSync(file, [header,...rows].map(r => JSON.stringify(r)).join('\n') + '\n');
+  else {
+    const cols = ['category','safe','repo','path','branch','size_bytes','size_human','action','reason'];
+    fs.writeFileSync(file, '# wheelhouse-prune-scan-v1\t' + JSON.stringify(header.roots) + '\n' + cols.join('\t') + '\n' + rows.map(r => cols.map(c => String(r[c] ?? '')).join('\t')).join('\n') + '\n');
+  }
+  const r = command('bun', ['seats/prune.ts','prune','--from-file',file,'--yes'], f.root, f.env);
+  console.log(`MEASUREMENT ${path.basename(f.dir)} rc=${r.rc} stdout=${JSON.stringify(r.out)} stderr=${JSON.stringify(r.err)}`);
+  return r;
+}
+{
+  const f = fixture('outside-rm'), victim = path.join(f.dir,'victim'); keep(victim);
+  if (!fs.existsSync(path.join(victim,'KEEP'))) throw new Error('outside sentinel absent before prune');
+  const r = invoke(f,[row(f.root,victim)]), present = fs.existsSync(path.join(victim,'KEEP'));
+  console.log(`MEASUREMENT outside-rm KEEP_present=${Number(present)}`);
+  check(r.rc === 0 && present && r.out.includes('SKIPPED run-scratch') && r.out.includes('outside allowed'), 'outside rm row keeps unrelated KEEP');
+}
+{
+  const f = fixture('string-safe'), victim = path.join(f.dir,'victim'); keep(victim);
+  const r = invoke(f,[row(f.root,victim,{safe:'0'})]);
+  check(r.rc === 2 && fs.existsSync(path.join(victim,'KEEP')) && /row 2 field safe/.test(r.err), 'JSON safe string refuses whole file');
+}
+{
+  const f = fixture('dirty-worktree'), wt = path.join(f.root,'.wheelhouse-worktrees','dirty');
+  const created = command('git',['worktree','add','-q','-b','fleet/dirty',wt,'main'],f.root);
+  if (created.rc !== 0 || !fs.existsSync(path.join(wt,'.git'))) throw new Error('worktree creation failed: '+created.err);
+  const recorded = row(f.root,wt,{category:'merged-worktree',action:'worktree',branch:'fleet/dirty'});
+  // Save the clean reviewed row, THEN let the tree change before prune acts.
+  const file = path.join(f.dir,'clean-scan.json'); fs.writeFileSync(file,JSON.stringify([meta(f.root),recorded]));
+  const before = command('git',['status','--porcelain','--untracked-files=all'],wt);
+  if (before.rc !== 0 || before.out.trim()) throw new Error('subject was not a clean worktree when recorded');
+  fs.writeFileSync(path.join(wt,'KEEP'),'new untracked work\n');
+  const r = command('bun',['seats/prune.ts','prune','--from-file',file,'--yes'],f.root,f.env), present = fs.existsSync(path.join(wt,'KEEP'));
+  console.log(`MEASUREMENT dirty-worktree rc=${r.rc} KEEP_present=${Number(present)} stdout=${JSON.stringify(r.out)} stderr=${JSON.stringify(r.err)}`);
+  check(r.rc === 0 && present && r.out.includes('SKIPPED merged-worktree') && r.out.includes('uncommitted changes'), 'worktree dirtied after review keeps KEEP');
+}
+{
+  const f = fixture('invalid-simctl');
+  if (!fs.existsSync(f.log) || !fs.existsSync(path.join(f.dir,'bin','xcrun'))) throw new Error('stub/log subject absent');
+  const r = invoke(f,[row(f.root,'simctl:../x',{category:'bead-simulator',action:'simctl'})]);
+  check(r.rc === 0 && r.out.includes('SKIPPED bead-simulator') && r.out.includes('invalid simulator UDID') && fs.readFileSync(f.log,'utf8') === '', 'invalid UDID skipped with zero xcrun calls');
+}
+{
+  const f = fixture('foreign-root'), other = fixture('other-install'), target = path.join(f.root,'.wheelhouse-runs','owned'); keep(target);
+  const r = invoke(f,[row(f.root,target)],meta(other.root));
+  check(r.rc === 2 && fs.existsSync(path.join(target,'KEEP')) && /row 1 field root/.test(r.err), 'foreign install scan refused');
+}
+for (const [field,value] of [['category','not-a-category'],['action','none'],['path','relative'],['repo','not-a-repository'],['safe',true],['size_bytes',-1]] as const) {
+  const f = fixture('bad-'+field), first = path.join(f.root,'.wheelhouse-runs','first'), second = path.join(f.dir,'victim'); keep(first); keep(second);
+  const r = invoke(f,[row(f.root,first),row(f.root,second,{[field]:value})]);
+  check(r.rc === 2 && fs.existsSync(path.join(first,'KEEP')) && fs.existsSync(path.join(second,'KEEP')) && r.err.includes('row 3 field '+field), `bad ${field} validates whole file before first action`);
+}
+for (const format of ['jsonl','tsv']) {
+  const f = fixture('bad-'+format), target = path.join(f.root,'.wheelhouse-runs','owned'); keep(target);
+  const r = invoke(f,[row(f.root,target,{category:'bogus'})],meta(f.root),format);
+  check(r.rc === 2 && fs.existsSync(path.join(target,'KEEP')) && r.err.includes('field category'), format+' validates rows too');
+}
+{
+  const f = fixture('symlink'), outside = path.join(f.dir,'outside'); keep(path.join(outside,'owned'));
+  fs.symlinkSync(outside,path.join(f.root,'.wheelhouse-runs'));
+  const r = invoke(f,[row(f.root,path.join(f.root,'.wheelhouse-runs','owned'))]);
+  check(r.rc === 0 && fs.existsSync(path.join(outside,'owned','KEEP')) && r.out.includes('path mismatch'), 'symlink ancestor cannot redirect rm');
+}
+{
+  const f = fixture('cancelled-symlink'), runs = path.join(f.root,'.wheelhouse-runs'), outside = path.join(f.dir,'outside');
+  keep(path.join(runs,'owned')); keep(path.join(outside,'owned')); fs.mkdirSync(path.join(outside,'inner'));
+  fs.symlinkSync(path.join(outside,'inner'),path.join(runs,'link'));
+  const target = runs + '/link/../owned'; // path.join would erase the dangerous spelling.
+  const r = invoke(f,[row(f.root,target)]);
+  check(r.rc === 0 && fs.existsSync(path.join(outside,'owned','KEEP')) && fs.existsSync(path.join(runs,'owned','KEEP')) && r.out.includes('path mismatch'), 'lexical dotdot cannot hide a symlink from validation');
+}
+{
+  const f = fixture('missing'), target = path.join(f.root,'.wheelhouse-runs','missing');
+  const r = invoke(f,[row(f.root,target)]);
+  check(r.rc === 0 && r.out.includes('SKIPPED run-scratch') && r.out.includes('no longer exists') && r.out.includes('touched=0 skipped=1'), 'missing target skipped, not reported PRUNED');
+}
+{
+  const f = fixture('xctest-outside'), target = path.join(f.dir,'unrelated-device-set'); keep(target);
+  const r = invoke(f,[row(f.root,target,{category:'xctest-devices',action:'xctest-devices'})]);
+  check(r.rc === 0 && fs.existsSync(path.join(target,'KEEP')) && r.out.includes('outside XCTestDevices') && fs.readFileSync(f.log,'utf8') === '', 'XCTest set outside scanner root cannot reach xcrun');
+}
+{
+  const f = fixture('ancestor-swap'), parent = path.join(f.root,'.wheelhouse-runs'), outside = path.join(f.dir,'outside');
+  keep(path.join(parent,'owned')); keep(path.join(outside,'owned'));
+  fs.writeFileSync(f.env.WHEELHOUSE_LSOF, '#!/bin/sh\nmv -f "'+parent+'" "'+parent+'.original"\nln -s "'+outside+'" "'+parent+'"\nprintf "p1\\nn/\\n"\n');
+  const r = invoke(f,[row(f.root,path.join(parent,'owned'))]);
+  const original = fs.existsSync(path.join(parent+'.original','owned','KEEP'));
+  check(r.rc === 0 && original && fs.existsSync(path.join(outside,'owned','KEEP')) && r.out.includes('path mismatch after validation'), 'ancestor swapped by last outside probe cannot redirect rm');
+}
+{
+  const f = fixture('live-worktree'), wt = path.join(f.root,'.wheelhouse-worktrees','occupied');
+  if (command('git',['worktree','add','-q','-b','fleet/occupied',wt,'main'],f.root).rc !== 0) throw new Error('live worktree absent');
+  const file = path.join(f.dir,'before-live.json'); fs.writeFileSync(file,JSON.stringify([meta(f.root),row(f.root,wt,{category:'merged-worktree',action:'worktree',branch:'fleet/occupied'})]));
+  const realLsof = command('which',['lsof'],base).out.trim(); if (!realLsof || !fs.existsSync(realLsof)) throw new Error('real lsof unavailable for live-cwd proof');
+  const child = spawn('sleep',['1000'],{cwd:wt,stdio:'ignore'});
+  try {
+    if (!child.pid) throw new Error('owned sleep not started');
+    command('sleep',['0.1'],f.dir);
+    const cwd = command(realLsof,['-a','-p',String(child.pid),'-d','cwd','-Fn'],f.dir);
+    if (!cwd.out.split('\n').includes('n'+wt)) throw new Error('owned live cwd not observed');
+    console.log(`CAPTURE lsof -a -p <fixture-pid> -d cwd -Fn rc=${cwd.rc} stdout=${JSON.stringify(cwd.out)} stderr=${JSON.stringify(cwd.err)}`);
+    const r = command('bun',['seats/prune.ts','prune','--from-file',file,'--yes'],f.root,{...f.env,WHEELHOUSE_LSOF:realLsof});
+    console.log(`MEASUREMENT live-worktree rc=${r.rc} stdout=${JSON.stringify(r.out)} stderr=${JSON.stringify(r.err)}`);
+    check(r.rc === 0 && fs.existsSync(path.join(wt,'.git')) && r.out.includes('SKIPPED merged-worktree') && r.out.includes('live process has its cwd'), 'live cwd acquired after review keeps unanchored worktree');
+  } finally { child.kill('SIGTERM'); }
+}
+for (const format of ['jsonl','tsv']) {
+  const f = fixture('first-bad-'+format), target = path.join(f.root,'.wheelhouse-runs','owned'); keep(target);
+  // Earlier semantic error wins over a later record's decoding/coercion error.
+  const file = path.join(f.dir,'first.'+format), bad = row(f.root,target,{category:'bogus'});
+  if (format === 'jsonl') fs.writeFileSync(file,JSON.stringify(meta(f.root))+'\n'+JSON.stringify(bad)+'\n{not-json}\n');
+  else { const cols = Object.keys(bad); fs.writeFileSync(file,'# wheelhouse-prune-scan-v1\t'+JSON.stringify([f.root])+'\n'+cols.join('\t')+'\n'+cols.map(c=>String(bad[c])).join('\t')+'\n'+cols.map(c=>c==='safe'?'not-a-number':String(bad[c])).join('\t')+'\n'); }
+  const r = command('bun',['seats/prune.ts','prune','--from-file',file,'--yes'],f.root,f.env);
+  check(r.rc === 2 && fs.existsSync(path.join(target,'KEEP')) && r.err.includes('row 2 field category'), format+' reports first bad row, not later syntax/coercion error');
+}
+console.log(`reviewed-row regression failures=${failures}`);
+// Positive wire controls: actual producer -> saved file -> actual consumer,
+// including a plain (non-Git) umbrella with a Git product repository.
+for (const layout of ['single-repo','plain-umbrella']) for (const format of ['json','jsonl','tsv']) {
+  const f = fixture('roundtrip-'+layout+'-'+format);
+  if (layout === 'plain-umbrella') {
+    if (command('git',['clone','-q',f.root,path.join(f.root,'product')],f.dir).rc !== 0) throw new Error('local product clone failed');
+    fs.renameSync(path.join(f.root,'.git'),path.join(f.dir,'retired-fixture-git'));
+  }
+  const target = path.join(f.root,'.wheelhouse-worktrees','orphan'); keep(target);
+  const produced = command('bun',['seats/prune.ts','scan','--format',format],f.root,f.env), file = path.join(f.dir,'actual-scan.'+format);
+  fs.writeFileSync(file,produced.out);
+  const scoped = format === 'tsv' ? produced.out.startsWith('# wheelhouse-prune-scan-v1\t') : produced.out.includes('"kind"') && produced.out.includes('wheelhouse-prune-scan');
+  const pruned = command('bun',['seats/prune.ts','prune','--from-file',file,'--yes','--categories','orphaned-worktree'],f.root,f.env);
+  check(produced.rc === 0 && scoped && pruned.rc === 0 && !fs.existsSync(target) && pruned.out.includes('PRUNED rm orphaned-worktree'), `${layout} ${format} bound producer/consumer roundtrip`);
+}
+process.exit(failures ? 1 : 0);
+TS
+if bun "$FIX/reviewed-rows.ts" "$REVIEWED"; then pass 'reviewed-row safety regressions'; else fail 'reviewed-row safety regressions'; fi
+if [ "${WHEELHOUSE_PRUNE_REVIEWED_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" -eq 0 ] && { echo 'prune.reviewed.selftest: PASS'; exit 0; }
+  echo 'prune.reviewed.selftest: FAIL' >&2; exit 1
+fi
+
+reviewed_tsv_header(){ printf '# wheelhouse-prune-scan-v1\t["%s"]\ncategory\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\n' "$1"; }
+
 if [ "${WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK:-0}" != 1 ]; then
   phase 'preflight: TMPDIR inside another git repo is not touched'
   OUTER="$FIX/enclosing-tmp-repo"
@@ -201,7 +383,7 @@ shift
 if [ "\${1:-}" = help ]; then echo help; exit 0; fi
 if [ "\${1:-}" = list ] && [ "\${2:-}" = devices ]; then
 cat <<JSON
-{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-17-0":[{"name":"$CLOSED_ID-walk","udid":"CLOSED-UDID","state":"Shutdown","dataPath":"$SIMDATA_CLOSED"},{"name":"$OPEN_ID-walk","udid":"OPEN-UDID","state":"Shutdown","dataPath":"$SIMDATA_OPEN"}]}}
+{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-17-0":[{"name":"$CLOSED_ID-walk","udid":"11111111-1111-1111-1111-111111111111","state":"Shutdown","dataPath":"$SIMDATA_CLOSED"},{"name":"$OPEN_ID-walk","udid":"22222222-2222-2222-2222-222222222222","state":"Shutdown","dataPath":"$SIMDATA_OPEN"}]}}
 JSON
 exit 0
 fi
@@ -220,6 +402,7 @@ export PATH="$FAKEBIN:$PATH"
 
 BUSY="$FIX/busy-container"
 mkdir -p "$BUSY/seats" "$BUSY/.wheelhouse-bench.lock" "$BUSY/product/.wheelhouse-build"
+git -C "$BUSY" init -q -b main
 printf '{"seats":{}}\n' > "$BUSY/seats/state.json"
 selftest_copy_seat_runtime "$BUSY" "$(dirname "$PRUNE")"
 chmod +x "$BUSY/seats/prune.ts"
@@ -265,8 +448,8 @@ if awk -F '\t' -v p="$ROOT/.wheelhouse-runs/$CLOSED_ID-build" '$1=="run-scratch"
 if awk -F '\t' -v p="$ROOT/.wheelhouse-runs/$OPEN_ID-build" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /which is open/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'open bead .wheelhouse-runs scratch is needs-review'; else fail "open bead-runs guard row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$CLOSED_TMP" '$1=="bead-tmp" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed bead tmp scratch is safe bead-tmp'; else fail "closed bead-tmp row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$OPEN_TMP" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /which is open/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'open bead tmp scratch is needs-review'; else fail "open bead-tmp guard row missing:\n$(cat "$SCAN")"; fi
-if awk -F '\t' '$1=="bead-simulator" && $2=="1" && $4=="simctl:CLOSED-UDID" {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed bead simctl device is safe bead-simulator'; else fail "closed bead-simulator row missing:\n$(cat "$SCAN")"; fi
-if awk -F '\t' '$1=="needs-review" && $2=="0" && $4=="simctl:OPEN-UDID" && $9 ~ /which is open/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'open bead simctl device is needs-review'; else fail "open bead-simulator guard row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' '$1=="bead-simulator" && $2=="1" && $4=="simctl:11111111-1111-1111-1111-111111111111" {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed bead simctl device is safe bead-simulator'; else fail "closed bead-simulator row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' '$1=="needs-review" && $2=="0" && $4=="simctl:22222222-2222-2222-2222-222222222222" && $9 ~ /which is open/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'open bead simctl device is needs-review'; else fail "open bead-simulator guard row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$HOME/Library/Developer/XCTestDevices" '$1=="xctest-devices" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'idle XCTestDevices set is safe xctest-devices'; else fail "xctest-devices row missing:\n$(cat "$SCAN")"; fi
 
 phase 'active bench lock makes caches review-only'
@@ -285,6 +468,7 @@ if grep -q 'DRY-RUN branch stale-branch' "$FIX/stale-branch-dry.out" && grep -q 
 phase 'prune --yes refuses while a rostered seat is mid-turn'
 MID="$FIX/midturn"
 mkdir -p "$MID/seats" "$MID/product/.wheelhouse-build"
+git -C "$MID" init -q -b main
 selftest_copy_seat_runtime "$MID" "$(dirname "$PRUNE")"
 chmod +x "$MID/seats/prune.ts"
 MID_FIFO="$MID/seats/mid.stdin"
@@ -299,35 +483,35 @@ touch "$MID_LOG"
 ) >/dev/null 2>&1 &
 MID_PID=$!
 printf '{"seats":{"worker-busy":{"pid":%s,"cwd":"%s","fifo":"%s","log":"%s"}}}\n' "$MID_PID" "$MID/product" "$MID_FIFO" "$MID_LOG" > "$MID/seats/state.json"
-printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\nbuild-cache\t1\t%s\t%s\t\t1\t1.0B\trm\tfixture\n' "$MID" "$MID/product/.wheelhouse-build" > "$FIX/mid-scan.tsv"
+{ reviewed_tsv_header "$MID"; printf 'build-cache\t1\t%s\t%s\t\t1\t1.0B\trm\tfixture\n' "$MID" "$MID/product/.wheelhouse-build"; } > "$FIX/mid-scan.tsv"
 ( cd "$MID" && bun seats/prune.ts prune --from-file "$FIX/mid-scan.tsv" > "$FIX/mid-dry.out" )
 [ -d "$MID/product/.wheelhouse-build" ] && pass 'mid-turn seat still allows dry-run scan/prune preview' || fail 'mid-turn dry-run removed cache'
 set +e
 MID_RC=0; MID_OUT=$(cd "$MID" && bun seats/prune.ts prune --from-file "$FIX/mid-scan.tsv" --yes 2>&1) || MID_RC=$?
 set +e
-if [ $MID_RC -ne 0 ] && printf '%s\n' "$MID_OUT" | grep -q 'worker-busy' && printf '%s\n' "$MID_OUT" | grep -q 'mid-turn'; then pass 'prune --yes STOPs naming the mid-turn seat'; else fail "mid-turn prune did not STOP as specified (exit $MID_RC): $MID_OUT"; fi
+if [ $MID_RC -eq 0 ] && printf '%s\n' "$MID_OUT" | grep -q 'SKIPPED build-cache' && printf '%s\n' "$MID_OUT" | grep -q 'worker-busy' && printf '%s\n' "$MID_OUT" | grep -q 'mid-turn'; then pass 'prune --yes skips naming the mid-turn seat'; else fail "mid-turn prune did not skip safely (exit $MID_RC): $MID_OUT"; fi
 [ -d "$MID/product/.wheelhouse-build" ] && pass 'mid-turn guarded cache remains after refused prune --yes' || fail 'mid-turn guarded cache was removed'
 kill "$MID_PID" >/dev/null 2>&1 || true
 
 phase 'prune --yes restores write permission before rm action'
-MANUAL_RO="$FIX/manual-readonly-rm"
+MANUAL_RO="$ROOT/.wheelhouse-runs/$CLOSED_ID-manual-readonly-rm"
 mkdir -p "$MANUAL_RO/readonly-subdir"
 printf 'locked\n' > "$MANUAL_RO/readonly-subdir/file.txt"
 chmod 555 "$MANUAL_RO/readonly-subdir"
-printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\nrun-scratch\t1\t%s\t%s\t\t1\t1.0B\trm\tread-only fixture\n' "$ROOT" "$MANUAL_RO" > "$FIX/manual-readonly-scan.tsv"
+{ reviewed_tsv_header "$ROOT"; printf 'run-scratch\t1\t%s\t%s\t\t1\t1.0B\trm\tread-only fixture\n' "$ROOT" "$MANUAL_RO"; } > "$FIX/manual-readonly-scan.tsv"
 set +e
 MANUAL_RO_RC=0; MANUAL_RO_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/manual-readonly-scan.tsv" --yes --categories run-scratch 2>&1) || MANUAL_RO_RC=$?
 set -e
 if [ $MANUAL_RO_RC -eq 0 ] && [ ! -e "$MANUAL_RO" ] && printf '%s\n' "$MANUAL_RO_OUT" | grep -q "PRUNED rm run-scratch $MANUAL_RO"; then pass 'prune --yes removes an rm row containing a mode-555 subdirectory'; else chmod -R u+w "$MANUAL_RO" 2>/dev/null || true; fail "manual read-only rm row was not removed (exit $MANUAL_RO_RC): $MANUAL_RO_OUT"; fi
 
 phase 'prune --yes rechecks live seat anchors from reviewed scan files'
-printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\norphaned-worktree\t1\t%s\t%s\t\t1\t1.0B\trm\tstale reviewed scan fixture\n' "$ROOT" "$WTS/$LIVE_ID" > "$FIX/stale-live-scan.tsv"
+{ reviewed_tsv_header "$ROOT"; printf 'orphaned-worktree\t1\t%s\t%s\t\t1\t1.0B\trm\tstale reviewed scan fixture\n' "$ROOT" "$WTS/$LIVE_ID"; } > "$FIX/stale-live-scan.tsv"
 set +e
 STALE_RC=0; STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-live-scan.tsv" --yes --categories orphaned-worktree 2>&1) || STALE_RC=$?
 set +e
-if [ $STALE_RC -ne 0 ] && printf '%s\n' "$STALE_OUT" | grep -q 'worker-live' && printf '%s\n' "$STALE_OUT" | grep -q 'refusing to prune'; then pass 'prune --yes refuses a stale safe row that is now a live seat cwd'; else fail "stale live-cwd row was not refused (exit $STALE_RC): $STALE_OUT"; fi
+if [ $STALE_RC -eq 0 ] && printf '%s\n' "$STALE_OUT" | grep -q 'SKIPPED orphaned-worktree' && printf '%s\n' "$STALE_OUT" | grep -q 'worker-live' && printf '%s\n' "$STALE_OUT" | grep -q 'refusing to prune'; then pass 'prune --yes skips a stale safe row that is now a live seat cwd'; else fail "stale live-cwd row was not skipped (exit $STALE_RC): $STALE_OUT"; fi
 [ -d "$WTS/$LIVE_ID" ] && pass 'stale-scan live seat cwd remains after refused prune --yes' || fail 'stale-scan live seat cwd was removed'
-printf 'category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\nmerged-worktree\t1\t%s\t%s\tfleet/%s\t1\t1.0B\tworktree\tstale reviewed scan fixture\n' "$PROD" "$WTS/$HIST_ID" "$HIST_ID" > "$FIX/stale-session-scan.tsv"
+{ reviewed_tsv_header "$ROOT"; printf 'merged-worktree\t1\t%s\t%s\tfleet/%s\t1\t1.0B\tworktree\tstale reviewed scan fixture\n' "$PROD" "$WTS/$HIST_ID" "$HIST_ID"; } > "$FIX/stale-session-scan.tsv"
 set +e
 SESSION_STALE_RC=0; SESSION_STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-session-scan.tsv" --yes --categories merged-worktree 2>&1) || SESSION_STALE_RC=$?
 set -e
@@ -355,7 +539,7 @@ fi
 [ ! -e "$ROOT/.wheelhouse-bench.lock.stale.12345" ] && pass 'safe stale bench lock removed' || fail 'stale bench lock still exists'
 [ ! -e "$ROOT/.wheelhouse-runs/$CLOSED_ID-build" ] && pass 'safe closed bead runs scratch removed' || fail 'closed bead runs scratch still exists'
 [ ! -e "$CLOSED_TMP" ] && pass 'safe closed bead tmp scratch removed' || fail 'closed bead tmp scratch still exists'
-grep -q 'delete CLOSED-UDID' "$FIX/xcrun.log" && pass 'safe closed bead simulator deleted by simctl' || fail "closed bead simulator delete missing: $(cat "$FIX/xcrun.log" 2>/dev/null)"
+grep -q 'delete 11111111-1111-1111-1111-111111111111' "$FIX/xcrun.log" && pass 'safe closed bead simulator deleted by simctl' || fail "closed bead simulator delete missing: $(cat "$FIX/xcrun.log" 2>/dev/null)"
 grep -q "set-delete $HOME/Library/Developer/XCTestDevices all" "$FIX/xcrun.log" && [ ! -e "$HOME/Library/Developer/XCTestDevices" ] && pass 'idle XCTestDevices set deleted with simctl --set' || fail "XCTestDevices set delete missing: $(cat "$FIX/xcrun.log" 2>/dev/null)"
 [ -d "$PROD/node_modules/pkg/dist" ] && pass 'node_modules package dist remains after prune --yes' || fail 'node_modules package dist was removed'
 [ -d "$PROD/node_modules/.bin" ] && pass 'node_modules .bin remains after prune --yes' || fail 'node_modules .bin was removed'
@@ -367,8 +551,46 @@ OPEN_RUNS_AFTER=$(shasum -a 256 "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt"
 OPEN_TMP_AFTER=$(shasum -a 256 "$OPEN_TMP/file.txt" | awk '{print $1}')
 [ "$OPEN_RUNS_BEFORE" = "$OPEN_RUNS_AFTER" ] && pass 'open bead runs scratch remains byte-identical' || fail 'open bead runs scratch changed'
 [ "$OPEN_TMP_BEFORE" = "$OPEN_TMP_AFTER" ] && pass 'open bead tmp scratch remains byte-identical' || fail 'open bead tmp scratch changed'
-if ! grep -q 'delete OPEN-UDID' "$FIX/xcrun.log"; then pass 'open bead simulator is not deleted'; else fail "open bead simulator was deleted: $(cat "$FIX/xcrun.log")"; fi
-if grep -q 'prune summary: touched=12' "$FIX/prune.out" && grep -q 'reclaimed_bytes=' "$FIX/prune.out"; then pass 'prune summary reports twelve touched rows and reclaimed bytes'; else fail "unexpected prune summary: $(cat "$FIX/prune.out")"; fi
+if ! grep -q 'delete 22222222-2222-2222-2222-222222222222' "$FIX/xcrun.log"; then pass 'open bead simulator is not deleted'; else fail "open bead simulator was deleted: $(cat "$FIX/xcrun.log")"; fi
+if grep -q 'prune summary: touched=11' "$FIX/prune.out" && grep -q 'reclaimed_bytes=' "$FIX/prune.out" && grep -q "SKIPPED merged-worktree $WTS/$HIST_ID reason=path no longer exists" "$FIX/prune.out"; then pass 'prune summary reports eleven touched rows; already-removed history row counts as skipped'; else fail "unexpected prune summary: $(cat "$FIX/prune.out")"; fi
+
+phase 'host-budget auto_prune uses the real scanner and reviewed prune parser'
+CAP_REAL="$FIX/actual-auto-prune"
+mkdir -p "$CAP_REAL/seats/logs" "$CAP_REAL/seats/run" "$CAP_REAL/.wheelhouse-worktrees"
+selftest_copy_seat_runtime "$CAP_REAL" "$(dirname "$PRUNE")"
+git -C "$CAP_REAL" init -q -b main
+git -C "$CAP_REAL" config user.email selftest@example.invalid
+git -C "$CAP_REAL" config user.name selftest
+printf 'owned cap fixture\n' > "$CAP_REAL/base.txt"
+git -C "$CAP_REAL" add base.txt && git -C "$CAP_REAL" commit -q -m base
+( cd "$CAP_REAL" && bd init --non-interactive --skip-agents -p cap >/dev/null 2>&1 ) || { echo 'selftest: cap graph init failed' >&2; exit 2; }
+CAP_IDS=()
+for n in 1 2; do
+  id=$(cd "$CAP_REAL" && bd create "real auto-prune $n" --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
+  [ -n "$id" ] || { echo 'selftest: cap bead missing' >&2; exit 2; }
+  CAP_IDS+=("$id")
+  wt="$CAP_REAL/.wheelhouse-worktrees/$id"
+  git -C "$CAP_REAL" worktree add -q -b "fleet/$id" "$wt" main
+  printf 'work\n' > "$wt/$id.txt"
+  git -C "$wt" add "$id.txt" && git -C "$wt" commit -q -m "work $id"
+  git -C "$CAP_REAL" merge -q --no-ff "fleet/$id" -m "merge $id"
+  ( cd "$CAP_REAL" && bd close "$id" >/dev/null 2>&1 )
+done
+printf '{"seats":{}}\n' > "$CAP_REAL/seats/seats.json"
+printf '{"type":"agent_end"}\n' > "$CAP_REAL/seats/logs/fixture-status.jsonl"
+printf '{"seats":{"fixture-status":{"pid":null,"role":"worker","log":"%s","fifo":"%s"}}}\n' "$CAP_REAL/seats/logs/fixture-status.jsonl" "$CAP_REAL/seats/run/fixture-status.stdin" > "$CAP_REAL/seats/state.json"
+printf '{"enabled":true,"max_worktrees":1,"auto_prune":true}\n' > "$CAP_REAL/seats/host-budget.json"
+CAP_BEFORE=$(git -C "$CAP_REAL" worktree list --porcelain | grep -c '^worktree ')
+[ "$CAP_BEFORE" -eq 3 ] || { echo 'selftest: real cap subjects absent' >&2; exit 2; }
+set +e
+( cd "$CAP_REAL" && bun seats/adapter.ts status ) > "$FIX/cap-real.out" 2> "$FIX/cap-real.err"; CAP_REAL_RC=$?
+set -e
+printf 'MEASUREMENT real-auto-prune rc=%s\n' "$CAP_REAL_RC"
+while IFS= read -r line; do printf '  adapter stdout: %s\n' "$line"; done < "$FIX/cap-real.out"
+while IFS= read -r line; do printf '  adapter stderr: %s\n' "$line"; done < "$FIX/cap-real.err"
+if [ "$CAP_REAL_RC" -eq 0 ] && grep -q 'HOST-BUDGET worktree cap exceeded' "$FIX/cap-real.out" && grep -q 'prune summary: touched=2' "$FIX/cap-real.out" && ! grep -q 'auto_prune failed' "$FIX/cap-real.out" && [ "$(git -C "$CAP_REAL" worktree list --porcelain | grep -c '^worktree ')" -eq 1 ] && [ ! -e "$CAP_REAL/.wheelhouse-worktrees/${CAP_IDS[0]}" ] && [ ! -e "$CAP_REAL/.wheelhouse-worktrees/${CAP_IDS[1]}" ] && grep -q '"kind": "wheelhouse-prune-scan"' "$CAP_REAL/seats/logs/prune-worktree-cap-scan.json"; then
+  pass 'actual adapter auto_prune consumes bound JSON and removes two clean merged worktrees'
+else fail "actual adapter auto_prune failed rc=$CAP_REAL_RC"; fi
 
 # ---------------------------------------------------------------------------
 # cleanup phases. One empty install proves the fresh-install case; every other
@@ -397,7 +619,7 @@ mk_install(){ # $1 root: container git repo, nested product repo with a bare ori
 phase 'ISC-71 fresh install with zero worktrees'
 FRESH="$FIX/fresh"; mk_install "$FRESH"; mkdir -p "$FIX/fresh-home"
 FRESH_SCAN=$(cd "$FRESH" && HOME="$FIX/fresh-home" bun seats/prune.ts scan --format jsonl 2>&1); FRESH_RC=$?
-[ "$FRESH_RC" -eq 0 ] && [ -z "$FRESH_SCAN" ] && pass 'scan on a fresh install prints nothing and exits 0' || fail "fresh scan rc=$FRESH_RC output: $FRESH_SCAN"
+[ "$FRESH_RC" -eq 0 ] && [ "$(printf '%s\n' "$FRESH_SCAN" | grep -c .)" -eq 1 ] && printf '%s\n' "$FRESH_SCAN" | grep -q '"kind":"wheelhouse-prune-scan"' && pass 'scan on a fresh install prints root metadata only and exits 0' || fail "fresh scan rc=$FRESH_RC output: $FRESH_SCAN"
 FRESH_OUT=$(cd "$FRESH" && HOME="$FIX/fresh-home" bun seats/prune.ts cleanup 2>&1); FRESH_RC=$?
 [ "$FRESH_RC" -eq 0 ] && [ "$(printf '%s\n' "$FRESH_OUT" | grep -c .)" -eq 1 ] && printf '%s\n' "$FRESH_OUT" | grep -q 'Z cleanup done removed=0 kept=0 bytes=0$' && pass 'cleanup on a fresh install prints only "cleanup done removed=0 kept=0 bytes=0" and exits 0' || fail "fresh cleanup rc=$FRESH_RC output: $FRESH_OUT"
 
