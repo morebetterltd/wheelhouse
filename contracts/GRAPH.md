@@ -13,6 +13,31 @@ Copied byte-for-byte into every project. Do not edit this section.
 - **Work discovered mid-task becomes a bead, not a detour.** Report it, file it, stay on your own bead.
 - **Signals become work without a permission round.** When the principal, the ISA, a claim falsifier, a decision, a defect, or a backlog direction points at work, the commander creates the bead and dispatches it. Asking whether to create work, start work, or declare done work done is a defect unless the action is on this install's reserved list or there is a genuine fork in product intent. New beads still need a trace; autonomy removes the permission round, not the evidence trail.
 - **Every bead carries a trace.** Its description contains a literal `Trace: ` line (first line preferred) naming what justifies dispatch: an ISA goal, an ISA claim's defect or falsifier, an ISA decision, a real observed defect, or a verifiable maintenance need. A bead whose trace nobody can state is not ready to dispatch. Readiness is judged by the designer when filing and by the commander when dispatching, not by bd; no graph mechanism enforces this for you. Carve-outs: the `wheelhouse-bootstrap` bench bead and `wheelhouse-smoke` bead trace to the install procedure because BOOTSTRAP files them before any ISA claim exists; a fresh install's early beads may trace to the Goal alone while Claims and Decisions are still empty; `Report <tool> issue:` beads trace to the observed defect they quote. `wheelhouse/crew/DESIGNER.md` carries the designer-facing version of this same rule ("No speculative work..."); GRAPH.md is the universal rule, and the wording is deliberately not a copy.
+- **Every bead is a contract.** Its description uses this grammar verbatim, as plain text with no fences inside bd:
+
+      Trace: <what justifies dispatch>
+      Integration: fleet/<goal-slug>            (optional)
+      Signal: sig-<id> | isa-gap: <claim id> | install-procedure
+      Skills: intent@<version> outcomes@<version>
+
+      Intent:
+      <one or more paragraphs: what is being done and why, in words a reader outside the factory follows>
+
+      Outcomes:
+      - O1 <one claim, provable true or false>
+        consumer: person-on-surface | person-reading | machine — <who meets it>
+        surface: <where that consumer meets it>
+        check: walk | read | run — <how that consumer would check it>
+
+  Headers `Intent:` and `Outcomes:` stand alone at line start. Outcome ids are sequential and unique (`O1`, `O2`, …); each outcome's three fields are indented continuation lines. Choose one group and its fixed check kind, not the literal alternatives:
+
+  | consumer group | check kind | consumer's check |
+  |---|---|---|
+  | person-on-surface | walk | Drive the real page, app or CLI session as that person. |
+  | person-reading | read | Read the artifact top to bottom, running its commands. |
+  | machine | run | Inspect literal command output, API response or file content. |
+
+  The kinds are fixed because the check is the one the consumer would make: a person on a page is proven by driving the page, a reader by reading the artifact top to bottom with its commands run, a machine by literal output. `Signal:` and `Skills:` are parsed by `seats/contract.ts`; their refusal gates arrive separately, not with this shape gate. seats/adapter.ts dispatch and seats/verify.ts refuse a bead missing Intent:, missing Outcomes:, or carrying an outcome with no surface:; the refusal happens before any seat process starts. `spawn <seat> <bead-id>` only prepares a worktree and sends no prompt, so it is not gated.
 - **A bead names where it integrates, or it integrates into the default line.** When a trace names an ISA Goal that the designer decomposed into more than one bead, the bead description carries the literal line `Integration: fleet/<goal-slug>` directly below the `Trace:` line. If that line is absent, the bead integrates into the install's default line, per bead. A bead carrying that line closes when its reviewed tip is on the named branch; that close satisfies its bd dependency edges, so dependents can become ready without waiting for the default line. The epic bead stays open until the branch reaches the default line and closes citing that default-line SHA. Drop `needs-review` at close exactly as before. The goal branch is not any bead's worker branch; it is listed in `seats/integration-refs.txt` and is never pruned while listed. `wheelhouse/INTEGRATOR.md`'s `### Two integration modes` owns the integrator's duties.
 - **A bead's done is stated by its author and judged by the reviewer.** Neither the worker nor the reviewer gets to move it.
 

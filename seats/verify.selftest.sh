@@ -41,6 +41,7 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 VERIFY_DIR="$(cd "$(dirname "$VERIFY")" && pwd)"
 BRIEFS="$VERIFY_DIR/briefs.ts"
 HARNESS="$VERIFY_DIR/harness.ts"
@@ -430,7 +431,7 @@ done
 verb="${1:-}"
 case "$verb" in
   show)
-    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf 'fixture bead\n'; fi
+    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi
     exit 0 ;;
   comments)
     printf 'fixture comments\n'; exit 0 ;;
@@ -618,6 +619,12 @@ VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
 
+phase "contract gate: no-outcomes review is refused before harness spawn"
+run_with_bd_show "$HERE/fixtures/contracts/no-outcomes.md" bead-no-outcomes fleet/bead-1 worker-1
+[ "$RC" = 5 ] && says 'STOP:' && says 'bead-no-outcomes is not a contract' && says 'bead-no-outcomes: contract: Outcomes: missing' && pass 'contract refusal: review exits 5 naming bead and Outcomes' || fail "contract refusal: review expected exit 5, got $RC: $OUT"
+[ ! -f "$VINVOKED" ] && pass 'contract refusal: no reviewer harness spawned' || fail 'contract refusal: reviewer harness was spawned'
+if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
+
 phase "verifier gate STOP reaches the dispatch inbox"
 if [ -f "$PROJ/seats/inbox.jsonl" ]; then BEFORE_INBOX_LINES="$(wc -l < "$PROJ/seats/inbox.jsonl" | tr -d ' ')"; else BEFORE_INBOX_LINES=0; fi
 run bead-no-branch fleet/does-not-exist worker-1
@@ -753,7 +760,8 @@ else fail "umbrella layout: default repo verdict did not record product repo and
 UMB_AMBIG_TIP="$(git -C "$UMB_PROJ" rev-parse fleet/bead-ambiguous)"
 PROD_AMBIG_TIP="$(git -C "$UMB_PROJ/product" rev-parse fleet/bead-ambiguous)"
 BD_UMBRELLA_REPO="$FIX/bd-umbrella-repo.txt"
-cat > "$BD_UMBRELLA_REPO" <<EOF
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$BD_UMBRELLA_REPO"
+cat >> "$BD_UMBRELLA_REPO" <<EOF
 fixture ambiguous repo bead
 
 DESCRIPTION
@@ -780,7 +788,8 @@ mkdir -p "$ALLOWED_SIB" "$UNLISTED_SIB"
 printf 'allowed sibling source\n' > "$ALLOWED_SIB/allowed.txt"
 printf 'unlisted sibling source\n' > "$UNLISTED_SIB/secret.txt"
 BD_SOURCE="$FIX/bd-source.txt"
-cat > "$BD_SOURCE" <<EOF
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$BD_SOURCE"
+cat >> "$BD_SOURCE" <<EOF
 wheelhouse-source [BUG]
 
 DESCRIPTION

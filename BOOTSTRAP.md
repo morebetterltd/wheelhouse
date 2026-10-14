@@ -641,8 +641,20 @@ Run each of these and paste what it prints:
 
   ```bash
   bd create "Implement wheelhouse/crew/bench.sh against wheelhouse/crew/BENCH.md" -p 1 \
-    --labels wheelhouse-bootstrap \
-    --description="Trace: install procedure wheelhouse-bootstrap carve-out. The bench ships as a stub that exits non-zero. Until it is implemented, no APPROVE may claim this project's software runs. Acceptance: the eight clauses in wheelhouse/crew/BENCH.md."
+    --labels wheelhouse-bootstrap --body-file /dev/stdin <<'CONTRACT'
+Trace: install procedure wheelhouse-bootstrap carve-out.
+Signal: install-procedure
+Skills: install-procedure carve-out
+
+Intent:
+Implement the project's bench so the fleet can prove the software runs instead of relying on a successful build. The shipped stub exits non-zero; until it is implemented, no APPROVE may claim this project's software runs. Work in a worktree per wheelhouse/fleet/WORKER.md.
+
+Outcomes:
+- O1 The project bench proves the eight clauses in wheelhouse/crew/BENCH.md.
+  consumer: machine — the verification runner checking this project's software
+  surface: wheelhouse/crew/bench.sh
+  check: run — the bench exits 0 on the project and prints the clause evidence BENCH.md names
+CONTRACT
   bd ready                                 # must now list that bead
   bd ready --label wheelhouse-bootstrap    # must list that bead and nothing else
   ```
@@ -832,12 +844,25 @@ Five things, in this order.
 
    ```bash
    bd create "Smoke: prove the loop closes" -p 1 --labels wheelhouse-smoke \
-     --description="Trace: install procedure wheelhouse-smoke carve-out. Install smoke check. Done: a file SMOKE.md exists on branch fleet/<this bead's id> containing the single line 'the loop closes', committed, with the worker's report and evidence on this bead. Work in a worktree per wheelhouse/fleet/WORKER.md; the branch itself is disposable once the verdict lands."
+     --body-file /dev/stdin <<'CONTRACT'
+Trace: install procedure wheelhouse-smoke carve-out.
+Signal: install-procedure
+Skills: install-procedure carve-out
+
+Intent:
+Prove that this install's loop closes: a worker receives work, commits a result, reports evidence on this bead, and an independent reviewer delivers a verdict. Keep the work trivial so any failure exposes the plumbing rather than product ambiguity. Work in a worktree per wheelhouse/fleet/WORKER.md; the branch itself is disposable once the verdict lands.
+
+Outcomes:
+- O1 The committed smoke result contains exactly the single line 'the loop closes'.
+  consumer: machine — the reviewer checking this install's smoke result
+  surface: branch fleet/<this bead's id>, file SMOKE.md
+  check: run — git show fleet/<id>:SMOKE.md prints exactly the loop closes
+CONTRACT
    ```
 
    Trivial is the point: the bead exists to exercise dispatch, worktree, branch, report and verdict, and any failure it surfaces is an install failure, undiluted by real work's ambiguity.
 3. **Dispatch it through the adapter, and wait on the bead**: `bun seats/adapter.ts dispatch <worker-seat> <bead-id> <the dispatch text>` — composed per the runbook's stage 1: the bead id, the repo, a way to read anything it points at that changes nothing. The report arrives ON THE BEAD, not in a message; a silent seat gets the probe-then-nudge from `wheelhouse/fleet/SEATS.md`'s rules, not a guess.
-4. **Verdict, by the one-shot reviewer**: `bun seats/verify.ts <bead-id> fleet/<bead-id> <worker-seat>`. The exit code IS the verdict — 0 APPROVE, 2 BOUNCE, 3 DISCOVER, 1 no-verdict-exists — and the full output lands in `seats/verdicts/<bead-id>.md`, which git ignores because it is a working copy. **Transcribe the decisive extract onto the bead before citing it** (`wheelhouse/GRAPH.md`, "Where evidence lives"), then close the smoke bead naming the verdict. If the roster has no reviewer seat, or `verify.ts` refuses because the only reviewer shares the author's account, the verdict comes from the solo path instead — the principal, or a fresh session that authored nothing — recorded on the bead in the same shape, and say plainly that the mechanical reviewer leg went unexercised. Before the install's first ISA claim closes, run the first claim walk with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out evidence/<bead-id>/<surface-walk> --verifier <verifier-seat>` and cite the walk verdict plus transcript in the claim, or state `Not walked:` explicitly per `INTENT.md`.
+4. **Verdict, by the one-shot reviewer**: `bun seats/verify.ts <bead-id> fleet/<bead-id> <worker-seat>`. The exit code IS the verdict — 0 APPROVE, 2 BOUNCE, 3 DISCOVER, 1 no-verdict-exists, 5 refused: not a contract — and the full output lands in `seats/verdicts/<bead-id>.md`, which git ignores because it is a working copy. **Transcribe the decisive extract onto the bead before citing it** (`wheelhouse/GRAPH.md`, "Where evidence lives"), then close the smoke bead naming the verdict. If the roster has no reviewer seat, or `verify.ts` refuses because the only reviewer shares the author's account, the verdict comes from the solo path instead — the principal, or a fresh session that authored nothing — recorded on the bead in the same shape, and say plainly that the mechanical reviewer leg went unexercised. Before the install's first ISA claim closes, run the first claim walk with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out evidence/<bead-id>/<surface-walk> --verifier <verifier-seat>` and cite the walk verdict plus transcript in the claim, or state `Not walked:` explicitly per `INTENT.md`.
 5. **The loop closing IS the install verification.** A BOUNCE or an error is not an embarrassment to smooth over — it is the install failing loudly at the cheapest possible moment, and it stops this procedure exactly as a FAIL in step 5 would: diagnose, fix, re-run the smoke. Merging the one-line branch is not required for the verdict to count; whether it merges or is deleted is the principal's call under question 5's policy.
 
 **The one legitimate skip.** If step 4 provisioned no seat that passed its probe — every seat declined, or every provisioning attempt failed and was recorded — the smoke loop has nothing to run on. Skip it SAYING SO, with the reason, in the hand-back and on the record (the declined-seats section already carries it): the solo-install doctrine holds, the commander alone is a working install, and the first real bead below then runs the loop's solo path as its own de-facto smoke. What is not legitimate is skipping it quietly, or skipping it while a probed seat sits idle.
