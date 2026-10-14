@@ -505,15 +505,19 @@ says the full `seats/*.selftest.sh` sweep passes), `verify.ts` runs
 separate detached worktree at the pinned tip, waits for the runner's host-wide
 H4 lock without a model-command timeout, and streams output to a unique
 `seats/verdicts/sweeps/<tip>.*.selftest-sweep.log`. The dispatcher initializes
-an isolated graph there and supplies real `bd` only to that sweep; suites
-still create their own fixture graphs. No writable graph or PATH override is
+an isolated graph there, binds logical `PWD` as well as process cwd to that
+worktree for bd's workspace discovery, and supplies real `bd` only to that
+sweep; suites still create their own fixture graphs. No writable graph or PATH override is
 passed to the reviewer. Live-login smoke legs are skipped explicitly with
 `WHEELHOUSE_SKIP_REAL_PI=1`; claims requiring those legs still need separate
 account-safe evidence. The reviewer receives the tip, rc and log path and must
 cite `rc=<number>` and that path in its final evidence. A failed sweep cannot
 be approved, and a verdict missing the citation is rejected. The verdict and
 log are working copies: transcribe decisive output to the task before citing
-it as durable graph evidence.
+it as durable graph evidence. A caller with its own hard per-command cap
+must launch this long-running dispatcher in the background (for example with
+`nohup`) and poll the retained log/verdict, rather than putting the whole
+dispatch under that caller's command timeout.
 
 `process.on("exit", ...)` cannot run on SIGKILL, so killing the dispatcher
 process mid-verification leaves the scratch worktree (and its `git

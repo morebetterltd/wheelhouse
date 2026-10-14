@@ -134,9 +134,9 @@ function assertHostBuildLockAvailable(): void {
  *
  * Detached at a commit object (`<tip>^{commit}` for verify, `HEAD^{commit}` for
  * verifier walks) so git never creates a branch named by the reviewed SHA.
- * The checked-out content is never read by anyone; the worktree exists
- * only so a stray write has somewhere harmless to land, and so `git`
- * commands run from inside it resolve at all. Removed on every exit path
+ * The checked-out content isolates reviewer searches and dispatcher-run
+ * suites at the pinned SHA; stray writes have somewhere harmless to land.
+ * Removed on every exit path
  * via `process.on("exit", ...)`, which still fires synchronous cleanup
  * when `die()` calls `process.exit()` mid-run. The one path that skips
  * "exit" — a SIGKILL of the dispatcher — is handled by
@@ -1062,7 +1062,9 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   fs.mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${tip}.${process.pid}.${Date.now()}.selftest-sweep.log`);
   const started = Date.now();
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1" };
+  // bd 1.2.2 discovers the workspace via logical PWD; spawn's cwd alone
+  // can otherwise select the live ancestor graph instead of this worktree.
+  const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1" };
   for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN"]) delete env[key];
   const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
   if (actualTip !== tip) die(`sweep scratch tip ${actualTip} differs from reviewed tip ${tip}`);
