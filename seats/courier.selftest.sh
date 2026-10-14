@@ -15,6 +15,7 @@ CHANNELS="$HERE/channels.ts"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-courier-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0; SERVER_PID=""; COURIER_PID=""; WATCHDOG_PID=""
 wait_child_exit(){
   local pid="$1" label="$2" grace_ms="${3:-1500}" waited=0 step=100 stat=""
