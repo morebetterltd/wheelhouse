@@ -740,6 +740,23 @@ else fail "installed layout: machine-local bench did not run with writable scrat
 phase "0a2. dispatcher-owned full sweep evidence for reviewer"
 SWEEP_PROJ="$FIX/sweep-proj"
 build_proj "$SWEEP_PROJ" sweep "$VERIFY"
+# Unlike a bash stub (which repairs PWD on startup), real bd 1.2.2 uses
+# inherited PWD for workspace discovery even when spawn's cwd differs.
+SWEEP_BIN="$FIX/sweep-bin"; mkdir -p "$SWEEP_BIN"
+export STUB_SWEEP_BASE_BD="$BIN/bd" STUB_SWEEP_PWD_MARKER="$FIX/sweep-pwd.json"
+cat > "$SWEEP_BIN/bd" <<'JS'
+#!/usr/bin/env node
+const fs=require('fs'),cp=require('child_process');
+if(process.argv[2]==='init') {
+  const cwd=fs.realpathSync(process.cwd()),pwd=process.env.PWD ? fs.realpathSync(process.env.PWD) : '';
+  if(pwd!==cwd) { console.error('scratch bd init logical PWD differs from cwd'); process.exit(73); }
+  fs.writeFileSync(process.env.STUB_SWEEP_PWD_MARKER,JSON.stringify({cwd,pwd}));
+}
+const r=cp.spawnSync(process.env.STUB_SWEEP_BASE_BD,process.argv.slice(2),{stdio:'inherit',env:process.env});
+process.exit(r.status ?? 1);
+JS
+chmod +x "$SWEEP_BIN/bd"
+SWEEP_SAVED_RUN_PATH="$RUN_PATH"; RUN_PATH="$SWEEP_BIN:$RUN_PATH"
 cp -f "$VERIFY_DIR/selftest-sweep.sh" "$SWEEP_PROJ/seats/selftest-sweep.sh"
 cat > "$SWEEP_PROJ/seats/slowed.selftest.sh" <<'SH'
 #!/usr/bin/env bash
@@ -792,10 +809,15 @@ SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
   pass "full-sweep done: exact tip, H4 wait outside model limit, scratch bd, reviewer cites rc/log"
 else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$SWEEP_CHECK" 2>/dev/null)"; fi
+if [ -f "$STUB_SWEEP_PWD_MARKER" ] && node -e 'const r=require(process.argv[1]); if(!r.cwd || r.cwd!==r.pwd) process.exit(1)' "$STUB_SWEEP_PWD_MARKER"; then
+  pass "sweep bd init binds logical PWD to its detached scratch cwd"
+else fail "sweep bd init inherited the live workspace PWD"; fi
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_OMIT_CITATION=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-omit fleet/bead-1 worker-1
 [ $RC -eq 1 ] && says 'must cite full-sweep' && pass "full-sweep verdict without rc/log citation is refused" || fail "missing citation accepted rc=$RC out=$OUT"
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" SWEEP_FIXTURE_RC=7 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-failed fleet/bead-1 worker-1
 [ $RC -eq 1 ] && says 'APPROVE with failed full sweep' && pass "failed full sweep cannot be approved" || fail "failed sweep approved rc=$RC out=$OUT"
+RUN_PATH="$SWEEP_SAVED_RUN_PATH"
+unset STUB_SWEEP_BASE_BD STUB_SWEEP_PWD_MARKER
 RUN_PROJ="$INST_PROJ"
 VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
 MISS_PROJ="$FIX/missing-brief-proj"
