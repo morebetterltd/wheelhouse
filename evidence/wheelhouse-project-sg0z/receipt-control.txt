@@ -1,0 +1,1 @@
+Real full-sweep capture with exactly one adapter PASS record removed: validator exit=1. Original capture: validator exit=0.

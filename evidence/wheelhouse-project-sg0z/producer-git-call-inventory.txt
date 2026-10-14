@@ -1,0 +1,641 @@
+adapter.selftest.sh:361:# Every fixture project is a git repository with one commit on main and a
+adapter.selftest.sh:363:# <root>/.wheelhouse-worktrees/<seat-name>, and every dispatch runs git in
+adapter.selftest.sh:364:# it (worktree add on the first dispatch, git switch to fleet/<bead> after
+adapter.selftest.sh:365:# that, and a push of the branch it is leaving). Fixture git runs with the
+adapter.selftest.sh:366:# fixture HOME so nothing from the operator's own git config (signing,
+adapter.selftest.sh:369:fgit() { env -u XDG_CONFIG_HOME HOME="$HOME_FIX" GIT_CONFIG_NOSYSTEM=1 git -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false -c init.defaultBranch=main "$@"; }
+adapter.selftest.sh:371:  local proj="$1" ns="$2" origin="$FIX/origins/$2.git"
+adapter.selftest.sh:373:  fgit -C "$proj" init -q -b main
+adapter.selftest.sh:375:  fgit -C "$proj" add -A
+adapter.selftest.sh:376:  fgit -C "$proj" commit -qm "fixture base"
+adapter.selftest.sh:377:  fgit init -q --bare -b main "$origin"
+adapter.selftest.sh:378:  fgit -C "$proj" remote add origin "$origin"
+adapter.selftest.sh:379:  fgit -C "$proj" push -q -u origin main 2>/dev/null
+adapter.selftest.sh:382:wt_registered() {   # $1 = project dir, $2 = worktree path — true when git lists it
+adapter.selftest.sh:383:  fgit -C "$1" worktree list --porcelain 2>/dev/null | grep -qx "worktree $2"
+adapter.selftest.sh:385:wt_branch() { fgit -C "$1" branch --show-current 2>/dev/null; }   # $1 = worktree path
+adapter.selftest.sh:448:fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/contract-worktrees.before"
+adapter.selftest.sh:450:fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/contract-status.before"
+adapter.selftest.sh:455:fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/contract-worktrees.after"
+adapter.selftest.sh:456:fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/contract-status.after"
+adapter.selftest.sh:1006:if [ $RC -eq 0 ] && [ "$(node -e 'const s=require(process.argv[1]).seats["worker-1"]; process.stdout.write(String(s.pid||""))' "$CODEX_TMP/proj/seats/state.json")" = "$codex_pid_before" ] && [ "$(wt_branch "$(seat_wt "$CODEX_TMP/proj")")" = "fleet/bead-resume" ] && [ -n "$(fgit -C "$CODEX_TMP/proj" branch --list fleet/bead-codex)" ]; then pass "codex cross-bead dispatch switches the seat worktree to fleet/bead-resume without relaunching (fleet/bead-codex kept)"; else fail "codex cross-bead dispatch relaunched or did not switch (rc=$RC pid before=$codex_pid_before branch=$(wt_branch "$(seat_wt "$CODEX_TMP/proj")")): $OUT"; fi
+adapter.selftest.sh:1136:  pass "first dispatch created the seat worktree: registered by git worktree list and on fleet/bead-x"
+adapter.selftest.sh:1144:if [ "$(fgit -C "$SEAT_WT" rev-parse HEAD)" = "$(fgit -C "$PROJ" rev-parse origin/main)" ] && [ -z "$(fgit -C "$SEAT_WT" status --porcelain)" ]; then
+adapter.selftest.sh:1146:else fail "bead branch base/cleanliness wrong: HEAD=$(fgit -C "$SEAT_WT" rev-parse HEAD) origin/main=$(fgit -C "$PROJ" rev-parse origin/main) status=$(fgit -C "$SEAT_WT" status --porcelain)"; fi
+adapter.selftest.sh:1166:if [ "$(wt_branch "$SEAT_WT")" = "fleet/bead-x2" ] && [ -n "$(fgit -C "$PROJ" branch --list fleet/bead-x)" ] && [ "$(state_get cwd)" = "$SEAT_WT" ]; then
+adapter.selftest.sh:1168:else fail "cross-bead switch wrong: branch=$(wt_branch "$SEAT_WT") old=$(fgit -C "$PROJ" branch --list fleet/bead-x) cwd=$(state_get cwd)"; fi
+adapter.selftest.sh:1183:if [ $RC -ne 0 ] && says "exists but is not registered by git worktree list" && says "refusing to touch a directory that is not a Git worktree"; then
+adapter.selftest.sh:1539:# The seat worktree is removed by hand (a prune that left git's registration
+adapter.selftest.sh:1540:# behind). No `git worktree prune` by the caller: the adapter prunes the
+adapter.selftest.sh:1788:  git -C "$proj" init -q
+adapter.selftest.sh:1789:  git -C "$proj" config user.email fixture@example.invalid
+adapter.selftest.sh:1790:  git -C "$proj" config user.name Fixture
+adapter.selftest.sh:1791:  printf base > "$proj/base.txt"; git -C "$proj" add base.txt; git -C "$proj" commit -qm base
+adapter.selftest.sh:1792:  git -C "$proj" branch fleet/closed
+adapter.selftest.sh:1793:  git -C "$proj" branch fleet/closed2
+adapter.selftest.sh:1794:  git -C "$proj" worktree add -q "$wtbase/closed" fleet/closed
+adapter.selftest.sh:1795:  git -C "$proj" worktree add -q "$wtbase/closed2" fleet/closed2
+adapter.selftest.sh:1840:for n in x1 x2 x3; do fgit -C "$CAP_PROJ" worktree add -q "$CAP_PROJ/.wheelhouse-worktrees/foreign-$n" -b "fleet/foreign-$n" main; done
+adapter.selftest.sh:1853:fgit -C "$CAP_PROJ" worktree remove --force "$CAP_PROJ/.wheelhouse-worktrees/foreign-x2"
+adapter.selftest.sh:1854:fgit -C "$CAP_PROJ" worktree remove --force "$CAP_PROJ/.wheelhouse-worktrees/foreign-x3"
+adapter.selftest.sh:1857:fgit -C "$CAP_PROJ" worktree move "$CAP_PROJ/.wheelhouse-worktrees/foreign-x1" "$CAP_PROJ/.wheelhouse-worktrees/worker-2"
+adapter.selftest.sh:1877:fgit -C "$CAP_PROJ" worktree remove --force "$CAP_PROJ/.wheelhouse-worktrees/worker-2"
+adapter.selftest.sh:1893:for n in $(seq 1 12); do fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/closed-$n" -b "fleet/closed-$n" main; done
+adapter.selftest.sh:1896:fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/open-bead" -b "fleet/open-bead" main
+adapter.selftest.sh:1917:fgit -C "$LEG_PROJ" worktree remove --force "$LEG_MISSING_CWD" >/dev/null 2>&1 || rm -rf "$LEG_MISSING_CWD"
+adapter.selftest.sh:1922:fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/odd-bead" -b fleet/ootb-sync-20260924 main
+adapter.selftest.sh:1943:fgit -C "$PUSHOFF_WT" add local.txt && fgit -C "$PUSHOFF_WT" commit -qm 'local only'
+adapter.selftest.sh:1944:fgit -C "$PUSHOFF_PROJ" remote remove origin
+adapter.selftest.sh:1994:fgit -C "$UMB_WT_PROJ/product" init -q -b main
+adapter.selftest.sh:1996:fgit -C "$UMB_WT_PROJ/product" add product.txt
+adapter.selftest.sh:1997:fgit -C "$UMB_WT_PROJ/product" commit -qm "product base"
+adapter.selftest.sh:2001:if [ $RC -eq 0 ] && fgit -C "$UMB_WT_PROJ" rev-parse --verify -q refs/heads/fleet/bead-umb >/dev/null \
+adapter.selftest.sh:2002:  && ! fgit -C "$UMB_WT_PROJ/product" rev-parse --verify -q refs/heads/fleet/bead-umb >/dev/null; then
+adapter.selftest.sh:2004:else fail "repo routing: Repo: UMBRELLA worktree landed in wrong repo (rc=$RC root_branch=$(fgit -C "$UMB_WT_PROJ" rev-parse --verify -q refs/heads/fleet/bead-umb 2>/dev/null || true) product_branch=$(fgit -C "$UMB_WT_PROJ/product" rev-parse --verify -q refs/heads/fleet/bead-umb 2>/dev/null || true) out=$OUT)"; fi
+adapter.selftest.sh:2010:WT_ORIGIN="$FIX/origins/wt.git"
+adapter.selftest.sh:2018:fgit -C "$WT" add p1.txt
+adapter.selftest.sh:2019:fgit -C "$WT" commit -qm "p1 work"
+adapter.selftest.sh:2020:fgit -C "$WT_PROJ" remote set-url origin /nonexistent/path.git
+adapter.selftest.sh:2029:fgit -C "$WT_PROJ" remote set-url origin "$WT_ORIGIN"
+adapter.selftest.sh:2030:P1_SAFE_SHA="$(fgit -C "$WT" rev-parse HEAD)"
+adapter.selftest.sh:2033:fgit -C "$WT" add leak.txt
+adapter.selftest.sh:2034:fgit -C "$WT" commit -qm "leaky p1 work"
+adapter.selftest.sh:2036:if [ $RC -ne 0 ] && says "credential scan failed" && says "leak.txt:1" && [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ] && ! fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 >/dev/null; then
+adapter.selftest.sh:2038:else fail "push gate: credential scan did not refuse safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
+adapter.selftest.sh:2039:fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
+adapter.selftest.sh:2041:fgit -C "$WT" add state-leak.txt
+adapter.selftest.sh:2042:fgit -C "$WT" commit -qm "synthetic bead id leak"
+adapter.selftest.sh:2044:if [ $RC -ne 0 ] && says "public state scan failed" && says "state-leak.txt:1" && [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ] && ! fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 >/dev/null; then
+adapter.selftest.sh:2046:else fail "push gate: synthetic install id was not refused safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
+adapter.selftest.sh:2047:fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
+adapter.selftest.sh:2049:fgit -C "$WT" add home-leak.txt
+adapter.selftest.sh:2050:fgit -C "$WT" commit -qm "synthetic home path leak"
+adapter.selftest.sh:2052:if [ $RC -ne 0 ] && says "public state scan failed" && says "home-leak.txt:1" && [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ] && ! fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 >/dev/null; then
+adapter.selftest.sh:2054:else fail "push gate: fake HOME path was not refused safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
+adapter.selftest.sh:2055:fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
+adapter.selftest.sh:2059:fgit -C "$WT" add deny-leak.txt
+adapter.selftest.sh:2060:fgit -C "$WT" commit -qm "synthetic deny term leak"
+adapter.selftest.sh:2062:if [ $RC -ne 0 ] && says "public state scan failed" && says "deny-leak.txt:1" && [ "$(wt_branch "$WT")" = "fleet/bead-p1" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ] && ! fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 >/dev/null; then
+adapter.selftest.sh:2064:else fail "push gate: install-local deny term was not refused safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse --verify -q refs/heads/fleet/bead-p1 2>/dev/null || true)): $OUT"; fi
+adapter.selftest.sh:2065:fgit -C "$WT" reset -q --hard "$P1_SAFE_SHA"
+adapter.selftest.sh:2067:fgit -C "$WT_PROJ" checkout -q main
+adapter.selftest.sh:2071:  fgit -C "$WT_PROJ" add "main-credential-history/leak-$i.txt"
+adapter.selftest.sh:2072:  fgit -C "$WT_PROJ" commit -qm "main credential-shaped history fixture $i"
+adapter.selftest.sh:2074:fgit -C "$WT_PROJ" push -q origin main
+adapter.selftest.sh:2075:fgit -C "$WT" fetch -q origin main
+adapter.selftest.sh:2076:fgit -C "$WT" merge -q --no-edit origin/main
+adapter.selftest.sh:2081:if [ $RC -eq 0 ] && [ "$SCAN_ELAPSED_MS" -lt 10000 ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1 | grep -q 'origin/' && [ "$(wt_branch "$WT")" = "fleet/bead-p2" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ]; then
+adapter.selftest.sh:2083:else fail "push gate: restored remote dispatch failed or scanned merged-main history (exit $RC elapsed=${SCAN_ELAPSED_MS}ms remote=$(fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1) branch=$(wt_branch "$WT")): $OUT"; fi
+adapter.selftest.sh:2095:fgit -C "$PUBLIC_WT" add pub1.txt
+adapter.selftest.sh:2096:fgit -C "$PUBLIC_WT" commit -qm "public branch work"
+adapter.selftest.sh:2097:fgit -C "$PUBLIC_WT" push -q origin fleet/bead-pub1
+adapter.selftest.sh:2098:fgit -C "$PUBLIC_PROJ" checkout -q main
+adapter.selftest.sh:2101:fgit -C "$PUBLIC_PROJ" add evidence/public-main/run-path.txt
+adapter.selftest.sh:2102:fgit -C "$PUBLIC_PROJ" commit -qm "main public run path fixture"
+adapter.selftest.sh:2103:fgit -C "$PUBLIC_PROJ" push -q origin main
+adapter.selftest.sh:2104:fgit -C "$PUBLIC_WT" fetch -q origin main
+adapter.selftest.sh:2105:fgit -C "$PUBLIC_WT" merge -q --no-edit origin/main
+adapter.selftest.sh:2114:fgit -C "$PUBLIC_WT" add new-run-path.txt
+adapter.selftest.sh:2115:fgit -C "$PUBLIC_WT" commit -qm "new run path leak"
+adapter.selftest.sh:2125:fgit -C "$WT_PROJ" worktree add -q "$FIX/wt-mayline-src" -b mayline-src main
+adapter.selftest.sh:2127:fgit -C "$FIX/wt-mayline-src" add mayline.txt
+adapter.selftest.sh:2128:fgit -C "$FIX/wt-mayline-src" commit -qm "mayline diverges"
+adapter.selftest.sh:2129:fgit -C "$WT_PROJ" update-ref refs/remotes/mayline/main mayline-src
+adapter.selftest.sh:2130:fgit -C "$WT_PROJ" worktree remove --force "$FIX/wt-mayline-src"
+adapter.selftest.sh:2131:fgit -C "$WT_PROJ" branch -q -D mayline-src
+adapter.selftest.sh:2133:if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-b1" ] && [ "$(fgit -C "$WT" rev-parse HEAD)" = "$(fgit -C "$WT_PROJ" rev-parse origin/main)" ]; then
+adapter.selftest.sh:2137:if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-b2" ] && [ -z "$(fgit -C "$WT" status --porcelain)" ] && [ "$(fgit -C "$WT" rev-parse HEAD)" = "$(fgit -C "$WT_PROJ" rev-parse mayline/main)" ] && [ -f "$WT/mayline.txt" ]; then
+adapter.selftest.sh:2139:else fail "base switch: mayline dispatch wrong (exit $RC branch=$(wt_branch "$WT") status=$(fgit -C "$WT" status --porcelain) head=$(fgit -C "$WT" rev-parse HEAD) base=$(fgit -C "$WT_PROJ" rev-parse mayline/main)): $OUT"; fi
+adapter.selftest.sh:2140:fgit -C "$WT_PROJ" checkout -q -b fleet/bead-pre59 main
+adapter.selftest.sh:2142:fgit -C "$WT_PROJ" add .gitignore
+adapter.selftest.sh:2143:fgit -C "$WT_PROJ" commit -qm 'pre PR59 ignore shape'
+adapter.selftest.sh:2144:fgit -C "$WT_PROJ" push -q origin fleet/bead-pre59
+adapter.selftest.sh:2145:fgit -C "$WT_PROJ" checkout -q main
+adapter.selftest.sh:2149:if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-pre59" ] && [ -z "$(fgit -C "$WT" status --porcelain --untracked-files=all)" ] && [ -f "$WT/.wheelhouse-runs/wheelhouse-project-old/report.md" ]; then
+adapter.selftest.sh:2151:else fail "base switch: pre-PR59 branch saw seat-local scratch as dirty (exit $RC branch=$(wt_branch "$WT") status=$(fgit -C "$WT" status --porcelain --untracked-files=all)): $OUT"; fi
+adapter.selftest.sh:2156:fgit -C "$WT" add r1.txt
+adapter.selftest.sh:2157:fgit -C "$WT" commit -qm "r1 work kept"
+adapter.selftest.sh:2158:R1_SHA="$(fgit -C "$WT" rev-parse HEAD)"
+adapter.selftest.sh:2160:if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-r2" ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-r1 | grep -q 'origin/'; then
+adapter.selftest.sh:2164:if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-r1" ] && [ "$(fgit -C "$WT_PROJ" log -1 --format=%s fleet/bead-r1)" = "r1 work kept" ] && [ "$(fgit -C "$WT" rev-parse HEAD)" = "$R1_SHA" ] && [ -f "$WT/r1.txt" ] && says "existing branch, commits kept"; then
+adapter.selftest.sh:2166:else fail "reopened bead: wrong branch or commits (exit $RC branch=$(wt_branch "$WT") log=$(fgit -C "$WT_PROJ" log -1 --format=%s fleet/bead-r1) head=$(fgit -C "$WT" rev-parse HEAD) want=$R1_SHA): $OUT"; fi
+adapter.selftest.sh:2172:fgit -C "$WT" reset -q --hard origin/main
+adapter.selftest.sh:2174:fgit -C "$WT" add r1-rewritten.txt
+adapter.selftest.sh:2175:fgit -C "$WT" commit -qm "r1 rewritten by commander"
+adapter.selftest.sh:2176:R1_REWRITE_SHA="$(fgit -C "$WT" rev-parse HEAD)"
+adapter.selftest.sh:2178:if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-r3" ] && [ "$(fgit -C "$WT_PROJ" rev-parse refs/remotes/origin/fleet/bead-r1)" = "$R1_REWRITE_SHA" ]; then
+adapter.selftest.sh:2180:else fail "push gate: rebased fleet branch did not push and move (exit $RC branch=$(wt_branch "$WT") remote=$(fgit -C "$WT_PROJ" rev-parse refs/remotes/origin/fleet/bead-r1 2>/dev/null) want=$R1_REWRITE_SHA): $OUT"; fi
+adapter.selftest.sh:2182:fgit -C "$WT" reset -q --hard origin/main
+adapter.selftest.sh:2184:fgit -C "$WT" add r1-rewritten-again.txt
+adapter.selftest.sh:2185:fgit -C "$WT" commit -qm "r1 rewritten again"
+adapter.selftest.sh:2187:fgit clone -q "$WT_ORIGIN" "$REMOTE_MOVER"
+adapter.selftest.sh:2189:fgit -C "$REMOTE_MOVER" add elsewhere.txt
+adapter.selftest.sh:2190:fgit -C "$REMOTE_MOVER" commit -qm "somebody else moved r1"
+adapter.selftest.sh:2191:fgit -C "$REMOTE_MOVER" push -q --force origin HEAD:refs/heads/fleet/bead-r1
+adapter.selftest.sh:2192:REMOTE_MOVED_SHA="$(fgit --git-dir="$WT_ORIGIN" rev-parse refs/heads/fleet/bead-r1)"
+adapter.selftest.sh:2194:if [ $RC -ne 0 ] && says "push failed" && [ "$(wt_branch "$WT")" = "fleet/bead-r1" ] && [ "$(fgit --git-dir="$WT_ORIGIN" rev-parse refs/heads/fleet/bead-r1)" = "$REMOTE_MOVED_SHA" ]; then
+adapter.selftest.sh:2196:else fail "push gate: stale lease did not refuse safely (exit $RC branch=$(wt_branch "$WT") remote=$(fgit --git-dir="$WT_ORIGIN" rev-parse refs/heads/fleet/bead-r1 2>/dev/null) want=$REMOTE_MOVED_SHA): $OUT"; fi
+adapter.selftest.sh:2212:fgit -C "$WT_PROJ" worktree remove --force "$WT"
+adapter.selftest.sh:2220:fgit -C "$WT_PROJ" worktree remove --force "$WT"
+cockpit.selftest.sh:284:( cd "$PROJ/open-work" && git init -q && git config user.email a@example.invalid && git config user.name A && printf tracked > tracked.txt && git add tracked.txt && git commit -q -m base && printf dirty > dirty.txt )
+cockpit.selftest.sh:285:( cd "$PROJ/clean-work" && git init -q && git config user.email a@example.invalid && git config user.name A && printf clean > clean.txt && git add clean.txt && git commit -q -m base && git init -q --bare "$PROJ/clean-remote.git" && git remote add origin "$PROJ/clean-remote.git" && git push -q -u origin HEAD )
+concurrency.selftest.sh:20:#   - worktree isolation: the contract workers run under is one git worktree
+concurrency.selftest.sh:21:#     per bead, never a shared checkout. The test creates two scratch git
+concurrency.selftest.sh:69:GIT_BIN="$(command -v git)" || { echo "selftest: git is required for the worktree phase" >&2; exit 2; }
+concurrency.selftest.sh:196:# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+concurrency.selftest.sh:197:# created from the project repo, so every fixture project is a git repo with
+concurrency.selftest.sh:201:  git -C "$1" init -q -b main
+concurrency.selftest.sh:203:  git -C "$1" add .gitignore
+concurrency.selftest.sh:204:  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+concurrency.selftest.sh:320:  ba="$(git -C "$wta" branch --show-current 2>/dev/null)"
+concurrency.selftest.sh:321:  bb="$(git -C "$wtb" branch --show-current 2>/dev/null)"
+desk.selftest.sh:97:PRODUCT="$PROJ/product"; mkdir -p "$PRODUCT"; git -C "$PRODUCT" init -q; git -C "$PRODUCT" config user.email selftest@example.invalid; git -C "$PRODUCT" config user.name selftest
+desk.selftest.sh:98:printf base > "$PRODUCT/file.txt"; git -C "$PRODUCT" add file.txt; GIT_AUTHOR_DATE=2026-09-20T00:00:00Z GIT_COMMITTER_DATE=2026-09-20T00:00:00Z git -C "$PRODUCT" commit -q -m base; git -C "$PRODUCT" checkout -q -b feat; printf feat >> "$PRODUCT/file.txt"; git -C "$PRODUCT" commit -am 'demo-merged Ship the button' -q; SECOND="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" checkout -q main; printf main > "$PRODUCT/main.txt"; git -C "$PRODUCT" add main.txt; git -C "$PRODUCT" commit -q -m main; GIT_AUTHOR_DATE=2026-09-21T12:00:00Z GIT_COMMITTER_DATE=2026-09-21T12:00:00Z git -C "$PRODUCT" merge --no-ff -q feat -m 'Merge demo-merged Ship the button'; MERGE="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" remote add origin https://github.com/example/product.git
+digest.selftest.sh:6:command -v git >/dev/null 2>&1 || { echo "selftest: git required" >&2; exit 2; }
+digest.selftest.sh:22:source=https://github.com/example/template.git
+digest.selftest.sh:31:PRODUCT="$PROJ/product"; mkdir -p "$PRODUCT"; git -C "$PRODUCT" init -q; git -C "$PRODUCT" config user.email selftest@example.invalid; git -C "$PRODUCT" config user.name selftest
+digest.selftest.sh:32:printf base > "$PRODUCT/file.txt"; git -C "$PRODUCT" add file.txt; GIT_AUTHOR_DATE=2026-01-01T10:00:00Z GIT_COMMITTER_DATE=2026-01-01T10:00:00Z git -C "$PRODUCT" commit -q -m base; git -C "$PRODUCT" checkout -q -b feat; printf feat >> "$PRODUCT/file.txt"; GIT_AUTHOR_DATE=2026-01-01T11:00:00Z GIT_COMMITTER_DATE=2026-01-01T11:00:00Z git -C "$PRODUCT" commit -am 'demo-ship feature' -q; SECOND="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" checkout -q main; printf main >> "$PRODUCT/main.txt"; git -C "$PRODUCT" add main.txt; GIT_AUTHOR_DATE=2026-01-01T11:30:00Z GIT_COMMITTER_DATE=2026-01-01T11:30:00Z git -C "$PRODUCT" commit -q -m main; GIT_AUTHOR_DATE=2026-01-01T12:30:00Z GIT_COMMITTER_DATE=2026-01-01T12:30:00Z git -C "$PRODUCT" merge --no-ff -q feat -m 'Merge demo-ship Build the package'; MERGE="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" remote add origin https://github.com/example/product.git
+digest.selftest.sh:90:EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats" "$EMPTY/wheelhouse" "$EMPTY/bin"; selftest_copy_seat_runtime "$EMPTY" "$ROOT/seats"; printf 'namespace=empty\nproduct-repo=.\n' > "$EMPTY/wheelhouse/.template-source"; (cd "$EMPTY" && git init -q && git config user.email a@b && git config user.name a && touch x && git add x && git commit -q -m x); cp "$PROJ/bin/bd" "$EMPTY/bin/bd"; printf '[]\n' > "$EMPTY/closed.json"; printf '[]\n' > "$EMPTY/review.json"; EO="$(WHEELHOUSE_DIGEST_ROOT="$EMPTY" WHEELHOUSE_FIXTURE_CLOSED="$EMPTY/closed.json" WHEELHOUSE_FIXTURE_REVIEW="$EMPTY/review.json" PATH="$EMPTY/bin:$PATH" bun "$EMPTY/seats/digest.ts" --since "$SINCE" --until "$UNTIL")"
+fleet-gate.selftest.sh:57:( cd "$PROJ" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats wheelhouse contracts && git commit -q -m base )
+fleet-pre-push-guard.selftest.sh:20:REMOTE="$FIX/remote.git"
+fleet-pre-push-guard.selftest.sh:22:git init -q --bare "$REMOTE"
+fleet-pre-push-guard.selftest.sh:23:git init -q -b main "$REPO"
+fleet-pre-push-guard.selftest.sh:24:git -C "$REPO" config user.email fleet-pre-push@example.invalid
+fleet-pre-push-guard.selftest.sh:25:git -C "$REPO" config user.name 'Fleet Pre Push Selftest'
+fleet-pre-push-guard.selftest.sh:27:git -C "$REPO" add file.txt && git -C "$REPO" commit -qm base
+fleet-pre-push-guard.selftest.sh:28:git -C "$REPO" remote add origin "$REMOTE"
+fleet-pre-push-guard.selftest.sh:29:git -C "$REPO" push -q -u origin main
+fleet-pre-push-guard.selftest.sh:34:git -C "$REPO" config core.hooksPath .beads/hooks
+fleet-pre-push-guard.selftest.sh:38:git -C "$REPO" switch -q -c fleet/raw-main
+fleet-pre-push-guard.selftest.sh:40:git -C "$REPO" add raw-main.txt && git -C "$REPO" commit -qm 'raw fleet push before guard'
+fleet-pre-push-guard.selftest.sh:41:if git -C "$REPO" push -q origin fleet/raw-main:fleet/raw-main; then
+fleet-pre-push-guard.selftest.sh:60:git -C "$REPO" switch -q -c fleet/raw-refused main
+fleet-pre-push-guard.selftest.sh:62:git -C "$REPO" add raw-refused.txt && git -C "$REPO" commit -qm 'raw fleet push refused'
+fleet-pre-push-guard.selftest.sh:63:if git -C "$REPO" push origin fleet/raw-refused:fleet/raw-refused >"$FIX/refused.out" 2>&1; then
+fleet-pre-push-guard.selftest.sh:73:if WHEELHOUSE_INTEGRATOR_PUSH=1 git -C "$REPO" push -q origin fleet/raw-refused:fleet/raw-refused \
+fleet-pre-push-guard.selftest.sh:81:git -C "$REPO" switch -q -c topic/non-fleet main
+fleet-pre-push-guard.selftest.sh:83:git -C "$REPO" add topic.txt && git -C "$REPO" commit -qm topic
+fleet-pre-push-guard.selftest.sh:84:if git -C "$REPO" push -q origin topic/non-fleet:topic/non-fleet; then
+fleet-pre-push-guard.selftest.sh:92:git -C "$REPO" switch -q main
+fleet-pre-push-guard.selftest.sh:94:git -C "$REPO" worktree add -q "$REPO/.wheelhouse-worktrees/worker-1" -b fleet/old-seat main
+fleet-pre-push-guard.selftest.sh:95:git -C "$REPO/.wheelhouse-worktrees/worker-1" config user.email fleet-pre-push@example.invalid
+fleet-pre-push-guard.selftest.sh:96:git -C "$REPO/.wheelhouse-worktrees/worker-1" config user.name 'Fleet Pre Push Selftest'
+fleet-pre-push-guard.selftest.sh:98:git -C "$REPO/.wheelhouse-worktrees/worker-1" add seat-old.txt && git -C "$REPO/.wheelhouse-worktrees/worker-1" commit -qm 'seat old branch'
+fleet-pre-push-guard.selftest.sh:104:  && git --git-dir="$REMOTE" rev-parse --verify --quiet refs/heads/fleet/old-seat >/dev/null; then
+fleet-pre-push-guard.selftest.sh:110:git -C "$REPO/.wheelhouse-worktrees/worker-1" switch -q -c fleet/raw-seat-shell origin/main
+fleet-pre-push-guard.selftest.sh:112:git -C "$REPO/.wheelhouse-worktrees/worker-1" add raw-shell.txt && git -C "$REPO/.wheelhouse-worktrees/worker-1" commit -qm 'raw shell after guard'
+fleet-pre-push-guard.selftest.sh:113:if git -C "$REPO/.wheelhouse-worktrees/worker-1" push origin fleet/raw-seat-shell:fleet/raw-seat-shell >"$FIX/raw-seat-shell.out" 2>&1; then
+fleet-snapshot.selftest.sh:16:git -C "$ROOT" init -q -b main
+fleet-snapshot.selftest.sh:17:git -C "$ROOT" add wheelhouse/ISA.md wheelhouse/.template-source
+fleet-snapshot.selftest.sh:18:git -C "$ROOT" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture-isa
+floor.selftest.sh:93:{"type":"tool_execution_start","toolName":"bash","args":{"cmd":"git status"},"timestamp":"$RECENT_ISO"}
+git-isolation.selftest.sh:6:FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-git-isolation.XXXXXX")" || exit 2
+git-isolation.selftest.sh:10:# Audit the setup of every suite, not just fgit: exported ceilings also protect
+git-isolation.selftest.sh:11:# plain git -C, bare git after cd, and git launched by Node/Bun/runtime children.
+git-isolation.selftest.sh:22:            assert lines[i+1] == f'selftest_isolate_git "${m[1]}" || exit 2', f'{p.name}:{i+1}: missing git boundary'
+git-isolation.selftest.sh:30:git -C "$OUTER" init -q -b main
+git-isolation.selftest.sh:31:git -C "$OUTER" -c user.name=selftest -c user.email=selftest@example.invalid -c commit.gpgsign=false commit --allow-empty -qm old
+git-isolation.selftest.sh:32:git -C "$OUTER" update-ref refs/remotes/origin/main HEAD
+git-isolation.selftest.sh:33:git -C "$OUTER" -c user.name=selftest -c user.email=selftest@example.invalid -c commit.gpgsign=false commit --allow-empty -qm kept
+git-isolation.selftest.sh:34:BEFORE="$(git -C "$OUTER" rev-parse HEAD)"
+git-isolation.selftest.sh:35:[ "$(git -C "$OUTER" rev-parse --show-toplevel)" = "$OUTER" ]
+git-isolation.selftest.sh:37:# Use the actual fgit definition, so the reproducer covers its env/config flags.
+git-isolation.selftest.sh:38:FGIT="$(grep '^fgit() ' "$HERE/adapter.selftest.sh")"
+git-isolation.selftest.sh:40:printf '%s\n' "$FGIT" > "$FIX/fgit.sh"
+git-isolation.selftest.sh:49:# remains, but contains no .git: exactly the failed-dispatch precondition.
+git-isolation.selftest.sh:53:[ "$rc" = 1 ] && [ -d "$WT" ] && [ ! -e "$WT/.git" ]
+git-isolation.selftest.sh:55:fgit -C "$WT" reset -q --hard origin/main > "$INNER/reset.out" 2> "$INNER/reset.err" || reset_rc=$?
+git-isolation.selftest.sh:56:after="$(git -C "$OUTER" rev-parse HEAD)"
+git-isolation.selftest.sh:62:grep -q 'not a git repository' "$INNER/reset.err"
+git-isolation.selftest.sh:67:  if git -C "$target" rev-parse --show-toplevel > /dev/null 2>&1; then exit 1; fi
+git-isolation.selftest.sh:69:git -C "$INNER" init -q -b main "$INNER/repo"
+git-isolation.selftest.sh:70:git -C "$INNER/repo" -c user.name=selftest -c user.email=selftest@example.invalid -c commit.gpgsign=false commit --allow-empty -qm base
+git-isolation.selftest.sh:71:git -C "$INNER/repo" worktree add -q -b fleet/fixture "$INNER/wt"
+git-isolation.selftest.sh:74:  git -C "$target" rev-parse --verify HEAD > /dev/null
+git-isolation.selftest.sh:83:env -u GIT_CEILING_DIRECTORIES LIB="$FIX/unsafe-lib.sh" FGIT_FILE="$FIX/fgit.sh" INNER="$INNER" OUTER="$OUTER" BEFORE="$BEFORE" bash "$FIX/repro.sh" > "$FIX/unsafe.out" 2> "$FIX/unsafe.err" || rc=$?
+git-isolation.selftest.sh:86:[ "$(git -C "$OUTER" rev-parse HEAD)" = "$(git -C "$OUTER" rev-parse origin/main)" ]
+git-isolation.selftest.sh:89:git -C "$OUTER" reset -q --hard "$BEFORE"
+git-isolation.selftest.sh:90:env -u GIT_CEILING_DIRECTORIES LIB="$HERE/selftest-lib.sh" FGIT_FILE="$FIX/fgit.sh" INNER="$INNER" OUTER="$OUTER" BEFORE="$BEFORE" bash "$FIX/repro.sh"
+git-isolation.selftest.sh:91:[ "$(git -C "$OUTER" rev-parse HEAD)" = "$BEFORE" ]
+git-isolation.selftest.sh:92:echo 'git-isolation.selftest: PASS'
+intent-check.selftest.sh:57:    git init -q -b main
+intent-check.selftest.sh:58:    git config user.email intent-check@example.invalid
+intent-check.selftest.sh:59:    git config user.name 'Intent Check Selftest'
+intent-check.selftest.sh:63:    git add wheelhouse/ISA.md
+intent-check.selftest.sh:64:    git commit -q -m 'Add ISA'
+intent-check.selftest.sh:106:  git checkout -q -b "fleet/$merge_bead"
+intent-check.selftest.sh:108:  git add product.txt
+intent-check.selftest.sh:109:  git commit -q -m 'Product change'
+intent-check.selftest.sh:110:  git checkout -q main
+intent-check.selftest.sh:111:  git merge --no-ff -q "fleet/$merge_bead" -m "Merge fleet/${merge_bead}: planted merge"
+intent-check.selftest.sh:124:  git checkout -q -b "fleet/$move_bead"
+intent-check.selftest.sh:126:  git add product.txt
+intent-check.selftest.sh:127:  git commit -q -m 'Product change'
+intent-check.selftest.sh:128:  git checkout -q main
+intent-check.selftest.sh:129:  git merge --no-ff --no-commit "fleet/$move_bead" >/dev/null
+intent-check.selftest.sh:131:  git add wheelhouse/ISA.md product.txt
+intent-check.selftest.sh:132:  git commit -q -m "Merge fleet/${move_bead}: claim moved in merge"
+intent-check.selftest.sh:145:  git checkout -q -b "fleet/$walk_bead"
+intent-check.selftest.sh:147:  git add installer.txt
+intent-check.selftest.sh:148:  git commit -q -m 'Installer behavior change'
+intent-check.selftest.sh:149:  git checkout -q main
+intent-check.selftest.sh:150:  git merge --no-ff --no-commit "fleet/$walk_bead" >/dev/null
+intent-check.selftest.sh:151:  awk -v claim="- 2026-09-03: README install path works for consumers at merge $(git rev-parse --short HEAD). Walk: \`bun seats/walk.ts claim-1 --surface runbook:README.md\` verdict WALKED-DONE; evidence: evidence/$walk_bead/walk.log." '
+intent-check.selftest.sh:156:  git add wheelhouse/ISA.md installer.txt
+intent-check.selftest.sh:157:  git commit -q -m "Merge fleet/${walk_bead}: walked consumer claim"
+intent-check.selftest.sh:170:  git checkout -q -b "fleet/$not_walked_bead"
+intent-check.selftest.sh:172:  git add upgrade.txt
+intent-check.selftest.sh:173:  git commit -q -m 'Upgrade behavior change'
+intent-check.selftest.sh:174:  git checkout -q main
+intent-check.selftest.sh:175:  git merge --no-ff --no-commit "fleet/$not_walked_bead" >/dev/null
+intent-check.selftest.sh:181:  git add wheelhouse/ISA.md upgrade.txt
+intent-check.selftest.sh:182:  git commit -q -m "Merge fleet/${not_walked_bead}: not-walked consumer claim"
+intent-check.selftest.sh:195:  git checkout -q -b "fleet/$silent_bead"
+intent-check.selftest.sh:197:  git add browser.txt
+intent-check.selftest.sh:198:  git commit -q -m 'Browser behavior change'
+intent-check.selftest.sh:199:  git checkout -q main
+intent-check.selftest.sh:200:  git merge --no-ff --no-commit "fleet/$silent_bead" >/dev/null
+intent-check.selftest.sh:206:  git add wheelhouse/ISA.md browser.txt
+intent-check.selftest.sh:207:  git commit -q -m "Merge fleet/${silent_bead}: silent consumer claim"
+intent-check.selftest.sh:220:  git checkout -q -b "fleet/$internal_bead"
+intent-check.selftest.sh:222:  git add doctrine.txt
+intent-check.selftest.sh:223:  git commit -q -m 'Internal doctrine change'
+intent-check.selftest.sh:224:  git checkout -q main
+intent-check.selftest.sh:225:  git merge --no-ff --no-commit "fleet/$internal_bead" >/dev/null
+intent-check.selftest.sh:231:  git add wheelhouse/ISA.md doctrine.txt
+intent-check.selftest.sh:232:  git commit -q -m "Merge fleet/${internal_bead}: internal doctrine claim"
+intent-check.selftest.sh:254:  git init -q -b main
+intent-check.selftest.sh:255:  git config user.email intent-check@example.invalid
+intent-check.selftest.sh:256:  git config user.name 'Intent Check Selftest'
+isolation.selftest.sh:240:# Each is also a git repo with one commit on main: a worker seat owns one
+isolation.selftest.sh:244:  git -C "$1" init -q -b main
+isolation.selftest.sh:246:  git -C "$1" add .gitignore
+isolation.selftest.sh:247:  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+legibility.selftest.sh:47:GIT_BIN="$(command -v git)" || { echo "selftest: git is required" >&2; exit 2; }
+legibility.selftest.sh:281:# A git repo: verify.ts resolves branches and reads evidence at the tip.
+legibility.selftest.sh:283:  git init -q &&
+legibility.selftest.sh:284:  git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base &&
+legibility.selftest.sh:285:  git branch fleet/bead-rev && git branch fleet/bead-ev ) \
+legibility.selftest.sh:286:  || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
+never-lose-work.selftest.sh:23:command -v git >/dev/null 2>&1 || { echo "selftest: git is required" >&2; exit 2; }
+never-lose-work.selftest.sh:55:git -C "$ROOT" init -q -b main
+never-lose-work.selftest.sh:56:git -C "$PROD" init -q -b main
+never-lose-work.selftest.sh:57:git -C "$PROD" config user.email selftest@example.invalid
+never-lose-work.selftest.sh:58:git -C "$PROD" config user.name selftest
+never-lose-work.selftest.sh:60:git -C "$PROD" add app.txt
+never-lose-work.selftest.sh:61:git -C "$PROD" commit -q -m base
+never-lose-work.selftest.sh:62:BARE="$FIX/origin.git"
+never-lose-work.selftest.sh:63:git -C "$PROD" init --bare -q "$BARE"
+never-lose-work.selftest.sh:64:git -C "$PROD" remote add origin "$BARE"
+never-lose-work.selftest.sh:65:git -C "$PROD" push -q -u origin main
+never-lose-work.selftest.sh:77:  git -C "$PROD" worktree add -q -b "fleet/$1" "$WTS/$1" main
+never-lose-work.selftest.sh:79:  git -C "$WTS/$1" add "$1.txt"
+never-lose-work.selftest.sh:80:  git -C "$WTS/$1" commit -q -m "work $1"
+never-lose-work.selftest.sh:82:merge_main(){ git -C "$PROD" checkout -q main; git -C "$PROD" merge -q --no-ff "fleet/$1" -m "merge $1"; git -C "$PROD" push -q origin main; }
+never-lose-work.selftest.sh:85:wt_add "$A_ID"; merge_main "$A_ID"; git -C "$PROD" push -q origin "fleet/$A_ID"
+never-lose-work.selftest.sh:90:git -C "$PROD" worktree add -q -b "fleet/$B_ID" "$WTS/$B_ID" main
+never-lose-work.selftest.sh:94:git -C "$WTS/$B_ID" add -A
+never-lose-work.selftest.sh:95:git -C "$WTS/$B_ID" commit -q -m 'commit build output'
+never-lose-work.selftest.sh:96:merge_main "$B_ID"; git -C "$PROD" push -q origin "fleet/$B_ID"
+never-lose-work.selftest.sh:98:B_STATUS=$(git -C "$WTS/$B_ID" status --porcelain --untracked-files=all)
+never-lose-work.selftest.sh:105:git -C "$WTS/$C_ID" add "$C_ID-2.txt"
+never-lose-work.selftest.sh:106:git -C "$WTS/$C_ID" commit -q -m "work $C_ID part 2"
+never-lose-work.selftest.sh:107:C_TIP=$(git -C "$WTS/$C_ID" rev-parse HEAD)
+never-lose-work.selftest.sh:108:git -C "$PROD" checkout -q main
+never-lose-work.selftest.sh:109:git -C "$PROD" merge -q --squash "fleet/$C_ID" && git -C "$PROD" commit -q -m "squash $C_ID"
+never-lose-work.selftest.sh:110:git -C "$PROD" push -q origin main
+never-lose-work.selftest.sh:113:wt_add "$D_ID"; merge_main "$D_ID"; git -C "$PROD" push -q origin "fleet/$D_ID"
+never-lose-work.selftest.sh:118:wt_add "$E_ID"; merge_main "$E_ID"; git -C "$PROD" push -q origin "fleet/$E_ID"
+never-lose-work.selftest.sh:121:BRANCHES_BEFORE=$(git -C "$PROD" for-each-ref --format='%(refname:short)' refs/heads/fleet | sort)
+never-lose-work.selftest.sh:122:registered(){ git -C "$PROD" worktree list --porcelain | grep -qxF "worktree $1"; }
+never-lose-work.selftest.sh:126:[ -z "$(git -C "$PROD" branch -r --contains "$C_TIP")" ] && pass 'unpushed worktree tip is on no remote ref' || fail 'unpushed tip is unexpectedly on a remote ref'
+never-lose-work.selftest.sh:147:[ "$(git -C "$PROD" rev-parse --verify --quiet "refs/tags/archive/$C_ID^{commit}")" = "$C_TIP" ] && pass 'archive/<name> tag points at the old tip (ISC-53)' || fail "archive/$C_ID tag missing or not at $C_TIP: $(git -C "$PROD" tag --list 'archive/*')"
+never-lose-work.selftest.sh:148:[ "$(git -C "$PROD" tag --list 'archive/*')" = "archive/$C_ID" ] && pass 'only the unpushed worktree was archive-tagged' || fail "unexpected archive tags: $(git -C "$PROD" tag --list 'archive/*')"
+never-lose-work.selftest.sh:149:git -C "$PROD" branch --list "fleet/$C_ID" | grep -q . && git -C "$PROD" log -1 --oneline "fleet/$C_ID" >/dev/null 2>&1 && [ "$(git -C "$PROD" rev-parse "fleet/$C_ID")" = "$C_TIP" ] && pass 'unpushed branch ref survives at its tip' || fail "fleet/$C_ID ref missing or moved"
+never-lose-work.selftest.sh:151:BRANCHES_AFTER=$(git -C "$PROD" for-each-ref --format='%(refname:short)' refs/heads/fleet | sort)
+never-lose-work.selftest.sh:153:for b in $BRANCHES_AFTER; do git -C "$PROD" log -1 "$b" >/dev/null 2>&1 || fail "git log -1 $b failed"; done
+never-lose-work.selftest.sh:162:[ -z "$(git -C "$PROD" worktree prune --dry-run 2>&1)" ] && pass 'worktree registry is consistent after cleanup' || fail "worktree prune --dry-run has work: $(git -C "$PROD" worktree prune --dry-run 2>&1)"
+never-lose-work.selftest.sh:170:[ "$(git -C "$PROD" for-each-ref --format='%(refname:short)' refs/heads/fleet | sort)" = "$BRANCHES_BEFORE" ] && pass 'branch refs unchanged after the nightly run' || fail 'branch refs changed on the second run'
+prune.selftest.sh:18:command -v git >/dev/null 2>&1 || { echo "selftest: git is required" >&2; exit 2; }
+prune.selftest.sh:47:  phase 'preflight: TMPDIR inside another git repo is not touched'
+prune.selftest.sh:50:  git -C "$OUTER" init -q -b main
+prune.selftest.sh:51:  git -C "$OUTER" config user.email selftest@example.invalid
+prune.selftest.sh:52:  git -C "$OUTER" config user.name selftest
+prune.selftest.sh:54:  git -C "$OUTER" add outer.txt
+prune.selftest.sh:55:  git -C "$OUTER" commit -q -m outer
+prune.selftest.sh:56:  OUTER_HEAD_BEFORE="$(git -C "$OUTER" rev-parse HEAD)"
+prune.selftest.sh:58:    OUTER_HEAD_AFTER="$(git -C "$OUTER" rev-parse HEAD)"
+prune.selftest.sh:59:    OUTER_STATUS="$(git -C "$OUTER" status --porcelain --untracked-files=all)"
+prune.selftest.sh:61:      pass 'prune.selftest with TMPDIR inside a scratch git repo leaves that repo HEAD and index unchanged'
+prune.selftest.sh:77:git -C "$ROOT" init -q -b main
+prune.selftest.sh:78:git -C "$ROOT" config user.email selftest@example.invalid
+prune.selftest.sh:79:git -C "$ROOT" config user.name selftest
+prune.selftest.sh:81:git -C "$PROD" init -q -b main
+prune.selftest.sh:82:git -C "$PROD" config user.email selftest@example.invalid
+prune.selftest.sh:83:git -C "$PROD" config user.name selftest
+prune.selftest.sh:85:git -C "$PROD" add app.txt
+prune.selftest.sh:86:git -C "$PROD" commit -q -m base
+prune.selftest.sh:87:BARE="$FIX/origin.git"
+prune.selftest.sh:88:git -C "$PROD" init --bare -q "$BARE"
+prune.selftest.sh:89:git -C "$PROD" remote add origin "$BARE"
+prune.selftest.sh:90:git -C "$PROD" push -q -u origin main
+prune.selftest.sh:112:  git -C "$PROD" worktree add -q -b "fleet/$id" "$WTS/$id" main
+prune.selftest.sh:114:  git -C "$WTS/$id" add app.txt
+prune.selftest.sh:115:  git -C "$WTS/$id" commit -q -m "$msg"
+prune.selftest.sh:116:  git -C "$PROD" checkout -q main
+prune.selftest.sh:117:  git -C "$PROD" merge -q --no-ff "fleet/$id" -m "merge $msg"
+prune.selftest.sh:118:  git -C "$PROD" push -q origin main
+prune.selftest.sh:121:git -C "$PROD" push -q origin "fleet/$CLOSED_ID"
+prune.selftest.sh:126:git -C "$PROD" worktree remove --force "$WTS/$STALE_ID"
+prune.selftest.sh:127:git -C "$PROD" push -q origin "fleet/$STALE_ID"
+prune.selftest.sh:128:STALE_SHA="$(git -C "$PROD" rev-parse "fleet/$STALE_ID")"
+prune.selftest.sh:130:git -C "$PROD" worktree add -q -b "fleet/$UNMERGED_ID" "$WTS/$UNMERGED_ID" main
+prune.selftest.sh:132:git -C "$WTS/$UNMERGED_ID" add app.txt
+prune.selftest.sh:133:git -C "$WTS/$UNMERGED_ID" commit -q -m 'unmerged work'
+prune.selftest.sh:134:git -C "$PROD" push -q origin "fleet/$UNMERGED_ID"
+prune.selftest.sh:136:git -C "$PROD" checkout -q -b fleet/goal-x main
+prune.selftest.sh:137:git -C "$PROD" push -q -u origin fleet/goal-x
+prune.selftest.sh:138:git -C "$PROD" checkout -q main
+prune.selftest.sh:139:git -C "$PROD" worktree add -q -b "fleet/$GOAL_CHILD_ID" "$WTS/$GOAL_CHILD_ID" main
+prune.selftest.sh:141:git -C "$WTS/$GOAL_CHILD_ID" add app.txt
+prune.selftest.sh:142:git -C "$WTS/$GOAL_CHILD_ID" commit -q -m 'goal child work'
+prune.selftest.sh:143:git -C "$PROD" checkout -q fleet/goal-x
+prune.selftest.sh:144:git -C "$PROD" merge -q --no-ff "fleet/$GOAL_CHILD_ID" -m 'merge goal child work'
+prune.selftest.sh:145:git -C "$PROD" push -q origin fleet/goal-x
+prune.selftest.sh:146:git -C "$PROD" push -q origin "fleet/$GOAL_CHILD_ID"
+prune.selftest.sh:147:git -C "$PROD" checkout -q main
+prune.selftest.sh:149:git -C "$PROD" worktree add -q -b "fleet/$OPEN_ID" "$WTS/$OPEN_ID" main
+prune.selftest.sh:150:git -C "$PROD" worktree add -q -b "fleet/$OPEN_LIVE_ID" "$WTS/$OPEN_LIVE_ID" main
+prune.selftest.sh:349:if [ ! -e "$WTS/$CLOSED_ID" ] && ! git -C "$PROD" worktree list --porcelain | grep -qF "$WTS/$CLOSED_ID"; then pass 'safe merged worktree removed by git worktree remove'; else fail 'safe merged worktree still exists or is registered'; fi
+prune.selftest.sh:350:if git -C "$PROD" branch --list "fleet/$CLOSED_ID" | grep -q . && git -C "$PROD" log -1 --format=%s "fleet/$CLOSED_ID" >/dev/null && ! grep -q 'PRUNED branch' "$FIX/prune.out"; then pass 'safe merged worktree prune keeps its merged branch ref'; else fail "merged worktree branch was deleted or PRUNED branch was logged: branch=$(git -C "$PROD" branch --list "fleet/$CLOSED_ID") output=$(cat "$FIX/prune.out")"; fi
+prune.selftest.sh:351:if [ ! -e "$WTS/$GOAL_CHILD_ID" ] && git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID" | grep -q . && git -C "$PROD" log -1 --format=%s "fleet/$GOAL_CHILD_ID" >/dev/null && ! grep -q 'PRUNED branch' "$FIX/prune.out" && git -C "$PROD" branch --list fleet/goal-x | grep -q .; then pass 'goal-branch merged worktree prunes worktree while child and listed goal branches survive'; else fail "goal-branch prune outcome wrong: child_dir=$([ -e "$WTS/$GOAL_CHILD_ID" ] && echo present || echo gone) child_branch=$(git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID") goal_branch=$(git -C "$PROD" branch --list fleet/goal-x) output=$(cat "$FIX/prune.out")"; fi
+prune.selftest.sh:352:if git -C "$PROD" branch --list "fleet/$UNMERGED_ID" | grep -q .; then pass 'unmerged fleet branch is not deleted by merged-worktree prune path'; else fail 'unmerged fleet branch was deleted'; fi
+prune.selftest.sh:354:if ! git -C "$PROD" branch --list "fleet/$STALE_ID" | grep -q . \
+prune.selftest.sh:356:  && [ "$(git -C "$PROD" rev-parse "archive/$STALE_ID^{commit}" 2>/dev/null)" = "$STALE_SHA" ]; then
+prune.selftest.sh:359:  fail "stale-branch prune did not archive-tag before delete: branch=$(git -C "$PROD" branch --list "fleet/$STALE_ID") tag=$(git -C "$PROD" rev-parse "archive/$STALE_ID^{commit}" 2>/dev/null) want=$STALE_SHA output=$(cat "$FIX/stale-branch-prune.out")"
+prune.selftest.sh:393:mk_install(){ # $1 root: container git repo, nested product repo with a bare origin at $1.origin.git, prune.ts in place
+prune.selftest.sh:396:  git -C "$1" init -q -b main
+prune.selftest.sh:397:  git -C "$1/product" init -q -b main
+prune.selftest.sh:398:  git -C "$1/product" config user.email selftest@example.invalid
+prune.selftest.sh:399:  git -C "$1/product" config user.name selftest
+prune.selftest.sh:401:  git -C "$1/product" add app.txt; git -C "$1/product" commit -q -m base
+prune.selftest.sh:402:  git -C "$1/product" init --bare -q "$1.origin.git"
+prune.selftest.sh:403:  git -C "$1/product" remote add origin "$1.origin.git"
+prune.selftest.sh:404:  git -C "$1/product" push -q -u origin main
+prune.selftest.sh:420:  git -C "$EPROD" worktree add -q -b "fleet/$1" "$dir" main || { fail "worktree add failed for $dir"; return 1; }
+prune.selftest.sh:421:  [ -e "$dir/.git" ] || { fail "worktree $dir has no .git after git worktree add; refusing to commit"; return 1; }
+prune.selftest.sh:422:  printf '%s\n' "$1" > "$dir/$1.txt"; git -C "$dir" add "$1.txt" && git -C "$dir" commit -q -m "work $1"
+prune.selftest.sh:424:ext_merge(){ git -C "$EPROD" checkout -q main; git -C "$EPROD" merge -q --no-ff "fleet/$1" -m "merge $1"; git -C "$EPROD" push -q origin main; git -C "$EPROD" push -q origin "fleet/$1"; }
+prune.selftest.sh:427:ext_registered(){ git -C "$EPROD" worktree list --porcelain | grep -qxF "worktree $1"; }
+prune.selftest.sh:448:git -C "$EPROD" init --bare -q "$FIX/ext-mayline.git"; git -C "$EPROD" remote add mayline "$FIX/ext-mayline.git"
+prune.selftest.sh:450:git -C "$EPROD" checkout -q -b tmp-mayline main; git -C "$EPROD" merge -q --no-ff "fleet/$MAY_ID" -m "mayline merge"; git -C "$EPROD" push -q mayline tmp-mayline:main; git -C "$EPROD" checkout -q main; git -C "$EPROD" branch -q -D tmp-mayline
+prune.selftest.sh:452:printf 'more\n' > "$EWTS/$SQ_ID/$SQ_ID-2.txt"; git -C "$EWTS/$SQ_ID" add "$SQ_ID-2.txt"; git -C "$EWTS/$SQ_ID" commit -q -m "work $SQ_ID part 2"
+prune.selftest.sh:453:SQ_TIP=$(git -C "$EWTS/$SQ_ID" rev-parse HEAD)
+prune.selftest.sh:454:git -C "$EPROD" merge -q --squash "fleet/$SQ_ID" >/dev/null 2>&1 && git -C "$EPROD" commit -q -m "squash $SQ_ID"; git -C "$EPROD" push -q origin main
+prune.selftest.sh:461:[ "$RC" -eq 0 ] && [ ! -e "$EWTS/$SQ_ID" ] && [ "$(git -C "$EPROD" rev-parse --verify --quiet "refs/tags/archive/$SQ_ID^{commit}")" = "$SQ_TIP" ] && git -C "$EPROD" branch --list "fleet/$SQ_ID" | grep -q . && pass 'squash-merged worktree removed after archive/<name> tag; branch ref kept (ISC-52/53)' || fail "squash cleanup rc=$RC tags=$(git -C "$EPROD" tag --list 'archive/*'): $OUT"
+prune.selftest.sh:465:git -C "$EPROD" checkout -q -b fleet/ootb-agent main; git -C "$EPROD" merge -q --no-ff "fleet/$OOTB_ID" -m 'ootb merge'; git -C "$EPROD" push -q origin fleet/ootb-agent; git -C "$EPROD" checkout -q main; git -C "$EPROD" branch -q -D fleet/ootb-agent
+prune.selftest.sh:473:git -C "$EPROD" worktree add -q -b "fleet/$ZERO_ID" "$EWTS/$ZERO_ID" main
+prune.selftest.sh:477:[ "$RC" -eq 0 ] && [ ! -e "$EWTS/$ZERO_ID" ] && git -C "$EPROD" branch --list "fleet/$ZERO_ID" | grep -q . && pass 'zero-commit worktree removed; its branch ref still exists' || fail "zero-commit cleanup rc=$RC branch=$(git -C "$EPROD" branch --list "fleet/$ZERO_ID"): $OUT"
+prune.selftest.sh:526:[ -z "$(git -C "$EPROD" worktree prune --dry-run 2>&1)" ] && pass 'worktree registry needs no prune after the race' || fail "registry inconsistent: $(git -C "$EPROD" worktree prune --dry-run 2>&1)"
+prune.selftest.sh:540:printf 'target/\n' > "$EWTS/$BIG_ID/.gitignore"; git -C "$EWTS/$BIG_ID" add .gitignore; git -C "$EWTS/$BIG_ID" commit -q -m 'ignore target'; ext_merge "$BIG_ID"
+prune.selftest.sh:545:[ -z "$(git -C "$EWTS/$BIG_ID" status --porcelain --untracked-files=all)" ] && pass 'ignored build output leaves the tree clean' || fail 'tree not clean with ignored target/'
+prune.selftest.sh:583:[ -L "$EWTS/$LINK_ID" ] && [ -L "$EWTS/linked-orphan" ] && [ -f "$FIX/elsewhere/orphan-target/file.txt" ] && [ -f "$FIX/elsewhere/$LINK_ID/.git" ] && ext_registered "$FIX/elsewhere/$LINK_ID" && pass 'symlinks, their targets and the out-of-container worktree are untouched' || fail 'a symlink, its target, or the out-of-container worktree was touched'
+recover.selftest.sh:217:# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+recover.selftest.sh:218:# created from the project repo, so every fixture project is a git repo with
+recover.selftest.sh:221:  git -C "$1" init -q -b main
+recover.selftest.sh:223:  git -C "$1" add .gitignore
+recover.selftest.sh:224:  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+report-issues.selftest.sh:46:base_env; printf 'source=https://github.com/fixture/repo.git\n' > "$PROJ/wheelhouse/.template-source"; write_tasks '[]'; runpub
+report-issues.selftest.sh:49:base_env; printf 'github-report=on\nsource=https://github.com/fixture/repo.git\n' > "$PROJ/wheelhouse/.template-source"; (cd "$PROJ" && PATH="$NOGH_PATH" WHEELHOUSE_REPORT_ROOT="$PROJ" BD_TASKS="$TASKS" CALLS_LOG="$CALLS" bun seats/report-issues.ts publish > "$FIX/out" 2>&1); RC=$?; OUT="$(cat "$FIX/out")"
+report-issues.selftest.sh:72:printf 'github-report=on\nsource=https://github.com/fixture/repo.git\n' > "$PROJ/wheelhouse/.template-source"
+report-issues.selftest.sh:77:base_env; printf 'github-report=on\nsource=git@github.com:owner/name.git\n' > "$PROJ/wheelhouse/.template-source"; (cd "$PROJ" && PATH="$RUN_PATH" bun seats/report-issues.ts status > "$FIX/out" 2>&1); RC=$?; ok1=0; [ $RC -eq 0 ] && grep -q 'routes=template-report->owner/name' "$FIX/out" && ok1=1
+report-issues.selftest.sh:78:printf 'github-report=on\nsource=https://example.invalid/nope.git\n' > "$PROJ/wheelhouse/.template-source"; runpub; [ "$ok1" = 1 ] && [ $RC -eq 2 ] && grep -q 'source= is not a github.com' "$FIX/out" && pass 'default route from github source and bad source STOP' || fail "default/bad rc=$RC out=$OUT status=$(cat "$FIX/out")"
+reset.selftest.sh:176:# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+reset.selftest.sh:177:# created from the project repo, so every fixture project is a git repo with
+reset.selftest.sh:180:  git -C "$1" init -q -b main
+reset.selftest.sh:182:  git -C "$1" add .gitignore
+reset.selftest.sh:183:  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+seat-env.selftest.sh:72:git -C "$PROJECT" init -q -b main >/dev/null 2>&1 || git -C "$PROJECT" init -q >/dev/null 2>&1
+seat-worktree.selftest.sh:47:git -C "$REPO" init -q -b main
+seat-worktree.selftest.sh:48:git -C "$REPO" config user.email seat-worktree-selftest@example.invalid
+seat-worktree.selftest.sh:49:git -C "$REPO" config user.name 'Seat Worktree Selftest'
+seat-worktree.selftest.sh:51:git -C "$REPO" add README.md && git -C "$REPO" commit -qm initial
+seat-worktree.selftest.sh:89:if [ ! -e "$REPO/.wheelhouse-worktrees/worker-1/.git" ]; then
+seat-worktree.selftest.sh:90:  git -C "$REPO" worktree add -q "$REPO/.wheelhouse-worktrees/worker-1" -b fleet/seat-old main
+seat-worktree.selftest.sh:92:git -C "$REPO" worktree add -q "$REPO/.wheelhouse-worktrees/closed-old" -b fleet/closed-old main
+seat-worktree.selftest.sh:101:const branch = execFileSync("git", ["-C", seatTarget, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" }).trim();
+seat-worktree.selftest.sh:111:ORIGIN="$FIX/origin.git"
+seat-worktree.selftest.sh:114:git -C "$SRC" init -q -b main
+seat-worktree.selftest.sh:115:git -C "$SRC" config user.email seat-worktree-selftest@example.invalid
+seat-worktree.selftest.sh:116:git -C "$SRC" config user.name 'Seat Worktree Selftest'
+seat-worktree.selftest.sh:118:git -C "$SRC" add file.txt && git -C "$SRC" commit -qm main
+seat-worktree.selftest.sh:119:git -C "$SRC" branch staging
+seat-worktree.selftest.sh:120:STAGING_SHA="$(git -C "$SRC" rev-parse staging)"
+seat-worktree.selftest.sh:121:git -C "$SRC" switch -q -c fleet/goal
+seat-worktree.selftest.sh:123:git -C "$SRC" add goal.txt && git -C "$SRC" commit -qm 'goal integration'
+seat-worktree.selftest.sh:124:GOAL_SHA="$(git -C "$SRC" rev-parse fleet/goal)"
+seat-worktree.selftest.sh:125:git -C "$SRC" switch -q main
+seat-worktree.selftest.sh:127:git -C "$SRC" add default.txt && git -C "$SRC" commit -qm 'default branch moves ahead'
+seat-worktree.selftest.sh:128:MAIN_SHA="$(git -C "$SRC" rev-parse main)"
+seat-worktree.selftest.sh:129:git -C "$SRC" clone -q --bare . "$ORIGIN"
+seat-worktree.selftest.sh:130:git --git-dir="$ORIGIN" symbolic-ref HEAD refs/heads/main
+seat-worktree.selftest.sh:132:git -C "$INSTALL" clone -q "$ORIGIN" product
+seat-worktree.selftest.sh:150:const head = execFileSync("git", ["-C", target, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+seat-worktree.selftest.sh:168:const head = execFileSync("git", ["-C", target, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+selftest-lib.selftest.sh:60:  git -C "$INSTALL" init -q
+staffing-live.selftest.sh:26:(cd "$PROJ" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add . && git commit -q -m base)
+staffing.selftest.sh:22:( cd "$ROOT" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats wheelhouse && git commit -q -m base )
+staffing.selftest.sh:60: const wt=path.join(root,".wheelhouse-worktrees",seat); spawnSync("git",["-C",root,"worktree","add","--detach",wt,"HEAD"],{stdio:"ignore"});
+staffing.selftest.sh:140:(cd "$REAL" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats contracts wheelhouse && git commit -q -m base)
+staffing.selftest.sh:239:git -C "$ROOT" worktree add --detach "$ROOT/.wheelhouse-worktrees/worker-dirty" HEAD >/dev/null 2>&1
+staffing.selftest.sh:242:git -C "$ROOT/.wheelhouse-worktrees/worker-dirty" reset --hard >/dev/null 2>&1; git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-dirty" >/dev/null 2>&1
+staffing.selftest.sh:243:git -C "$ROOT" worktree add --detach "$ROOT/.wheelhouse-worktrees/worker-unpushed" HEAD >/dev/null 2>&1
+staffing.selftest.sh:245:git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-unpushed" >/dev/null 2>&1
+stop-all.selftest.sh:66:# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+stop-all.selftest.sh:67:# created from the project repo, so every fixture project is a git repo with
+stop-all.selftest.sh:70:  git -C "$1" init -q -b main
+stop-all.selftest.sh:72:  git -C "$1" add .gitignore
+stop-all.selftest.sh:73:  git -C "$1" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+template-drift.selftest.sh:14:( cd "$TEMPLATE" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest )
+template-drift.selftest.sh:38:( cd "$TEMPLATE" && git add . && git commit -q -m one )
+template-drift.selftest.sh:39:COMMIT1="$(git -C "$TEMPLATE" rev-parse HEAD)"
+template-drift.selftest.sh:41:( cd "$TEMPLATE" && git add . && git commit -q -m two )
+template-drift.selftest.sh:42:COMMIT2="$(git -C "$TEMPLATE" rev-parse HEAD)"
+template-drift.selftest.sh:44:( cd "$TEMPLATE" && git archive "$COMMIT1" | tar -x -C "$INSTALL" )
+template-drift.selftest.sh:59:( cd "$TEMPLATE" && git archive "$COMMIT2" | tar -x -C "$INSTALL" )
+template-drift.selftest.sh:90:git -C "$TEMPLATE" archive "$COMMIT2" wheelhouse/crew/WORKER.md | tar -x -C "$INSTALL"
+template-drift.selftest.sh:99:rm -f "$INSTALL/seats/commander-watch.ts"; git -C "$TEMPLATE" show "$COMMIT2:seats/alerts.ts" > "$INSTALL/seats/alerts.ts"; git -C "$TEMPLATE" show "$COMMIT2:seats/herald.ts" > "$INSTALL/seats/herald.ts"
+template-drift.selftest.sh:133:s=s.replace('if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null | awk \'BEGIN{p=1} /^## This project$/{p=0} p{print}\'', 'if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null')
+template-drift.selftest.sh:142:git -C "$TEMPLATE" archive "$COMMIT2" | tar -x -C "$INSTALL"
+upgrade-contract-audit.selftest.sh:42:git -C "$TEMPLATE" cat-file -e "$BASE^{commit}" || fail 'baseline absent'
+upgrade-runbook.selftest.sh:38:      && git -C "$recorded" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+upgrade-runbook.selftest.sh:39:      && git -C "$recorded" cat-file -e "${commit}^{commit}" >/dev/null 2>&1; then
+upgrade-runbook.selftest.sh:47:    if [ -d "$cache/.git" ] && git -C "$cache" cat-file -e "${commit}^{commit}" >/dev/null 2>&1; then
+upgrade-runbook.selftest.sh:55:    if ! git clone --quiet "$source" "$cache" >/dev/null 2>&1; then
+upgrade-runbook.selftest.sh:58:    git -C "$cache" cat-file -e "${commit}^{commit}" >/dev/null 2>&1 \
+upgrade-runbook.selftest.sh:108:git -C "$TEMPLATE" show "${BASELINE}:contracts/WORKER.md" > "$PROJ/wheelhouse/fleet/WORKER.md"
+upgrade-runbook.selftest.sh:110:  git -C "$TEMPLATE" show "${BASELINE}:runbooks/$b" > "$PROJ/wheelhouse/runbooks/$b"
+upgrade-runbook.selftest.sh:120:for c in $(git -C "$TEMPLATE" rev-list HEAD -- contracts/); do
+upgrade-runbook.selftest.sh:121:  if diff -rq <(git -C "$TEMPLATE" show ${c}:contracts/WORKER.md) "$PROJECT/wheelhouse/fleet/WORKER.md" >/dev/null 2>&1; then
+upgrade-runbook.selftest.sh:148:  if git -C "$TEMPLATE" show "${BASE:-unknown}:runbooks/$b" >"$baseline" 2>/dev/null; then
+upgrade-runbook.selftest.sh:172:git -C "$REMOTE_SRC" init -b main >/dev/null
+upgrade-runbook.selftest.sh:174:git -C "$REMOTE_SRC" add template.txt
+upgrade-runbook.selftest.sh:175:git -C "$REMOTE_SRC" -c user.email=selftest@local -c user.name=selftest commit -q -m old
+upgrade-runbook.selftest.sh:176:OLD_COMMIT=$(git -C "$REMOTE_SRC" rev-parse HEAD)
+upgrade-runbook.selftest.sh:177:git clone --quiet "$REMOTE_SRC" "$CACHE_REUSED"
+upgrade-runbook.selftest.sh:179:git -C "$REMOTE_SRC" add template.txt
+upgrade-runbook.selftest.sh:180:git -C "$REMOTE_SRC" -c user.email=selftest@local -c user.name=selftest commit -q -m new
+upgrade-runbook.selftest.sh:181:NEW_COMMIT=$(git -C "$REMOTE_SRC" rev-parse HEAD)
+upgrade-runbook.selftest.sh:186:git -C "$TEMPLATE" fetch --tags origin
+upgrade-runbook.selftest.sh:187:git -C "$TEMPLATE" fetch origin
+upgrade-runbook.selftest.sh:188:git -C "$TEMPLATE" rev-parse "${TARGET:-main}" >/dev/null
+upgrade-runbook.selftest.sh:189:git -C "$TEMPLATE" checkout --quiet "${TARGET:-main}"
+upgrade-runbook.selftest.sh:190:if git -C "$TEMPLATE" rev-parse --verify --quiet "origin/${TARGET:-main}^{commit}" >/dev/null; then
+upgrade-runbook.selftest.sh:191:  git -C "$TEMPLATE" merge --ff-only --quiet "origin/${TARGET:-main}" \
+upgrade-runbook.selftest.sh:194:git -C "$TEMPLATE" rev-parse HEAD
+upgrade-runbook.selftest.sh:208:git -C "$CACHE_REUSED" checkout --quiet main
+upgrade-runbook.selftest.sh:209:git -C "$CACHE_REUSED" reset --hard --quiet "$OLD_COMMIT"
+upgrade-runbook.selftest.sh:210:git -C "$CACHE_REUSED" fetch --quiet origin
+upgrade-runbook.selftest.sh:214:NEW_COMMIT=$(git -C "$TEMPLATE" rev-parse HEAD)
+upgrade-runbook.selftest.sh:216:  && git -C "$TEMPLATE" rev-parse --verify --quiet "origin/${TARGET:-main}^{commit}" >/dev/null \
+upgrade-runbook.selftest.sh:217:  && [ "$(git -C "$TEMPLATE" rev-parse "origin/${TARGET:-main}^{commit}")" != "$BASE" ]; then
+upgrade-runbook.selftest.sh:231:git -C "$CACHE_REUSED" reset --hard --quiet "$NEW_COMMIT"
+upgrade-runbook.selftest.sh:235:git -C "$GITPROJ" init -b main >/dev/null
+upgrade-runbook.selftest.sh:242:  git add wheelhouse/ seats/ .gitignore CLAUDE.md
+upgrade-runbook.selftest.sh:244:if git -C "$GITPROJ" diff --cached --name-only | grep -qx 'wheelhouse/evidence-dir/proof.txt'; then
+upgrade-runbook.selftest.sh:293:  BARE_SOURCE="$TMP/template-source.git"
+upgrade-runbook.selftest.sh:294:  git clone --quiet --bare "$TEMPLATE" "$BARE_SOURCE"
+upgrade-runbook.selftest.sh:298:  git -C "$INSTALL_NO_LIB" init -b main >/dev/null
+upgrade-runbook.selftest.sh:317:  git -C "$INSTALL" init -b main >/dev/null
+upgrade-runbook.selftest.sh:333:  git -C "$INSTALL_DEAD_REACHABLE" init -b main >/dev/null
+upgrade-runbook.selftest.sh:344:      if [ -d "$INSTALL_DEAD_REACHABLE/wheelhouse/.template-cache/$(printf '%s' "$BASELINE" | cut -c1-12)/.git" ] \
+upgrade-runbook.selftest.sh:346:        pass "installed-layout dead path= fetches commit= from reachable source= into git-excluded install-local cache"
+upgrade-runbook.selftest.sh:348:        fail "installed-layout dead path= passed but did not create a git-excluded install-local template cache"
+upgrade-runbook.selftest.sh:356:  git -C "$INSTALL_DEAD_UNREACHABLE" init -b main >/dev/null
+upgrade-runbook.selftest.sh:359:source=$TMP/not-a-source.git
+upgrade-runbook.selftest.sh:375:  git -C "$INSTALL_MISSING" init -b main >/dev/null
+upgrade-runbook.selftest.sh:388:  git -C "$INSTALL_BAD" init -b main >/dev/null
+upgrade-runbook.selftest.sh:395:    pass "installed-layout bad path= without source= fails legibly before raw git fatal"
+upgrade-runbook.selftest.sh:410:# A worker seat owns one persistent git worktree, .wheelhouse-worktrees/<seat>,
+upgrade-runbook.selftest.sh:411:# created from the project repo: make the project a git repo with one commit
+upgrade-runbook.selftest.sh:413:git -C "$HARNESS_PROJ" init -q -b main
+upgrade-runbook.selftest.sh:415:git -C "$HARNESS_PROJ" add .gitignore
+upgrade-runbook.selftest.sh:416:git -C "$HARNESS_PROJ" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+verify.selftest.sh:60:GIT_BIN="$(command -v git)" || { echo "selftest: git is required" >&2; exit 2; }
+verify.selftest.sh:156:    const r = cp.spawnSync("git", ["-C", repo, "config", "--get", "core.worktree"], { encoding: "utf8", env: cleanEnv });
+verify.selftest.sh:160:  const fixture = path.join(agentDir, "git-init-fixture");
+verify.selftest.sh:162:  const init = cp.spawnSync("git", ["init", "-q"], { cwd: fixture, encoding: "utf8", env: process.env });
+verify.selftest.sh:164:  fs.writeFileSync(path.join(agentDir, "git-init-check.json"), JSON.stringify({ before, after, initStatus: init.status, initStderr: init.stderr ?? "", gitDir: process.env.GIT_DIR ?? null, gitWorkTree: process.env.GIT_WORK_TREE ?? null }, null, 2));
+verify.selftest.sh:170:  cp.spawnSync("git", ["-C", process.env.STUB_CLOBBER_CORE_WORKTREE_REPO, "config", "--local", "core.worktree", process.cwd()], { env: cleanEnv });
+verify.selftest.sh:213:    cp.execFileSync("git", ["checkout", "--", "canonical-guard.txt"], { env: process.env, stdio: "pipe" });
+verify.selftest.sh:284:  const pinned = cp.execFileSync("git", ["-C", repo, "rev-parse", `${branch}^{commit}`], { encoding: "utf8", env: gitEnv }).trim();
+verify.selftest.sh:285:  cp.execFileSync("git", ["-C", repo, "checkout", "-q", branch], { env: gitEnv });
+verify.selftest.sh:287:  cp.execFileSync("git", ["-C", repo, "add", "midpass-move.txt"], { env: gitEnv });
+verify.selftest.sh:288:  cp.execFileSync("git", ["-C", repo, "-c", "user.email=selftest@local", "-c", "user.name=selftest", "commit", "-q", "-m", "mid-pass move"], { env: gitEnv });
+verify.selftest.sh:289:  const moved = cp.execFileSync("git", ["-C", repo, "rev-parse", `${branch}^{commit}`], { encoding: "utf8", env: gitEnv }).trim();
+verify.selftest.sh:458:# the brief at <root>/contracts/REVIEWER.md, and the root to be a git repo
+verify.selftest.sh:494:    git init -q &&
+verify.selftest.sh:495:    git add seats/README.md &&
+verify.selftest.sh:496:    git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
+verify.selftest.sh:497:    git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
+verify.selftest.sh:524:  printf 'wheelhouse/\n' >> "$proj/.git/info/exclude"
+verify.selftest.sh:559:    git init -q &&
+verify.selftest.sh:560:    git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
+verify.selftest.sh:562:    git init -q &&
+verify.selftest.sh:564:    git add evidence/bench.log &&
+verify.selftest.sh:565:    git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
+verify.selftest.sh:566:    git branch fleet/bead-1 ) || { echo "selftest: could not build umbrella product git repo" >&2; exit 2; }
+verify.selftest.sh:571:TIP="$(git -C "$PROJ" rev-parse fleet/bead-1)"
+verify.selftest.sh:574:core_worktree_snapshot() { local out rc; out="$(git -C "$1" config --local --get core.worktree 2>&1)"; rc=$?; printf 'rc=%s\n%s\n' "$rc" "$out"; }
+verify.selftest.sh:704:INST_TIP="$(git -C "$INST_PROJ" rev-parse fleet/bead-1)"
+verify.selftest.sh:715:if git -C "$INST_PROJ" check-ignore -q wheelhouse/crew/bench.sh; then
+verify.selftest.sh:717:else fail "installed layout: wheelhouse/crew/bench.sh was not excluded by .git/info/exclude"; fi
+verify.selftest.sh:741:UMB_TIP="$(git -C "$UMB_PROJ/product" rev-parse fleet/bead-1)"
+verify.selftest.sh:761:  git checkout -q -b fleet/bead-ambiguous &&
+verify.selftest.sh:763:  git add umbrella-work.txt &&
+verify.selftest.sh:764:  git -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella-work ) || { echo "selftest: could not build ambiguous umbrella branch" >&2; exit 2; }
+verify.selftest.sh:765:( cd "$UMB_PROJ/product" && git branch fleet/bead-ambiguous ) || { echo "selftest: could not build ambiguous product branch" >&2; exit 2; }
+verify.selftest.sh:766:UMB_AMBIG_TIP="$(git -C "$UMB_PROJ" rev-parse fleet/bead-ambiguous)"
+verify.selftest.sh:767:PROD_AMBIG_TIP="$(git -C "$UMB_PROJ/product" rev-parse fleet/bead-ambiguous)"
+verify.selftest.sh:923:\$ git show --stat fleet/bead-1
+verify.selftest.sh:937:   && grep -q "git show --stat" "$VDIR/bead-1.md" 2>/dev/null; then
+verify.selftest.sh:1032:# from (so its own bare `git diff`/`git show` still work — proven by phase 1
+verify.selftest.sh:1046:if git -C "$PROJ" worktree list | grep -qF "$SCRATCH_CWD"; then
+verify.selftest.sh:1090:git -C "$PROJ" add canonical-guard.txt && git -C "$PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m canonical-guard
+verify.selftest.sh:1091:CANONICAL_TIP="$(git -C "$PROJ" rev-parse HEAD)"
+verify.selftest.sh:1092:git -C "$PROJ" branch -f fleet/bead-1 "$CANONICAL_TIP"
+verify.selftest.sh:1095:Attempted canonical checkout write; dispatcher should pin git to scratch.
+verify.selftest.sh:1103:  pass "bare checkout git write runs from scratch cwd without exported GIT_WORK_TREE and leaves canonical checkout unchanged"
+verify.selftest.sh:1105:git -C "$PROJ" checkout -q -- canonical-guard.txt
+verify.selftest.sh:1109:Ran git init in a fixture directory; dispatcher must not leak GIT_DIR/GIT_WORK_TREE.
+verify.selftest.sh:1114:  bun "$RUN_PROJ/seats/verify.ts" bead-git-init fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
+verify.selftest.sh:1115:GIT_INIT_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/git-init-check.json"
+verify.selftest.sh:1120:  pass "reviewer git init fixture leaves live repo config unchanged and receives no GIT_DIR/GIT_WORK_TREE"
+verify.selftest.sh:1121:else fail "reviewer git init fixture leaked git env or changed live config (exit $RC): check=$(cat "$GIT_INIT_CHECK" 2>/dev/null) out=$OUT"; fi
+verify.selftest.sh:1177:MOVE_PIN="$(git -C "$MOVE_PROJ" rev-parse fleet/bead-1)"
+verify.selftest.sh:1185:MOVE_TIP="$(git -C "$MOVE_PROJ" rev-parse fleet/bead-1)"
+verify.selftest.sh:1278:bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+verify.selftest.sh:1301:if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
+verify.selftest.sh:1641:if git -C "$PROJ" worktree add -q "$EV_WT" fleet/bead-1 2>/dev/null; then
+verify.selftest.sh:1655:    git add evidence &&
+verify.selftest.sh:1656:    git -c user.email=selftest@local -c user.name=selftest commit -q -m evidence ) \
+verify.selftest.sh:1658:  git -C "$PROJ" worktree remove -f "$EV_WT" 2>/dev/null
+verify.selftest.sh:1680:printf 'wheelhouse/evidence/\n' >> "$PROJ/.git/info/exclude"
+verify.selftest.sh:1682:printf 'disk evidence retained outside git\n' > "$PROJ/wheelhouse/evidence/disk-ok/proof.txt"
+verify.selftest.sh:1689:if [ $RC -eq 0 ]; then pass "APPROVE over git-excluded evidence with a verified SHA-256 manifest exits 0"
+verify.selftest.sh:1700:  pass "git-excluded evidence without a manifest is UNSATISFIED, not accepted for bare existence"
+verify.selftest.sh:1703:if [ $RC -eq 1 ] && says "git-excluded evidence path is absent on disk" && says "UNSATISFIED"; then
+verify.selftest.sh:1704:  pass "missing git-excluded evidence is UNSATISFIED with disk source named"
+verify.selftest.sh:1791:  CB_TIP="$(git -C "$CAN_B" rev-parse fleet/bead-1)"
+verify.selftest.sh:1829:git -C "$CORE_GUARD_PROJ" config --local core.worktree "$CORE_GUARD_PROJ"
+verify.selftest.sh:1849:git -C "$PROJ" worktree add --detach "$ORPHAN_DIR" HEAD >/dev/null 2>&1
+verify.selftest.sh:1850:git -C "$PROJ" worktree add --detach "$REVIEW_ORPHAN_DIR" HEAD >/dev/null 2>&1
+verify.selftest.sh:1851:git -C "$PROJ" branch "$SHA_BRANCH" HEAD >/dev/null 2>&1
+verify.selftest.sh:1856:  git -C "$2" worktree add --detach "$dir" HEAD >/dev/null 2>&1
+verify.selftest.sh:1863:if git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" \
+verify.selftest.sh:1864:   && git -C "$PROJ" worktree list | grep -qF "$REVIEW_ORPHAN_DIR" \
+verify.selftest.sh:1865:   && git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" \
+verify.selftest.sh:1866:   && git -C "$PROJ" show-ref --verify --quiet "refs/heads/$SHA_BRANCH"; then
+verify.selftest.sh:1871:if ! git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" && [ ! -d "$ORPHAN_DIR" ]; then
+verify.selftest.sh:1873:else fail "the verify orphan survived: $(git -C "$PROJ" worktree list)"; fi
+verify.selftest.sh:1874:if ! git -C "$PROJ" worktree list | grep -qF "$REVIEW_ORPHAN_DIR" && [ ! -d "$REVIEW_ORPHAN_DIR" ]; then
+verify.selftest.sh:1876:else fail "the review orphan survived: $(git -C "$PROJ" worktree list)"; fi
+verify.selftest.sh:1877:if ! git -C "$PROJ" show-ref --verify --quiet "refs/heads/$SHA_BRANCH"; then
+verify.selftest.sh:1879:else fail "the stale SHA-named branch survived: $(git -C "$PROJ" branch --list "$SHA_BRANCH")"; fi
+verify.selftest.sh:1880:if git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ -d "$LIVE_DIR" ]; then
+verify.selftest.sh:1892:  CONCURRENT_DIRS="$(git -C "$PROJ" worktree list --porcelain 2>/dev/null | awk -v a="wheelhouse-verify-${CONCURRENT_PID_A}-" -v b="wheelhouse-verify-${CONCURRENT_PID_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
+verify.selftest.sh:1905:  git -C "$PROJ" worktree list | grep -qF "$d" && [ -d "$d" ] || MISSING_CONCURRENT=$((MISSING_CONCURRENT + 1))
+verify.selftest.sh:1921:if ! git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
+verify.selftest.sh:1923:else fail "the formerly-live worktree was not reclaimed after its owner pid died: $(git -C "$PROJ" worktree list)"; fi
+verify.selftest.sh:1930:git -C "$KILL_PROJ" branch "$KILL_SHA_BRANCH" HEAD >/dev/null 2>&1
+verify.selftest.sh:1937:  KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | head -n 1 || true)"
+verify.selftest.sh:1948:if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -qF "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
+verify.selftest.sh:1950:else fail "killed one-shot scratch survived: dir=$KILLED_DIR list=$(git -C "$KILL_PROJ" worktree list)"; fi
+verify.selftest.sh:1951:if ! git -C "$KILL_PROJ" show-ref --verify --quiet "refs/heads/$KILL_SHA_BRANCH"; then
+verify.selftest.sh:1963:  git -C "$sig_proj" config --local core.worktree "$sig_proj"
+verify.selftest.sh:1969:    dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | head -n 1 || true)"
+verify.selftest.sh:1983:  if [ -n "$dir" ] && ! git -C "$sig_proj" worktree list | grep -qF "$dir" && [ ! -d "$dir" ]; then
+verify.selftest.sh:1985:  else fail "$label scratch survived: dir=$dir list=$(git -C "$sig_proj" worktree list 2>/dev/null)"; fi
+walk.selftest.sh:28:GIT_BIN="$(command -v git)" || { echo "selftest: git is required" >&2; exit 2; }
+walk.selftest.sh:144:  ( cd "$proj" && git init -q && git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base ) \
+walk.selftest.sh:145:    || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
+walk.selftest.sh:245:bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+walk.selftest.sh:262:if grep -q 'Fixture walker brief' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'codex walk one-shot carries verifier brief and measured-safe exec flags'; else fail "codex walk one-shot missing brief or safe flags: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
+worktree-root.selftest.sh:110:git -C "$PROJ" init -q
+worktree-root.selftest.sh:112:git -C "$PROJ" add README.md
+worktree-root.selftest.sh:113:git -C "$PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m init
+worktree-root.selftest.sh:137:if [ "$(git -C "$WORKTREE_ROOT/worker-1" branch --show-current 2>/dev/null)" = "fleet/bead-a" ]; then
+worktree-root.selftest.sh:138:  pass "the seat worktree is a real git worktree on fleet/<bead>"
+worktree-root.selftest.sh:140:  fail "seat worktree branch was $(git -C "$WORKTREE_ROOT/worker-1" branch --show-current 2>&1)"
+worktree-root.selftest.sh:151:phase "umbrella root git repo with product-repo seat worktree"
+worktree-root.selftest.sh:176:# This is the regression shape: the container root is itself a git repo, but
+worktree-root.selftest.sh:178:git -C "$UMB" init -q
+worktree-root.selftest.sh:180:git -C "$UMB" add README.md wheelhouse/.template-source
+worktree-root.selftest.sh:181:git -C "$UMB" -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella
+worktree-root.selftest.sh:183:git -C "$PRODUCT" init -q
+worktree-root.selftest.sh:185:git -C "$PRODUCT" add README.md
+worktree-root.selftest.sh:186:git -C "$PRODUCT" -c user.email=selftest@local -c user.name=selftest commit -q -m product
+worktree-root.selftest.sh:195:if [ $RC -eq 0 ] && [ "$(git -C "$UMB_WT" rev-parse --show-toplevel 2>/dev/null)" = "$UMB_WT" ] && [ "$(git -C "$PRODUCT" worktree list --porcelain | awk -v wt="$UMB_WT" '$1=="worktree" && $2==wt {found=1} END{print found+0}')" = 1 ] && ! git -C "$UMB" worktree list --porcelain | awk -v wt="$UMB_WT" '$1=="worktree" && $2==wt {found=1} END{exit(found?0:1)}'; then
+worktree-root.selftest.sh:198:  fail "umbrella dispatch did not create product repo worktree (exit $RC): out=$OUT product_list=$(git -C "$PRODUCT" worktree list --porcelain 2>&1) root_list=$(git -C "$UMB" worktree list --porcelain 2>&1)"
+worktree-root.selftest.sh:201:if [ $RC -eq 0 ] && [ "$(git -C "$PRODUCT" worktree list --porcelain | awk -v wt="$UMB_WT" '$1=="worktree" && $2==wt {found=1} END{print found+0}')" = 1 ] && [ "$(git -C "$UMB_WT" branch --show-current 2>/dev/null)" = "fleet/bead-product-b" ]; then
+worktree-root.selftest.sh:204:  fail "umbrella dispatch did not reuse product repo worktree (exit $RC): out=$OUT branch=$(git -C "$UMB_WT" branch --show-current 2>&1)"

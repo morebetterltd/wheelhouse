@@ -1,0 +1,20 @@
+before: git -C <umbrella> reflog --format=%gs -5
+commit: Sync template 6cb9dc9: empty-lock and state-lock recovery (5tcl, su88), recover selftest counts only its own processes (fhfb), template cache recovery guards (gsma); sweep-runner lock change (muyl) held until running sweeps finish
+commit: Sync template 6581044: prune selftest stable in every environment (yo4m)
+commit: ISA: record Keenan's approval to ship Lauren Tan's MIT notice with the verification skills (V1)
+commit: Integration refs: add fleet/front-door (F9)
+commit: ISA: V9 probe uses the template's verdict word (BOUNCE), not REQUEST_CHANGES
+
+RUN ['bash', 'seats/git-isolation.selftest.sh']
+PASS fixture Git boundary audit (47 suite setups)
+PASS negative control: removing the ceiling moves only the throwaway enclosing HEAD (regression exits 1)
+PASS failed dispatch, fixture root, plain directory, nested repo, worktree and their subdirectories stay contained
+git-isolation.selftest: PASS
+after: git -C <umbrella> reflog --format=%gs -5
+commit: Sync template 6cb9dc9: empty-lock and state-lock recovery (5tcl, su88), recover selftest counts only its own processes (fhfb), template cache recovery guards (gsma); sweep-runner lock change (muyl) held until running sweeps finish
+commit: Sync template 6581044: prune selftest stable in every environment (yo4m)
+commit: ISA: record Keenan's approval to ship Lauren Tan's MIT notice with the verification skills (V1)
+commit: Integration refs: add fleet/front-door (F9)
+commit: ISA: V9 probe uses the template's verdict word (BOUNCE), not REQUEST_CHANGES
+
+umbrella safety: PASS (0 permitted new reflog entries); test exit=0

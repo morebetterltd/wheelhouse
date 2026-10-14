@@ -1,0 +1,466 @@
+diff --git a/seats/adapter.selftest.sh b/seats/adapter.selftest.sh
+index 60d3b5b..6a0348c 100755
+--- a/seats/adapter.selftest.sh
++++ b/seats/adapter.selftest.sh
+@@ -115,0 +116 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || ex
++selftest_isolate_git "$FIX" || exit 2
+@@ -116,0 +118,12 @@ FIX="$(cd "$FIX" && pwd -P)"
++# Dispatch must pass the real contract gate too (fleet/producer enables it).
++export WHEELHOUSE_CONTRACT_FIXTURE="$FIX/dispatch-contract.md"
++cat > "$WHEELHOUSE_CONTRACT_FIXTURE" <<'CONTRACT'
++Trace: adapter protocol selftest
++Intent:
++Keep fixture dispatches exercising the adapter protocol and worktree lifecycle.
++Outcomes:
++- O1 The fixture seat receives the dispatched prompt.
++  consumer: machine — the selftest runner
++  surface: fixture seat event log and worktree
++  check: run — dispatch and assert the recorded prompt, state and branch
++CONTRACT
+diff --git a/seats/alerts.selftest.sh b/seats/alerts.selftest.sh
+index 78f2816..42ff7e7 100644
+--- a/seats/alerts.selftest.sh
++++ b/seats/alerts.selftest.sh
+@@ -6,0 +7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-alerts.XXXXXX")" ||
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/channels.selftest.sh b/seats/channels.selftest.sh
+index ab9036b..328164c 100755
+--- a/seats/channels.selftest.sh
++++ b/seats/channels.selftest.sh
+@@ -19,0 +20 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-channels-selftest.X
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/cockpit.selftest.sh b/seats/cockpit.selftest.sh
+index e48342c..b4f84ef 100755
+--- a/seats/cockpit.selftest.sh
++++ b/seats/cockpit.selftest.sh
+@@ -19,0 +20 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/commander-voice-lint.selftest.sh b/seats/commander-voice-lint.selftest.sh
+index d1bdf44..1b9e53c 100755
+--- a/seats/commander-voice-lint.selftest.sh
++++ b/seats/commander-voice-lint.selftest.sh
+@@ -13,0 +14 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-commander-voice-lin
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/comms.selftest.sh b/seats/comms.selftest.sh
+index f8738a2..c239749 100755
+--- a/seats/comms.selftest.sh
++++ b/seats/comms.selftest.sh
+@@ -8,0 +9 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-comms-selftest.XXXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/concurrency.selftest.sh b/seats/concurrency.selftest.sh
+index 318e808..9abff1e 100755
+--- a/seats/concurrency.selftest.sh
++++ b/seats/concurrency.selftest.sh
+@@ -122,0 +123 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || ex
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/contract.selftest.sh b/seats/contract.selftest.sh
+index 2de1888..72e1b69 100755
+--- a/seats/contract.selftest.sh
++++ b/seats/contract.selftest.sh
+@@ -6,0 +7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-contract.XXXXXX")"
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/courier.selftest.sh b/seats/courier.selftest.sh
+index 974e92a..5772dbc 100755
+--- a/seats/courier.selftest.sh
++++ b/seats/courier.selftest.sh
+@@ -17,0 +18 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-courier-selftest.XX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/desk.selftest.sh b/seats/desk.selftest.sh
+index 1f1b5a5..6469a9c 100755
+--- a/seats/desk.selftest.sh
++++ b/seats/desk.selftest.sh
+@@ -11,0 +12 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-desk-selftest.XXXXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/digest.selftest.sh b/seats/digest.selftest.sh
+index d905536..e85dd23 100755
+--- a/seats/digest.selftest.sh
++++ b/seats/digest.selftest.sh
+@@ -8,0 +9 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-digest-selftest.XXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/evidence-scrub.selftest.sh b/seats/evidence-scrub.selftest.sh
+index 12ede26..ac7bd31 100755
+--- a/seats/evidence-scrub.selftest.sh
++++ b/seats/evidence-scrub.selftest.sh
+@@ -18,0 +19 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-evidence-scrub-self
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/fleet-gate.selftest.sh b/seats/fleet-gate.selftest.sh
+index 9eceaa8..a5f2334 100755
+--- a/seats/fleet-gate.selftest.sh
++++ b/seats/fleet-gate.selftest.sh
+@@ -19,0 +20 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-fleet-gate-selftest
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/fleet-pre-push-guard.selftest.sh b/seats/fleet-pre-push-guard.selftest.sh
+index ecd2b51..99a671b 100755
+--- a/seats/fleet-pre-push-guard.selftest.sh
++++ b/seats/fleet-pre-push-guard.selftest.sh
+@@ -17,0 +18 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-fleet-pre-push-guar
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/fleet-snapshot.selftest.sh b/seats/fleet-snapshot.selftest.sh
+index 9ba2524..b5a976d 100755
+--- a/seats/fleet-snapshot.selftest.sh
++++ b/seats/fleet-snapshot.selftest.sh
+@@ -5,0 +6 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-fleet-snapshot.XXXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/floor.selftest.sh b/seats/floor.selftest.sh
+index d86f66c..519f141 100755
+--- a/seats/floor.selftest.sh
++++ b/seats/floor.selftest.sh
+@@ -63,0 +64 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-floor-selftest.$$.X
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/git-isolation.selftest.sh b/seats/git-isolation.selftest.sh
+new file mode 100755
+index 0000000..0d39b80
+--- /dev/null
++++ b/seats/git-isolation.selftest.sh
+@@ -0,0 +1,92 @@
++#!/usr/bin/env bash
++# All destructive canaries run inside our own disposable enclosing repository.
++set -euo pipefail
++HERE="$(cd "$(dirname "$0")" && pwd -P)"
++. "$HERE/selftest-lib.sh"
++FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-git-isolation.XXXXXX")" || exit 2
++selftest_isolate_git "$FIX" || exit 2
++trap 'selftest_remove_fixture_dir "$FIX"' EXIT
++
++# Audit the setup of every suite, not just fgit: exported ceilings also protect
++# plain git -C, bare git after cd, and git launched by Node/Bun/runtime children.
++python3 - "$HERE" <<'PY'
++from pathlib import Path
++import re, sys
++root = Path(sys.argv[1])
++checked = 0
++for p in sorted(root.glob('*.selftest.sh')):
++    lines = p.read_text().splitlines()
++    for i, line in enumerate(lines):
++        m = re.match(r'(\w+)=.*selftest_make_fixture_dir.*\|\| exit 2$', line)
++        if m:
++            assert lines[i+1] == f'selftest_isolate_git "${m[1]}" || exit 2', f'{p.name}:{i+1}: missing git boundary'
++            checked += 1
++assert checked > 40, f'wrong suite directory: only {checked} fixture setups'
++print(f'PASS fixture Git boundary audit ({checked} suite setups)')
++PY
++
++OUTER="$FIX/enclosing"
++mkdir -p "$OUTER/tmp"
++git -C "$OUTER" init -q -b main
++git -C "$OUTER" -c user.name=selftest -c user.email=selftest@example.invalid -c commit.gpgsign=false commit --allow-empty -qm old
++git -C "$OUTER" update-ref refs/remotes/origin/main HEAD
++git -C "$OUTER" -c user.name=selftest -c user.email=selftest@example.invalid -c commit.gpgsign=false commit --allow-empty -qm kept
++BEFORE="$(git -C "$OUTER" rev-parse HEAD)"
++[ "$(git -C "$OUTER" rev-parse --show-toplevel)" = "$OUTER" ]
++INNER="$(selftest_make_fixture_dir "$OUTER/tmp/fixture.XXXXXX")"
++# Use the actual fgit definition, so the reproducer covers its env/config flags.
++FGIT="$(grep '^fgit() ' "$HERE/adapter.selftest.sh")"
++[ -n "$FGIT" ]
++printf '%s\n' "$FGIT" > "$FIX/fgit.sh"
++cat > "$FIX/repro.sh" <<'REPRO'
++set -eu
++. "$LIB"
++. "$FGIT_FILE"
++HOME_FIX="$INNER/home"
++mkdir -p "$HOME_FIX"
++selftest_isolate_git "$INNER"
++# Model a dispatch gate refusing before worktree creation. The empty seat cwd
++# remains, but contains no .git: exactly the failed-dispatch precondition.
++WT="$INNER/project/.wheelhouse-worktrees/worker-1"
++failed_dispatch(){ mkdir -p "$WT"; return 1; }
++rc=0; failed_dispatch || rc=$?
++[ "$rc" = 1 ] && [ -d "$WT" ] && [ ! -e "$WT/.git" ]
++reset_rc=0
++fgit -C "$WT" reset -q --hard origin/main > "$INNER/reset.out" 2> "$INNER/reset.err" || reset_rc=$?
++after="$(git -C "$OUTER" rev-parse HEAD)"
++if [ "$after" != "$BEFORE" ]; then
++  echo 'FAIL failed-dispatch reset moved the throwaway enclosing HEAD'
++  exit 1
++fi
++[ "$reset_rc" != 0 ]
++grep -q 'not a git repository' "$INNER/reset.err"
++# At the fixture root itself, and in a plain subdirectory, discovery must also
++# fail; existing nested repos/worktrees and their subdirectories must work.
++mkdir -p "$INNER/plain"
++for target in "$INNER" "$INNER/plain"; do
++  if git -C "$target" rev-parse --show-toplevel > /dev/null 2>&1; then exit 1; fi
++done
++git -C "$INNER" init -q -b main "$INNER/repo"
++git -C "$INNER/repo" -c user.name=selftest -c user.email=selftest@example.invalid -c commit.gpgsign=false commit --allow-empty -qm base
++git -C "$INNER/repo" worktree add -q -b fleet/fixture "$INNER/wt"
++mkdir -p "$INNER/repo/sub" "$INNER/wt/sub"
++for target in "$INNER/repo" "$INNER/repo/sub" "$INNER/wt" "$INNER/wt/sub"; do
++  git -C "$target" rev-parse --verify HEAD > /dev/null
++done
++echo 'PASS failed dispatch, fixture root, plain directory, nested repo, worktree and their subdirectories stay contained'
++REPRO
++# Negative control: remove only the fix in a COPY of the helper. Never run an
++# unguarded suite against the install or its enclosing umbrella repository.
++cp -f "$HERE/selftest-lib.sh" "$FIX/unsafe-lib.sh"
++printf '\nselftest_isolate_git() { :; }\n' >> "$FIX/unsafe-lib.sh"
++rc=0
++env -u GIT_CEILING_DIRECTORIES LIB="$FIX/unsafe-lib.sh" FGIT_FILE="$FIX/fgit.sh" INNER="$INNER" OUTER="$OUTER" BEFORE="$BEFORE" bash "$FIX/repro.sh" > "$FIX/unsafe.out" 2> "$FIX/unsafe.err" || rc=$?
++[ "$rc" = 1 ]
++grep -q 'FAIL failed-dispatch reset moved' "$FIX/unsafe.out"
++[ "$(git -C "$OUTER" rev-parse HEAD)" = "$(git -C "$OUTER" rev-parse origin/main)" ]
++echo 'PASS negative control: removing the ceiling moves only the throwaway enclosing HEAD (regression exits 1)'
++# Restore only the canary repo, then execute the identical regression with fix.
++git -C "$OUTER" reset -q --hard "$BEFORE"
++env -u GIT_CEILING_DIRECTORIES LIB="$HERE/selftest-lib.sh" FGIT_FILE="$FIX/fgit.sh" INNER="$INNER" OUTER="$OUTER" BEFORE="$BEFORE" bash "$FIX/repro.sh"
++[ "$(git -C "$OUTER" rev-parse HEAD)" = "$BEFORE" ]
++echo 'git-isolation.selftest: PASS'
+diff --git a/seats/herald.selftest.sh b/seats/herald.selftest.sh
+index b4f6d6f..7cc46d1 100755
+--- a/seats/herald.selftest.sh
++++ b/seats/herald.selftest.sh
+@@ -16,0 +17 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-herald-selftest.XXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/host-build-shim.selftest.sh b/seats/host-build-shim.selftest.sh
+index bb3e7d5..3b82578 100755
+--- a/seats/host-build-shim.selftest.sh
++++ b/seats/host-build-shim.selftest.sh
+@@ -6,0 +7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-host-build-shim.XXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/intake.selftest.sh b/seats/intake.selftest.sh
+index 51d4b57..dd138a6 100755
+--- a/seats/intake.selftest.sh
++++ b/seats/intake.selftest.sh
+@@ -6,0 +7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-intake-selftest.XXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/intent-check.selftest.sh b/seats/intent-check.selftest.sh
+index d0a18f5..aea364d 100755
+--- a/seats/intent-check.selftest.sh
++++ b/seats/intent-check.selftest.sh
+@@ -10,0 +11 @@ FIXTURE=$(selftest_make_fixture_dir "$TMPBASE/wheelhouse-intent-check-selftest.$
++selftest_isolate_git "$FIXTURE" || exit 2
+@@ -12,0 +14 @@ trap cleanup EXIT HUP INT TERM
++selftest_disable_bd_metrics "$FIXTURE" || exit 2
+diff --git a/seats/isolation.selftest.sh b/seats/isolation.selftest.sh
+index 383064e..c393139 100755
+--- a/seats/isolation.selftest.sh
++++ b/seats/isolation.selftest.sh
+@@ -116,0 +117 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || ex
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/legibility.selftest.sh b/seats/legibility.selftest.sh
+index 544925a..f8b8cba 100755
+--- a/seats/legibility.selftest.sh
++++ b/seats/legibility.selftest.sh
+@@ -98,0 +99 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || ex
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/needs.selftest.sh b/seats/needs.selftest.sh
+index 0fb8696..9120e93 100755
+--- a/seats/needs.selftest.sh
++++ b/seats/needs.selftest.sh
+@@ -19,0 +20 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-needs-selftest.$$.X
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/never-lose-work.selftest.sh b/seats/never-lose-work.selftest.sh
+index 4f0cea0..bc7e773 100755
+--- a/seats/never-lose-work.selftest.sh
++++ b/seats/never-lose-work.selftest.sh
+@@ -33,0 +34 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-nlw-selftest.XXXXXX
++selftest_isolate_git "$FIX" || exit 2
+@@ -39,0 +41 @@ mkdir -p "$HOME"
++selftest_disable_bd_metrics "$FIX" || exit 2
+diff --git a/seats/placeholder-grep.selftest.sh b/seats/placeholder-grep.selftest.sh
+index 73d8c50..151fd33 100755
+--- a/seats/placeholder-grep.selftest.sh
++++ b/seats/placeholder-grep.selftest.sh
+@@ -23,0 +24 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-placeholder-grep.XX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/pool.selftest.sh b/seats/pool.selftest.sh
+index aae7102..69ba841 100755
+--- a/seats/pool.selftest.sh
++++ b/seats/pool.selftest.sh
+@@ -5,0 +6 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-pool-selftest.XXXXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/principal-sentinel.selftest.sh b/seats/principal-sentinel.selftest.sh
+index 1811ab6..b3106ba 100755
+--- a/seats/principal-sentinel.selftest.sh
++++ b/seats/principal-sentinel.selftest.sh
+@@ -8,0 +9 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-principal-sentinel-
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/prune.selftest.sh b/seats/prune.selftest.sh
+index dfdd468..53f1242 100755
+--- a/seats/prune.selftest.sh
++++ b/seats/prune.selftest.sh
+@@ -28,0 +29 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-prune-selftest.XXXX
++selftest_isolate_git "$FIX" || exit 2
+@@ -35,0 +37,8 @@ mkdir -p "$HOME"
++# Yo4m fixture-lifecycle fix, without importing main's newer reviewed-row API.
++selftest_disable_bd_metrics "$FIX" || exit 2
++METRICS_CONFIG="$XDG_CONFIG_HOME/bd/config.yaml"
++if [ -f "$METRICS_CONFIG" ] && grep -Eq '^[[:space:]]+disabled: true$' "$METRICS_CONFIG"; then
++  pass 'fixture-owned bd metrics config disables detached telemetry flushers'
++else
++  fail 'fixture-owned bd metrics config does not disable detached telemetry flushers'
++fi
+@@ -173,0 +183 @@ mkdir -p "$TMP_ROOT"
++TMP_ROOT="$(cd "$TMP_ROOT" && pwd -P)"
+diff --git a/seats/prune.ts b/seats/prune.ts
+index 4dff41a..e1c94c2 100755
+--- a/seats/prune.ts
++++ b/seats/prune.ts
+@@ -490 +490,3 @@ function scanPrivateTmp(root: string, beads: Map<string, string>): Row[] {
+-  const tmpRoots = [...new Set(["/private/tmp", path.resolve(os.tmpdir())])].filter(isDir);
++  // Record the physical parent, not TMPDIR's alias spelling. Reviewed rows
++  // must stay canonical; do not relax their symlink/identity checks instead.
++  const tmpRoots = [...new Set(["/private/tmp", os.tmpdir()].map((d) => realpathOr(d)).filter((d): d is string => !!d))].filter(isDir);
+diff --git a/seats/push-authority-lint.selftest.sh b/seats/push-authority-lint.selftest.sh
+index 43b468c..4d1513a 100755
+--- a/seats/push-authority-lint.selftest.sh
++++ b/seats/push-authority-lint.selftest.sh
+@@ -13,0 +14 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-push-authority-lint
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/recover.selftest.sh b/seats/recover.selftest.sh
+index 4ad362a..e7747fc 100755
+--- a/seats/recover.selftest.sh
++++ b/seats/recover.selftest.sh
+@@ -108,0 +109 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-recover-selftest.$$
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/report-issues.selftest.sh b/seats/report-issues.selftest.sh
+index 486a3b5..fcebf52 100644
+--- a/seats/report-issues.selftest.sh
++++ b/seats/report-issues.selftest.sh
+@@ -6,0 +7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-report-issues.XXXXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/reset.selftest.sh b/seats/reset.selftest.sh
+index d84e2f7..7d1fa07 100755
+--- a/seats/reset.selftest.sh
++++ b/seats/reset.selftest.sh
+@@ -96,0 +97 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || ex
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/seat-env.selftest.sh b/seats/seat-env.selftest.sh
+index a90b473..03e7544 100755
+--- a/seats/seat-env.selftest.sh
++++ b/seats/seat-env.selftest.sh
+@@ -65,0 +66 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-seat-env-selftest.$
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/seat-worktree.selftest.sh b/seats/seat-worktree.selftest.sh
+index c969417..a407040 100755
+--- a/seats/seat-worktree.selftest.sh
++++ b/seats/seat-worktree.selftest.sh
+@@ -23,0 +24 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-seat-worktree-selft
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/selftest-lib.selftest.sh b/seats/selftest-lib.selftest.sh
+index e36ddc4..3490b3f 100755
+--- a/seats/selftest-lib.selftest.sh
++++ b/seats/selftest-lib.selftest.sh
+@@ -6,0 +7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-selftest-lib.XXXXXX
++selftest_isolate_git "$FIX" || exit 2
+@@ -48,0 +50,8 @@ if command -v bd >/dev/null 2>&1; then
++  METRICS_FIX="$FIX/metrics-fixture"
++  mkdir -p "$METRICS_FIX"
++  selftest_disable_bd_metrics "$METRICS_FIX" || exit 2
++  if [ "$HOME" = "$METRICS_FIX/home" ] && [ "$XDG_CONFIG_HOME" = "$HOME/.config" ] && [ -f "$XDG_CONFIG_HOME/bd/config.yaml" ] && grep -Eq '^[[:space:]]+disabled: true$' "$XDG_CONFIG_HOME/bd/config.yaml"; then
++    pass 'shared fixture metrics setup pins HOME and XDG to an owned disabled config'
++  else
++    fail 'shared fixture metrics setup did not pin an owned disabled config'
++  fi
+diff --git a/seats/selftest-lib.sh b/seats/selftest-lib.sh
+index a4201a8..27be605 100644
+--- a/seats/selftest-lib.sh
++++ b/seats/selftest-lib.sh
+@@ -45,0 +46,22 @@ selftest_make_fixture_dir() {
++# Metrics are global bd configuration, not per-graph state. bd 1.2.2 writes
++# HOME/.config/bd even with a different XDG_CONFIG_HOME, so pin BOTH to an
++# owned fixture before init; exporting XDG alone is not sufficient.
++selftest_disable_bd_metrics() {
++  local metrics_root="${1:-}" metrics_home="${2:-${1:-}/home}"
++  [ -n "$metrics_root" ] && [ -d "$metrics_root" ] && selftest_has_fixture_marker "$metrics_root" || { echo 'STOP: bd metrics config needs an owned fixture' >&2; return 2; }
++  mkdir -p "$metrics_home" || return 2
++  metrics_home="$(cd "$metrics_home" && pwd -P)" || return 2
++  selftest_has_fixture_marker "$metrics_home" || { echo 'STOP: bd metrics HOME needs an owned fixture' >&2; return 2; }
++  export HOME="$metrics_home" XDG_CONFIG_HOME="$metrics_home/.config"
++  (cd "$metrics_root" && bd metrics off > "$metrics_root/bd-metrics-off.out" 2> "$metrics_root/bd-metrics-off.err") || { echo 'STOP: could not disable fixture bd metrics' >&2; return 2; }
++}
++
++# Call in the parent shell: selftest_make_fixture_dir usually runs in $(...),
++# so an export there would be lost. Children (including runtime/stub git) inherit
++# this boundary. Include the parent too: git starting AT a ceiling ignores it.
++selftest_isolate_git() {
++  git_fixture="$(cd "$1" && pwd -P)" || return 2
++  [ -f "$git_fixture/.wheelhouse-selftest-fixture" ] || { echo "STOP: git isolation needs a marked fixture: $git_fixture" >&2; return 2; }
++  export GIT_CEILING_DIRECTORIES="$git_fixture:$(dirname "$git_fixture")${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}"
++}
++
+@@ -79 +101,2 @@ selftest_scratch_graph() {
+-  git -C "$graph_root" init -q
++  selftest_disable_bd_metrics "$graph_root" || return 2
++  GIT_CEILING_DIRECTORIES="$parent:$(dirname "$parent")${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}" git -C "$graph_root" init -q
+@@ -92,0 +116,2 @@ EOF
++  printf 'export HOME=%s\n' "$(selftest_shell_quote "$HOME")"
++  printf 'export XDG_CONFIG_HOME=%s\n' "$(selftest_shell_quote "$XDG_CONFIG_HOME")"
+diff --git a/seats/selftest-sweep.selftest.sh b/seats/selftest-sweep.selftest.sh
+index deabdb6..ffa9c35 100755
+--- a/seats/selftest-sweep.selftest.sh
++++ b/seats/selftest-sweep.selftest.sh
+@@ -23,0 +24 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-selftest-sweep-self
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/specimen-leak.selftest.sh b/seats/specimen-leak.selftest.sh
+index ca147b5..e46c41c 100755
+--- a/seats/specimen-leak.selftest.sh
++++ b/seats/specimen-leak.selftest.sh
+@@ -27,0 +28 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-specimen-leak.XXXXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/staffing-live.selftest.sh b/seats/staffing-live.selftest.sh
+index 614f2d7..5086365 100755
+--- a/seats/staffing-live.selftest.sh
++++ b/seats/staffing-live.selftest.sh
+@@ -8,0 +9 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing-live.XXXXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/staffing.selftest.sh b/seats/staffing.selftest.sh
+index 536f472..95080bd 100644
+--- a/seats/staffing.selftest.sh
++++ b/seats/staffing.selftest.sh
+@@ -5,0 +6 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing.XXXXXX")"
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/stop-all.selftest.sh b/seats/stop-all.selftest.sh
+index 3898927..ae9cae7 100755
+--- a/seats/stop-all.selftest.sh
++++ b/seats/stop-all.selftest.sh
+@@ -33,0 +34 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-stop-all-selftest.$
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/supervisor.selftest.sh b/seats/supervisor.selftest.sh
+index 4905a37..06632b8 100644
+--- a/seats/supervisor.selftest.sh
++++ b/seats/supervisor.selftest.sh
+@@ -6,0 +7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-supervisor.XXXXXX")
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/template-drift.selftest.sh b/seats/template-drift.selftest.sh
+index 1f09878..e190aeb 100755
+--- a/seats/template-drift.selftest.sh
++++ b/seats/template-drift.selftest.sh
+@@ -5,0 +6 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-template-drift.XXXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/transports.selftest.sh b/seats/transports.selftest.sh
+index 45d71ad..23fd3b7 100755
+--- a/seats/transports.selftest.sh
++++ b/seats/transports.selftest.sh
+@@ -7,0 +8 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-transports-selftest
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/upgrade-contract-audit.selftest.sh b/seats/upgrade-contract-audit.selftest.sh
+index 1ef3469..b794651 100755
+--- a/seats/upgrade-contract-audit.selftest.sh
++++ b/seats/upgrade-contract-audit.selftest.sh
+@@ -11,0 +12 @@ FIX=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-contract.XXX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/upgrade-runbook.selftest.sh b/seats/upgrade-runbook.selftest.sh
+index 864eebb..9040d8d 100755
+--- a/seats/upgrade-runbook.selftest.sh
++++ b/seats/upgrade-runbook.selftest.sh
+@@ -66,0 +67 @@ TMP=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXX
++selftest_isolate_git "$TMP" || exit 2
+diff --git a/seats/verify.selftest.sh b/seats/verify.selftest.sh
+index bf99426..20860c0 100755
+--- a/seats/verify.selftest.sh
++++ b/seats/verify.selftest.sh
+@@ -125,0 +126 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || ex
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/walk.selftest.sh b/seats/walk.selftest.sh
+index 5420735..72c77ef 100755
+--- a/seats/walk.selftest.sh
++++ b/seats/walk.selftest.sh
+@@ -40,0 +41 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-walk-selftest.$$.XX
++selftest_isolate_git "$FIX" || exit 2
+diff --git a/seats/worktree-root.selftest.sh b/seats/worktree-root.selftest.sh
+index 9271021..57fdf78 100755
+--- a/seats/worktree-root.selftest.sh
++++ b/seats/worktree-root.selftest.sh
+@@ -29,0 +30 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-worktree-root-selft
++selftest_isolate_git "$FIX" || exit 2
