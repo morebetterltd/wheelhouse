@@ -37,6 +37,7 @@ cleanup(){ [ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" >/dev/null 2>&1; selftest_cl
 trap cleanup EXIT INT TERM
 export HOME="$FIX/home"
 mkdir -p "$HOME"
+selftest_disable_bd_metrics "$FIX" || exit 2
 
 ROOT="$FIX/container"
 PROD="$ROOT/product"
