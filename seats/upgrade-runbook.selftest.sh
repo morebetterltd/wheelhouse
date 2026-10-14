@@ -157,11 +157,11 @@ for f in "$TEMPLATE"/runbooks/*; do
   rm -f "$baseline"
 done
 ' zsh "$TEMPLATE" "$PROJ" "$BASELINE")
-printf '%s\n' "$STEP3_OUT" | grep -q 'baseline unreadable' && fail "zsh step 3 reported baseline unreadable on a healthy baseline: $STEP3_OUT"
+printf '%s\n' "$STEP3_OUT" | grep >/dev/null 'baseline unreadable' && fail "zsh step 3 reported baseline unreadable on a healthy baseline: $STEP3_OUT"
 for b in PROMOTION.md RUNNING_THE_LOOP.md; do
-  printf '%s\n' "$STEP3_OUT" | grep -Eq "runbook updated: $b" || fail "zsh step 3 did not update ${b}: $STEP3_OUT"
+  printf '%s\n' "$STEP3_OUT" | grep -E >/dev/null "runbook updated: $b" || fail "zsh step 3 did not update ${b}: $STEP3_OUT"
 done
-printf '%s\n' "$STEP3_OUT" | grep -Eq "runbook current: UPGRADE.md" || fail "zsh step 3 did not report byte-equal UPGRADE.md as current: $STEP3_OUT"
+printf '%s\n' "$STEP3_OUT" | grep -E >/dev/null "runbook current: UPGRADE.md" || fail "zsh step 3 did not report byte-equal UPGRADE.md as current: $STEP3_OUT"
 pass "zsh step 3 runbook loop reads real baseline and reports byte-equal files current"
 
 REMOTE_SRC="$TMP/reused-cache-source"
@@ -220,7 +220,7 @@ sed -i.bak "s|^commit=.*|commit=$NEW_COMMIT|" wheelhouse/.template-source
 ' 2>&1)
 STEP6_STOP_RC=$?
 set -e
-if [ "$STEP6_STOP_RC" -eq 1 ] && printf '%s\n' "$STEP6_STOP_OUT" | grep -q 'target resolves to the baseline; the cache did not advance'; then
+if [ "$STEP6_STOP_RC" -eq 1 ] && printf '%s\n' "$STEP6_STOP_OUT" | grep >/dev/null 'target resolves to the baseline; the cache did not advance'; then
   pass "step 6 stale-cache guard STOPs when origin target differs from BASE"
 else
   fail "step 6 stale-cache guard did not STOP (rc=$STEP6_STOP_RC): $STEP6_STOP_OUT"
@@ -239,7 +239,7 @@ printf 'untracked\n' > "$GITPROJ/wheelhouse/evidence-dir/proof.txt"
   cd "$GITPROJ"
   git add wheelhouse/ seats/ .gitignore CLAUDE.md
 )
-if git -C "$GITPROJ" diff --cached --name-only | grep -qx 'wheelhouse/evidence-dir/proof.txt'; then
+if git -C "$GITPROJ" diff --cached --name-only | grep -x >/dev/null 'wheelhouse/evidence-dir/proof.txt'; then
   pass "step 8 broad wheelhouse add stages untracked files under wheelhouse"
 else
   fail "step 8 broad wheelhouse add did not demonstrate untracked wheelhouse staging"
@@ -277,11 +277,11 @@ comm -13 <(sort -u "$yours_h") <(sort -u "$upstream_h") | sed "s|^|project secti
 awk -v file="$yours" '\''NR==FNR { if (!($0 in yi)) yi[$0]=FNR; next } ($0 in yi) && yi[$0] != FNR { print "project section UPSTREAM, present, different position — " file ": " $0 }'\'' "$yours_h" "$upstream_h"
 rm -f "$yours_h" "$upstream_h"
 ' zsh "$HEADING_FIX/upstream.md" "$HEADING_FIX/yours.md")
-if printf '%s\n' "$HEADING_OUT" | grep -q 'not in yours .*### Gamma' \
-  && ! printf '%s\n' "$HEADING_OUT" | grep -q 'not in yours .*### Alpha' \
-  && ! printf '%s\n' "$HEADING_OUT" | grep -q 'not in yours .*### Beta' \
-  && printf '%s\n' "$HEADING_OUT" | grep -q 'present, different position .*### Alpha' \
-  && printf '%s\n' "$HEADING_OUT" | grep -q 'present, different position .*### Beta'; then
+if printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'not in yours .*### Gamma' \
+  && ! printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'not in yours .*### Alpha' \
+  && ! printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'not in yours .*### Beta' \
+  && printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'present, different position .*### Alpha' \
+  && printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'present, different position .*### Beta'; then
   pass "step 4 heading report separates new headings from reordered existing headings"
 else
   fail "step 4 heading report misclassified moved headings: $HEADING_OUT"
@@ -304,7 +304,7 @@ EOF
   set +e
   NO_LIB_RC=0; NO_LIB_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_NO_LIB/seats/upgrade-runbook.selftest.sh" 2>&1) || NO_LIB_RC=$?
   set -e
-  if [ "$NO_LIB_RC" -ne 0 ] && printf '%s\n' "$NO_LIB_OUT" | grep -q 'selftest-lib.sh'; then
+  if [ "$NO_LIB_RC" -ne 0 ] && printf '%s\n' "$NO_LIB_OUT" | grep >/dev/null 'selftest-lib.sh'; then
     pass "installed-layout fixture without selftest-lib.sh fails honestly instead of passing"
   else
     fail "installed-layout fixture without selftest-lib.sh was not caught (rc=$NO_LIB_RC): $NO_LIB_OUT"
@@ -362,7 +362,7 @@ EOF
   set +e
   DEAD_UNREACHABLE_RC=0; DEAD_UNREACHABLE_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_DEAD_UNREACHABLE/seats/upgrade-runbook.selftest.sh" 2>&1) || DEAD_UNREACHABLE_RC=$?
   set -e
-  if [ "$DEAD_UNREACHABLE_RC" -eq 42 ] && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep -q 'REFUSED template source: source=' && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep -q 'unreachable'; then
+  if [ "$DEAD_UNREACHABLE_RC" -eq 42 ] && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep >/dev/null 'REFUSED template source: source=' && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep >/dev/null 'unreachable'; then
     pass "installed-layout dead path= with unreachable source= refuses by named source reason"
   else
     fail "installed-layout dead path= with unreachable source= was not legible (rc=$DEAD_UNREACHABLE_RC): $DEAD_UNREACHABLE_OUT"
@@ -375,7 +375,7 @@ EOF
   set +e
   MISSING_RC=0; MISSING_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_MISSING/seats/upgrade-runbook.selftest.sh" 2>&1) || MISSING_RC=$?
   set -e
-  if [ "$MISSING_RC" -eq 42 ] && printf '%s\n' "$MISSING_OUT" | grep -q 'wheelhouse/.template-source missing' && printf '%s\n' "$MISSING_OUT" | grep -q 'source= and commit='; then
+  if [ "$MISSING_RC" -eq 42 ] && printf '%s\n' "$MISSING_OUT" | grep >/dev/null 'wheelhouse/.template-source missing' && printf '%s\n' "$MISSING_OUT" | grep >/dev/null 'source= and commit='; then
     pass "installed-layout missing .template-source fails legibly with source= and commit= expectation"
   else
     fail "installed-layout missing .template-source was not legible (rc=$MISSING_RC): $MISSING_OUT"
@@ -389,7 +389,7 @@ EOF
   set +e
   BAD_RC=0; BAD_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh" 2>&1) || BAD_RC=$?
   set -e
-  if [ "$BAD_RC" -eq 42 ] && printf '%s\n' "$BAD_OUT" | grep -q 'has no source= line' && printf '%s\n' "$BAD_OUT" | grep -q 'path='; then
+  if [ "$BAD_RC" -eq 42 ] && printf '%s\n' "$BAD_OUT" | grep >/dev/null 'has no source= line' && printf '%s\n' "$BAD_OUT" | grep >/dev/null 'path='; then
     pass "installed-layout bad path= without source= fails legibly before raw git fatal"
   else
     fail "installed-layout bad path= without source= was not legible (rc=$BAD_RC): $BAD_OUT"
@@ -458,7 +458,7 @@ set +e
 HRUN_CANARY_OUT=$(set -e; HRUN_ADAPTER_CMD="$HARNESS_BIN/fail-command"; hrun probe worker-a; [ "$HRC" -eq 0 ] || fail "hrun canary surfaced failing adapter command: $HOUT")
 HRUN_CANARY_RC=$?
 set -e
-if [ "$HRUN_CANARY_RC" -eq 1 ] && printf '%s\n' "$HRUN_CANARY_OUT" | grep -q '^not ok '; then
+if [ "$HRUN_CANARY_RC" -eq 1 ] && printf '%s\n' "$HRUN_CANARY_OUT" | grep >/dev/null '^not ok '; then
   pass "hrun reports failing adapter commands with a not ok line"
 else
   fail "hrun canary did not emit a not ok line for a failing adapter command (rc=$HRUN_CANARY_RC): $HRUN_CANARY_OUT"
@@ -472,7 +472,7 @@ hrun stop worker-a; [ "$HRC" -eq 0 ] || fail "stop switched seat before harness 
 env HOME="$HARNESS_HOME" PROJ="$HARNESS_PROJ" node -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); const s=r.seats["worker-a"]; s.harness="claude-code"; s.model="sonnet"; s.provider="anthropic"; s.allowedTools="Bash(printf *)"; s.account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 printf '{"loggedIn":true}\n' > "$HARNESS_HOME/.pi-seats-harnessswitch/worker-a/.claude.json"
 SEAT_ENV_OUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" "$ROOT/seats/seat-env.sh" harnessswitch worker-a "$HARNESS_PROJ")
-printf '%s\n' "$SEAT_ENV_OUT" | grep -q 'CLAUDE_CONFIG_DIR' || fail "seat-env did not print claude binding after switch: $SEAT_ENV_OUT"
+printf '%s\n' "$SEAT_ENV_OUT" | grep >/dev/null 'CLAUDE_CONFIG_DIR' || fail "seat-env did not print claude binding after switch: $SEAT_ENV_OUT"
 hrun probe worker-a; [ "$HRC" -eq 0 ] && [ "$HOUT" = OK ] || fail "claude-code binding probe failed: $HOUT"
 hrun reset worker-a; [ "$HRC" -eq 0 ] || fail "claude-code reset failed: $HOUT"
 hrun dispatch worker-a smoke-a 'Smoke check after harness switch: reply OK and stop.'; [ "$HRC" -eq 0 ] || fail "claude-code smoke dispatch failed: $HOUT"
@@ -483,7 +483,7 @@ grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl" || fail "claude-
 hrun stop worker-a; [ "$HRC" -eq 0 ] || fail "stop claude-code seat before switching back failed: $HOUT"
 env HOME="$HARNESS_HOME" PROJ="$HARNESS_PROJ" node -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); const s=r.seats["worker-a"]; s.harness="pi"; s.model="stub-model"; s.provider="anthropic"; delete s.allowedTools; s.account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 SEAT_ENV_OUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" "$ROOT/seats/seat-env.sh" harnessswitch worker-a "$HARNESS_PROJ")
-printf '%s\n' "$SEAT_ENV_OUT" | grep -q 'PI_CODING_AGENT_DIR' || fail "seat-env did not print pi binding after switch back: $SEAT_ENV_OUT"
+printf '%s\n' "$SEAT_ENV_OUT" | grep >/dev/null 'PI_CODING_AGENT_DIR' || fail "seat-env did not print pi binding after switch back: $SEAT_ENV_OUT"
 hrun probe worker-a; [ "$HRC" -eq 0 ] || fail "pi binding probe after switch back failed: $HOUT"
 hrun reset worker-a; [ "$HRC" -eq 0 ] || fail "pi reset after switch back failed: $HOUT"
 hrun dispatch worker-a smoke-b 'Smoke check after switching back to pi: reply OK and stop.'; [ "$HRC" -eq 0 ] || fail "pi smoke dispatch after switch back failed: $HOUT"

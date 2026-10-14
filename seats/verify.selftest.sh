@@ -108,7 +108,7 @@ sweep_stale_fixtures() {
     while IFS= read -r sf; do
       [ -f "$sf" ] || continue
       for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
+        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
           kill "$pid" 2>/dev/null
           echo "swept: killed leaked seat pid $pid (held open files under $d)"
         fi
@@ -931,11 +931,11 @@ SOURCE_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/source-check.txt"
 if [ $RC -eq 0 ] && grep -q '"readable": true' "$SOURCE_CHECK" 2>/dev/null && grep -q '"writeFailed": true' "$SOURCE_CHECK" 2>/dev/null; then
   pass "source snapshots: verifier can read the bead-declared sibling and writes to the mounted copy fail"
 else fail "source snapshots: read/write assertion failed (exit $RC): $OUT check=$(cat "$SOURCE_CHECK" 2>/dev/null)"; fi
-if ! find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -exec test ! -w '{}' \; -print -quit | grep -q .; then
+if ! find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -exec test ! -w '{}' \; -print -quit | grep >/dev/null .; then
   pass "source snapshots: cleanup restores/removes read-only snapshot trees"
 else
   chmod -R u+w "$VERIFY_RO_TMP" 2>/dev/null || true
-  fail "source snapshots: read-only snapshot tree left under TMPDIR: $(find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -print 2>/dev/null | head -5)"
+  fail "source snapshots: read-only snapshot tree left under TMPDIR: $(find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -print 2>/dev/null | sed -n '1,5p')"
 fi
 if grep -q '"undeclaredAbsent": true' "$SOURCE_CHECK" 2>/dev/null; then
   pass "source snapshots: undeclared sibling source is not mounted or named"
@@ -1159,7 +1159,7 @@ case "$SCRATCH_CWD" in
     pass "the verifier's cwd is the scratch worktree makeScratchCwd() creates" ;;
   *) fail "the verifier's cwd \"$SCRATCH_CWD\" does not look like a wheelhouse-verify-* scratch dir" ;;
 esac
-if git -C "$PROJ" worktree list | grep -qF "$SCRATCH_CWD"; then
+if git -C "$PROJ" worktree list | grep -F >/dev/null "$SCRATCH_CWD"; then
   fail "the scratch worktree $SCRATCH_CWD is still registered after verify.ts exited — cleanup did not run"
 else pass "the scratch worktree is unregistered after verify.ts exited (process-exit cleanup ran)"; fi
 if [ -d "$SCRATCH_CWD" ]; then
@@ -1950,24 +1950,24 @@ bash -c '
 while [ ! -f "$FIX/live-owner.txt" ]; do sleep 0.05; done
 LIVE_OWNER_PID=$(sed -n '1p' "$FIX/live-owner.txt")
 LIVE_DIR=$(sed -n '2p' "$FIX/live-owner.txt")
-if git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" \
-   && git -C "$PROJ" worktree list | grep -qF "$REVIEW_ORPHAN_DIR" \
-   && git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" \
+if git -C "$PROJ" worktree list | grep -F >/dev/null "$ORPHAN_DIR" \
+   && git -C "$PROJ" worktree list | grep -F >/dev/null "$REVIEW_ORPHAN_DIR" \
+   && git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" \
    && git -C "$PROJ" show-ref --verify --quiet "refs/heads/$SHA_BRANCH"; then
   pass "planted verify/review orphan worktrees, a live scratch worktree, and a SHA-named branch"
 else fail "could not plant stale scratch fixtures before sweeping"; fi
 
 run   # no args: usage STOP, but only after sweepStaleScratchWorktrees() ran
-if ! git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" && [ ! -d "$ORPHAN_DIR" ]; then
+if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$ORPHAN_DIR" && [ ! -d "$ORPHAN_DIR" ]; then
   pass "the orphaned verify scratch worktree (dead pid) was reclaimed"
 else fail "the verify orphan survived: $(git -C "$PROJ" worktree list)"; fi
-if ! git -C "$PROJ" worktree list | grep -qF "$REVIEW_ORPHAN_DIR" && [ ! -d "$REVIEW_ORPHAN_DIR" ]; then
+if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$REVIEW_ORPHAN_DIR" && [ ! -d "$REVIEW_ORPHAN_DIR" ]; then
   pass "the orphaned review scratch worktree (dead pid) was reclaimed"
 else fail "the review orphan survived: $(git -C "$PROJ" worktree list)"; fi
 if ! git -C "$PROJ" show-ref --verify --quiet "refs/heads/$SHA_BRANCH"; then
   pass "the stale 40-hex local branch was reclaimed"
 else fail "the stale SHA-named branch survived: $(git -C "$PROJ" branch --list "$SHA_BRANCH")"; fi
-if git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ -d "$LIVE_DIR" ]; then
+if git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ -d "$LIVE_DIR" ]; then
   pass "the live scratch worktree (real running pid, not holding the path) was spared"
 else fail "the live worktree was swept even though its owner pid is still alive"; fi
 
@@ -1992,7 +1992,7 @@ run   # a third gate's early sweep must not delete either live concurrent gate's
 MISSING_CONCURRENT=0
 while IFS= read -r d; do
   [ -z "$d" ] && continue
-  git -C "$PROJ" worktree list | grep -qF "$d" && [ -d "$d" ] || MISSING_CONCURRENT=$((MISSING_CONCURRENT + 1))
+  git -C "$PROJ" worktree list | grep -F >/dev/null "$d" && [ -d "$d" ] || MISSING_CONCURRENT=$((MISSING_CONCURRENT + 1))
 done <<EOF_CONCURRENT_DIRS
 $CONCURRENT_DIRS
 EOF_CONCURRENT_DIRS
@@ -2008,7 +2008,7 @@ wait "$CONCURRENT_PID_B" 2>/dev/null || true
 kill "$LIVE_OWNER_PID" 2>/dev/null
 i=0; while kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 run   # a second sweep pass, now that the "live" owner has actually exited
-if ! git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
+if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
   pass "once its owner pid actually exits, a later sweep reclaims that worktree too"
 else fail "the formerly-live worktree was not reclaimed after its owner pid died: $(git -C "$PROJ" worktree list)"; fi
 
@@ -2024,7 +2024,7 @@ KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
 for _ in $(seq 1 100); do
-  KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | head -n 1 || true)"
+  KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
   [ -n "$KILLED_DIR" ] && break
   sleep 0.05
 done
@@ -2035,7 +2035,7 @@ wait "$KILLED_DISPATCHER_PID" 2>/dev/null || true
 PI_PID_FILE="$HOME_FIX/.pi-seats-kill/verifier/pi-pid.txt"
 if [ -s "$PI_PID_FILE" ]; then kill "$(cat "$PI_PID_FILE")" 2>/dev/null || true; fi
 run   # sweep the killed run's scratch worktree and stale SHA branch
-if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -qF "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
+if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -F >/dev/null "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
   pass "killed one-shot scratch worktree was reclaimed by the reaper pass"
 else fail "killed one-shot scratch survived: dir=$KILLED_DIR list=$(git -C "$KILL_PROJ" worktree list)"; fi
 if ! git -C "$KILL_PROJ" show-ref --verify --quiet "refs/heads/$KILL_SHA_BRANCH"; then
@@ -2056,7 +2056,7 @@ signal_cleanup_case() {
   local dispatcher_pid=$!
   dir=""
   for _ in $(seq 1 100); do
-    dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | head -n 1 || true)"
+    dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
     [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/verifier/core-worktree-clobber.txt" ] && break
     sleep 0.05
   done
@@ -2070,7 +2070,7 @@ signal_cleanup_case() {
   else fail "$label exit status was $wait_rc, expected $expect; out=$(cat "$out_file" 2>/dev/null)"; fi
   if [ "$(core_worktree_snapshot "$sig_proj")" = "$before" ]; then pass "$label leaves product repo core.worktree byte-identical after mid-run clobber"
   else fail "$label changed core.worktree: before=$before after=$(core_worktree_snapshot "$sig_proj")"; fi
-  if [ -n "$dir" ] && ! git -C "$sig_proj" worktree list | grep -qF "$dir" && [ ! -d "$dir" ]; then
+  if [ -n "$dir" ] && ! git -C "$sig_proj" worktree list | grep -F >/dev/null "$dir" && [ ! -d "$dir" ]; then
     pass "$label removes scratch worktree on signal"
   else fail "$label scratch survived: dir=$dir list=$(git -C "$sig_proj" worktree list 2>/dev/null)"; fi
 }

@@ -27,7 +27,7 @@ write_json(){ local r="$1" body="$2"; mkdir -p "$r/seats"; printf '%s\n' "$body"
 phase 'example parses and lists three declared channels'
 ROOT1="$FIX/example"; mkroot "$ROOT1"; cp "$EXAMPLE" "$ROOT1/seats/channels.json"
 run "$ROOT1" list
-if [ "$RC" -eq 0 ] && printf '%s\n' "$OUT" | grep -q '^principal-telegram telegram principal .* read=no members=0$' && printf '%s\n' "$OUT" | grep -q '^stakeholders-slack slack stakeholders C0EXAMPLE read=yes members=2$' && printf '%s\n' "$OUT" | grep -q '^stakeholders-teams teams stakeholders .* read=no members=0$'; then
+if [ "$RC" -eq 0 ] && printf '%s\n' "$OUT" | grep >/dev/null '^principal-telegram telegram principal .* read=no members=0$' && printf '%s\n' "$OUT" | grep >/dev/null '^stakeholders-slack slack stakeholders C0EXAMPLE read=yes members=2$' && printf '%s\n' "$OUT" | grep >/dev/null '^stakeholders-teams teams stakeholders .* read=no members=0$'; then
   pass 'example file parses and list prints the three expected rows'
 else fail "example list wrong rc=$RC: $OUT"; fi
 
@@ -39,15 +39,15 @@ ROOT3="$FIX/empty"; mkroot "$ROOT3"; write_json "$ROOT3" '{"channels":{}}'; run 
 
 phase 'invalid files STOP with exit 2'
 ROOT4="$FIX/bad-json"; mkroot "$ROOT4"; printf '{"version":1,"channels":' > "$ROOT4/seats/channels.json"; run "$ROOT4" check
-[ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep -q '^STOP: seats/channels.json:' && pass 'malformed JSON exits 2 with STOP' || fail "malformed JSON rc=$RC: $OUT"
+[ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep >/dev/null '^STOP: seats/channels.json:' && pass 'malformed JSON exits 2 with STOP' || fail "malformed JSON rc=$RC: $OUT"
 ROOT5="$FIX/two-principals"; mkroot "$ROOT5"; write_json "$ROOT5" '{"version":1,"channels":{"one":{"kind":"telegram","destination":"@one","audience":"principal"},"two":{"kind":"slack","destination":"C0EXAMPLE","audience":"principal"}}}' ; run "$ROOT5" check
-[ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep -q 'at most one channel' && pass 'two principal channels exit 2' || fail "two principals rc=$RC: $OUT"
+[ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep >/dev/null 'at most one channel' && pass 'two principal channels exit 2' || fail "two principals rc=$RC: $OUT"
 ROOT6="$FIX/token"; mkroot "$ROOT6"; TOKEN="$(printf 'xox%s-%s-%s' b 123456789012 secret)"; write_json "$ROOT6" "{\"version\":1,\"channels\":{\"bad\":{\"kind\":\"slack\",\"destination\":\"$TOKEN\",\"audience\":\"stakeholders\"}}}"; run "$ROOT6" check
-if [ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep -q '^STOP: seats/channels.json:' && ! printf '%s\n' "$OUT" | grep -qF "$TOKEN"; then pass 'credential-shaped xoxb destination exits 2 without echoing the token'; else fail "credential leak/rc wrong rc=$RC: $OUT"; fi
+if [ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep >/dev/null '^STOP: seats/channels.json:' && ! printf '%s\n' "$OUT" | grep -F >/dev/null "$TOKEN"; then pass 'credential-shaped xoxb destination exits 2 without echoing the token'; else fail "credential leak/rc wrong rc=$RC: $OUT"; fi
 ROOT7="$FIX/discord"; mkroot "$ROOT7"; write_json "$ROOT7" '{"version":1,"channels":{"bad":{"kind":"discord","destination":"D0EXAMPLE","audience":"stakeholders"}}}'; run "$ROOT7" check
-[ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep -q 'kind must be' && pass 'unknown kind discord exits 2' || fail "discord rc=$RC: $OUT"
+[ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep >/dev/null 'kind must be' && pass 'unknown kind discord exits 2' || fail "discord rc=$RC: $OUT"
 ROOT8="$FIX/reed"; mkroot "$ROOT8"; write_json "$ROOT8" '{"version":1,"channels":{"bad":{"kind":"slack","destination":"C0EXAMPLE","audience":"stakeholders","reed":true}}}'; run "$ROOT8" check
-[ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep -q 'unknown key.*reed' && pass 'unknown channel key reed exits 2' || fail "reed rc=$RC: $OUT"
+[ "$RC" -eq 2 ] && printf '%s\n' "$OUT" | grep >/dev/null 'unknown key.*reed' && pass 'unknown channel key reed exits 2' || fail "reed rc=$RC: $OUT"
 
 phase 'canary: duplicate-principal leg catches a broken loader'
 SAB="$FIX/channels-no-dup-check.ts"

@@ -244,7 +244,7 @@ if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" env -u WHEELHOUSE_SEAT_PUSH
 git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-unpushed" >/dev/null 2>&1
 # log line fields/reasons.
 LOG_LINES=$(wc -l < "$ROOT/seats/logs/staffing.log" | tr -d ' ')
-awk 'NF{line=$0} END{print line}' "$ROOT/seats/logs/staffing.log" | grep -Eq 'decision=.* decider=rule conf=0.00 ready=[0-9]+ chained=[0-9]+ overlap=[0-9]+ backlog=[0-9]+ workers=[0-9]+/[0-9]+\.\.[0-9]+ reviewers=[0-9]+/[0-9]+\.\.[0-9]+ seat=.* entry=.* reason="[^"]+"' && [ "$LOG_LINES" -ge 12 ] && pass 'G4-39/G4-40 decision log has one parseable plain-English line per check' || fail "log shape/count failed lines=$LOG_LINES"
+awk 'NF{line=$0} END{print line}' "$ROOT/seats/logs/staffing.log" | grep -E >/dev/null 'decision=.* decider=rule conf=0.00 ready=[0-9]+ chained=[0-9]+ overlap=[0-9]+ backlog=[0-9]+ workers=[0-9]+/[0-9]+\.\.[0-9]+ reviewers=[0-9]+/[0-9]+\.\.[0-9]+ seat=.* entry=.* reason="[^"]+"' && [ "$LOG_LINES" -ge 12 ] && pass 'G4-39/G4-40 decision log has one parseable plain-English line per check' || fail "log shape/count failed lines=$LOG_LINES"
 # no pool touches nothing.
 NOPOOL="$FIX/nopool"; mkdir -p "$NOPOOL/seats" "$NOPOOL/wheelhouse"; selftest_copy_seat_runtime "$NOPOOL" "$HERE"; before=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)
 OUT="$(cd "$NOPOOL" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts check 2>&1)"; RC=$?; after=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)
