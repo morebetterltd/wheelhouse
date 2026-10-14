@@ -136,8 +136,9 @@ function assertHostBuildLockAvailable(): void {
  * verifier walks) so git never creates a branch named by the reviewed SHA.
  * The checked-out content isolates reviewer searches and dispatcher-run
  * suites at the pinned SHA; stray writes have somewhere harmless to land.
- * Removed on every exit path
- * via `process.on("exit", ...)`, which still fires synchronous cleanup
+ * Cleanup is attempted on every exit path; failed identity checks or Git
+ * refusal leave the path intact and report why. `process.on("exit", ...)`
+ * still fires synchronous cleanup
  * when `die()` calls `process.exit()` mid-run. The one path that skips
  * "exit" — a SIGKILL of the dispatcher — is handled by
  * sweepStaleScratchWorktrees() below, run once at the top of every
@@ -145,8 +146,52 @@ function assertHostBuildLockAvailable(): void {
  *
  * Named `wheelhouse-verify-<owning-pid>-<random>` or
  * `wheelhouse-review-<owning-pid>-<random>` so a later sweep can tell which
- * process made it without asking anything but the path.
+ * process made it. Ownership is recorded in this linked worktree's Git admin
+ * directory; a matching name alone never authorizes later deletion.
  */
+interface ScratchOwner {
+  version: 1;
+  dir: string;
+  dev: number;
+  ino: number;
+  pid: number;
+  kind: "verify" | "review";
+}
+const createdScratchCwds = new Map<string, ScratchOwner>();
+
+function scratchWorktreeInfo(repoRoot: string, dir: string): { ownerFile: string; canonical: string; stat: fs.Stats } | null {
+  try {
+    if (fs.lstatSync(dir).isSymbolicLink()) return null;
+    const canonical = fs.realpathSync(dir);
+    const tmp = fs.realpathSync(os.tmpdir());
+    const rel = path.relative(tmp, canonical);
+    if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+    const gitFile = path.join(canonical, ".git");
+    if (!fs.lstatSync(gitFile).isFile()) return null; // never a primary checkout or symlink
+    const gitdir = fs.readFileSync(gitFile, "utf8").trim().match(/^gitdir: (.+)$/)?.[1];
+    if (!gitdir) return null;
+    const admin = fs.realpathSync(path.resolve(canonical, gitdir));
+    const commonRaw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const common = fs.realpathSync(path.resolve(repoRoot, commonRaw));
+    if (path.dirname(admin) !== path.join(common, "worktrees")) return null;
+    const backlink = fs.readFileSync(path.join(admin, "gitdir"), "utf8").trim();
+    if (fs.realpathSync(backlink) !== fs.realpathSync(gitFile)) return null;
+    return { ownerFile: path.join(admin, "wheelhouse-scratch.json"), canonical, stat: fs.lstatSync(canonical) };
+  } catch { return null; }
+}
+
+function scratchOwner(repoRoot: string, dir: string): ScratchOwner | null {
+  const info = scratchWorktreeInfo(repoRoot, dir);
+  if (!info) return null;
+  try {
+    const owner: ScratchOwner = createdScratchCwds.get(info.canonical) ?? JSON.parse(fs.readFileSync(info.ownerFile, "utf8"));
+    const name = path.basename(info.canonical).match(/^wheelhouse-(verify|review)-(\d+)-/);
+    if (owner.version !== 1 || owner.dir !== info.canonical || owner.dev !== info.stat.dev || owner.ino !== info.stat.ino
+        || !name || owner.kind !== name[1] || owner.pid !== Number(name[2]) || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return null;
+    return owner;
+  } catch { return null; }
+}
+
 interface CoreWorktreeConfig { present: boolean; value: string }
 
 function readCoreWorktreeConfig(repoRoot: string): CoreWorktreeConfig {
@@ -164,22 +209,36 @@ function restoreCoreWorktreeConfig(repoRoot: string, before: CoreWorktreeConfig)
 }
 
 export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD"): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`)));
+  const stat = fs.lstatSync(dir);
+  const owner: ScratchOwner = { version: 1, dir, dev: stat.dev, ino: stat.ino, pid: process.pid, kind };
+  createdScratchCwds.set(dir, owner);
   const coreWorktreeBefore = readCoreWorktreeConfig(repoRoot);
   try {
     execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, `${tip}^{commit}`], { stdio: "pipe" });
+    const info = scratchWorktreeInfo(repoRoot, dir);
+    if (!info) throw new Error("scratch worktree identity could not be verified");
+    fs.writeFileSync(info.ownerFile, JSON.stringify(owner) + "\n", { flag: "wx", mode: 0o600 });
   } catch (e: any) {
-    fs.rmSync(dir, { recursive: true, force: true });
     restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
+    if (fs.existsSync(path.join(dir, ".git"))) removeScratchWorktree(repoRoot, dir);
+    else {
+      // Only the empty directory allocated above; never recursively remove a
+      // partially populated path after Git refused creation.
+      try { if (fs.lstatSync(dir).ino === owner.ino && fs.lstatSync(dir).dev === owner.dev) fs.rmdirSync(dir); } catch {}
+    }
+    createdScratchCwds.delete(dir);
     die(`could not create a detached scratch worktree for the ${kind} one-shot in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
   }
   let cleaned = false;
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
+    // A verifier may have clobbered core.worktree: restore the main checkout's
+    // identity before asking Git which registered worktree is primary.
+    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
     removeScratchWorktree(repoRoot, dir);
     sweepShaNamedBranches(repoRoot);
-    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
   };
   process.on("exit", cleanup);
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
@@ -195,14 +254,30 @@ function makeWritableRecursive(p: string): void {
   } catch {}
 }
 
-function removeScratchWorktree(repoRoot: string, dir: string): void {
-  makeWritableRecursive(dir);
+function removeScratchWorktree(repoRoot: string, dir: string): boolean {
+  if (!fs.existsSync(dir)) { createdScratchCwds.delete(dir); return true; }
+  const owner = scratchOwner(repoRoot, dir);
+  if (!owner) {
+    process.stderr.write(`scratch cleanup: skipped unowned or ineligible path ${dir}; left in place\n`);
+    return false;
+  }
   try {
-    execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { stdio: "ignore" });
-  } catch {
+    const primary = execFileSync("git", ["-C", repoRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split("\n").find(l => l.startsWith("worktree "))?.slice(9);
+    if (!primary || fs.realpathSync(primary) === owner.dir) {
+      process.stderr.write(`scratch cleanup: skipped main checkout ${dir}; left in place\n`);
+      return false;
+    }
+    if (!scratchOwner(repoRoot, dir)) {
+      process.stderr.write(`scratch cleanup: ownership changed for ${dir}; left in place\n`);
+      return false;
+    }
     makeWritableRecursive(dir);
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-    try { execFileSync("git", ["-C", repoRoot, "worktree", "prune"], { stdio: "ignore" }); } catch {}
+    execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { stdio: "pipe" });
+    createdScratchCwds.delete(owner.dir);
+    return true;
+  } catch (e: any) {
+    process.stderr.write(`scratch cleanup: Git refused removal of ${dir}; left in place: ${(e.stderr ?? e.message).toString().trim()}\n`);
+    return false;
   }
 }
 
@@ -265,7 +340,10 @@ function pidAlive(pid: number): boolean {
  * touched that the branch repository does not already confirm is its own.
  * Filters those to the `wheelhouse-verify-<pid>-*` and
  * `wheelhouse-review-<pid>-*` naming makeScratchCwd() uses, and reclaims only
- * the ones whose stamped pid is no longer alive.
+ * the ones whose stamped pid is no longer alive, whose realpath is beneath
+ * the current temp root, and whose linked-worktree admin record proves the
+ * directory identity was allocated by makeScratchCwd(). Legacy unrecorded
+ * paths are deliberately left for inspection rather than adopted by name.
  *
  * No fd-based cross-check the way recover.ts's fixture sweep needs one:
  * that sweep KILLS live processes, so a reused pid is a real hazard it
@@ -289,12 +367,31 @@ export function sweepStaleScratchWorktrees(repoRoot: string): void {
     .split("\n")
     .filter((l) => l.startsWith("worktree "))
     .map((l) => l.slice("worktree ".length));
-  for (const p of worktreePaths) {
+  for (const [index, p] of worktreePaths.entries()) {
     const m = path.basename(p).match(/^wheelhouse-(?:verify|review)-(\d+)-/);
-    if (!m) continue; // not one of ours
-    if (pidAlive(Number(m[1]))) continue; // owner process is still running — not stale
-    removeScratchWorktree(repoRoot, p);
-    process.stderr.write(`swept: removed orphaned scratch worktree ${p} (owner pid ${m[1]} is gone)\n`);
+    if (!m) continue;
+    let primary = index === 0;
+    try { primary ||= fs.lstatSync(path.join(p, ".git")).isDirectory(); } catch {}
+    if (primary) {
+      process.stderr.write(`sweep: skipped main checkout ${p}; left in place\n`);
+      continue;
+    }
+    let underTmp = false;
+    try {
+      const rel = path.relative(fs.realpathSync(os.tmpdir()), fs.realpathSync(p));
+      underTmp = !!rel && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+    } catch {}
+    if (!underTmp) {
+      process.stderr.write(`sweep: skipped path outside current temp directory ${p}; left in place\n`);
+      continue;
+    }
+    const owner = scratchOwner(repoRoot, p);
+    if (!owner) {
+      process.stderr.write(`sweep: skipped unrecorded or changed scratch worktree ${p}; left in place\n`);
+      continue;
+    }
+    if (pidAlive(owner.pid)) continue;
+    if (removeScratchWorktree(repoRoot, p)) process.stderr.write(`swept: removed orphaned scratch worktree ${p} (owner pid ${owner.pid} is gone)\n`);
   }
   sweepShaNamedBranches(repoRoot);
 }
