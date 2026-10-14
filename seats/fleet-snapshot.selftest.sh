@@ -67,7 +67,7 @@ run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileS
 cp "$ROOT/ready.json" "$ROOT/ready.saved.json"; printf '[]\n' > "$ROOT/ready.json"
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.readyCount!==0||s.chainedCount!==0||s.overlapCount!==0) process.exit(1)' && pass 'table row 6: empty ready graph counts zero without hiding backlog' || fail "empty-ready row wrong rc=$RC out=$OUT"
 cp "$ROOT/ready.saved.json" "$ROOT/ready.json"
-BD_FAIL=1 run_snap; [ $RC -eq 2 ] && printf '%s\n' "$OUT" | grep -q 'STOP: bd ready --json failed' && pass 'bd non-zero is STOP, not a zero snapshot' || fail "bd failure behavior wrong rc=$RC out=$OUT"
+BD_FAIL=1 run_snap; [ $RC -eq 2 ] && printf '%s\n' "$OUT" | grep >/dev/null 'STOP: bd ready --json failed' && pass 'bd non-zero is STOP, not a zero snapshot' || fail "bd failure behavior wrong rc=$RC out=$OUT"
 DEFS="$(rg -n 'function readyWorkNobodyOnIt' "$HERE" -g '*.ts' | wc -l | tr -d ' ')"; [ "$DEFS" = 1 ] && pass 'grep finds exactly one readyWorkNobodyOnIt definition under seats/' || fail "definition count=$DEFS"
 BROKEN="$ROOT/seats/fleet-snapshot-broken.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN"; python3 - <<PY
 p='$BROKEN'; s=open(p).read(); s=s.replace('&& pidAlive(Number(m.pid))',''); open(p,'w').write(s)

@@ -76,7 +76,7 @@ run_text_leg() {
   rc=0; out="$(run_placeholder_check)" || rc=$?
   set -e
   cd "$old" || exit 2
-  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q 'wheelhouse/CLAIM.md:1:this is a real {{TEXT_PLACEHOLDER}}'; then
+  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep >/dev/null 'wheelhouse/CLAIM.md:1:this is a real {{TEXT_PLACEHOLDER}}'; then
     pass "text placeholder still fails the prescribed check"
   else
     printf '%s\n' "$out"
