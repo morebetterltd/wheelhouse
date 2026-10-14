@@ -505,9 +505,11 @@ says the full `seats/*.selftest.sh` sweep passes), `verify.ts` runs
 separate detached worktree at the pinned tip, waits for the runner's host-wide
 H4 lock without a model-command timeout, and streams output to a unique
 `seats/verdicts/sweeps/<tip>.*.selftest-sweep.log`. The dispatcher initializes
-an isolated graph there, binds logical `PWD` as well as process cwd to that
-worktree for bd's workspace discovery, and supplies real `bd` only to that
-sweep; suites still create their own fixture graphs. No writable graph or PATH override is
+an isolated graph in a nested primary repository and links it at the sweep
+root's `.beads`: bd setup never initializes a shared ancestor graph or commits
+setup files into the reviewed history. Logical `PWD` and process cwd agree;
+the pinned HEAD is checked again after setup and after the suites. Real `bd`
+is supplied only to the sweep; suites still create their own fixture graphs. No writable graph or PATH override is
 passed to the reviewer. Live-login smoke legs are skipped explicitly with
 `WHEELHOUSE_SKIP_REAL_PI=1`; claims requiring those legs still need separate
 account-safe evidence. The reviewer receives the tip, rc and log path and must
