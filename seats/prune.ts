@@ -492,7 +492,9 @@ function scanBeadRuns(root: string, beads: Map<string, string>, seats: Map<strin
 }
 
 function scanPrivateTmp(root: string, beads: Map<string, string>): Row[] {
-  const tmpRoots = [...new Set(["/private/tmp", path.resolve(os.tmpdir())])].filter(isDir);
+  // Record the physical parent, not TMPDIR's alias spelling. Reviewed rows
+  // must stay canonical; do not relax their symlink/identity checks instead.
+  const tmpRoots = [...new Set(["/private/tmp", os.tmpdir()].map((d) => realpathOr(d)).filter((d): d is string => !!d))].filter(isDir);
   const rows: Row[] = [];
   for (const tmpRoot of tmpRoots) {
     for (const d of subdirs(tmpRoot)) {
