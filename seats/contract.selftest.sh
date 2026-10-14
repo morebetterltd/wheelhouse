@@ -15,6 +15,40 @@ leg(){
   out="$(bun "$CONTRACT" check --file "$HERE/fixtures/contracts/$name.md" 2>&1)" || rc=$?
   if [ "$rc" = "$expected" ] && { [ -z "$error" ] || grep -Fq "$error" <<<"$out"; }; then pass "$name (exit $rc)"; else fail "$name expected exit $expected + '$error', got $rc: $out"; fi
 }
+# Intent-only linter never reads the graph. All fixtures are owned by this run.
+mkdir -p "$FIX/intents"
+intent_leg(){
+  local name="$1" text="$2" expected="$3" error="$4" rc=0
+  printf '%s' "$text" > "$FIX/intents/$name.md"
+  bun "$CONTRACT" lint-intent --file "$FIX/intents/$name.md" > "$FIX/intents/$name.out" 2> "$FIX/intents/$name.err" || rc=$?
+  if [ "$rc" = "$expected" ] && { [ -z "$error" ] || grep -Fq "$error" "$FIX/intents/$name.err"; } && [ ! -s "$FIX/intents/$name.out" ] && { { [ "$expected" = 0 ] && [ ! -s "$FIX/intents/$name.err" ]; } || { [ "$expected" != 0 ] && [ "$(wc -l < "$FIX/intents/$name.err" | tr -d ' ')" = 1 ]; }; }; then
+    pass "lint-intent $name (exit $rc)"
+  else fail "lint-intent $name expected exit $expected + '$error', got $rc: $(<"$FIX/intents/$name.err")"; fi
+}
+intent_leg paragraph $'Intent:\nMake the shared list easier to trust, so people avoid repeated shopping.\n' 0 ''
+intent_leg three-paragraphs $'Intent:\nMake the shared list easier to trust.\n\nPeople need a clear record of what is bought.\n\nThis avoids repeated shopping.\n' 0 ''
+intent_leg crlf $'Intent:\r\nMake the list clear so people can coordinate.\r\n' 0 ''
+intent_leg no-header $'Make the list clear.\n' 2 'line 1: expected the literal Intent: header'
+intent_leg leading-blank $'\nIntent:\nMake the list clear.\n' 2 'line 1: expected the literal Intent: header'
+intent_leg empty $'Intent:\n\n \t\n' 2 'line 2: Intent: needs at least one non-blank paragraph'
+intent_leg numbered-dot $'Intent:\nMake the list clear.\n1. edit the file\n' 2 'line 3: numbered build step: 1. edit the file'
+intent_leg numbered-paren $'Intent:\nMake the list clear.\n  2) rebuild it\n' 2 'line 3: numbered build step:'
+intent_leg outcome $'Intent:\nMake the list clear.\n  - O2 It is clear\n' 2 'line 3: outcome row:'
+intent_leg consumer $'Intent:\nMake the list clear.\n  consumer: person-reading\n' 2 'line 3: outcome field:'
+intent_leg surface $'Intent:\nMake the list clear.\n  surface: the list\n' 2 'line 3: outcome field:'
+intent_leg check $'Intent:\nMake the list clear.\n\tcheck: read\n' 2 'line 3: outcome field:'
+intent_leg outcomes $'Intent:\nMake the list clear.\nOutcomes:\n' 2 'line 3: Outcomes: header is not part of an intent:'
+intent_leg first-offense $'Intent:\nMake the list clear.\n1. edit the file\n\nconsumer: someone\n' 2 'line 3: numbered build step: 1. edit the file'
+intent_leg quoted-header $'> Intent:\nMake the list clear.\n' 2 'line 1: expected the literal Intent: header'
+intent_leg prose-number $'Intent:\nMake the list clear for 2 households, so people can coordinate.\n' 0 ''
+RC=0
+bun "$CONTRACT" lint-intent --file "$FIX/intents/missing.md" > "$FIX/intents/missing.out" 2> "$FIX/intents/missing.err" || RC=$?
+[ "$RC" = 2 ] && grep -Fq 'lint-intent: cannot read file:' "$FIX/intents/missing.err" && pass 'lint-intent unreadable (exit 2)' || fail "lint-intent unreadable rc=$RC"
+if [ "${WHEELHOUSE_INTENT_LINT_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] && { echo 'intent lint selftest: PASS'; exit 0; }
+  echo "intent lint selftest: FAIL ($FAILED failures)"; exit 1
+fi
+
 leg valid 0 ''
 leg no-intent 2 'contract: Intent: missing'
 leg empty-intent 2 'contract: Intent: must contain'

@@ -72,6 +72,10 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 <project root>/
 ├── CLAUDE.md                    generated — makes this folder's sessions the commander
 ├── .beads/                      the work graph
+├── .agents/skills/
+│   ├── intent/                  signal to plain-words what-and-why; SKILL.md and worked examples
+│   └── outcomes/                intent to outcome contract — arriving in the same producer goal
+├── .claude/skills/              symlinks for Claude Code, pointing to .agents/skills/
 ├── seats/                       the seat machinery, at the root because every path it prints is root-relative
 │   ├── seats.json               generated — the roster: role, harness, provider, model, auth route, account dir per seat; never a secret
 │   ├── seat-env.sh              provisions one seat's isolated account directory, once
@@ -120,6 +124,7 @@ That split is the whole design. It means a project's specifics never get tangled
 | | |
 |---|---|
 | `contracts/` | the briefs, copied verbatim at install |
+| `.agents/skills/` | one real copy of each contract-writing skill; `.claude/skills/` holds relative symlinks |
 | `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the bead-verdict dispatcher, the consumer-surface walk dispatcher, human needs (`needs.ts`), the local desk (`desk.ts`), the optional courier (`courier.ts`), the principal Stop hook (`principal-sentinel.sh`), pruning, the bridge, recovery, and a selftest for each |
 | `generated/` | specimens of what the interview writes — never copied, and drawn from an invented project so they cannot be mistaken for a starting point |
 | `runbooks/` | how to run the loop, the upgrade procedure, and the graduations to take once the loop has proven itself |

@@ -115,6 +115,21 @@ export function validateContract(parsed: Contract, options: { requireSkills?: bo
   return [...new Set(errors)];
 }
 
+/** Intent-only shape check; meaning and plain wording require a fresh reader. */
+export function lintIntent(text: string): string | null {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines[0] !== "Intent:") return `line 1: expected the literal Intent: header, got ${JSON.stringify(lines[0])}`;
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*\d+[.)]\s/.test(line)) return `line ${i + 1}: numbered build step: ${line}`;
+    if (/^\s*- O\d/.test(line)) return `line ${i + 1}: outcome row: ${line}`;
+    if (/^\s*(consumer|surface|check):/.test(line)) return `line ${i + 1}: outcome field: ${line}`;
+    if (/^\s*Outcomes:\s*$/.test(line)) return `line ${i + 1}: Outcomes: header is not part of an intent: ${line}`;
+  }
+  if (!lines.slice(1).some(line => line.trim())) return "line 2: Intent: needs at least one non-blank paragraph";
+  return null;
+}
+
 export type BeadText = { text: string; error: null } | { text: null; error: string };
 function fixtureText(file: string): BeadText {
   try {
@@ -150,7 +165,14 @@ export function contractRemedy(beadId: string, errors: string[]): string {
 
 function cli(): number {
   const [command, ...args] = process.argv.slice(2);
-  if (command === "check") {
+  if (command === "lint-intent" && args[0] === "--file" && args.length === 2) {
+    let text: string;
+    try { text = fs.readFileSync(args[1], "utf8"); }
+    catch (e: any) { console.error(`${args[1]}: lint-intent: cannot read file: ${e.message}`); return 2; }
+    const error = lintIntent(text);
+    if (error) console.error(`${args[1]}: lint-intent: ${error}`);
+    return error ? 2 : 0;
+  } else if (command === "check") {
     if (args[0] === "--file" && args.length === 2) {
       const read = fixtureText(args[1]);
       if (read.error !== null) { console.error(`${args[1]}: contract: unreadable: ${read.error}`); return 3; }
@@ -183,8 +205,7 @@ function cli(): number {
     }
     return invalid ? 1 : 0;
   }
-  // lint-intent is deliberately absent: child .3 adds its real implementation.
-  console.error("usage: contract.ts check <bead-id> | check --file <path> | audit");
+  console.error("usage: contract.ts check <bead-id> | check --file <path> | audit | lint-intent --file <path>");
   return 3;
 }
 if (import.meta.main) process.exitCode = cli();

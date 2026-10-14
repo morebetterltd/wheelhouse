@@ -2,6 +2,10 @@
 
 How this repo's own prose gets revised. It is a convention of this repo, and it is deliberately **not** a contract — the first thing written here that is not meant to be copied. A contract line is one every installed project must be able to act on, and installed projects are forbidden to edit the shared text at all; a rule about revising that text has no consumer who may execute it, so copying it into every install would ship a standing instruction nobody there is allowed to follow.
 
+## Skill versions
+
+Skills are versioned by the `version:` frontmatter in each `SKILL.md`. Any change to a skill's body bumps that version: patch for wording, minor for a new rule. Contracts are stamped with the versions that wrote them (R6), so preserve that distinction between what an older contract used and what a new one uses.
+
 ## Where reasoning lives
 
 Reasoning a reader needs in order to **apply** a rule belongs in the file. Reasoning needed only to **revise** the rule safely belongs in the tree — the commit body of the change it explains.
