@@ -620,6 +620,9 @@ VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
 
 phase "contract gate: no-outcomes review is refused before harness spawn"
+# The gate-removed negative must reach a normally answering harness, not fail
+# because the reply fixture has not been created yet.
+printf 'VERDICT: APPROVE\n' > "$REPLY"
 run_with_bd_show "$HERE/fixtures/contracts/no-outcomes.md" bead-no-outcomes fleet/bead-1 worker-1
 [ "$RC" = 5 ] && says 'STOP:' && says 'bead-no-outcomes is not a contract' && says 'bead-no-outcomes: contract: Outcomes: missing' && pass 'contract refusal: review exits 5 naming bead and Outcomes' || fail "contract refusal: review expected exit 5, got $RC: $OUT"
 [ ! -f "$VINVOKED" ] && pass 'contract refusal: no reviewer harness spawned' || fail 'contract refusal: reviewer harness was spawned'
