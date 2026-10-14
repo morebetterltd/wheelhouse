@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { channelToken } from "./transports/credentials";
 
 export type ChannelKind = "telegram" | "slack" | "teams";
 export type ChannelAudience = "principal" | "stakeholders";
@@ -97,10 +98,22 @@ if (import.meta.main) {
       if (!c) { process.stderr.write(`STOP: seats/channels.json: no channel named ${arg}\n`); process.exit(2); }
       console.log(JSON.stringify(c, null, 2));
     } else if (cmd === "check") {
-      const n = loadChannels().length;
+      if (arg !== undefined && arg !== "--credentials") throw new ChannelsFileError("usage: channels.ts check [--credentials]");
+      const channels = loadChannels();
+      if (arg === "--credentials") {
+        const checked = new Set<ChannelKind>();
+        for (const c of channels) {
+          if (checked.has(c.kind)) continue;
+          try { channelToken(rootFromEnv(), c.kind); }
+          catch (e) { throw new ChannelsFileError(`channel ${c.name} (${c.kind}): ${e instanceof Error ? e.message : "credential check failed"}`); }
+          checked.add(c.kind);
+        }
+        for (const c of channels) console.log(`channel ${c.name} (${c.kind}): credential present`);
+      }
+      const n = channels.length;
       console.log(n ? `channels: ${n} declared` : "channels: none declared (principal-only)");
     } else {
-      process.stderr.write("usage: channels.ts list|show <name>|check\n");
+      process.stderr.write("usage: channels.ts list|show <name>|check [--credentials]\n");
       process.exit(2);
     }
   } catch (e) { stop(e); }

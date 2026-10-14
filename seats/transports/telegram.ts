@@ -1,18 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fold, readEvents, type NeedEvent } from "../needs";
+import { channelToken, NoChannelCredential } from "./credentials";
 import type { ChannelTransport, InboundMessage, NeedTransport, OutboundNeedEvent, TransportPollResult } from "./transport";
 
 export class NoTelegramTransport extends Error {}
 
 function now(){ return new Date().toISOString(); }
 function tokenFrom(root: string): string {
-  if (process.env.WHEELHOUSE_TELEGRAM_TOKEN) return process.env.WHEELHOUSE_TELEGRAM_TOKEN;
-  const f = path.join(root, "seats", "run", "telegram.token");
-  if (!fs.existsSync(f)) throw new NoTelegramTransport("no telegram token configured");
-  const mode = fs.statSync(f).mode & 0o777;
-  if (mode !== 0o600) throw new Error(`telegram token file must be mode 0600, got ${mode.toString(8)}`);
-  return fs.readFileSync(f, "utf8").trim();
+  try { return channelToken(root, "telegram"); }
+  catch (e) { if (e instanceof NoChannelCredential) throw new NoTelegramTransport(e.message); throw e; }
 }
 function allowFile(root: string): string { return path.join(root, "seats", "run", "telegram.allow"); }
 function allowEntries(root: string): string[] {
