@@ -432,6 +432,30 @@ if [ $RC -eq 1 ] && says 'seat "bad-peer" has an invalid account.authRoute "bogu
 else fail "spawn did not preserve whole-roster validation for launch paths (rc=$RC): $OUT"; fi
 RUN_PROJ="$PROJ"
 
+phase "0a2. pi provider pin requires a model before launch/probe"
+MODEL_PIN_PROJ="$FIX/model-pin-proj"
+build_proj "$MODEL_PIN_PROJ" modelpin
+RUN_PROJ="$MODEL_PIN_PROJ"
+MODEL_PIN_ARGV="$HOME_FIX/.pi-seats-modelpin/worker-1/argv.json"
+for model_case in missing empty whitespace; do
+  env PROJ="$MODEL_PIN_PROJ" MODEL_CASE="$model_case" bun -e '
+    const fs=require("fs"), p=process.env.PROJ+"/seats/seats.json", r=JSON.parse(fs.readFileSync(p,"utf8"));
+    if(process.env.MODEL_CASE==="missing") delete r.seats["worker-1"].model;
+    else r.seats["worker-1"].model=process.env.MODEL_CASE==="empty"?"":"   ";
+    fs.writeFileSync(p,JSON.stringify(r));
+  '
+  for operation in spawn probe; do
+    rm -f "$MODEL_PIN_ARGV"
+    run "$operation" worker-1
+    if [ $RC -eq 1 ] && says 'seat "worker-1" has provider "anthropic" but no model pin' && [ ! -f "$MODEL_PIN_ARGV" ]; then
+      pass "pi $operation refuses $model_case model with named-seat diagnostic before invoking pi"
+    else fail "pi $operation did not refuse $model_case model before invoking pi (rc=$RC): $OUT"; fi
+  done
+  # Also clean up a wrongly launched seat when running this against old code.
+  run stop worker-1 >/dev/null 2>&1
+done
+RUN_PROJ="$PROJ"
+
 phase "0b. claude-code driver — spawn, dispatch ack, steer, settled, resume, stop, dead-process"
 CLAUDE_PROJ="$FIX/claude-proj"
 build_proj "$CLAUDE_PROJ" claude
