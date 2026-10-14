@@ -1,18 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readEvents } from "../needs";
+import { channelToken, NoChannelCredential } from "./credentials";
 import type { ChannelTransport, InboundMessage, NeedTransport, OutboundNeedEvent, TransportPollResult } from "./transport";
 
 export class NoSlackTransport extends Error {}
 
 function now(){ return new Date().toISOString(); }
 function tokenFrom(root: string): string {
-  if (process.env.WHEELHOUSE_SLACK_TOKEN) return process.env.WHEELHOUSE_SLACK_TOKEN;
-  const f = path.join(root, "seats", "run", "slack.token");
-  if (!fs.existsSync(f)) throw new NoSlackTransport(`no slack token configured at ${f}`);
-  const mode = fs.statSync(f).mode & 0o777;
-  if (mode !== 0o600) throw new Error(`slack token file must be mode 0600, got ${mode.toString(8)}`);
-  return fs.readFileSync(f, "utf8").trim();
+  try { return channelToken(root, "slack"); }
+  catch (e) { if (e instanceof NoChannelCredential) throw new NoSlackTransport(e.message); throw e; }
 }
 function channelFrom(root: string): string {
   const v = process.env.WHEELHOUSE_SLACK_CHANNEL;
