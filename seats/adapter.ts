@@ -902,7 +902,14 @@ function logFilterShell(): string {
   return `'${process.execPath.replace(/'/g, `'\\''`)}' -e '${script.replace(/'/g, `'\\''`)}'`;
 }
 
+function requirePiModelPin(name: string, entry: SeatEntry): void {
+  if (entry.provider && (typeof entry.model !== "string" || !entry.model.trim())) {
+    die(`seat "${name}" has provider ${JSON.stringify(entry.provider)} but no model pin in seats/seats.json — pi launch/probe requires --model with --provider`);
+  }
+}
+
 async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
+  requirePiModelPin(name, entry);
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
   const state = readState();
@@ -1262,6 +1269,7 @@ async function cmdSpawn(name: string, beadId?: string, base: string | null = nul
 }
 
 function piProbe(name: string, entry: SeatEntry): void {
+  requirePiModelPin(name, entry);
   const labelSuffix = accountLabelSuffix(entry);
   const accountDir = expandTilde(entry.account!.dir);
   if (!fs.existsSync(accountDir)) {
