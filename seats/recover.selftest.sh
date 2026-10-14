@@ -15,7 +15,8 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 # or not at all. Phase 6 then probes the REAL binary, login-free, to
 # document that premise against the pi actually installed here: its ps
 # title is bare `pi`, and it holds its stdin FIFO where lsof can see it.
-# That probe SKIPs (with the reason printed) only when pi is absent.
+# That probe SKIPs (with the reason printed) when pi is absent or
+# WHEELHOUSE_SKIP_REAL_PI=1, matching the other real-pi selftest legs.
 #
 # What is proven:
 #   1. SIGKILL a seat mid-turn -> recover classifies DEAD, names the bead,
@@ -368,7 +369,9 @@ if [ ! -s "$BD_LOG" ]; then
 else fail "recover called bd: $(cat "$BD_LOG")"; fi
 
 phase "6. real binary — the premise probe: pi's ps title is bare, its FIFO is not hidden"
-if [ -z "$REAL_PI" ]; then
+if [ "${WHEELHOUSE_SKIP_REAL_PI:-0}" = 1 ]; then
+  skip "real-binary probe: WHEELHOUSE_SKIP_REAL_PI=1"
+elif [ -z "$REAL_PI" ]; then
   skip "real-binary probe: no pi on PATH (npm install -g @earendil-works/pi-coding-agent) — premise unverified on this machine"
 else
   # Login-free: an env API key (value irrelevant — no request is ever made)
@@ -377,7 +380,7 @@ else
   mkdir -p "$RPDIR/agent"
   mkfifo "$RPDIR/probe.stdin"
   env PI_CODING_AGENT_DIR="$RPDIR/agent" ANTHROPIC_API_KEY="sk-selftest-dummy" \
-    bash -c "exec pi --mode rpc --provider anthropic 0<> '$RPDIR/probe.stdin' >> '$RPDIR/probe.log' 2>> '$RPDIR/probe.err'" &
+    bash -c "exec pi --mode rpc --provider anthropic --model claude-sonnet-4-5 0<> '$RPDIR/probe.stdin' >> '$RPDIR/probe.log' 2>> '$RPDIR/probe.err'" &
   PROBE_PID=$!; disown 2>/dev/null || true
   # The title rewrite lands only once pi's own code is running, which on a
   # busy machine trails process creation by seconds — poll for it instead of

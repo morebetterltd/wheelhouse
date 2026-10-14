@@ -1244,7 +1244,12 @@ const CODEX_DRIVER: SeatDriver = { name: "codex", launch: codexLaunch, probe: co
 
 function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatDriver {
   const harness = harnessNameForSeat(name, entry);
-  if (harness === "pi") return PI_DRIVER;
+  if (harness === "pi") {
+    if (entry.provider && (typeof entry.model !== "string" || !entry.model.trim())) {
+      die(`seat "${name}" has provider ${JSON.stringify(entry.provider)} but no model pin in seats/seats.json — pi launch/probe requires --model with --provider`);
+    }
+    return PI_DRIVER;
+  }
   if (harness === "claude-code") return CLAUDE_DRIVER;
   if (harness === "codex") return CODEX_DRIVER;
   requirePiHarness(name, entry, operation);
