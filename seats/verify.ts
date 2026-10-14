@@ -84,7 +84,7 @@ import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool } from "./pool";
-import { liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
+import { finalAssistantText, liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -1052,49 +1052,55 @@ function claimRequiresFullSweep(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
-function shellQuote(s: string): string { return `'${s.replace(/'/g, `'\\''`)}'`; }
-
-function initScratchBdGraph(realBd: string, scratchCwd: string, env: NodeJS.ProcessEnv): { env: NodeJS.ProcessEnv; graph: string | null; warning?: string } {
-  if (!realBd) return { env, graph: null, warning: "bd not found on dispatcher PATH; sweep ran without a scratch graph override" };
-  const graph = path.join(scratchCwd, ".wheelhouse-verify-sweep-bd");
-  fs.mkdirSync(graph, { recursive: true });
-  try { execFileSync("git", ["-C", graph, "init", "-q"], { stdio: "ignore" }); } catch {}
-  const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graph, encoding: "utf8", env });
-  if (init.status !== 0) return { env, graph, warning: `scratch bd init failed (${init.status ?? init.signal}): ${(init.stderr || init.stdout || "").trim()}` };
-  const wrapperDir = path.join(graph, "bin");
-  fs.mkdirSync(wrapperDir, { recursive: true });
-  const wrapper = path.join(wrapperDir, "bd");
-  fs.writeFileSync(wrapper, `#!/usr/bin/env bash\nexec ${shellQuote(realBd)} -C ${shellQuote(graph)} "$@"\n`);
-  fs.chmodSync(wrapper, 0o755);
-  return { env: { ...env, PATH: `${wrapperDir}${path.delimiter}${env.PATH ?? ""}`, WHEELHOUSE_SELFTEST_BD_ROOT: graph, BEADS_DIR: path.join(graph, ".beads") }, graph };
-}
-
-function runFullSweepIfRequired(claim: string, scratchCwd: string, tip: string, realBd: string, basePath: string): SweepResult {
+async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
   if (!claimRequiresFullSweep(claim)) return { required: false, rc: null, logPath: null, elapsedMs: 0, tip };
+  // Separate from the reviewer's cwd: no writable graph or bd wrapper reaches
+  // that process. Suites create their OWN fixture graphs, not one redirected
+  // global graph (which would invalidate graph-isolation selftests).
+  const scratchCwd = makeScratchCwd(repoRoot, "review", tip);
   const logDir = path.join(VERDICTS_DIR, "sweeps");
   fs.mkdirSync(logDir, { recursive: true });
-  const logPath = path.join(logDir, `${tip.slice(0, 12)}.selftest-sweep.log`);
+  const logPath = path.join(logDir, `${tip}.${process.pid}.${Date.now()}.selftest-sweep.log`);
   const started = Date.now();
-  const baseEnv: NodeJS.ProcessEnv = { ...process.env, PATH: basePath, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_REAL_BD: realBd };
-  const scratch = initScratchBdGraph(realBd, scratchCwd, baseEnv);
-  const res = spawnSync("bash", ["seats/selftest-sweep.sh"], { cwd: scratchCwd, encoding: "utf8", env: scratch.env, maxBuffer: 256 * 1024 * 1024 });
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1" };
+  for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN"]) delete env[key];
+  const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
+  if (actualTip !== tip) die(`sweep scratch tip ${actualTip} differs from reviewed tip ${tip}`);
+  fs.writeFileSync(logPath, `tip=${actualTip}\ncommand=bash seats/selftest-sweep.sh\nWHEELHOUSE_SKIP_REAL_PI=1 (hermetic suites; no live login borrowed)\n`);
+  let rc = 1;
+  let error: string | undefined;
+  try {
+    if (!realBd) throw new Error("bd is required for writable scratch fixture graphs");
+    const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: scratchCwd, encoding: "utf8", env: { ...env, BEADS_DIR: path.join(scratchCwd, ".beads") } });
+    if (init.status !== 0) throw new Error(`scratch bd init failed: ${init.stderr || init.stdout}`);
+    // Select the real binary without removing host-budget shims from PATH.
+    const bin = path.join(scratchCwd, ".wheelhouse-sweep-bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "bd"), `#!/usr/bin/env bash\nexec ${JSON.stringify(realBd)} "$@"\n`, { mode: 0o755 });
+    env.PATH = `${bin}${path.delimiter}${basePath}`;
+    const fd = fs.openSync(logPath, "a");
+    try {
+      // No wall-clock/model-command timeout: the runner owns H4 and waits for
+      // its turn. Stream directly to disk even during a long lock wait.
+      rc = await new Promise<number>((resolve) => {
+        const child = spawn("bash", ["seats/selftest-sweep.sh"], { cwd: scratchCwd, env, stdio: ["ignore", fd, fd] });
+        const stop = () => { child.kill("SIGTERM"); };
+        process.prependOnceListener("SIGTERM", stop);
+        process.prependOnceListener("SIGINT", stop);
+        const finish = (code: number) => {
+          process.removeListener("SIGTERM", stop);
+          process.removeListener("SIGINT", stop);
+          resolve(code);
+        };
+        child.once("error", (e) => { error = e.message; finish(1); });
+        child.once("close", (code) => finish(code ?? 128));
+      });
+    } finally { fs.closeSync(fd); }
+  } catch (e: any) { error = e.message; }
   const elapsedMs = Date.now() - started;
-  const output = [
-    `$ git -C ${scratchCwd} rev-parse HEAD`,
-    tip,
-    `$ bash seats/selftest-sweep.sh`,
-    `rc=${res.status ?? (res.signal ? `signal ${res.signal}` : "unknown")}`,
-    `elapsedMs=${elapsedMs}`,
-    scratch.graph ? `scratchBdGraph=${scratch.graph}` : `scratchBdGraph=<none>`,
-    scratch.warning ? `warning=${scratch.warning}` : null,
-    `--- stdout ---`,
-    res.stdout ?? "",
-    `--- stderr ---`,
-    res.stderr ?? "",
-    res.error ? `--- error ---\n${res.error.message}` : null,
-  ].filter((v) => v !== null).join("\n");
-  fs.writeFileSync(logPath, output);
-  return { required: true, rc: res.status ?? (res.signal ? 128 : 1), logPath, elapsedMs, tip, error: res.error?.message };
+  fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
+  removeScratchWorktree(repoRoot, scratchCwd);
+  return { required: true, rc, logPath, elapsedMs, tip, error };
 }
 
 function sweepPromptLines(sweep: SweepResult): string[] {
@@ -1107,7 +1113,7 @@ function sweepPromptLines(sweep: SweepResult): string[] {
     `- rc: ${sweep.rc}`,
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
-    `This sweep ran outside your model command timeout, in the detached scratch worktree for the reviewed tip, with a writable scratch bd graph when bd was available. You must cite this rc and log path in your evidence. If rc is not 0, do not approve the full-sweep portion of Done.`,
+    `This sweep ran outside your model command timeout, in the detached scratch worktree for the reviewed tip, with a writable scratch bd graph when bd was available. You must cite rc=${sweep.rc} and the exact log path in your final evidence. If rc is not 0, do not approve the full-sweep portion of Done.`,
   ];
 }
 
@@ -1292,7 +1298,7 @@ async function main(): Promise<void> {
   const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
-  const sweep = runFullSweepIfRequired(claim, scratchCwd, tip, realBd, basePath);
+  const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);
   const sweepPrompt = sweepPromptLines(sweep);
 
   // --- the one-shot ---------------------------------------------------------
@@ -1454,6 +1460,12 @@ async function main(): Promise<void> {
         evidenceLines(evidenceUnsatisfied).map((l) => `      ${l}`).join("\n") +
         `\n      An APPROVE cannot stand on evidence that is not there; this is malformed, not a judgment.`
     );
+  }
+
+  if (sweep.required) {
+    if (verdict === "APPROVE" && sweep.rc !== 0) die(`APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}`);
+    const evidenceText = finalAssistantText(stdout, verifierHarness);
+    if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath!)) die(`verifier must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
   }
 
   // --- record, then report --------------------------------------------------
