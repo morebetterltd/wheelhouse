@@ -487,7 +487,7 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
 
   ```json
   { "hooks": { "UserPromptSubmit": [ { "matcher": "",
-      "hooks": [ { "type": "command", "command": "bash seats/fleet-gate.sh" } ] } ] } }
+      "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/seats/fleet-gate.sh\"" } ] } ] } }
   ```
 
   Wire the Stop hook that turns final assistant `@principal:` lines into durable needs:
