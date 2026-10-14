@@ -62,6 +62,11 @@ const DEPENDENCY_SEGMENTS = new Set(["node_modules", "vendor", ".venv", "venv", 
 const NEVER = new Set(["needs-review", "seat-anchor"]);
 const CATEGORY_ALIASES: Record<string, string> = { "bead-runs": "run-scratch" };
 const SQUASH_LOG_DEPTH = Number(process.env.WHEELHOUSE_SQUASH_LOG_DEPTH || 2000);
+const SCAN_KIND = "wheelhouse-prune-scan";
+const SCAN_TSV_MARKER = "# wheelhouse-prune-scan-v1";
+const REVIEWED_ACTIONS = new Set(["rm", "worktree", "branch", "simctl", "xctest-devices"]);
+const CACHE_NAMES = [".wheelhouse-build", "DerivedData", "target", "bin", "obj", ".build", "dist", "build", ".next", "out"];
+function isDependencySegment(segment: string): boolean { return DEPENDENCY_SEGMENTS.has(segment) || /^node[-_]?modules$/i.test(segment); }
 
 interface Row {
   category: string;
@@ -550,10 +555,9 @@ function scanBenchJunk(root: string): Row[] {
 }
 
 function scanCaches(root: string, includeOptional: boolean, activeBench: boolean): Row[] {
-  const names = [".wheelhouse-build", "DerivedData", "target", "bin", "obj", ".build", "dist", "build", ".next", "out"];
+  const names = CACHE_NAMES;
   const dependencyBins = new Set([".bin"]);
   const rows: Row[] = [];
-  const isDependencySegment = (segment: string): boolean => DEPENDENCY_SEGMENTS.has(segment) || /^node[-_]?modules$/i.test(segment);
   const cacheRow = (child: string, category: "build-cache" | "node-modules", reason: string) => {
     if (activeBench) rows.push(row("needs-review", false, root, child, "", "none", `bench lock present at ${path.join(root, ".wheelhouse-bench.lock")}; ${reason}`));
     else rows.push(row(category, true, root, child, "", "rm", reason));
@@ -586,7 +590,9 @@ function scan(roots: string[], includeOptional: boolean): Row[] {
     const beads = beadStatuses(root);
     const isa = isaAnchors(root);
     const registeredPaths = new Set<string>();
-    for (const repo of repositories(root)) {
+    const begin = rows.length;
+    const repos = repositories(root);
+    for (const repo of repos) {
       const wts = worktrees(repo);
       for (const wt of wts) registeredPaths.add(path.resolve(wt.path));
       rows.push(...scanWorktrees(root, repo, seats, beads, extra, live, isa));
@@ -600,24 +606,92 @@ function scan(roots: string[], includeOptional: boolean): Row[] {
     rows.push(...scanXCTestDevices(root));
     rows.push(...scanBenchJunk(root));
     rows.push(...scanCaches(root, includeOptional, activeBench));
+    // Non-Git umbrella roots still describe rows against a real product repo.
+    for (const r of rows.slice(begin)) if (!repositoryRoot(r.repo) && repos.length) r.repo = repos[0];
   }
   return rows.sort((a, b) => `${a.category}\t${a.path}`.localeCompare(`${b.category}\t${b.path}`));
 }
 
-function toTsv(rows: Row[]): string {
-  return ["category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason", ...rows.map((r) => [r.category, r.safe, r.repo, r.path, r.branch, r.size_bytes, r.size_human, r.action, r.reason].map((x) => String(x).replace(/\t|\n/g, " ")).join("\t"))].join("\n") + "\n";
+function scanMetadata(roots: string[]): object {
+  const scope = roots.map((r) => realpathOr(path.resolve(r)) ?? path.resolve(r));
+  // Keep JSON a flat array for adapter host-budget consumers. Inactive repo/path
+  // fields let pre-fix code ignore the header in deletion regression fixtures.
+  return { kind: SCAN_KIND, version: 1, root: scope[0], roots: scope, safe: 0, repo: scope[0], path: scope[0] };
+}
+function reviewedRow(r: Row): Row {
+  if (r.action !== "none") return r;
+  // Unsafe rows remain unsafe, but the reviewed wire uses real operation kinds.
+  const action = r.path.startsWith("simctl:") ? "simctl" : r.path === path.join(os.homedir(), "Library", "Developer", "XCTestDevices") ? "xctest-devices" : r.branch ? (r.path === r.repo ? "branch" : "worktree") : "rm";
+  return { ...r, action };
+}
+function toTsv(rows: Row[], roots: string[]): string {
+  return [`${SCAN_TSV_MARKER}\t${JSON.stringify((scanMetadata(roots) as any).roots)}`, "category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason", ...rows.map(reviewedRow).map((r) => [r.category, r.safe, r.repo, r.path, r.branch, r.size_bytes, r.size_human, r.action, r.reason].map((x) => String(x).replace(/\t|\n/g, " ")).join("\t"))].join("\n") + "\n";
+}
+class ScanValidationError extends Error {}
+function badScan(row: number, field: string, reason: string): never { throw new ScanValidationError(`scan row ${row} field ${field}: ${reason}`); }
+function repositoryRoot(p: string): boolean {
+  if (!path.isAbsolute(p) || !isDir(p) || !fs.existsSync(path.join(p, ".git"))) return false;
+  const r = run("git", ["rev-parse", "--show-toplevel"], p);
+  return r.ok && realpathOr(r.out) === realpathOr(p);
+}
+function validateScanRoots(roots: unknown, row: number): void {
+  const expected = realpathOr(ROOT) ?? path.resolve(ROOT);
+  if (!Array.isArray(roots) || roots.length !== 1 || typeof roots[0] !== "string" || !path.isAbsolute(roots[0]) || realpathOr(roots[0]) !== expected) badScan(row, "root", `expected this install ${expected}; rescan from its prune.ts`);
+}
+function validateScanRow(value: any, n: number): Row {
+  if (!value || typeof value !== "object" || Array.isArray(value)) badScan(n, "row", "expected an object");
+  for (const f of ["category", "repo", "path", "branch", "size_human", "action", "reason"]) if (typeof value[f] !== "string") badScan(n, f, "expected a string");
+  if (value.safe !== 0 && value.safe !== 1) badScan(n, "safe", "expected exactly the number 0 or 1");
+  const category = Object.hasOwn(CATEGORY_ALIASES, value.category) ? CATEGORY_ALIASES[value.category] : value.category;
+  if (!Object.hasOwn(CATEGORIES, category)) badScan(n, "category", `unknown category ${value.category}`);
+  if (!REVIEWED_ACTIONS.has(value.action)) badScan(n, "action", `unknown action ${value.action}`);
+  if (!path.isAbsolute(value.path) && !(value.action === "simctl" && value.path.startsWith("simctl:") && value.path.length > 7)) badScan(n, "path", "expected an absolute path (or simctl: target for simctl)");
+  if (!repositoryRoot(value.repo)) badScan(n, "repo", "expected an existing Git repository root");
+  if (typeof value.size_bytes !== "number" || !Number.isFinite(value.size_bytes) || value.size_bytes < 0) badScan(n, "size_bytes", "expected a finite nonnegative number");
+  const actions: Record<string, string> = { "merged-worktree":"worktree", "zero-commit-worktree":"worktree", "detached-snapshot":"worktree", "orphaned-worktree":"rm", "stale-branch":"branch", "bead-simulator":"simctl", "xctest-devices":"xctest-devices", "build-cache":"rm", "node-modules":"rm", "bench-junk":"rm", "run-scratch":"rm", "bead-tmp":"rm" };
+  if (actions[category] && actions[category] !== value.action) badScan(n, "action", `${category} requires ${actions[category]}`);
+  return { ...value, category };
+}
+function validateScanMetadata(meta: any): void {
+  if (!meta || meta.kind !== SCAN_KIND || meta.version !== 1 || meta.safe !== 0) badScan(1, "root", "missing or invalid scan metadata; rescan");
+  validateScanRoots(meta.roots ?? [meta.root], 1);
+  if (meta.root !== (meta.roots ?? [meta.root])[0]) badScan(1, "root", "inconsistent root metadata");
 }
 function parseScan(file: string): Row[] {
-  const text = fs.readFileSync(file, "utf8");
-  if (/\.jsonl$/i.test(file)) return text.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
-  if (/\.json$/i.test(file)) return JSON.parse(text);
-  const [head, ...lines] = text.trimEnd().split("\n");
-  const cols = head.split("\t");
-  return lines.filter(Boolean).map((l) => {
-    const v = l.split("\t"); const o: any = {};
-    cols.forEach((c, i) => o[c] = v[i] ?? "");
-    o.safe = Number(o.safe) as 0 | 1; o.size_bytes = Number(o.size_bytes); return o as Row;
-  });
+  let text: string;
+  try { text = fs.readFileSync(file, "utf8"); } catch (e: any) { badScan(1, "file", e.message); }
+  let values: any[];
+  if (/\.jsonl?$/i.test(file)) {
+    if (/\.jsonl$/i.test(file)) {
+      const lines = text!.split("\n").filter((l) => l.trim());
+      const decode = (line: string, n: number): any => { try { return JSON.parse(line); } catch { badScan(n, "json", "malformed JSON"); } };
+      validateScanMetadata(decode(lines[0] ?? "", 1));
+      // Validate each record before decoding the next: report the FIRST bad row.
+      return lines.slice(1).map((line, i) => validateScanRow(decode(line, i + 2), i + 2));
+    }
+    try { values = JSON.parse(text!); } catch { badScan(1, "json", "malformed JSON"); }
+    if (!Array.isArray(values!)) badScan(1, "row", "expected a JSON array");
+    validateScanMetadata(values![0]);
+    values = values!.slice(1);
+  } else {
+    const [meta, head, ...lines] = text!.trimEnd().split(/\r?\n/);
+    if (!meta.startsWith(SCAN_TSV_MARKER + "\t")) badScan(1, "root", "missing scan metadata; rescan");
+    try { validateScanRoots(JSON.parse(meta.slice(SCAN_TSV_MARKER.length + 1)), 1); } catch(e) { if(e instanceof ScanValidationError) throw e; badScan(1, "root", "malformed scan metadata"); }
+    if (!head) badScan(2, "columns", "missing TSV columns");
+    const cols = head.split("\t");
+    if (new Set(cols).size !== cols.length) badScan(2, "columns", "duplicate TSV column");
+    return lines.filter(Boolean).map((l, i) => {
+      const v = l.split("\t"), o: any = {};
+      if (v.length !== cols.length) badScan(i + 2, "columns", "wrong TSV column count");
+      cols.forEach((c, j) => o[c] = v[j]);
+      if (!/^[01]$/.test(o.safe ?? "")) badScan(i + 2, "safe", "expected exactly 0 or 1");
+      if (!o.size_bytes?.trim()) badScan(i + 2, "size_bytes", "expected a number");
+      o.safe = Number(o.safe); o.size_bytes = Number(o.size_bytes);
+      return validateScanRow(o, i + 2);
+    });
+  }
+  // Eagerly validate ALL rows before any prune action, even excluded/unsafe rows.
+  return values!.map((r, i) => validateScanRow(r, i + 2));
 }
 function readJsonlResponse(log: string, id: string, start: number, deadlineMs: number): any | null {
   while (Date.now() < deadlineMs) {
@@ -646,63 +720,15 @@ function getState(rec: any): any | null {
   try { fs.appendFileSync(String(rec.fifo), JSON.stringify({ id, type: "get_state" }) + "\n"); } catch { return null; }
   return readJsonlResponse(String(rec.log), id, start, Date.now() + 2000);
 }
-function rootsWithInstallFiles(rows: Row[]): string[] {
-  const out = new Set<string>();
-  const candidates = new Set<string>();
-  for (const r of rows) {
-    if (path.isAbsolute(r.repo)) candidates.add(path.resolve(r.repo));
-    if (path.isAbsolute(r.path)) candidates.add(path.resolve(r.path));
+function midTurnSeatReason(): string | null {
+  let state: any;
+  try { state = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "state.json"), "utf8")); } catch { return null; }
+  for (const [name, rec] of Object.entries<any>(state.seats ?? {})) {
+    if (!pidAlive(Number(rec?.pid ?? 0))) continue;
+    const st = getState(rec);
+    if (st?.success && st?.data?.isStreaming) return `seat "${name}" is mid-turn per get_state; settle seats before prune --yes`;
   }
-  for (const c of candidates) {
-    if (!path.isAbsolute(c)) continue;
-    let cur = fs.existsSync(c) && fs.statSync(c).isDirectory() ? c : path.dirname(c);
-    while (true) {
-      if (fs.existsSync(path.join(cur, "seats"))) { out.add(cur); break; }
-      const next = path.dirname(cur);
-      if (next === cur) break;
-      cur = next;
-    }
-  }
-  return [...out];
-}
-function rootsWithSeatState(rows: Row[]): string[] {
-  const out = new Set<string>();
-  const candidates = new Set<string>();
-  for (const r of rows) {
-    if (path.isAbsolute(r.repo)) candidates.add(path.resolve(r.repo));
-  }
-  for (const c of candidates) {
-    if (!path.isAbsolute(c)) continue;
-    let cur = fs.existsSync(c) && fs.statSync(c).isDirectory() ? c : path.dirname(c);
-    while (true) {
-      if (fs.existsSync(path.join(cur, "seats", "state.json"))) { out.add(cur); break; }
-      const next = path.dirname(cur);
-      if (next === cur) break;
-      cur = next;
-    }
-  }
-  return [...out];
-}
-function assertNoMidTurnSeats(rows: Row[]): void {
-  for (const root of rootsWithSeatState(rows)) {
-    let state: any;
-    try { state = JSON.parse(fs.readFileSync(path.join(root, "seats", "state.json"), "utf8")); } catch { continue; }
-    for (const [name, rec] of Object.entries<any>(state.seats ?? {})) {
-      if (!pidAlive(Number(rec?.pid ?? 0))) continue;
-      const st = getState(rec);
-      if (st?.success && st?.data?.isStreaming) stop(`seat "${name}" is mid-turn per get_state; settle seats before prune --yes`);
-    }
-  }
-}
-function assertNoSelectedSeatAnchors(rows: Row[], cats: Set<string> | null): void {
-  const anchors = new Map<string, string>();
-  for (const root of rootsWithSeatState(rows)) for (const [p, reason] of seatAnchors(root)) anchors.set(path.resolve(p), reason);
-  for (const r of rows) {
-    if (cats && !cats.has(r.category)) continue;
-    if (!r.safe || NEVER.has(r.category)) continue;
-    const reason = anchors.get(path.resolve(r.path));
-    if (reason) stop(`refusing to prune ${r.path}: ${reason}`);
-  }
+  return null;
 }
 function localBranchSha(repo: string, branch: string): string {
   return run("git", ["rev-parse", "--verify", branch], repo).out.trim();
@@ -724,33 +750,117 @@ function normalizeCats(cats: Set<string> | null): Set<string> | null {
   if (!cats) return null;
   return new Set([...cats].map((c) => CATEGORY_ALIASES[c] ?? c));
 }
+/** The cache scanner's exceptions to the three owned containers. */
+function explicitCacheTarget(r: Row): boolean {
+  const p = path.resolve(r.path);
+  if (r.category === "bead-tmp") {
+    const tmpRoots = [os.tmpdir(), "/private/tmp"].map((d) => realpathOr(d)).filter(Boolean);
+    const bead = beadPrefix(path.basename(p), beadStatuses(ROOT), "-");
+    return tmpRoots.includes(path.dirname(p)) && bead?.[1] === "closed";
+  }
+  if (!insideOf(p, ROOT) || p === ROOT || !isDir(p)) return false;
+  if (r.category === "bench-junk") return path.dirname(p) === ROOT && path.basename(p).startsWith(".wheelhouse-bench.lock.stale.");
+  const parts = path.relative(ROOT, p).split(path.sep);
+  const parents = parts.slice(0, -1);
+  if (parts.length > 4 || parents.some((s) => isDependencySegment(s) || [".git", ".beads", "seats", FLEET_CONTAINER, RUNS_DIRNAME, ".worktrees"].includes(s))) return false;
+  if (r.category === "node-modules") return path.basename(p) === "node_modules";
+  return r.category === "build-cache" && CACHE_NAMES.includes(path.basename(p));
+}
+interface TargetIdentity { dev: number; ino: number }
+function targetIdentity(p: string): TargetIdentity | null {
+  try { const st = fs.lstatSync(p); return { dev: st.dev, ino: st.ino }; } catch { return null; }
+}
+/** Fresh probes, not the reviewed row's old assertion of safety. */
+function reviewedTargetReason(r: Row, identity?: TargetIdentity): string | null {
+  if (!repositories(ROOT).some((repo) => realpathOr(repo) === realpathOr(r.repo))) return "repository is not part of this install";
+  const busy = midTurnSeatReason();
+  if (busy) return busy;
+  if (r.action === "simctl") {
+    if (!/^simctl:[0-9A-F-]{36}$/.test(r.path)) return "invalid simulator UDID";
+    const current = scanSimulators(ROOT, beadStatuses(ROOT)).find((s) => s.path === r.path);
+    return current?.safe === 1 ? null : "simulator is no longer a closed-bead scan target";
+  }
+  if (r.action === "branch") {
+    if (path.resolve(r.path) !== path.resolve(r.repo) || !isFleetBranch(r.branch) || !run("git", ["check-ref-format", `refs/heads/${r.branch}`]).ok) return "invalid fleet branch target";
+    integrationRefCache.clear(); patchIdCache.clear();
+    const current = scanBranches(r.repo, ROOT, beadStatuses(ROOT), new Set(worktrees(r.repo).map((w) => w.branch).filter(Boolean)), extraIntegrationRefs([ROOT])).find((s) => s.branch === r.branch);
+    return current?.safe === 1 ? null : `branch is no longer safe: ${current?.reason ?? "not found"}`;
+  }
+  const p = path.resolve(r.path);
+  if (!fs.existsSync(p)) return "path no longer exists";
+  // Act using the same spelling we checked; lexical '..' normalization must
+  // not hide a symlink that the filesystem would traverse in the original path.
+  if (r.path !== p || realpathOr(r.path) !== p) return "path mismatch: noncanonical spelling or symlink component";
+  const before = targetIdentity(p);
+  if (!before) return "path no longer exists";
+  if (identity && (identity.dev !== before.dev || identity.ino !== before.ino)) return "target changed during validation";
+  if (r.action === "xctest-devices") {
+    const devicesRoot = path.join(os.homedir(), "Library", "Developer", "XCTestDevices");
+    if (!isDir(p) || !insideOf(p, devicesRoot)) return "outside XCTestDevices directory root";
+    if (xcodebuildRunning() || !run("xcrun", ["simctl", "help"]).ok) return "XCTestDevices set is busy or unverifiable";
+    const devices = simctlJson(["--set", p, "list", "devices", "--json"]);
+    if (!devices || Object.values<any>(devices.devices ?? {}).some((ds) => Array.isArray(ds) && ds.some((d) => String(d?.state ?? "") === "Booted"))) return "XCTestDevices set is busy or unverifiable";
+  } else if (!underAllowed(ROOT, p) && !explicitCacheTarget(r)) return "outside allowed containers and scanner cache paths";
+  seatAnchorCache.delete(ROOT);
+  const anchor = seatAnchorWithin(p, seatAnchors(ROOT));
+  if (anchor) return `refusing to prune: ${anchor}`;
+  if (r.action === "worktree") {
+    const wt = worktrees(r.repo).find((w) => path.resolve(w.path) === p);
+    if (!wt || wt.branch !== r.branch) return "worktree registration or branch changed";
+    const state = treeState(r.repo, p);
+    if (!state.clean) return `uncommitted changes: ${state.detail}`;
+    if (isaAnchors(ROOT).has(path.basename(p))) return "named by wheelhouse/ISA.md";
+    const push = pushInProgress(ROOT, p, null);
+    if (push) return `deferred: push in progress (${push})`;
+  } else if (r.action === "rm") {
+    if (fs.existsSync(path.join(p, ".git"))) return "rm target is a Git checkout; use a worktree row";
+    if (["build-cache", "node-modules"].includes(r.category) && fs.existsSync(path.join(ROOT, ".wheelhouse-bench.lock"))) return "bench lock present";
+  }
+  const live = liveCwds(true);
+  if (!live) return "cannot verify: lsof unavailable";
+  const cwd = liveCwdInside(p, live);
+  if (cwd) return `live process has its cwd in ${cwd}`;
+  // Outside probes can swap an ancestor. Check again after the last probe.
+  if (realpathOr(r.path) !== p) return "path mismatch after validation: symlink component or missing target";
+  const after = targetIdentity(p);
+  if (!after || after.dev !== before.dev || after.ino !== before.ino) return "target changed during validation";
+  return null;
+}
 function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
-  if (yes) { assertNoMidTurnSeats(rows); assertNoSelectedSeatAnchors(rows, cats); }
   let touched = 0, skipped = 0, reclaimed = 0;
+  const skip = (r: Row, reason: string) => { skipped++; console.log(`SKIPPED ${r.category} ${r.path} reason=${reason}`); };
   for (const r of rows) {
-    r.category = CATEGORY_ALIASES[r.category] ?? r.category;
     if (cats && !cats.has(r.category)) { skipped++; continue; }
-    if (!r.safe || NEVER.has(r.category)) { skipped++; continue; }
+    if (r.safe !== 1 || NEVER.has(r.category)) { skip(r, r.reason || "not a safe scan category"); continue; }
     if (!yes) { reclaimed += r.size_bytes; console.log(`DRY-RUN ${r.action} ${r.category} ${r.path}`); continue; }
+    const reason = reviewedTargetReason(r);
+    if (reason) { skip(r, reason); continue; }
+    const identity = r.action === "rm" || r.action === "worktree" ? targetIdentity(r.path)! : undefined;
     if (r.action === "rm") { makeWritable(r.path); fs.rmSync(r.path, { recursive: true, force: true }); }
     else if (r.action === "worktree") {
-      const branch = r.branch;
       const sha = run("git", ["rev-parse", "HEAD"], r.path).out;
       const tag = archiveTag(r.repo, r.path, sha);
       if (tag) console.log(`TAGGED ${tag} ${sha.slice(0, 12)} before removing ${r.path}`);
-      run("git", ["worktree", "remove", "--force", r.path], r.repo);
+      const changed = reviewedTargetReason(r, identity);
+      if (changed) { skip(r, changed); continue; }
+      const del = run("git", ["worktree", "remove", "--force", r.path], r.repo);
+      if (!del.ok) { skip(r, `worktree remove failed: ${del.err || del.out}`); continue; }
     }
     else if (r.action === "branch") {
       const sha = localBranchSha(r.repo, r.branch);
       const tagName = r.branch.replace(/^fleet\//, "");
       const tag = archiveTag(r.repo, tagName, sha, true);
-      if (!tag) { skipped++; continue; }
+      if (!tag) { skip(r, "could not preserve branch tip"); continue; }
       console.log(`TAGGED ${tag} ${sha.slice(0, 12)} before deleting ${r.branch}`);
+      const changed = reviewedTargetReason(r);
+      if (changed || localBranchSha(r.repo, r.branch) !== sha) { skip(r, changed ?? "branch tip changed"); continue; }
       const del = run("git", ["branch", "-d", r.branch], r.repo);
-      if (!del.ok) { skipped++; continue; }
+      if (!del.ok) { skip(r, `branch delete failed: ${del.err || del.out}`); continue; }
     }
-    else if (r.action === "simctl") run("xcrun", ["simctl", "delete", r.path.replace(/^simctl:/, "")]);
-    else if (r.action === "xctest-devices") run("xcrun", ["simctl", "--set", r.path, "delete", "all"]);
+    else if (r.action === "simctl" || r.action === "xctest-devices") {
+      const del = r.action === "simctl" ? run("xcrun", ["simctl", "delete", r.path.slice(7)]) : run("xcrun", ["simctl", "--set", r.path, "delete", "all"]);
+      if (!del.ok) { skip(r, `simctl delete failed: ${del.err || del.out}`); continue; }
+    }
     reclaimed += r.size_bytes;
     touched++;
     console.log(`PRUNED ${r.action} ${r.category} ${r.path}`);
@@ -919,10 +1029,11 @@ function main() {
     else { console.error(`unknown argument: ${a}`); process.exit(2); }
   }
   if (cmd === "scan") {
-    const rows = scan(roots.length ? roots : [ROOT], includeOptional);
-    if (format === "json") process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
-    else if (format === "jsonl") process.stdout.write(rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
-    else process.stdout.write(toTsv(rows));
+    const scope = roots.length ? roots : [ROOT];
+    const rows = scan(scope, includeOptional);
+    if (format === "json") process.stdout.write(JSON.stringify([scanMetadata(scope), ...rows.map(reviewedRow)], null, 2) + "\n");
+    else if (format === "jsonl") process.stdout.write([scanMetadata(scope), ...rows.map(reviewedRow)].map((r) => JSON.stringify(r)).join("\n") + "\n");
+    else process.stdout.write(toTsv(rows, scope));
   } else if (cmd === "cleanup") {
     if (roots.length > 1) { console.error("cleanup takes at most one --root"); process.exit(2); }
     const root = roots[0] ? path.resolve(roots[0]) : ROOT;
@@ -930,7 +1041,8 @@ function main() {
     process.exit(code);
   } else {
     if (!from) { console.error("prune requires --from-file <reviewed scan>"); process.exit(2); }
-    prune(parseScan(from), yes, cats);
+    try { prune(parseScan(from), yes, cats); }
+    catch(e) { if(e instanceof ScanValidationError) { console.error(`REFUSED ${e.message}`); process.exit(2); } throw e; }
   }
 }
 
