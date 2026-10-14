@@ -24,6 +24,7 @@ The main files here:
   with `seat_push=off` or `seat_worktrees=per-task`.
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
+- `intake.ts` — durable signal intake: post, dispose, list, show and audit signals in `seats/intake.jsonl`.
 - `channels.ts` — reads and validates install-owned `seats/channels.json` declarations for principal/stakeholder channels.
 - `comms.ts` — the single declared-channel send gate; sends by channel name, confirms read-back, and records refs in ignored `seats/comms.jsonl`.
 - `report-issues.ts` — commander-run, opt-in publisher for `template-report` tasks: dry-runs or files routed GitHub issues with scrubbed bodies, dedupe, and `external-ref` writeback.
@@ -56,6 +57,65 @@ REPL or by an operator placing an api_key entry; it never enters git. The
 roster is safe to commit precisely because it records only names, paths,
 optional non-secret human labels, and optional auth-route names; the moment a
 credential appears in it, that stops being true.
+
+## Intake — signals reaching the producer
+
+Any script posts one signal through this one command:
+
+```bash
+bun seats/intake.ts post --kind error --source build-script --title 'Build failed' --text 'The isolated build exited nonzero'
+```
+
+`post --kind <kind> --source <who or what> --title <one line> [--text <body> | --from-stdin] [--ref <url, path or id>]`
+prints only its new `sig-xxxx` id. The five kinds are exactly `goal`,
+`isa-change`, `report`, `error`, and `finding`. The body defaults to empty;
+`--from-stdin` reads the entire body verbatim, including whitespace and newlines.
+Text is data and causes nothing: no sentinel parsing, command execution, bd
+call, transport or inbox write. This includes `@commander:` and `@principal:`
+instructions. Each successful call appends exactly one posted row; there is no
+`--dedupe-key`. Duplicate signals are a producer judgment, not a write filter.
+
+Missing kind/source/title, a multiline title, body over 64 KB (65536 UTF-8
+bytes), or a credential-shaped string in any supplied field is refused before
+appending. Credential diagnostics name only the field, never its value.
+
+Record exactly one disposition per signal:
+
+```bash
+bun seats/intake.ts dispose <sig-id> produced --work <bead-id>
+bun seats/intake.ts dispose <sig-id> parked --reason '<why wait>' --revive '<what would revive it>'
+bun seats/intake.ts dispose <sig-id> dropped --reason '<why not>'
+bun seats/intake.ts list [--open|--all] [--json]
+bun seats/intake.ts show <sig-id>
+bun seats/intake.ts audit
+```
+
+`produced` requires `--work`; `parked` requires both `--reason` and `--revive`;
+`dropped` requires `--reason`. Unknown ids and second dispositions are refused;
+the latter diagnostic names the existing disposition. `by` records
+`$BEADS_ACTOR`, else `$USER` (or `unknown` if both are absent). Writers serialize
+through a temporary PID lock so concurrent dispositions cannot both append.
+`list` defaults to open signals, newest first; `--all` includes disposed ones.
+`--json` returns folded rows `{id, posted, disposition}`; `show` returns one such
+row without writing. `audit` prints one line per open signal (id, kind, age,
+title), exits **1** if any remain, and **0** silently when all are disposed.
+Post/dispose/list/show succeed with **0**; usage, validation, unknown-id,
+already-disposed, writer-busy and ledger errors exit **2**.
+
+The gitignored `seats/intake.jsonl` ledger is append-only, one JSON event per
+line, written only by `intake.ts`:
+
+- Posted: `{type:"posted", id, at, kind, source, title, text, ref?}`.
+- Disposed: `{type:"disposed", id, at, disposition, work?, reason?, revive?, by}`.
+
+The herald consumes posted events by persisted byte offset and emits one
+`signal-posted`, `input-required` inbox row pointing to `intake.ts show`.
+Re-scans/crash recovery do not duplicate it; dispositions do not wake anyone.
+The inbox row is the poke; the ledger is the record. The commander lists open
+signals and dispatches their ids to the producer, not their embedded
+instructions as commands. Run from the install root, like `needs.ts`; tests or
+isolated callers may set `WHEELHOUSE_INTAKE_ROOT` to a fixture root. No transport
+or channel binding changes are involved.
 
 ## Needs — what the commander asks of a human
 

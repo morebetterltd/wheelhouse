@@ -9,6 +9,7 @@ seats/staffing.json
 seats/herald.state.json
 seats/inbox.jsonl
 seats/needs.jsonl
+seats/intake.jsonl
 seats/comms.jsonl
 seats/inbox.cursor
 seats/inbox.seen.json

@@ -29,6 +29,7 @@ const SEATS_DIR = path.join(ROOT, "seats");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
 const INBOX = path.join(SEATS_DIR, "inbox.jsonl");
 const NEEDS_LEDGER = path.join(SEATS_DIR, "needs.jsonl");
+const INTAKE_LEDGER = path.join(SEATS_DIR, "intake.jsonl");
 const COMMS_LEDGER = path.join(SEATS_DIR, "comms.jsonl");
 const HERALD_OUT_LOG = path.join(LOG_DIR, "herald.out.log");
 const DRAIN_CURSOR = path.join(SEATS_DIR, "inbox.cursor");
@@ -58,12 +59,13 @@ const DISTRESS_RE = /(?:\bauth(?:entication|orization)?\b|\bunauthoriz(?:ed|atio
 const STOP_DISTRESS_RE = /\bSTOP\b/;
 const SENTINEL_RE = /^\s*@commander\s*:/im;
 
-type WakeClass = "settle" | "distress" | "sentinel" | "verdict-not-posted" | "need-answered" | "need-message" | "relay-request";
+type WakeClass = "settle" | "distress" | "sentinel" | "verdict-not-posted" | "need-answered" | "need-message" | "relay-request" | "signal-posted";
 type A2AState = "terminal" | "input-required" | "failed";
 
 interface HeraldState {
   logs: Record<string, { offset: number }>;
   needs?: { offset: number };
+  intake?: { offset: number };
   comms?: { offset: number };
   seen: string[];
   lastPokedInboxSize?: number;
@@ -124,7 +126,7 @@ function readState(): HeraldState {
   if (!fs.existsSync(STATE_FILE)) return { logs: {}, seen: currentSeen };
   try {
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return { logs: parsed.logs ?? {}, needs: parsed.needs, comms: parsed.comms, seen: currentSeen, lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, firstDeferredInboxSizeByPane: parsed.firstDeferredInboxSizeByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
+    return { logs: parsed.logs ?? {}, needs: parsed.needs, intake: parsed.intake, comms: parsed.comms, seen: currentSeen, lastPokedInboxSize: parsed.lastPokedInboxSize, lastPokedByPane: parsed.lastPokedByPane ?? {}, firstDeferredAtByPane: parsed.firstDeferredAtByPane ?? {}, firstDeferredInboxSizeByPane: parsed.firstDeferredInboxSizeByPane ?? {}, staffing: parsed.staffing ?? {}, alerts: parsed.alerts ?? {} };
   } catch (e: any) {
     if (!projectRootExists()) {
       console.error(`herald: project root disappeared (${ROOT}); exiting`);
@@ -525,6 +527,40 @@ function scanComms(state: HeraldState, seen: Set<string>): number {
   });
   if (batch.linesRead === 0 && batch.offset !== prior) {
     state.comms = { offset: batch.offset };
+    writeState(state);
+  }
+  return appended;
+}
+
+// Intake is durable pending work, not seat output: start at zero even on
+// adoption. The inbox rebuilds `seen` before each process, covering H2's
+// append-before-cursor crash window. Text is never classified as a sentinel.
+function scanIntake(state: HeraldState, seen: Set<string>): number {
+  if (!fs.existsSync(INTAKE_LEDGER)) return 0;
+  const rel = path.relative(ROOT, INTAKE_LEDGER);
+  const prior = state.intake?.offset ?? 0;
+  let appended = 0;
+  const batch = readCompleteLines(INTAKE_LEDGER, prior, (rec) => {
+    let ev: any;
+    try { ev = JSON.parse(rec.line); } catch { /* malformed data is not a command */ }
+    if (ev?.type === "posted" && /^sig-[a-z0-9]{4}$/.test(ev.id ?? "") &&
+        ["goal", "isa-change", "report", "error", "finding"].includes(ev.kind) && typeof ev.title === "string") {
+      const candidate: Candidate = { eventClass: "signal-posted", state: "input-required", title: `signal — ${ev.kind}: ${ev.title}`, detail: `Read it: bun seats/intake.ts show ${ev.id}`, sourceType: "posted" };
+      const id = eventId(rel, rec.offset, rec.line, candidate);
+      if (!seen.has(id)) {
+        seen.add(id);
+        appendInbox({ id, at: new Date().toISOString(), seat: "intake", class: candidate.eventClass,
+          state: candidate.state, title: candidate.title, detail: candidate.detail,
+          source: { log: rel, offset: rec.offset, type: "posted" } });
+        appended++;
+      }
+    }
+    state.intake = { offset: rec.endOffset };
+    state.seen = Array.from(seen).slice(-MAX_SEEN);
+    writeState(state);
+  });
+  if (batch.linesRead === 0 && batch.offset !== prior) {
+    state.intake = { offset: batch.offset };
     writeState(state);
   }
   return appended;
@@ -971,6 +1007,7 @@ function scanOnce(): number {
     }
   }
   appended += scanNeeds(state, seen);
+  appended += scanIntake(state, seen);
   appended += scanComms(state, seen);
   rememberSeen(seen);
   state.seen = currentSeen;
