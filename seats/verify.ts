@@ -1062,8 +1062,7 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   fs.mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${tip}.${process.pid}.${Date.now()}.selftest-sweep.log`);
   const started = Date.now();
-  // bd 1.2.2 discovers the workspace via logical PWD; spawn's cwd alone
-  // can otherwise select the live ancestor graph instead of this worktree.
+  // Keep logical and physical cwd consistent for sweep child processes.
   const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1" };
   for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN"]) delete env[key];
   const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
@@ -1073,8 +1072,23 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   let error: string | undefined;
   try {
     if (!realBd) throw new Error("bd is required for writable scratch fixture graphs");
-    const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: scratchCwd, encoding: "utf8", env: { ...env, BEADS_DIR: path.join(scratchCwd, ".beads") } });
+    // bd init in a linked worktree can select its shared ancestor graph;
+    // it can also commit setup files. Keep both operations in a fresh nested
+    // primary repository, then expose only that graph at the sweep root.
+    const graphRoot = path.join(scratchCwd, ".wheelhouse-sweep-graph");
+    fs.mkdirSync(graphRoot);
+    execFileSync("git", ["init", "--quiet", graphRoot], { env, stdio: "pipe" });
+    const graphDir = path.join(graphRoot, ".beads");
+    const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graphRoot, encoding: "utf8", env: { ...env, PWD: graphRoot, BEADS_DIR: graphDir } });
     if (init.status !== 0) throw new Error(`scratch bd init failed: ${init.stderr || init.stdout}`);
+    fs.symlinkSync(graphDir, path.join(scratchCwd, ".beads"), "dir");
+    const located = spawnSync(realBd, ["where", "--json"], { cwd: scratchCwd, encoding: "utf8", env });
+    if (located.status !== 0 || fs.realpathSync(JSON.parse(located.stdout).path) !== fs.realpathSync(graphDir)) {
+      throw new Error("sweep bd did not resolve its owned scratch graph");
+    }
+    const preparedTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
+    if (preparedTip !== tip) throw new Error(`sweep setup changed reviewed tip from ${tip} to ${preparedTip}`);
+    fs.appendFileSync(logPath, `preparedTip=${preparedTip}\nscratchGraph=isolated nested repository\n`);
     // Select the real binary without removing host-budget shims from PATH.
     const bin = path.join(scratchCwd, ".wheelhouse-sweep-bin");
     fs.mkdirSync(bin);
@@ -1099,6 +1113,11 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
       });
     } finally { fs.closeSync(fd); }
   } catch (e: any) { error = e.message; }
+  try {
+    const finalTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
+    fs.appendFileSync(logPath, `finalTip=${finalTip}\n`);
+    if (finalTip !== tip) { rc = 1; error = `sweep changed reviewed tip from ${tip} to ${finalTip}`; }
+  } catch (e: any) { rc = 1; error = e.message; }
   const elapsedMs = Date.now() - started;
   fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
   removeScratchWorktree(repoRoot, scratchCwd);
