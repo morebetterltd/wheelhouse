@@ -32,12 +32,9 @@ TMP_SCRATCH=()
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; rm -rf ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
 trap cleanup EXIT INT TERM
 export HOME="$FIX/home"
-export XDG_CONFIG_HOME="$HOME/.config"
 mkdir -p "$HOME"
-# bd init installs Git hooks. With metrics enabled, a hook may detach
-# `bd send-metrics` with a worktree cwd, violating this fixture's holder-free
-# premise. Disable collection BEFORE any bd command, in this fresh HOME only.
-( cd "$FIX" && bd metrics off > "$FIX/metrics-off.out" 2> "$FIX/metrics-off.err" ) || { echo 'selftest: could not disable fixture bd metrics' >&2; exit 2; }
+# bd init's hooks must not detach telemetry flushers into these worktrees.
+selftest_disable_bd_metrics "$FIX" || exit 2
 METRICS_CONFIG="$XDG_CONFIG_HOME/bd/config.yaml"
 if [ -f "$METRICS_CONFIG" ] && grep -Eq '^[[:space:]]+disabled: true$' "$METRICS_CONFIG"; then
   pass 'fixture-owned bd metrics config disables detached telemetry flushers'

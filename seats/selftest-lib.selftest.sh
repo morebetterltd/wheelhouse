@@ -46,6 +46,14 @@ fi
 
 if command -v bd >/dev/null 2>&1; then
   REAL_BD="$(command -v bd)"
+  METRICS_FIX="$FIX/metrics-fixture"
+  mkdir -p "$METRICS_FIX"
+  selftest_disable_bd_metrics "$METRICS_FIX" || exit 2
+  if [ "$HOME" = "$METRICS_FIX/home" ] && [ "$XDG_CONFIG_HOME" = "$HOME/.config" ] && [ -f "$XDG_CONFIG_HOME/bd/config.yaml" ] && grep -Eq '^[[:space:]]+disabled: true$' "$XDG_CONFIG_HOME/bd/config.yaml"; then
+    pass 'shared fixture metrics setup pins HOME and XDG to an owned disabled config'
+  else
+    fail 'shared fixture metrics setup did not pin an owned disabled config'
+  fi
   INSTALL="$FIX/install-graph"
   mkdir -p "$INSTALL"
   git -C "$INSTALL" init -q
