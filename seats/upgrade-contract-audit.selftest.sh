@@ -30,7 +30,10 @@ grep -q 'bd list' "$FIX/step7.sh" || fail 'missing later sweep'
 eval "$(selftest_scratch_graph "$FIX/install")"
 cd "$FIX/install"
 mkdir -p seats
-cp -f "$HERE/contract.ts" seats/
+# Step 3 ships all runtime modules, not contract.ts alone: intake also needs
+# credential-shapes, lock and seat-activity. Keep this install-shaped fixture
+# aligned with that copy without importing source-worktree runtime state.
+cp -f "$HERE"/*.ts seats/
 bd create 'Open old-dialect fixture' --description 'Implement crew/bench.sh against contracts/BENCH.md' --json > "$FIX/open.json"
 bd create 'Claimed old-dialect fixture' --description 'Implement crew/bench.sh against contracts/BENCH.md' --json > "$FIX/claimed.json"
 OPEN=$(node -e 'console.log(require(process.argv[1]).id)' "$FIX/open.json")
