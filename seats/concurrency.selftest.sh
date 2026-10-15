@@ -135,6 +135,16 @@ BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
 
+barrier_regression() {
+  "$NODE_BIN" "$HERE/fixtures/concurrency-barrier-regression.mjs" "$FIX/barrier-regression" \
+    "$HERE/fixtures/concurrency-barrier.cjs" "$HERE/fixtures/concurrency-stub-supervisor.cjs" \
+    "$HERE/fixtures/concurrency-barrier-observer.mjs"
+}
+if [ "${WHEELHOUSE_CONCURRENCY_BARRIER_ONLY:-}" = 1 ]; then
+  barrier_regression
+  exit $?
+fi
+
 # The stub pi: same long-lived RPC shape as adapter.selftest.sh's, with two
 # additions this exercise needs:
 #   - a prompt containing QUOTA answers success:false with a 429-shaped
@@ -480,6 +490,9 @@ else
   FAILED=$((CANARY_FAILED_BEFORE + 1))
   fail 'canary: non-overlapping turns escaped the barrier assertion'
 fi
+
+phase "3a. barrier lifecycle and missed-notification regression — 64 serialized canaries"
+barrier_regression || fail 'barrier lifecycle/repetition regression failed'
 
 # Record an actual native child exit and stderr before fixture cleanup.
 CAN_EXIT="$FIX/can-exit"
