@@ -27,7 +27,7 @@ const [path,uuid,text]=process.argv.slice(2),rows=[
  {type:'user',uuid:'user-'+uuid,message:{role:'user',content:'prompt'}},
  {type:'assistant',uuid,sessionId:'session-1',message:{content:[{type:'text',text}]}}
 ];
-require('fs').writeFileSync(path,rows.map(row=>JSON.stringify(row)+'\n').join(''));
+(await import('node:fs')).default.writeFileSync(path,rows.map(row=>JSON.stringify(row)+'\n').join(''));
 JS
 }
 
@@ -114,7 +114,7 @@ cp "$FIX/proj/seats/principal-sentinel.sh" "$CAN/proj/seats/principal-sentinel.s
 cp "$FIX/proj/seats/needs.ts" "$CAN/proj/seats/needs.ts"
 printf 'namespace=sentinel\n' > "$CAN/proj/wheelhouse/.template-source"
 bun - "$CAN/proj/seats/principal-sentinel.sh" <<'JS'
-const fs=require('fs'),p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='const idx = lines.findIndex((line) => /^@principal:/.test(line));';
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='const idx = lines.findIndex((line) => /^@principal:/.test(line));';
 if(s.split(needle).length!==2) throw new Error('sentinel canary source changed');
 fs.writeFileSync(p,s.replace(needle,'const idx = -1;'));
 JS
