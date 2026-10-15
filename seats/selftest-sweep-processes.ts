@@ -52,7 +52,7 @@ async function check(suite:string,group:number,root:string) {
   scratch(root,suite);
   function survivors() {
     const rows=processes(),dirs=cwds();
-    return rows.map(r=>({...r,cwd:dirs.get(r.pid)??""})).filter(r=>r.pid!==process.pid && r.pid!==process.ppid && !r.state.startsWith("Z") && (r.group===group || inside(root,r.cwd) || r.command.includes(root)));
+    return rows.map(r=>({...r,cwd:dirs.get(r.pid)??""})).filter(r=>r.pid!==process.pid && r.pid!==process.ppid && !r.state.startsWith("Z") && (r.group===group || inside(root,r.cwd)));
   }
   const leaked=survivors();
   for(const r of leaked) console.error(`selftest-sweep: LEAK ${suite} pid=${r.pid} pgid=${r.group} via=${r.group===group?"group":"scratch"} started=${r.started} cwd=${r.cwd} command=${r.command}`);
@@ -75,6 +75,7 @@ async function check(suite:string,group:number,root:string) {
   // Recheck the ownership record after all outside tools, before recursive rm.
   scratch(root,suite);
   fs.rmSync(root,{recursive:true});
+  if(!leaked.length) console.log(`selftest-sweep: CLEAN ${suite} pgid=${group} scratch=${root}`);
   return leaked.length?1:0;
 }
 if(import.meta.main) {

@@ -38,7 +38,7 @@ for(const mode of ["clean","group","scratch"]) {
     const original=fs.readFileSync(before,"utf8");assert.match(original,/sleep 1000/);
     const post=ps(pid);fs.writeFileSync(path.join(dir,"after.ps"),post.stdout);fs.writeFileSync(path.join(dir,"after.exit"),post.status+"\n");
     assert.equal(rc,mode==="clean"?0:1,`wrong runner result for ${mode}: ${stdout}${stderr}`);
-    if(mode==="clean")assert(fs.readFileSync(path.join(dir,"waits"),"utf8").trim().split("\n").includes(String(pid)),"teardown did not wait for its child");
+    if(mode==="clean")assert(fs.existsSync(path.join(dir,"waits")) && fs.readFileSync(path.join(dir,"waits"),"utf8").trim().split("\n").includes(String(pid)),"teardown did not wait for its child");
     // A zombie has no FDs and cannot keep the output pipe open.
     assert(post.status===1 || /\sZ\S*\s/.test(post.stdout),`child survived ${mode}: ${post.stdout}`);
     await Promise.race([closed,new Promise((_,reject)=>{const t=setTimeout(()=>reject(new Error("suite output did not reach EOF")),5000);t.unref();})]);

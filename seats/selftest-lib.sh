@@ -187,7 +187,7 @@ selftest_cleanup_fixture_processes() {
     tmux -L "$sock" kill-server >/dev/null 2>&1 || true
   done
 
-  local fixture_children=""
+  local fixture_children="" fixture_pid
   pids="$(selftest_fixture_processes "$root" | awk '{print $1}' | tr '\n' ' ')"
   fixture_children="$pids"
   [ -n "$pids" ] && kill $pids >/dev/null 2>&1 || true
