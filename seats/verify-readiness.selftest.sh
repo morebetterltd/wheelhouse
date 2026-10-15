@@ -65,4 +65,5 @@ if(!selected || selected==="disabled-watchdog")await check("disabled-watchdog",t
 assert.equal(failures,0,"readiness regressions");
 console.log(`verify-readiness.selftest: PASS (${checks} deterministic checks)`);
 TS
+bun "$HERE/fixtures/verify-h4-publication.ts" "$HERE" "$FIX" || exit $?
 bun "$HERE/fixtures/verify-exit-regression.ts" "$HERE" "$FIX"

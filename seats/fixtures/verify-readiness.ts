@@ -98,6 +98,49 @@ function own(name: string, label: string, bin: string, args: string[], env: Node
 }
 function status(exit: Exit): number { return exit.code ?? (exit.signal ? 128 + constants.signals[exit.signal] : 1); }
 
+// Use the runner's real lock protocol: shell mv can instead put a PID file
+// INSIDE a leftover directory lock, corrupting it before the dispatcher waits.
+async function holdH4(lock: string, releaseFile: string, readyFile: string, helper: string): Promise<void> {
+  const token = randomUUID().replaceAll("-", "");
+  let identity: string | undefined, stopped = 0;
+  const term = () => { stopped = 143; }, interrupt = () => { stopped = 130; };
+  process.once("SIGTERM", term); process.once("SIGINT", interrupt);
+  const transition = async (op: "acquire" | "release") => {
+    const args = [helper, op, lock, String(process.pid), token];
+    if (op === "release" && identity) args.push(identity);
+    const child = spawn("bun", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    child.stdout!.on("data", b => { out += b; }); child.stderr!.on("data", b => { err += b; });
+    const code = await new Promise<number>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve(code ?? (signal ? 128 + constants.signals[signal] : 1)));
+    });
+    if (!child.stdout!.readableEnded || !child.stderr!.readableEnded) throw new Error("H4 transition lost output EOF");
+    if (err) process.stderr.write(err);
+    return { code, out: out.trim() };
+  };
+  try {
+    while (!stopped && !fs.existsSync(releaseFile)) {
+      const result = await transition("acquire");
+      if (result.code === 0) {
+        if (!/^\d+:\d+$/.test(result.out)) throw new Error("H4 admission lacks directory identity");
+        identity = result.out;
+        fs.writeFileSync(readyFile, "admitted\n");
+        break;
+      }
+      if (result.code !== 75) throw new Error(`H4 holder admission failed: exit ${result.code}`);
+      fs.writeFileSync(`${readyFile}.waiting`, `${result.out}\n`);
+      await Bun.sleep(10); // Queue scheduling only, never a readiness deadline.
+    }
+    while (!stopped && identity && !fs.existsSync(releaseFile)) await Bun.sleep(10);
+  } finally {
+    const released = await transition("release");
+    process.removeListener("SIGTERM", term); process.removeListener("SIGINT", interrupt);
+    if (released.code !== 0) throw new Error(`H4 holder release failed: exit ${released.code}`);
+  }
+  if (stopped) process.exitCode = stopped;
+}
+
 async function drive(): Promise<void> {
   const [sourceFile, dir, mode, ...args] = process.argv.slice(2);
   if (!sourceFile || !dir || !["ready", "silent"].includes(mode)) throw new Error("usage: verify-readiness.ts <verify.ts> <owned-state-dir> <ready|silent> <verify args...>");
@@ -121,8 +164,10 @@ async function drive(): Promise<void> {
     if (process.env.STUB_TEST_HOLD_H4 === "1") {
       const lock = process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK;
       if (!lock) throw new Error("fixture H4 holder needs its private lock path");
-      holder = own("holder", label, "bash", ["-c", 'printf "pid=%s\\n" "$$" > "$1.new"; mv -f "$1.new" "$1"; while [ ! -f "$2" ]; do sleep 0.01; done; rm -f "$1"', "_", lock, holderRelease], process.env);
-      await until(() => fs.existsSync(lock), () => holder!.exited() || cancelled, "H4 holder publication");
+      const admitted = path.join(dir, "holder.admitted"), helper = path.join(path.dirname(sourceFile), "selftest-sweep-lock.ts");
+      if (!fs.statSync(helper).isFile()) throw new Error("fixture H4 holder requires the runner lock helper");
+      holder = own("holder", label, "bun", [import.meta.path, "--hold-h4", lock, holderRelease, admitted, helper], process.env);
+      await until(() => fs.existsSync(admitted), () => holder!.exited() || cancelled, "H4 holder admission");
     }
     fixture = own("fixture", label, "bun", [copy, ...args], { ...process.env, WHEELHOUSE_TEST_WATCHDOG_DIR: dir });
     const child = fixture.child, ended = () => fixture!.exited() || cancelled;
@@ -161,4 +206,10 @@ async function drive(): Promise<void> {
     fs.unlinkSync(copy); // Only the unique file this invocation created.
   }
 }
-if (import.meta.main) drive().catch(error => { console.error(`FAIL ${error.message}`); process.exitCode = 1; });
+if (import.meta.main) {
+  const args = process.argv.slice(2);
+  const result = args[0] === "--hold-h4"
+    ? holdH4(args[1], args[2], args[3], args[4])
+    : drive();
+  result.catch(error => { console.error(`FAIL ${error.message}`); process.exitCode = 1; });
+}
