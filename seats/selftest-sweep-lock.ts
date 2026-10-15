@@ -8,6 +8,8 @@ import { dlopen, FFIType, read, CString, toArrayBuffer } from "bun:ffi";
 
 const MARKER = "wheelhouse-selftest-sweep";
 const FILES = ["pid", "started", MARKER].sort();
+const QUEUE = `${MARKER}-queue`;
+const WAITER = `${MARKER}-waiter`;
 const HOST = os.hostname();
 const C = fs.constants;
 const darwin = process.platform === "darwin";
@@ -41,7 +43,9 @@ function openAt(parent: number, name: string, flags = C.O_RDONLY | C.O_NOFOLLOW 
   return fd;
 }
 function unlinkAt(parent: number, name: string, directory = false) {
-  if (native.symbols.unlinkat(parent, z(name), directory ? (darwin ? 0x80 : 0x200) : 0)) throw new Refused(`remove ${name} failed (errno ${errno()})`);
+  if (native.symbols.unlinkat(parent, z(name), directory ? (darwin ? 0x80 : 0x200) : 0)) {
+    const n = errno(); throw Object.assign(new Refused(`remove ${name} failed (errno ${n})`), { errno: n });
+  }
 }
 function id(fd: number) { const s = fs.fstatSync(fd, { bigint: true }); return `${s.dev}:${s.ino}`; }
 function entries(fd: number): string[] {
@@ -140,22 +144,20 @@ function removeValidated(parent: number, name: string, snapshot: Snapshot) {
     unlinkAt(parent, name, true);
   } finally { fs.closeSync(fd); }
 }
-function renameExclusive(parent: number, source: string, dest: string) {
+function renameExclusive(parent: number, source: string, dest: string, destinationParent = parent) {
   const fn = native.symbols[darwin ? "renameatx_np" : "renameat2"];
-  if (fn(parent, z(source), parent, z(dest), darwin ? 4 : 1)) throw new Refused(`exclusive publish failed (errno ${errno()})`);
+  if (fn(parent, z(source), destinationParent, z(dest), darwin ? 4 : 1)) throw new Refused(`exclusive publish failed (errno ${errno()})`);
 }
-function publish(parent: number, name: string, pid: number, token: string) {
+function publishDirectory(parent: number, name: string, members: [string, string][]) {
   const candidate = `.${name}.${randomUUID().replace(/-/g, "")}.new`;
   if (native.symbols.mkdirat(parent, z(candidate), 0o700)) throw new Refused(`candidate mkdir failed (errno ${errno()})`);
   const fd = openAt(parent, candidate, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
   const candidateId = id(fd), written: Record<string, string> = {};
   try {
-    const started = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-    const marker = { kind: MARKER, version: 1, pid, hostname: HOST, started, token };
     // mkstemp is non-variadic and creates0600/exclusive, unlike a Darwin arm64
     // FFI call to openat(O_CREAT). CWD changes only in this private helper.
     if (native.symbols.fchdir(fd)) throw new Refused("cannot enter private candidate descriptor");
-    for (const [member, content] of [["pid", `${pid}\n`], ["started", `${started}\n`], [MARKER, JSON.stringify(marker) + "\n"]]) {
+    for (const [member, content] of members) {
       const template = z(".member.XXXXXX"), out = native.symbols.mkstemp(template) as number;
       if (out < 0) throw new Refused("cannot create private member");
       const temporary = template.toString().split("\0")[0], fileId = id(out);
@@ -167,7 +169,7 @@ function publish(parent: number, name: string, pid: number, token: string) {
       } finally { fs.closeSync(out); }
     }
     renameExclusive(parent, candidate, name);
-    console.log(candidateId);
+    return candidateId;
   } finally {
     // Only this invocation's private candidate and recorded member identities.
     let current = -1;
@@ -184,6 +186,91 @@ function publish(parent: number, name: string, pid: number, token: string) {
     } finally { if (current >= 0) fs.closeSync(current); fs.closeSync(fd); }
   }
 }
+function publish(parent: number, name: string, pid: number, token: string) {
+  const started = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const marker = { kind: MARKER, version: 1, pid, hostname: HOST, started, token };
+  return publishDirectory(parent, name, [["pid", `${pid}\n`], ["started", `${started}\n`], [MARKER, JSON.stringify(marker) + "\n"]]);
+}
+
+type Ticket = { name: string; identity: string; raw: string; pid: number; token: string; sequence: bigint };
+function queueFd(parent: number, name: string, create: boolean): number | null {
+  let fd: number;
+  try { fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW); }
+  catch (e: any) {
+    if (e.errno !== 2) throw e;
+    if (!create) return null;
+    publishDirectory(parent, name, [[QUEUE, JSON.stringify({ kind: QUEUE, version: 1, hostname: HOST }) + "\n"]]);
+    fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+  }
+  try {
+    const [text] = readFile(fd, QUEUE), marker = JSON.parse(text);
+    if (JSON.stringify(Object.keys(marker).sort()) !== JSON.stringify(["hostname", "kind", "version"]) || marker.kind !== QUEUE || marker.version !== 1 || marker.hostname !== HOST) throw new Refused("invalid queue marker");
+    return fd;
+  } catch (e) { fs.closeSync(fd); throw e; }
+}
+function tickets(fd: number): Ticket[] {
+  const result: Ticket[] = [];
+  for (const name of entries(fd)) {
+    if (name === QUEUE) continue;
+    const match = /^([0-9]{20})\.([0-9a-f]{32})$/.exec(name);
+    if (!match || BigInt(match[1]) === 0n) throw new Refused("unknown queue entry");
+    const [raw, identity] = readFile(fd, name), m = JSON.parse(raw);
+    if (!m || JSON.stringify(Object.keys(m).sort()) !== JSON.stringify(["kind", "version", "pid", "hostname", "started", "token"].sort()) || m.kind !== WAITER || m.version !== 1 || m.hostname !== HOST || !validPid(m.pid) || m.token !== match[2]) throw new Refused("invalid waiter ownership record");
+    timestamp(m.started);
+    result.push({ name, identity, raw, pid: m.pid, token: m.token, sequence: BigInt(match[1]) });
+  }
+  if (new Set(result.map(t => String(t.sequence))).size !== result.length) throw new Refused("duplicate queue sequence");
+  return result; // Fixed-width sequence names from entries() are arrival order.
+}
+function removeTicket(fd: number, ticket: Ticket) {
+  const [raw, identity] = readFile(fd, ticket.name);
+  if (raw !== ticket.raw || identity !== ticket.identity) throw new Refused("waiter changed before removal");
+  unlinkAt(fd, ticket.name);
+}
+function enroll(parent: number, fd: number, current: Ticket[], pid: number, token: string): Ticket[] {
+  const own = current.find(t => t.token === token);
+  if (own) { if (own.pid !== pid) throw new Refused("waiter token belongs to another pid"); return current; }
+  const sequence = (current.at(-1)?.sequence ?? 0n) + 1n, digits = String(sequence).padStart(20, "0");
+  if (digits.length !== 20) throw new Refused("queue sequence exhausted");
+  // Stage outside the visible queue, so a killed publisher cannot leave an
+  // incomplete ticket blocking every live waiter. Publication is atomic.
+  if (native.symbols.fchdir(parent)) throw new Refused("cannot enter queue parent descriptor");
+  const template = z(`.sweep-waiter.${pid}.${token}.XXXXXX`), out = native.symbols.mkstemp(template) as number;
+  if (out < 0) throw new Refused("cannot create private waiter record");
+  const temporary = template.toString().split("\0")[0], temporaryId = id(out);
+  try {
+    fs.writeFileSync(out, JSON.stringify({ kind: WAITER, version: 1, pid, hostname: HOST, started: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), token }) + "\n");
+    renameExclusive(parent, temporary, `${digits}.${token}`, fd);
+  } finally {
+    fs.closeSync(out);
+    let leftover = -1;
+    try { leftover = openAt(parent, temporary); if (id(leftover) === temporaryId) unlinkAt(parent, temporary); }
+    catch (e: any) { if (e.errno !== 2) throw e; }
+    finally { if (leftover >= 0) fs.closeSync(leftover); }
+  }
+  return tickets(fd);
+}
+function pruneTickets(fd: number): Ticket[] {
+  // Validate the entire queue before deleting anything; malformed/foreign
+  // entries fail closed. Only a definitive dead PID authorizes stale removal.
+  const all = tickets(fd);
+  for (const ticket of all) if (!alive(ticket.pid)) {
+    removeTicket(fd, ticket);
+    console.error(`selftest-sweep: reaped dead waiter pid=${ticket.pid}`);
+  }
+  return tickets(fd);
+}
+function removeEmptyQueue(parent: number, name: string, fd: number) {
+  if (entries(fd).length !== 1 || entries(fd)[0] !== QUEUE) return;
+  const current = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+  try { if (id(current) !== id(fd)) throw new Refused("queue identity changed"); }
+  finally { fs.closeSync(current); }
+  // Marker was validated by queueFd; recheck its inode/content before unlink.
+  const [raw, identity] = readFile(fd, QUEUE), again = readFile(fd, QUEUE);
+  if (raw !== again[0] || identity !== again[1]) throw new Refused("queue marker changed");
+  unlinkAt(fd, QUEUE); unlinkAt(parent, name, true);
+}
+
 function parentFd(lock: string): number {
   // Shell resolves the physical parent once; reject subsequent ancestor links.
   let fd = fs.openSync("/", C.O_RDONLY | C.O_DIRECTORY);
@@ -204,29 +291,51 @@ function main(): number {
   const parent = parentFd(lock);
   try {
     if (native.symbols.flock(parent, 2)) throw new Refused(`parent flock failed (errno ${errno()})`);
+    const queueName = `${name}.queue`;
     if (op === "release") {
-      let fd = -1;
-      try { fd = openAt(parent, name); }
-      catch { return 0; } // Missing/unreadable replacement is never ours to remove.
-      try { if (id(fd) !== owned) return 0; } finally { fs.closeSync(fd); }
-      const snapshot = inspect(parent, name);
-      if (snapshot.marker.token !== token || snapshot.marker.pid !== pid) throw new Refused("owned lock marker changed");
-      removeValidated(parent, name, snapshot);
+      if (owned) {
+        let fd = -1;
+        try { fd = openAt(parent, name); } catch {} // Never delete an unreadable replacement.
+        if (fd >= 0) {
+          let ours: boolean;
+          try { ours = id(fd) === owned; } finally { fs.closeSync(fd); }
+          if (ours) {
+            const snapshot = inspect(parent, name);
+            if (snapshot.marker.token !== token || snapshot.marker.pid !== pid) throw new Refused("owned lock marker changed");
+            removeValidated(parent, name, snapshot);
+          }
+        }
+      }
+      const queue = queueFd(parent, queueName, false);
+      if (queue !== null) try {
+        for (const ticket of tickets(queue)) if (ticket.pid === pid && ticket.token === token) removeTicket(queue, ticket);
+        removeEmptyQueue(parent, queueName, queue);
+      } finally { fs.closeSync(queue); }
       return 0;
     }
     let snapshot: Snapshot | null;
     try { snapshot = inspect(parent, name); }
     catch (e: any) { if (e.errno !== 2) throw e; snapshot = null; }
-    if (snapshot) {
-      if (alive(snapshot.marker.pid)) {
-        console.log(`pid=${snapshot.marker.pid} started=${snapshot.marker.started}`);
-        return 75; // Reserved EX_TEMPFAIL: validated lock held; runtime errors are fatal.
+    if (!alive(pid)) throw new Refused("cannot enroll a dead caller pid");
+    const queue = queueFd(parent, queueName, true)!;
+    try {
+      const current = enroll(parent, queue, pruneTickets(queue), pid, token);
+      if (snapshot && !alive(snapshot.marker.pid)) {
+        console.error(`selftest-sweep: removing stale lock ${lock} held by dead pid ${snapshot.marker.pid}`);
+        removeValidated(parent, name, snapshot); snapshot = null;
       }
-      console.error(`selftest-sweep: removing stale lock ${lock} held by dead pid ${snapshot.marker.pid}`);
-      removeValidated(parent, name, snapshot);
-    }
-    publish(parent, name, pid, token);
-    return 0;
+      if (snapshot?.marker.pid === pid && snapshot.marker.token === token && current[0].token === token) {
+        console.log(snapshot.identity); return 0; // Idempotent admission of this owner.
+      }
+      if (snapshot || current[0].token !== token) {
+        const waiting = current.filter(t => !(snapshot && t.pid === snapshot.marker.pid && t.token === snapshot.marker.token));
+        const position = waiting.findIndex(t => t.token === token) + 1;
+        console.log(`queue_position=${position} holder=${snapshot ? `pid=${snapshot.marker.pid} started=${snapshot.marker.started}` : "none"} head_pid=${current[0].pid}`);
+        return 75; // Validated queue wait; helper/runtime errors remain fatal.
+      }
+      console.log(publish(parent, name, pid, token));
+      return 0;
+    } finally { fs.closeSync(queue); }
   } finally { fs.closeSync(parent); }
 }
 try { process.exitCode = main(); }
