@@ -33,7 +33,7 @@ assert_no_fixture_desks(){
   done
   [ -z "$leaks" ] && pass "desk selftest leaves zero fixture seats/desk.ts processes" || fail "fixture seats/desk.ts process survived: $leaks"
 }
-port(){ bun -e 'const s=require("net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});'; }
+port(){ bun -e 'const s=(await import("node:net")).default.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});'; }
 PROJ="$FIX/proj"; mkdir -p "$PROJ/seats" "$PROJ/wheelhouse"
 selftest_copy_seat_runtime "$PROJ" "$HERE"
 cat > "$PROJ/wheelhouse/.template-source" <<'EOF'
@@ -100,7 +100,7 @@ P="$(port)"
 for _ in $(seq 1 50); do [ -s "$PROJ/seats/run/desk.port" ] && curl -fsS "http://127.0.0.1:$P/needs" > "$FIX/needs.html" 2>/dev/null && break; sleep 0.1; done
 if kill -0 "$PID" 2>/dev/null && grep -q "http://127.0.0.1:$P/needs" "$PROJ/seats/run/desk.port"; then pass "desk starts and writes seats/run/desk.port"; else fail "desk did not start: $(cat "$FIX/desk.err" 2>/dev/null)"; fi
 if bun - "$FIX/needs.html" <<'JS'
-const assert=require('assert/strict'),html=require('fs').readFileSync(process.argv[2],'utf8');
+const assert=(await import('node:assert/strict')).default,html=(await import('node:fs')).default.readFileSync(process.argv[2],'utf8');
 for(const text of ['Choose lunch','Old question','History','Closed question','action="/api/needs/need-old/answer"','action="/api/needs/need-old/message"','Run the login line','Please do the second step.']) assert.ok(html.includes(text),text);
 const pos=['Choose lunch','Old question','History','Closed question'].map(x=>html.indexOf(x));
 assert.ok(pos.every((p,i)=>!i||pos[i-1]<p));
@@ -118,7 +118,7 @@ done
 curl -fsS "http://127.0.0.1:$P/board" > "$FIX/board.html" || fail "GET /board failed"
 curl -fsS "http://127.0.0.1:$P/api/board.json" > "$FIX/board.json" || fail "GET /api/board.json failed"
 if bun - "$FIX/board.json" <<'JS'
-const assert=require('assert/strict'),data=JSON.parse(require('fs').readFileSync(process.argv[2],'utf8'));
+const assert=(await import('node:assert/strict')).default,data=JSON.parse((await import('node:fs')).default.readFileSync(process.argv[2],'utf8'));
 const cols=Object.fromEntries(data.columns.map(c=>[c.title,c.cards]));
 const has=(col,title,seat)=> (cols[col]??[]).some(c=>c.title===title&&(seat===undefined||c.seat===seat));
 assert.ok(has('Ready','Write the guide','ready')); assert.ok(!has('Ready','Hidden dependency work'));
@@ -133,7 +133,7 @@ JS
 then pass "GET /api/board.json places cards in the right columns with the right seats"; else fail "board JSON did not match expected columns: $(cat "$FIX/board.json" 2>/dev/null)"; fi
 PREC_CAN="$FIX/precedence-canary.ts"; cp "$PROJ/seats/desk.ts" "$PREC_CAN"
 bun - "$PREC_CAN" <<'JS'
-const fs=require('fs'),p=process.argv[2],s=fs.readFileSync(p,'utf8'),old='if(placed.has(id)) return;';
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),old='if(placed.has(id)) return;';
 if(!s.includes(old)) throw new Error('board precedence canary source changed');
 fs.writeFileSync(p,s.replace(old,''));
 JS
@@ -145,7 +145,7 @@ else
   PPREC="$(port)"; (cd "$FIX/preccan" && exec env PATH="$FIX/preccan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/preccan" WHEELHOUSE_DESK_PORT="$PPREC" bun "$FIX/preccan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$PPREC/api/board.json" > "$FIX/precedence-canary.json" 2>/dev/null || true; grep -q 'Finished but still in progress' "$FIX/precedence-canary.json" 2>/dev/null && break; sleep 0.1; done
   if bun - "$FIX/precedence-canary.json" <<'JS'
-const assert=require('assert/strict'),data=JSON.parse(require('fs').readFileSync(process.argv[2],'utf8'));
+const assert=(await import('node:assert/strict')).default,data=JSON.parse((await import('node:fs')).default.readFileSync(process.argv[2],'utf8'));
 const cols=Object.fromEntries(data.columns.map(c=>[c.title,c.cards]));
 const count=Object.values(cols).flat().filter(c=>c.title==='Finished but still in progress').length;
 assert.ok(count>1||(cols['In progress']??[]).some(c=>c.title==='Finished but still in progress'));
@@ -160,15 +160,15 @@ SINCE="2026-09-21T00:00:00Z"; UNTIL="2026-09-22T00:00:00Z"; DIGEST_Q="since=$SIN
 for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P/digest?$DIGEST_Q" > "$FIX/digest.html" 2>/dev/null || true; grep -q 'Ship the button' "$FIX/digest.html" 2>/dev/null && break; sleep 0.1; done
 curl -fsS "http://127.0.0.1:$P/api/digest.json?$DIGEST_Q" > "$FIX/digest.json" || fail "GET /api/digest.json failed"
 if bun - "$FIX/digest.html" <<'JS'
-const assert=require('assert/strict'),h=require('fs').readFileSync(process.argv[2],'utf8');
+const assert=(await import('node:assert/strict')).default,h=(await import('node:fs')).default.readFileSync(process.argv[2],'utf8');
 const pos=['Shipped','Blocked on you','In review','Sent back','Failed and why'].map(x=>h.indexOf('<h2>'+x+'</h2>'));
 assert.ok(pos.every(p=>p>=0)); assert.deepEqual(pos,[...pos].sort((a,b)=>a-b));
 for(const text of ['Ship the button','commit ','https://github.com/example/product/commit/','<a href="/needs">need</a>']) assert.ok(h.includes(text),text);
 JS
 then pass "GET /digest renders ordered sections with shipped commit link and need link"; else fail "GET /digest missing expected digest content: $(cat "$FIX/digest.html" 2>/dev/null)"; fi
 if bun - "$FIX/digest.json" <(WHEELHOUSE_DIGEST_ROOT="$PROJ" PATH="$PROJ/bin:$PATH" bun "$PROJ/seats/digest.ts" --json --since "$SINCE" --until "$UNTIL") <<'JS'
-const fs=require('fs'),[p,q]=process.argv.slice(2),left=JSON.parse(fs.readFileSync(p,'utf8')),right=JSON.parse(fs.readFileSync(q,'utf8'));
-delete left.window; delete right.window; require('assert/strict').deepEqual(left,right);
+const fs=(await import('node:fs')).default,[p,q]=process.argv.slice(2),left=JSON.parse(fs.readFileSync(p,'utf8')),right=JSON.parse(fs.readFileSync(q,'utf8'));
+delete left.window; delete right.window; (await import('node:assert/strict')).default.deepEqual(left,right);
 JS
 then pass "GET /api/digest.json matches digest.ts --json for the same window"; else fail "digest JSON differed: api=$(cat "$FIX/digest.json" 2>/dev/null)"; fi
 HOURS_AT="$(bun -e 'console.log(new Date().toISOString())')"
@@ -184,7 +184,7 @@ if [ "$(curl -sS -o "$FIX/digest-zero-hours.txt" -w '%{http_code}' "http://127.0
 if grep -q 'Digest: last 24 h' "$FIX/board.html" && grep -q 'Digest: last 24 h' "$FIX/needs.html"; then pass "/board and /needs link to digest"; else fail "board or needs missing digest link"; fi
 DIGEST_CAN="$FIX/digest-canary.ts"; cp "$PROJ/seats/desk.ts" "$DIGEST_CAN"
 bun - "$DIGEST_CAN" <<'JS'
-const fs=require('fs'),p=process.argv[2],s=fs.readFileSync(p,'utf8');
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8');
 const old='.replace(new RegExp(`\\\\b${namespace().replace(/[.*+?^${}()|[\\]\\\\]/g,"\\\\$&")}-[a-z0-9_.-]+\\\\b`,"ig"),"work item")';
 if(!s.includes(old)) throw new Error('digest id canary source changed');
 fs.writeFileSync(p,s.replaceAll(old,''));
@@ -219,7 +219,7 @@ PSLOW="$(port)"; (cd "$SLOW" && exec env PATH="$SLOW/bin:$PATH" WHEELHOUSE_STUB_
 for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$PSLOW/board" >/dev/null 2>&1 && break; sleep 0.1; done
 NEEDS_MS="$(bun - "http://127.0.0.1:$PSLOW/needs" "$FIX/slow-needs.html" <<'JS'
 const [url,file]=process.argv.slice(2),start=performance.now(),r=await fetch(url);
-if(!r.ok) throw new Error('HTTP '+r.status); require('fs').writeFileSync(file,Buffer.from(await r.arrayBuffer())); console.log(Math.floor(performance.now()-start));
+if(!r.ok) throw new Error('HTTP '+r.status); (await import('node:fs')).default.writeFileSync(file,Buffer.from(await r.arrayBuffer())); console.log(Math.floor(performance.now()-start));
 JS
 )"
 if [ "$NEEDS_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd refresh never runs in a request: /needs answers in under 1s and desk survives"; else fail "slow bd blocked /needs or killed desk (ms=$NEEDS_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
@@ -228,13 +228,13 @@ if [ "$NEEDS_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow 
 sleep 5
 DIGEST_MS="$(bun - "http://127.0.0.1:$PSLOW/digest?hours=1" "$FIX/slow-digest.html" <<'JS'
 const [url,file]=process.argv.slice(2),start=performance.now(),r=await fetch(url);
-if(!r.ok) throw new Error('HTTP '+r.status); require('fs').writeFileSync(file,Buffer.from(await r.arrayBuffer())); console.log(Math.floor(performance.now()-start));
+if(!r.ok) throw new Error('HTTP '+r.status); (await import('node:fs')).default.writeFileSync(file,Buffer.from(await r.arrayBuffer())); console.log(Math.floor(performance.now()-start));
 JS
 )"
 if [ "$DIGEST_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd digest window is scheduled off the request path and answers in under 1s"; else fail "slow bd digest window blocked request or killed desk (ms=$DIGEST_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
 NEEDS_DURING_DIGEST_MS="$(bun - "http://127.0.0.1:$PSLOW/needs" "$FIX/slow-needs-during-digest.html" <<'JS'
 const [url,file]=process.argv.slice(2),start=performance.now(),r=await fetch(url);
-if(!r.ok) throw new Error('HTTP '+r.status); require('fs').writeFileSync(file,Buffer.from(await r.arrayBuffer())); console.log(Math.floor(performance.now()-start));
+if(!r.ok) throw new Error('HTTP '+r.status); (await import('node:fs')).default.writeFileSync(file,Buffer.from(await r.arrayBuffer())); console.log(Math.floor(performance.now()-start));
 JS
 )"
 if [ "$NEEDS_DURING_DIGEST_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd digest build does not block another desk request"; else fail "slow bd digest build blocked another request or killed desk (ms=$NEEDS_DURING_DIGEST_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
@@ -244,7 +244,7 @@ kill "$SLOW_PID" 2>/dev/null || true; wait "$SLOW_PID" 2>/dev/null || true
 kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; PID=""
 ANSWERED_CAN="$FIX/answered-canary.ts"; cp "$PROJ/seats/desk.ts" "$ANSWERED_CAN"
 bun - "$ANSWERED_CAN" <<'JS'
-const fs=require('fs'),p=process.argv[2],s=fs.readFileSync(p,'utf8'),old='const active = n.state !== "closed";';
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),old='const active = n.state !== "closed";';
 if(!s.includes(old)) throw new Error('answered canary source changed');
 fs.writeFileSync(p,s.replace(old,'const active = n.state === "open";'));
 JS
@@ -260,7 +260,7 @@ else
 fi
 CAN="$FIX/canary.ts"; cp "$PROJ/seats/desk.ts" "$CAN"
 bun - "$CAN" <<'JS'
-const fs=require('fs'),p=process.argv[2],s=fs.readFileSync(p,'utf8'),old='${active && n.opened.options.length?`<form';
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),old='${active && n.opened.options.length?`<form';
 if(!s.includes(old)) throw new Error('machine-field canary source changed');
 fs.writeFileSync(p,s.replace('<p>${esc(n.opened.body)}</p>','<p>${esc(n.opened.body)}</p><p>${esc(n.opened.machine.bead)}</p>'));
 JS
@@ -272,7 +272,7 @@ if grep -q 'demo-ab12' "$FIX/canary.html"; then pass "canary: rendering machine.
 [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
 BOARD_CAN="$FIX/board-canary.ts"; cp "$PROJ/seats/desk.ts" "$BOARD_CAN"
 bun - "$BOARD_CAN" <<'JS'
-const fs=require('fs'),p=process.argv[2],s=fs.readFileSync(p,'utf8'),old='title:String(i.title||"Untitled work"),';
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),old='title:String(i.title||"Untitled work"),';
 if(!s.includes(old)) throw new Error('board id canary source changed');
 fs.writeFileSync(p,s.replace(old,'title:String(i.id)+" "+String(i.title||"Untitled work"),'));
 JS
