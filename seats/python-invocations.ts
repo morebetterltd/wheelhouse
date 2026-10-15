@@ -189,7 +189,7 @@ function shellTokens(text: string): { tokens: Token[]; substitutions: { code: st
   return { tokens, substitutions, heredocs };
 }
 
-export function invocationViolations(text: string, file = "source.sh"): Violation[] {
+export function invocationViolations(text: string, file = "source.sh", isExecutableFile = false): Violation[] {
   const errors: Violation[] = [];
   function bad(offset: number, why: string) { if (!errors.some(e => e.offset === offset && e.why === why)) errors.push({ offset, why }); }
   function program(code: string, at: number) {
@@ -316,7 +316,11 @@ export function invocationViolations(text: string, file = "source.sh"): Violatio
       }
     }
   }
-  if (/\.(?:md|markdown)$/i.test(file)) {
+  const javascript = /\.(?:[cm]?[jt]s|tsx|jsx)$/i.test(file);
+  // A data suffix is not an exclusion when the file declares code or is executable.
+  if (/^#!/.test(text)) program(text, 0);
+  else if (isExecutableFile && !javascript) shell(text, 0);
+  else if (/\.(?:md|markdown)$/i.test(file)) {
     for (const block of text.matchAll(/^```(bash|sh|shell|console|js|javascript|ts|typescript)\s*\n([^]*?)^```/gm)) {
       const at = block.index! + block[0].indexOf("\n") + 1;
       if (/^(?:js|javascript|ts|typescript)$/.test(block[1])) js(block[2], at); else shell(block[2].replace(/^\$ /gm, ""), at);
@@ -325,7 +329,7 @@ export function invocationViolations(text: string, file = "source.sh"): Violatio
     const data = JSON.parse(text); for (const value of Object.values(data.scripts ?? {})) if (typeof value === "string") shell(value, 0);
   } else if (/\.(?:json|jsonl|txt|csv|ya?ml|svg|xml|plist|out|err|log|html|css)$/i.test(file)) {
     // Captures, messages and documents are data, not executable programs.
-  } else if (/\.(?:[cm]?[jt]s|tsx|jsx)$/i.test(file) || /^#![^\n]*\b(?:node|bun)\b/.test(text)) js(text.replace(/^#![^\n]*/, ""), 0);
+  } else if (javascript) js(text, 0);
   else shell(text, 0);
   return errors;
 }
@@ -348,9 +352,12 @@ export function auditPythonCalls(root: string): { files: number; errors: string[
     if (!stat.isFile()) throw Error(`not a regular tracked source: ${relative}`);
     const bytes = fs.readFileSync(full); examined++;
     if (bytes.includes(0)) return;
-    for (const result of invocationViolations(bytes.toString("utf8"), relative)) {
-      const line = bytes.toString("utf8").slice(0, result.offset).split("\n").length;
-      errors.push(`${relative}:${line}: forbidden Python invocation: ${result.why}`);
+    const text = bytes.toString("utf8");
+    // Both names matter: a tracked data-looking link can target a code file.
+    for (const sourceName of new Set([relative, real])) for (const result of invocationViolations(text, sourceName, Boolean(stat.mode & 0o111))) {
+      const line = text.slice(0, result.offset).split("\n").length;
+      const message = `${relative}:${line}: forbidden Python invocation: ${result.why}`;
+      if (!errors.includes(message)) errors.push(message);
     }
   }
   for (const file of files) {
