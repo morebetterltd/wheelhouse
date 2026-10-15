@@ -1,5 +1,11 @@
 # Shared-host recovery selftest (fhfb)
 
+For a current rerun, the controller is now TypeScript (twxf):
+`bun seats/fixtures/recover-process-noise.ts <recover.selftest.sh> <existing-empty-case-dir>`.
+The captures and original commands below remain historical evidence, not a
+requirement to install their former interpreter. All case/TMPDIR paths must
+remain in the invoking bead's scratch root.
+
 Base: `origin/main a0bf61cfd3390bb54a3e1dd700181a2a264d5445`, default target
 `main`. Runtime/test source pin: `f594fbc` (test files only). The following
 commit adds evidence only, leaving the tested `seats/` tree unchanged.

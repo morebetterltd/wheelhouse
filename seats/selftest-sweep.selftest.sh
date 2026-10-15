@@ -52,10 +52,10 @@ chmod +x "$SUITES/fixture.selftest.sh"
 # Exercise the default (override unset), but relocate only its constant /tmp
 # prefix into this fixture. Otherwise a full sweep would wait on its own lock.
 default_tmpdir_leg(){
-  local runner="$FIX/default-runner.sh" host="$FIX/default-host"
+  local runner="$FIX/default-project/seats/selftest-sweep.sh" host="$FIX/default-host"
   local tmp_a="$FIX/tmp-A" tmp_b="$FIX/tmp-B" events="$FIX/default-events.log"
   local release="$FIX/default-release" pid_a pid_b rc_a rc_b order
-  mkdir -p "$host" "$tmp_a" "$tmp_b"
+  mkdir -p "$(dirname "$runner")" "$host" "$tmp_a" "$tmp_b"
   sed "/^LOCK=/s|/tmp|$host|g" "$SWEEP" > "$runner"
   env -u WHEELHOUSE_SELFTEST_SWEEP_LOCK TMPDIR="$tmp_a" SWEEP_RELEASE="$release" SWEEP_ID=TA SWEEP_EVENTS="$events" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$runner" > "$FIX/TA.out" 2> "$FIX/TA.err" &
   pid_a=$!
@@ -85,6 +85,46 @@ default_tmpdir_leg(){
   else
     fail "different TMPDIR default sweep order wrong (rcA=$rc_a rcB=$rc_b order=$order)"
   fi
+}
+# A copied real runner scans its own seats tree even with a filtered pattern.
+source_policy_leg(){
+  local project="$FIX/source-project" file kind rc ran
+  mkdir -p "$project/seats/nested space" "$FIX/source-linked"
+  cp -f "$SWEEP" "$project/seats/selftest-sweep.sh"
+  printf '#!/usr/bin/env bash\nprintf ran > "$POLICY_RAN"\n' > "$project/seats/pass.selftest.sh"
+  ran="$project/ran"
+  for kind in suffix direct env split quoted compact split-equals no-newline linked; do
+    file="$project/seats/nested space/no-extension"
+    case "$kind" in
+      suffix) file="$file.py"; printf 'not even executable\n' > "$file" ;;
+      direct) printf '#!/opt/venv/bin/python3.12\n' > "$file" ;;
+      env) printf '#!/usr/bin/env python3\n' > "$file" ;;
+      split) printf '#!/usr/bin/env -S python3 -u\n' > "$file" ;;
+      quoted) printf '#!/usr/bin/env -S "python3 -u"\n' > "$file" ;;
+      compact) printf '#!/usr/bin/env -Spython3\n' > "$file" ;;
+      split-equals) printf '#!/usr/bin/env --split-string="python3 -u"\n' > "$file" ;;
+      no-newline) printf '#! /usr/bin/python' > "$file" ;;
+      linked)
+        printf '#!/usr/bin/env python2.7\n' > "$FIX/source-linked/script"
+        file="$project/seats/link"; ln -s "$FIX/source-linked" "$file" ;;
+    esac
+    rc=0
+    POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+    if [ "$rc" != 0 ] && [ ! -e "$ran" ] && grep -F 'forbidden Python' "$project/err" >/dev/null; then
+      pass "source guard rejects $kind before even a filtered suite runs"
+    else
+      fail "source guard missed $kind (rc=$rc suiteRan=$([ -e "$ran" ] && echo yes || echo no))"
+    fi
+    rm -f "$ran" "$file"
+  done
+  # Existing inline calls and embedded generated-script text are NOT files
+  # using that interpreter; 9yms owns the later invocation-level policy.
+  printf '#!/usr/bin/env bash\npython3 -c "print(1)"\n' > "$project/seats/inline.sh"
+  printf 'documentation\n#!/usr/bin/env python3\n' > "$project/seats/embedded.txt"
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 0 ] && [ -f "$ran" ]; then pass 'source guard permits existing inline calls and non-first-line shebang text'
+  else fail "source guard incorrectly rejects inline/embedded text (rc=$rc)"; fi
 }
 default_tmpdir_leg
 if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
@@ -190,6 +230,7 @@ if [ "${WHEELHOUSE_SELFTEST_SWEEP_OWNERSHIP_ONLY:-0}" = 1 ]; then
   [ "$FAILED" = 0 ] && { echo 'selftest-sweep.selftest: PASS (15 ownership checks)'; exit 0; }
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1
 fi
+source_policy_leg
 
 RELEASE_A="$FIX/release-A"
 SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=A SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/A.out" 2> "$FIX/A.err" &
@@ -287,7 +328,11 @@ EPERM="$FIX/eperm.lock"
 make_lock "$EPERM" 1
 SWEEP_ID=H SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$EPERM" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/eperm.out" 2> "$FIX/eperm.err" &
 PID_G=$!
-sleep 0.2
+for _ in $(seq 1 100); do
+  grep -q 'waiting for host-wide lock' "$FIX/eperm.err" && break
+  kill -0 "$PID_G" 2>/dev/null || break
+  sleep 0.05
+ done
 if [ -d "$EPERM" ] && grep -q 'waiting for host-wide lock' "$FIX/eperm.err" && ! grep -q 'removing stale lock' "$FIX/eperm.err"; then
   pass "EPERM holder pid is treated as live instead of stale"
 else
@@ -330,7 +375,7 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "selftest-sweep.selftest: PASS (26 checks)"
+  echo "selftest-sweep.selftest: PASS (36 checks)"
 else
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"
   exit 1
