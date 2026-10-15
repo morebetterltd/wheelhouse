@@ -20,7 +20,7 @@ function run(command: string, args: string[], cwd: string, env = process.env) {
 }
 function snapshot(file: string): unknown {
   let st: fs.Stats;
-  try { st = fs.lstatSync(file); } catch (e: any) { if (e.code === "ENOENT") return {missing: true}; throw e; }
+  try { st = fs.lstatSync(file); } catch (e: any) { if (e.code === "ENOENT" || e.code === "ENOTDIR") return {missing: true, code: e.code}; throw e; }
   return {dev: st.dev, ino: st.ino, mode: st.mode, nlink: st.nlink, size: st.size, mtime: st.mtimeMs,
     bytes: st.isFile() ? fs.readFileSync(file).toString("base64") : null,
     link: st.isSymbolicLink() ? fs.readlinkSync(file) : null,
@@ -63,6 +63,9 @@ for (const kind of selected) {
   const paths = [...new Set([stateFile, log, expected, external, external + ".3", ...[1,2,3].map(i => log + "." + i)])];
   if (kind === "archive-directory") paths.push(log + ".1/KEEP");
   const before = paths.map(file => ({file, data: snapshot(file)}));
+  for (const file of [stateFile, log, external, external + ".3", ...[1,2,3].map(i => log + "." + i)]) {
+    assert(!("missing" in (before.find(x => x.file === file)!.data as object)), "absent measurement subject: " + file);
+  }
   const beforeLog = kind === "fifo" ? null : fs.readFileSync(log);
   const env = {...process.env, WHEELHOUSE_LOG_ROTATE_BYTES: "1", WHEELHOUSE_LOG_ROTATE_KEEP: kind.endsWith("-zero") ? "0" : "3", WHEELHOUSE_ORPHAN_CONFIRM_MS: "0"};
   const args = [path.join(seats, "adapter.ts"), "status"];
@@ -85,7 +88,7 @@ for(const call of [()=>fs.realpathSync(process.env.EVO6_TARGET),()=>fs.openSync(
 console.log('PASS both namespace hooks calibrated on a regular file');\n`);
     const calibrated = run("bun", ["--preload", preload, probe], root, {...env, EVO6_TARGET: regular, EVO6_MARK: mark, EVO6_EXIT: "0"});
     native.push({command: ["bun", "--preload", preload, probe], ...calibrated});
-    assert.equal(calibrated.code, 0, JSON.stringify(calibrated)); assert.equal(fs.readFileSync(mark, "utf8").trim().split("\n").length, 2);
+    assert.equal(calibrated.code, 0, JSON.stringify(calibrated)); assert.equal(calibrated.stderr, ""); assert.equal(fs.readFileSync(mark, "utf8").trim().split("\n").length, 2);
     fs.unlinkSync(mark); Object.assign(env, {EVO6_TARGET: log, EVO6_MARK: mark, EVO6_EXIT: "1"}); args.unshift("--preload", preload);
   }
   const result = run("bun", args, root, env);
