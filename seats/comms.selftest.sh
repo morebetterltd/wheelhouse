@@ -142,13 +142,13 @@ if [ $rc -eq 2 ] && grep -q 'STOP: channel principal is not readable' "$FIX/read
 
 reset_logs
 bun - "$ROOT/seats/channels.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.channels.principal.read=true; fs.writeFileSync(p,JSON.stringify(j)+'\n');
 JS
 base_env bun "$ROOT/seats/comms.ts" read principal > "$FIX/read-telegram-courier.out" 2>&1; rc=$?
 if [ $rc -eq 0 ] && grep -q 'read principal: telegram channels are read by the courier tick' "$FIX/read-telegram-courier.out" && [ "$(count_req)" -eq 0 ]; then pass 'standalone telegram read prints courier-tick line and makes zero API calls'; else fail "telegram courier line leg rc=$rc out=$(cat "$FIX/read-telegram-courier.out") req=$(count_req)"; fi
 bun - "$ROOT/seats/channels.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.channels.principal.read=false; fs.writeFileSync(p,JSON.stringify(j)+'\n');
 JS
 
