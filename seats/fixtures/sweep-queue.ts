@@ -19,7 +19,7 @@ fs.readSync(gate,Buffer.alloc(1),0,1,null);
 fs.appendFileSync(e.QUEUE_EVENTS!,e.QUEUE_NAME+" exit\\n");fs.unlinkSync(active);fs.closeSync(gate);
 `);
 
-type Participant = { name: string; child: ChildProcess; stdout: string; stderr: string; closed: boolean; expectedStop: boolean; done: Promise<number | null>; gate: string };
+type Participant = { name: string; child: ChildProcess; stdout: string; stderr: string; closed: boolean; status: number | null; expectedStop: boolean; done: Promise<number | null>; gate: string };
 class Case {
   dir: string; lock: string; participants: Participant[] = []; entered: string[] = [];
   listeners = new Set<() => void>(); cursor = 0;
@@ -29,7 +29,7 @@ class Case {
     await new Promise<void>((resolve, reject) => {
       const check = () => {
         if (condition()) { this.listeners.delete(check); resolve(); return; }
-        const failed = this.participants.find(p => p.closed && !p.expectedStop && (p === subject || /selftest-sweep: FAIL/.test(p.stdout)));
+        const failed = this.participants.find(p => p.closed && !p.expectedStop && (p === subject || p.status !== 0 || !p.stdout.includes(`QUEUE_ENTER ${p.name}\n`)));
         if (failed) { this.listeners.delete(check); reject(new Error(`${failed.name} closed before barrier:\n${failed.stdout}\n${failed.stderr}`)); }
       };
       this.listeners.add(check); check();
@@ -39,12 +39,12 @@ class Case {
     const gate = path.join(this.dir, name + ".fifo"), fifo = spawnSync("mkfifo", [gate], { encoding: "utf8" });
     assert.equal(fifo.status, 0, fifo.stderr);
     const child = spawn("bash", [runner], { env: { ...process.env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, WHEELHOUSE_SELFTEST_SWEEP_LOCK: this.lock, WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER: helper, QUEUE_SUITE: code, QUEUE_NAME: name, QUEUE_GATE: gate, QUEUE_ACTIVE: path.join(this.dir, "active"), QUEUE_EVENTS: path.join(this.dir, "events") }, stdio: ["ignore", "pipe", "pipe"] });
-    const p: Participant = { name, child, stdout: "", stderr: "", closed: false, expectedStop: false, gate, done: Promise.resolve(null) };
+    const p: Participant = { name, child, stdout: "", stderr: "", closed: false, status: null, expectedStop: false, gate, done: Promise.resolve(null) };
     this.participants.push(p);
     let entered = false;
     child.stdout!.on("data", b => { p.stdout += b; if (!entered && p.stdout.includes(`QUEUE_ENTER ${name}\n`)) { entered = true; this.entered.push(name); } this.notify(); });
     child.stderr!.on("data", b => { p.stderr += b; this.notify(); });
-    p.done = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", status => { p.closed = true; this.notify(); resolve(status); }); });
+    p.done = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", status => { p.closed = true; p.status = status; this.notify(); resolve(status); }); });
     return p;
   }
   async next(expected: string) { await this.observe(() => this.entered.length > this.cursor); assert.equal(this.entered[this.cursor++], expected, "actual acquisition order"); }
