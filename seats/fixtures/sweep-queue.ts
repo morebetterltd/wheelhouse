@@ -9,6 +9,10 @@ const [root, runner, helper] = process.argv.slice(2);
 assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());
 assert(fs.statSync(runner).isFile()); assert(fs.statSync(helper).isFile());
 const suite = path.join(root, "fixture.selftest.sh"), code = path.join(root, "suite.ts");
+const pollBin = path.join(root, "poll-bin"); fs.mkdirSync(pollBin);
+// Only the oldest test runner gets this PATH. Its first retry parks after a
+// completed helper call, never while holding the parent-directory flock.
+fs.writeFileSync(path.join(pollBin, "sleep"), '#!/usr/bin/env bash\nexec 9<>"$QUEUE_POLL_GATE"\nprintf "QUEUE_POLL_HELD %s\\n" "$QUEUE_NAME"\nIFS= read -r -n 1 <&9\n', { mode: 0o700 });
 fs.writeFileSync(suite, '#!/usr/bin/env bash\nexec bun "$QUEUE_SUITE"\n');
 fs.writeFileSync(code, `import fs from "node:fs";
 const e=process.env, gate=fs.openSync(e.QUEUE_GATE!,"r+"),active=e.QUEUE_ACTIVE!;
@@ -19,7 +23,7 @@ fs.readSync(gate,Buffer.alloc(1),0,1,null);
 fs.appendFileSync(e.QUEUE_EVENTS!,e.QUEUE_NAME+" exit\\n");fs.unlinkSync(active);fs.closeSync(gate);
 `);
 
-type Participant = { name: string; child: ChildProcess; stdout: string; stderr: string; closed: boolean; status: number | null; expectedStop: boolean; done: Promise<number | null>; gate: string };
+type Participant = { name: string; child: ChildProcess; stdout: string; stderr: string; closed: boolean; status: number | null; expectedStop: boolean; done: Promise<number | null>; gate: string; poll?: number };
 class Case {
   dir: string; lock: string; participants: Participant[] = []; entered: string[] = [];
   listeners = new Set<() => void>(); cursor = 0;
@@ -35,11 +39,17 @@ class Case {
       this.listeners.add(check); check();
     });
   }
-  start(name: string) {
+  start(name: string, holdPoll = false) {
     const gate = path.join(this.dir, name + ".fifo"), fifo = spawnSync("mkfifo", [gate], { encoding: "utf8" });
     assert.equal(fifo.status, 0, fifo.stderr);
-    const child = spawn("bash", [runner], { env: { ...process.env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, WHEELHOUSE_SELFTEST_SWEEP_LOCK: this.lock, WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER: helper, QUEUE_SUITE: code, QUEUE_NAME: name, QUEUE_GATE: gate, QUEUE_ACTIVE: path.join(this.dir, "active"), QUEUE_EVENTS: path.join(this.dir, "events") }, stdio: ["ignore", "pipe", "pipe"] });
-    const p: Participant = { name, child, stdout: "", stderr: "", closed: false, status: null, expectedStop: false, gate, done: Promise.resolve(null) };
+    const pollGate = gate + ".poll";
+    let poll: number | undefined;
+    if (holdPoll) {
+      const made = spawnSync("mkfifo", [pollGate], { encoding: "utf8" }); assert.equal(made.status, 0, made.stderr);
+      poll = fs.openSync(pollGate, "r+"); // Can buffer a cleanup release before its reader starts.
+    }
+    const child = spawn("bash", [runner], { env: { ...process.env, PATH: holdPoll ? pollBin + path.delimiter + process.env.PATH : process.env.PATH, QUEUE_POLL_GATE: pollGate, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, WHEELHOUSE_SELFTEST_SWEEP_LOCK: this.lock, WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER: helper, QUEUE_SUITE: code, QUEUE_NAME: name, QUEUE_GATE: gate, QUEUE_ACTIVE: path.join(this.dir, "active"), QUEUE_EVENTS: path.join(this.dir, "events") }, stdio: ["ignore", "pipe", "pipe"] });
+    const p: Participant = { name, child, stdout: "", stderr: "", closed: false, status: null, expectedStop: false, gate, poll, done: Promise.resolve(null) };
     this.participants.push(p);
     let entered = false;
     child.stdout!.on("data", b => { p.stdout += b; if (!entered && p.stdout.includes(`QUEUE_ENTER ${name}\n`)) { entered = true; this.entered.push(name); } this.notify(); });
@@ -72,10 +82,12 @@ class Case {
   }
   async cleanup() {
     for (const p of this.participants) {
+      if (p.poll !== undefined) fs.writeSync(p.poll, "r");
       fs.writeFileSync(path.join(this.dir, p.name + ".stdout"), p.stdout); fs.writeFileSync(path.join(this.dir, p.name + ".stderr"), p.stderr);
-      if (!p.closed) { p.expectedStop = true; p.child.kill("SIGCONT"); p.child.kill("SIGTERM"); }
+      if (!p.closed) { p.expectedStop = true; p.child.kill("SIGTERM"); }
     }
     await Promise.all(this.participants.map(p => p.done));
+    for (const p of this.participants) if (p.poll !== undefined) fs.closeSync(p.poll);
   }
 }
 
@@ -83,21 +95,22 @@ async function fifo() {
   const c = new Case("fifo"); let first: Participant | undefined;
   try {
     const holder = c.start("holder"); await c.next("holder");
-    first = c.start("first"); await c.queued(first, 1, holder);
+    first = c.start("first", true); await c.queued(first, 1, holder);
+    await c.observe(() => first!.stdout.includes("QUEUE_POLL_HELD first\n"), first);
     const second = c.start("second"); await c.queued(second, 2, holder);
     const third = c.start("third"); await c.queued(third, 3, holder);
     // Force a younger admission attempt while the oldest cannot poll. No
     // timing decides who attempts first and no absence is measured by a clock.
-    first.child.kill("SIGSTOP"); c.release(holder); assert.equal(await holder.done, 0);
+    c.release(holder); assert.equal(await holder.done, 0);
     const blocked = c.probe(third); assert.equal(blocked.status, 75, blocked.stderr + blocked.stdout);
     assert.match(blocked.stdout, /queue_position=3 holder=none/);
-    console.log("PASS younger explicit attempt cannot pass a stopped oldest waiter");
-    first.child.kill("SIGCONT");
+    console.log("PASS younger explicit attempt cannot pass the FIFO-barrier-held oldest waiter");
+    fs.writeSync(first.poll!, "r");
     for (const p of [first, second, third]) { await c.next(p.name); c.release(p); assert.equal(await p.done, 0); }
     await c.finish();
     assert.equal(fs.readFileSync(path.join(c.dir, "events"), "utf8"), "holder enter\nholder exit\nfirst enter\nfirst exit\nsecond enter\nsecond exit\nthird enter\nthird exit\n");
     console.log("PASS three barrier-ordered waiters acquire FIFO with exclusive suite execution");
-  } finally { first?.child.kill("SIGCONT"); await c.cleanup(); }
+  } finally { await c.cleanup(); }
 }
 async function deadWaiter() {
   const c = new Case("dead");
