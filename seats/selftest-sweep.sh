@@ -9,102 +9,30 @@ PATTERN="${WHEELHOUSE_SELFTEST_SWEEP_PATTERN:-$ROOT/seats/*.selftest.sh}"
 LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-/tmp/wheelhouse-selftest-sweep.lock}"
 SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
+OWNED_LOCK=""
+LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$ROOT/seats/selftest-sweep-lock.ts}"
+if [ ! -f "$LOCK_HELPER" ] || [ ! -r "$LOCK_HELPER" ]; then
+  printf 'STOP: selftest-sweep lock helper missing or unreadable: %s\n' "$LOCK_HELPER" >&2
+  exit 2
+fi
+# Canonicalize the parent, not the leaf: a symlink at LOCK must be refused.
+LOCK="$(bun -e 'import fs from "node:fs"; import p from "node:path"; const s=process.argv[1]; console.log(p.join(fs.realpathSync(p.dirname(p.resolve(s))),p.basename(s)))' "$LOCK")" || exit 2
+LOCK_TOKEN="$(bun -e 'console.log(crypto.randomUUID().replace(/-/g,""))')" || exit 2
 
 say(){ printf '%s\n' "$*"; }
 info(){ say "$*" >&2; }
 
-lock_read_field(){
-  local key="$1"
-  if [ -d "$LOCK" ]; then
-    case "$key" in
-      pid) [ -f "$LOCK/pid" ] && sed -n '1p' "$LOCK/pid" 2>/dev/null || true ;;
-      started) [ -f "$LOCK/started" ] && sed -n '1p' "$LOCK/started" 2>/dev/null || true ;;
-      root) [ -f "$LOCK/root" ] && sed -n '1p' "$LOCK/root" 2>/dev/null || true ;;
-      pattern) [ -f "$LOCK/pattern" ] && sed -n '1p' "$LOCK/pattern" 2>/dev/null || true ;;
-    esac
-    return 0
-  fi
-  [ -f "$LOCK" ] || return 0
-  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$LOCK" 2>/dev/null || true
-}
-holder_pid(){ lock_read_field pid; }
-holder_desc(){
-  local pid started root
-  pid="$(holder_pid)"
-  started="$(lock_read_field started)"
-  root="$(lock_read_field root)"
-  printf 'pid=%s%s%s' "${pid:-unknown}" "${started:+ started=$started}" "${root:+ root=$root}"
-}
-pid_alive(){
-  local pid="$1" err
-  [ -n "$pid" ] || return 1
-  if kill -0 "$pid" 2>/dev/null; then return 0; fi
-  err="$(kill -0 "$pid" 2>&1 >/dev/null || true)"
-  case "$err" in
-    *"Operation not permitted"*|*"operation not permitted"*|*"not permitted"*) return 0 ;;
-  esac
-  return 1
-}
-
-write_lock_candidate(){
-  local path="$1"
-  {
-    printf 'pid=%s\n' "$$"
-    printf 'started=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf 'root=%s\n' "$ROOT"
-    printf 'pattern=%s\n' "$PATTERN"
-  } > "$path"
-}
-
-try_atomic_acquire(){
-  local parent base candidate
-  parent="$(dirname "$LOCK")"
-  base="$(basename "$LOCK")"
-  candidate="$parent/.${base}.$$.$RANDOM.new"
-  write_lock_candidate "$candidate" || { rm -f "$candidate"; return 1; }
-  if [ -e "$LOCK" ]; then
-    rm -f "$candidate"
-    return 1
-  fi
-  if ln "$candidate" "$LOCK" 2>/dev/null; then
-    rm -f "$candidate"
-    return 0
-  fi
-  rm -f "$candidate"
-  return 1
-}
-
-try_remove_stale_lock(){
-  local pid stale moved_pid desc
-  pid="$(holder_pid)"
-  if [ -n "$pid" ] && pid_alive "$pid"; then return 1; fi
-  stale="$LOCK.stale.$$.$RANDOM"
-  if ! mv "$LOCK" "$stale" 2>/dev/null; then return 1; fi
-  if [ -d "$stale" ]; then
-    moved_pid="$(sed -n '1p' "$stale/pid" 2>/dev/null || true)"
-  else
-    moved_pid="$(awk -F= '$1 == "pid" { sub(/^[^=]*=/, ""); print; exit }' "$stale" 2>/dev/null || true)"
-  fi
-  if [ -n "$moved_pid" ] && pid_alive "$moved_pid"; then
-    mv "$stale" "$LOCK" 2>/dev/null || true
-    return 1
-  fi
-  if [ -n "$moved_pid" ]; then desc="dead pid $moved_pid"; else desc="missing pid"; fi
-  info "selftest-sweep: removing stale lock $LOCK held by $desc"
-  rm -rf "$stale"
-  return 0
-}
-
 acquire_lock(){
-  local printed=0
+  local printed=0 result rc
   while :; do
-    if try_atomic_acquire; then return 0; fi
-    if [ -e "$LOCK" ] && try_remove_stale_lock; then
-      printed=0
-      continue
-    fi
+    result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
+    case "$rc" in
+      0) OWNED_LOCK="$result"; return 0 ;;
+      75) ;; # Reserved helper result: a validated live lock, not a Bun error.
+      *) info "STOP: selftest-sweep lock helper failed (exit $rc)"; exit 2 ;;
+    esac
     if [ "$printed" = 0 ]; then
-      info "selftest-sweep: waiting for host-wide lock $LOCK held by $(holder_desc)"
+      info "selftest-sweep: waiting for host-wide lock $LOCK held by $result"
       printed=1
     fi
     sleep "$SLEEP_SECS"
@@ -112,7 +40,18 @@ acquire_lock(){
 }
 
 release_lock(){
-  if [ -f "$LOCK" ] && [ "$(holder_pid)" = "$$" ]; then rm -f "$LOCK"; fi
+  local rc=0
+  if [ -n "$OWNED_LOCK" ]; then
+    bun "$LOCK_HELPER" release "$LOCK" "$$" "$LOCK_TOKEN" "$OWNED_LOCK" || rc=$?
+    OWNED_LOCK=""
+  fi
+  return "$rc"
+}
+finish_sweep(){
+  local rc=$?
+  trap - EXIT
+  release_lock || rc=2
+  exit "$rc"
 }
 interrupt_sweep(){
   local rc="$1"
@@ -121,10 +60,10 @@ interrupt_sweep(){
     kill -TERM -- "-$CURRENT_SUITE_PID" 2>/dev/null || kill -TERM "$CURRENT_SUITE_PID" 2>/dev/null || true
     wait "$CURRENT_SUITE_PID" 2>/dev/null || true
   fi
-  release_lock
+  release_lock || rc=2
   exit "$rc"
 }
-trap release_lock EXIT
+trap finish_sweep EXIT
 trap 'interrupt_sweep 130' INT
 trap 'interrupt_sweep 143' TERM
 
