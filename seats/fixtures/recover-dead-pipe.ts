@@ -14,7 +14,9 @@ fs.writeFileSync(preload,`
 import * as nativeFs from 'node:fs';
 import {mock} from 'bun:test';
 const fs={...nativeFs},pipe=process.env.WGJ1_PIPE,mark=process.env.WGJ1_UNSAFE;
-function unsafe(kind,p){fs.appendFileSync(mark,kind+' '+p+'\\n');throw Object.assign(new Error('WGJ1_BLOCKING_FIFO_LOOKUP'),{code:'WGJ1_BLOCKING_FIFO_LOOKUP'});}
+function unsafe(kind,p){fs.appendFileSync(mark,kind+' '+p+'\\n');
+ if(process.env.WGJ1_EXIT_ON_UNSAFE==='1'){console.error('WGJ1_BLOCKING_FIFO_LOOKUP: '+kind+' '+p);process.exit(86);}
+ throw Object.assign(new Error('WGJ1_BLOCKING_FIFO_LOOKUP'),{code:'WGJ1_BLOCKING_FIFO_LOOKUP'});}
 const hooks={realpathSync(p,...args){if(String(p)===pipe)unsafe('realpath final FIFO',p);return fs.realpathSync(p,...args);},
 openSync(p,flags,...args){if(String(p)===pipe&&(typeof flags!=='number'||!(flags&fs.constants.O_NONBLOCK)))unsafe('blocking open',p);return fs.openSync(p,flags,...args);}};
 mock.module('node:fs',()=>({...fs,...hooks,default:{...fs.default,...hooks}}));
@@ -26,7 +28,7 @@ fs.writeFileSync(calibration,"regular\n");
 fs.writeFileSync(probe,`import * as fs from 'node:fs';import assert from 'node:assert/strict';
 for(const call of [()=>fs.realpathSync(process.env.WGJ1_PIPE),()=>fs.openSync(process.env.WGJ1_PIPE,'r')])assert.throws(call,{code:'WGJ1_BLOCKING_FIFO_LOOKUP'});
 console.log('PASS ESM guard calibrated: namespace realpath and blocking open intercepted on regular file');\n`);
-const calibrated=spawnSync("bun",["--preload",preload,probe],{encoding:"utf8",env:{...process.env,WGJ1_PIPE:calibration,WGJ1_UNSAFE:probeMark}});
+const calibrated=spawnSync("bun",["--preload",preload,probe],{encoding:"utf8",env:{...process.env,WGJ1_PIPE:calibration,WGJ1_UNSAFE:probeMark,WGJ1_EXIT_ON_UNSAFE:"0"}});
 assert.equal(calibrated.status,0,calibrated.stdout+calibrated.stderr);assert.equal(fs.readFileSync(probeMark,"utf8").trim().split("\n").length,2);process.stdout.write(calibrated.stdout);
 const made=spawnSync("mkfifo",[fifo],{encoding:"utf8"});assert.equal(made.status,0,made.stderr);assert(fs.statSync(fifo).isFIFO());
 const helper=path.join(root,"peer.mjs");
@@ -66,8 +68,10 @@ try {
   // with an owned live foreign process so the dangerous comparison MUST run.
   const session=path.join(root,"session.jsonl"),state=path.join(seats,"state.json");fs.writeFileSync(session,'{"type":"session-start"}\n');
   const stateBytes=JSON.stringify({seats:{"worker-dead":{pid:foreign.pid,fifo,sessionFile:session,lastBead:"wgj1-dead-pipe"}}})+"\n";fs.writeFileSync(state,stateBytes);
+  // Fatal mode makes the recover process exit decide the unsafe-call case,
+  // even when the old realpath try/catch would otherwise hide a thrown guard.
   const unsafe=path.join(root,"unsafe");
-  cli=spawn("bun",["--preload",preload,path.join(seats,"recover.ts")],{cwd:project,env:{...process.env,HOME:root,WGJ1_PIPE:fifo,WGJ1_UNSAFE:unsafe},stdio:["ignore","pipe","pipe"]});cliExit=exited(cli);
+  cli=spawn("bun",["--preload",preload,path.join(seats,"recover.ts")],{cwd:project,env:{...process.env,HOME:root,WGJ1_PIPE:fifo,WGJ1_UNSAFE:unsafe,WGJ1_EXIT_ON_UNSAFE:"1"},stdio:["ignore","pipe","pipe"]});cliExit=exited(cli);
   let out="",err="";cli.stdout!.on("data",b=>out+=b);cli.stderr!.on("data",b=>err+=b);
   const result=await cliExit;fs.writeFileSync(path.join(root,"recover-result.json"),JSON.stringify({...result,stdout:out,stderr:err})+"\n");
   process.stdout.write(out);process.stderr.write(err);console.log(`recover process exit=${result.code} signal=${result.signal}`);
