@@ -129,7 +129,7 @@ CONTRACT
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
+RUN_PATH="$BIN:$PATH" # Preserve the installed host-budget shims in children.
 
 phase "0. fixture cleanup catches cwd-only descendants"
 CWD_ONLY_DIR="$FIX/cwd-only-holder"
@@ -1212,19 +1212,18 @@ cat > "$DELTA_STREAM" <<'JSONL'
 {"type":"agent_end","messages":[]}
 {"id":"delta-response","type":"response","command":"prompt","success":true}
 JSONL
-python3 - "$RUN_PROJ/seats/adapter.ts" "$FIX/log-filter.js" <<'PY'
-import re,sys
-src,out=sys.argv[1:]
-s=open(src).read()
-m=re.search(r"const script = `([\s\S]*?)`;\n  return", s)
-if not m: raise SystemExit("could not extract logFilterShell script")
-open(out,"w").write(m.group(1))
-PY
+bun - "$RUN_PROJ/seats/adapter.ts" "$FIX/log-filter.js" <<'JS'
+import fs from 'node:fs';
+const [src,out]=process.argv.slice(2),s=fs.readFileSync(src,'utf8');
+const matches=[...s.matchAll(/const script = `([\s\S]*?)`;\n  return/g)];
+if(matches.length!==1)throw new Error('expected exactly one logFilterShell script');
+fs.writeFileSync(out,matches[0][1]);
+JS
 RC=0; node "$FIX/log-filter.js" < "$DELTA_STREAM" > "$DELTA_SLICE" 2> "$FIX/log-filter.err" || RC=$?
-DELTA_COUNT="$(python3 - "$DELTA_SLICE" <<'PY'
-import sys
-print(open(sys.argv[1]).read().count('_delta'))
-PY
+DELTA_COUNT="$(bun - "$DELTA_SLICE" <<'JS'
+import fs from 'node:fs';
+console.log(fs.readFileSync(process.argv[2],'utf8').split('_delta').length-1);
+JS
 )"
 if [ $RC -eq 0 ] && [ "$DELTA_COUNT" = 0 ] && grep -q '"type":"message_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_end"' "$DELTA_SLICE" && grep -q 'echo: DELTAS payload' "$DELTA_SLICE" && grep -q '"type":"response"' "$DELTA_SLICE"; then
   pass "message_update *_delta stream frames are dropped while settle, tool, and response events remain"
@@ -1370,25 +1369,21 @@ wait_for "$LOG" 'echo: Bead bead-y' 5 >/dev/null   # let the slow turn finish
 phase "4. state survives the adapter — every invocation is a fresh process"
 BIGLOG="$PROJ/seats/logs/worker-big.jsonl"
 cp "$STATE" "$FIX/state-before-big.json"
-python3 - <<PY
-from pathlib import Path
-p=Path('$BIGLOG'); p.parent.mkdir(parents=True, exist_ok=True)
-with p.open('wb') as f:
-    f.truncate(2*1024*1024*1024 + 1024)
-    f.write(b'{"type":"agent_end"}\n')
-PY
+bun - "$BIGLOG" <<'JS'
+import fs from 'node:fs';import path from 'node:path';
+const p=process.argv[2];fs.mkdirSync(path.dirname(p),{recursive:true});
+const fd=fs.openSync(p,'w');try{fs.ftruncateSync(fd,2*1024*1024*1024+1024);fs.writeSync(fd,'{"type":"agent_end"}\n');}finally{fs.closeSync(fd);}
+JS
 bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-big']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BIGLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "worker-big" && says "last-event agent_end"; then pass "status reads last event from a synthetic >2GB sparse log without full-file parsing"
 else fail "status did not survive synthetic >2GB log (exit $RC): $OUT"; fi
 BADLOG="$PROJ/seats/logs/worker-badlog.jsonl"
-python3 - <<PY
-from pathlib import Path
-p=Path('$BADLOG'); p.parent.mkdir(parents=True, exist_ok=True)
-with p.open('wb') as f:
-    f.truncate(2*1024*1024*1024 + 1024)
-    f.write(b'not json at tail but process is alive\n')
-PY
+bun - "$BADLOG" <<'JS'
+import fs from 'node:fs';import path from 'node:path';
+const p=process.argv[2];fs.mkdirSync(path.dirname(p),{recursive:true});
+const fd=fs.openSync(p,'w');try{fs.ftruncateSync(fd,2*1024*1024*1024+1024);fs.writeSync(fd,'not json at tail but process is alive\n');}finally{fs.closeSync(fd);}
+JS
 bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-badlog']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BADLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "worker-badlog" && says "RUNNING" && says "log too large to parse"; then pass "oversize unparsable log keeps live seat visible with log-too-large marker"
@@ -2259,7 +2254,7 @@ phase "8. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
 CAN_A="$FIX/can-a"
 build_proj "$CAN_A" can-a
-sed 's|^  writeState(state); // spawn-record$|  ; // spawn-record|' "$ADAPTER" > "$CAN_A/seats/adapter.ts"
+sed 's|^  recordLaunchedSeat(name, record); // spawn-record$|  ; // spawn-record|' "$ADAPTER" > "$CAN_A/seats/adapter.ts"
 if cmp -s "$ADAPTER" "$CAN_A/seats/adapter.ts"; then
   fail "canary: could not cut the state write — the line no longer matches, so the canary proves nothing"
 else

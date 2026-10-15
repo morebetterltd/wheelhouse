@@ -79,7 +79,7 @@ interface SeatDriver {
   getState(rec: SeatRecord): Promise<any>;
   prompt(rec: SeatRecord, message: string, streamingBehavior: "followUp" | "steer", timeoutMs?: number): Promise<any>;
   steer(rec: SeatRecord, text: string): Promise<any>;
-  stop(state: State, name: string, rec: SeatRecord): Promise<string>;
+  stop(name: string, rec: SeatRecord): Promise<string>;
 }
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -433,27 +433,39 @@ function releaseStateLock(fd: number): void {
   releasePidLock(path.join(SEATS_DIR, "state.lock"), fd);
 }
 
-function writeState(state: State): void {
+/** Mutators receive only the fresh state read during this lock hold.
+ * RPC/process waits stay outside: never commit a pre-wait State snapshot. */
+function writeState<T>(update: (state: State) => T): T {
   const testDelay = Number(process.env.WHEELHOUSE_STATE_WRITE_DELAY_MS || 0);
   const fd = acquireStateLock();
   try {
+    const state = readState();
+    const before = JSON.stringify(state);
     if (testDelay > 0) sleepMs(testDelay);
-    // Re-read-before-merge under the lock plus a per-writer tmp file: two
-    // adapter invocations updating different seats must not let the later
-    // rename erase the earlier writer's record.
-    let merged = state;
-    if (fs.existsSync(STATE_FILE)) {
+    const result = update(state);
+    if (result && typeof (result as any).then === "function") throw new Error("state mutation must be synchronous");
+    if (JSON.stringify(state) !== before) {
+      const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
       try {
-        const current = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) as State;
-        merged = { seats: { ...(current.seats ?? {}), ...(state.seats ?? {}) } };
-      } catch {}
+        fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\n");
+        fs.renameSync(tmp, STATE_FILE);
+      } finally { fs.rmSync(tmp, { force: true }); }
     }
-    const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + "\n");
-    fs.renameSync(tmp, STATE_FILE);
+    return result;
   } finally {
     releaseStateLock(fd);
   }
+}
+
+function recordLaunchedSeat(name: string, record: SeatRecord): void {
+  writeState((state) => {
+    const lastBead = state.seats[name]?.lastBead;
+    state.seats[name] = { ...record, ...(lastBead ? { lastBead } : {}) };
+  });
+}
+
+function sameSeatProcess(a: SeatRecord, b: SeatRecord): boolean {
+  return a.pid === b.pid && a.startedAt === b.startedAt && a.fifo === b.fifo;
 }
 
 // Same rule as seat-env.sh: pi auto-creates an empty {} auth.json on a first
@@ -735,7 +747,16 @@ function eventIsSuccessfulTurnEnd(obj: any): boolean {
   return stopReasonOf(obj) !== "error";
 }
 
-function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster: Record<string, SeatEntry>): void {
+function syncCapacityFromLog(name: string, roster: Record<string, SeatEntry>): SeatRecord | undefined {
+  return writeState((state) => {
+    const rec = state.seats[name];
+    if (rec) syncCapacityRecordFromLog(name, rec, roster);
+    return rec;
+  });
+}
+
+// Called only by the locked mutation above, using its fresh seat record.
+function syncCapacityRecordFromLog(name: string, rec: SeatRecord, roster: Record<string, SeatEntry>): void {
   const r = logLinesFrom(rec.log, 0);
   let sawCapacityInThisScan = false;
   let cursor = r.offset - Buffer.byteLength(r.lines.map((l) => `${l}\n`).join(""));
@@ -778,19 +799,18 @@ function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster
   else delete rec.lastCapacityEvent;
   if (nextCleared) rec.lastCapacityCleared = nextCleared;
   else delete rec.lastCapacityCleared;
-  writeState(state);
 }
 
 
 /** Last few KB of the seat's stderr log — where pi complains about limits. */
 function recordLaunchFailure(name: string, existing: SeatRecord | undefined, detail: string): void {
-  const state = readState();
-  state.seats[name] = {
-    ...(existing ?? state.seats[name] ?? {}),
-    pid: null,
-    lastLaunchFailure: { at: new Date().toISOString(), detail } as any,
-  } as SeatRecord;
-  writeState(state);
+  writeState((state) => {
+    state.seats[name] = {
+      ...(state.seats[name] ?? existing ?? {}),
+      pid: null,
+      lastLaunchFailure: { at: new Date().toISOString(), detail } as any,
+    } as SeatRecord;
+  });
 }
 
 function stderrTail(rec: { log: string }, maxBytes = 8 * 1024): string {
@@ -898,8 +918,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   requirePiModelPin(name, entry);
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
-  const state = readState();
-  const existing = state.seats[name];
+  const existing = readState().seats[name];
   if (existing && pidAlive(existing.pid, existing.fifo, existing.startedAt)) {
     die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
   }
@@ -983,7 +1002,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} has live cwd ${liveCwd}, not requested cwd ${requestedCwd}. launch-only cleanup: ${cleanup}`);
   }
 
-  state.seats[name] = {
+  const record: SeatRecord = {
     pid,
     startedAt: new Date().toISOString(),
     accountDir,
@@ -996,10 +1015,9 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     sessionId: st.data?.sessionId ?? null,
     sessionFile: st.data?.sessionFile ?? null,
     model: entry.model,
-    ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}),
   };
-  writeState(state); // spawn-record
-  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`);
+  recordLaunchedSeat(name, record); // spawn-record
+  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
 }
 
@@ -1054,8 +1072,7 @@ function claudeChildEnv(entry: SeatEntry, accountDir: string, name: string): Nod
 async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
-  const state = readState();
-  const existing = state.seats[name];
+  const existing = readState().seats[name];
   if (existing && pidAlive(existing.pid, existing.fifo, existing.startedAt)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
 
   const accountDir = claudeAccountDir(entry);
@@ -1123,7 +1140,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
 
   const requestedCwd = path.resolve(cwd);
   const liveCwd = processCwd(pid);
-  state.seats[name] = {
+  const record: SeatRecord = {
     pid,
     startedAt: new Date().toISOString(),
     accountDir,
@@ -1137,10 +1154,9 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
     sessionId: st.data?.sessionId ?? null,
     sessionFile: st.data?.sessionFile ?? null,
     model: st.data?.model ?? entry.model,
-    ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}),
   };
-  writeState(state);
-  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`);
+  recordLaunchedSeat(name, record);
+  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
 }
 
@@ -1183,7 +1199,7 @@ function codexChildEnv(entry: SeatEntry, accountDir: string, name: string): Node
 async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
-  const state = readState(); const existing = state.seats[name];
+  const existing = readState().seats[name];
   if (existing && pidAlive(existing.pid, existing.fifo, existing.startedAt)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
   const accountDir = codexAccountDir(entry);
   if (!isCodexDefaultAuth(entry) && !fs.existsSync(accountDir)) die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`);
@@ -1204,8 +1220,8 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
-  state.seats[name] = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model, ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}) };
-  writeState(state); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`); console.log(`  events -> ${log}`);
+  const record: SeatRecord = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
+  recordLaunchedSeat(name, record); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`); console.log(`  events -> ${log}`);
 }
 function codexProbe(name: string, entry: SeatEntry): void {
   const labelSuffix = accountLabelSuffix(entry); const accountDir = codexAccountDir(entry);
@@ -1248,10 +1264,9 @@ async function cmdSpawn(name: string, beadId?: string, base: string | null = nul
   const entry = requireSeat(name);
   const cwd = beadId ? prepareSeatCwd(name, entry, beadId, base) : ROOT;
   await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, cwd);
-  if (beadId) {
-    const state = readState();
-    if (state.seats[name]) { state.seats[name].lastBead = beadId; writeState(state); }
-  }
+  if (beadId) writeState((state) => {
+    if (state.seats[name]) state.seats[name].lastBead = beadId;
+  });
 }
 
 function piProbe(name: string, entry: SeatEntry): void {
@@ -1290,15 +1305,16 @@ function piProbe(name: string, entry: SeatEntry): void {
 }
 
 function clearCapacityAfterProbe(name: string): void {
-  const state = readState();
-  const rec = state.seats[name];
-  if (!rec?.lastCapacityEvent) return;
-  const logOffset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
-  const at = new Date().toISOString();
-  delete rec.lastCapacityEvent;
-  rec.lastCapacityCleared = { at, logOffset };
-  writeState(state);
-  console.log(`capacity cleared at ${at} (probe OK at ${at})`);
+  const at = writeState((state) => {
+    const rec = state.seats[name];
+    if (!rec?.lastCapacityEvent) return null;
+    const logOffset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
+    const at = new Date().toISOString();
+    delete rec.lastCapacityEvent;
+    rec.lastCapacityCleared = { at, logOffset };
+    return at;
+  });
+  if (at) console.log(`capacity cleared at ${at} (probe OK at ${at})`);
 }
 
 function cmdProbe(name: string): void {
@@ -1388,14 +1404,13 @@ async function cmdReset(name: string): Promise<void> {
   // state.json must already show no session to resume into, not the stale
   // one reset was meant to drop. This also supports the documented upgrade
   // path where an operator stops an idle seat before changing its harness.
-  const state = readState();
-  if (state.seats[name]) {
+  writeState((state) => {
+    if (!state.seats[name]) return;
     state.seats[name].sessionId = null;
     state.seats[name].sessionFile = null;
     state.seats[name].pid = null;
     delete (state.seats[name] as any).cwd;
-    writeState(state); // reset-record
-  }
+  }); // reset-record
   await driverForSeat(name, entry, "adapter reset").launch(name, entry, null, cwd); // null sessionFile: cold, no --session
   console.log(`seat ${name}: reset — session discarded, respawned cold`);
 }
@@ -1418,7 +1433,7 @@ async function healWedgedSeat(name: string, rec: SeatRecord, context: string): P
   const current = state.seats[name];
   if (!current) die(`seat "${name}" disappeared while healing WEDGED seat`);
   try {
-    console.log(await driver.stop(state, name, current));
+    console.log(await driver.stop(name, current));
   } catch (e: any) {
     die(`seat "${name}" is WEDGED but stop failed while healing after get_state timeout: ${e.message}. Remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}`);
   }
@@ -1525,14 +1540,14 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
   const promptText = `Bead ${beadId}\n\n${text}`;
-  const state = readState();
-  state.seats[name].lastBead = beadId;
-  state.seats[name].lastDispatchAt = new Date().toISOString();
-  state.seats[name].lastPrompt = promptText;
-  delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
-  delete state.seats[name].lastCapacityCleared;
-  delete state.seats[name].lastStalledEvent; // a new dispatch supersedes a prior resumed-cutoff stall
-  writeState(state);
+  writeState((state) => {
+    state.seats[name].lastBead = beadId;
+    state.seats[name].lastDispatchAt = new Date().toISOString();
+    state.seats[name].lastPrompt = promptText;
+    delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
+    delete state.seats[name].lastCapacityCleared;
+    delete state.seats[name].lastStalledEvent; // a new dispatch supersedes a prior resumed-cutoff stall
+  });
   let resp: any;
   try {
     resp = await sameCwdDriver.prompt(rec, promptText, "followUp", PROMPT_ACK_MS);
@@ -1549,29 +1564,30 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     // process is gone. Anything else stays a plain failure.
     const blob = `${resp.error ?? ""}\n${stderrTail(rec)}`;
     if (QUOTA_RE.test(blob)) {
-      const state = readState();
-      const label = accountLabel(undefined, rec);
-      state.seats[name].lastCapacityEvent = {
-        at: "time unknown",
-        detail: label ? `${String(resp.error ?? "quota-shaped stderr")} (account ${label})` : String(resp.error ?? "quota-shaped stderr"),
-        ...(label ? { accountLabel: label } : {}),
-      }; // capacity-record
-      delete state.seats[name].lastCapacityCleared;
-      writeState(state);
+      writeState((state) => {
+        const label = accountLabel(undefined, state.seats[name]);
+        state.seats[name].lastCapacityEvent = {
+          at: "time unknown",
+          detail: label ? `${String(resp.error ?? "quota-shaped stderr")} (account ${label})` : String(resp.error ?? "quota-shaped stderr"),
+          ...(label ? { accountLabel: label } : {}),
+        }; // capacity-record
+        delete state.seats[name].lastCapacityCleared;
+      });
     }
     die(`dispatch failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
   }
-  const landedState = readState();
-  if (resp.data?.sessionId) landedState.seats[name].sessionId = resp.data.sessionId;
-  if (resp.data?.sessionFile) landedState.seats[name].sessionFile = resp.data.sessionFile;
-  if (resp.data?.model) landedState.seats[name].model = resp.data.model;
-  landedState.seats[name].lastBead = beadId;
-  landedState.seats[name].lastDispatchAt = new Date().toISOString();
-  landedState.seats[name].lastPrompt = promptText;
-  delete landedState.seats[name].lastCapacityEvent; // a dispatch that lands clears it
-  delete landedState.seats[name].lastCapacityCleared;
-  delete landedState.seats[name].lastStalledEvent; // a dispatch that lands clears it
-  writeState(landedState);
+  writeState((state) => {
+    const landed = state.seats[name];
+    if (resp.data?.sessionId) landed.sessionId = resp.data.sessionId;
+    if (resp.data?.sessionFile) landed.sessionFile = resp.data.sessionFile;
+    if (resp.data?.model) landed.model = resp.data.model;
+    landed.lastBead = beadId;
+    landed.lastDispatchAt = new Date().toISOString();
+    landed.lastPrompt = promptText;
+    delete landed.lastCapacityEvent; // a dispatch that lands clears it
+    delete landed.lastCapacityCleared;
+    delete landed.lastStalledEvent; // a dispatch that lands clears it
+  });
   console.log(`dispatched ${beadId} to ${name}; watch ${rec.log}`);
   if (crossBead && previousBead) startBeadCleanup(previousBead);
 }
@@ -1774,13 +1790,14 @@ function appendSeatLog(log: string, obj: any): void {
 }
 
 function markSeatStalledAfterResume(name: string, bead: string | undefined): void {
-  const state = readState();
-  const rec = state.seats[name];
-  if (!rec) return;
   const at = new Date().toISOString();
   const detail = `resume detected prior turn was cut off during a tool call${bead ? ` for bead ${bead}` : ""}; commander must redispatch or reset`;
-  rec.lastStalledEvent = { at, detail };
-  writeState(state);
+  const rec = writeState((state) => {
+    const rec = state.seats[name];
+    if (rec) rec.lastStalledEvent = { at, detail };
+    return rec;
+  });
+  if (!rec) return;
   appendSeatLog(rec.log, { type: "agent_settled", state: "stalled", message: detail, bead: bead ?? null, at });
   console.log(`seat ${name}: STALLED — ${detail}`);
 }
@@ -1873,8 +1890,8 @@ async function cmdStatus(): Promise<void> {
   const rows = processRows();
   let sawSettled = false;
   for (const name of names) {
-    const rec = state.seats[name];
-    syncCapacityFromLog(name, rec, state, roster);
+    const rec = syncCapacityFromLog(name, roster);
+    if (!rec) continue;
     const bareAlive = barePidAlive(rec.pid);
     const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
     // A seat nobody stopped whose pid is gone — or whose pid was reused by a
@@ -1926,7 +1943,7 @@ async function cmdStatus(): Promise<void> {
   if (sawSettled) reportHostBudgetWorktreeCap();
 }
 
-async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<string> {
+async function stopRecord(name: string, rec: SeatRecord): Promise<string> {
   // SIGTERM is pi's graceful path: it flushes stdout and exits 143. No
   // SIGKILL fallback here — a seat that ignores SIGTERM is worth looking at,
   // not shooting.
@@ -1937,13 +1954,14 @@ async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<
   if (pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     throw new Error(`pid ${rec.pid} is still alive after SIGTERM and ${TIMEOUT_MS}ms — look at it before escalating`);
   }
-  rec.pid = null;
-  rec.stoppedAt = new Date().toISOString();
-  // Keep the recorded cwd with the session: stop/stop-all are warm-pause
-  // operations, and resume must return the seat to the same worktree. Dead
-  // seat records no longer occupy worktrees in seat-worktree.ts, so preserving
-  // this path does not resurrect the pre-#76 stale-cwd blocker.
-  writeState(state);
+  writeState((state) => {
+    const current = state.seats[name];
+    if (!current || !sameSeatProcess(current, rec)) return;
+    current.pid = null;
+    current.stoppedAt = new Date().toISOString();
+    // Keep the CURRENT cwd/session, not the pre-SIGTERM snapshot. Another
+    // stop (or a cwd refresh) may have committed while this process waited.
+  });
   return `seat ${name} stopped; session ${rec.sessionId} kept for resume`;
 }
 
@@ -1952,15 +1970,15 @@ async function cmdStop(name: string): Promise<void> {
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
-    if ((rec as any).cwd !== undefined) {
-      delete (rec as any).cwd;
-      writeState(state);
-    }
+    writeState((state) => {
+      const current = state.seats[name];
+      if (current && sameSeatProcess(current, rec)) delete (current as any).cwd;
+    });
     console.log(`seat ${name} is not running`);
     return;
   }
   const driver = driverForRunningSeat(name, "adapter stop");
-  console.log(await driver.stop(state, name, rec));
+  console.log(await driver.stop(name, rec));
 }
 
 async function cmdStopAll(): Promise<void> {
@@ -2004,7 +2022,7 @@ async function cmdStopAll(): Promise<void> {
       continue;
     }
     try {
-      console.log(await driver.stop(state, name, rec));
+      console.log(await driver.stop(name, rec));
     } catch (e: any) {
       console.log(`seat ${name}: REPORT stop failed; left for human inspection — ${e.message}`);
     }
