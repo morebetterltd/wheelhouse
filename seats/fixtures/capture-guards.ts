@@ -65,28 +65,38 @@ for (const [file, expected] of inventory) {
     const assertion = lines.slice(i, end + 1).join("\n");
     for (const expression of captures) {
       try {
+        const errors: string[] = [];
         for (const mode of ["baseline", "missing", "empty"]) {
-          const dir = path.join(fix, String(i) + "-" + file.replaceAll("/", "-"), mode);
-          fs.mkdirSync(dir, { recursive: true });
-          const script = prelude + `
+          try {
+            const dir = path.join(fix, String(i) + "-" + file.replaceAll("/", "-"), mode);
+            fs.mkdirSync(dir, { recursive: true });
+            const script = prelude + `
 ${file === "channel-credentials.selftest.sh" ? "RC=1" : ""}
 # Seed ALL inputs to a multi-capture assertion, then corrupt exactly one.
 ${captures.map(e => `capture=${e}\nmkdir -p "$(dirname "$capture")"\nprintf '{"captured":true}\\n' > "$capture"`).join("\n")}
 capture=${expression}
-# Establish a nonempty capture BEFORE deleting/truncating it.
-case "$3" in missing) rm -f "$capture";; empty) : > "$capture";; esac
+# Assert the subject exists and the corruption actually happened.
+[ -s "$capture" ]
+case "$3" in
+  missing) rm -f "$capture"; [ ! -e "$capture" ];;
+  empty) : > "$capture"; [ -f "$capture" ] && [ ! -s "$capture" ];;
+esac
+printf 'CAPTURE_PATH=%s\\n' "$capture"
 ` + assertion + '\n[ "$failed" -eq 0 ]\n';
-          const result = spawnSync("bash", ["-c", script, "capture-control", seats, dir, mode], { encoding: "utf8" });
-          assert.equal(result.error, undefined);
-          assert.equal(result.signal, null);
-          assert.equal(result.status, mode === "baseline" ? 0 : 1,
-            `${file}:${i + 1} ${mode}: exit=${result.status}\n${result.stdout}\n${result.stderr}`);
-          if (mode !== "baseline") {
-            assert(result.stderr.includes("selftest: missing, empty, or unreadable capture: "), result.stderr);
-            assert(result.stderr.includes(dir + "/"), result.stderr);
-            assert(!result.stdout.includes("PASS "), `${mode} assertion also printed PASS: ${result.stdout}`);
-          }
+            const result = spawnSync("bash", ["-c", script, "capture-control", seats, dir, mode], { encoding: "utf8" });
+            assert.equal(result.error, undefined);
+            assert.equal(result.signal, null);
+            assert.equal(result.status, mode === "baseline" ? 0 : 1,
+              `${file}:${i + 1} ${mode}: exit=${result.status}\n${result.stdout}\n${result.stderr}`);
+            const capture = /^CAPTURE_PATH=(.+)$/m.exec(result.stdout)?.[1];
+            assert(capture?.startsWith(dir + "/"), result.stdout);
+            if (mode !== "baseline") {
+              assert(result.stderr.includes(`selftest: missing, empty, or unreadable capture: ${capture}`), result.stderr);
+              assert(!result.stdout.includes("PASS "), `${mode} assertion also printed PASS: ${result.stdout}`);
+            }
+          } catch (error) { errors.push(String(error)); }
         }
+        assert.equal(errors.length, 0, errors.join("\n"));
         console.log(`ok - ${file}:${i + 1} ${expression}: baseline0; deleted1; empty1 (capture named)`);
         passed++;
       } catch (error) {
