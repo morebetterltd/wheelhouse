@@ -11,7 +11,7 @@ trap 'exit 143' TERM
 # Alternate source directory is for removed-fix checks; no adapter is executed.
 SOURCE="${1:-$HERE}"
 bun - "$SOURCE" "$FIX" <<'JS'
-const fs=require('fs'),path=require('path'),assert=require('assert/strict');
+const fs=(await import('node:fs')).default,path=(await import('node:path')).default,assert=(await import('node:assert/strict')).default;
 const [source,fix]=process.argv.slice(2);
 const adapter=fs.readFileSync(path.join(source,'adapter.selftest.sh'),'utf8').split('\n');
 const herald=fs.readFileSync(path.join(source,'herald.selftest.sh'),'utf8').split('\n');
