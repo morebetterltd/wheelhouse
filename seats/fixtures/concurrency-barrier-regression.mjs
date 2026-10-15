@@ -63,7 +63,7 @@ if (process.argv[2] === 'peer') {
   async function runCase(label, mode, observe = '') {
     const project = path.join(root, label), barrier = path.join(project, 'turn-barrier');
     fs.mkdirSync(path.join(project, 'seats/logs'), { recursive: true }); fs.mkdirSync(barrier);
-    const state = { seats: {} }, peers = [], rows = new Map(); let controller, failure, summary;
+    const state = { seats: {} }, peers = [], rows = new Map(); let controller, failure, summary, diagnosticCheckpointUsed = false;
     try {
       for (const name of ['worker-a', 'worker-b']) {
         const accountDir = path.join(project, name), fifo = path.join(accountDir, 'stdin'), log = path.join(project, 'seats/logs', `${name}.jsonl`);
@@ -108,11 +108,12 @@ if (process.argv[2] === 'peer') {
           fs.watchFile(history, { interval: 20 }, observe); observe();
         });
       }
-      // A controlled observation wake makes missing native notifications and
-      // fix-removed failures decidable without a timeout. Production still
-      // uses the real stat wakes; this only calls listeners it actually armed.
+      // Acceptance waits for autonomous native exit/EOF/file reconciliation.
+      // Only a deliberately broken negative control requests a diagnostic
+      // observation wake, so its failure/rescue needs no elapsed-time budget.
       const expected = mode === 'healthy' ? 0 : 1;
-      if (!controller.exited) {
+      if (process.env.WHEELHOUSE_CONCURRENCY_BARRIER_DIAGNOSTIC === '1' && !controller.exited) {
+        diagnosticCheckpointUsed = true;
         child.send({ type: 'checkpoint' }, () => {});
         const observation = await Promise.race([checkpoint.promise, controller.close]);
         if (observation.type === 'checkpoint') assert.equal(observation.exitCode, expected,
@@ -128,7 +129,7 @@ if (process.argv[2] === 'peer') {
         assert.match(verdict.reason, /pipe closed/);
       }
       if (mode === 'child-exit') { const native = await peers[0].close; assert.equal(native.code, 23); assert.equal(native.signal, null); assert(native.stdoutEOF && native.stderrEOF); }
-      summary = { test: label, mode, barrierExit: result.code, stdoutEOF: true, stderrEOF: true, reason: verdict.reason, releaseExists: false, peers: [] };
+      summary = { test: label, mode, barrierExit: result.code, stdoutEOF: true, stderrEOF: true, reason: verdict.reason, releaseExists: false, diagnosticCheckpointUsed, peers: [] };
     } catch (error) { failure = error; }
     finally {
       if (controller && !controller.exited) {

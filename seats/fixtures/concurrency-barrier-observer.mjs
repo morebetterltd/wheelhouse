@@ -32,8 +32,9 @@ fs.writeSync = function(...args) {
 };
 process.on('message', message => {
   if (message.type !== 'checkpoint') return;
-  // An explicit observation wake after native peer output has reached the
-  // state files. No sleep, deadline, iteration budget or elapsed-time verdict.
+  // Fix-removed controls ONLY: an observation wake after native output has
+  // reached the state files. Acceptance runs never send this message; they
+  // must finish autonomously. No elapsed-time verdict in either path.
   for (const listener of reconciliations) listener();
   process.send?.({ type: 'checkpoint', exitCode: process.exitCode ?? null });
 });
