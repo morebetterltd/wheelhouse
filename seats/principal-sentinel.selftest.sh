@@ -46,15 +46,15 @@ PY
 
 count_opened(){
   [ -f "$FIX/proj/seats/needs.jsonl" ] || { echo 0; return; }
-  LEDGER="$FIX/proj/seats/needs.jsonl" bun -e 'const fs=require("fs"); let n=0; for (const l of fs.readFileSync(process.env.LEDGER,"utf8").split(/\n/)) { if (!l.trim()) continue; const r=JSON.parse(l); if (r.type === "opened") n++; } console.log(n);'
+  LEDGER="$FIX/proj/seats/needs.jsonl" bun -e 'import fs from "node:fs"; let n=0; for (const l of fs.readFileSync(process.env.LEDGER,"utf8").split(/\n/)) { if (!l.trim()) continue; const r=JSON.parse(l); if (r.type === "opened") n++; } console.log(n);'
 }
 
 title_at(){
-  LEDGER="$FIX/proj/seats/needs.jsonl" IDX="$1" bun -e 'const fs=require("fs"); const rows=fs.readFileSync(process.env.LEDGER,"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse).filter(r=>r.type==="opened"); console.log(rows[Number(process.env.IDX)]?.title || "");'
+  LEDGER="$FIX/proj/seats/needs.jsonl" IDX="$1" bun -e 'import fs from "node:fs"; const rows=fs.readFileSync(process.env.LEDGER,"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse).filter(r=>r.type==="opened"); console.log(rows[Number(process.env.IDX)]?.title || "");'
 }
 
 source_at(){
-  LEDGER="$FIX/proj/seats/needs.jsonl" IDX="$1" bun -e 'const fs=require("fs"); const rows=fs.readFileSync(process.env.LEDGER,"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse).filter(r=>r.type==="opened"); console.log(rows[Number(process.env.IDX)]?.machine?.source || "");'
+  LEDGER="$FIX/proj/seats/needs.jsonl" IDX="$1" bun -e 'import fs from "node:fs"; const rows=fs.readFileSync(process.env.LEDGER,"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse).filter(r=>r.type==="opened"); console.log(rows[Number(process.env.IDX)]?.machine?.source || "");'
 }
 
 # 1. Final assistant sentinel opens one need with the sentinel line text as title.

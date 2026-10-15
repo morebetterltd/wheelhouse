@@ -103,7 +103,7 @@ await test("live PID is never stolen by acquisition or an old owner's release", 
 await test("failed PID write never publishes an empty state.lock or leaks a candidate", () => {
   reset(); const before = fs.readFileSync(state, "utf8");
   const code = `
-    const fs = require('node:fs'), original = fs.writeFileSync;
+    import fs from "node:fs"; const  original = fs.writeFileSync;
     fs.writeFileSync = function(fd, ...args) {
       if (typeof fd === 'number') throw Error('fixture PID write refusal');
       return original.call(this, fd, ...args);
