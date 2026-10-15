@@ -52,22 +52,20 @@ release_lock(){
 finish_sweep(){
   local rc=$?
   trap - EXIT
-  release_lock || rc=2
-  exit "$rc"
-}
-interrupt_sweep(){
-  local rc="$1"
-  trap - INT TERM
-  if [ -n "$CURRENT_SUITE_PID" ] && kill -0 "$CURRENT_SUITE_PID" 2>/dev/null; then
+  trap '' INT TERM
+  if [ -n "$CURRENT_SUITE_PID" ]; then
     kill -TERM -- "-$CURRENT_SUITE_PID" 2>/dev/null || kill -TERM "$CURRENT_SUITE_PID" 2>/dev/null || true
     wait "$CURRENT_SUITE_PID" 2>/dev/null || true
+    CURRENT_SUITE_PID=""
   fi
-  release_lock || rc=2
+  # Release once, from EXIT, after the interrupted suite has cleaned up.
+  # A release error must not replace the requested signal exit status.
+  release_lock || { [ "$rc" -ge 128 ] || rc=2; }
   exit "$rc"
 }
 trap finish_sweep EXIT
-trap 'interrupt_sweep 130' INT
-trap 'interrupt_sweep 143' TERM
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Source policy is unconditional, including filtered sweeps. Check actual
 # files, not embedded heredocs/inline calls (tracked separately in 9yms).

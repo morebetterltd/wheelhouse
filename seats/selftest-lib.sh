@@ -2,6 +2,33 @@
 # Shared teardown helpers for wheelhouse selftests.
 # Source this file, then call selftest_cleanup_fixture_processes "$FIX" [tmux-socket...]
 # from the selftest's EXIT trap before deleting the fixture root.
+# Register cleanup with selftest_install_cleanup_traps, not `trap cleanup ...`:
+# a signal trap that returns resumes the interrupted script on a deleted fixture.
+
+selftest_install_cleanup_traps() {
+  SELFTEST_CLEANUP_COMMAND="$1"
+  SELFTEST_CLEANUP_RAN=0
+  trap 'selftest_finish "$?"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+}
+
+selftest_finish() {
+  local status="$1" cleanup_status=0
+  # Do not re-enter cleanup, even if another signal arrives while it is draining
+  # children. EXIT is disabled before calling the callback in this same shell,
+  # so callbacks can still wait for their own children.
+  trap - EXIT
+  trap '' INT TERM HUP
+  if [ "${SELFTEST_CLEANUP_RAN:-0}" = 0 ]; then
+    SELFTEST_CLEANUP_RAN=1
+    eval "$SELFTEST_CLEANUP_COMMAND" || cleanup_status=$?
+  fi
+  # A teardown failure may fail a normal success, never erase a signal status.
+  if [ "$status" = 0 ] && [ "$cleanup_status" != 0 ]; then status="$cleanup_status"; fi
+  exit "$status"
+}
 
 SELFTEST_INVOCATION_PWD="${SELFTEST_INVOCATION_PWD:-$(pwd -P)}"
 

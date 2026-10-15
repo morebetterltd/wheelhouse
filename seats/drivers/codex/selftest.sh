@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-codex-selftest.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+. "$ROOT/seats/selftest-lib.sh"
+TMP="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-codex-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$TMP" || exit 2
+selftest_install_cleanup_traps 'selftest_cleanup_fixture_processes "$TMP"; selftest_remove_fixture_dir "$TMP"'
 mkdir -p "$TMP/bin" "$TMP/home" "$TMP/proj/contracts" "$TMP/proj/.wheelhouse-worktrees/bead-a"
 cat > "$TMP/bin/codex" <<'CODEX'
 #!/usr/bin/env node

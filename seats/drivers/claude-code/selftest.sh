@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
-FIX="${TMPDIR:-$ROOT/.wheelhouse-runs/wheelhouse-project-er5m.3/tmp}/claude-code-driver.$$"
+. "$ROOT/seats/selftest-lib.sh"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-claude-code-driver.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
+selftest_install_cleanup_traps 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"'
 mkdir -p "$FIX/bin" "$FIX/account" "$FIX/cwd" "$FIX/run" "$FIX/logs"
-trap 'pkill -f "$FIX" 2>/dev/null || true; rm -rf "$FIX"' EXIT
 cat > "$FIX/bin/claude" <<'STUB'
 #!/usr/bin/env node
 const fs=require('fs'),path=require('path');

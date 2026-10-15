@@ -735,6 +735,8 @@ Reviewed scan files are install-bound: TSV starts with a `# wheelhouse-prune-sca
 
 ## Proving it still works
 
+Selftests register their teardown with `selftest_install_cleanup_traps cleanup` from `selftest-lib.sh` (a trusted shell command string is also accepted). The callback must return, not `exit`: it runs once, in the owning shell so it can reap its children, on normal EXIT and on INT/TERM. Signals exit 130/143 instead of resuming the script against a removed fixture; repeated signals are ignored during teardown. The sweep likewise drains its current suite group and releases its lock only from EXIT. `bash seats/selftest-signals.selftest.sh` checks both signal paths, normal exits, re-entrant signals, fixture removal and child reaping; `--old-trap` deliberately restores the returning trap in the fixture and must fail.
+
 For the full host sweep, run the locked runner instead of an ad-hoc loop:
 
 ```bash
