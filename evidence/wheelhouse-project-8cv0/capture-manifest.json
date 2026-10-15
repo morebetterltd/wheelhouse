@@ -127,8 +127,56 @@
   },
   {
     "file": "capture.cjs",
-    "rawBytes": 4520,
-    "rawSha256": "121b10eb0643cb976d8e3e914b61479c0d2e992195e5004d6ebe05fbe94c8528",
-    "retainedSha256": "121b10eb0643cb976d8e3e914b61479c0d2e992195e5004d6ebe05fbe94c8528"
+    "rawBytes": 5758,
+    "rawSha256": "b17346038d4ecb9e6e64a598ab3583263482c5dcb7a5ec4871e22b420fd671b2",
+    "retainedSha256": "b17346038d4ecb9e6e64a598ab3583263482c5dcb7a5ec4871e22b420fd671b2"
+  },
+  {
+    "file": "lock-diagnosis.stdout",
+    "rawBytes": 565,
+    "rawSha256": "34c79ba4bfab6232744a904f867dd74ac08c7c60c377eebe4f0f15ccc798031c",
+    "retainedSha256": "e965de4370d8dfd74cb666aa828da065641e3b0a80219acc028d8cf0f159d04c"
+  },
+  {
+    "file": "lock-diagnosis.stderr",
+    "rawBytes": 0,
+    "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "retainedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "lock-diagnosis.exit",
+    "rawBytes": 2,
+    "rawSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "retainedSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  {
+    "file": "lock-diagnosis.before.json",
+    "rawBytes": 81820,
+    "rawSha256": "e9fe1b4e6816623d9a884e3111f30d8b04d97b4b39665f58ba0b4c244f7ca93d",
+    "retainedSha256": "e9fe1b4e6816623d9a884e3111f30d8b04d97b4b39665f58ba0b4c244f7ca93d"
+  },
+  {
+    "file": "lock-diagnosis.after.json",
+    "rawBytes": 81820,
+    "rawSha256": "e9fe1b4e6816623d9a884e3111f30d8b04d97b4b39665f58ba0b4c244f7ca93d",
+    "retainedSha256": "e9fe1b4e6816623d9a884e3111f30d8b04d97b4b39665f58ba0b4c244f7ca93d"
+  },
+  {
+    "file": "lock-diagnosis/run.cjs",
+    "rawBytes": 4803,
+    "rawSha256": "c6dd8bc203e6ae57b9e7f6ebe3f5b9b67c928d43fb64af9d2dae7b6a6f85dbce",
+    "retainedSha256": "c6dd8bc203e6ae57b9e7f6ebe3f5b9b67c928d43fb64af9d2dae7b6a6f85dbce"
+  },
+  {
+    "file": "lock-diagnosis/results.json",
+    "rawBytes": 1731,
+    "rawSha256": "570bb64f95bbc63d68870713a25d12a3898e27534dfd639cc079d11e01773ea6",
+    "retainedSha256": "d6076ba6c41ad701948621770dda215b59cea5e9142c0710a1ffe5f8436330af"
+  },
+  {
+    "file": "lock-diagnosis/git-show.stderr",
+    "rawBytes": 0,
+    "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "retainedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   }
 ]

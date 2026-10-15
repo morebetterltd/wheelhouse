@@ -9,6 +9,7 @@ const scrub = text => replacements.reduce((s,[from,to])=>s.split(from).join(to),
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const manifest = [];
 function retain(from, to = from) {
+  fs.mkdirSync(path.dirname(path.join(dest, to)), { recursive: true });
   const file = path.join(root, from); if (!fs.statSync(file).isFile()) throw new Error('missing input '+file);
   const raw = fs.readFileSync(file), text = scrub(raw.toString());
   fs.writeFileSync(path.join(dest, to), text);
@@ -50,6 +51,15 @@ const comments = JSON.parse(fs.readFileSync(path.join(root, 'comments-latest.jso
 const ruling = comments.find(row => row.id === '01a13d36-01ec-7376-a20c-806ee6cbb5d2');
 if (!ruling) throw new Error('missing commander ruling');
 fs.writeFileSync(path.join(dest, 'commander-ruling.json'), JSON.stringify({ id:ruling.id, text:ruling.text, created_at:ruling.created_at },null,2)+'\n');
+if (fs.existsSync(path.join(root, 'lock-diagnosis/results.json'))) {
+  for (const ext of ['stdout', 'stderr', 'exit', 'before.json', 'after.json']) retain('lock-diagnosis.'+ext);
+  for (const file of ['run.cjs', 'results.json', 'git-show.stderr']) retain('lock-diagnosis/'+file);
+  const legacy = fs.readFileSync(path.join(root, 'lock-diagnosis/pre-su88-adapter.ts'), 'utf8');
+  const start = legacy.indexOf('function acquireStateLock(): number {'), end = legacy.indexOf('function writeState(state: State): void {');
+  if (start < 0 || end <= start) throw new Error('missing legacy lock functions');
+  fs.writeFileSync(path.join(dest, 'lock-diagnosis/pre-su88-lock-functions.txt'), legacy.slice(start,end).trimEnd()+'\n');
+  fs.writeFileSync(path.join(dest, 'lock-diagnosis/source.json'), JSON.stringify({ legacyCapture: 'git show 88e34b6eaa70b98b04b0030ccb0ea74fe224d153:seats/adapter.ts', legacySha256: sha(Buffer.from(legacy)), currentAdapter: runtime+':seats/adapter.ts', comparison: 'only lock functions substituted, then identical FIFO hold hook inside writeState; real adapter stop CLI, not stub protocol', naturalWorker1Cause: 'UNKNOWN' }, null, 2)+'\n');
+}
 if (fs.existsSync(path.join(root, 'full.exit'))) {
   for (const ext of ['stdout', 'stderr', 'exit', 'before.json', 'after.json']) retain('full.'+ext);
   for (const file of ['inventory-check.json', 'receipt-control.json', 'receipt-control.stderr']) retain(file);

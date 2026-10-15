@@ -1,0 +1,7 @@
+{
+  "legacyCapture": "git show 88e34b6eaa70b98b04b0030ccb0ea74fe224d153:seats/adapter.ts",
+  "legacySha256": "a5ef538d21c9eb3ff1db4d8a69b48449c63daab97096e485f3bad26e3ef47fbc",
+  "currentAdapter": "34c1c34f04621fa4687de63ad24a8ba10617ae77:seats/adapter.ts",
+  "comparison": "only lock functions substituted, then identical FIFO hold hook inside writeState; real adapter stop CLI, not stub protocol",
+  "naturalWorker1Cause": "UNKNOWN"
+}
