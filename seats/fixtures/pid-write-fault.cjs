@@ -1,5 +1,5 @@
-// File invocation is deliberate: Bun's default ESM fs export is not the mutable
-// CommonJS builtin object used by the lock module. Inline CJS can swallow errors.
+// File invocation is deliberate: on Bun 1.3.1 the ESM setup misses this write
+// fault, while CJS-only setup reaches it. Do not use CJS eval: it can swallow errors.
 const fs = require("node:fs");
 const path = require("node:path");
 const [mode, moduleFile, file] = process.argv.slice(2);
