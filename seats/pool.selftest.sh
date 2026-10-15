@@ -25,7 +25,7 @@ run_check(){ HOME="$HOME_FIX" PATH="$BIN:$PATH" bun "$ROOT/seats/pool.ts" check 
 expect_refusal(){ name="$1" want="$2"; run_check; [ $RC -eq 2 ] && printf '%s\n' "$OUT" | grep -F >/dev/null "$want" && printf '%s\n' "$OUT" | grep >/dev/null '— fix:' && pass "$name" || fail "$name rc=$RC out=$OUT"; }
 
 bun - "$HERE/pool.json.example" "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),src=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const fs=(await import('node:fs')).default,src=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 for(const e of Object.values(src.entries)) e.account.dir=e.account.dir.replaceAll('myproject','pooltest');
 fs.writeFileSync(process.argv[3],JSON.stringify(src));
 JS
@@ -51,7 +51,7 @@ JSON
 ( cd "$ROOT" && HOME="$HOME_FIX" bun -e 'import { worktreeCap } from "./seats/seat-worktree.ts"; const c=worktreeCap(process.cwd()); if(c.seats!==3 || c.cap!==5) throw new Error(JSON.stringify(c));' ) > "$FIX/worktree-cap.out" 2>&1
 [ $? -eq 0 ] && pass 'worktreeCap counts the effective roster, including staffed seats' || fail "worktree cap failed: $(cat "$FIX/worktree-cap.out")"
 bun - "$ROOT/seats/staffing.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.seats['worker-missing']={role:'worker',entry:'missing'}; fs.writeFileSync(p,JSON.stringify(j));
 JS
 ( cd "$ROOT" && HOME="$HOME_FIX" bun -e 'import { effectiveRoster } from "./seats/roster.ts"; effectiveRoster(process.cwd());' ) > "$FIX/missing-staffing.out" 2>&1; rc=$?
@@ -59,54 +59,54 @@ JS
 rm -f "$ROOT/seats/staffing.json"
 
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.entries.a.harness='bad'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'unknown harness is refused' 'entries.a.harness is unknown'
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.roles.workers.min=2; j.roles.workers.max=1; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'min above max is refused' 'roles.workers min/max is invalid'
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.roles.workers.max=3; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'max above role entries is refused' 'roles.workers.max exceeds subscription count'
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.entries.a.account.dir='~/.pi-seats-pooltest/pool/missing'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'missing login dir is refused' 'login folder for entry a is missing'
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.roles.workers.model.a='not-offered'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'role model not offered is refused' 'roles.workers.model for a is not offered'
 ln -sfn a "$HOME_FIX/.pi-seats-pooltest/pool/link-a"
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.entries.b.account.dir='~/.pi-seats-pooltest/pool/link-a'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'symlinked duplicate login dir is refused' 'share a login folder'
 mkdir -p "$HOME_FIX/.claude"
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.entries.a.account.dir='~/.claude'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'commander login dir is refused' 'uses the commander login folder'
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.entries.a.account.authRoute='default'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'authRoute default is refused' 'account.authRoute default is not allowed'
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.entries.a.surprise=1; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'unknown entry key is refused' 'unknown key entries.a.surprise'
 write_valid_pool; bun - "$ROOT/seats/seats.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.seats['fixed-worker']={role:'worker',harness:'codex',provider:'openai',model:'m',account:{dir:'~/.pi-seats-pooltest/fixed',authRoute:'oauth'}};
 fs.writeFileSync(p,JSON.stringify(j));
 JS
@@ -118,7 +118,7 @@ write_valid_pool
 SECRET_PREFIX='sk-'; SECRET_BODY='abcdefghijklmnopqrstuvwxyz'
 SECRET="$SECRET_PREFIX$SECRET_BODY"; export SECRET
 bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.entries.a.allowedTools=process.env.SECRET; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'token-shaped pool strings are refused without echoing the value' 'credential-shaped value at entries.a.allowedTools'
@@ -131,7 +131,7 @@ write_valid_pool; run_check; HOME="$HOME_FIX" PATH="$BIN:$PATH" bun "$ROOT/seats
 AFTER="$(checksum)"
 [ "$BEFORE" = "$AFTER" ] && pass 'check/show/seat-env --pool do not touch another namespace root' || fail "second namespace checksum changed: before=$BEFORE after=$AFTER"
 write_valid_pool; bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.entries.a.account.dir='~/.pi-seats-other/pool/foreign'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'entry pointing at another namespace is refused' 'login folder is outside namespace root'
@@ -140,13 +140,13 @@ write_valid_pool
 BROKEN="$ROOT/seats/pool-no-dupe.ts"
 cp "$ROOT/seats/pool.ts" "$BROKEN"
 BROKEN="$BROKEN" bun - <<'JS'
-const fs=require('fs'),p=process.env.BROKEN,s=fs.readFileSync(p,'utf8');
+const fs=(await import('node:fs')).default,p=process.env.BROKEN,s=fs.readFileSync(p,'utf8');
 const needle='    if (seenDirs.has(rdir)) stop(`entries ${seenDirs.get(rdir)} and ${name} share a login folder`, "give every pool entry its own account.dir");\n';
 if(s.split(needle).length!==2) throw new Error('duplicate-dir canary source changed');
 fs.writeFileSync(p,s.replace(needle,''));
 JS
 bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.entries.b.account.dir='~/.pi-seats-pooltest/pool/a'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 HOME="$HOME_FIX" PATH="$BIN:$PATH" bun "$BROKEN" check > "$FIX/canary.out" 2>&1; rc=$?
