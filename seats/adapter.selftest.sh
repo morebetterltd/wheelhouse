@@ -114,6 +114,13 @@ sweep_stale_fixtures
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+phase "0. status only rotates owned, regular seat logs"
+selftest_copy_seat_runtime "$FIX/log-rotation-runtime" "$ADAPTER_DIR"
+if bun "$HERE/fixtures/log-rotation-owner.ts" "$FIX/log-rotation-runtime" "$FIX"; then
+  pass "status refuses outside, aliased, linked and nonregular logs/archives without touching KEEP"
+else
+  fail "status log-rotation ownership regression"
+fi
 # Dispatch must pass the real contract gate too (fleet/producer enables it).
 export WHEELHOUSE_CONTRACT_FIXTURE="$FIX/dispatch-contract.md"
 cat > "$WHEELHOUSE_CONTRACT_FIXTURE" <<'CONTRACT'

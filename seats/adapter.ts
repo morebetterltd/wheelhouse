@@ -1840,10 +1840,51 @@ function reportHostBudgetWorktreeCap(): void {
   }
 }
 
-function rotateLogIfSafe(log: string, last: string): void {
-  if (!fs.existsSync(log) || !agentSettledEvent(last)) return;
+// State is not an ownership proof by itself. Check directories component by
+// component BEFORE realpath: never resolve/open a final FIFO to compare paths.
+function ownedSeatLog(name: string, log: string): fs.Stats | null {
+  try {
+    if (typeof log !== "string" || !path.isAbsolute(log) || path.normalize(log) !== log || path.basename(log) !== `${name}.jsonl`) return null;
+    for (const dir of [LOG_DIR, path.dirname(log)]) {
+      let current = path.parse(dir).root;
+      for (const part of dir.slice(current.length).split(path.sep).filter(Boolean)) {
+        current = path.join(current, part);
+        const st = fs.lstatSync(current);
+        if (st.isSymbolicLink() || !st.isDirectory()) return null;
+      }
+    }
+    if (fs.realpathSync(path.dirname(log)) !== fs.realpathSync(LOG_DIR)) return null;
+    const st = fs.lstatSync(log);
+    // A hard link can otherwise copy-truncate an unrelated file outside logs.
+    if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1) return null;
+    const expected = fs.lstatSync(path.join(LOG_DIR, `${name}.jsonl`));
+    return expected.isFile() && expected.nlink === 1 && expected.dev === st.dev && expected.ino === st.ino ? st : null;
+  } catch { return null; }
+}
+
+function refuseLogRotation(name: string, log: string, archive?: string): void {
+  console.log(`note: seat ${name} log ${log} is outside seats/logs; not rotated`);
+  if (archive) console.log(`note: seat ${name} archive ${archive} is not an owned regular log archive; not rotated`);
+}
+
+function rotateLogIfSafe(name: string, log: string, last: string): void {
+  const st = ownedSeatLog(name, log);
+  if (!st) { refuseLogRotation(name, log); return; }
+  if (!agentSettledEvent(last)) return;
   const cap = LOG_ROTATE_BYTES;
-  if (cap <= 0 || fs.statSync(log).size < cap) return;
+  if (cap <= 0 || st.size < cap) return;
+  // Validate the WHOLE chain before the first unlink/rename/copy. In
+  // particular copyFile must not follow an existing .1 symlink/hard link.
+  if (!Number.isSafeInteger(LOG_ROTATE_KEEP) || LOG_ROTATE_KEEP < 0) { refuseLogRotation(name, log); return; }
+  for (let i = 1; i <= Math.max(1, LOG_ROTATE_KEEP); i++) {
+    const archive = `${log}.${i}`;
+    try {
+      const archived = fs.lstatSync(archive);
+      if (!archived.isFile() || archived.isSymbolicLink() || archived.nlink !== 1) { refuseLogRotation(name, log, archive); return; }
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") { refuseLogRotation(name, log, archive); return; }
+    }
+  }
   // Copy-truncate, not rename: a settled seat can still be alive with stdout
   // holding this inode open. The launch redirection is `>>`, which opens the
   // log with O_APPEND, so after truncate the live writer's next append lands in
@@ -1872,7 +1913,10 @@ async function cmdStatus(): Promise<void> {
   let sawSettled = false;
   for (const name of names) {
     const rec = state.seats[name];
-    syncCapacityFromLog(name, rec, state, roster);
+    const ownedLog = ownedSeatLog(name, rec.log);
+    // Invalid log records are not read either: lastEvent opens its argument,
+    // so allowing a FIFO here could hang status before the rotation guard.
+    if (ownedLog) syncCapacityFromLog(name, rec, state, roster);
     const bareAlive = barePidAlive(rec.pid);
     const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
     // A seat nobody stopped whose pid is gone — or whose pid was reused by a
@@ -1880,8 +1924,8 @@ async function cmdStatus(): Promise<void> {
     // graceful stop earns would be a failure conflated into a normal state.
     const died = !alive && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
-    const stalled = Boolean(rec.lastStalledEvent) || logLastStalledEvent(rec.log);
-    const last = lastEvent(rec.log);
+    const stalled = Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log));
+    const last = ownedLog ? lastEvent(rec.log) : "-";
     let wedged = false;
     if (alive && agentSettledEvent(last)) {
       try {
@@ -1899,7 +1943,7 @@ async function cmdStatus(): Promise<void> {
     const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
     if (agentSettledEvent(last)) sawSettled = true;
     console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${last}${bead}${labelText}`);
-    rotateLogIfSafe(rec.log, last);
+    rotateLogIfSafe(name, rec.log, last);
     if (died) {
       console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? "is alive but is not this seat (no FIFO/start-time proof)" : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
