@@ -790,6 +790,9 @@ printf 'sweep cwd tip=%s\n' "$(git rev-parse HEAD)"
 bd create 'sweep scratch bead' --json >/dev/null
 printf 'scratch bd create ok\n'
 printf 'fixture sweep PASS\n'
+if [ -n "${STUB_REFUSAL_SWEEP_LEDGER:-}" ]; then
+  git rev-parse HEAD >> "$STUB_REFUSAL_SWEEP_LEDGER"
+fi
 if [ "${SWEEP_FIXTURE_MOVE_TIP:-0}" = 1 ]; then
   git -c user.name=selftest -c user.email=selftest@local commit --allow-empty -qm 'bad suite mutation'
 fi
@@ -814,6 +817,17 @@ EOF
 RUN_PROJ="$SWEEP_PROJ"
 VARGV="$HOME_FIX/.pi-seats-sweep/verifier/argv.json"
 SWEEP_LOCK="$FIX/review-sweep.lock"
+phase "0a3. refused output and one in-invocation corrective attempt"
+if env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR \
+  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$VERIFY_DIR/fixtures/verify-refusal.ts" \
+  "$SWEEP_PROJ/seats/verify.ts" "$SWEEP_PROJ" "$FIX/refusal-tests" "$SWEEP_BD_SHOW" "$SWEEP_LOCK"; then
+  pass "all harnesses retain refusals, admit no premature verdict, bound retry, and reuse the completed sweep"
+else fail "refusal/restatement regression failed"; fi
+if [ "${WHEELHOUSE_VERIFY_REFUSAL_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || { printf 'verify.selftest: FAIL (%s failures in refusal subset)\n' "$FAILED"; exit 1; }
+  printf 'verify.selftest: PASS (refusal subset)\n'
+  exit 0
+fi
 # First reproduce the old dispatch path: no precomputed evidence, model tool
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
@@ -1651,10 +1665,14 @@ run_without_default_push bead-5 fleet/bead-1 worker-1
 if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
   pass "two conflicting live VERDICT: lines exit 1 and print both final-message candidates"
 else fail "ambiguous double verdict not refused with candidates (exit $RC): $OUT"; fi
-if grep -q '"type":"message_end"' "$VDIR/.raw.md" 2>/dev/null && grep -q 'VERDICT: APPROVE' "$VDIR/.raw.md" && grep -q 'VERDICT: BOUNCE' "$VDIR/.raw.md"; then
-  pass "ambiguous double verdict writes raw json stdout to seats/verdicts/.raw.md before STOP"
+if bun -e 'import fs from "node:fs"; import a from "node:assert/strict";
+  const dir=process.argv[1]; a.ok(fs.statSync(dir).isDirectory());
+  const rows=fs.readdirSync(dir).filter(n=>n.startsWith("bead-5.")).map(n=>JSON.parse(fs.readFileSync(`${dir}/${n}`,"utf8"))).filter(r=>r.reason.startsWith("verifier emitted 2 live VERDICT:"));
+  a.equal(rows.length,2); for(const r of rows){a.equal(r.status,"REFUSED");a.equal(r.notAVerdict,true);a.match(r.stdout, /"type":"message_end"/);a.ok(r.stdout.includes("VERDICT: APPROVE") && r.stdout.includes("VERDICT: BOUNCE"));}
+' "$VDIR/refused"; then
+  pass "ambiguous double verdict retains both raw json answers marked REFUSED, never verdict Markdown"
 else
-  fail "ambiguous double verdict raw stdout missing json verdicts; raw was: $(cat "$VDIR/.raw.md" 2>/dev/null)"
+  fail "ambiguous double verdict raw answers or refusal reasons were not retained"
 fi
 cat > "$REPLY" <<'EOF'
 VERDICT: BOUNCE — NOT BENCHED: something
@@ -1901,7 +1919,7 @@ fi
 
 # 9b: a verify.ts that reports a verdict it never recorded
 CAN_B="$FIX/can-b"
-sed 's|^  fs.writeFileSync(verdictFile, record); // verdict-write$|  ; // verdict-write|' \
+sed 's|^[[:space:]]*fs.writeFileSync(verdictFile, record); // verdict-write$|  ; // verdict-write|' \
   "$VERIFY" > "$FIX/can-b-verify.ts"
 if cmp -s "$VERIFY" "$FIX/can-b-verify.ts"; then
   fail "canary: could not cut the verdict write — the line no longer matches, so the canary proves nothing"

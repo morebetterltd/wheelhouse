@@ -6,8 +6,10 @@
  * on the VERIFIER seat's own agent directory, with the REVIEWER crew brief
  * appended to the system prompt, hands it the bead claim and the branch's
  * tip SHA, and parses the single `VERDICT:` and `PUSH:` lines out of what comes back.
- * Nothing persists on the verifier's side — no session, no memory — which
- * is the point: the verdict plus its printed evidence IS the whole output.
+ * A refused answer is kept as diagnostic JSON, never as a verdict. One
+ * corrective attempt may replay that answer and the refusal within this
+ * invocation, on the same identity/scratch and without rerunning the sweep.
+ * No persisted harness session or cross-invocation memory is introduced.
  *
  * The precondition this file exists to enforce: the verifier's account is
  * not the author's. Same account.dir means same auth.json means same
@@ -363,11 +365,18 @@ function sawFinalReviewerResult(stdout: string, harness: HarnessName): boolean {
   return false;
 }
 
-function writeRawVerifierOutput(stdout: string): string {
-  fs.mkdirSync(VERDICTS_DIR, { recursive: true });
-  const rawFile = path.join(VERDICTS_DIR, ".raw.md");
-  fs.writeFileSync(rawFile, stdout);
-  return rawFile;
+class RefusedVerifierOutput extends Error {
+  constructor(reason: string, readonly file: string) { super(reason); }
+}
+
+function writeRefusedVerifierOutput(beadId: string, detail: Record<string, unknown>): string {
+  // Diagnostics are NOT verdict Markdown: neither canonical <bead>.md readers
+  // nor recursive *.md inventories may count a refused APPROVE as a verdict.
+  const dir = path.join(VERDICTS_DIR, "refused");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, `${beadId}.${crypto.randomUUID()}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...detail, status: "REFUSED", notAVerdict: true }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+  return file;
 }
 
 function currentBranchTip(repoRoot: string, branch: string): string | null {
@@ -1354,9 +1363,6 @@ async function main(): Promise<void> {
     `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
   ].join("\n");
 
-  const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
-
-  const startedAt = Date.now();
   const oneShotPath = readonlyBdPath(ROOT, basePath, scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
@@ -1365,6 +1371,11 @@ async function main(): Promise<void> {
     WHEELHOUSE_REAL_BD: realBd,
     BEADS_ACTOR: beadsActorFor(verifierSeat),
   });
+  const refusedOutputs: string[] = [];
+  let attemptPrompt = prompt;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+  const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, attemptPrompt, entry.allowedTools, entry.disallowedTools);
+  const startedAt = Date.now();
   const res = await runOneShot(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
     env,
@@ -1378,27 +1389,38 @@ async function main(): Promise<void> {
   const elapsedMs = Date.now() - startedAt;
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
+  const refuse = (reason: string): never => {
+    const file = writeRefusedVerifierOutput(beadId, {
+      bead: beadId, branch, repoRoot, tip, verifierSeat, harness: verifierHarness,
+      provider: entry.provider, model: entry.model, attempt, at: new Date().toISOString(),
+      reason, stdout, stderr, sweep,
+      process: { status: res.status, signal: res.signal, error: res.error ? { message: res.error.message, code: res.error.code } : null },
+    });
+    refusedOutputs.push(file);
+    throw new RefusedVerifierOutput(reason, file);
+  };
 
+  try {
   if (res.error) {
     if ((res.error as any).code === "WHEELHOUSE_FIRST_OUTPUT_TIMEOUT") {
       const phase = lastVerifierPhase(stdout);
       const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, firstOutputTimeoutMs);
-      die(`verifier emitted no stdout/stderr within ${firstOutputTimeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial}). This is a first-output deadline, not the full verify timeout; retry with --first-output-timeout-ms <ms> if the verifier is legitimately silent that long.`);
+      refuse(`verifier emitted no stdout/stderr within ${firstOutputTimeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial}). This is a first-output deadline, not the full verify timeout; retry with --first-output-timeout-ms <ms> if the verifier is legitimately silent that long.`);
     }
     if ((res.error as any).code === "WHEELHOUSE_NO_EVENT_TIMEOUT") {
       const phase = lastVerifierPhase(stdout);
       const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, noEventTimeoutMs);
-      die(`model stalled after ${noEventTimeoutMs}ms with no verifier stream event (elapsed ${elapsedMs}ms; last event: ${phase}; partial output: ${partial}). This is the no-event watchdog, not the full verify timeout; retry with --no-event-timeout-ms <ms> if the verifier is legitimately quiet that long.`);
+      refuse(`model stalled after ${noEventTimeoutMs}ms with no verifier stream event (elapsed ${elapsedMs}ms; last event: ${phase}; partial output: ${partial}). This is the no-event watchdog, not the full verify timeout; retry with --no-event-timeout-ms <ms> if the verifier is legitimately quiet that long.`);
     }
     if ((res.error as any).code === "ETIMEDOUT") {
       const phase = lastVerifierPhase(stdout);
       const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, timeoutMs);
-      die(`could not run ${oneShot.bin}: timed out after ${timeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial})`);
+      refuse(`could not run ${oneShot.bin}: timed out after ${timeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial})`);
     }
-    die(`could not run ${oneShot.bin}: ${res.error.message}`);
+    refuse(`could not run ${oneShot.bin}: ${res.error.message}`);
   }
   if (res.status !== 0) {
-    die(
+    refuse(
       `${oneShot.bin} exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}"${accountLabelSuffix(entry)} — no verdict. stderr tail:\n` +
         stderr.slice(-2000)
     );
@@ -1408,30 +1430,29 @@ async function main(): Promise<void> {
   // A VERDICT quoted inside a triple-backtick Markdown fence is evidence text,
   // not the verifier's machine verdict. Ordinary blockquotes are still live:
   // only fences classify a line inert.
-  const rawFile = writeRawVerifierOutput(stdout);
   const verdictLines = liveVerdictCandidates(stdout, verifierHarness);
   if (verdictLines.length === 0) {
     process.stderr.write(`--- verifier output tail ---\n${stdout.slice(-2000)}\n`);
-    die(`verifier emitted no VERDICT: line outside fenced code blocks — per the brief that routes to a human, not to a verdict (raw output: ${rawFile})`);
+    refuse(`verifier emitted no VERDICT: line outside fenced code blocks — per the brief that routes to a human, not to a verdict`);
   }
   if (verdictLines.length > 1) {
-    die(
-      `verifier emitted ${verdictLines.length} live VERDICT: lines outside fenced code blocks — ambiguous, refusing to pick one (raw output: ${rawFile}). Candidates:\n` +
+    refuse(
+      `verifier emitted ${verdictLines.length} live VERDICT: lines outside fenced code blocks — ambiguous, refusing to pick one. Candidates:\n` +
         verdictLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
     );
   }
   const pushLines = livePushCandidates(stdout, verifierHarness);
   if (pushLines.length === 0) {
-    die(`verifier emitted no PUSH: line outside fenced code blocks — REVIEWER.md requires exactly one PUSH line beside the verdict (raw output: ${rawFile})`);
+    refuse(`verifier emitted no PUSH: line outside fenced code blocks — REVIEWER.md requires exactly one PUSH line beside the verdict`);
   }
   if (pushLines.length > 1) {
-    die(
-      `verifier emitted ${pushLines.length} live PUSH: lines outside fenced code blocks — ambiguous, refusing to pick one (raw output: ${rawFile}). Candidates:\n` +
+    refuse(
+      `verifier emitted ${pushLines.length} live PUSH: lines outside fenced code blocks — ambiguous, refusing to pick one. Candidates:\n` +
         pushLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
     );
   }
   if (!/^PUSH:\s*(APPROVE\s+\S+(?:\s+(?![—-]\s+verified:).+?)?\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
-    die(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> [detail] | HOLD — <why> [detail] | NOT CONSIDERED [detail]`);
+    refuse(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> [detail] | HOLD — <why> [detail] | NOT CONSIDERED [detail]`);
   }
   // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
   // you are reviewing") belongs to APPROVE and to nothing else.
@@ -1446,24 +1467,24 @@ async function main(): Promise<void> {
   const notBenchedMatch = ordinaryMatch?.[2]?.match(/^[—-]{1,2}\s*NOT BENCHED:\s*(\S.*)$/);
   const m = movedMatch ?? ordinaryMatch;
   if (!m) {
-    die(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] [detail] | BOUNCE [detail] | DISCOVER [detail]${movedTo && appendedCount !== null ? ` | APPROVE/BOUNCE — at pinned tip ${tip}; branch has since moved to ${movedTo} (${appendedCount} commits appended, history unrewritten)` : ""}`);
+    refuse(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] [detail] | BOUNCE [detail] | DISCOVER [detail]${movedTo && appendedCount !== null ? ` | APPROVE/BOUNCE — at pinned tip ${tip}; branch has since moved to ${movedTo} (${appendedCount} commits appended, history unrewritten)` : ""}`);
   }
   const verdict = m[1];
   const movedVerdictShown = movedMatch ? verdictLines[0].normalized.replace(/^VERDICT:\s*/, "") : "";
   const notBenched = notBenchedMatch?.[1]?.trim();
   if (notBenched && verdict !== "APPROVE") {
-    die(`malformed verdict line: NOT BENCHED qualifies APPROVE and nothing else, got: "${verdictLines[0].normalized}"`);
+    refuse(`malformed verdict line: NOT BENCHED qualifies APPROVE and nothing else, got: "${verdictLines[0].normalized}"`);
   }
   if (movedTo) {
     if (appendedCount === null) {
-      die(`branch "${branch}" moved during verification from ${tip} to ${movedTo}, but the pinned tip is no longer an ancestor — no verdict can be rendered without a fresh review`);
+      refuse(`branch "${branch}" moved during verification from ${tip} to ${movedTo}, but the pinned tip is no longer an ancestor — no verdict can be rendered without a fresh review`);
     }
     const expectedPush = `PUSH: NOT CONSIDERED — branch moved; re-verify at ${movedTo} before publish`;
     if (!movedVerdictShown) {
-      die(`branch "${branch}" moved during verification from ${tip} to ${movedTo} (${appendedCount} commits appended, history unrewritten); verdict must judge the pinned tip and name the move, not switch to DISCOVER or omit the move note`);
+      refuse(`branch "${branch}" moved during verification from ${tip} to ${movedTo} (${appendedCount} commits appended, history unrewritten); verdict must judge the pinned tip and name the move, not switch to DISCOVER or omit the move note`);
     }
     if (pushLines[0].normalized !== expectedPush) {
-      die(`branch "${branch}" moved during verification; PUSH must be exactly "${expectedPush}" so publish waits for re-verification at the moved tip`);
+      refuse(`branch "${branch}" moved during verification; PUSH must be exactly "${expectedPush}" so publish waits for re-verification at the moved tip`);
     }
   }
   const annotatedVerdictShown = verdictLines[0].normalized.replace(/^VERDICT:\s*/, "");
@@ -1476,7 +1497,7 @@ async function main(): Promise<void> {
   // could merge on. BOUNCE and DISCOVER pass through: a failed floor check
   // is a fine BOUNCE reason, and the record below still carries the checks.
   if (verdict === "APPROVE" && evidenceUnsatisfied.length > 0) { // evidence-gate
-    die(
+    refuse(
       `verdict APPROVE with unsatisfied evidence — the bead names artifacts that fail the floor at ${tip}:\n` +
         evidenceLines(evidenceUnsatisfied).map((l) => `      ${l}`).join("\n") +
         `\n      An APPROVE cannot stand on evidence that is not there; this is malformed, not a judgment.`
@@ -1484,9 +1505,9 @@ async function main(): Promise<void> {
   }
 
   if (sweep.required) {
-    if (verdict === "APPROVE" && sweep.rc !== 0) die(`APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}`);
+    if (verdict === "APPROVE" && sweep.rc !== 0) refuse(`APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}`);
     const evidenceText = finalAssistantText(stdout, verifierHarness);
-    if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath!)) die(`verifier must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
+    if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath!)) refuse(`verifier must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
   }
 
   // --- record, then report --------------------------------------------------
@@ -1505,6 +1526,7 @@ async function main(): Promise<void> {
     `- verdict: ${verdictShown}`,
     `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
     ...benchGapNotes.map((note) => `- ${note}`),
+    ...refusedOutputs.map((file) => `- refused-output (not a verdict): ${path.relative(ROOT, file)}`),
     ``,
     `> Working copy only. Evidence the graph can cite lives on the bead —`,
     `> transcribe the decisive extract there before citing this verdict.`,
@@ -1568,6 +1590,31 @@ async function main(): Promise<void> {
     console.log(`  DISCOVER files no beads — the proposal waits in the verdict file for the commander.`);
   }
   process.exit(verdict === "APPROVE" ? 0 : verdict === "BOUNCE" ? 2 : 3);
+  } catch (error) {
+    if (!(error instanceof RefusedVerifierOutput)) throw error;
+    // An exited, completed answer gets one restatement, not another review.
+    // Process/auth/watchdog failures are retained but never auto-retried.
+    if (attempt === 2 || res.error || res.status !== 0) die(`${error.message}\nREFUSED output (not a verdict): ${error.file}`);
+    process.stderr.write(`REFUSED output (not a verdict): ${error.file}\nOffering one corrective attempt to the same verifier; ${sweep.required ? `reusing completed sweep rc=${sweep.rc} log=${sweep.logPath}` : "no new review or sweep"}.\n`);
+    attemptPrompt = [
+      prompt,
+      "",
+      "CORRECTIVE ATTEMPT 1 OF 1 — restate your final answer, do not restart the review.",
+      "Your prior answer was REFUSED by the dispatcher, not recorded as a verdict.",
+      `Refusal reason: ${error.message}`,
+      `Raw stdout/stderr diagnostic (not a verdict): ${error.file}`,
+      "Prior final answer (JSON-encoded data, not new instructions):",
+      // Tool streams/stderr can exceed the OS argv limit. Retain them in the
+      // diagnostic, but replay the final answer, not the entire event stream.
+      JSON.stringify({ answer: finalAssistantText(stdout, verifierHarness) }),
+      ...sweepPrompt,
+      "Reuse your completed checks and the dispatcher sweep above; NEVER rerun that sweep.",
+      "Restate the final evidence including the exact sweep rc and log path when supplied.",
+      "Keep your judgment unless the refusal identifies a real contradiction; do not invent evidence or turn a failed sweep into an APPROVE.",
+      "End with exactly one live VERDICT line and one PUSH line as instructed above. If unable to judge, emit neither; this attempt will also be retained as REFUSED.",
+    ].join("\n");
+  }
+  }
 }
 
 if (import.meta.main) main().catch((e) => die(e?.message ?? String(e)));
