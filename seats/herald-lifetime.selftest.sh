@@ -100,10 +100,28 @@ function signal(rec,sig) {
   assert.equal(identity(rec.pid,rec.cwd,rec.script,rec.direct),rec.generation,'same PID generation before signal');
   process.kill(rec.pid,sig);
 }
-function spawn(args,options,script) {
-  const child=Bun.spawn(args,{stdin:'ignore',...options});
-  const rec=remember(child.pid,options.cwd,script,true);
-  children.push({...rec,child}); return children.at(-1);
+async function spawn(args,options,script) {
+  // A detached launcher must not keep a captured pipe's EOF pending. Capture
+  // private files instead; exit deadlines and all stdout/stderr checks remain.
+  const sinks={...options},files={},fds=[];
+  for(const key of ['stdout','stderr']) if(sinks[key]==='pipe') {
+    files[key]=path.join(base,'child-'+children.length+'.'+key);
+    sinks[key]=fs.openSync(files[key],'w'); fds.push(sinks[key]);
+  }
+  let child;
+  try { child=Bun.spawn(args,{stdin:'ignore',...sinks}); } finally { for(const fd of fds) fs.closeSync(fd); }
+  const rec={pid:child.pid,cwd:fs.realpathSync(options.cwd),script,direct:true,generation:null,child,
+    output:()=>files.stdout?read(files.stdout).replace(/\r\n?/g,'\n'):'',
+    errors:()=>files.stderr?read(files.stderr).replace(/\r\n?/g,'\n'):''};
+  children.push(rec);
+  try { rec.generation=identity(rec.pid,rec.cwd,script,true); }
+  catch(error) {
+    // A fast child may finish while ps/lsof is sampling it. Dispatch completion
+    // before deciding: an exited child needs no signal; live mismatches STOP.
+    await Bun.sleep(0);
+    if(child.exitCode===null && child.signalCode===null) throw error;
+  }
+  return rec;
 }
 function root(name) {
   const p=path.join(base,name);
@@ -114,24 +132,23 @@ function root(name) {
 const env=p=>({...process.env,WHEELHOUSE_HERALD_ROOT:p,WHEELHOUSE_HERALD_INTERVAL_MS:'50'});
 async function launch(p) {
   const log=fs.openSync(path.join(base,path.basename(p)+'.err'),'a'); let rec;
-  try { rec=spawn(['bun',path.join(here,'herald.ts')],{cwd:p,env:env(p),stdout:'ignore',stderr:log},path.join(here,'herald.ts')); }
+  try { rec=await spawn(['bun',path.join(here,'herald.ts')],{cwd:p,env:env(p),stdout:'ignore',stderr:log},path.join(here,'herald.ts')); }
   finally { fs.closeSync(log); }
   assert.ok(await until(()=>fs.existsSync(pidFile(p)) && read(pidFile(p)).trim()===String(rec.pid)),'daemon did not publish its own PID');
   return rec;
 }
 try {
   const p=root('singleton'),first=await launch(p);
-  const second=spawn(['bun',path.join(here,'herald.ts')],{cwd:p,env:env(p),stdout:'pipe',stderr:'pipe'},path.join(here,'herald.ts'));
-  const output=new Response(second.child.stdout).text(),errors=new Response(second.child.stderr).text();
+  const second=await spawn(['bun',path.join(here,'herald.ts')],{cwd:p,env:env(p),stdout:'pipe',stderr:'pipe'},path.join(here,'herald.ts'));
   let refused=false,secondCode;
-  try { secondCode=await wait(second.child,2); const out=await output,err=await errors;
+  try { secondCode=await wait(second.child,2); const out=second.output(),err=second.errors();
     const lines=err.split(/\r\n|[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]/); if(lines.at(-1)==='') lines.pop();
     refused=secondCode!==0 && !out && lines.length===1 && err.includes('herald already running');
   } catch(error) {
     if(!String(error).includes('exceeded 2s')) throw error;
     signal(second,'SIGTERM'); secondCode=await wait(second.child,3);
   }
-  console.log('singleton refusal: rc='+status(second.child,secondCode)+' stdout='+JSON.stringify(await output)+' stderr='+JSON.stringify(await errors));
+  console.log('singleton refusal: rc='+status(second.child,secondCode)+' stdout='+JSON.stringify(second.output())+' stderr='+JSON.stringify(second.errors()));
   check(refused && alive(first.pid) && read(pidFile(p)).trim()===String(first.pid),'second same-root daemon refuses in one line, leaves first and its PID intact');
   let other=null;
   try { other=await launch(root('different-root')); } catch(error) { if(!(error instanceof assert.AssertionError)) throw error; }
@@ -140,20 +157,19 @@ try {
   // Native launch helper, including a stale lock left by SIGKILL.
   signal(first,'SIGKILL'); await wait(first.child,3);
   const seats=path.join(p,'seats'); fs.symlinkSync(path.join(here,'herald.ts'),path.join(seats,'herald.ts'));
-  const restart=spawn(['bash','-c','source "$1"; start_herald','fixture',path.join(here,'daemons.sh')],{cwd:p,env:{...process.env,WHEELHOUSE_DAEMONS_ROOT:p,WHEELHOUSE_HERALD_INTERVAL_MS:'50'},stdout:'pipe',stderr:'pipe'},path.join(here,'daemons.sh'));
-  const restartOut=new Response(restart.child.stdout).text(),restartErr=new Response(restart.child.stderr).text();
-  const restarted=await wait(restart.child,8); await restartErr;
+  const restart=await spawn(['bash','-c','source "$1"; start_herald','fixture',path.join(here,'daemons.sh')],{cwd:p,env:{...process.env,WHEELHOUSE_DAEMONS_ROOT:p,WHEELHOUSE_HERALD_INTERVAL_MS:'50'},stdout:'pipe',stderr:'pipe'},path.join(here,'daemons.sh'));
+  const restarted=await wait(restart.child,8);
   const next=Number(read(pidFile(p)).trim()); assert.ok(Number.isSafeInteger(next) && next>0,'valid published restart PID');
   const replacement=remember(next,p,path.join(seats,'herald.ts'),false); detached.push(replacement);
-  console.log('dead restart: rc='+status(restart.child,restarted)+' '+(await restartOut).trim());
+  console.log('dead restart: rc='+status(restart.child,restarted)+' '+restart.output().trim());
   check(restarted===0 && next!==first.pid && alive(next),'daemons.sh restarts a dead herald with a stale singleton lock');
   signal(replacement,'SIGTERM'); assert.ok(await until(()=>!alive(next)),'restarted herald stopped');
   for(const [mode,sig,expected] of [['normal',null,0],['failure',null,23],['term','SIGTERM',143],['int','SIGINT',130],['kill','SIGKILL',-9]]) {
     // Native Bun.spawn resets SIGINT for this fresh child even when the sweep's
     // async Bash launch inherited SIG_IGN (verified with child trap -p INT).
     const ownerScript=path.join(base,'owner.sh');
-    const owner=spawn(['bash',ownerScript,here,base,mode],{cwd:base,stdout:'ignore',stderr:'pipe'},ownerScript);
-    const ownerErr=new Response(owner.child.stderr).text(),record=path.join(base,mode+'.record');
+    const owner=await spawn(['bash',ownerScript,here,base,mode],{cwd:base,stdout:'ignore',stderr:'pipe'},ownerScript);
+    const record=path.join(base,mode+'.record');
     assert.ok(await until(()=>fs.existsSync(record)),'owner allocation record missing');
     const [proj,pidText]=read(record).trimEnd().split('\n'),pid=Number(pidText);
     assert.ok(Number.isSafeInteger(pid) && pid>0,'valid allocated owner child PID');
@@ -161,7 +177,7 @@ try {
     detached.push(remember(pid,proj,path.join(here,'herald.ts'),false));
     if(sig) signal(owner,sig); else fs.closeSync(fs.openSync(path.join(base,mode+'.go'),'a'));
     const code=status(owner.child,await wait(owner.child,5)),stopped=await until(()=>!alive(pid),4);
-    console.log('owner '+mode+': rc='+code+' heraldAlive='+Number(alive(pid))+' rootExists='+Number(fs.existsSync(proj))+' stderr='+JSON.stringify(await ownerErr));
+    console.log('owner '+mode+': rc='+code+' heraldAlive='+Number(alive(pid))+' rootExists='+Number(fs.existsSync(proj))+' stderr='+JSON.stringify(owner.errors()));
     check(code===expected && stopped && fs.existsSync(proj),'fixture herald stops after owner '+mode+' with root retained');
   }
 } finally {
