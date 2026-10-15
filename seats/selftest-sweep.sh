@@ -87,7 +87,7 @@ check_source_files(){
       first=""; IFS= read -r first < "$file" || true
       # env -S also accepts a quoted split string, e.g. "python3 -u".
       first="${first//\"/}"; first="${first//\'/}"
-      if printf '%s\n' "$first" | LC_ALL=C grep -E '^#![[:space:]]*([^[:space:]]*/)?python([0-9]+([.][0-9]+)*)?([[:space:]]|$)|^#![[:space:]]*([^[:space:]]*/)?env[[:space:]]+([^[:space:]]+[[:space:]]+)*([^[:space:]]*/)?python([0-9]+([.][0-9]+)*)?([[:space:]]|$)' >/dev/null; then
+      if printf '%s\n' "$first" | LC_ALL=C grep -E '^#![[:space:]]*([^[:space:]]*/)?python([0-9]+([.][0-9]+)*)?([[:space:]]|$)|^#![[:space:]]*([^[:space:]]*/)?env[[:space:]]+([^[:space:]]+[[:space:]]+)*([^[:space:]]*/)?python([0-9]+([.][0-9]+)*)?([[:space:]]|$)|^#![[:space:]]*([^[:space:]]*/)?env[[:space:]]+([^[:space:]]+[[:space:]]+)*(-S|--split-string=)([^[:space:]]*/)?python([0-9]+([.][0-9]+)*)?([[:space:]]|$)' >/dev/null; then
         info "selftest-sweep: forbidden Python shebang: $file"
         rejected=1
       fi
