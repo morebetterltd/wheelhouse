@@ -17,10 +17,24 @@ export function openPaths(pid: number): string[] {
   return [];
 }
 
+/** Compare metadata, not canonical names: Bun's realpathSync opens the final
+ * component for reading on macOS. On an unattended FIFO that blocks forever,
+ * even if a reader probe succeeded just before the seat died. stat follows
+ * directory and final-component aliases without opening the pipe. */
+export function openPathsMatch(paths: string[], p: string): boolean {
+  if (paths.includes(p)) return true;
+  let wanted: fs.BigIntStats;
+  try { wanted = fs.statSync(p, { bigint: true }); } catch { return false; }
+  return paths.some((n) => {
+    try {
+      const observed = fs.statSync(n, { bigint: true });
+      return wanted.dev === observed.dev && wanted.ino === observed.ino;
+    } catch { return false; }
+  });
+}
+
 export function pidHoldsPath(pid: number, p: string): boolean {
-  const wanted = new Set([p]);
-  try { wanted.add(fs.realpathSync(p)); } catch {}
-  return openPaths(pid).some((n) => wanted.has(n));
+  return openPathsMatch(openPaths(pid), p);
 }
 
 function fifoHasReader(fifo: string): boolean {

@@ -68,7 +68,7 @@ import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
-import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, pidAlive, pidHoldsPath } from "./seat-activity";
+import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
 
@@ -1654,9 +1654,7 @@ function processOpenPaths(): OpenPathSnapshot | null {
 
 function pathsMatch(openPaths: string[] | undefined, p: string | undefined): boolean {
   if (!p || !openPaths) return false;
-  const wanted = new Set([p]);
-  try { wanted.add(fs.realpathSync(p)); } catch {}
-  return openPaths.some((n) => wanted.has(n));
+  return openPathsMatch(openPaths, p);
 }
 
 function pidAliveFromSnapshot(pid: number | null, fifo: string | undefined, open: OpenPathSnapshot | null): boolean {
@@ -1952,11 +1950,11 @@ async function cmdStop(name: string): Promise<void> {
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
-    if ((rec as any).cwd !== undefined) {
-      delete (rec as any).cwd;
-      writeState(state);
-    }
-    console.log(`seat ${name} is not running`);
+    rec.pid = null;
+    rec.stoppedAt = new Date().toISOString();
+    delete (rec as any).cwd;
+    writeState(state);
+    console.log(`seat ${name} is not running; dead record cleared; session ${rec.sessionId ?? "-"} kept for resume`);
     return;
   }
   const driver = driverForRunningSeat(name, "adapter stop");
