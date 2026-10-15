@@ -3,6 +3,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-pool-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 trap 'selftest_remove_fixture_dir "$FIX"' EXIT
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
@@ -21,7 +22,7 @@ write_valid_pool(){ cat > "$ROOT/seats/pool.json" <<'JSON'
 JSON
 }
 run_check(){ HOME="$HOME_FIX" PATH="$BIN:$PATH" bun "$ROOT/seats/pool.ts" check > "$FIX/out" 2>&1; RC=$?; OUT="$(cat "$FIX/out")"; }
-expect_refusal(){ name="$1" want="$2"; run_check; [ $RC -eq 2 ] && printf '%s\n' "$OUT" | grep -qF "$want" && printf '%s\n' "$OUT" | grep -q '— fix:' && pass "$name" || fail "$name rc=$RC out=$OUT"; }
+expect_refusal(){ name="$1" want="$2"; run_check; [ $RC -eq 2 ] && printf '%s\n' "$OUT" | grep -F >/dev/null "$want" && printf '%s\n' "$OUT" | grep >/dev/null '— fix:' && pass "$name" || fail "$name rc=$RC out=$OUT"; }
 
 python3 - <<PY
 import json, pathlib
@@ -111,7 +112,7 @@ import json, os
 p='$ROOT/seats/pool.json'; j=json.load(open(p)); j['entries']['a']['allowedTools']=os.environ['SECRET']; json.dump(j,open(p,'w'))
 PY
 expect_refusal 'token-shaped pool strings are refused without echoing the value' 'credential-shaped value at entries.a.allowedTools'
-printf '%s\n' "$OUT" | grep -qF "$SECRET" && fail 'token-shaped refusal echoed the planted value' || pass 'token-shaped refusal omits the planted value'
+printf '%s\n' "$OUT" | grep -F >/dev/null "$SECRET" && fail 'token-shaped refusal echoed the planted value' || pass 'token-shaped refusal omits the planted value'
 
 mkdir -p "$HOME_FIX/.pi-seats-other/pool/foreign"; printf 'foreign\n' > "$HOME_FIX/.pi-seats-other/pool/foreign/file.txt"
 checksum(){ (cd "$HOME_FIX/.pi-seats-other" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256) 2>/dev/null; }

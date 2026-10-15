@@ -15,6 +15,7 @@ CHANNELS="$HERE/channels.ts"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-courier-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0; SERVER_PID=""; COURIER_PID=""; WATCHDOG_PID=""
 wait_child_exit(){
   local pid="$1" label="$2" grace_ms="${3:-1500}" waited=0 step=100 stat=""
@@ -53,7 +54,7 @@ fixture_courier_pids(){
   [ -n "${FIX:-}" ] || return 0
   for pid in $(pgrep -f 'seats/courier\.ts' 2>/dev/null || true); do
     [ -n "$pid" ] || continue
-    if lsof -p "$pid" 2>/dev/null | grep -qF "$FIX"; then
+    if lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$FIX"; then
       printf '%s\n' "$pid"
     fi
   done
@@ -188,7 +189,7 @@ if grep -q '"type":"message"' "$PROJ/seats/needs.jsonl" && grep -q '"from":"huma
 printf '%s
 ' '{"type":"closed","id":"need-one","at":"2026-09-21T00:02:00.000Z","reason":"complete"}' >> "$PROJ/seats/needs.jsonl"
 (cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
-if tail -20 "$FIX/requests.jsonl" | grep -q 'Resolved: complete'; then pass "closed notice is sent as the thread-ending Telegram message"; else fail "closed notice missing req=$(tail -20 "$FIX/requests.jsonl")"; fi
+if tail -20 "$FIX/requests.jsonl" | grep >/dev/null 'Resolved: complete'; then pass "closed notice is sent as the thread-ending Telegram message"; else fail "closed notice missing req=$(tail -20 "$FIX/requests.jsonl")"; fi
 before_ans="$(count_ledger '"type":"answered"')"
 cat > "$FIX/updates.json" <<'EOF'
 [{"update_id":11,"message":{"message_id":51,"date":1790000001,"chat":{"id":999},"from":{"id":999},"text":"B","reply_to_message":{"message_id":1}}}]
@@ -199,7 +200,7 @@ if [ "$before_ans" = "$after_ans" ] && grep -q 'ignored telegram sender 999' "$P
 printf '%s
 ' '{"type":"message","id":"need-one","at":"2026-09-21T00:03:00.000Z","from":"commander","via":"cli","text":"Extra context"}' >> "$PROJ/seats/needs.jsonl"
 (cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
-if tail -20 "$FIX/requests.jsonl" | grep -q 'Extra context' && tail -20 "$FIX/requests.jsonl" | grep -q '"reply_to_message_id":1'; then pass "commander say pushes a threaded Telegram sendMessage"; else fail "commander say was not threaded req=$(tail -20 "$FIX/requests.jsonl")"; fi
+if tail -20 "$FIX/requests.jsonl" | grep >/dev/null 'Extra context' && tail -20 "$FIX/requests.jsonl" | grep >/dev/null '"reply_to_message_id":1'; then pass "commander say pushes a threaded Telegram sendMessage"; else fail "commander say was not threaded req=$(tail -20 "$FIX/requests.jsonl")"; fi
 RETRY="$FIX/retry"; make_proj "$RETRY"
 cat > "$RETRY/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-retry","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Retry me","body":"First send fails","options":[],"machine":{}}

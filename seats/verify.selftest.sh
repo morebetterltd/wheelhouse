@@ -43,6 +43,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
 export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 VERIFY_DIR="$(cd "$(dirname "$VERIFY")" && pwd)"
+READINESS_DRIVER="$(dirname "$SELFTEST_LIB")/fixtures/verify-readiness.ts"
 BRIEFS="$VERIFY_DIR/briefs.ts"
 HARNESS="$VERIFY_DIR/harness.ts"
 FINAL_ASSISTANT="$VERIFY_DIR/final-assistant-message.ts"
@@ -109,7 +110,7 @@ sweep_stale_fixtures() {
     while IFS= read -r sf; do
       [ -f "$sf" ] || continue
       for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
+        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
           kill "$pid" 2>/dev/null
           echo "swept: killed leaked seat pid $pid (held open files under $d)"
         fi
@@ -123,6 +124,7 @@ sweep_stale_fixtures() {
 sweep_stale_fixtures
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
@@ -173,6 +175,18 @@ if (process.env.STUB_CLOBBER_CORE_WORKTREE_REPO) {
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+// Readiness is out-of-band: it must not count as verifier stdout/stderr.
+const watchdogDir = process.env.WHEELHOUSE_TEST_WATCHDOG_DIR;
+if (watchdogDir) {
+  fs.writeFileSync(path.join(watchdogDir, "ready"), JSON.stringify({pid:process.pid}));
+  while (!fs.existsSync(path.join(watchdogDir, "release"))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  if (process.env.STUB_TEST_EMIT_NOTHING === "eof") process.exit(0);
+  if (process.env.STUB_TEST_EMIT_NOTHING === "silent") {
+    fs.writeFileSync(path.join(watchdogDir, "silent"), "entered\n");
+    setInterval(() => {}, 1000);
+    return;
+  }
+}
 if (process.env.STUB_RUN_BENCH === "1") {
   const cp = require("child_process");
   const outDir = path.join(process.cwd(), "bench-out");
@@ -247,6 +261,25 @@ if (process.env.STUB_BD_READONLY_CHECK === "1") {
   });
   fs.writeFileSync(path.join(agentDir, "bd-readonly-check.json"), JSON.stringify(cases, null, 2));
 }
+if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
+  const prompt = process.argv[process.argv.length - 1] || "";
+  const rc = (prompt.match(/^- rc: (\d+)/m) || [])[1] || "";
+  const log = (prompt.match(/^- log: (.+)$/m) || [])[1] || "";
+  let logText = "", ok = false;
+  try { logText = fs.readFileSync(log, "utf8"); ok = rc === "0" && logText.includes("fixture sweep PASS") && logText.includes("scratch bd create ok"); } catch (e) { logText = `read failed: ${e.message}`; }
+  fs.writeFileSync(path.join(agentDir, "sweep-prompt-check.json"), JSON.stringify({ rc, log, ok, logText }, null, 2));
+  const cp = require("child_process");
+  const readonly = cp.spawnSync("bd", ["create", "reviewer must not write"], { encoding: "utf8" });
+  if (!log) {
+    const attempted = cp.spawnSync("bash", ["seats/selftest-sweep.sh"], { timeout: 150, encoding: "utf8" });
+    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\n`}})+"\n");
+    process.exit(0);
+  }
+  const verdict = ok && readonly.status !== 0 ? "APPROVE" : "BOUNCE";
+  const citation = process.env.STUB_SWEEP_OMIT_CITATION === "1" ? "sweep omitted" : `sweep evidence rc=${rc} log=${log}`;
+  process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`${citation}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : verdict}\nPUSH: NOT CONSIDERED\n`}})+"\n");
+  process.exit(0);
+}
 if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
   const cp = require("child_process");
   const scratchGraph = path.join(process.cwd(), "bd-scratch");
@@ -294,7 +327,8 @@ if (process.env.STUB_STREAM_FILE) {
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 if (process.env.STUB_SILENT === "1") {
-  setTimeout(() => {}, 10000);
+  if (watchdogDir) fs.writeFileSync(path.join(watchdogDir, "silent"), "entered\n");
+  setInterval(() => {}, 1000); // Remain silent until the explicitly fired watchdog stops us.
 } else if (process.env.STUB_STALL === "1") {
   // Match real pi behavior: without --mode json, a stalled one-shot emits no
   // JSON events before timeout, so this selftest catches a missing stream flag.
@@ -421,9 +455,10 @@ readonly=0
 while true; do
   case "${1:-}" in
     --readonly) readonly=1; shift; continue ;;
-    -C|--directory) shift 2; continue ;;
+    -C|--directory) cd "$2"; shift 2; continue ;;
+    --directory=*) cd "${1#--directory=}"; shift; continue ;;
     --actor|--db|--database) shift 2; continue ;;
-    --db=*|--database=*|--directory=*) shift; continue ;;
+    --db=*|--database=*) shift; continue ;;
     --global) shift; continue ;;
   esac
   break
@@ -614,6 +649,14 @@ run_bench_check() {  # args pass through to verify.ts
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
 }
+run_sweep_prompt_check() {  # $1 = bd-show file, remaining args pass through
+  local bdfile="$1"
+  shift
+  WATCHDOG_DIR="$(mktemp -d "$FIX/sweep-readiness.XXXXXX")"
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_SHOW_FILE="$bdfile" STUB_SWEEP_PROMPT_CHECK=1 \
+    bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" ready "$@" 2>&1)"
+  RC=$?
+}
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 VDIR="$PROJ/seats/verdicts"
@@ -721,6 +764,123 @@ if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-sea
   && ! grep -q '"rc": 127' "$BENCH_RUN" 2>/dev/null; then
   pass "installed-layout stub bench receives WHEELHOUSE_REAL_BD and writes only its scratch BEADS_DIR graph"
 else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
+
+phase "0a2. dispatcher-owned full sweep evidence for reviewer"
+SWEEP_PROJ="$FIX/sweep-proj"
+build_proj "$SWEEP_PROJ" sweep "$VERIFY"
+# Real bd 1.2.2 may redirect a linked-worktree init to its shared ancestor;
+# keep graph setup in an independent primary repo with consistent cwd/PWD.
+SWEEP_BIN="$FIX/sweep-bin"; mkdir -p "$SWEEP_BIN"
+export STUB_SWEEP_BASE_BD="$BIN/bd" STUB_SWEEP_PWD_MARKER="$FIX/sweep-pwd.json"
+cat > "$SWEEP_BIN/bd" <<'JS'
+#!/usr/bin/env node
+const fs=require('fs'),cp=require('child_process');
+if(process.argv[2]==='where') {
+  console.log(JSON.stringify({path:fs.realpathSync(require('path').join(process.cwd(),'.beads'))})); process.exit(0);
+}
+if(process.argv[2]==='init') {
+  const cwd=fs.realpathSync(process.cwd()),pwd=process.env.PWD ? fs.realpathSync(process.env.PWD) : '';
+  const primary=fs.statSync(require('path').join(cwd,'.git')).isDirectory();
+  if(pwd!==cwd || !primary) { console.error('scratch bd init requires an isolated primary repo and consistent PWD'); process.exit(73); }
+  fs.writeFileSync(process.env.STUB_SWEEP_PWD_MARKER,JSON.stringify({cwd,pwd,primary}));
+}
+const r=cp.spawnSync(process.env.STUB_SWEEP_BASE_BD,process.argv.slice(2),{stdio:'inherit',env:process.env});
+if(r.status===0 && process.argv[2]==='init' && process.env.STUB_SWEEP_MUTATE_SETUP==='1') {
+  cp.execFileSync('git',['-c','user.name=selftest','-c','user.email=selftest@local','commit','--allow-empty','-qm','bad sweep setup'],{cwd:require('path').dirname(process.cwd())});
+}
+process.exit(r.status ?? 1);
+JS
+chmod +x "$SWEEP_BIN/bd"
+SWEEP_SAVED_RUN_PATH="$RUN_PATH"; RUN_PATH="$SWEEP_BIN:$RUN_PATH"
+cp -f "$VERIFY_DIR/selftest-sweep.sh" "$SWEEP_PROJ/seats/selftest-sweep.sh"
+cat > "$SWEEP_PROJ/seats/slowed.selftest.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+sleep 2
+[ -n "${WHEELHOUSE_REAL_BD:-}" ] || { echo 'missing WHEELHOUSE_REAL_BD'; exit 8; }
+printf 'sweep cwd tip=%s\n' "$(git rev-parse HEAD)"
+bd create 'sweep scratch bead' --json >/dev/null
+printf 'scratch bd create ok\n'
+printf 'fixture sweep PASS\n'
+if [ "${SWEEP_FIXTURE_MOVE_TIP:-0}" = 1 ]; then
+  git -c user.name=selftest -c user.email=selftest@local commit --allow-empty -qm 'bad suite mutation'
+fi
+exit "${SWEEP_FIXTURE_RC:-0}"
+SH
+chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
+# Detached evidence runs only committed files: include the runner companion.
+git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/slowed.selftest.sh
+git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
+git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
+SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
+SWEEP_BD_SHOW="$FIX/sweep-bd-show.txt"
+cat > "$SWEEP_BD_SHOW" <<'EOF'
+○ bead-sweep [task]
+
+DESCRIPTION
+
+  ## Done
+
+  The full seats/*.selftest.sh sweep passes.
+EOF
+RUN_PROJ="$SWEEP_PROJ"
+VARGV="$HOME_FIX/.pi-seats-sweep/verifier/argv.json"
+SWEEP_LOCK="$FIX/review-sweep.lock"
+# First reproduce the old dispatch path: no precomputed evidence, model tool
+# budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
+# Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
+cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
+if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
+cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
+# Hold H4 until the dispatcher log proves it waited, before verifier readiness.
+# The controller then releases the fixture holder. No elapsed-time comparison.
+HOLDER_RELEASE="$FIX/sweep-holder.release"
+bash -c 'printf "pid=%s\n" "$$" > "$1.new"; mv -f "$1.new" "$1"; while [ ! -f "$2" ]; do sleep 0.01; done; rm -f "$1"' _ "$SWEEP_LOCK" "$HOLDER_RELEASE" & HOLDER=$!
+while [ ! -f "$SWEEP_LOCK" ]; do sleep 0.01; done
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLDER_RELEASE="$HOLDER_RELEASE" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
+wait "$HOLDER"
+SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
+SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
+  pass "full-sweep done: exact tip, H4 wait outside model limit, scratch bd, reviewer cites rc/log"
+else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$SWEEP_CHECK" 2>/dev/null)"; fi
+if [ -f "$WATCHDOG_DIR/holder-wait-observed" ] && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ -f "$WATCHDOG_DIR/output" ]; then
+  pass "sweep evidence waits for H4 and fixture readiness without a wall-clock verdict"
+else fail "sweep/readiness handshake was not observed"; fi
+for NO_OUTPUT_MODE in eof silent; do
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_EMIT_NOTHING="$NO_OUTPUT_MODE" run_sweep_prompt_check "$SWEEP_BD_SHOW" "bead-sweep-no-output-$NO_OUTPUT_MODE" fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && { says 'verifier emitted no VERDICT:' || says 'first-output deadline'; } && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ ! -e "$WATCHDOG_DIR/output" ]; then
+    pass "sweep evidence still refuses a ready verifier that emits nothing ($NO_OUTPUT_MODE)"
+  else fail "empty ready verifier was accepted ($NO_OUTPUT_MODE rc=$RC out=$OUT)"; fi
+done
+if [ -f "$STUB_SWEEP_PWD_MARKER" ] && node -e 'const r=require(process.argv[1]); if(!r.primary || r.cwd!==r.pwd || require("path").basename(r.cwd)!==".wheelhouse-sweep-graph") process.exit(1)' "$STUB_SWEEP_PWD_MARKER"; then
+  pass "sweep graph init uses an independent primary repo and bound logical PWD"
+else fail "sweep graph init was not isolated from the reviewed repository"; fi
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_OMIT_CITATION=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-omit fleet/bead-1 worker-1
+[ $RC -eq 1 ] && says 'must cite full-sweep' && pass "full-sweep verdict without rc/log citation is refused" || fail "missing citation accepted rc=$RC out=$OUT"
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" SWEEP_FIXTURE_RC=7 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-failed fleet/bead-1 worker-1
+[ $RC -eq 1 ] && says 'APPROVE with failed full sweep' && pass "failed full sweep cannot be approved" || fail "failed sweep approved rc=$RC out=$OUT"
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_MUTATE_SETUP=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-setup-moved fleet/bead-1 worker-1
+SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
+if [ $RC -eq 1 ] && says 'APPROVE with failed full sweep' && grep -q 'changed reviewed tip' "$SWEEP_LOG"; then
+  pass "sweep setup cannot commit past the pinned reviewed tip"
+else fail "setup mutation of reviewed tip accepted rc=$RC out=$OUT"; fi
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" SWEEP_FIXTURE_MOVE_TIP=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-final-moved fleet/bead-1 worker-1
+SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
+if [ $RC -eq 1 ] && says 'APPROVE with failed full sweep' && grep -q 'changed reviewed tip' "$SWEEP_LOG"; then
+  pass "sweep suites cannot move the pinned reviewed tip"
+else fail "suite mutation of reviewed tip accepted rc=$RC out=$OUT"; fi
+RUN_PATH="$SWEEP_SAVED_RUN_PATH"
+unset STUB_SWEEP_BASE_BD STUB_SWEEP_PWD_MARKER
+if [ "${WHEELHOUSE_VERIFY_SWEEP_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || { printf 'verify.selftest: FAIL (%s failures in sweep-readiness subset)\n' "$FAILED"; exit 1; }
+  printf 'verify.selftest: PASS (sweep-readiness subset)\n'
+  exit 0
+fi
+RUN_PROJ="$INST_PROJ"
+VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
 MISS_PROJ="$FIX/missing-brief-proj"
 build_proj "$MISS_PROJ" missing "$VERIFY"
 rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"
@@ -814,11 +974,11 @@ SOURCE_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/source-check.txt"
 if [ $RC -eq 0 ] && grep -q '"readable": true' "$SOURCE_CHECK" 2>/dev/null && grep -q '"writeFailed": true' "$SOURCE_CHECK" 2>/dev/null; then
   pass "source snapshots: verifier can read the bead-declared sibling and writes to the mounted copy fail"
 else fail "source snapshots: read/write assertion failed (exit $RC): $OUT check=$(cat "$SOURCE_CHECK" 2>/dev/null)"; fi
-if ! find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -exec test ! -w '{}' \; -print -quit | grep -q .; then
+if ! find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -exec test ! -w '{}' \; -print -quit | grep >/dev/null .; then
   pass "source snapshots: cleanup restores/removes read-only snapshot trees"
 else
   chmod -R u+w "$VERIFY_RO_TMP" 2>/dev/null || true
-  fail "source snapshots: read-only snapshot tree left under TMPDIR: $(find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -print 2>/dev/null | head -5)"
+  fail "source snapshots: read-only snapshot tree left under TMPDIR: $(find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -print 2>/dev/null | sed -n '1,5p')"
 fi
 if grep -q '"undeclaredAbsent": true' "$SOURCE_CHECK" 2>/dev/null; then
   pass "source snapshots: undeclared sibling source is not mounted or named"
@@ -894,8 +1054,9 @@ OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIM
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "tool progress beyond total timeout reaches a verdict instead of being killed"
 else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$RUN_PROJ/seats/verify.ts" bead-silent fleet/bead-1 worker-1 verifier --timeout-ms 5000 --first-output-timeout-ms 300 2>&1)"; RC=$?
-if [ $RC -eq 1 ] && says "verifier emitted no stdout/stderr within 300ms" && says "first-output deadline" && says "--first-output-timeout-ms"; then
+WATCHDOG_DIR="$(mktemp -d "$FIX/silent-readiness.XXXXXX")"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" silent bead-silent fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && [ -f "$WATCHDOG_DIR/expired-first" ] && says "verifier emitted no stdout/stderr within" && says "first-output deadline" && says "--first-output-timeout-ms"; then
   pass "silent verifier stops on the first-output deadline with an actionable reason"
 else fail "silent verifier did not stop on first-output deadline (exit $RC): $OUT"; fi
 SILENT_PARTIAL="$VDIR/bead-silent.partial.md"
@@ -1042,7 +1203,7 @@ case "$SCRATCH_CWD" in
     pass "the verifier's cwd is the scratch worktree makeScratchCwd() creates" ;;
   *) fail "the verifier's cwd \"$SCRATCH_CWD\" does not look like a wheelhouse-verify-* scratch dir" ;;
 esac
-if git -C "$PROJ" worktree list | grep -qF "$SCRATCH_CWD"; then
+if git -C "$PROJ" worktree list | grep -F >/dev/null "$SCRATCH_CWD"; then
   fail "the scratch worktree $SCRATCH_CWD is still registered after verify.ts exited — cleanup did not run"
 else pass "the scratch worktree is unregistered after verify.ts exited (process-exit cleanup ran)"; fi
 if [ -d "$SCRATCH_CWD" ]; then
@@ -1859,24 +2020,24 @@ bash -c '
 while [ ! -f "$FIX/live-owner.txt" ]; do sleep 0.05; done
 LIVE_OWNER_PID=$(sed -n '1p' "$FIX/live-owner.txt")
 LIVE_DIR=$(sed -n '2p' "$FIX/live-owner.txt")
-if git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" \
-   && git -C "$PROJ" worktree list | grep -qF "$REVIEW_ORPHAN_DIR" \
-   && git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" \
+if git -C "$PROJ" worktree list | grep -F >/dev/null "$ORPHAN_DIR" \
+   && git -C "$PROJ" worktree list | grep -F >/dev/null "$REVIEW_ORPHAN_DIR" \
+   && git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" \
    && git -C "$PROJ" show-ref --verify --quiet "refs/heads/$SHA_BRANCH"; then
   pass "planted verify/review orphan worktrees, a live scratch worktree, and a SHA-named branch"
 else fail "could not plant stale scratch fixtures before sweeping"; fi
 
 run   # no args: usage STOP, but only after sweepStaleScratchWorktrees() ran
-if ! git -C "$PROJ" worktree list | grep -qF "$ORPHAN_DIR" && [ ! -d "$ORPHAN_DIR" ]; then
+if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$ORPHAN_DIR" && [ ! -d "$ORPHAN_DIR" ]; then
   pass "the orphaned verify scratch worktree (dead pid) was reclaimed"
 else fail "the verify orphan survived: $(git -C "$PROJ" worktree list)"; fi
-if ! git -C "$PROJ" worktree list | grep -qF "$REVIEW_ORPHAN_DIR" && [ ! -d "$REVIEW_ORPHAN_DIR" ]; then
+if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$REVIEW_ORPHAN_DIR" && [ ! -d "$REVIEW_ORPHAN_DIR" ]; then
   pass "the orphaned review scratch worktree (dead pid) was reclaimed"
 else fail "the review orphan survived: $(git -C "$PROJ" worktree list)"; fi
 if ! git -C "$PROJ" show-ref --verify --quiet "refs/heads/$SHA_BRANCH"; then
   pass "the stale 40-hex local branch was reclaimed"
 else fail "the stale SHA-named branch survived: $(git -C "$PROJ" branch --list "$SHA_BRANCH")"; fi
-if git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ -d "$LIVE_DIR" ]; then
+if git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ -d "$LIVE_DIR" ]; then
   pass "the live scratch worktree (real running pid, not holding the path) was spared"
 else fail "the live worktree was swept even though its owner pid is still alive"; fi
 
@@ -1901,7 +2062,7 @@ run   # a third gate's early sweep must not delete either live concurrent gate's
 MISSING_CONCURRENT=0
 while IFS= read -r d; do
   [ -z "$d" ] && continue
-  git -C "$PROJ" worktree list | grep -qF "$d" && [ -d "$d" ] || MISSING_CONCURRENT=$((MISSING_CONCURRENT + 1))
+  git -C "$PROJ" worktree list | grep -F >/dev/null "$d" && [ -d "$d" ] || MISSING_CONCURRENT=$((MISSING_CONCURRENT + 1))
 done <<EOF_CONCURRENT_DIRS
 $CONCURRENT_DIRS
 EOF_CONCURRENT_DIRS
@@ -1917,7 +2078,7 @@ wait "$CONCURRENT_PID_B" 2>/dev/null || true
 kill "$LIVE_OWNER_PID" 2>/dev/null
 i=0; while kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 run   # a second sweep pass, now that the "live" owner has actually exited
-if ! git -C "$PROJ" worktree list | grep -qF "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
+if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
   pass "once its owner pid actually exits, a later sweep reclaims that worktree too"
 else fail "the formerly-live worktree was not reclaimed after its owner pid died: $(git -C "$PROJ" worktree list)"; fi
 
@@ -1933,7 +2094,7 @@ KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
 for _ in $(seq 1 100); do
-  KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | head -n 1 || true)"
+  KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
   [ -n "$KILLED_DIR" ] && break
   sleep 0.05
 done
@@ -1944,7 +2105,7 @@ wait "$KILLED_DISPATCHER_PID" 2>/dev/null || true
 PI_PID_FILE="$HOME_FIX/.pi-seats-kill/verifier/pi-pid.txt"
 if [ -s "$PI_PID_FILE" ]; then kill "$(cat "$PI_PID_FILE")" 2>/dev/null || true; fi
 run   # sweep the killed run's scratch worktree and stale SHA branch
-if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -qF "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
+if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -F >/dev/null "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
   pass "killed one-shot scratch worktree was reclaimed by the reaper pass"
 else fail "killed one-shot scratch survived: dir=$KILLED_DIR list=$(git -C "$KILL_PROJ" worktree list)"; fi
 if ! git -C "$KILL_PROJ" show-ref --verify --quiet "refs/heads/$KILL_SHA_BRANCH"; then
@@ -1965,7 +2126,7 @@ signal_cleanup_case() {
   local dispatcher_pid=$!
   dir=""
   for _ in $(seq 1 100); do
-    dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | head -n 1 || true)"
+    dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
     [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/verifier/core-worktree-clobber.txt" ] && break
     sleep 0.05
   done
@@ -1979,7 +2140,7 @@ signal_cleanup_case() {
   else fail "$label exit status was $wait_rc, expected $expect; out=$(cat "$out_file" 2>/dev/null)"; fi
   if [ "$(core_worktree_snapshot "$sig_proj")" = "$before" ]; then pass "$label leaves product repo core.worktree byte-identical after mid-run clobber"
   else fail "$label changed core.worktree: before=$before after=$(core_worktree_snapshot "$sig_proj")"; fi
-  if [ -n "$dir" ] && ! git -C "$sig_proj" worktree list | grep -qF "$dir" && [ ! -d "$dir" ]; then
+  if [ -n "$dir" ] && ! git -C "$sig_proj" worktree list | grep -F >/dev/null "$dir" && [ ! -d "$dir" ]; then
     pass "$label removes scratch worktree on signal"
   else fail "$label scratch survived: dir=$dir list=$(git -C "$sig_proj" worktree list 2>/dev/null)"; fi
 }

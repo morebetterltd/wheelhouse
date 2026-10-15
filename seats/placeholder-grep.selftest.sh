@@ -21,6 +21,7 @@ pass() { printf '  ok    %s\n' "$*"; }
 fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-placeholder-grep.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 
@@ -76,7 +77,7 @@ run_text_leg() {
   rc=0; out="$(run_placeholder_check)" || rc=$?
   set -e
   cd "$old" || exit 2
-  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q 'wheelhouse/CLAIM.md:1:this is a real {{TEXT_PLACEHOLDER}}'; then
+  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep >/dev/null 'wheelhouse/CLAIM.md:1:this is a real {{TEXT_PLACEHOLDER}}'; then
     pass "text placeholder still fails the prescribed check"
   else
     printf '%s\n' "$out"

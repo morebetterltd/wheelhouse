@@ -4,6 +4,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-supervisor.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
@@ -69,7 +70,7 @@ assert data['StandardErrorPath'] == root + '/seats/logs/supervisor.launchd.err.l
 PY
 then pass "launchd plist names fixture root, ProgramArguments, and Interactive process type"; else fail "launchd plist fields wrong: $(cat "$PLIST" 2>/dev/null)"; fi
 RC=0; OUT="$(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$PROJ/seats/supervisor.sh" print-systemd 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q '^ExecStart=/bin/bash ' && printf '%s\n' "$OUT" | grep -q 'seats/supervisor.sh' && printf '%s\n' "$OUT" | grep -q '^Restart=always'; then pass "print-systemd prints equivalent user unit"; else fail "print-systemd wrong rc=$RC out=$OUT"; fi
+if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep >/dev/null '^ExecStart=/bin/bash ' && printf '%s\n' "$OUT" | grep >/dev/null 'seats/supervisor.sh' && printf '%s\n' "$OUT" | grep >/dev/null '^Restart=always'; then pass "print-systemd prints equivalent user unit"; else fail "print-systemd wrong rc=$RC out=$OUT"; fi
 before_restarts="$(grep -c 'restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
 rm -f "$PROJ/seats/run/supervisor.pid"
 (cd "$PROJ" && exec env WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_STARTED_BY_COCKPIT=1 WHEELHOUSE_SUPERVISOR_SECONDS=0.1 "$PROJ/seats/supervisor.sh") > "$FIX/supervisor-holder.out" 2>&1 &

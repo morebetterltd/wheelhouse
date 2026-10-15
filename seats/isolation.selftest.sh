@@ -100,7 +100,7 @@ sweep_stale_fixtures() {
     while IFS= read -r sf; do
       [ -f "$sf" ] || continue
       for spid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$spid" 2>/dev/null && lsof -p "$spid" 2>/dev/null | grep -qF "$phys"; then
+        if kill -0 "$spid" 2>/dev/null && lsof -p "$spid" 2>/dev/null | grep -F >/dev/null "$phys"; then
           kill "$spid" 2>/dev/null
           echo "swept: killed leaked seat pid $spid (held open files under $d)"
         fi
@@ -114,6 +114,7 @@ sweep_stale_fixtures() {
 sweep_stale_fixtures
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
@@ -355,7 +356,7 @@ astate_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE_A');const v=
 wait_for_from() {   # $1 = file, $2 = byte offset, $3 = substring, $4 = seconds
   local i=0 max=$((${4:-10} * 10))
   while [ $i -lt $max ]; do
-    [ -f "$1" ] && tail -c +"$(($2 + 1))" "$1" 2>/dev/null | grep -q "$3" && return 0
+    [ -f "$1" ] && tail -c +"$(($2 + 1))" "$1" 2>/dev/null | grep >/dev/null "$3" && return 0
     sleep 0.1; i=$((i + 1))
   done
   return 1
@@ -394,7 +395,7 @@ b_pristine "after the full benign run"
 mkdir -p "$HOME_FIX/foreign-planted"
 printf 'foreign\n' > "$HOME_FIX/foreign-planted/path.txt"
 HOME_WITH_FOREIGN="$(home_listing)"
-if [ "$HOME_BEFORE" != "$HOME_WITH_FOREIGN" ] && comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_WITH_FOREIGN") | grep -q 'foreign-planted/path.txt'; then
+if [ "$HOME_BEFORE" != "$HOME_WITH_FOREIGN" ] && comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_WITH_FOREIGN") | grep >/dev/null 'foreign-planted/path.txt'; then
   pass "negative control: a planted foreign path under \$HOME still trips the strict HOME assertion"
 else
   fail "negative control: planted foreign path was not detected by the HOME assertion"
@@ -403,7 +404,7 @@ rm -rf "$HOME_FIX/foreign-planted"
 HOME_AFTER="$(home_listing)"
 if [ "$HOME_BEFORE" = "$HOME_AFTER" ]; then
   pass "nothing new in \$HOME outside A's own seat namespace"
-else fail "unexpected paths appeared in \${HOME}: $(comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_AFTER") | head -5 | tr '\n' ' ')"; fi
+else fail "unexpected paths appeared in \${HOME}: $(comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_AFTER") | sed -n '1,5p' | tr '\n' ' ')"; fi
 
 phase "3. bead-graph isolation — A's bd calls are scoped to A's store, never B's"
 if [ -d "$PROJA/.beads" ] && [ -d "$PROJB/.beads" ] \
@@ -416,12 +417,12 @@ wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 || fail "A: GRAPH turn never end
 if [ -s "$BD_LOG" ]; then
   pass "the seat's bd call was captured ($(wc -l < "$BD_LOG" | tr -d ' ') call(s) logged)"
 else fail "no bd call reached the fake bd — the graph leg measured nothing"; fi
-if [ -s "$BD_LOG" ] && ! grep -v "graph=$PROJA/.beads" "$BD_LOG" | grep -q .; then
+if [ -s "$BD_LOG" ] && ! grep -v "graph=$PROJA/.beads" "$BD_LOG" | grep >/dev/null .; then
   pass "every logged bd call resolved to A's graph dir"
-else fail "a bd call resolved outside A's graph: $(grep -v "graph=$PROJA/.beads" "$BD_LOG" | head -2)"; fi
+else fail "a bd call resolved outside A's graph: $(grep -v "graph=$PROJA/.beads" "$BD_LOG" | sed -n '1,2p')"; fi
 if ! grep -qF "$PROJB" "$BD_LOG"; then
   pass "zero B-scoped bd calls (B's path appears in no call, cwd, or resolved graph)"
-else fail "a bd call carried B's path: $(grep -F "$PROJB" "$BD_LOG" | head -2)"; fi
+else fail "a bd call carried B's path: $(grep -F "$PROJB" "$BD_LOG" | sed -n '1,2p')"; fi
 b_pristine "after the graph leg"
 
 phase "4. the doors — path-shaped arguments refuse or stay inert data"

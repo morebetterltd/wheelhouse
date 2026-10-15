@@ -124,10 +124,16 @@ JSONL ledger for requests that need a principal or other human. It mirrors the
 herald inbox shape: one JSON object per line, never edited in place, ignored by
 git. `WHEELHOUSE_NEEDS_ROOT=/path/to/install` overrides the install root for
 fixtures and tools, the same way the herald has `WHEELHOUSE_HERALD_ROOT`.
+Only the commander may `open`, `say`, or `close` a human need; a non-commander
+roster seat's `BEADS_ACTOR` (including its configured actor override) is refused
+before any ledger write. Human/desk `answer`, `read`, `show`, and `list` are unchanged.
+
+A seat that needs a human writes a line beginning `@commander:` in its own output; the herald records a `sentinel` inbox row for the commander, who alone opens the human need.
+After reading that row, the commander runs `bun seats/needs.ts open --title <t> --body <b> --source sentinel:<inbox-row-id>`; repeating the row returns the existing need ID without another opened event, even after that need is closed.
 
 Subcommands:
 
-- `bun seats/needs.ts open --title <t> --body <b> [--option "<label>: <text>"]... [--default "<label>; applies <when>"] [--consequence <c>] [--kind question|approval|notify|task] [--bead <id>] [--seat <name>] [--source <opaque>] [--from-stdin]` opens a need and prints its `need-xxxx` id. `--from-stdin` reads an `@principal:` block: the first line must begin `@principal:`, the text after it becomes the title, and the remaining lines become the body; if there are no remaining lines, the body repeats the title so one-line sentinel requests are valid. `--source` de-duplicates repeat opens: if an open or answered need with that source already exists, the command appends nothing and prints the existing id.
+- `bun seats/needs.ts open --title <t> --body <b> [--option "<label>: <text>"]... [--default "<label>; applies <when>"] [--consequence <c>] [--kind question|approval|notify|task] [--bead <id>] [--seat <name>] [--source <opaque>] [--from-stdin]` opens a need and prints its `need-xxxx` id. `--from-stdin` reads an `@principal:` block: the first line must begin `@principal:`, the text after it becomes the title, and the remaining lines become the body; if there are no remaining lines, the body repeats the title so one-line sentinel requests are valid. `--source` de-duplicates repeat opens: a `sentinel:` source returns its existing id without a write even after closure; every other source de-duplicates only open or answered needs and may open a new need after closure.
 - `bun seats/needs.ts say <id> <text>` appends a commander message for the human.
 - `bun seats/needs.ts answer <id> <text> [--via desk|cli|<transport>]` records a human answer. If `<text>` equals an option label or option text, the folded state records `choice` as that label.
 - `bun seats/needs.ts show <id>` prints the folded JSON state for one need.
@@ -217,7 +223,7 @@ bun seats/report-issues.ts publish [--yes] [--bead <id>]
 
 Bodies include the task description, notes, comments, an install footer, and a hidden `wheelhouse-report` marker. The body is scrubbed through `seats/evidence-scrub.sh`; any remaining credential-shaped text matching `seats/credential-shapes.ts` refuses that task before creating an issue. Temporary body files are written under `seats/run/` and removed after the `gh` call.
 
-Credentials are per-machine: `WHEELHOUSE_TELEGRAM_TOKEN`, `WHEELHOUSE_SLACK_TOKEN`, or `WHEELHOUSE_TEAMS_TOKEN`; or `seats/run/telegram.token`, `seats/run/slack.token`, or `seats/run/teams.token` with mode `0600`. Teams also accepts `WHEELHOUSE_TEAMS_TOKEN_CMD`, a command whose stdout is a fresh bearer token. Telegram Bot API cannot fetch a sent message by id; its read-back is the `sendMessage` response echo (message id, chat id, and identical text), while Slack and Teams fetch the message back by ref.
+Credentials are per-machine: `WHEELHOUSE_TELEGRAM_TOKEN`, `WHEELHOUSE_SLACK_TOKEN`, or `WHEELHOUSE_TEAMS_TOKEN`; or `seats/run/telegram.token`, `seats/run/slack.token`, or `seats/run/teams.token` with mode `0600`. Teams also accepts `WHEELHOUSE_TEAMS_TOKEN_CMD`, a command whose stdout is a fresh bearer token. `bun seats/channels.ts check --credentials` checks every declared channel using the same reader as the transports: non-empty environment token first, otherwise the mode-`0600` token file, otherwise (Teams only, when no file exists) the token command. It exits 2 on missing/empty/wrong-mode credentials and names the supported environment variable and file; success prints channel names and credential presence, never values. Run it in the commander's/courier's environment before finishing install or upgrade. Command stdout/stderr and the command line are never included in failure diagnostics. No network request is made; presence is not authorization or channel-access proof. Plain `check` remains the declaration-only validator. Telegram Bot API cannot fetch a sent message by id; its read-back is the `sendMessage` response echo (message id, chat id, and identical text), while Slack and Teams fetch the message back by ref.
 
 `seats/comms.jsonl` is ignored runtime state. It holds request/relayed/declined rows and send refs/hashes; it never stores outbound message text for confirmed sends and never stores credentials.
 
@@ -559,6 +565,28 @@ to the real `bd` binary behind the shim. Bench code must call
 `${WHEELHOUSE_REAL_BD:-bd}` with its own scratch `BEADS_DIR`; bare `bd`
 through `PATH` remains the read-only shim inside the verifier process.
 
+When the dispatched task requires a full sweep (names `selftest-sweep.sh` or
+says the full `seats/*.selftest.sh` sweep passes), `verify.ts` runs
+`bash seats/selftest-sweep.sh` **before** starting the reviewer. It uses a
+separate detached worktree at the pinned tip, waits for the runner's host-wide
+H4 lock without a model-command timeout, and streams output to a unique
+`seats/verdicts/sweeps/<tip>.*.selftest-sweep.log`. The dispatcher initializes
+an isolated graph in a nested primary repository and links it at the sweep
+root's `.beads`: bd setup never initializes a shared ancestor graph or commits
+setup files into the reviewed history. Logical `PWD` and process cwd agree;
+the pinned HEAD is checked again after setup and after the suites. Real `bd`
+is supplied only to the sweep; suites still create their own fixture graphs. No writable graph or PATH override is
+passed to the reviewer. Live-login smoke legs are skipped explicitly with
+`WHEELHOUSE_SKIP_REAL_PI=1`; claims requiring those legs still need separate
+account-safe evidence. The reviewer receives the tip, rc and log path and must
+cite `rc=<number>` and that path in its final evidence. A failed sweep cannot
+be approved, and a verdict missing the citation is rejected. The verdict and
+log are working copies: transcribe decisive output to the task before citing
+it as durable graph evidence. A caller with its own hard per-command cap
+must launch this long-running dispatcher in the background (for example with
+`nohup`) and poll the retained log/verdict, rather than putting the whole
+dispatch under that caller's command timeout.
+
 `process.on("exit", ...)` cannot run on SIGKILL, so killing the dispatcher
 process mid-verification leaves the scratch worktree (and its `git
 worktree` registration) behind — same gap class recover.ts's fixture
@@ -776,6 +804,8 @@ bun seats/prune.ts categories
 
 `scan` is read-only and defaults to the install/container root. The scan category `bead-runs` is now named `run-scratch`; `--categories bead-runs` is still accepted. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, stale `.wheelhouse-bench.lock.stale.*` bench lock directories, closed-bead scratch under `.wheelhouse-runs/<bead>*` and `/private/tmp/<bead>-*`, simctl devices named `<closed-bead>-*`, an idle `~/Library/Developer/XCTestDevices` simctl set, and regenerable build caches. Pruning a merged-worktree keeps the merged fleet branch ref; stale-branch rows are archive-tagged (`archive/<branch-without-fleet/>`) before deletion and report `0` bytes because deleting a branch does not reclaim worktree storage. Build-cache means only directories a clean build regenerates at a project/package root: `.wheelhouse-build`, `dist`, `build`, `.next`, `out`, `.build`, `target`, .NET `bin`/`obj`, and Xcode `DerivedData` when explicitly under a scanned root; a directory below a dependency tree (`node_modules`, `vendor`, `.venv`, `venv`, `Pods`, or a dependency-like path segment) is never safe build-cache and is emitted as `needs-review` when matched. Caches under a root with an active `.wheelhouse-bench.lock` are `needs-review`. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, bead-named scratch or simulators for open/in-progress beads, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed. The XCTestDevices row is safe only when no `xcodebuild` process is running and no device in that set is booted.
 
+Reviewed scan files are install-bound: TSV starts with a `# wheelhouse-prune-scan-v1` root header; JSON/JSONL starts with an inactive `wheelhouse-prune-scan` v1 metadata record (JSON remains a flat array for host-budget consumers). Even an empty scan records its root. Old headerless files and files from another install are refused; rescan with that install's `seats/prune.ts`. Every row is validated before any action; malformed files exit `2` naming the row and field. JSON `safe` must be the number `0` or `1`, never a string or boolean. Immediately before `--yes` acts, targets are checked again for owned-container/cache scope, canonical paths, existence, seat/live-cwd occupancy and worktree cleanliness. Simulator IDs and XCTest set scope are checked before invoking simctl. Stale or unsafe targets print `SKIPPED ... reason=...`, count as skipped, and exit `0`; missing targets are not reported as reclaimed.
+
 `seats/integration-refs.txt` is install-owned configuration, like `seats/host-budget.json`. It lists extra integration refs one per line; blank lines and `#` comments are allowed. Matching is exact on the branch name (`fleet/goal-x` also matches a containing ref such as `origin/fleet/goal-x`) and does not widen `fleet/` prefixes. A listed ref is itself never pruned as a stale branch. When a commander creates a goal branch, they add that branch here so closed work merged to the goal branch can be pruned before the goal reaches `main`.
 
 ## Proving it still works
@@ -786,7 +816,11 @@ For the full host sweep, run the locked runner instead of an ad-hoc loop:
 bash seats/selftest-sweep.sh
 ```
 
-It runs `seats/*.selftest.sh` serially and holds a host-wide lock so another seat or install on the same machine waits rather than starting a second full sweep. Individual suites are still run directly when only a touched surface needs proof:
+It runs `seats/*.selftest.sh` serially and holds a host-wide lock so another seat or install on the same machine waits rather than starting a second full sweep. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
+
+The runner uses bun's FFI for macOS/Linux exclusive directory-rename support; unsupported primitives fail closed. Only the helper's reserved lock-held status retries; missing/unreadable helpers and all other runtime errors STOP with exit 2. Fixtures that pin or copy the runner must include its helper at that same tip. Parent-directory `flock` serializes new lock transitions without creating a separate cleanup/guard path. Older installed runners do not share that transition mutex: upgrade/sync the runner and its `selftest-sweep-lock.ts` helper only with the host lock idle; this is not a claim that an old runner has gained the ownership check.
+
+Individual suites are still run directly when only a touched surface needs proof:
 
 ```bash
 bash seats/evidence-scrub.selftest.sh
@@ -889,6 +923,9 @@ The herald is a standalone, non-LLM daemon. It tails every `seats/logs/*.jsonl` 
 | `need-message` | `input-required` | a human adds a message to a need in `seats/needs.jsonl` |
 | `relay-request` | `input-required` | a non-commander asks the commander to pass a declared-channel message through `seats/comms.jsonl` |
 | `inbound` | `terminal` | a declared readable stakeholder channel produced untrusted information |
+
+A seat that needs a human writes a line beginning `@commander:` in its own output; the herald records a `sentinel` inbox row for the commander, who alone opens the human need.
+After reading that row, the commander runs `bun seats/needs.ts open --title <t> --body <b> --source sentinel:<inbox-row-id>`; repeating the row returns the existing need ID without another opened event, even after that need is closed.
 
 Each inbox row carries a stable source identity (`source.log`, `source.offset`, source event type) and a content hash id. The herald persists its log offset and seen set after every processed line, and `--drain` deduplicates against every stable `id` it has ever drained, making append-before-state and eviction-horizon duplicate rows harmless before a commander reads them. The inbox is append-only; commander-side draining is a separate cursor, `seats/inbox.cursor`, advanced only by:
 

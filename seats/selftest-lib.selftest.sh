@@ -4,6 +4,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-selftest-lib.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 PASS=0; FAIL=0
@@ -46,6 +47,14 @@ fi
 
 if command -v bd >/dev/null 2>&1; then
   REAL_BD="$(command -v bd)"
+  METRICS_FIX="$FIX/metrics-fixture"
+  mkdir -p "$METRICS_FIX"
+  selftest_disable_bd_metrics "$METRICS_FIX" || exit 2
+  if [ "$HOME" = "$METRICS_FIX/home" ] && [ "$XDG_CONFIG_HOME" = "$HOME/.config" ] && [ -f "$XDG_CONFIG_HOME/bd/config.yaml" ] && grep -Eq '^[[:space:]]+disabled: true$' "$XDG_CONFIG_HOME/bd/config.yaml"; then
+    pass 'shared fixture metrics setup pins HOME and XDG to an owned disabled config'
+  else
+    fail 'shared fixture metrics setup did not pin an owned disabled config'
+  fi
   INSTALL="$FIX/install-graph"
   mkdir -p "$INSTALL"
   git -C "$INSTALL" init -q
