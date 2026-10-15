@@ -64,7 +64,7 @@ test("live owner is never replaced; failed PID write publishes no empty lock", (
   // Fresh process: instrument the native fs write before importing the module.
   // The fault models death between wx and PID write, without killing this test.
   const code = `
-    const fs = require('node:fs');
+    import fs from "node:fs";
     const original = fs.writeFileSync;
     let injected = false;
     fs.writeFileSync = function(fd, ...args) {
