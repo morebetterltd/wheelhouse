@@ -1,0 +1,14 @@
+selftest-sweep: waiting for host-wide lock /private/tmp/wheelhouse-selftest-sweep.lock queue_position=1 holder=pid=45877 started=2026-10-15T12:41:50Z head_pid=48321
+selftest-sweep: waiting for host-wide lock /private/tmp/wheelhouse-selftest-sweep.lock queue_position=1 holder=pid=28338 started=2026-10-15T12:59:41Z head_pid=48321
+[worktree]/seats/courier.selftest.sh: warning: run_pending_traps: bad value in trap_list[15]: 0x0
+[worktree]/seats/courier.selftest.sh: warning: run_pending_traps: signal handler is SIG_DFL, resending 15 (SIGTERM) to myself
+Automatic merge went well; stopped before committing as requested
+Automatic merge went well; stopped before committing as requested
+Automatic merge went well; stopped before committing as requested
+Automatic merge went well; stopped before committing as requested
+Automatic merge went well; stopped before committing as requested
+rm: [run]/tmp/wheelhouse-staffing-live.OYcsOi/canary-herald: Directory not empty
+rm: [run]/tmp/wheelhouse-staffing-live.OYcsOi/project: Directory not empty
+rm: [run]/tmp/wheelhouse-staffing-live.OYcsOi: Directory not empty
+From [run]/tmp/wheelhouse-upgrade-selftest.CSboKb/reused-cache-source
+   3914b66..b45cbf4  main       -> origin/main

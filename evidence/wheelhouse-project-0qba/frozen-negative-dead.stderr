@@ -1,0 +1,22 @@
+118 |     const holder = c.start("keeper"); await c.next("keeper");
+119 |     const dead = c.start("dead"); await c.queued(dead, 1, holder);
+120 |     const live = c.start("live"); await c.queued(live, 2, holder);
+121 |     dead.expectedStop = true; dead.child.kill("SIGKILL"); await dead.done;
+122 |     c.release(holder); assert.equal(await holder.done, 0);
+123 |     const admitted = c.probe(live); assert.equal(admitted.status, 0, admitted.stderr + admitted.stdout);
+                                                 ^
+AssertionError: queue_position=2 holder=none head_pid=39370
+
+
+75 !== 0
+
+ generatedMessage: false,
+     actual: 75,
+   expected: 0,
+   operator: "strictEqual",
+       code: "ERR_ASSERTION"
+
+      at deadWaiter ([worktree]/seats/fixtures/sweep-queue.ts:123:44)
+      at processTicksAndRejections (native:7:39)
+
+Bun v1.3.1 (macOS arm64)

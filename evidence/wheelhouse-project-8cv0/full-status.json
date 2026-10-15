@@ -1,0 +1,10 @@
+{
+  "exit": 143,
+  "expectedSuites": 48,
+  "innerStart": 0,
+  "innerPass": 0,
+  "innerFail": 0,
+  "complete": false,
+  "greenGate": false,
+  "reason": "scheduling pause after22:30 while queued; resume only after06:00"
+}

@@ -69,7 +69,7 @@ import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
-import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, pidAlive, pidHoldsPath } from "./seat-activity";
+import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
 
@@ -885,7 +885,7 @@ function processCwd(pid: number): string | null {
 }
 
 function logFilterShell(): string {
-  const script = `const readline=require('readline'); const limit=Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES||65536); function trim(v){ if(typeof v==='string' && Buffer.byteLength(v)>limit){ const b=Buffer.from(v); return b.subarray(0,limit).toString('utf8')+'\\n[wheelhouse log truncated '+(b.length-limit)+' bytes; full output remains in the pi session file]'; } if(Array.isArray(v)) return v.map(trim); if(v&&typeof v==='object'){ for(const k of Object.keys(v)) v[k]=trim(v[k]); } return v;} function isDelta(o){const ev=o&&typeof o==='object'?(o.assistantMessageEvent||o.delta||o):null; const t=String(ev&&ev.type||''); return o&&o.type==='message_update'&&/_delta$/.test(t);} const rl=readline.createInterface({input:process.stdin}); rl.on('line',l=>{try{const o=JSON.parse(l); if(isDelta(o)) return; if(o.type==='tool_execution_update'){const before=Buffer.byteLength(l); const t=trim(o); const after=Buffer.byteLength(JSON.stringify(t)); if(after<before) t.wheelhouse_truncated_bytes=before-after; process.stdout.write(JSON.stringify(t)+'\\n');} else process.stdout.write(l+'\\n');}catch{process.stdout.write(l+'\\n')}});`;
+  const script = `import readline from 'node:readline'; const limit=Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES||65536); function trim(v){ if(typeof v==='string' && Buffer.byteLength(v)>limit){ const b=Buffer.from(v); return b.subarray(0,limit).toString('utf8')+'\\n[wheelhouse log truncated '+(b.length-limit)+' bytes; full output remains in the pi session file]'; } if(Array.isArray(v)) return v.map(trim); if(v&&typeof v==='object'){ for(const k of Object.keys(v)) v[k]=trim(v[k]); } return v;} function isDelta(o){const ev=o&&typeof o==='object'?(o.assistantMessageEvent||o.delta||o):null; const t=String(ev&&ev.type||''); return o&&o.type==='message_update'&&/_delta$/.test(t);} const rl=readline.createInterface({input:process.stdin}); rl.on('line',l=>{try{const o=JSON.parse(l); if(isDelta(o)) return; if(o.type==='tool_execution_update'){const before=Buffer.byteLength(l); const t=trim(o); const after=Buffer.byteLength(JSON.stringify(t)); if(after<before) t.wheelhouse_truncated_bytes=before-after; process.stdout.write(JSON.stringify(t)+'\\n');} else process.stdout.write(l+'\\n');}catch{process.stdout.write(l+'\\n')}});`;
   return `'${process.execPath.replace(/'/g, `'\\''`)}' -e '${script.replace(/'/g, `'\\''`)}'`;
 }
 
@@ -1663,9 +1663,7 @@ function processOpenPaths(): OpenPathSnapshot | null {
 
 function pathsMatch(openPaths: string[] | undefined, p: string | undefined): boolean {
   if (!p || !openPaths) return false;
-  const wanted = new Set([p]);
-  try { wanted.add(fs.realpathSync(p)); } catch {}
-  return openPaths.some((n) => wanted.has(n));
+  return openPathsMatch(openPaths, p);
 }
 
 function pidAliveFromSnapshot(pid: number | null, fifo: string | undefined, open: OpenPathSnapshot | null): boolean {
@@ -1961,11 +1959,11 @@ async function cmdStop(name: string): Promise<void> {
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
-    if ((rec as any).cwd !== undefined) {
-      delete (rec as any).cwd;
-      writeState(state);
-    }
-    console.log(`seat ${name} is not running`);
+    rec.pid = null;
+    rec.stoppedAt = new Date().toISOString();
+    delete (rec as any).cwd;
+    writeState(state);
+    console.log(`seat ${name} is not running; dead record cleared; session ${rec.sessionId ?? "-"} kept for resume`);
     return;
   }
   const driver = driverForRunningSeat(name, "adapter stop");

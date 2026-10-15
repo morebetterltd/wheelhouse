@@ -1,0 +1,52 @@
+[
+  {
+    "mode": "shared-current",
+    "holderPid": 16666,
+    "owner": {
+      "code": 0,
+      "signal": null,
+      "stdout": "{\"held\":true,\"pid\":16666}\nseat worker-a is not running\n",
+      "stderr": ""
+    },
+    "waiter": {
+      "code": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "STOP: timed out waiting for <bead-run>/lock-diagnosis/shared-current/project/seats/state.lock\n"
+    },
+    "retry": {
+      "code": 0,
+      "signal": null,
+      "stdout": "seat worker-b is not running\n",
+      "stderr": ""
+    },
+    "timeoutConfiguration": "production default 5000ms unchanged; 300ms write delay unchanged",
+    "gate": "waiter close event releases owned FIFO; no guessed timing",
+    "historicalCause": "UNKNOWN"
+  },
+  {
+    "mode": "legacy-functions-only",
+    "holderPid": 19317,
+    "owner": {
+      "code": 0,
+      "signal": null,
+      "stdout": "{\"held\":true,\"pid\":19317}\nseat worker-a is not running\n",
+      "stderr": ""
+    },
+    "waiter": {
+      "code": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "STOP: timed out waiting for <bead-run>/lock-diagnosis/legacy-functions-only/project/seats/state.lock\n"
+    },
+    "retry": {
+      "code": 0,
+      "signal": null,
+      "stdout": "seat worker-b is not running\n",
+      "stderr": ""
+    },
+    "timeoutConfiguration": "production default 5000ms unchanged; 300ms write delay unchanged",
+    "gate": "waiter close event releases owned FIFO; no guessed timing",
+    "historicalCause": "UNKNOWN"
+  }
+]

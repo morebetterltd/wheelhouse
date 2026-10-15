@@ -1,0 +1,22 @@
+before umbrella HEAD=4c55510d6235ec26adb1459f91872f5acaf1c2a2
+RUN ["bash","seats/digest.selftest.sh"]
+ok 1 - empty digest prints sections in order with bracketed text
+ok 2 - shipped rows carry main merge details and goal-branch closes, including branch-only reasons
+ok 3 - open and cleared needs print, including need without machine bead
+ok 4 - bounce rows use bd titles, reasons, rework state, and window filtering
+ok 5 - distress rows print details elapsed recovery and still-failing summary
+ok 6 - stalled rows print resumed time
+ok 7 - bulk-close anomaly groups three but not two
+ok 8 - human output has no ids/bead and passes needs humanTextGuard
+ok 9 - json output has required top-level keys
+ok 10 - seats and pool account labels and account fields do not reach digest output
+ok 11 - failed detail lines are truncated
+ok 12 - human output scrubs install root and fake HOME paths
+ok 13 - bounce without dash uses no reason given
+ok 14 - human push keeps full value and scrubs ids
+ok 15 - canary removes distress line and product-repo fallback still renders
+ok 16 - bd absent exits 0 and marks bd sections unavailable
+ok 17 - since/until exclude rows outside the window edges
+ok 18 - canary: id-leaking renderHuman makes --notify exit 2 without writing digest.last
+after umbrella HEAD=4c55510d6235ec26adb1459f91872f5acaf1c2a2
+umbrella safety: PASS (0 permitted new reflog entries); test exit=1; signal=null

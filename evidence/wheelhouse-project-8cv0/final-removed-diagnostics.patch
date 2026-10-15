@@ -1,0 +1,14 @@
+diff --git a/seats/fixtures/concurrency-stub-supervisor.cjs b/seats/fixtures/concurrency-stub-supervisor.cjs
+index ff928b0..969a21e 100644
+--- a/seats/fixtures/concurrency-stub-supervisor.cjs
++++ b/seats/fixtures/concurrency-stub-supervisor.cjs
+@@ -15,8 +15 @@ const result = { supervisorPid: process.pid, childPid: null, code: null, signal:
+-const save = () => {
+-  const text = JSON.stringify(result) + '\n';
+-  for (const target of [record, history]) {
+-    const candidate = target + '.new';
+-    fs.writeFileSync(candidate, text, { mode: 0o600 });
+-    fs.renameSync(candidate, target);
+-  }
+-};
++const save = () => {}; // Removed-fix control: omit exit-record publication.

@@ -1,0 +1,5 @@
+{
+  "id": "01a13d36-01ec-7376-a20c-806ee6cbb5d2",
+  "text": "Commander ruling 2026-10-14 21:38: the instrumentation option is satisfied by 34c1c34 (native exit and stderr capture verified; hold-removal and exit-record-removal controls fail). The cause of the historical initial launch death stays unexplained; it is not claimed. A follow-up is opened only if the instrumented capture records it again.",
+  "created_at": "2026-10-15T01:38:32Z"
+}

@@ -19,7 +19,7 @@ has(){ case "$OUT" in *"$1"*) return 0;; *) return 1;; esac; }
 no_value(){
   ! has "$FAKE" || return 1
   FAKE_CHECK_VALUE="$FAKE" CHECK_ROOT="$ROOT" bun -e '
-    const fs=require("fs"), path=require("path"), root=process.env.CHECK_ROOT, token=process.env.FAKE_CHECK_VALUE;
+    import fs from "node:fs"; import path from "node:path"; const  root=process.env.CHECK_ROOT, token=process.env.FAKE_CHECK_VALUE;
     const files=["seats/channels.json","seats/seats.json"].map(p=>path.join(root,p));
     if(files.some(p=>!fs.existsSync(p))) process.exit(1);
     const ledger=path.join(root,"seats/comms.jsonl"); if(fs.existsSync(ledger)) files.push(ledger);

@@ -220,7 +220,7 @@ RUN_PROJ="$PROJ"
 STATE="$PROJ/seats/state.json"
 LOG="$PROJ/seats/logs/worker-1.jsonl"
 ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
-state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
+state_get() { env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE','utf8'));const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
 
 wait_for() {   # $1 = file, $2 = substring, $3 = seconds
   local i=0 max=$((${3:-10} * 10))

@@ -1,0 +1,31 @@
+before umbrella HEAD=4c55510d6235ec26adb1459f91872f5acaf1c2a2
+RUN ["bash","seats/selftest-sweep.selftest.sh"]
+ok - different TMPDIRs share the default lock: second sweep waits on first
+ok - different TMPDIR default sweeps complete serially after release
+ok - missing helper fails2 without retry, lock mutation or suite START
+ok - broken helper fails2 without retry, lock mutation or suite START
+ok - invalid plain lock STOPs2 without moving/removing any record
+ok - invalid extra lock STOPs2 without moving/removing any record
+ok - invalid nested lock STOPs2 without moving/removing any record
+ok - invalid bad-marker lock STOPs2 without moving/removing any record
+ok - invalid mismatch lock STOPs2 without moving/removing any record
+ok - invalid bad-time lock STOPs2 without moving/removing any record
+ok - invalid other-host lock STOPs2 without moving/removing any record
+ok - invalid link lock STOPs2 without moving/removing any record
+ok - invalid legacy-bad lock STOPs2 without moving/removing any record
+ok - invalid legacy-duplicate lock STOPs2 without moving/removing any record
+ok - valid dead-pid legacy file is compatible and released
+ok - release preserves replacement with same pid but different identity
+ok - TERM before acquisition preserves unowned same-pid legacy file
+ok - atomic acquire publishes a complete marked pid-bearing directory before waiters can see it
+ok - second fixture sweep reports the holder and waits before starting
+ok - host-wide lock serializes concurrent fixture sweeps in order
+ok - dead-pid stale lock is recovered before running
+ok - exactly one waiter wins stale-lock takeover
+ok - orphaned takeover guard cannot wedge stale-lock recovery
+ok - unmarked pid-less directory STOPs with exit 2 and KEEP survives
+ok - EPERM holder pid is treated as live instead of stale
+ok - TERM stops the running fixture suite process group, skips later suites, and releases the lock
+selftest-sweep.selftest: PASS (26 checks)
+after umbrella HEAD=4c55510d6235ec26adb1459f91872f5acaf1c2a2
+umbrella safety: PASS (0 permitted new reflog entries); test exit=0; signal=null

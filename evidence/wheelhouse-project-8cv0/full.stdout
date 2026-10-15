@@ -1,0 +1,5 @@
+before umbrella HEAD=829e1a35bc1731e45ccfd525eb7bbb32468822ec
+RUN ["bash","seats/selftest-sweep.sh"]
+selftest-sweep: START <bead-run>/bridge.selftest.sh
+after umbrella HEAD=80225f55df987ea49c54c388182293e95c268c69
+umbrella safety: PASS (3 permitted new reflog entries); test exit=143; signal=null

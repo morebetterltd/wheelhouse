@@ -1,0 +1,7 @@
+diff --git a/seats/selftest-sweep.sh b[run]/controls/no-cancel.sh
+index 4b2d608..611bf2c 100755
+--- a/seats/selftest-sweep.sh
++++ b[run]/controls/no-cancel.sh
+@@ -45 +45 @@ release_lock(){
+-  if [ "$ENROLLED" = 1 ]; then
++  if [ -n "$OWNED_LOCK" ]; then # removed pre-acquisition cancellation

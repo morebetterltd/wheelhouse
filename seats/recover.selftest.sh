@@ -237,7 +237,7 @@ adapter_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SK
 recover_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/recover.ts" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seat_line() { printf '%s\n' "$OUT" | grep "^$1 "; }
-state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
+state_get() { env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
 pi_count() { awk 'END { print NR + 0 }' "$PI_PIDS"; }
 
 # a pid that is definitely dead (spawned, then reaped)
@@ -298,7 +298,7 @@ phase "2. commander-restart simulation — fresh process, state.json only, all c
 sleep 300 & SLEEP_PID=$!; disown 2>/dev/null || true
 tail -f "$PROJ/contracts/WORKER.md" >/dev/null 2>&1 & SPOOF_PID=$!; disown 2>/dev/null || true
 env HOME="$HOME_FIX" bun -e "
-const fs=require('fs');
+import fs from 'node:fs';
 const s=JSON.parse(fs.readFileSync('$STATE','utf8'));
 const w=s.seats['worker-1'];
 fs.writeFileSync('$FIX/dead-sess.jsonl','{}\n');
@@ -330,7 +330,7 @@ else fail "worker-spoof (tail -f carrying the brief path in argv) misclassified:
 
 phase "3. double-resume refusal — an attached session gets REFUSED, not a command"
 env HOME="$HOME_FIX" bun -e "
-const fs=require('fs');
+import fs from 'node:fs';
 const s=JSON.parse(fs.readFileSync('$STATE','utf8'));
 const w=s.seats['worker-1'];
 s.seats['worker-ghost']={...w,pid:$DEADPID,lastBead:'bead-ghost'};
