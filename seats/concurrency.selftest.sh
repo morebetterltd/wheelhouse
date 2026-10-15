@@ -279,7 +279,7 @@ run() {
 }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 state_get() {   # $1 = seat, $2 = field  (reads $RUN_PROJ's state.json)
-  env HOME="$HOME_FIX" bun -e "const s=require('$RUN_PROJ/seats/state.json');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"
+  env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$RUN_PROJ/seats/state.json','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"
 }
 wait_for() {   # $1 = file, $2 = substring, $3 = seconds
   local i=0 max=$((${3:-10} * 10))

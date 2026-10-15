@@ -63,22 +63,8 @@ test("live owner is never replaced; failed PID write publishes no empty lock", (
   } finally { release(file, owner); }
   // Fresh process: instrument the native fs write before importing the module.
   // The fault models death between wx and PID write, without killing this test.
-  const code = `
-    const fs = require('node:fs');
-    const original = fs.writeFileSync;
-    let injected = false;
-    fs.writeFileSync = function(fd, ...args) {
-      if (typeof fd === 'number') { injected = true; throw Error('injected PID write failure'); }
-      return original.call(this, fd, ...args);
-    };
-    const { acquirePidLock } = await import(${JSON.stringify(moduleFile)});
-    let failed = false;
-    try { acquirePidLock(${JSON.stringify(file)}); } catch (e) { if (e.message !== 'injected PID write failure') throw e; failed = true; }
-    if (!injected || !failed) throw Error('write fault did not reach the lock module');
-    if (fs.existsSync(${JSON.stringify(file)})) throw Error('failed write left an empty public lock');
-    if (fs.readdirSync(${JSON.stringify(root)}).some(n => n.startsWith('live.lock.tmp.'))) throw Error('failed write left a temp candidate');
-  `;
-  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8" });
+  const helper = path.join(import.meta.dir, "pid-write-fault.cjs");
+  const r = spawnSync(process.execPath, [helper, "lock", moduleFile, file], { encoding: "utf8" });
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
 });
 

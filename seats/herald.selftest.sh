@@ -60,7 +60,7 @@ run_herald_status_fixture() {
   WHEELHOUSE_HERALD_ROOT="$PROJ" PATH="$FIX/bin:$PATH" bun "$ROOT/seats/herald.ts" --status
 }
 
-private_port() { bun -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
+private_port() { bun -e 'import net from "node:net"; const s=net.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
 HERALD_SELFTEST_DESK_PORT="${WHEELHOUSE_HERALD_SELFTEST_DESK_PORT:-$(private_port)}"
 
 line_count() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
