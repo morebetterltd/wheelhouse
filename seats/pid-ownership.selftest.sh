@@ -8,7 +8,7 @@ ADAPTER="${1:-$HERE/adapter.ts}"
 SEAT_ACTIVITY="$(cd "$(dirname "$ADAPTER")" && pwd)/seat-activity.ts"
 FIX=""
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 FAILED=0
 pass(){ echo "  ok    $*"; }
 fail(){ echo "  FAIL  $*"; FAILED=$((FAILED+1)); }

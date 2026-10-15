@@ -59,7 +59,7 @@ cleanup() {
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- stale-fixture sweep -----------------------------------------------------
 # The EXIT trap above cannot run on SIGKILL, so a killed selftest leaves its

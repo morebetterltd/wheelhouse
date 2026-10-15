@@ -76,7 +76,7 @@ stop_courier(){
   COURIER_PID=""
 }
 cleanup(){ stop_courier; [ -n "$WATCHDOG_PID" ] && stop_child "$WATCHDOG_PID" "watchdog" 500; [ -n "$SERVER_PID" ] && stop_child "$SERVER_PID" "fake endpoint" 1500; sweep_fixture_couriers; selftest_cleanup_fixture_processes "${FIX:-}" ""; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 port(){ python3 - <<'PY'

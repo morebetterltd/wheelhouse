@@ -11,7 +11,7 @@ pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 skip(){ PASS=$((PASS+1)); echo "ok $PASS - SKIP $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; [ "${WHEELHOUSE_KEEP_FIXTURE:-0}" = 1 ] || selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 PROJ="$FIX/project"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/contracts" "$PROJ/wheelhouse" "$BIN" "$HOME_FIX/.pi-seats-live"
 for e in e1 e2 e3 rv1; do mkdir -p "$HOME_FIX/.pi-seats-live/$e"; done
 selftest_copy_seat_runtime "$PROJ" "$HERE"

@@ -24,7 +24,7 @@ cleanup() {
   if [ -n "${REVIVED_PID:-}" ]; then kill "$REVIVED_PID" 2>/dev/null || true; fi
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
