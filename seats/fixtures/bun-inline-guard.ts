@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { auditTracked, unsafeInline } from "../bun-inline";
 
@@ -58,6 +59,13 @@ for (const mode of ["-e", "-p", "-"]) {
     console.log(`Bun ${Bun.version} CJS ${kind} ${mode}: ${result.status === 0 ? "BUG PRESENT (uncaught error exited 0)" : "bug not observed (exit 1)"}; stdout=${result.stdout.length} stderr=${result.stderr.length}`);
   });
 }
+test("live file-based CJS throw fails", () => {
+  const file = `${process.argv[2]}/seats/fixtures/pid-write-fault.cjs`;
+  assert(fs.statSync(file).isFile(), "checked-in CJS helper must exist");
+  const result = spawnSync(process.execPath, [file, "invalid-mode"], { encoding: "utf8" });
+  assert.equal(result.error, undefined); assert.equal(result.signal, null);
+  assert.equal(result.status, 1); assert.match(result.stderr, /usage: pid-write-fault/);
+});
 test("tracked-file audit", () => {
   const result = auditTracked(process.argv[2]);
   assert.equal(result.errors.length, 0, result.errors.join("\n"));
