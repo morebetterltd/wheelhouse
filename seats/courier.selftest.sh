@@ -157,6 +157,19 @@ const lines=require('fs').readFileSync(process.argv[2],'utf8').replace(/\r\n?/g,
 console.log(lines.filter(line=>line.includes(process.env.PAT)).length);
 JS
 }
+# Exercise diagnostic-only readers too: successful network legs otherwise never
+# call requests(), so a leftover dependency there could hide behind a green run.
+requests > "$FIX/helper-missing.out"; rc=$?
+[ "$rc" = 0 ] && [ ! -s "$FIX/helper-missing.out" ] && pass 'requests helper accepts an absent diagnostic log' || fail 'requests helper missing-file case failed'
+printf ' \tfirst\r\n\r\n second \n' > "$FIX/requests.jsonl"
+requests > "$FIX/helper-requests.out"; rc=$?
+printf 'first\n\nsecond\n' > "$FIX/helper-requests.expected"
+[ "$rc" = 0 ] && cmp -s "$FIX/helper-requests.expected" "$FIX/helper-requests.out" && pass 'requests helper preserves trimmed lines including empty records' || fail 'requests helper line bytes changed'
+rm -f "$FIX/requests.jsonl"
+PROJ="$FIX/helper-proj"; mkdir -p "$PROJ/seats"
+printf 'match match one\nno hit\nmatch two\n' > "$PROJ/seats/needs.jsonl"
+helper_count="$(count_ledger match)"; rc=$?
+[ "$rc" = 0 ] && [ "$helper_count" = 2 ] && pass 'ledger helper counts matching lines rather than occurrences' || fail 'ledger helper count failed'
 PROJ="$FIX/proj"; make_proj "$PROJ"; write_server
 P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
 for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$P/" >/dev/null 2>&1 || true; kill -0 "$SERVER_PID" 2>/dev/null && break; sleep 0.1; done
