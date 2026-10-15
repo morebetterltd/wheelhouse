@@ -422,6 +422,7 @@ phase "7. canary — can these checks detect a broken recover?"
 # 7a: a recover that never removes the orphaned FIFO
 CAN_A="$FIX/can-a"
 mkdir -p "$CAN_A/seats/run"
+selftest_copy_seat_runtime "$CAN_A" "$HERE"
 sed 's|^      fs.unlinkSync(fifoPath); // fifo-clean$|      ; // fifo-clean|' "$RECOVER" > "$CAN_A/seats/recover.ts"
 if cmp -s "$RECOVER" "$CAN_A/seats/recover.ts"; then
   fail "canary: could not cut the FIFO removal — the line no longer matches, so the canary proves nothing"
@@ -444,6 +445,7 @@ fi
 # 7b: a recover with the double-resume attachment check cut out
 CAN_B="$FIX/can-b"
 mkdir -p "$CAN_B/seats/run"
+selftest_copy_seat_runtime "$CAN_B" "$HERE"
 sed 's|^        const attachedBy = sessionAttachment(name, rec, rows); // attach-check$|        const attachedBy = null; // attach-check|' "$RECOVER" > "$CAN_B/seats/recover.sabotaged.ts"
 if cmp -s "$RECOVER" "$CAN_B/seats/recover.sabotaged.ts"; then
   fail "canary: could not cut the attachment check — the line no longer matches, so the canary proves nothing"
