@@ -4,6 +4,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$SCRIPT_DIR/selftest-lib.sh"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-intake-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 trap 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"' EXIT
 mkdir -p "$FIX/bin"
 cat > "$FIX/bin/bd" <<'STUB'
