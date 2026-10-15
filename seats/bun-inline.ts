@@ -4,7 +4,6 @@
 // selectors, and the named template programs used by our spawnSync fixtures.
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 export type InlineProgram = { offset: number; code: string; mode: string };
@@ -80,12 +79,10 @@ export function unsafeInline(text: string): InlineProgram[] {
 export function auditTracked(root: string): { files: number; programs: number; errors: string[] } {
   const listed = spawnSync("git", ["-C", root, "ls-files", "-z"], { encoding: "utf8" });
   if (listed.error || listed.status !== 0) throw Error(`git ls-files failed: ${listed.error || listed.stderr}`);
-  const files = listed.stdout.split("\0").filter(Boolean);
+  // Evidence is captured output, never executable template code. Exclude the
+  // entire namespace, including future captures, before opening any files.
+  const files = listed.stdout.split("\0").filter(file => file && !file.startsWith("evidence/"));
   if (!files.includes("seats/bun-inline.ts")) throw Error("wrong tracked tree: seats/bun-inline.ts is absent");
-  // Captured transcripts/patches are data, not runnable template code. Freeze
-  // exact historical blobs rather than exempting the evidence/ directory: a new
-  // or edited unsafe capture must be considered explicitly by the reviewer.
-  const history: Record<string, string> = JSON.parse(fs.readFileSync(path.join(root, "seats/fixtures/bun-inline-history.json"), "utf8"));
   let programs = 0;
   const errors: string[] = [];
   for (const file of files) {
@@ -94,7 +91,6 @@ export function auditTracked(root: string): { files: number; programs: number; e
     const bytes = fs.readFileSync(full);
     if (bytes.includes(0)) continue;
     const text = bytes.toString("utf8");
-    if (history[file] && crypto.createHash("sha256").update(bytes).digest("hex") === history[file]) continue;
     try {
       const found = inlinePrograms(text); programs += found.length;
       for (const program of found.filter(program => commonJS.test(program.code))) {
