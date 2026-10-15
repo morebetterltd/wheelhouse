@@ -178,10 +178,9 @@ function handle(cmd) {
         break;
       }
       out({ id, type: "response", command: "prompt", success: true });
-      streaming = true;
-      out({ type: "agent_start" });
       const bead = (cmd.message.match(/^Bead (\S+)/) || [])[1] || "unknown";
       const wd = (cmd.message.match(/WORKDIR:(\S+)/) || [])[1];
+      const barrier = (cmd.message.match(/BARRIER:(\S+)/) || [])[1];
       let done = false, watcher;
       const finish = () => {
         if (done) return;
@@ -192,14 +191,26 @@ function handle(cmd) {
         out({ type: "message_end", message: { role: "assistant",
               content: [{ type: "text", text: "echo: " + cmd.message }] } });
         out({ type: "agent_end", messages: [] });
+        if (barrier) fs.writeFileSync(path.join(barrier, bead + ".finished"), "finished\n");
       };
-      const barrier = (cmd.message.match(/BARRIER:(\S+)/) || [])[1];
-      if (barrier && !process.env.WHEELHOUSE_CONCURRENCY_SERIAL_TURNS) {
+      const start = () => {
+        streaming = true;
+        out({ type: "agent_start" });
+        if (!barrier) { finish(); return; }
         held = true;
         const released = () => { if (fs.existsSync(path.join(barrier, "release"))) finish(); };
         watcher = fs.watch(barrier, released);
         released();
-      } else finish();
+      };
+      if (barrier && process.env.WHEELHOUSE_CONCURRENCY_SERIAL_TURNS && bead === "bead-b") {
+        // Real serialization sabotage: B cannot start until A has finished.
+        let queued = true;
+        const unqueue = () => {
+          if (queued && fs.existsSync(path.join(barrier, "bead-a.finished"))) { queued = false; watcher.close(); start(); }
+        };
+        watcher = fs.watch(barrier, unqueue);
+        unqueue();
+      } else start();
       break;
     }
     default:
@@ -454,7 +465,7 @@ else
   RUN_PROJ="$CAN_A" run stop worker-b > /dev/null 2>&1
 fi
 
-# Force non-overlapping turns while retaining separate healthy seats/logs.
+# Force B to queue behind A's completion, retaining healthy distinct seats.
 CAN_SERIAL="$FIX/can-serial"
 build_proj "$CAN_SERIAL" can-serial
 CANARY_FAILED_BEFORE=$FAILED
@@ -462,7 +473,7 @@ RUN_PROJ="$CAN_SERIAL"
 WHEELHOUSE_CONCURRENCY_SERIAL_TURNS=1 run_two_seat_exercise "serialized canary" > "$FIX/serialized-canary.out" 2>&1
 if [ "$FAILED" -gt "$CANARY_FAILED_BEFORE" ] && grep -F 'barrier did not prove concurrent turns' "$FIX/serialized-canary.out" >/dev/null; then
   FAILED=$CANARY_FAILED_BEFORE
-  pass 'canary: completed/non-overlapping turns fail the same barrier assertion'
+  pass 'canary: serialized turns fail the same barrier assertion'
   printf 'BEGIN expected non-overlap failure evidence\n'; cat "$FIX/serialized-canary.out"; printf 'END expected non-overlap failure evidence\n'
 else
   FAILED=$((CANARY_FAILED_BEFORE + 1))
