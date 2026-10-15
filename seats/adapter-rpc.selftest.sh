@@ -8,6 +8,13 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-adapter-rpc.XXXXXX"
 selftest_isolate_git "$FIX" || exit 2
 cleanup() { selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT
-selftest_copy_seat_runtime "$FIX/runtime" "$S" || exit 2
-cp -f "$ADAPTER" "$FIX/runtime/seats/adapter.ts" || exit 2
+RUNTIME_SOURCE="$S"
+if [ "$ADAPTER" != "$S/adapter.ts" ]; then
+  # Overlay the alternate file in a complete source tree, never in the runtime.
+  # The helper still supplies the runtime's entire dependency closure.
+  selftest_copy_seat_runtime "$FIX/source" "$S" || exit 2
+  bun -e 'import fs from "node:fs"; const [source, target] = process.argv.slice(1); fs.copyFileSync(source, target);' "$ADAPTER" "$FIX/source/seats/adapter.ts" || exit 2
+  RUNTIME_SOURCE="$FIX/source/seats"
+fi
+selftest_copy_seat_runtime "$FIX/runtime" "$RUNTIME_SOURCE" || exit 2
 bun "$S/fixtures/adapter-rpc.ts" "$FIX"
