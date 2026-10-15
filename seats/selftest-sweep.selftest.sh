@@ -71,7 +71,7 @@ default_tmpdir_leg(){
     grep -q '^TB start$' "$events" 2>/dev/null && break
     sleep 0.05
   done
-  if grep -qF "waiting for host-wide lock $host/wheelhouse-selftest-sweep.lock" "$FIX/TB.err" && ! grep -q '^TB start$' "$events" 2>/dev/null; then
+  if grep -qF "waiting for host-wide lock $host/wheelhouse-selftest-sweep.lock" "$FIX/TB.err" && selftest_capture_lacks "$events" -q -- '^TB start$'; then
     pass "different TMPDIRs share the default lock: second sweep waits on first"
   else
     fail "different TMPDIRs did not wait on default lock (err=$(cat "$FIX/TB.err") events=$(cat "$events"))"
@@ -214,7 +214,7 @@ exec 9<>"$FIX/B-ready"
 SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=B SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bun "$HERE/fixtures/sweep-wait-diagnostic.ts" "$SWEEP" "$FIX" 4>&9 > "$FIX/B.out" 2> "$FIX/B.err" &
 PID_B=$!
 IFS= read -r WAIT_SIGNAL <&9
-if [ "$WAIT_SIGNAL" = ticket ] && grep -q "waiting for host-wide lock .*queue_position=1 holder=pid=$PID_A started=" "$FIX/B.err" && ! grep -q '^B start$' "$EVENTS" 2>/dev/null; then
+if [ "$WAIT_SIGNAL" = ticket ] && grep -q "waiting for host-wide lock .*queue_position=1 holder=pid=$PID_A started=" "$FIX/B.err" && selftest_capture_lacks "$EVENTS" -q -- '^B start$'; then
   pass "second fixture sweep reports the holder and waits before starting"
 else
   fail "second fixture sweep did not wait (signal=$WAIT_SIGNAL B.err=$(cat "$FIX/B.err" 2>/dev/null) events=$(cat "$EVENTS" 2>/dev/null))"
@@ -277,7 +277,7 @@ printf 'KEEP\n' > "$NO_PID/KEEP"
 SWEEP_ID=G SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$NO_PID" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/no-pid.out" 2> "$FIX/no-pid.err"
 RC_NO_PID=$?
 # Deliberate H7 contract change: an unmarked directory is NOT a stale lock.
-if [ "$RC_NO_PID" -eq 2 ] && [ -f "$NO_PID/KEEP" ] && grep -q 'STOP: .* is not a selftest-sweep lock' "$FIX/no-pid.err" && ! grep -q '^G start$' "$EVENTS"; then
+if [ "$RC_NO_PID" -eq 2 ] && [ -f "$NO_PID/KEEP" ] && grep -q 'STOP: .* is not a selftest-sweep lock' "$FIX/no-pid.err" && selftest_capture_lacks "$EVENTS" -q -- '^G start$'; then
   pass "unmarked pid-less directory STOPs with exit 2 and KEEP survives"
 else
   fail "unmarked directory was not refused (rc=$RC_NO_PID KEEP=$([ -f "$NO_PID/KEEP" ] && echo present || echo GONE) err=$(cat "$FIX/no-pid.err" 2>/dev/null))"

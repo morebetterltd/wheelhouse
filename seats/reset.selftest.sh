@@ -279,7 +279,7 @@ else fail "reset kept the same session file — the cache was not discarded"; fi
 if [ -f "$SESS_BEFORE" ]; then
   pass "the discarded session file is left on disk, not deleted"
 else fail "reset deleted the old session file — it should be discarded from state, not destroyed"; fi
-if ! grep -q '"--session"' "$ARGV" 2>/dev/null; then
+if selftest_capture_lacks "$ARGV" -q -- '"--session"'; then
   pass "the post-reset spawn did not pass --session — it came back cold"
 else fail "the post-reset spawn still attached --session — reset did not go cold"; fi
 if grep -q '"BEADS_ACTOR":"worker-1"' "${ARGV%argv.json}env.json" 2>/dev/null; then
@@ -301,7 +301,7 @@ STOPPED_SESS_AFTER="$(state_get sessionFile)"
 if [ -n "$STOPPED_SESS_AFTER" ] && [ "$STOPPED_SESS_AFTER" != "$STOPPED_SESS_BEFORE" ]; then
   pass "reset on a stopped seat discards the stored session"
 else fail "reset on a stopped seat kept the stopped session — the cache was not discarded"; fi
-if ! grep -q '"--session"' "$ARGV" 2>/dev/null; then
+if selftest_capture_lacks "$ARGV" -q -- '"--session"'; then
   pass "reset on a stopped seat uses a cold spawn, not --session"
 else fail "reset on a stopped seat still attached --session — reset did not go cold"; fi
 run stop worker-1 >/dev/null 2>&1

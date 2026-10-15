@@ -350,10 +350,10 @@ run_two_seat_exercise() {
   # Log isolation — and, through it, FIFO isolation: each dispatch was
   # written to one FIFO, so its echo landing only in that seat's log is the
   # no-cross-talk proof.
-  if grep -q 'MARKER-ALPHA' "$la" 2>/dev/null && ! grep -q 'MARKER-ALPHA' "$lb" 2>/dev/null; then
+  if grep -q 'MARKER-ALPHA' "$la" 2>/dev/null && selftest_capture_lacks "$lb" -q -- 'MARKER-ALPHA'; then
     pass "${label}: worker-a's events land ONLY in worker-a's log"
   else fail "${label}: worker-a's dispatch text leaked into worker-b's log (or missing from its own)"; fi
-  if grep -q 'MARKER-BRAVO' "$lb" 2>/dev/null && ! grep -q 'MARKER-BRAVO' "$la" 2>/dev/null; then
+  if grep -q 'MARKER-BRAVO' "$lb" 2>/dev/null && selftest_capture_lacks "$la" -q -- 'MARKER-BRAVO'; then
     pass "${label}: worker-b's events land ONLY in worker-b's log"
   else fail "${label}: worker-b's dispatch text leaked into worker-a's log (or missing from its own)"; fi
 
