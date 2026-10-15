@@ -29,8 +29,8 @@ leg bad-group-token 2 'O1: consumer: unknown group "robot"'
 eval "$(selftest_scratch_graph "$FIX/graph")" || exit 2
 VALID_JSON="$(bd create 'Valid contract fixture' --body-file "$HERE/fixtures/contracts/valid.md" --json)" || exit 2
 INVALID_JSON="$(bd create 'Invalid contract fixture' --body-file "$HERE/fixtures/contracts/outcome-no-surface.md" --json)" || exit 2
-VALID_ID="$(printf '%s' "$VALID_JSON" | bun -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).id)')"
-INVALID_ID="$(printf '%s' "$INVALID_JSON" | bun -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).id)')"
+VALID_ID="$(printf '%s' "$VALID_JSON" | bun -e 'import fs from "node:fs";process.stdout.write(JSON.parse(fs.readFileSync(0,"utf8")).id)')"
+INVALID_ID="$(printf '%s' "$INVALID_JSON" | bun -e 'import fs from "node:fs";process.stdout.write(JSON.parse(fs.readFileSync(0,"utf8")).id)')"
 [ -n "$VALID_ID" ] && [ -n "$INVALID_ID" ] || exit 2
 bd update "$INVALID_ID" --status in_progress >/dev/null || exit 2
 RC=0; OUT="$(env -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE WHEELHOUSE_CONTRACT_ROOT="$FIX/graph" bun "$CONTRACT" audit 2>&1)" || RC=$?
@@ -51,7 +51,8 @@ RC=0; OUT="$(env -u WHEELHOUSE_SKIP_BD PATH="$FIX/bin:$PATH" bun "$CONTRACT" aud
 
 # API flags are opt-in; the default K1 gates do not enforce sibling features.
 RC=0; OUT="$(CONTRACT="$CONTRACT" VALID="$HERE/fixtures/contracts/valid.md" bun -e '
-const m=await import(process.env.CONTRACT); const fs=require("fs");
+import fs from "node:fs";
+const m=await import(process.env.CONTRACT);
 const p=m.parseContract(fs.readFileSync(process.env.VALID,"utf8"));
 if(p.trace!=="contract parser fixture"||p.integration!=="fleet/fixture-goal"||p.signal!=="isa-gap: K1"||p.skills!=="intent@1.0.0 outcomes@1.0.0"||p.outcomes.length!==3)throw Error("parsed fields lost");
 p.signal="";p.skills="";
