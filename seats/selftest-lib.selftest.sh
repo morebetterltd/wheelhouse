@@ -79,7 +79,7 @@ if command -v bd >/dev/null 2>&1; then
       mkdir -p "$SCRATCH_WORK"
       (cd "$SCRATCH_WORK" && bd create 'isolated helper row' --json >/dev/null)
       after_isolated_count="$(count_install)"
-      scratch_count="$(cd "$SCRATCH_WORK" && bd list --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+      scratch_count="$(cd "$SCRATCH_WORK" && bd list --json | bun -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(0,"utf8")).length)')"
       if [ "$after_isolated_count" = "$before_isolated_count" ] && [ "$scratch_count" -ge 1 ]; then
         pass "selftest_scratch_graph isolates bd create from the fixture install graph"
       else
