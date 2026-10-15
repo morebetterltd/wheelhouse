@@ -1,0 +1,8 @@
+not ok 18 - notify open failed rc=2 id= before=2 after=2 err=STOP: seats do not open needs; write a line beginning @commander: in your own output and the commander opens the need ledger={"type":"opened","id":"need-clear","at":"2026-01-01T09:00:00Z","kind":"approval","title":"Approve fixture","body":"Approve?","options":[],"machine":{"bead":"demo-need"}}
+{"type":"answered","id":"need-clear","at":"2026-01-01T11:00:00Z","from":"human","via":"selftest","text":"yes"}
+{"type":"closed","id":"need-open","at":"2026-01-01T10:05:00Z","reason":"selftest"}
+not ok 19 - notify rerun dedupe failed rc=2 id1= id2= opened_after=2 opened_rerun=2 err=STOP: seats do not open needs; write a line beginning @commander: in your own output and the commander opens the need
+not ok 20 - digest.last/bare notify failed last= bare_rc=2 body= err=STOP: seats do not open needs; write a line beginning @commander: in your own output and the commander opens the need
+seats/digest.selftest.sh: line 143: [run]/tmp/wheelhouse-digest-selftest.71QVsT/project/seats/run/desk.port: No such file or directory
+not ok 21 - notify desk URL missing rc=2 id= body= err=STOP: seats do not open needs; write a line beginning @commander: in your own output and the commander opens the need
+digest.selftest: FAIL (4 failure(s), 18 pass(es))

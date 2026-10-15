@@ -1,0 +1,10 @@
+{
+  "reason": "replace SIGSTOP control with an acknowledged FIFO poll barrier before final gate",
+  "wrapper": 82364,
+  "outer": 82403,
+  "innerStarts": 0,
+  "signal": "SIGTERM",
+  "wrapperRecord": "82364     1 82364 Thu Oct 15 08:42:59 2026     node [run]/check-run.cjs full-final bash seats/selftest-sweep.sh\n",
+  "outerRecord": "82403 82364 82364 Thu Oct 15 08:42:59 2026     bash seats/selftest-sweep.sh\n",
+  "cwd": "p82403\nfcwd\nn[worktree]\n"
+}

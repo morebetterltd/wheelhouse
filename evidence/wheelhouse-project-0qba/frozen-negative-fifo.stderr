@@ -1,0 +1,22 @@
+100 |     const second = c.start("second"); await c.queued(second, 2, holder);
+101 |     const third = c.start("third"); await c.queued(third, 3, holder);
+102 |     // Force a younger admission attempt while the oldest cannot poll. No
+103 |     // timing decides who attempts first and no absence is measured by a clock.
+104 |     c.release(holder); assert.equal(await holder.done, 0);
+105 |     const blocked = c.probe(third); assert.equal(blocked.status, 75, blocked.stderr + blocked.stdout);
+                                                 ^
+AssertionError: 16777234:1234000597
+
+
+0 !== 75
+
+ generatedMessage: false,
+     actual: 0,
+   expected: 75,
+   operator: "strictEqual",
+       code: "ERR_ASSERTION"
+
+      at fifo ([worktree]/seats/fixtures/sweep-queue.ts:105:44)
+      at processTicksAndRejections (native:7:39)
+
+Bun v1.3.1 (macOS arm64)

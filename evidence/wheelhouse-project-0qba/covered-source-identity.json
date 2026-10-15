@@ -1,0 +1,33 @@
+{
+  "controlRuntime": "c0cba8bd1209e51ffc7f086491e62b3c649fdcf9",
+  "handoffRuntime": "7a6f85e00b7c00d4682b10be16e653f248f2347c",
+  "coveredSources": [
+    {
+      "path": "seats/selftest-sweep-lock.ts",
+      "controlRuntimeBlob": "3805817fedd7e663527097697d3a54df27ea735c",
+      "handoffRuntimeBlob": "3805817fedd7e663527097697d3a54df27ea735c",
+      "diskMatchesHead": true
+    },
+    {
+      "path": "seats/selftest-sweep.sh",
+      "controlRuntimeBlob": "4b2d608afb029837dca4899d9bda7524058b1e0a",
+      "handoffRuntimeBlob": "4b2d608afb029837dca4899d9bda7524058b1e0a",
+      "diskMatchesHead": true
+    },
+    {
+      "path": "seats/selftest-sweep-queue.selftest.sh",
+      "controlRuntimeBlob": "c3ce61760dc78369b8577e9686c08361ef736c81",
+      "handoffRuntimeBlob": "c3ce61760dc78369b8577e9686c08361ef736c81",
+      "diskMatchesHead": true
+    },
+    {
+      "path": "seats/fixtures/sweep-queue.ts",
+      "controlRuntimeBlob": "9b7cd324dd6c26599d591eb18a143a85a9225d05",
+      "handoffRuntimeBlob": "9b7cd324dd6c26599d591eb18a143a85a9225d05",
+      "diskMatchesHead": true
+    }
+  ],
+  "threeFinalStandalonePasses": 26,
+  "removedLineTargetAssertionFailed": true,
+  "inventory": 50
+}

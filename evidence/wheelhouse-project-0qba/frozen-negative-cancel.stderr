@@ -1,0 +1,18 @@
+131 |   try {
+132 |     const holder = c.start("owner"); await c.next("owner");
+133 |     const waiter = c.start("cancelled"); await c.queued(waiter, 1, holder);
+134 |     const identity = fs.statSync(c.lock, { bigint: true }).ino;
+135 |     waiter.expectedStop = true; waiter.child.kill("SIGTERM"); assert.equal(await waiter.done, 143);
+136 |     assert(!c.ticket(waiter), "TERM removes only the cancelling waiter's ticket");
+          ^
+AssertionError: TERM removes only the cancelling waiter's ticket
+ generatedMessage: false,
+     actual: false,
+   expected: true,
+   operator: "==",
+       code: "ERR_ASSERTION"
+
+      at cancelWaiter ([worktree]/seats/fixtures/sweep-queue.ts:136:5)
+      at processTicksAndRejections (native:7:39)
+
+Bun v1.3.1 (macOS arm64)

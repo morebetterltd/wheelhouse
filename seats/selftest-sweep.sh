@@ -10,6 +10,7 @@ LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-/tmp/wheelhouse-selftest-sweep.lock}"
 SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
 OWNED_LOCK=""
+ENROLLED=0
 LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$ROOT/seats/selftest-sweep-lock.ts}"
 if [ ! -f "$LOCK_HELPER" ] || [ ! -r "$LOCK_HELPER" ]; then
   printf 'STOP: selftest-sweep lock helper missing or unreadable: %s\n' "$LOCK_HELPER" >&2
@@ -23,17 +24,17 @@ say(){ printf '%s\n' "$*"; }
 info(){ say "$*" >&2; }
 
 acquire_lock(){
-  local printed=0 result rc
+  local previous="" result rc
   while :; do
     result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
-      0) OWNED_LOCK="$result"; return 0 ;;
-      75) ;; # Reserved helper result: a validated live lock, not a Bun error.
+      0) ENROLLED=1; OWNED_LOCK="$result"; return 0 ;;
+      75) ENROLLED=1 ;; # Validated, durably registered waiter, not a Bun error.
       *) info "STOP: selftest-sweep lock helper failed (exit $rc)"; exit 2 ;;
     esac
-    if [ "$printed" = 0 ]; then
-      info "selftest-sweep: waiting for host-wide lock $LOCK held by $result"
-      printed=1
+    if [ "$previous" != "$result" ]; then
+      info "selftest-sweep: waiting for host-wide lock $LOCK $result"
+      previous="$result"
     fi
     sleep "$SLEEP_SECS"
   done
@@ -41,9 +42,10 @@ acquire_lock(){
 
 release_lock(){
   local rc=0
-  if [ -n "$OWNED_LOCK" ]; then
+  if [ "$ENROLLED" = 1 ]; then
     bun "$LOCK_HELPER" release "$LOCK" "$$" "$LOCK_TOKEN" "$OWNED_LOCK" || rc=$?
     OWNED_LOCK=""
+    ENROLLED=0
   fi
   return "$rc"
 }

@@ -1,0 +1,7 @@
+diff --git a/seats/fixtures/sweep-queue.ts b[run]/controls/integrity-symlink.ts
+index 9b7cd32..976488a 100644
+--- a/seats/fixtures/sweep-queue.ts
++++ b[run]/controls/integrity-symlink.ts
+@@ -145 +145 @@ async function integrity() {
+-  for (const kind of ["unmarked", "symlink", "foreign-ticket"]) {
++  for (const kind of ["symlink"]) { // select only this unchanged assertion group

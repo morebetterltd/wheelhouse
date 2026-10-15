@@ -1,0 +1,20 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+const root=path.dirname(fileURLToPath(import.meta.url));
+const wrapper=Number(fs.readFileSync(root+'/full-wrapper.pid','utf8').trim());
+const outer=Number(fs.readFileSync(root+'/queued-children.pids','utf8').trim());
+function fresh(command,args,expected){ const r=spawnSync(command,args,{encoding:'utf8'});assert.equal(r.status,0,r.stderr);assert.equal(r.stdout,fs.readFileSync(root+'/'+expected,'utf8'));return r.stdout; }
+const w=fresh('ps',['-p',String(wrapper),'-o','pid=,ppid=,pgid=,lstart=,command='],'queued-wrapper.ps');
+assert(w.includes(root+'/check-run.cjs full bash seats/selftest-sweep.sh'));
+const o=fresh('ps',['-p',String(outer),'-o','pid=,ppid=,pgid=,lstart=,command='],'queued-outer.ps');
+assert.equal(Number(o.trim().split(/\s+/)[1]),wrapper);assert.match(o,/bash seats\/selftest-sweep\.sh\n$/);
+const cwd=fresh('lsof',['-a','-p',String(outer),'-d','cwd','-Fn'],'queued-outer.cwd');assert(cwd.includes('/.wheelhouse-worktrees/worker-3\n'));
+const log=fs.readFileSync(root+'/full.stdout','utf8');
+const innerStarts=[...log.matchAll(/^selftest-sweep: START (.+\.selftest\.sh)$/gm)].filter(m=>path.basename(m[1])!=='bridge.selftest.sh').length;
+assert.equal(innerStarts,0,'must not cancel an acquired/running gate for this fixture adjustment');
+process.kill(outer,'SIGTERM');
+fs.writeFileSync(root+'/queued-cancel.json',JSON.stringify({reason:'tighten fixture early-exit error handling before final gate',wrapper,outer,innerStarts,signal:'SIGTERM',wrapperRecord:w,outerRecord:o,cwd},null,2)+'\n');
+console.log('validated own outer '+outer+'; inner START=0; TERM sent only to that outer');
