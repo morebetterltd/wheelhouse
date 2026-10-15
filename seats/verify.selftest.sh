@@ -814,7 +814,10 @@ git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
 SWEEP_BD_SHOW="$FIX/sweep-bd-show.txt"
-cat > "$SWEEP_BD_SHOW" <<'EOF'
+# Ordinary show overrides must pass the same contract gate as the default.
+# Refusal cases opt into explicit non-contract fixtures above.
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$SWEEP_BD_SHOW"
+cat >> "$SWEEP_BD_SHOW" <<'EOF'
 ○ bead-sweep [task]
 
 DESCRIPTION
@@ -823,6 +826,11 @@ DESCRIPTION
 
   The full seats/*.selftest.sh sweep passes.
 EOF
+if bun "$VERIFY_DIR/contract.ts" check --file "$SWEEP_BD_SHOW"; then
+  pass "sweep bd-show fixture is a valid work contract"
+else
+  fail "sweep bd-show fixture is not a contract"; exit 1
+fi
 RUN_PROJ="$SWEEP_PROJ"
 VARGV="$HOME_FIX/.pi-seats-sweep/verifier/argv.json"
 SWEEP_LOCK="$FIX/review-sweep.lock"
