@@ -16,7 +16,7 @@ for caller in unset worker-1 commander; do
   actor_env=(env -u BEADS_ACTOR)
   [ "$caller" = unset ] || actor_env+=("BEADS_ACTOR=$caller")
   RC=0
-  ACTOR="$("${actor_env[@]}" bash -c '. "$1"; printf "%s" "${BEADS_ACTOR-<unset>}"' _ "$HERE/selftest-lib.sh")" || RC=$?
+  ACTOR="$("${actor_env[@]}" bash -c '. "$1"; printenv BEADS_ACTOR' _ "$HERE/selftest-lib.sh")" || RC=$?
   if [ "$RC" -eq 0 ] && [ "$ACTOR" = wheelhouse-selftest ]; then
     pass "fixture actor ignores caller BEADS_ACTOR=$caller"
   else
