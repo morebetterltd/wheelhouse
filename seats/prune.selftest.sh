@@ -287,7 +287,7 @@ printf 'base\n' > "$PROD/app.txt"
 git -C "$PROD" add app.txt
 git -C "$PROD" commit -q -m base
 BARE="$FIX/origin.git"
-git -C "$PROD" init --bare -q "$BARE"
+git -C "$PROD" init --bare -q -b main "$BARE"
 git -C "$PROD" remote add origin "$BARE"
 git -C "$PROD" push -q -u origin main
 
@@ -642,7 +642,7 @@ mk_install(){ # $1 root: container git repo, nested product repo with a bare ori
   git -C "$1/product" config user.name selftest
   printf 'base\n' > "$1/product/app.txt"
   git -C "$1/product" add app.txt; git -C "$1/product" commit -q -m base
-  git -C "$1/product" init --bare -q "$1.origin.git"
+  git -C "$1/product" init --bare -q -b main "$1.origin.git"
   git -C "$1/product" remote add origin "$1.origin.git"
   git -C "$1/product" push -q -u origin main
 }
@@ -688,7 +688,7 @@ rm -rf "$ERUNS/$OFF_ID-run" "$ERUNS/$REPORT_ID-run"
 printf 'cleanup=on\n' > "$EXT/wheelhouse/.template-source"
 
 phase 'ISC-42 squash-merge and ISC-117 mayline/main integration ref'
-git -C "$EPROD" init --bare -q "$FIX/ext-mayline.git"; git -C "$EPROD" remote add mayline "$FIX/ext-mayline.git"
+git -C "$EPROD" init --bare -q -b main "$FIX/ext-mayline.git"; git -C "$EPROD" remote add mayline "$FIX/ext-mayline.git"
 MAY_ID=$(ext_bead 'merged only on mayline'); ext_wt "$MAY_ID"
 git -C "$EPROD" checkout -q -b tmp-mayline main; git -C "$EPROD" merge -q --no-ff "fleet/$MAY_ID" -m "mayline merge"; git -C "$EPROD" push -q mayline tmp-mayline:main; git -C "$EPROD" checkout -q main; git -C "$EPROD" branch -q -D tmp-mayline
 SQ_ID=$(ext_bead 'squash merged, never pushed'); ext_wt "$SQ_ID"

@@ -65,7 +65,7 @@ if command -v bd >/dev/null 2>&1; then
   fi
   INSTALL="$FIX/install-graph"
   mkdir -p "$INSTALL"
-  git -C "$INSTALL" init -q
+  git -C "$INSTALL" init -q -b main
   if (cd "$INSTALL" && "$REAL_BD" init --non-interactive --skip-agents -p install >/dev/null 2>"$FIX/install-bd-init.err"); then
     count_install(){ (cd "$INSTALL" && "$REAL_BD" list --json) | bun -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(0,"utf8")).length)'; }
     before_count="$(count_install)"

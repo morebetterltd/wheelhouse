@@ -141,7 +141,7 @@ EOF
 }
 EOF
   printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
-  ( cd "$proj" && git init -q && git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base ) \
+  ( cd "$proj" && git init -q -b main && git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base ) \
     || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
 

@@ -281,8 +281,8 @@ else
 fi
 EOF
 chmod +x "$RECOVERY_BIN/bd"
-( cd "$PROJ/open-work" && git init -q && git config user.email a@example.invalid && git config user.name A && printf tracked > tracked.txt && git add tracked.txt && git commit -q -m base && printf dirty > dirty.txt )
-( cd "$PROJ/clean-work" && git init -q && git config user.email a@example.invalid && git config user.name A && printf clean > clean.txt && git add clean.txt && git commit -q -m base && git init -q --bare "$PROJ/clean-remote.git" && git remote add origin "$PROJ/clean-remote.git" && git push -q -u origin HEAD )
+( cd "$PROJ/open-work" && git init -q -b main && git config user.email a@example.invalid && git config user.name A && printf tracked > tracked.txt && git add tracked.txt && git commit -q -m base && printf dirty > dirty.txt )
+( cd "$PROJ/clean-work" && git init -q -b main && git config user.email a@example.invalid && git config user.name A && printf clean > clean.txt && git add clean.txt && git commit -q -m base && git init -q --bare -b main "$PROJ/clean-remote.git" && git remote add origin "$PROJ/clean-remote.git" && git push -q -u origin HEAD )
 cat > "$PROJ/seats/adapter.ts" <<'EOF'
 import * as fs from "node:fs";
 import * as path from "node:path";
