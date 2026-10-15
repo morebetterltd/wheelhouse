@@ -78,7 +78,7 @@ cleanup(){ stop_courier; [ -n "$WATCHDOG_PID" ] && stop_child "$WATCHDOG_PID" "w
 trap cleanup EXIT INT TERM
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-port(){ bun -e 'const s=require("net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});'; }
+port(){ bun -e 'const s=(await import("node:net")).default.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});'; }
 make_proj(){
   local p="$1"; mkdir -p "$p/seats/transports" "$p/seats/run" "$p/seats/logs" "$p/wheelhouse"
   selftest_copy_seat_runtime "$p" "$HERE"
@@ -148,12 +148,12 @@ start_courier_daemon(){
   COURIER_PID=$!
 }
 requests(){ bun - "$FIX/requests.jsonl" <<'JS'
-const fs=require('fs'),p=process.argv[2]; if(!fs.existsSync(p)) process.exit(0);
+const fs=(await import('node:fs')).default,p=process.argv[2]; if(!fs.existsSync(p)) process.exit(0);
 for(const line of fs.readFileSync(p,'utf8').replace(/\r\n?/g,'\n').match(/[^\n]*\n|[^\n]+$/g)??[]) console.log(line.trim());
 JS
 }
 count_ledger(){ PAT="$1" bun - "$PROJ/seats/needs.jsonl" <<'JS'
-const lines=require('fs').readFileSync(process.argv[2],'utf8').replace(/\r\n?/g,'\n').match(/[^\n]*\n|[^\n]+$/g)??[];
+const lines=(await import('node:fs')).default.readFileSync(process.argv[2],'utf8').replace(/\r\n?/g,'\n').match(/[^\n]*\n|[^\n]+$/g)??[];
 console.log(lines.filter(line=>line.includes(process.env.PAT)).length);
 JS
 }
