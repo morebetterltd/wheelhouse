@@ -18,7 +18,7 @@ function wire(harness: Harness, text: string): string {
       : { type: "item.completed", item: { type: "agent_message", text } }) + "\n";
 }
 const refusedText = (attempt: number) => `retained answer ${attempt}: checked the pinned tree, but omitted sweep evidence\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n`;
-// Larger than Darwin's argv budget: preserve diagnostic bytes without putting
+// Large diagnostic fixture: preserve all bytes without unnecessarily putting
 // the entire tool/stderr stream in the retry's command-line prompt.
 const errText = (attempt: number) => `retained stderr ${attempt}\n${attempt === 1 ? "x".repeat(300_000) + "\n" : ""}`;
 
