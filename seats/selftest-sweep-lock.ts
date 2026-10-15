@@ -10,6 +10,7 @@ const MARKER = "wheelhouse-selftest-sweep";
 const FILES = ["pid", "started", MARKER].sort();
 const QUEUE = `${MARKER}-queue`;
 const WAITER = `${MARKER}-waiter`;
+const queueMarkers = new Map<number, [string, string]>();
 const HOST = os.hostname();
 const C = fs.constants;
 const darwin = process.platform === "darwin";
@@ -203,8 +204,9 @@ function queueFd(parent: number, name: string, create: boolean): number | null {
     fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
   }
   try {
-    const [text] = readFile(fd, QUEUE), marker = JSON.parse(text);
+    const anchor = readFile(fd, QUEUE), marker = JSON.parse(anchor[0]);
     if (JSON.stringify(Object.keys(marker).sort()) !== JSON.stringify(["hostname", "kind", "version"]) || marker.kind !== QUEUE || marker.version !== 1 || marker.hostname !== HOST) throw new Refused("invalid queue marker");
+    queueMarkers.set(fd, anchor);
     return fd;
   } catch (e) { fs.closeSync(fd); throw e; }
 }
@@ -266,8 +268,8 @@ function removeEmptyQueue(parent: number, name: string, fd: number) {
   try { if (id(current) !== id(fd)) throw new Refused("queue identity changed"); }
   finally { fs.closeSync(current); }
   // Marker was validated by queueFd; recheck its inode/content before unlink.
-  const [raw, identity] = readFile(fd, QUEUE), again = readFile(fd, QUEUE);
-  if (raw !== again[0] || identity !== again[1]) throw new Refused("queue marker changed");
+  const again = readFile(fd, QUEUE), anchor = queueMarkers.get(fd);
+  if (!anchor || anchor[0] !== again[0] || anchor[1] !== again[1]) throw new Refused("queue marker changed");
   unlinkAt(fd, QUEUE); unlinkAt(parent, name, true);
 }
 
