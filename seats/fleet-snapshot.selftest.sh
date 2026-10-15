@@ -55,7 +55,7 @@ JSON
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.workers.live.length!==1||s.workers.busy!==1||s.workers.idle!==0) process.exit(1)' && pass 'table row 2: settled worker remains busy when lastBead is in progress/rework' || fail "busy worker snapshot wrong rc=$RC out=$OUT"
 (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot, readyWorkNobodyOnIt } from "./seats/fleet-snapshot.ts"; if(readyWorkNobodyOnIt(fleetSnapshot(process.cwd()))) process.exit(1);') && pass 'readyWorkNobodyOnIt false when a worker is busy' || fail 'readyWorkNobodyOnIt false row failed'
 bun - "$ROOT/seats/state.json" "$ROOT/list.json" <<'JS'
-const fs=require('fs'),[p,q]=process.argv.slice(2),j=JSON.parse(fs.readFileSync(p,'utf8')),rows=JSON.parse(fs.readFileSync(q,'utf8'));
+const fs=(await import('node:fs')).default,[p,q]=process.argv.slice(2),j=JSON.parse(fs.readFileSync(p,'utf8')),rows=JSON.parse(fs.readFileSync(q,'utf8'));
 j.seats['worker-1'].lastBead='closed-bead'; fs.writeFileSync(p,JSON.stringify(j));
 rows.push({id:'closed-bead',status:'closed'}); fs.writeFileSync(q,JSON.stringify(rows));
 JS
@@ -71,13 +71,13 @@ cp "$ROOT/ready.saved.json" "$ROOT/ready.json"
 BD_FAIL=1 run_snap; [ $RC -eq 2 ] && printf '%s\n' "$OUT" | grep >/dev/null 'STOP: bd ready --json failed' && pass 'bd non-zero is STOP, not a zero snapshot' || fail "bd failure behavior wrong rc=$RC out=$OUT"
 DEFS="$(rg -n 'function readyWorkNobodyOnIt' "$HERE" -g '*.ts' | wc -l | tr -d ' ')"; [ "$DEFS" = 1 ] && pass 'grep finds exactly one readyWorkNobodyOnIt definition under seats/' || fail "definition count=$DEFS"
 BROKEN="$ROOT/seats/fleet-snapshot-broken.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN"; bun - "$BROKEN" <<'JS'
-const fs=require('fs'),p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='&& pidAlive(Number(m.pid))';
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='&& pidAlive(Number(m.pid))';
 if(!s.includes(needle)) throw new Error('stale-marker canary source changed');
 fs.writeFileSync(p,s.replaceAll(needle,''));
 JS
 if (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot } from "./seats/fleet-snapshot-broken.ts"; const s=fleetSnapshot(process.cwd()); if(s.reviewBacklog.length===1) process.exit(1);' >/dev/null 2>&1); then pass 'canary: removing stale-marker check makes backlog leg fail'; else fail 'canary did not prove stale-marker leg catches breakage'; fi
 BROKEN_CHAIN="$ROOT/seats/fleet-snapshot-broken-chain.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN_CHAIN"; bun - "$BROKEN_CHAIN" <<'JS'
-const fs=require('fs'),p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
+const fs=(await import('node:fs')).default,p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
 for(const [old,replacement] of [
  ['const xs = Array.isArray(row?.dependencies) ? row.dependencies : [];','const xs = row?.blocks ?? row?.dependents ?? row?.blocked_by_me ?? row?.children ?? [];'],
  ['return xs.filter((d: any) => d?.type !== "parent-child").map((d: any) => String(d?.depends_on_id ?? "")).filter(Boolean);','return Array.isArray(xs) ? xs.map((v: any) => typeof v === "string" ? v : String(v?.id ?? "")).filter(Boolean) : [];']
@@ -86,7 +86,7 @@ fs.writeFileSync(p,s);
 JS
 if (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot } from "./seats/fleet-snapshot-broken-chain.ts"; const s=fleetSnapshot(process.cwd()); if(s.chainedCount!==1) process.exit(0); process.exit(1);' >/dev/null 2>&1); then pass 'canary: old non-dependencies parser fails the chained row'; else fail 'canary did not prove dependencies-shaped chained row catches old parser'; fi
 BROKEN_EPIC="$ROOT/seats/fleet-snapshot-broken-epic.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN_EPIC"; bun - "$BROKEN_EPIC" <<'JS'
-const fs=require('fs'),p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
+const fs=(await import('node:fs')).default,p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
 for(const [old,replacement] of [
  ['String(x?.issue_type ?? x?.type ?? "").toLowerCase() === "epic"','String(x?.type ?? "").toLowerCase() === "epic"'],
  ['Date.parse(String(x?.created_at ?? x?.created ?? 0))','Date.parse(String(x?.created ?? 0))']
