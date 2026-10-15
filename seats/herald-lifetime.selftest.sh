@@ -37,74 +37,140 @@ printf '%s\n%s\n' "$PROJ" "$CHILD" > "$BASE/$MODE.record"
 while [ ! -e "$BASE/$MODE.go" ]; do sleep 0.05; done
 [ "$MODE" != failure ] || exit 23
 SH
-python3 - "$HERE" "$FIX" <<'PY'
-import json, os, pathlib, signal, subprocess, sys, time
-here, base=map(pathlib.Path,sys.argv[1:]); failures=[]; children=[]; detached=[]
-def check(ok, text):
-    print(('ok - ' if ok else 'not ok - ')+text,flush=True)
-    if not ok: failures.append(text)
-def alive(pid):
-    r=subprocess.run(['ps','-p',str(pid),'-o','stat='],capture_output=True,text=True)
-    return r.returncode==0 and bool(r.stdout.strip()) and not r.stdout.strip().startswith('Z')
-def until(fn,seconds=4):
-    end=time.monotonic()+seconds
-    while time.monotonic()<end:
-        if fn(): return True
-        time.sleep(.05)
-    return fn()
-def root(name):
-    p=base/name; (p/'seats/run').mkdir(parents=True); (p/'seats/logs').mkdir()
-    (p/'seats/herald.state.json').write_text(json.dumps({'logs':{},'seen':[], 'alerts':{'lastCheckAt':'2999-01-01T00:00:00Z'}, 'staffing':{'lastCheckAt':'2999-01-01T00:00:00Z'}}))
-    return p
-def launch(p):
-    env=os.environ|{'WHEELHOUSE_HERALD_ROOT':str(p),'WHEELHOUSE_HERALD_INTERVAL_MS':'50'}
-    log=open(base/(p.name+'.err'),'a'); c=subprocess.Popen(['bun',str(here/'herald.ts')],cwd=p,env=env,stdout=subprocess.DEVNULL,stderr=log); children.append(c)
-    assert until(lambda:(p/'seats/run/herald.pid').exists() and (p/'seats/run/herald.pid').read_text().strip()==str(c.pid)), 'daemon did not publish its own PID'
-    return c
-try:
-    p=root('singleton'); first=launch(p)
-    env=os.environ|{'WHEELHOUSE_HERALD_ROOT':str(p),'WHEELHOUSE_HERALD_INTERVAL_MS':'50'}
-    second=subprocess.Popen(['bun',str(here/'herald.ts')],cwd=p,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True); children.append(second)
-    try: out,err=second.communicate(timeout=2); refused=second.returncode!=0 and not out and len(err.splitlines())==1 and 'herald already running' in err
-    except subprocess.TimeoutExpired: refused=False; second.terminate(); out,err=second.communicate(timeout=3)
-    print(f'singleton refusal: rc={second.returncode} stdout={out!r} stderr={err!r}',flush=True)
-    check(refused and alive(first.pid) and (p/'seats/run/herald.pid').read_text().strip()==str(first.pid), 'second same-root daemon refuses in one line, leaves first and its PID intact')
-    other=None
-    try: other=launch(root('different-root'))
-    except AssertionError: pass
-    check(other is not None and alive(first.pid) and alive(other.pid), 'independent root can run its own herald')
-    if other is not None: other.terminate(); other.wait(timeout=3)
-    # Native launch helper, including a stale lock left by SIGKILL.
-    first.kill(); first.wait(timeout=3)
-    seats=p/'seats'; (seats/'herald.ts').symlink_to(here/'herald.ts')
-    restart=subprocess.run(['bash','-c','source "$1"; start_herald','fixture',str(here/'daemons.sh')],cwd=p,env=os.environ|{'WHEELHOUSE_DAEMONS_ROOT':str(p),'WHEELHOUSE_HERALD_INTERVAL_MS':'50'},capture_output=True,text=True,timeout=8)
-    new=int((seats/'run/herald.pid').read_text()); detached.append(new)
-    print(f'dead restart: rc={restart.returncode} {restart.stdout.strip()}',flush=True)
-    check(restart.returncode==0 and new!=first.pid and alive(new), 'daemons.sh restarts a dead herald with a stale singleton lock')
-    os.kill(new,signal.SIGTERM); assert until(lambda:not alive(new))
-    for mode, sig, expected in [('normal',None,0),('failure',None,23),('term',signal.SIGTERM,143),('int',signal.SIGINT,130),('kill',signal.SIGKILL,-9)]:
-        # The full runner launches suites asynchronously: Bash passes SIGINT
-        # ignored, and an owner Bash cannot trap a signal ignored on entry.
-        # Normalize only this fresh test child before exec; keep the INT proof
-        # meaningful in both direct and full-sweep configurations.
-        owner=subprocess.Popen(['bash',str(base/'owner.sh'),str(here),str(base),mode],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,preexec_fn=lambda:signal.signal(signal.SIGINT,signal.SIG_DFL)); children.append(owner)
-        rec=base/(mode+'.record'); assert until(rec.exists), 'owner allocation record missing'
-        proj,pid=rec.read_text().splitlines(); pid=int(pid); detached.append(pid)
-        assert until(lambda:pathlib.Path(proj,'seats/run/herald.pid').exists()), 'owned herald never started'
-        if sig: owner.send_signal(sig)
-        else: (base/(mode+'.go')).touch()
-        _,err=owner.communicate(timeout=5); stopped=until(lambda:not alive(pid),4)
-        print(f'owner {mode}: rc={owner.returncode} heraldAlive={int(alive(pid))} rootExists={int(pathlib.Path(proj).exists())} stderr={err!r}',flush=True)
-        check(owner.returncode==expected and stopped and pathlib.Path(proj).exists(), 'fixture herald stops after owner '+mode+' with root retained')
-finally:
-    for c in children:
-        if c.poll() is None: c.terminate()
-    for c in children:
-        try: c.wait(timeout=3)
-        except subprocess.TimeoutExpired: c.kill(); c.wait()
-    # These PID records came only from this controller's fresh launches.
-    for pid in detached:
-        if alive(pid): os.kill(pid,signal.SIGTERM); until(lambda:not alive(pid))
-if failures: print('herald-lifetime.selftest: FAIL ('+str(len(failures))+' checks)'); sys.exit(1)
-print('herald-lifetime.selftest: PASS (9 checks)')
-PY
+bun - "$HERE" "$FIX" <<'JS'
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+const [here,rawBase]=process.argv.slice(2),base=fs.realpathSync(rawBase);
+const failures=[],children=[],detached=[];
+const read=p=>fs.readFileSync(p,'utf8');
+const pidFile=p=>path.join(p,'seats/run/herald.pid');
+function check(ok,text) {
+  console.log((ok?'ok - ':'not ok - ')+text);
+  if(!ok) failures.push(text);
+}
+function alive(pid) {
+  const r=spawnSync('ps',['-p',String(pid),'-o','stat='],{encoding:'utf8'});
+  return r.status===0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z');
+}
+async function until(fn,seconds=4) {
+  const end=performance.now()+seconds*1000;
+  while(performance.now()<end) { if(await fn()) return true; await Bun.sleep(50); }
+  return Boolean(await fn());
+}
+async function wait(child,seconds) {
+  let timer;
+  try { return await Promise.race([child.exited,new Promise((_,reject)=>{
+    timer=setTimeout(()=>reject(new Error('child '+child.pid+' exceeded '+seconds+'s')),seconds*1000);
+  })]); } finally { clearTimeout(timer); }
+}
+const status=(child,code)=>child.signalCode ? -os.constants.signals[child.signalCode] : code;
+// Record fresh native identity at allocation, then compare again before signals.
+// Never adopt an unrelated PID from a stale record or clean another run's root.
+function identity(pid,cwd,script,direct) {
+  assert.ok(cwd===base || cwd.startsWith(base+path.sep),'owned scratch cwd');
+  const r=spawnSync('ps',['-p',String(pid),'-o','pid=,ppid=,uid=,lstart=,stat=,command='],{encoding:'utf8'});
+  fs.appendFileSync(path.join(base,'process-identities.jsonl'),JSON.stringify({pid,cwd,script,direct,status:r.status,stdout:r.stdout,stderr:r.stderr})+'\n');
+  if(r.status===1 && !r.stdout.trim()) return null;
+  assert.equal(r.status,0,r.stderr);
+  const fields=r.stdout.trim().split(/\s+/);
+  if(fields[8]?.startsWith('Z')) return null;
+  assert.equal(Number(fields[0]),pid); assert.equal(Number(fields[2]),process.getuid());
+  if(direct) assert.equal(Number(fields[1]),process.pid,'direct child');
+  assert.ok(fields.slice(9).includes(script),'exact expected script argument: '+JSON.stringify({script,stdout:r.stdout}));
+  const opened=spawnSync('lsof',['-a','-p',String(pid),'-d','cwd','-Fpcn'],{encoding:'utf8'});
+  if(opened.status!==0 && !alive(pid)) return null;
+  assert.equal(opened.status,0,opened.stderr);
+  const dirs=opened.stdout.split('\n').filter(s=>s.startsWith('n')).map(s=>s.slice(1));
+  assert.deepEqual(dirs.map(p=>fs.realpathSync(p)),[cwd]);
+  // An owned herald may be reparented to init when its test owner exits.
+  // Still record the fresh parent above; generation/cwd/argv must not change.
+  return JSON.stringify({pid:fields[0],parent:direct?fields[1]:null,uid:fields[2],start:fields.slice(3,8),argv:fields.slice(9)});
+}
+function remember(pid,cwd,script,direct) {
+  const rec={pid,cwd:fs.realpathSync(cwd),script,direct};
+  rec.generation=identity(pid,rec.cwd,script,direct);
+  return rec;
+}
+function signal(rec,sig) {
+  if(!alive(rec.pid)) return;
+  assert.ok(rec.generation,'identity captured while allocated');
+  assert.equal(identity(rec.pid,rec.cwd,rec.script,rec.direct),rec.generation,'same PID generation before signal');
+  process.kill(rec.pid,sig);
+}
+function spawn(args,options,script) {
+  const child=Bun.spawn(args,{stdin:'ignore',...options});
+  const rec=remember(child.pid,options.cwd,script,true);
+  children.push({...rec,child}); return children.at(-1);
+}
+function root(name) {
+  const p=path.join(base,name);
+  fs.mkdirSync(path.join(p,'seats/run'),{recursive:true}); fs.mkdirSync(path.join(p,'seats/logs'));
+  fs.writeFileSync(path.join(p,'seats/herald.state.json'),JSON.stringify({logs:{},seen:[],alerts:{lastCheckAt:'2999-01-01T00:00:00Z'},staffing:{lastCheckAt:'2999-01-01T00:00:00Z'}}));
+  return p;
+}
+const env=p=>({...process.env,WHEELHOUSE_HERALD_ROOT:p,WHEELHOUSE_HERALD_INTERVAL_MS:'50'});
+async function launch(p) {
+  const log=fs.openSync(path.join(base,path.basename(p)+'.err'),'a'); let rec;
+  try { rec=spawn(['bun',path.join(here,'herald.ts')],{cwd:p,env:env(p),stdout:'ignore',stderr:log},path.join(here,'herald.ts')); }
+  finally { fs.closeSync(log); }
+  assert.ok(await until(()=>fs.existsSync(pidFile(p)) && read(pidFile(p)).trim()===String(rec.pid)),'daemon did not publish its own PID');
+  return rec;
+}
+try {
+  const p=root('singleton'),first=await launch(p);
+  const second=spawn(['bun',path.join(here,'herald.ts')],{cwd:p,env:env(p),stdout:'pipe',stderr:'pipe'},path.join(here,'herald.ts'));
+  const output=new Response(second.child.stdout).text(),errors=new Response(second.child.stderr).text();
+  let refused=false,secondCode;
+  try { secondCode=await wait(second.child,2); const out=await output,err=await errors;
+    const lines=err.split(/\r\n|[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]/); if(lines.at(-1)==='') lines.pop();
+    refused=secondCode!==0 && !out && lines.length===1 && err.includes('herald already running');
+  } catch(error) {
+    if(!String(error).includes('exceeded 2s')) throw error;
+    signal(second,'SIGTERM'); secondCode=await wait(second.child,3);
+  }
+  console.log('singleton refusal: rc='+status(second.child,secondCode)+' stdout='+JSON.stringify(await output)+' stderr='+JSON.stringify(await errors));
+  check(refused && alive(first.pid) && read(pidFile(p)).trim()===String(first.pid),'second same-root daemon refuses in one line, leaves first and its PID intact');
+  let other=null;
+  try { other=await launch(root('different-root')); } catch(error) { if(!(error instanceof assert.AssertionError)) throw error; }
+  check(other!==null && alive(first.pid) && alive(other.pid),'independent root can run its own herald');
+  if(other!==null) { signal(other,'SIGTERM'); await wait(other.child,3); }
+  // Native launch helper, including a stale lock left by SIGKILL.
+  signal(first,'SIGKILL'); await wait(first.child,3);
+  const seats=path.join(p,'seats'); fs.symlinkSync(path.join(here,'herald.ts'),path.join(seats,'herald.ts'));
+  const restart=spawn(['bash','-c','source "$1"; start_herald','fixture',path.join(here,'daemons.sh')],{cwd:p,env:{...process.env,WHEELHOUSE_DAEMONS_ROOT:p,WHEELHOUSE_HERALD_INTERVAL_MS:'50'},stdout:'pipe',stderr:'pipe'},path.join(here,'daemons.sh'));
+  const restartOut=new Response(restart.child.stdout).text(),restartErr=new Response(restart.child.stderr).text();
+  const restarted=await wait(restart.child,8); await restartErr;
+  const next=Number(read(pidFile(p)).trim()); assert.ok(Number.isSafeInteger(next) && next>0,'valid published restart PID');
+  const replacement=remember(next,p,path.join(seats,'herald.ts'),false); detached.push(replacement);
+  console.log('dead restart: rc='+status(restart.child,restarted)+' '+(await restartOut).trim());
+  check(restarted===0 && next!==first.pid && alive(next),'daemons.sh restarts a dead herald with a stale singleton lock');
+  signal(replacement,'SIGTERM'); assert.ok(await until(()=>!alive(next)),'restarted herald stopped');
+  for(const [mode,sig,expected] of [['normal',null,0],['failure',null,23],['term','SIGTERM',143],['int','SIGINT',130],['kill','SIGKILL',-9]]) {
+    // Native Bun.spawn resets SIGINT for this fresh child even when the sweep's
+    // async Bash launch inherited SIG_IGN (verified with child trap -p INT).
+    const ownerScript=path.join(base,'owner.sh');
+    const owner=spawn(['bash',ownerScript,here,base,mode],{cwd:base,stdout:'ignore',stderr:'pipe'},ownerScript);
+    const ownerErr=new Response(owner.child.stderr).text(),record=path.join(base,mode+'.record');
+    assert.ok(await until(()=>fs.existsSync(record)),'owner allocation record missing');
+    const [proj,pidText]=read(record).trimEnd().split('\n'),pid=Number(pidText);
+    assert.ok(Number.isSafeInteger(pid) && pid>0,'valid allocated owner child PID');
+    assert.ok(await until(()=>fs.existsSync(pidFile(proj))),'owned herald never started');
+    detached.push(remember(pid,proj,path.join(here,'herald.ts'),false));
+    if(sig) signal(owner,sig); else fs.closeSync(fs.openSync(path.join(base,mode+'.go'),'a'));
+    const code=status(owner.child,await wait(owner.child,5)),stopped=await until(()=>!alive(pid),4);
+    console.log('owner '+mode+': rc='+code+' heraldAlive='+Number(alive(pid))+' rootExists='+Number(fs.existsSync(proj))+' stderr='+JSON.stringify(await ownerErr));
+    check(code===expected && stopped && fs.existsSync(proj),'fixture herald stops after owner '+mode+' with root retained');
+  }
+} finally {
+  for(const rec of children) signal(rec,'SIGTERM');
+  for(const rec of children) {
+    try { await wait(rec.child,3); } catch { signal(rec,'SIGKILL'); await rec.child.exited; }
+  }
+  for(const rec of detached) if(alive(rec.pid)) { signal(rec,'SIGTERM'); await until(()=>!alive(rec.pid)); }
+}
+if(failures.length) { console.log('herald-lifetime.selftest: FAIL ('+failures.length+' checks)'); process.exit(1); }
+console.log('herald-lifetime.selftest: PASS (9 checks)');
+JS
