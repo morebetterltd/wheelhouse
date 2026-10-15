@@ -44,7 +44,15 @@ Real rewrites from an installed wheelhouse record:
 
 ## Standing behavior
 
-- Principal direction lands in `wheelhouse/ISA.md`'s Decisions before (or in the same breath as) it becomes described work.
+When a human changes direction, the commander first records their words, dated,
+in `wheelhouse/ISA.md`'s Decisions and updates the claim they change, before any
+work depends on that direction. Run `bun seats/isa-signals.ts sync` right after
+the edit (the supervisor also syncs on its tick). Changed open claims become
+`isa-change` rows in `seats/intake.jsonl`, which the herald brings to the
+producer through the commander. The producer decides what work the signal
+warrants; the commander files nothing from the direction change. The first sync
+only establishes the snapshot, so establish that baseline before editing claims.
+
 - Read `wheelhouse/ISA.md`'s Goal before dispatch; no work item without a stateable trace is ready to dispatch.
 - Merges move `wheelhouse/ISA.md`'s Claims per `wheelhouse/INTEGRATOR.md`, or the task record says why no claim moved.
 - Claims on consumer surfaces cite a `bun seats/walk.ts ... --surface ...` walk before close or explicitly say not-walked, and the commander also runs the primary-surface drift walk every `walk_cadence_merges` merges (default 5 in `wheelhouse/INTEGRATOR.md`).

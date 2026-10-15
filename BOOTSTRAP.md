@@ -124,6 +124,7 @@ mkdir -p wheelhouse
   echo "seat_push=on"
   echo "seat_worktrees=per-seat"
   echo "cleanup=on"
+  echo "isa_signals=on"
 } > wheelhouse/.template-source
 cat wheelhouse/.template-source
 ```
