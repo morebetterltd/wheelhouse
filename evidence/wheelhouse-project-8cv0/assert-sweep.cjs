@@ -1,0 +1,18 @@
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const [logPath, inventoryPath, exitPath, stderrPath] = process.argv.slice(2);
+for (const p of [logPath, inventoryPath, exitPath, stderrPath]) assert(fs.statSync(p).isFile(), `missing regular input ${p}`);
+assert(fs.statSync(logPath).size > 0); assert(fs.statSync(inventoryPath).size > 0);
+const log = fs.readFileSync(logPath, 'utf8'), inventory = fs.readFileSync(inventoryPath, 'utf8').trim().split('\n').map(p => path.basename(p));
+assert.equal(new Set(inventory).size, inventory.length, 'duplicate inventory');
+const rows = [...log.matchAll(/^selftest-sweep: (START|PASS|FAIL) (.+\.selftest\.sh)(?: rc=\d+)?$/gm)].map(m => [m[1], path.basename(m[2])]);
+const bridges = rows.filter(r => r[1] === 'bridge.selftest.sh'), inner = rows.filter(r => r[1] !== 'bridge.selftest.sh');
+const names = kind => inner.filter(r => r[0] === kind).map(r => r[1]).sort();
+assert.deepEqual(names('START'), [...inventory].sort(), 'START inventory differs');
+assert.deepEqual(names('PASS'), [...inventory].sort(), 'PASS inventory differs');
+assert.equal(names('FAIL').length, 0);
+assert.deepEqual(bridges, [['START', 'bridge.selftest.sh'], ['PASS', 'bridge.selftest.sh']]);
+assert.deepEqual([...log.matchAll(/^selftest-sweep: PASS \((\d+) suite\(s\)\)$/gm)].map(m => Number(m[1])).sort((a,b)=>a-b), [1, inventory.length]);
+assert.equal(Number(fs.readFileSync(exitPath, 'utf8').trim()), 0);
+assert.match(log, /umbrella safety: PASS .*test exit=0/);
+assert(!/^STOP /m.test(log));
+console.log(JSON.stringify({ innerStart: names('START').length, innerPass: names('PASS').length, innerFail: names('FAIL').length, bridgeStart: 1, bridgePass: 1, inventoryExact: true, exit: 0 }));

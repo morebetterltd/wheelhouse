@@ -1,0 +1,134 @@
+[
+  {
+    "file": "standalone-clean.stdout",
+    "rawBytes": 19927,
+    "rawSha256": "a8bad4272d1a3d7cc75e171cc7854e131ae582ee1edb110a504d11b3ec62cd9c",
+    "retainedSha256": "810bc73a5eb1369678a5a9efd5bb7f6a30a90baa26a18f50be23f6aebe5d2d0e"
+  },
+  {
+    "file": "standalone-clean.stderr",
+    "rawBytes": 0,
+    "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "retainedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "standalone-clean.exit",
+    "rawBytes": 2,
+    "rawSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "retainedSha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  {
+    "file": "standalone-clean.before.json",
+    "rawBytes": 81678,
+    "rawSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905",
+    "retainedSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905"
+  },
+  {
+    "file": "standalone-clean.after.json",
+    "rawBytes": 81678,
+    "rawSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905",
+    "retainedSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905"
+  },
+  {
+    "file": "final-removed-hold.stdout",
+    "rawBytes": 35711,
+    "rawSha256": "bac90172ff6ac371bac8499081a097608275e26cc0df2d4adf4597001f55c1b9",
+    "retainedSha256": "0b6867e92b198ce354f53a450360e8b9c68c7d1489ada9fa7eb21587749d448c"
+  },
+  {
+    "file": "final-removed-hold.stderr",
+    "rawBytes": 57,
+    "rawSha256": "808eee1120dfba42c8c60a1499c030165af25599919f64fbf354d70b8a41100c",
+    "retainedSha256": "808eee1120dfba42c8c60a1499c030165af25599919f64fbf354d70b8a41100c"
+  },
+  {
+    "file": "final-removed-hold.exit",
+    "rawBytes": 2,
+    "rawSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "retainedSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+  },
+  {
+    "file": "final-removed-hold.before.json",
+    "rawBytes": 81678,
+    "rawSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905",
+    "retainedSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905"
+  },
+  {
+    "file": "final-removed-hold.after.json",
+    "rawBytes": 81678,
+    "rawSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905",
+    "retainedSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905"
+  },
+  {
+    "file": "final-removed-diagnostics.stdout",
+    "rawBytes": 6292,
+    "rawSha256": "af4f2bbfb519293ca4339370e7113874df28748a9dfc202be4ac939feeae87c0",
+    "retainedSha256": "af4f2bbfb519293ca4339370e7113874df28748a9dfc202be4ac939feeae87c0"
+  },
+  {
+    "file": "final-removed-diagnostics.stderr",
+    "rawBytes": 1133,
+    "rawSha256": "fec9b9f26857d8b01b8ac6774cb678934e1c96104c229790c5f539fb7a0b79ec",
+    "retainedSha256": "c88035b40fafe5d4fb1b39e7ca615a1e5121659edd282f4b51f3e5df1eb23523"
+  },
+  {
+    "file": "final-removed-diagnostics.exit",
+    "rawBytes": 2,
+    "rawSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "retainedSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+  },
+  {
+    "file": "final-removed-diagnostics.before.json",
+    "rawBytes": 81678,
+    "rawSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905",
+    "retainedSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905"
+  },
+  {
+    "file": "final-removed-diagnostics.after.json",
+    "rawBytes": 81678,
+    "rawSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905",
+    "retainedSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905"
+  },
+  {
+    "file": "runtime-tip.txt",
+    "rawBytes": 41,
+    "rawSha256": "9be02789ea9c8655fef1573f3f78189f07c98089ebae979cd39220507fd63cc0",
+    "retainedSha256": "9be02789ea9c8655fef1573f3f78189f07c98089ebae979cd39220507fd63cc0"
+  },
+  {
+    "file": "runtime-seats-tree.txt",
+    "rawBytes": 41,
+    "rawSha256": "61a4ff2ad85e50bb9f2b519e99b9f39727fdf0597dcc190ede4875a3e574abff",
+    "retainedSha256": "61a4ff2ad85e50bb9f2b519e99b9f39727fdf0597dcc190ede4875a3e574abff"
+  },
+  {
+    "file": "suite-inventory.txt",
+    "rawBytes": 1416,
+    "rawSha256": "6180d79ebac880845608e63b57224380f58fa3d8b75c30f614ea1420485872de",
+    "retainedSha256": "6180d79ebac880845608e63b57224380f58fa3d8b75c30f614ea1420485872de"
+  },
+  {
+    "file": "check-run.cjs",
+    "rawBytes": 2129,
+    "rawSha256": "7120764957a319e42810679079b680471fbcbbb3301c34ea945f9dee5048b2a9",
+    "retainedSha256": "7120764957a319e42810679079b680471fbcbbb3301c34ea945f9dee5048b2a9"
+  },
+  {
+    "file": "assert-sweep.cjs",
+    "rawBytes": 1754,
+    "rawSha256": "74630a5dacb9e38818eea2238a181c7f22c4594b55d1a6ddf78ff734595fc34d",
+    "retainedSha256": "74630a5dacb9e38818eea2238a181c7f22c4594b55d1a6ddf78ff734595fc34d"
+  },
+  {
+    "file": "bridge.selftest.sh",
+    "rawBytes": 200,
+    "rawSha256": "ae5d4780c6036b8a8eb29487437b3aa9bebec5f5827252540f455a8e2fc63ee6",
+    "retainedSha256": "ae5d4780c6036b8a8eb29487437b3aa9bebec5f5827252540f455a8e2fc63ee6"
+  },
+  {
+    "file": "capture.cjs",
+    "rawBytes": 4520,
+    "rawSha256": "121b10eb0643cb976d8e3e914b61479c0d2e992195e5004d6ebe05fbe94c8528",
+    "retainedSha256": "121b10eb0643cb976d8e3e914b61479c0d2e992195e5004d6ebe05fbe94c8528"
+  }
+]

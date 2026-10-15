@@ -1,0 +1,16 @@
+{
+  "final-removed-hold": {
+    "sourceRuntime": "34c1c34f04621fa4687de63ad24a8ba10617ae77",
+    "changed": [
+      "seats/concurrency.selftest.sh"
+    ],
+    "exit": 1
+  },
+  "final-removed-diagnostics": {
+    "sourceRuntime": "34c1c34f04621fa4687de63ad24a8ba10617ae77",
+    "changed": [
+      "seats/fixtures/concurrency-stub-supervisor.cjs"
+    ],
+    "exit": 1
+  }
+}
