@@ -48,6 +48,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { openPathsMatch } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -124,19 +125,9 @@ function openPaths(pid: number): string[] {
     .map((l) => l.slice(1));
 }
 
-/**
- * Does this pid hold this path open? Compared against both the recorded
- * path and its canonicalized form — lsof reports physical paths, and a
- * project reached through a symlink records the logical one.
- */
+/** Match descriptor paths by metadata, never by opening an unattended FIFO. */
 function pidHoldsPath(pid: number, p: string): boolean {
-  const wanted = new Set([p]);
-  try {
-    wanted.add(fs.realpathSync(p));
-  } catch {
-    /* path gone from disk; raw compare still applies */
-  }
-  return openPaths(pid).some((n) => wanted.has(n));
+  return openPathsMatch(openPaths(pid), p);
 }
 
 /**
