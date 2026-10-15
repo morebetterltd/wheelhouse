@@ -93,7 +93,7 @@ source_policy_leg(){
   cp -f "$SWEEP" "$project/seats/selftest-sweep.sh"
   printf '#!/usr/bin/env bash\nprintf ran > "$POLICY_RAN"\n' > "$project/seats/pass.selftest.sh"
   ran="$project/ran"
-  for kind in suffix direct env split quoted no-newline linked; do
+  for kind in suffix direct env split quoted compact split-equals no-newline linked; do
     file="$project/seats/nested space/no-extension"
     case "$kind" in
       suffix) file="$file.py"; printf 'not even executable\n' > "$file" ;;
@@ -101,6 +101,8 @@ source_policy_leg(){
       env) printf '#!/usr/bin/env python3\n' > "$file" ;;
       split) printf '#!/usr/bin/env -S python3 -u\n' > "$file" ;;
       quoted) printf '#!/usr/bin/env -S "python3 -u"\n' > "$file" ;;
+      compact) printf '#!/usr/bin/env -Spython3\n' > "$file" ;;
+      split-equals) printf '#!/usr/bin/env --split-string="python3 -u"\n' > "$file" ;;
       no-newline) printf '#! /usr/bin/python' > "$file" ;;
       linked)
         printf '#!/usr/bin/env python2.7\n' > "$FIX/source-linked/script"
@@ -373,7 +375,7 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "selftest-sweep.selftest: PASS (34 checks)"
+  echo "selftest-sweep.selftest: PASS (36 checks)"
 else
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"
   exit 1
