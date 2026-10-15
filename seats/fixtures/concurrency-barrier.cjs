@@ -17,6 +17,9 @@ for (const seat of seats) {
   if (!seat.fifo?.startsWith(fixture + path.sep) || !seat.log?.startsWith(fixture + path.sep)) throw new Error('foreign endpoint');
   if (!fs.statSync(seat.fifo).isFIFO()) throw new Error('missing fixture FIFO');
 }
+if (new Set(seats.map(seat => seat.log)).size !== seats.length || new Set(seats.map(seat => seat.fifo)).size !== seats.length) {
+  throw new Error('barrier requires distinct seat logs and FIFOs');
+}
 const watchers = [];
 let finished = false;
 const records = seat => fs.readFileSync(seat.log, 'utf8').split('\n').filter(Boolean).flatMap(line => {
