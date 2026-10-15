@@ -1,0 +1,36 @@
+diff --git a/seats/contract.selftest.sh b/seats/contract.selftest.sh
+index 2de1888..72e1b69 100755
+--- a/seats/contract.selftest.sh
++++ b/seats/contract.selftest.sh
+@@ -4,6 +4,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
+ . "$HERE/selftest-lib.sh"
+ CONTRACT="${1:-$HERE/contract.ts}"
+ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-contract.XXXXXX")" || exit 2
++selftest_isolate_git "$FIX" || exit 2
+ cleanup(){ selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
+ trap cleanup EXIT
+ FAILED=0
+diff --git a/seats/intake.selftest.sh b/seats/intake.selftest.sh
+index 51d4b57..dd138a6 100755
+--- a/seats/intake.selftest.sh
++++ b/seats/intake.selftest.sh
+@@ -4,6 +4,7 @@ set -u
+ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+ . "$SCRIPT_DIR/selftest-lib.sh"
+ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-intake-selftest.XXXXXX")" || exit 2
++selftest_isolate_git "$FIX" || exit 2
+ trap 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"' EXIT
+ mkdir -p "$FIX/bin"
+ cat > "$FIX/bin/bd" <<'STUB'
+diff --git a/seats/upgrade-contract-audit.selftest.sh b/seats/upgrade-contract-audit.selftest.sh
+index 1ef3469..b794651 100755
+--- a/seats/upgrade-contract-audit.selftest.sh
++++ b/seats/upgrade-contract-audit.selftest.sh
+@@ -9,6 +9,7 @@ CASE=${WHEELHOUSE_UPGRADE_CONTRACT_CASE:-all}
+ case "$CASE" in all|bash-legacy|zsh-legacy|bash-valid|zsh-valid|bash-unreadable|zsh-unreadable) ;; *) echo "unknown test case: $CASE" >&2; exit 2;; esac
+ selected(){ [ "$CASE" = all ] || [ "$CASE" = "$1" ]; }
+ FIX=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-contract.XXXXXX") || exit 2
++selftest_isolate_git "$FIX" || exit 2
+ cleanup(){ selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
+ trap cleanup EXIT
+ fail(){ echo "FAIL $*"; exit 1; }

@@ -1,0 +1,10 @@
+[
+  {
+    "mode": "fixed",
+    "exit": 0
+  },
+  {
+    "mode": "guard-removed",
+    "exit": 1
+  }
+]

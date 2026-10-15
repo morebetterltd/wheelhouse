@@ -4,6 +4,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-selftest-lib.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 PASS=0; FAIL=0

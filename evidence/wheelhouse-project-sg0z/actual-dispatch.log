@@ -1,0 +1,20 @@
+before: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+RUN ['bash', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/actual-dispatch-repro.sh']
+unsafe dispatch exit=1: STOP: bead-r1 is not a contract: bead-r1: contract: Intent: missing; bead-r1: contract: Outcomes: missing; bead-r1: contract: Intent: must contain at least one non-blank line before Outcomes:; bead-r1: contract: Outcomes: must contain at least one outcome — fix: write the Intent: and Outcomes: sections per wheelhouse/GRAPH.md (Every bead is a contract) and dispatch again
+unsafe: actual failing dispatch + original fgit reset moved THROWAWAY enclosing HEAD; preservation assertion FAILS
+fixed dispatch exit=1: STOP: bead-r1 is not a contract: bead-r1: contract: Intent: missing; bead-r1: contract: Outcomes: missing; bead-r1: contract: Intent: must contain at least one non-blank line before Outcomes:; bead-r1: contract: Outcomes: must contain at least one outcome — fix: write the Intent: and Outcomes: sections per wheelhouse/GRAPH.md (Every bead is a contract) and dispatch again
+fixed: reset exit=128; THROWAWAY enclosing HEAD preserved; fatal: not a git repository (or any of the parent directories): .git
+after: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+umbrella safety: PASS (0 permitted new reflog entries); test exit=0

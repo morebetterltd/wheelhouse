@@ -1,0 +1,241 @@
+before: git -C <umbrella> reflog --format=%gs -5
+commit: Sync template 1c63d01: selftests can no longer false-fail on SIGPIPE under pipefail (3nmc); also sync the held sweep-runner lock change (muyl)
+commit: overnight-pause: stop this install's detached test sweeps too, and match reviews and sweeps by working directory so Meridian's are never touched
+commit: Sync template 6cb9dc9: empty-lock and state-lock recovery (5tcl, su88), recover selftest counts only its own processes (fhfb), template cache recovery guards (gsma); sweep-runner lock change (muyl) held until running sweeps finish
+commit: Sync template 6581044: prune selftest stable in every environment (yo4m)
+commit: ISA: record Keenan's approval to ship Lauren Tan's MIT notice with the verification skills (V1)
+
+RUN ['bash', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/source/seats/prune.selftest.sh']
+  ok    fixture-owned bd metrics config disables detached telemetry flushers
+
+reviewed-row deletion safety (fresh allocations only)
+MEASUREMENT outside-rm-gTqsFw rc=0 stdout="SKIPPED run-scratch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/outside-rm-gTqsFw/victim reason=outside allowed containers and scanner cache paths\nprune summary: touched=0 skipped=1 dry_run=0 reclaimed_bytes=0 reclaimed_human=0.0B\n" stderr=""
+MEASUREMENT outside-rm KEEP_present=1
+  ok   outside rm row keeps unrelated KEEP
+MEASUREMENT string-safe-BO0Xpr rc=2 stdout="" stderr="REFUSED scan row 2 field safe: expected exactly the number 0 or 1\n"
+  ok   JSON safe string refuses whole file
+MEASUREMENT dirty-worktree rc=0 KEEP_present=1 stdout="SKIPPED merged-worktree [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/dirty-worktree-wKTXxe/install/.wheelhouse-worktrees/dirty reason=uncommitted changes: ?? KEEP\nprune summary: touched=0 skipped=1 dry_run=0 reclaimed_bytes=0 reclaimed_human=0.0B\n" stderr=""
+  ok   worktree dirtied after review keeps KEEP
+MEASUREMENT invalid-simctl-VUpCEE rc=0 stdout="SKIPPED bead-simulator simctl:../x reason=invalid simulator UDID\nprune summary: touched=0 skipped=1 dry_run=0 reclaimed_bytes=0 reclaimed_human=0.0B\n" stderr=""
+  ok   invalid UDID skipped with zero xcrun calls
+MEASUREMENT foreign-root-pMpd90 rc=2 stdout="" stderr="REFUSED scan row 1 field root: expected this install [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/foreign-root-pMpd90/install; rescan from its prune.ts\n"
+  ok   foreign install scan refused
+MEASUREMENT bad-category-IsjS6y rc=2 stdout="" stderr="REFUSED scan row 3 field category: unknown category not-a-category\n"
+  ok   bad category validates whole file before first action
+MEASUREMENT bad-action-kZbAAD rc=2 stdout="" stderr="REFUSED scan row 3 field action: unknown action none\n"
+  ok   bad action validates whole file before first action
+MEASUREMENT bad-path-FHhLfU rc=2 stdout="" stderr="REFUSED scan row 3 field path: expected an absolute path (or simctl: target for simctl)\n"
+  ok   bad path validates whole file before first action
+MEASUREMENT bad-repo-8VUVwD rc=2 stdout="" stderr="REFUSED scan row 3 field repo: expected an existing Git repository root\n"
+  ok   bad repo validates whole file before first action
+MEASUREMENT bad-safe-Wf2KNi rc=2 stdout="" stderr="REFUSED scan row 3 field safe: expected exactly the number 0 or 1\n"
+  ok   bad safe validates whole file before first action
+MEASUREMENT bad-size_bytes-tdxArf rc=2 stdout="" stderr="REFUSED scan row 3 field size_bytes: expected a finite nonnegative number\n"
+  ok   bad size_bytes validates whole file before first action
+MEASUREMENT bad-jsonl-PByldC rc=2 stdout="" stderr="REFUSED scan row 2 field category: unknown category bogus\n"
+  ok   jsonl validates rows too
+MEASUREMENT bad-tsv-jJnCNe rc=2 stdout="" stderr="REFUSED scan row 2 field category: unknown category bogus\n"
+  ok   tsv validates rows too
+MEASUREMENT symlink-3edDn0 rc=0 stdout="SKIPPED run-scratch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/symlink-3edDn0/install/.wheelhouse-runs/owned reason=path mismatch: noncanonical spelling or symlink component\nprune summary: touched=0 skipped=1 dry_run=0 reclaimed_bytes=0 reclaimed_human=0.0B\n" stderr=""
+  ok   symlink ancestor cannot redirect rm
+MEASUREMENT cancelled-symlink-JvqX4I rc=0 stdout="SKIPPED run-scratch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/cancelled-symlink-JvqX4I/install/.wheelhouse-runs/link/../owned reason=path mismatch: noncanonical spelling or symlink component\nprune summary: touched=0 skipped=1 dry_run=0 reclaimed_bytes=0 reclaimed_human=0.0B\n" stderr=""
+  ok   lexical dotdot cannot hide a symlink from validation
+MEASUREMENT missing-p99fcZ rc=0 stdout="SKIPPED run-scratch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/missing-p99fcZ/install/.wheelhouse-runs/missing reason=path no longer exists\nprune summary: touched=0 skipped=1 dry_run=0 reclaimed_bytes=0 reclaimed_human=0.0B\n" stderr=""
+  ok   missing target skipped, not reported PRUNED
+MEASUREMENT xctest-outside-wUDAOQ rc=0 stdout="SKIPPED xctest-devices [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/xctest-outside-wUDAOQ/unrelated-device-set reason=outside XCTestDevices directory root\nprune summary: touched=0 skipped=1 dry_run=0 reclaimed_bytes=0 reclaimed_human=0.0B\n" stderr=""
+  ok   XCTest set outside scanner root cannot reach xcrun
+MEASUREMENT ancestor-swap-U63MCB rc=0 stdout="SKIPPED run-scratch [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/ancestor-swap-U63MCB/install/.wheelhouse-runs/owned reason=path mismatch after validation: symlink component or missing target\nprune summary: touched=0 skipped=1 dry_run=0 reclaimed_bytes=0 reclaimed_human=0.0B\n" stderr=""
+  ok   ancestor swapped by last outside probe cannot redirect rm
+CAPTURE lsof -a -p <fixture-pid> -d cwd -Fn rc=0 stdout="p96239\nfcwd\nn[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/live-worktree-HQG4uP/install/.wheelhouse-worktrees/occupied\n" stderr=""
+MEASUREMENT live-worktree rc=0 stdout="SKIPPED merged-worktree [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/live-worktree-HQG4uP/install/.wheelhouse-worktrees/occupied reason=live process has its cwd in [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/live-worktree-HQG4uP/install/.wheelhouse-worktrees/occupied\nprune summary: touched=0 skipped=1 dry_run=0 reclaimed_bytes=0 reclaimed_human=0.0B\n" stderr=""
+  ok   live cwd acquired after review keeps unanchored worktree
+  ok   jsonl reports first bad row, not later syntax/coercion error
+  ok   tsv reports first bad row, not later syntax/coercion error
+MEASUREMENT tmp-parent-alias scanRc=0 pruneRc=0 recorded={"category":"bead-tmp","safe":1,"repo":"[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/tmp-parent-alias-MIMdrH/install","path":"[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/tmp-parent-alias-MIMdrH/physical-tmp/aliascase-20c-scratch","branch":"","size_bytes":4096,"size_human":"4.0K","action":"rm","reason":"tmp scratch belongs to closed bead aliascase-20c"} stdout="PRUNED rm bead-tmp [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/reviewed/tmp-parent-alias-MIMdrH/physical-tmp/aliascase-20c-scratch\nprune summary: touched=1 skipped=0 dry_run=0 reclaimed_bytes=4096 reclaimed_human=4.0K\n" stderr=""
+  ok   aliased TMPDIR producer records canonical target and reviewed consumer removes it
+reviewed-row regression failures=0
+  ok   single-repo json bound producer/consumer roundtrip
+  ok   single-repo jsonl bound producer/consumer roundtrip
+  ok   single-repo tsv bound producer/consumer roundtrip
+  ok   plain-umbrella json bound producer/consumer roundtrip
+  ok   plain-umbrella jsonl bound producer/consumer roundtrip
+  ok   plain-umbrella tsv bound producer/consumer roundtrip
+  ok    reviewed-row safety regressions
+
+preflight: TMPDIR inside another git repo is not touched
+  ok    prune.selftest with TMPDIR inside a scratch git repo leaves that repo HEAD and index unchanged
+
+categories verb
+  ok    categories names worktree, bench-junk, scratch, simulator, xctest, and seat safety categories
+
+scan classifies fixture rows
+  ok    closed merged clean worktree is safe merged-worktree
+  ok    safe stale-branch reports zero reclaimed size
+  ok    closed but unmerged fleet worktree is needs-review
+  ok    goal-branch child is needs-review before integration-refs.txt exists
+  ok    goal-branch child becomes safe merged-worktree when its goal branch is listed
+  ok    listed goal branch is needs-review, never stale-branch
+  ok    listed goal ref does not widen matching to unrelated fleet branches
+  ok    current recorded seat cwd is classified as non-prunable seat-anchor
+  ok    rostered .wheelhouse-worktrees/<seat> directory is classified as non-prunable seat-anchor
+  ok    live lsof cwd beats stale state.json cwd and is a seat-anchor
+  ok    closed bead live-cwd worktree reason includes exact closed-bead wording
+  ok    open bead live-cwd worktree reason includes exact open-bead wording
+  ok    session history cwd is scanned by normal closed-bead worktree rules, not as a seat-anchor
+  ok    orphaned checkout is safe orphaned-worktree
+  ok    build cache is safe build-cache
+  ok    .NET obj cache is safe build-cache
+  ok    root dist is safe build-cache
+  ok    node_modules package dist is needs-review, not safe build-cache
+  ok    node_modules .bin is needs-review, not safe build-cache
+  ok    no safe scan rows appear under node_modules
+  ok    stale bench lock is safe bench-junk
+  ok    closed bead .wheelhouse-runs scratch is safe run-scratch
+  ok    open bead .wheelhouse-runs scratch is needs-review
+  ok    closed bead tmp scratch is safe bead-tmp
+  ok    open bead tmp scratch is needs-review
+  ok    closed bead simctl device is safe bead-simulator
+  ok    open bead simctl device is needs-review
+  ok    idle XCTestDevices set is safe xctest-devices
+
+active bench lock makes caches review-only
+  ok    active bench lock reclassifies cache as needs-review
+  ok    active-bench cache remains after prune --yes
+
+dry-run does not touch rows
+  ok    prune without --yes is dry-run only
+  ok    stale-branch dry-run contributes zero reclaimed bytes
+
+prune --yes refuses while a rostered seat is mid-turn
+  ok    mid-turn seat still allows dry-run scan/prune preview
+  ok    prune --yes skips naming the mid-turn seat
+  ok    mid-turn guarded cache remains after refused prune --yes
+
+prune --yes restores write permission before rm action
+  ok    prune --yes removes an rm row containing a mode-555 subdirectory
+
+prune --yes rechecks live seat anchors from reviewed scan files
+  ok    prune --yes skips a stale safe row that is now a live seat cwd
+  ok    stale-scan live seat cwd remains after refused prune --yes
+  ok    prune --yes removes a reviewed safe row that appears only in stored session history
+  ok    stale-scan session-history worktree is removed by prune --yes
+
+prune acts only on safe selected rows
+  ok    safe merged worktree removed by git worktree remove
+  ok    safe merged worktree prune keeps its merged branch ref
+  ok    goal-branch merged worktree prunes worktree while child and listed goal branches survive
+  ok    unmerged fleet branch is not deleted by merged-worktree prune path
+  ok    stale-branch prune archive-tags the branch tip before deleting the branch ref
+  ok    safe orphaned checkout removed
+  ok    safe build cache removed
+  ok    safe .NET obj cache removed
+  ok    safe root dist cache removed
+  ok    safe stale bench lock removed
+  ok    safe closed bead runs scratch removed
+  ok    safe closed bead tmp scratch removed
+  ok    safe closed bead simulator deleted by simctl
+  ok    idle XCTestDevices set deleted with simctl --set
+  ok    node_modules package dist remains after prune --yes
+  ok    node_modules .bin remains after prune --yes
+  ok    recorded-cwd seat-anchor worktree remains
+  ok    rostered seat worktree remains
+  ok    live-cwd seat-anchor worktree remains
+  ok    session-history worktree was removed by normal pruning rules
+  ok    open bead runs scratch remains byte-identical
+  ok    open bead tmp scratch remains byte-identical
+  ok    open bead simulator is not deleted
+  ok    prune summary reports eleven touched rows; already-removed history row counts as skipped
+
+host-budget auto_prune uses the real scanner and reviewed prune parser
+MEASUREMENT real-auto-prune rc=0
+  adapter stdout: fixture-status   worker            STOPPED  stopped     last-event agent_end
+  adapter stdout: HOST-BUDGET worktree cap exceeded: count=2 max_worktrees=1
+  adapter stdout: HOST-BUDGET safe merged-worktree fleet/cap-3cb [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/actual-auto-prune/.wheelhouse-worktrees/cap-3cb 52.0K — clean, closed bead cap-3cb, tip is an ancestor of main; commits on no remote ref: archive tag before removal
+  adapter stdout: HOST-BUDGET safe merged-worktree fleet/cap-pur [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/actual-auto-prune/.wheelhouse-worktrees/cap-pur 56.0K — clean, closed bead cap-pur, tip is an ancestor of main; commits on no remote ref: archive tag before removal
+  adapter stdout: HOST-BUDGET prune command: bun seats/prune.ts prune --from-file seats/logs/prune-worktree-cap-scan.json --yes --categories merged-worktree
+  adapter stdout: TAGGED archive/cap-3cb 24003b1d60f8 before removing [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/actual-auto-prune/.wheelhouse-worktrees/cap-3cb
+  adapter stdout: PRUNED worktree merged-worktree [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/actual-auto-prune/.wheelhouse-worktrees/cap-3cb
+  adapter stdout: TAGGED archive/cap-pur d3b1cc7985ef before removing [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/actual-auto-prune/.wheelhouse-worktrees/cap-pur
+  adapter stdout: PRUNED worktree merged-worktree [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/main/enclosing-tmp-repo/tmp/wheelhouse-prune-selftest.zgV9Nm/actual-auto-prune/.wheelhouse-worktrees/cap-pur
+  adapter stdout: prune summary: touched=2 skipped=0 dry_run=0 reclaimed_bytes=110592 reclaimed_human=108.0K
+  ok    actual adapter auto_prune consumes bound JSON and removes two clean merged worktrees
+
+ISC-71 fresh install with zero worktrees
+  ok    scan on a fresh install prints root metadata only and exits 0
+  ok    cleanup on a fresh install prints only "cleanup done removed=0 kept=0 bytes=0" and exits 0
+
+install policy cleanup=off/report is honored by direct prune cleanup
+  ok    cleanup=off direct cleanup exits without deleting closed-bead scratch
+  ok    cleanup=report direct cleanup writes a would-remove report and deletes nothing
+
+ISC-42 squash-merge and ISC-117 mayline/main integration ref
+  ok    branch merged only on mayline/main is merged-worktree naming mayline/main (ISC-117)
+  ok    squash-merged unpushed branch is merged-worktree naming the squash commit (ISC-42)
+  ok    mayline-merged worktree removed by cleanup
+  ok    squash-merged worktree removed after archive/<name> tag; branch ref kept (ISC-52/53)
+
+ISC-43 bead landed on origin/fleet/ootb-agent
+  ok    bead merged only to origin/fleet/ootb-agent is merged-worktree naming that ref
+  ok    ootb-agent-merged worktree removed by cleanup
+
+ISC-44 open bead with zero commits and no seat
+  ok    open bead at its base tip is zero-commit-worktree with a "zero commits ... no seat" reason
+  ok    zero-commit worktree removed; its branch ref still exists
+
+ISC-45/56 run folder kept while a live process has its cwd inside
+  ok    run folder kept with holder pid, command, and cwd while occupied
+  ok    run folder removed on the next cleanup once the process is gone
+  ok    cleanup removes closed-bead scratch containing a read-only source snapshot subtree
+
+ISC-46/138 concurrent cleanups, lock refusal, and a race with another remover
+  ok    two parallel bead-scoped cleanups both exit 0 and both run folders are gone
+  ok    cleanup log has exactly one removed line per bead (ISC-46)
+  ok    neither waiting cleanup gave up on the lock
+  ok    a cleanup while another holds the lock prints only "already running", exits 0, within ~1 s
+  ok    dry-run lists the run folder and leaves it in place
+  ok    a row removed between scan and act logs "already removed", no removed line, exit 0 (ISC-138)
+  ok    worktree registry needs no prune after the race
+
+ISC-50 bead closed while its seat is mid-push
+  ok    worktree kept with "deferred: push in progress" while the push marker names a live pid
+  ok    worktree removed once the push has ended
+
+ISC-51 oversized worktree follows the same rules
+  ok    21 GB sparse build file allocates only 16K
+  ok    ignored build output leaves the tree clean
+  ok    oversized merged worktree is still merged-worktree; size never changes the category
+  ok    oversized worktree removed by cleanup
+
+ISC-59/60 seat anchors and ISA-named worktrees are never removed
+  ok    seats/state.json cwd is listed seat-anchor (ISC-59)
+  ok    worktree named in wheelhouse/ISA.md is needs-review "named by wheelhouse/ISA.md" (ISC-60)
+  ok    seat-anchor worktree kept with "seat-anchor" and still registered
+  ok    ISA-named worktree kept with "named by wheelhouse/ISA.md" and still registered
+
+ISC-61 lsof unavailable removes nothing
+  ok    otherwise-removable worktree and run folder are kept with "cannot verify: lsof unavailable"
+  ok    nothing removed without lsof; exit 0
+  ok    the same rows are removed once lsof is available again
+
+ISC-64 symlinked entries and paths with spaces
+  ok    symlinked worktree registers at its real path and is needs-review (outside the container)
+  ok    orphaned symlink under .wheelhouse-worktrees/ is listed by scan
+  ok    cleanup over symlinked entries exits 0
+  ok    cleanup logs "path mismatch" for a symlinked entry
+  ok    symlinks, their targets and the out-of-container worktree are untouched
+  ok    no removed line names a symlinked or out-of-container path
+  ok    merged worktree whose path has a space is resolved and removed
+
+ISC-62 interactive .worktrees/ checkouts are never touched
+  ok    interactive .worktrees/ checkout on a merged fleet branch is needs-review "interactive checkout"
+  ok    interactive checkout kept and still registered after cleanup
+  ok    no removed line in the cleanup log names a .worktrees/ path
+prune.selftest: PASS
+after: git -C <umbrella> reflog --format=%gs -5
+commit: Sync template 1c63d01: selftests can no longer false-fail on SIGPIPE under pipefail (3nmc); also sync the held sweep-runner lock change (muyl)
+commit: overnight-pause: stop this install's detached test sweeps too, and match reviews and sweeps by working directory so Meridian's are never touched
+commit: Sync template 6cb9dc9: empty-lock and state-lock recovery (5tcl, su88), recover selftest counts only its own processes (fhfb), template cache recovery guards (gsma); sweep-runner lock change (muyl) held until running sweeps finish
+commit: Sync template 6581044: prune selftest stable in every environment (yo4m)
+commit: ISA: record Keenan's approval to ship Lauren Tan's MIT notice with the verification skills (V1)
+
+umbrella safety: PASS (0 permitted new reflog entries); test exit=0

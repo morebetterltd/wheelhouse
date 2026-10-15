@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+    assert lines[i+1] == f'selftest_isolate_git "${m[1]}" || exit 2', f'{p.name}:{i+1}: missing git boundary'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: pipefail.selftest.sh:6: missing git boundary

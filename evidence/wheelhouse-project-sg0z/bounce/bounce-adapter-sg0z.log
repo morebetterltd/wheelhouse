@@ -1,0 +1,45 @@
+before: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: stop this install's detached test sweeps too, and match reviews and sweeps by working directory so Meridian's are never touched
+commit: Sync template 6cb9dc9: empty-lock and state-lock recovery (5tcl, su88), recover selftest counts only its own processes (fhfb), template cache recovery guards (gsma); sweep-runner lock change (muyl) held until running sweeps finish
+commit: Sync template 6581044: prune selftest stable in every environment (yo4m)
+commit: ISA: record Keenan's approval to ship Lauren Tan's MIT notice with the verification skills (V1)
+commit: Integration refs: add fleet/front-door (F9)
+
+RUN ['bash', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/sg0z/source/seats/adapter.selftest.sh']
+
+0. fixture cleanup catches cwd-only descendants
+  ok    adapter selftest cleanup kills a process whose only fixture reference is its cwd
+
+0a0. state lock recovers abandoned incomplete writers without stealing live owners
+PASS old closed empty state.lock is reclaimed and real state write commits
+PASS old closed malformed state.lock is reclaimed and real state write commits
+PASS fresh incomplete lock gets grace, then the same aged lock is reclaimed
+PASS old open empty lock is protected, then reclaimed only after close
+PASS live PID is never stolen by acquisition or an old owner's release
+PASS failed PID write never publishes an empty state.lock or leaks a candidate
+adapter state lock: PASS (0 failure(s))
+  ok    state lock recovery, grace, open/live owners, safe release and atomic publication
+
+0a. launch paths validate the whole roster before choosing a seat
+  ok    spawn refuses before launch when a peer roster entry has a bad authRoute
+
+0a2. pi provider pin requires a model before launch/probe
+  ok    pi spawn refuses missing model with named-seat diagnostic before invoking pi
+  ok    pi probe refuses missing model with named-seat diagnostic before invoking pi
+  ok    pi spawn refuses empty model with named-seat diagnostic before invoking pi
+  ok    pi probe refuses empty model with named-seat diagnostic before invoking pi
+  ok    pi spawn refuses whitespace model with named-seat diagnostic before invoking pi
+  ok    pi probe refuses whitespace model with named-seat diagnostic before invoking pi
+
+0b. claude-code driver — spawn, dispatch ack, steer, settled, resume, stop, dead-process
+  ok    claude-code spawn exits 0 through the adapter
+  ok    claude-code passes brief text, not a path
+  ok    claude-code shim forwards allowedTools and disallowedTools to claude
+after: git -C <umbrella> reflog --format=%gs -5
+commit: Sync template 1c63d01: selftests can no longer false-fail on SIGPIPE under pipefail (3nmc); also sync the held sweep-runner lock change (muyl)
+commit: overnight-pause: stop this install's detached test sweeps too, and match reviews and sweeps by working directory so Meridian's are never touched
+commit: Sync template 6cb9dc9: empty-lock and state-lock recovery (5tcl, su88), recover selftest counts only its own processes (fhfb), template cache recovery guards (gsma); sweep-runner lock change (muyl) held until running sweeps finish
+commit: Sync template 6581044: prune selftest stable in every environment (yo4m)
+commit: ISA: record Keenan's approval to ship Lauren Tan's MIT notice with the verification skills (V1)
+
+umbrella safety: PASS (1 permitted new reflog entries); test exit=-9
