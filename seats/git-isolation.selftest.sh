@@ -9,21 +9,25 @@ trap 'selftest_remove_fixture_dir "$FIX"' EXIT
 
 # Audit the setup of every suite, not just fgit: exported ceilings also protect
 # plain git -C, bare git after cd, and git launched by Node/Bun/runtime children.
-python3 - "$HERE" <<'PY'
-from pathlib import Path
-import re, sys
-root = Path(sys.argv[1])
-checked = 0
-for p in sorted(root.glob('*.selftest.sh')):
-    lines = p.read_text().splitlines()
-    for i, line in enumerate(lines):
-        m = re.match(r'(\w+)=.*selftest_make_fixture_dir.*\|\| exit 2$', line)
-        if m:
-            assert lines[i+1] == f'selftest_isolate_git "${m[1]}" || exit 2', f'{p.name}:{i+1}: missing git boundary'
-            checked += 1
-assert checked > 40, f'wrong suite directory: only {checked} fixture setups'
-print(f'PASS fixture Git boundary audit ({checked} suite setups)')
-PY
+bun - "$HERE" <<'JS'
+import fs from "node:fs";
+import path from "node:path";
+import assert from "node:assert/strict";
+const root = process.argv[2];
+let checked = 0;
+for (const name of fs.readdirSync(root).filter(name => name.endsWith(".selftest.sh")).sort()) {
+  const lines = fs.readFileSync(path.join(root, name), "utf8").split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const match = /^(\w+)=.*selftest_make_fixture_dir.*\|\| exit 2$/.exec(lines[i]);
+    if (match) {
+      assert.equal(lines[i + 1], `selftest_isolate_git "$${match[1]}" || exit 2`, `${name}:${i + 1}: missing git boundary`);
+      checked++;
+    }
+  }
+}
+assert(checked > 40, `wrong suite directory: only ${checked} fixture setups`);
+console.log(`PASS fixture Git boundary audit (${checked} suite setups)`);
+JS
 
 OUTER="$FIX/enclosing"
 mkdir -p "$OUTER/tmp"
