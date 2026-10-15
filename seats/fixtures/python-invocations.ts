@@ -65,6 +65,8 @@ const bad: [string,string,string][] = [
  ["JS template expression", "a.ts", "const text=`result ${spawnSync('python3',[])}`;"],
  ["package script", "package.json", '{"scripts":{"check":"python3 -V"}}'],
  ["document executable fence", "a.md", 'Prose.\n```bash\npython3 -V\n```\n'],
+ ["shell shebang overrides data suffix", "a.txt", "#!/bin/sh\npython3 -V\n"],
+ ["Node shebang overrides data suffix", "a.jsonl", '#!/usr/bin/env node\nrequire("node:child_process").spawnSync("python3",[]);\n'],
 ];
 const good: [string,string,string][] = [
  ["shell comment", "a.sh", "# python3 -V\nprintf ok"],
@@ -114,5 +116,8 @@ git(root,"add","seats");git(root,"commit","-q","-m","fixture source");const wt=p
 const sub=path.join(wt,"sub");fs.mkdirSync(path.join(sub,"seats"),{recursive:true});check(throws(()=>auditPythonCalls(sub),/wrong tracked root/),"worktree subdirectory is not mistaken for root");
 const corrupt=path.join(fixture,"bad-index");repo(corrupt);fs.writeFileSync(path.join(corrupt,".git","index"),"bad");const capture=spawnSync("git",["-C",corrupt,"ls-files","-z","--","seats"],{encoding:"utf8"});console.log("Native invalid-index capture: "+JSON.stringify({status:capture.status,stdout:capture.stdout,stderr:capture.stderr}));check(capture.status!==0&&throws(()=>auditPythonCalls(corrupt),/git ls-files failed/),"Git inventory failure is not empty success");
 const odd=path.join(fixture,"root with final space ");repo(odd);fs.writeFileSync(path.join(odd,"seats","bad.sh"),"python3 -V\n");git(odd,"add","seats");let oddPassed=false;try { oddPassed=auditPythonCalls(odd).errors.length===1; } catch {} check(oddPassed,"Git root whitespace is data, not display padding");
+// These are static scanner inputs, never launched as executable programs.
+const modeRoot=path.join(fixture,"file-mode");repo(modeRoot);const modeFile=path.join(modeRoot,"seats","input.txt");fs.copyFileSync(path.join(root,"seats","untracked.sh"),modeFile);fs.chmodSync(modeFile,0o755);git(modeRoot,"add","seats");check(auditPythonCalls(modeRoot).errors.length===1,"executable metadata overrides data suffix");
+const linked=path.join(fixture,"linked-source");repo(linked);const target=path.join(fixture,"linked-code.ts");fs.writeFileSync(target,bad.find(([name])=>name==="JS array API")![2]);fs.symlinkSync(target,path.join(linked,"seats","input.txt"));git(linked,"add","seats");check(auditPythonCalls(linked).errors.length===1,"data-looking tracked link audits real code target");
 const noGit=path.join(fixture,"plain-root");fs.mkdirSync(path.join(noGit,"seats"),{recursive:true});const cli=spawnSync("bun",[auditor,noGit],{encoding:"utf8"});check(cli.status===2&&cli.stderr.includes("cannot audit"),"CLI exits2 for unauditable root");
 console.log(`Python invocation guard: ${checked} checks, ${failed} failures`);process.exit(failed ? 1 : 0);
