@@ -30,6 +30,9 @@ const unsafe = [
   ["runtime selector with Node flags", `"$json_runtime" \${json_runtime_flag:+"$json_runtime_flag"} -e '${cjs}'`],
   ["shell substitution inside JS word", `bun -e "const value='$(${ 'helper "$ARG"' })'; ${cjs.replaceAll('"', '\\"')}"`],
   ["programmatic Bun template", 'const code = `' + cjs + '`; spawnSync(process.execPath, ["-e", code]);'],
+  ["programmatic literal eval", `spawnSync("bun", ["-e", '${cjs}']);`],
+  ["programmatic literal print", `spawn(process.execPath, ["-p", '${mod}']);`],
+  ["generated shell eval", 'const script = `' + cjs + '`; return `\'${process.execPath.replace(x,y)}\' -e \'${script.replace(x,y)}\'`;'],
 ];
 for (const [name, source] of unsafe) test(`guard rejects ${name}`, () => assert.equal(unsafeInline(source).length, 1));
 for (const [name, source] of [
