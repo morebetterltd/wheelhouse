@@ -2001,7 +2001,8 @@ printf 'product\n' > "$UMB_WT_PROJ/product/product.txt"
 fgit -C "$UMB_WT_PROJ/product" add product.txt
 fgit -C "$UMB_WT_PROJ/product" commit -qm "product base"
 BD_UMB_WT="$FIX/bd-umbrella-worktree.txt"
-printf 'fixture umbrella worktree bead\n\nDESCRIPTION\n\n  Repo: UMBRELLA\n' > "$BD_UMB_WT"
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$BD_UMB_WT"
+printf 'fixture umbrella worktree bead\n\nDESCRIPTION\n\n  Repo: UMBRELLA\n' >> "$BD_UMB_WT"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_SHOW_FILE="$BD_UMB_WT" bun "$UMB_WT_PROJ/seats/adapter.ts" spawn worker-1 bead-umb 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && fgit -C "$UMB_WT_PROJ" rev-parse --verify -q refs/heads/fleet/bead-umb >/dev/null \
   && ! fgit -C "$UMB_WT_PROJ/product" rev-parse --verify -q refs/heads/fleet/bead-umb >/dev/null; then
