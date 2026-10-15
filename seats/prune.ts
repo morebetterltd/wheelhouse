@@ -52,6 +52,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import { PLACEHOLDER_MARKER, phantomOnlyStatus, porcelainStatus } from "./seat-worktree";
+import { acquireCleanupLock, prepareCleanupRuntime, cleanupPathIdentity, cleanupPathUnchanged, scratchOwnership, type CleanupPathIdentity } from "./cleanup-identity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const FLEET_CONTAINER = ".wheelhouse-worktrees";
@@ -879,29 +880,6 @@ const CLEANUP_CATEGORIES = new Set(["merged-worktree", "zero-commit-worktree", "
 interface CleanupOptions { root: string; dryRun: boolean; deadline: number | null; log: string; bead: string | null; wait: number }
 
 function nowIso(): string { return new Date().toISOString().replace(/\.\d{3}Z$/, "Z"); }
-function acquireCleanupLock(root: string, waitSeconds: number): (() => void) | null {
-  const dir = path.join(root, "seats", "run", "cleanup.lock");
-  fs.mkdirSync(path.dirname(dir), { recursive: true });
-  const until = Date.now() + waitSeconds * 1000;
-  while (true) {
-    try {
-      fs.mkdirSync(dir);
-      fs.writeFileSync(path.join(dir, "pid"), `${process.pid}\n`);
-      return () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} };
-    } catch (e: any) {
-      if (e?.code !== "EEXIST") throw e;
-      let owner = 0;
-      try { owner = Number(fs.readFileSync(path.join(dir, "pid"), "utf8").trim()); } catch {}
-      if (owner && !pidAlive(owner)) { try { fs.rmSync(dir, { recursive: true, force: true }); continue; } catch {} }
-      if (!owner) {
-        // a lock dir with no pid yet: give the taker a moment; treat as stale after 10 s
-        try { if (Date.now() - fs.statSync(dir).mtimeMs > 10000) { fs.rmSync(dir, { recursive: true, force: true }); continue; } } catch {}
-      }
-      if (Date.now() >= until) return null;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
-    }
-  }
-}
 function rowIsForBead(r: Row, bead: string): boolean {
   const base = path.basename(r.path);
   return r.branch === `fleet/${bead}` || base === bead || base.startsWith(`${bead}-`) || base.startsWith(`${bead}_`);
@@ -913,6 +891,7 @@ function underAllowed(root: string, p: string): boolean {
 function makeWritable(p: string): void {
   try {
     const st = fs.lstatSync(p);
+    if (st.isSymbolicLink()) return;
     fs.chmodSync(p, st.mode | 0o200);
     if (st.isDirectory() && !st.isSymbolicLink()) for (const child of fs.readdirSync(p)) makeWritable(path.join(p, child));
   } catch {}
@@ -936,6 +915,8 @@ function cleanupPolicy(root: string): CleanupPolicy {
 
 function cleanup(o: CleanupOptions): number {
   const root = realpathOr(path.resolve(o.root)) ?? path.resolve(o.root);
+  // Validate/create runtime components by descriptor before even opening logs.
+  prepareCleanupRuntime(root);
   fs.mkdirSync(path.dirname(o.log), { recursive: true });
   const emit = (line: string) => { const l = `${nowIso()} ${line}`; console.log(l); fs.appendFileSync(o.log, l + "\n"); };
   const policy = cleanupPolicy(root);
@@ -962,9 +943,34 @@ function cleanup(o: CleanupOptions): number {
       if (pastDeadline()) { emit(`${dry}cleanup deadline reached removed=${removed} kept=${kept} bytes=${freed}`); return failed ? 1 : 0; }
       // verify again right before acting: the world may have moved since the scan
       if (!fs.existsSync(r.path)) { emit(`${dry}already removed ${r.path}`); continue; }
+      let identity: CleanupPathIdentity;
+      try { identity = cleanupPathIdentity(root, path.resolve(r.path)); }
+      catch (e: any) { emit(`${dry}kept ${r.category} ${r.path} reason=path mismatch: ${e.message}`); kept++; continue; }
+      // Git registration records worktree ownership; plain scratch needs an
+      // explicit creation record, not merely a closed-bead-looking name.
+      const expectedBead = r.category === "run-scratch" ? /^scratch belongs to closed bead (.+)$/.exec(r.reason)?.[1] : undefined;
+      let ownership: ReturnType<typeof scratchOwnership> | null = null;
+      if (r.action === "rm") {
+        try {
+          if (r.category === "run-scratch" && !expectedBead) throw new Error("cannot bind scratch to a closed bead");
+          ownership = scratchOwnership(root, identity.real, expectedBead);
+        }
+        catch (e: any) { emit(`${dry}kept ${r.category} ${r.path} reason=unproven scratch ownership: ${e.message}`); kept++; continue; }
+      }
+      const changed = () => {
+        if (!cleanupPathUnchanged(root, identity.real, identity)) return true;
+        try { return ownership !== null && JSON.stringify(scratchOwnership(root, identity.real, expectedBead)) !== JSON.stringify(ownership); }
+        catch { return true; }
+      };
+      const keepChanged = () => {
+        if (!changed()) return false;
+        emit(`${dry}kept ${r.category} ${r.path} reason=path changed during check`); kept++; return true;
+      };
       const live = liveCwds(true);
       if (live === null) { emit(`${dry}kept ${r.category} ${r.path} reason=cannot verify: lsof unavailable`); kept++; continue; }
-      const cwd = liveCwdInside(r.path, live);
+      if (!fs.existsSync(r.path)) { emit(`${dry}already removed ${r.path}`); continue; }
+      if (keepChanged()) continue;
+      const cwd = liveCwdInside(identity.real, live);
       if (cwd) { emit(`${dry}kept ${r.category} ${r.path} reason=${liveCwdReason(r.path, cwd)}`); kept++; continue; }
       const anchor = seatAnchorWithin(r.path, seatAnchors(root));
       if (anchor) { emit(`${dry}kept ${r.category} ${r.path} reason=seat-anchor: ${anchor}`); kept++; continue; }
@@ -976,21 +982,27 @@ function cleanup(o: CleanupOptions): number {
       }
       if (o.dryRun) { emit(`dry-run would remove ${r.category} ${r.path} bytes=${r.size_bytes} reason=${r.reason}`); removed++; freed += r.size_bytes; continue; }
       try {
-        makeWritable(r.path);
+        if (keepChanged()) continue;
+        const target = identity.real; // Re-derived from the pinned realpath, never the row spelling.
+        makeWritable(target);
         let tagged = "";
         if (r.action === "worktree") {
-          const sha = run("git", ["rev-parse", "HEAD"], r.path).out;
-          const tag = archiveTag(r.repo, r.path, sha);
+          const sha = run("git", ["rev-parse", "HEAD"], target).out;
+          const tag = archiveTag(r.repo, target, sha);
           if (tag) tagged = `; archived as ${tag}`;
-          const rm = run("git", ["worktree", "remove", "--force", r.path], r.repo);
+          if (keepChanged()) continue;
+          const rm = run("git", ["worktree", "remove", "--force", target], r.repo);
           if (!rm.ok) {
             if (!fs.existsSync(r.path)) { emit(`already removed ${r.path}`); continue; }
             throw new Error(rm.err || rm.out || `git worktree remove exited ${rm.code}`);
           }
-          if (fs.existsSync(r.path)) fs.rmSync(r.path, { recursive: true, force: true });
+          if (fs.existsSync(target)) {
+            if (keepChanged()) continue;
+            fs.rmSync(target, { recursive: true, force: true });
+          }
         } else {
-          if (!fs.existsSync(r.path)) { emit(`already removed ${r.path}`); continue; }
-          fs.rmSync(r.path, { recursive: true, force: true });
+          if (keepChanged()) continue;
+          fs.rmSync(target, { recursive: true, force: true });
         }
         emit(`removed ${r.category} ${r.path} bytes=${r.size_bytes} reason=${r.reason}${tagged}`);
         removed++; freed += r.size_bytes;
@@ -1039,8 +1051,10 @@ function main() {
   } else if (cmd === "cleanup") {
     if (roots.length > 1) { console.error("cleanup takes at most one --root"); process.exit(2); }
     const root = roots[0] ? path.resolve(roots[0]) : ROOT;
-    const code = cleanup({ root, dryRun, deadline: Number.isFinite(deadline as number) ? deadline : null, log: log || path.join(root, "seats", "logs", "cleanup.log"), bead, wait });
-    process.exit(code);
+    try {
+      const code = cleanup({ root, dryRun, deadline: Number.isFinite(deadline as number) ? deadline : null, log: log || path.join(root, "seats", "logs", "cleanup.log"), bead, wait });
+      process.exit(code);
+    } catch (e: any) { console.error(`REFUSED cleanup ${root}: ${e.message}`); process.exit(2); }
   } else {
     if (!from) { console.error("prune requires --from-file <reviewed scan>"); process.exit(2); }
     try { prune(parseScan(from), yes, cats); }
