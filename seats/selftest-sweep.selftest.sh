@@ -9,6 +9,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 SWEEP="${1:-$HERE/selftest-sweep.sh}"
 [ -x "$SWEEP" ] || { echo "selftest: not executable: $SWEEP" >&2; exit 2; }
 export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$HERE/selftest-sweep-lock.ts}"
+export WHEELHOUSE_SELFTEST_SWEEP_PROCESS_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_PROCESS_HELPER:-$HERE/selftest-sweep-processes.ts}"
 make_lock(){
   bun -e '
 import fs from "node:fs"; import os from "node:os"; import p from "node:path";

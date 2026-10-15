@@ -797,7 +797,7 @@ exit "${SWEEP_FIXTURE_RC:-0}"
 SH
 chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
 # Detached evidence runs only committed files: include the runner companion.
-git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/slowed.selftest.sh
+git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/selftest-sweep-processes.ts seats/slowed.selftest.sh
 git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"

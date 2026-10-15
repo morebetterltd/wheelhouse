@@ -5,7 +5,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-fleet-snapshot.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 PIDS=""
-cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
+cleanup(){ selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
@@ -47,7 +47,7 @@ EOF
 write_graph
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.readyCount!==3||s.chainedCount!==1||s.ready.find(r=>r.id==="ready-b")?.chained!==true||s.ready.find(r=>r.id==="ready-c")?.chained!==false||s.overlapCount!==2||s.reviewBacklog.length!==2||s.workers.live.length!==0||s.reviewers.live.length!==1||s.reviewers.busy!==0) process.exit(1)' && pass 'table row 1: empty graph counts ready, open-dependent chaining, overlap, backlog, reviewers' || fail "empty snapshot wrong rc=$RC out=$OUT"
 (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot, readyWorkNobodyOnIt } from "./seats/fleet-snapshot.ts"; if(!readyWorkNobodyOnIt(fleetSnapshot(process.cwd()))) process.exit(1);') && pass 'readyWorkNobodyOnIt true when ready exists and no worker is busy' || fail 'readyWorkNobodyOnIt true row failed'
-FIFO="$ROOT/seats/run/worker-1.stdin"; mkfifo "$FIFO"; (exec 3<>"$FIFO"; sleep 1000) & PIDS="$PIDS $!"; WPID=$!
+FIFO="$ROOT/seats/run/worker-1.stdin"; mkfifo "$FIFO"; (cd "$FIX" || exit 2; exec 3<>"$FIFO"; exec sleep 1000) & PIDS="$PIDS $!"; WPID=$!
 printf '%s\n' '{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}' > "$ROOT/seats/logs/worker-1.jsonl"
 cat > "$ROOT/seats/state.json" <<JSON
 {"seats":{"worker-1":{"pid":$WPID,"startedAt":"2026-01-01T00:00:00Z","fifo":"$FIFO","log":"$ROOT/seats/logs/worker-1.jsonl","lastBead":"busy-bead"}}}

@@ -2,6 +2,8 @@
 # Shared teardown helpers for wheelhouse selftests.
 # Source this file, then call selftest_cleanup_fixture_processes "$FIX" [tmux-socket...]
 # from the selftest's EXIT trap before deleting the fixture root.
+# Removal also drains fixture-owned processes, including for older traps which
+# only called selftest_remove_fixture_dir. Direct children are waited/reaped.
 
 SELFTEST_INVOCATION_PWD="${SELFTEST_INVOCATION_PWD:-$(pwd -P)}"
 
@@ -128,6 +130,7 @@ selftest_remove_fixture_dir() {
   [ "$canon" != "/" ] || selftest_fixture_refused "$canon" "refuses filesystem root" || return 2
   if selftest_path_contains "$canon" "$cwd"; then selftest_fixture_refused "$canon" "fixture would contain caller cwd $cwd" || return 2; fi
   if selftest_path_contains "$canon" "$repo"; then selftest_fixture_refused "$canon" "fixture would contain repository root $repo" || return 2; fi
+  selftest_cleanup_fixture_processes "$canon" || return 2
   rm -rf "$canon"
 }
 
@@ -184,11 +187,17 @@ selftest_cleanup_fixture_processes() {
     tmux -L "$sock" kill-server >/dev/null 2>&1 || true
   done
 
+  local fixture_children=""
   pids="$(selftest_fixture_processes "$root" | awk '{print $1}' | tr '\n' ' ')"
+  fixture_children="$pids"
   [ -n "$pids" ] && kill $pids >/dev/null 2>&1 || true
   sleep 0.2
   pids="$(selftest_fixture_processes "$root" | awk '{print $1}' | tr '\n' ' ')"
   [ -n "$pids" ] && kill -9 $pids >/dev/null 2>&1 || true
+  fixture_children="$fixture_children $pids"
+  # wait accepts only our own children; detached descendants are checked below.
+  # Preserve the first snapshot too: TERM may have removed them from the second.
+  for fixture_pid in $fixture_children; do wait "$fixture_pid" 2>/dev/null || true; done
   sleep 0.1
 
   leaks="$(selftest_fixture_processes "$root" || true)"

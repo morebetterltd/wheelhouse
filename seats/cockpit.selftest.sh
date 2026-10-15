@@ -351,7 +351,7 @@ if [ -n "$SUPERVISOR_PID" ] && kill -0 "$SUPERVISOR_PID" 2>/dev/null && grep -Eq
 else
   fail "cockpit did not start/verify supervisor (pid=${SUPERVISOR_PID:-none} out=$(cat "$FIX/cockpit.out" 2>/dev/null))"
 fi
-(sleep 1000) & LEGACY_WD=$!
+(cd "$FIX" && exec sleep 1000) & LEGACY_WD=$!
 printf '%s\n' "$LEGACY_WD" > "$PROJ/seats/run/desk-watchdog.pid"
 run_cockpit
 if ! kill -0 "$LEGACY_WD" 2>/dev/null && grep -q 'legacy desk watchdog stopped: pid' "$FIX/cockpit.out"; then
