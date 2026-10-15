@@ -1,0 +1,22 @@
+node:fs:561
+  return binding.open(
+                 ^
+
+Error: ENOENT: no such file or directory, open '<bead-run>/final-removed-diagnostics-tmp/wheelhouse-concurrency-selftest.42192.S6rmim/home/.pi-seats-can-exit/worker-a/stub-launch.json'
+    at Object.openSync (node:fs:561:18)
+    at Object.readFileSync (node:fs:445:35)
+    at [eval]:1:58
+    at runScriptInThisContext (node:internal/vm:209:10)
+    at node:internal/process/execution:446:12
+    at [eval]-wrapper:6:24
+    at runScriptInContext (node:internal/process/execution:444:60)
+    at evalFunction (node:internal/process/execution:279:30)
+    at evalTypeScript (node:internal/process/execution:291:3)
+    at node:internal/main/eval_string:74:3 {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '<bead-run>/final-removed-diagnostics-tmp/wheelhouse-concurrency-selftest.42192.S6rmim/home/.pi-seats-can-exit/worker-a/stub-launch.json'
+}
+
+Node.js v22.21.0

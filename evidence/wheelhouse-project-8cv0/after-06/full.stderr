@@ -1,0 +1,11 @@
+selftest-sweep: waiting for host-wide lock /private/tmp/wheelhouse-selftest-sweep.lock held by pid=80248 started=2026-10-15T10:11:56Z
+Automatic merge went well; stopped before committing as requested
+Automatic merge went well; stopped before committing as requested
+Automatic merge went well; stopped before committing as requested
+Automatic merge went well; stopped before committing as requested
+Automatic merge went well; stopped before committing as requested
+rm: <bead-run>/after-06/tmp/wheelhouse-staffing-live.hSSQtW/canary-herald: Directory not empty
+rm: <bead-run>/after-06/tmp/wheelhouse-staffing-live.hSSQtW/project: Directory not empty
+rm: <bead-run>/after-06/tmp/wheelhouse-staffing-live.hSSQtW: Directory not empty
+From <bead-run>/after-06/tmp/wheelhouse-upgrade-selftest.R4fcrZ/reused-cache-source
+   1b68ce3..7fd3f38  main       -> origin/main
