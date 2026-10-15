@@ -42,7 +42,6 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-walk-selftest.$$.XX
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
-export GIT_CEILING_DIRECTORIES="$FIX"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
@@ -169,6 +168,19 @@ run_clocked(){
   rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$CLOCK" drive "$proj/seats/walk.ts" "$CLOCK_DIR" "$mode" "$@" 2>&1) || rc=$?
 }
 
+assert_clock_budget(){
+  local expected="$1"
+  if bun - "$CLOCK_DIR/armed" "$expected" <<'TS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const armed=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+assert.equal(armed.kind,'walk','armed clock belongs to the verifier spawn');
+assert.equal(armed.budget,Number(process.argv[3]),'armed verifier budget must equal WHEELHOUSE_WALK_TIMEOUT_MS');
+console.log(`armed verifier budget ${armed.budget} equals env ${process.argv[3]}`);
+TS
+  then pass "verifier spawn receives env budget $expected"
+  else fail "verifier spawn armed budget differs from env $expected"; fi
+}
+
 phase 'captured malformed GUI output: match the actual verdict line, not other text'
 if bun - "$CLOCK" "$HERE/fixtures/walk/gui-malformed-output.txt" <<'TS'
 import fs from 'node:fs';import assert from 'node:assert/strict';
@@ -229,7 +241,7 @@ run_stream_case(){
   local proj="$FIX/proj-stream-$name" outdir="$FIX/out-stream-$name" ns="walk-stream-$name" out rc
   build_proj "$proj" "$ns"
   if [ "$harness" != pi ]; then
-    bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='$harness'; j.seats.verifier.provider='$([ "$harness" = claude-code ] && printf anthropic || printf openai-codex)'; j.seats.verifier.model='stream-fixture'; j.seats.verifier.account.authRoute='$([ "$harness" = claude-code ] && printf oauth || printf env)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+    bun -e "const fs=(await import('node:fs')).default; const p='$proj/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='$harness'; j.seats.verifier.provider='$([ "$harness" = claude-code ] && printf anthropic || printf openai-codex)'; j.seats.verifier.model='stream-fixture'; j.seats.verifier.account.authRoute='$([ "$harness" = claude-code ] && printf oauth || printf env)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
   fi
   if [ "$harness" = claude-code ]; then
     rm -f "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
@@ -270,7 +282,7 @@ if grep -q "$proj/seats/bin" "$HOME_FIX/.pi-seats-$ns/verifier/env.json" 2>/dev/
 
 phase 'mixed harness verifier walks use the selected driver'
 proj="$FIX/proj-mixed-walk"; ns="walk-mixed"; build_proj "$proj" "$ns"
-bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "const fs=(await import('node:fs')).default; const p='$proj/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
 printf '{"oauthAccount":{"accountUuid":"fixture-oauth"}}\n' > "$HOME_FIX/.pi-seats-$ns/verifier/.claude.json"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-claude" 2>&1) || rc=$?
@@ -278,11 +290,11 @@ if [ "$rc" -eq 0 ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-$ns/verif
 if grep -q '"--output-format","stream-json"' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && grep -q '"--verbose"' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot requests stream-json output with --verbose'; else fail "claude-code walk one-shot missing stream-json/--verbose argv: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
 if grep -q 'Fixture walker brief' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" && ! grep -q 'contracts/VERIFIER.md' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot carries verifier brief text, not the path'; else fail "claude-code walk one-shot carried path or missed brief text: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
 if ! grep -q -- 'permission-mode\|allowed-tools\|disallowed-tools' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot omits tool permission flags when the seat has no tool lists'; else fail "claude-code walk one-shot unexpectedly carried tool permission flags: $(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null)"; fi
-bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "const fs=(await import('node:fs')).default; const p='$proj/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-claude-tools" 2>&1) || rc=$?
 if [ "$rc" -eq 0 ] && bun -e '
-  const fs = require("fs");
+  const fs = (await import("node:fs")).default;
   const args = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const flagAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 && /^--/.test(args[i+2] ?? ""); };
   if (args.at(-1).startsWith("--")) process.exit(1);
@@ -290,7 +302,7 @@ if [ "$rc" -eq 0 ] && bun -e '
   if (!flagAfter("--allowed-tools") || !flagAfter("--disallowed-tools")) process.exit(3);
   if (args.indexOf("--allowed-tools") > args.indexOf("--model") || args.indexOf("--disallowed-tools") > args.indexOf("--model")) process.exit(4);
 ' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot passes tool lists before --model with a following flag and prompt last'; else fail "claude-code walk one-shot tool-list argv order wrong (rc=$rc argv=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null))"; fi
-bun -e "const fs=require('fs'); const p='$proj/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "const fs=(await import('node:fs')).default; const p='$proj/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/env.json"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-codex" 2>&1) || rc=$?
@@ -343,6 +355,7 @@ phase 'stdin-reading verifier receives EOF immediately'
 proj="$FIX/proj-stdin"; ns="walk-stdin"; build_proj "$proj" "$ns"
 # One tick of fixture time; no real deadline. The driver keeps caller stdin open.
 WHEELHOUSE_WALK_TIMEOUT_MS=1 STUB_READ_STDIN_TO_EOF=1 STUB_REPLY=$'VERDICT: WALKED-DONE\n' run_clocked eof 'claim' --surface product:fixture --out "$FIX/out-stdin"
+assert_clock_budget 1
 [ "$rc" -eq 0 ] && pass 'stdin-reading verifier exits 0' || fail "stdin-reading verifier rc=$rc output=$out"
 printf '%s\n' "$out" | grep >/dev/null 'VERDICT: WALKED-DONE' && pass 'stdin-reading verifier walk completes with a verdict' || fail "stdin-reading verifier missing verdict: $out"
 [ -f "$CLOCK_DIR/readiness-observed" ] && [ -f "$CLOCK_DIR/eof" ] && [ ! -e "$CLOCK_DIR/expired" ] && pass 'stdin EOF is observed after readiness with caller pipe still open, without expiring a clock' || fail "stdin EOF handshake missing: $out"
@@ -350,6 +363,7 @@ printf '%s\n' "$out" | grep >/dev/null 'VERDICT: WALKED-DONE' && pass 'stdin-rea
 phase 'timeout names phase and honors per-walk budget env'
 proj="$FIX/proj-timeout"; ns="walk-timeout"; build_proj "$proj" "$ns"
 WHEELHOUSE_WALK_TIMEOUT_MS=200 STUB_REPLY=$'working before timeout\nVERDICT: WALKED-DONE\n' run_clocked timeout 'claim' --surface product:fixture --out "$FIX/out-timeout"
+assert_clock_budget 200
 [ "$rc" -eq 3 ] && pass 'timeout exits as COULD-NOT-WALK (3)' || fail "timeout rc=$rc output=$out"
 printf '%s\n' "$out" | grep >/dev/null 'VERDICT: COULD-NOT-WALK — timed out after 200ms during run verifier walk' && pass 'timeout verdict names budget and phase' || fail "timeout did not name budget/phase: $out"
 if grep -q '"phase": "run verifier walk"' "$FIX/out-timeout/walk.json" && grep -q 'timed out after 200ms during run verifier walk' "$FIX/out-timeout/walk.json"; then pass 'timeout metadata records phase'; else fail "timeout metadata missing phase: $(cat "$FIX/out-timeout/walk.json" 2>/dev/null)"; fi
