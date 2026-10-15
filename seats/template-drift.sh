@@ -9,7 +9,7 @@ SRC_FILE="$ROOT/wheelhouse/.template-source"
 FORKS_FILE="$ROOT/wheelhouse/.template-forks"
 
 # Keep the original JSON wire format, including ASCII escapes for Unicode.
-json_escape() { bun -e 'const fs=require("fs"); const s=JSON.stringify(fs.readFileSync(0,"utf8").replace(/\n+$/, "")); process.stdout.write(s.replace(/[\u007f-\uffff]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0"))+"\n");'; }
+json_escape() { bun -e 'const fs=(await import("node:fs")).default; const s=JSON.stringify(fs.readFileSync(0,"utf8").replace(/\n+$/, "")); process.stdout.write(s.replace(/[\u007f-\uffff]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0"))+"\n");'; }
 fail_compare() {
   msg="$1"
   if [ "$JSON" = 1 ]; then printf '{"error":%s,"modified":[],"localOnly":[],"missing":[],"aheadBy":null,"comparedAgainst":null}\n' "$(printf '%s' "$msg" | json_escape)"; else printf 'DRIFT: cannot compare (%s)\n' "$msg"; fi

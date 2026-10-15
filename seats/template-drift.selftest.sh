@@ -109,7 +109,7 @@ local project half
 EOF
 run; [ $RC -eq 1 ] && grep -q '^MODIFIED wheelhouse/crew/WORKER.md$' <<<"$OUT" && pass 'contract-half changes report MODIFIED' || fail "contract-half failed rc=$RC out=$OUT"
 run_json; [ $RC -eq 1 ] && bun -e '
-const assert=require("assert/strict"), j=JSON.parse(require("fs").readFileSync(0,"utf8"));
+const assert=(await import("node:assert/strict")).default, j=JSON.parse((await import("node:fs")).default.readFileSync(0,"utf8"));
 assert.ok(j.modified.includes("wheelhouse/crew/WORKER.md"));
 assert.ok(Array.isArray(j.localOnly)&&Array.isArray(j.missing));
 assert.ok(j.comparedAgainst);
@@ -125,7 +125,7 @@ run; [ $RC -eq 3 ] && grep -q '^DRIFT: cannot compare' <<<"$OUT" && pass 'unreac
 BROKEN="$FIX/template-drift-nosplit.sh"
 cp "$SCRIPT" "$BROKEN"
 bun - "$BROKEN" <<'JS'
-const fs=require('fs'), p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
+const fs=(await import('node:fs')).default, p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
 for(const [old,replacement] of [
   [`split_contract() { awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}' "$1"; }`, 'split_contract() { cat "$1"; }'],
   [`if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null | awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}'`, 'if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null']
