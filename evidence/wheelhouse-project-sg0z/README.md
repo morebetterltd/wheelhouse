@@ -1,5 +1,10 @@
 # sg0z evidence
 
+**Latest gate:** [after-1c/README.md](after-1c/README.md) records the rebase
+onto main `1c63d01`, runtime `d7ec128`, and exact 49/49 PASS full sweep.
+[bounce/README.md](bounce/README.md) retains the serial review comparisons.
+The sections below are historical pinned 6cb9dc9/main and producer-overlay evidence.
+
 ## Candidate and scope
 
 The main candidate was rebased onto `6cb9dc9c2208d8baabb129a1f88fa8f06fd0d5d9`.
