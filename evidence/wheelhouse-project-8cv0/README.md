@@ -51,21 +51,47 @@ perl -MPOSIX=setsid -e 'setsid or die; exec @ARGV or die' \
   archive differs in exactly its one intentional file. The two `.patch` files
   are zero-context controls (`git apply --unidiff-zero`).
 
-**Full official gate is INCOMPLETE, not green.** The official dual-lock bridge
-was launched at 21:32 EDT. It remained queued behind canonical-lock owners;
-no inner suite started. At 22:33, after the late-start cutoff, only the
-validated owned outer runner was sent TERM. Exit **143**; actual inner
-START/PASS/FAIL inventories are **0/0/0** of the expected 48. Umbrella safety
-PASS with **three permitted commander reflog entries**. `full.*`,
-`full-status.json` and `queued-stop.*` retain the outcome and ownership checks.
-The explicit 23:00 guard subsequently reported completion and sent no signals.
-Commander agreed to the cancellation and checkpoint for resumption after 06:00.
-`needs-review` remains unset; see `RESUME.md`.
+**Morning full official gate PASSED: 48/48, exit 0.** The fresh dual-lock
+runner launched at 06:12 EDT on received checkpoint `b66bc8d`, whose `seats/`
+tree equals runtime `34c1c34`. It remained queued without bypassing owners;
+actual inner execution began at 07:47 EDT; exit 0 was validated at 08:07.
+`after-06/full.*` retains separate stdout/stderr/exit and umbrella snapshots.
+Safety PASS with **one permitted commander commit**, no unsafe worktree mutation.
+The standalone and removal-control results above apply to the same unchanged
+runtime; they have not been relabeled as runs on a different source tree.
 
-`assert-sweep.cjs` is prepared for exact tracked START/PASS inventory checks,
-bridge receipts, aggregate consistency, exit and safety. It has **not** been
-validated against a completed 8cv0 full capture; its positive/missing-PASS
-control remains part of the resumed gate, not evidence claimed here.
+`after-06/inventory-check.json` verifies exact **48 START / 48 PASS / 0 FAIL**,
+unique tracked inventory, one bridge START/PASS, aggregates `[48,1]`, exit 0
+and safety PASS. Validator command:
+
+```sh
+node evidence/wheelhouse-project-8cv0/assert-sweep.cjs \
+  evidence/wheelhouse-project-8cv0/after-06/full.stdout \
+  evidence/wheelhouse-project-8cv0/after-06/suite-inventory.txt \
+  evidence/wheelhouse-project-8cv0/after-06/full.exit \
+  evidence/wheelhouse-project-8cv0/after-06/full.stderr
+```
+
+Positive validator **exit 0**. Removing only the unique real concurrency PASS
+receipt makes the SAME validator **exit 1** (`PASS inventory differs`) while
+both green aggregates remain unchanged; see `after-06/receipt-control.*`.
+
+**Cleanup warning disclosed, not hidden by exit 0:** retained full stderr
+contains staffing-live `Directory not empty` warnings. Native PID/start/argv
+and cwd captures identified exactly two owned fixture heralds, 30527/32971,
+born 08:03 under this run's `wheelhouse-staffing-live.hSSQtW`. After the gate,
+only those validated owned processes received TERM; subsequent native `ps`
+exited 1 with empty stdout/stderr. `after-06/owned-*` retains evidence. This
+is **manual post-gate cleanup, not automatic cleanup**. Commander identified
+it as the existing m4s6 fix's scope and authorized only these owned stops.
+No staffing/herald runtime edit or production/other-worker signal occurred.
+
+**Historical canceled attempt remains INCOMPLETE:** root `full.*`,
+`full-status.json` and `queued-stop.*` are the previous evening's exit 143,
+zero inner-suite starts, safety PASS/three permitted commander commits.
+They remain unchanged and are not counted as a pass. The explicit 23:00 guard
+observed that cancellation and sent no signals. `RESUME.md` now records the
+completed restart rather than requesting another gate.
 
 The wrapper snapshots umbrella HEAD, complete reflog and the tracked HEAD diff
 (excluding only `.beads/interactions.jsonl`). It accepts genuine commander

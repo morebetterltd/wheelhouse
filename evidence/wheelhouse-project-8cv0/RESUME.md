@@ -1,43 +1,29 @@
-# Resume 8cv0 only after 06:00 local
+# Morning restart completed — 2026-10-15
 
-This is a checkpoint, NOT a completed bead or review handoff. `needs-review`
-is unset. Commander explicitly accepted pausing the queued sweep.
+The overnight checkpoint was received at `b66bc8d`. Its source still equals
+runtime `34c1c34f04621fa4687de63ad24a8ba10617ae77`; no rebase or runtime
+change occurred during the morning restart.
 
-Branch: `fleet/wheelhouse-project-8cv0`, originally cut from `origin/main`
-`c8d156f5c61dc65784110902b4b8eb143c3944d1`.
-Tested runtime: `34c1c34f04621fa4687de63ad24a8ba10617ae77`.
-Evidence-only commits leave its `seats/` tree unchanged.
+The fresh official dual-domain full sweep completed **48/48 PASS, exit 0**.
+Exact inventory validator exits 0; deleting only the real concurrency PASS
+receipt makes it exit 1 despite unchanged green aggregates. Evidence and
+separate stdout/stderr/exit are in `after-06/`; see README.md.
 
-The clean asynchronous setsid standalone exits 0. Removing only the fixture
-release hold exits 1; removing only native exit-record publication exits 1.
-The original initial launch death remains unexplained. Commander accepted
-instrumentation, with follow-up only if an instrumented occurrence catches it.
-The separate state-lock timeout investigation is `wheelhouse-project-woq6`;
-no state-lock runtime changes belong in this branch.
+The previous queued/canceled attempt remains retained as exit143/zero inner
+starts, not a pass. No queued-run or canceled-run result was relabeled.
 
-The official full attempt was canceled while QUEUED at 22:33 EDT: exit143,
-zero inner-suite STARTs of 48. It is neither a pass nor a natural test failure.
-Only the validated owned official outer runner received TERM. Safety PASS;
-three permitted commander reflog entries. The 23:00 guard observed completion
-and sent no signals. Do not overwrite these captures or count them as a gate.
+The original initial launch death is still unexplained. Commander accepted
+instrumentation, with follow-up only if a new instrumented occurrence catches
+it. State-lock timeouts remain split to `wheelhouse-project-woq6`; no state-lock
+runtime change is in this branch.
 
-After resumption, confirm the current ref is this branch and equals HEAD,
-inspect current main and commander instructions, and compare `HEAD:seats`
-with the recorded runtime. If rebasing/changing runtime, preserve the old
-capture provenance and rerun standalone plus both single-file removal controls
-at the new runtime; do not silently relabel the existing results.
+The passing old-base sweep also emitted staffing-live cleanup warnings and
+left two owned fixture heralds. Only those validated owned processes received
+post-gate TERM, with native gone checks retained. This is not an automatic
+cleanup claim. Commander routed that scope to m4s6; staffing/herald code was
+not changed.
 
-Run a fresh full gate through `bash seats/selftest-sweep.sh`, not a hand-made
-suite loop. Keep the approved dual-domain bridge while needed; all scratch
-roots and logs belong under this bead's `.wheelhouse-runs/` directory. Keep
-`seats/bin` on PATH, owned TMPDIR/Git ceilings, real-provider skip, independent
-stdout/stderr/exit capture and umbrella protection. Use a NEW run name (for
-example `full-after-06`) so the canceled `full.*` remains intact.
-
-Verify exact unique START/PASS inventories against the committed tree, not
-just the aggregate. The prepared `assert-sweep.cjs` still needs a real positive
-capture and a control deleting only one actual PASS receipt, which must fail
-while leaving the aggregate unchanged. Update evidence/README and retain
-source identity/redaction/whitespace/branch-tip checks against the final
-committed tree. Post a Done-by-Done report, request exact-tip receipt, then
-add `needs-review`. Do not close, merge or push.
+The branch is now ready for the evidence-backed review handoff. Do not rerun
+solely because this historical filename says RESUME. A future rebase/runtime
+change requires new source-appropriate gates; do not relabel these captures.
+No push, merge or bead close was performed.
