@@ -1,0 +1,20 @@
+{
+  "reason": "bounded stalled first standalone adapter attempt before leg 2a",
+  "processes": {
+    "34198": [
+      34165,
+      "08:48",
+      "bash [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/sg0z/source/seats/adapter.selftest.sh"
+    ],
+    "39015": [
+      34198,
+      "08:40",
+      "bash [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/sg0z/source/seats/adapter.selftest.sh"
+    ],
+    "39016": [
+      39015,
+      "08:40",
+      "bun [home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-sg0z/bounce-comparison/sg0z/enclosing-tmp-repo/tmp/wheelhouse-adapter-selftest.34198.xSIFcL/claude-proj/seats/adapter.ts dispatch worker-1 bead-y tools hello claude"
+    ]
+  }
+}

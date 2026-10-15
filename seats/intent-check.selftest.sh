@@ -8,8 +8,10 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 CHECK="$SCRIPT_DIR/intent-check.sh"
 TMPBASE=${TMPDIR:-/tmp}
 FIXTURE=$(selftest_make_fixture_dir "$TMPBASE/wheelhouse-intent-check-selftest.$$.XXXXXX") || exit 2
+selftest_isolate_git "$FIXTURE" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${FIXTURE:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIXTURE"; }
 trap cleanup EXIT HUP INT TERM
+selftest_disable_bd_metrics "$FIXTURE" || exit 2
 
 pass_count=0
 
@@ -68,7 +70,7 @@ new_bead() {
   title=$2
   desc=$3
   ( cd "$dir" && bd create "$title" -d "$desc" --json ) |
-    sed -n 's/^[[:space:]]*"id": "\([^"]*\)".*/\1/p' | head -1
+    sed -n 's/^[[:space:]]*"id": "\([^"]*\)".*/\1/p' | sed -n '1p'
 }
 
 # 1. Clean state passes.

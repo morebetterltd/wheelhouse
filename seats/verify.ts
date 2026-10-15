@@ -86,7 +86,7 @@ import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool } from "./pool";
-import { liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
+import { finalAssistantText, liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -136,9 +136,9 @@ function assertHostBuildLockAvailable(): void {
  *
  * Detached at a commit object (`<tip>^{commit}` for verify, `HEAD^{commit}` for
  * verifier walks) so git never creates a branch named by the reviewed SHA.
- * The checked-out content is never read by anyone; the worktree exists
- * only so a stray write has somewhere harmless to land, and so `git`
- * commands run from inside it resolve at all. Removed on every exit path
+ * The checked-out content isolates reviewer searches and dispatcher-run
+ * suites at the pinned SHA; stray writes have somewhere harmless to land.
+ * Removed on every exit path
  * via `process.on("exit", ...)`, which still fires synchronous cleanup
  * when `die()` calls `process.exit()` mid-run. The one path that skips
  * "exit" — a SIGKILL of the dispatcher — is handled by
@@ -1051,6 +1051,98 @@ function sourceAccessPromptLines(snapshots: SourceSnapshot[]): string[] {
   ];
 }
 
+interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; error?: string }
+
+function claimRequiresFullSweep(claim: string): boolean {
+  return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
+}
+
+async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
+  if (!claimRequiresFullSweep(claim)) return { required: false, rc: null, logPath: null, elapsedMs: 0, tip };
+  // Separate from the reviewer's cwd: no writable graph or bd wrapper reaches
+  // that process. Suites create their OWN fixture graphs, not one redirected
+  // global graph (which would invalidate graph-isolation selftests).
+  const scratchCwd = makeScratchCwd(repoRoot, "review", tip);
+  const logDir = path.join(VERDICTS_DIR, "sweeps");
+  fs.mkdirSync(logDir, { recursive: true });
+  const logPath = path.join(logDir, `${tip}.${process.pid}.${Date.now()}.selftest-sweep.log`);
+  const started = Date.now();
+  // Keep logical and physical cwd consistent for sweep child processes.
+  const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1" };
+  for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN"]) delete env[key];
+  const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
+  if (actualTip !== tip) die(`sweep scratch tip ${actualTip} differs from reviewed tip ${tip}`);
+  fs.writeFileSync(logPath, `tip=${actualTip}\ncommand=bash seats/selftest-sweep.sh\nWHEELHOUSE_SKIP_REAL_PI=1 (hermetic suites; no live login borrowed)\n`);
+  let rc = 1;
+  let error: string | undefined;
+  try {
+    if (!realBd) throw new Error("bd is required for writable scratch fixture graphs");
+    // bd init in a linked worktree can select its shared ancestor graph;
+    // it can also commit setup files. Keep both operations in a fresh nested
+    // primary repository, then expose only that graph at the sweep root.
+    const graphRoot = path.join(scratchCwd, ".wheelhouse-sweep-graph");
+    fs.mkdirSync(graphRoot);
+    execFileSync("git", ["init", "--quiet", graphRoot], { env, stdio: "pipe" });
+    const graphDir = path.join(graphRoot, ".beads");
+    const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graphRoot, encoding: "utf8", env: { ...env, PWD: graphRoot, BEADS_DIR: graphDir } });
+    if (init.status !== 0) throw new Error(`scratch bd init failed: ${init.stderr || init.stdout}`);
+    fs.symlinkSync(graphDir, path.join(scratchCwd, ".beads"), "dir");
+    const located = spawnSync(realBd, ["where", "--json"], { cwd: scratchCwd, encoding: "utf8", env });
+    if (located.status !== 0 || fs.realpathSync(JSON.parse(located.stdout).path) !== fs.realpathSync(graphDir)) {
+      throw new Error("sweep bd did not resolve its owned scratch graph");
+    }
+    const preparedTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
+    if (preparedTip !== tip) throw new Error(`sweep setup changed reviewed tip from ${tip} to ${preparedTip}`);
+    fs.appendFileSync(logPath, `preparedTip=${preparedTip}\nscratchGraph=isolated nested repository\n`);
+    // Select the real binary without removing host-budget shims from PATH.
+    const bin = path.join(scratchCwd, ".wheelhouse-sweep-bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "bd"), `#!/usr/bin/env bash\nexec ${JSON.stringify(realBd)} "$@"\n`, { mode: 0o755 });
+    env.PATH = `${bin}${path.delimiter}${basePath}`;
+    const fd = fs.openSync(logPath, "a");
+    try {
+      // No wall-clock/model-command timeout: the runner owns H4 and waits for
+      // its turn. Stream directly to disk even during a long lock wait.
+      rc = await new Promise<number>((resolve) => {
+        const child = spawn("bash", ["seats/selftest-sweep.sh"], { cwd: scratchCwd, env, stdio: ["ignore", fd, fd] });
+        const stop = () => { child.kill("SIGTERM"); };
+        process.prependOnceListener("SIGTERM", stop);
+        process.prependOnceListener("SIGINT", stop);
+        const finish = (code: number) => {
+          process.removeListener("SIGTERM", stop);
+          process.removeListener("SIGINT", stop);
+          resolve(code);
+        };
+        child.once("error", (e) => { error = e.message; finish(1); });
+        child.once("close", (code) => finish(code ?? 128));
+      });
+    } finally { fs.closeSync(fd); }
+  } catch (e: any) { error = e.message; }
+  try {
+    const finalTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
+    fs.appendFileSync(logPath, `finalTip=${finalTip}\n`);
+    if (finalTip !== tip) { rc = 1; error = `sweep changed reviewed tip from ${tip} to ${finalTip}`; }
+  } catch (e: any) { rc = 1; error = e.message; }
+  const elapsedMs = Date.now() - started;
+  fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
+  removeScratchWorktree(repoRoot, scratchCwd);
+  return { required: true, rc, logPath, elapsedMs, tip, error };
+}
+
+function sweepPromptLines(sweep: SweepResult): string[] {
+  if (!sweep.required) return [];
+  return [
+    ``,
+    `Full selftest sweep run by the dispatcher at the exact reviewed tip before this verifier spawn:`,
+    `- tip: ${sweep.tip}`,
+    `- command: bash seats/selftest-sweep.sh`,
+    `- rc: ${sweep.rc}`,
+    `- log: ${sweep.logPath}`,
+    `- elapsedMs: ${sweep.elapsedMs}`,
+    `This sweep ran outside your model command timeout, in the detached scratch worktree for the reviewed tip, with a writable scratch bd graph when bd was available. You must cite rc=${sweep.rc} and the exact log path in your final evidence. If rc is not 0, do not approve the full-sweep portion of Done.`,
+  ];
+}
+
 function sectionByHeading(text: string, heading: string): string | null {
   const lines = text.split(/\r?\n/);
   const start = lines.findIndex((line) => line.trim() === heading);
@@ -1234,9 +1326,13 @@ async function main(): Promise<void> {
   // makeScratchCwd() above and seats/README.md, "Verifying a branch" for
   // the full reasoning.
   assertHostBuildLockAvailable();
+  const basePath = hostBudgetPath(ROOT);
+  const realBd = findOnPath("bd", basePath) ?? "";
   const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
+  const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);
+  const sweepPrompt = sweepPromptLines(sweep);
 
   // --- the one-shot ---------------------------------------------------------
   const prompt = [
@@ -1251,6 +1347,7 @@ async function main(): Promise<void> {
     claim,
     ...evidencePrompt,
     ...sourcePrompt,
+    ...sweepPrompt,
     ...pushAuthorityPromptLines(ROOT),
     ``,
     `Verify whether the bead's stated done holds at that SHA, per your brief.`,
@@ -1272,8 +1369,6 @@ async function main(): Promise<void> {
   const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
 
   const startedAt = Date.now();
-  const basePath = hostBudgetPath(ROOT);
-  const realBd = findOnPath("bd", basePath) ?? "";
   const oneShotPath = readonlyBdPath(ROOT, basePath, scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
@@ -1400,6 +1495,12 @@ async function main(): Promise<void> {
     );
   }
 
+  if (sweep.required) {
+    if (verdict === "APPROVE" && sweep.rc !== 0) die(`APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}`);
+    const evidenceText = finalAssistantText(stdout, verifierHarness);
+    if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath!)) die(`verifier must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
+  }
+
   // --- record, then report --------------------------------------------------
   fs.mkdirSync(VERDICTS_DIR, { recursive: true });
   const verdictFile = path.join(VERDICTS_DIR, `${beadId}.md`);
@@ -1440,6 +1541,18 @@ async function main(): Promise<void> {
           `## Read-only source snapshots`,
           ``,
           ...sourceSnapshots.map((s) => `- ${s.original} — mounted read-only at ${s.mountedAt} (${s.bytes} bytes copied)`),
+        ]
+      : []),
+    ...(sweep.required
+      ? [
+          ``,
+          `## Dispatcher full-sweep result`,
+          ``,
+          `- tip: ${sweep.tip}`,
+          `- command: bash seats/selftest-sweep.sh`,
+          `- rc: ${sweep.rc}`,
+          `- log: ${sweep.logPath}`,
+          `- elapsedMs: ${sweep.elapsedMs}`,
         ]
       : []),
     ``,

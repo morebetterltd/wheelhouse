@@ -99,7 +99,7 @@ sweep_stale_fixtures() {
     while IFS= read -r sf; do
       [ -f "$sf" ] || continue
       for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
+        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
           kill "$pid" 2>/dev/null
           echo "swept: killed leaked seat pid $pid (held open files under $d)"
         fi
@@ -113,7 +113,20 @@ sweep_stale_fixtures() {
 sweep_stale_fixtures
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+# Dispatch must pass the real contract gate too (fleet/producer enables it).
+export WHEELHOUSE_CONTRACT_FIXTURE="$FIX/dispatch-contract.md"
+cat > "$WHEELHOUSE_CONTRACT_FIXTURE" <<'CONTRACT'
+Trace: adapter protocol selftest
+Intent:
+Keep fixture dispatches exercising the adapter protocol and worktree lifecycle.
+Outcomes:
+- O1 The fixture seat receives the dispatched prompt.
+  consumer: machine — the selftest runner
+  surface: fixture seat event log and worktree
+  check: run — dispatch and assert the recorded prompt, state and branch
+CONTRACT
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
@@ -367,7 +380,7 @@ git_init_fixture_repo() {   # $1 = project dir, $2 = seat namespace (names the b
 }
 seat_wt() { printf '%s/.wheelhouse-worktrees/%s' "$1" "${2:-worker-1}"; }   # $1 = project dir, $2 = seat
 wt_registered() {   # $1 = project dir, $2 = worktree path — true when git lists it
-  fgit -C "$1" worktree list --porcelain 2>/dev/null | grep -qx "worktree $2"
+  fgit -C "$1" worktree list --porcelain 2>/dev/null | grep -x >/dev/null "worktree $2"
 }
 wt_branch() { fgit -C "$1" branch --show-current 2>/dev/null; }   # $1 = worktree path
 state_get_in() {   # $1 = state.json, $2 = field, $3 = seat (default worker-1)
@@ -446,6 +459,11 @@ LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launche
 [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ] && pass 'contract refusal: no process spawned' || fail 'contract refusal: a harness process was spawned'
 if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 RUN_PROJ="$PROJ"
+phase "0a0. state lock recovers abandoned incomplete writers without stealing live owners"
+mkdir -p "$FIX/state-lock-cases"
+if bun "$HERE/fixtures/adapter-state-lock.ts" "$ADAPTER" "$FIX/state-lock-cases"; then
+  pass "state lock recovery, grace, open/live owners, safe release and atomic publication"
+else fail "adapter state-lock regression failed"; fi
 
 phase "0a. launch paths validate the whole roster before choosing a seat"
 BAD_ROSTER_PROJ="$FIX/bad-roster-proj"
@@ -535,7 +553,7 @@ live_cwd_for_pid() {
   local pid="$1"
   [ -n "$pid" ] || return 0
   if command -v lsof >/dev/null 2>&1; then
-    lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
+    lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p'
   elif [ -e "/proc/$pid/cwd" ]; then
     readlink "/proc/$pid/cwd"
   fi
@@ -564,7 +582,7 @@ wait_for() {   # $1 = file, $2 = substring, $3 = seconds
 wait_for_from() {   # $1 = file, $2 = byte offset, $3 = substring, $4 = seconds
   local i=0 max=$((${4:-10} * 10))
   while [ $i -lt $max ]; do
-    [ -f "$1" ] && tail -c +"$(($2 + 1))" "$1" 2>/dev/null | grep -q "$3" && return 0
+    [ -f "$1" ] && tail -c +"$(($2 + 1))" "$1" 2>/dev/null | grep >/dev/null "$3" && return 0
     sleep 0.1; i=$((i + 1))
   done
   return 1
@@ -994,8 +1012,8 @@ if [ $RC -eq 0 ] && [ "$(node -e 'const s=require(process.argv[1]).seats["worker
 codex_pid=$(node -e 'const s=require(process.argv[1]).seats["worker-1"]; process.stdout.write(String(s.pid||""))' "$CODEX_TMP/proj/seats/state.json")
 [ -n "$codex_pid" ] || fail "codex pid missing before dead-process check"
 kill -9 "$codex_pid" 2>/dev/null || true
-for i in {1..80}; do PATH="$CODEX_TMP/bin:$PATH" run status worker-1; echo "$OUT" | grep -q 'DIED' && break; sleep .1; done
-if [ $RC -eq 0 ] && echo "$OUT" | grep -q 'DIED'; then pass "codex status reports DIED after the recorded process is killed"; else fail "codex dead process was not reported DIED (rc=$RC): $OUT"; fi
+for i in {1..80}; do PATH="$CODEX_TMP/bin:$PATH" run status worker-1; echo "$OUT" | grep >/dev/null 'DIED' && break; sleep .1; done
+if [ $RC -eq 0 ] && echo "$OUT" | grep >/dev/null 'DIED'; then pass "codex status reports DIED after the recorded process is killed"; else fail "codex dead process was not reported DIED (rc=$RC): $OUT"; fi
 printf 'changed brief\n' >> "$CODEX_TMP/proj/contracts/WORKER.md"
 PATH="$CODEX_TMP/bin:$PATH" run resume worker-1
 if [ $RC -eq 1 ] && says "brief changed; reset instead of resume"; then pass "codex resume refuses when the role brief hash changed"; else fail "codex resume did not refuse changed brief (rc=$RC): $OUT"; fi
@@ -1577,7 +1595,7 @@ run spawn worker-1
 run stop worker-1 >/dev/null 2>&1
 env HOME="$HOME_FIX" STATE="$STATE" CWD="$CLEAN_PROJ" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=require(f); s.seats["worker-1"].cwd=process.env.CWD; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_STALL_ONCE=2000 STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)" || RC=$?
-CLEAN_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | head -1)"
+CLEAN_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | sed -n '1p')"
 if [ $RC -ne 0 ] && says "launch-only cleanup" && says "SIGKILL" && [ -n "$CLEAN_PID" ] && ! kill -0 "$CLEAN_PID" 2>/dev/null; then
   pass "launch readiness timeout kills only the newly spawned unready pid before STOP"
 else fail "launch readiness timeout did not clean up spawned pid (exit $RC pid=$CLEAN_PID): $OUT"; fi
@@ -1588,11 +1606,11 @@ FAIL_PROJ="$FIX/getstate-fail-proj"
 build_proj "$FAIL_PROJ" getstatefail
 RUN_PROJ="$FAIL_PROJ"; STATE="$FAIL_PROJ/seats/state.json"; LOG="$FAIL_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-getstatefail/worker-1/argv.json"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_FAIL_ONCE='fixture get_state failure' bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 2>&1)" || RC=$?
-FAIL_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | head -1)"
+FAIL_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | sed -n '1p')"
 if [ $RC -ne 0 ] && says "get_state failed on fresh seat" && says "launch-only cleanup" && [ -n "$FAIL_PID" ] && ! kill -0 "$FAIL_PID" 2>/dev/null; then
   pass "launch get_state success:false kills the spawned child before STOP"
 else fail "get_state success:false did not clean up spawned pid (exit $RC pid=$FAIL_PID): $OUT"; fi
-if state_get lastLaunchFailure | grep -q 'fixture get_state failure'; then
+if state_get lastLaunchFailure | grep >/dev/null 'fixture get_state failure'; then
   pass "launch get_state success:false records lastLaunchFailure in state.json"
 else fail "get_state success:false did not record lastLaunchFailure: $(cat "$STATE" 2>/dev/null)"; fi
 RUN_PROJ="$CLEAN_PROJ"; STATE="$CLEAN_PROJ/seats/state.json"; LOG="$CLEAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cleanup/worker-1/argv.json"
@@ -1745,7 +1763,7 @@ if [ $DOTNET_RC -eq 0 ] && grep -q 'args=build -maxcpucount:8 node_reuse=1 guard
 else fail "host budget: dotnet caps/env missing rc=$DOTNET_RC log=$(cat "$FIX/host-budget-dotnet.log" 2>/dev/null)"; fi
 FAKE_PERL_DIR="$FIX/fake-perl"; mkdir -p "$FAKE_PERL_DIR"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FAKE_PERL_DIR/perl"; chmod +x "$FAKE_PERL_DIR/perl"
 PRIM_RC=0; PRIM_OUT="$(STUB_CARGO_LOG="$FIX/no-primitive.log" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$FAKE_PERL_DIR:$BIN:/usr/bin:/bin" "$BUDGET_PROJ/seats/bin/cargo" no-primitive 2>&1)" || PRIM_RC=$?
-if [ $PRIM_RC -eq 127 ] && printf '%s\n' "$PRIM_OUT" | grep -q 'STOP: host-build-shim needs a crash-safe flock(2) primitive' && printf '%s\n' "$PRIM_OUT" | grep -q 'Refusing mkdir locks'; then
+if [ $PRIM_RC -eq 127 ] && printf '%s\n' "$PRIM_OUT" | grep >/dev/null 'STOP: host-build-shim needs a crash-safe flock(2) primitive' && printf '%s\n' "$PRIM_OUT" | grep >/dev/null 'Refusing mkdir locks'; then
   pass "host budget: missing lock primitive fails with actionable STOP"
 else fail "host budget: missing lock primitive was not actionable rc=$PRIM_RC: $PRIM_OUT"; fi
 HOST_KILL_LOG="$FIX/host-budget-kill.log"
@@ -1759,12 +1777,12 @@ if wait_for "$HOST_KILL_LOG" 'args=hold' 5; then
   else fail "host budget: next build did not acquire after killed holder rc=$AFTER_RC log=$(cat "$HOST_KILL_LOG" 2>/dev/null)"; fi
 else fail "host budget: killed-holder setup never acquired lock: $(cat "$HOST_KILL_LOG" 2>/dev/null)"; fi
 CONTRACT_RC=0; CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/no-parity-dir" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)" || CONTRACT_RC=$?
-if [ $CONTRACT_RC -eq 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep -q 'lock=.*/.cache/wheelhouse-build.lock jobs=8 test_threads=4 reentry=WHEELHOUSE_BUILD_LOCK_HELD' && printf '%s\n' "$CONTRACT_OUT" | grep -q 'parity=ok scanned='; then
+if [ $CONTRACT_RC -eq 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep >/dev/null 'lock=.*/.cache/wheelhouse-build.lock jobs=8 test_threads=4 reentry=WHEELHOUSE_BUILD_LOCK_HELD' && printf '%s\n' "$CONTRACT_OUT" | grep >/dev/null 'parity=ok scanned='; then
   pass "host budget: cargo --contract prints lock/jobs/test_threads/reentry and parity scan result"
 else fail "host budget: cargo --contract mismatch rc=$CONTRACT_RC: $CONTRACT_OUT"; fi
 BAD_PARITY="$FIX/parity/fleet-x"; mkdir -p "$BAD_PARITY"; printf '#!/usr/bin/env bash\nprintf "tool=cargo lock=/other jobs=99 test_threads=9 reentry=OTHER\\n"\n' > "$BAD_PARITY/cargo"; chmod +x "$BAD_PARITY/cargo"
 CONTRACT_RC=0; CONTRACT_OUT="$(WHEELHOUSE_HOST_BUDGET_PARITY_DIR="$FIX/parity" HOME="$HOME_FIX" PATH="$BUDGET_PROJ/seats/bin:$RUN_PATH" "$BUDGET_PROJ/seats/bin/cargo" --contract 2>&1)" || CONTRACT_RC=$?
-if [ $CONTRACT_RC -ne 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep -q 'parity=mismatch'; then pass "host budget: --contract parity scan reports mismatched fleet shims"
+if [ $CONTRACT_RC -ne 0 ] && printf '%s\n' "$CONTRACT_OUT" | grep >/dev/null 'parity=mismatch'; then pass "host budget: --contract parity scan reports mismatched fleet shims"
 else fail "host budget: parity mismatch not reported rc=$CONTRACT_RC: $CONTRACT_OUT"; fi
 
 setup_worktree_cap_repo() { # $1 proj, $2 max, $3 auto
@@ -1803,15 +1821,15 @@ EOF
 }
 CAP_UNDER="$FIX/host-budget-cap-under"; build_proj "$CAP_UNDER" cap-under; setup_worktree_cap_repo "$CAP_UNDER" 9 false
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_UNDER/fakebin:$RUN_PATH" bun "$CAP_UNDER/seats/adapter.ts" status 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && ! printf '%s\n' "$OUT" | grep -q 'HOST-BUDGET worktree cap'; then pass "host budget worktree cap: under cap is silent"
+if [ $RC -eq 0 ] && ! printf '%s\n' "$OUT" | grep >/dev/null 'HOST-BUDGET worktree cap'; then pass "host budget worktree cap: under cap is silent"
 else fail "host budget worktree cap: under cap printed or failed rc=$RC: $OUT"; fi
 CAP_OVER="$FIX/host-budget-cap-over"; build_proj "$CAP_OVER" cap-over; setup_worktree_cap_repo "$CAP_OVER" 1 false
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_OVER/fakebin:$RUN_PATH" bun "$CAP_OVER/seats/adapter.ts" status 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'HOST-BUDGET worktree cap exceeded' && printf '%s\n' "$OUT" | grep -q 'HOST-BUDGET safe merged-worktree' && printf '%s\n' "$OUT" | grep -q 'bun seats/prune.ts prune --from-file seats/logs/prune-worktree-cap-scan.json --yes --categories merged-worktree'; then pass "host budget worktree cap: over cap reports safe rows and exact prune command"
+if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep >/dev/null 'HOST-BUDGET worktree cap exceeded' && printf '%s\n' "$OUT" | grep >/dev/null 'HOST-BUDGET safe merged-worktree' && printf '%s\n' "$OUT" | grep >/dev/null 'bun seats/prune.ts prune --from-file seats/logs/prune-worktree-cap-scan.json --yes --categories merged-worktree'; then pass "host budget worktree cap: over cap reports safe rows and exact prune command"
 else fail "host budget worktree cap: over cap report missing rc=$RC: $OUT"; fi
 CAP_AUTO="$FIX/host-budget-cap-auto"; build_proj "$CAP_AUTO" cap-auto; setup_worktree_cap_repo "$CAP_AUTO" 1 true
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$CAP_AUTO/fakebin:$RUN_PATH" bun "$CAP_AUTO/seats/adapter.ts" status 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'PRUNED worktree merged-worktree' && [ ! -e "$CAP_AUTO/.wheelhouse-worktrees/closed" ]; then pass "host budget worktree cap: auto_prune removes a safe merged worktree"
+if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep >/dev/null 'PRUNED worktree merged-worktree' && [ ! -e "$CAP_AUTO/.wheelhouse-worktrees/closed" ]; then pass "host budget worktree cap: auto_prune removes a safe merged worktree"
 else fail "host budget worktree cap: auto_prune failed rc=$RC out=$OUT exists=$(test -e "$CAP_AUTO/.wheelhouse-worktrees/closed" && echo yes || echo no)"; fi
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" stop worker-1 2>&1)" || RC=$?
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
@@ -1828,10 +1846,10 @@ for n in x1 x2 x3; do fgit -C "$CAP_PROJ" worktree add -q "$CAP_PROJ/.wheelhouse
 run spawn worker-1
 CAP_PID_BEFORE="$(state_get pid)"
 run dispatch worker-1 cap-bead "over the cap"
-if [ $RC -ne 0 ] && says "cap 3" && says "(1 seats in seats/seats.json + 2)" && printf '%s\n' "$OUT" | grep -Eq 'live [0-9]+ .* cap [0-9]+ .* [Ww]ait for seat'; then
+if [ $RC -ne 0 ] && says "cap 3" && says "(1 seats in seats/seats.json + 2)" && printf '%s\n' "$OUT" | grep -E >/dev/null 'live [0-9]+ .* cap [0-9]+ .* [Ww]ait for seat'; then
   pass "over-cap dispatch is refused naming live count, cap 3 (1 seat + 2) and the seat to wait for"
 else fail "over-cap dispatch was not refused as specified (exit $RC): $OUT"; fi
-if printf '%s\n' "$OUT" | grep -Eq '[Ww]ait for seat [A-Za-z0-9_.-]+ to finish' && says "3 worktree(s) not named for a seat: foreign-x1, foreign-x2, foreign-x3"; then
+if printf '%s\n' "$OUT" | grep -E >/dev/null '[Ww]ait for seat [A-Za-z0-9_.-]+ to finish' && says "3 worktree(s) not named for a seat: foreign-x1, foreign-x2, foreign-x3"; then
   pass "over-cap refusal names a seat and lists the worktrees not named for any seat"
 else fail "over-cap refusal did not name a seat or the foreign worktrees: $OUT"; fi
 if [ "$(state_get pid)" = "$CAP_PID_BEFORE" ] && kill -0 "$CAP_PID_BEFORE" 2>/dev/null && [ ! -e "$CAP_WT" ] && [ "$(state_get cwd)" = "$CAP_PROJ" ]; then
@@ -1844,7 +1862,7 @@ fgit -C "$CAP_PROJ" worktree remove --force "$CAP_PROJ/.wheelhouse-worktrees/for
 fgit -C "$CAP_PROJ" worktree move "$CAP_PROJ/.wheelhouse-worktrees/foreign-x1" "$CAP_PROJ/.wheelhouse-worktrees/worker-2"
 env HOME="$HOME_FIX" HOLDER="$CAP_PROJ/.wheelhouse-worktrees/worker-2" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-2"]={pid:null,cwd:process.env.HOLDER,lastBead:"foreign-x1",lastDispatchAt:"2026-01-01T00:00:00.000Z",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_MAX_LIVE_WORKTREES=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 cap-bead "over the override cap" 2>&1)" || RC=$?
-if [ $RC -ne 0 ] && printf '%s\n' "$OUT" | grep -Eq 'live 1 .* cap 1 .* [Ww]ait for seat worker-2' && [ ! -e "$CAP_WT" ] && [ "$(state_get pid)" = "$CAP_PID_BEFORE" ]; then
+if [ $RC -ne 0 ] && printf '%s\n' "$OUT" | grep -E >/dev/null 'live 1 .* cap 1 .* [Ww]ait for seat worker-2' && [ ! -e "$CAP_WT" ] && [ "$(state_get pid)" = "$CAP_PID_BEFORE" ]; then
   pass "WHEELHOUSE_MAX_LIVE_WORKTREES=1 refuses a fresh seat's worktree and names the seat holding the slot"
 else fail "override cap refusal wrong (exit $RC wt=$(test -e "$CAP_WT" && echo exists || echo absent)): $OUT"; fi
 # A seat that runs from the root ("worktree": false) takes no slot: it
@@ -1942,7 +1960,7 @@ printf 'cleanup=report\n' > "$REPORT_PROJ/wheelhouse/.template-source"
 printf 'scratch\n' > "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt"
 cat > "$REPORT_PROJ/fakebin/bd" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1" = "list" ] && printf '%s\n' "$@" | grep -q -- '--status=closed'; then
+if [ "$1" = "list" ] && printf '%s\n' "$@" | grep >/dev/null -- '--status=closed'; then
   printf '[{"id":"bead-report","status":"closed"}]\n'
 else
   printf '[]\n'
@@ -2065,7 +2083,7 @@ SCAN_START_MS="$(node -e 'console.log(Date.now())')"
 run dispatch worker-1 bead-p2 "second bead after merged-main history"
 SCAN_END_MS="$(node -e 'console.log(Date.now())')"
 SCAN_ELAPSED_MS=$((SCAN_END_MS - SCAN_START_MS))
-if [ $RC -eq 0 ] && [ "$SCAN_ELAPSED_MS" -lt 10000 ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1 | grep -q 'origin/' && [ "$(wt_branch "$WT")" = "fleet/bead-p2" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ]; then
+if [ $RC -eq 0 ] && [ "$SCAN_ELAPSED_MS" -lt 10000 ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1 | grep >/dev/null 'origin/' && [ "$(wt_branch "$WT")" = "fleet/bead-p2" ] && [ "$(state_get pid)" = "$PUSH_PID_BEFORE" ]; then
   pass "push gate: clean branch with 30 merged-main credential-shaped commits scans added lines only and switches in ${SCAN_ELAPSED_MS}ms"
 else fail "push gate: restored remote dispatch failed or scanned merged-main history (exit $RC elapsed=${SCAN_ELAPSED_MS}ms remote=$(fgit -C "$WT_PROJ" branch -r --contains fleet/bead-p1) branch=$(wt_branch "$WT")): $OUT"; fi
 if says "pushed fleet/bead-p1 to origin" && wait_for "$LOG" 'echo: Bead bead-p2' 5; then
@@ -2144,7 +2162,7 @@ fgit -C "$WT" add r1.txt
 fgit -C "$WT" commit -qm "r1 work kept"
 R1_SHA="$(fgit -C "$WT" rev-parse HEAD)"
 run dispatch worker-1 bead-r2 "move on to r2"
-if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-r2" ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-r1 | grep -q 'origin/'; then
+if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-r2" ] && fgit -C "$WT_PROJ" branch -r --contains fleet/bead-r1 | grep >/dev/null 'origin/'; then
   pass "reopen setup: leaving bead-r1 pushed it and moved the seat to fleet/bead-r2"
 else fail "reopen setup: bead-r2 dispatch failed (exit $RC branch=$(wt_branch "$WT")): $OUT"; fi
 run dispatch worker-1 bead-r1 "reopened r1"
@@ -2226,7 +2244,7 @@ cp "$ADAPTER_DIR/prune.ts" "$WT_PROJ/seats/prune.ts"
 CLEANUP_LOG="$WT_PROJ/seats/logs/cleanup.log"
 mkdir -p "$WT_PROJ/.wheelhouse-runs/bead-ph2-scratch"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-c1 "sync cleanup of the bead just left" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && [ -f "$CLEANUP_LOG" ] && tail -n 1 "$CLEANUP_LOG" | grep -q 'cleanup done' && ! says "cleanup for bead bead-ph2 exited"; then
+if [ $RC -eq 0 ] && [ -f "$CLEANUP_LOG" ] && tail -n 1 "$CLEANUP_LOG" | grep >/dev/null 'cleanup done' && ! says "cleanup for bead bead-ph2 exited"; then
   pass "cleanup trigger: a cross-bead dispatch with WHEELHOUSE_CLEANUP_SYNC=1 runs cleanup for the old bead to a 'cleanup done' line (ISC-41)"
 else fail "cleanup trigger: sync cleanup did not finish cleanly (exit $RC log=$(tail -n 3 "$CLEANUP_LOG" 2>/dev/null)): $OUT"; fi
 CLEANUP_MARK=$(wc -c < "$CLEANUP_LOG" | tr -d ' ')

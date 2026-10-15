@@ -17,6 +17,7 @@ BRIDGE_GUARD="$HERE/bridge-guard.sh"
 [ -x "$BRIDGE_GUARD" ] || { echo "selftest: not executable: $BRIDGE_GUARD" >&2; exit 2; }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 SOCK="wheelhouse-cockpit-selftest.$$"
 PASS=0
 FAIL=0
@@ -132,7 +133,7 @@ set +e
 CANARY_OUT="$(cd "$CANARY_CWD" && TMPDIR=/nonexistent WHEELHOUSE_COCKPIT_MKTEMP_CANARY=0 bash "$HERE/cockpit.selftest.sh" 2>&1)"
 CANARY_RC=$?
 set -u
-if [ "$CANARY_RC" -ne 0 ] && [ -f "$CANARY_CWD/sentinel.txt" ] && printf '%s\n' "$CANARY_OUT" | grep -q 'STOP: mktemp failed for fixture template'; then
+if [ "$CANARY_RC" -ne 0 ] && [ -f "$CANARY_CWD/sentinel.txt" ] && printf '%s\n' "$CANARY_OUT" | grep >/dev/null 'STOP: mktemp failed for fixture template'; then
   pass "bad TMPDIR stops before cleanup and preserves caller cwd sentinel"
 else
   fail "bad TMPDIR canary failed (rc=$CANARY_RC sentinel=$([ -f "$CANARY_CWD/sentinel.txt" ] && echo present || echo missing) out=$CANARY_OUT)"
@@ -195,7 +196,7 @@ POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
 PANE0="$(tmux -L "$SOCK" list-panes -t wh-pane:bridge -F '#{pane_id}' | sed -n '1p')"
 RECORDED_PANE="$(node -e 'const fs=require("fs"); const f=process.argv[1]; try { console.log(JSON.parse(fs.readFileSync(f,"utf8")).paneId || "") } catch { console.log("") }' "$PROJ/seats/run/commander-pane.json")"
 PANE_TEXT="$(tmux -L "$SOCK" capture-pane -p -t wh-pane:bridge.0 -S -80 2>/dev/null || true)"
-if [ -n "$PANE0" ] && [ "$RECORDED_PANE" = "$PANE0" ] && [ -z "$POLL_PID" ] && ! printf '%s\n' "$PANE_TEXT" | grep -q 'commander-inbox-poll'; then
+if [ -n "$PANE0" ] && [ "$RECORDED_PANE" = "$PANE0" ] && [ -z "$POLL_PID" ] && ! printf '%s\n' "$PANE_TEXT" | grep >/dev/null 'commander-inbox-poll'; then
   pass "cockpit --pane-commander records pane target and does not start retired commander poll"
 else
   fail "cockpit --pane-commander poll retirement failed (pid=${POLL_PID:-none} pane0=${PANE0:-none} recorded=${RECORDED_PANE:-none} text=$PANE_TEXT file=$(cat "$PROJ/seats/run/commander-pane.json" 2>/dev/null || echo missing))"
@@ -273,7 +274,7 @@ RECOVERY_BIN="$FIX/recovery-bin"
 mkdir -p "$RECOVERY_BIN" "$PROJ/seats/logs" "$PROJ/open-work" "$PROJ/clean-work" "$PROJ/closed-work" "$PROJ/.beads"
 cat > "$RECOVERY_BIN/bd" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1" = "list" ] && printf '%s\n' "$@" | grep -q -- '--status=closed'; then
+if [ "$1" = "list" ] && printf '%s\n' "$@" | grep >/dev/null -- '--status=closed'; then
   printf '[{"id":"closed-bead","status":"closed"}]\n'
 else
   printf '[]\n'
@@ -359,7 +360,7 @@ else
   kill "$LEGACY_WD" 2>/dev/null || true
   fail "legacy watchdog was not stopped on cockpit re-run (out=$(cat "$FIX/cockpit.out" 2>/dev/null))"
 fi
-if grep -Eq 'desk (started|already running): pid' "$FIX/cockpit.out" && opt_value wh-ratio status-right | grep -q 'desk http://127.0.0.1:42042/needs'; then
+if grep -Eq 'desk (started|already running): pid' "$FIX/cockpit.out" && opt_value wh-ratio status-right | grep >/dev/null 'desk http://127.0.0.1:42042/needs'; then
   pass "cockpit banner/status include the desk URL"
 else
   fail "cockpit did not expose desk URL (out=$(cat "$FIX/cockpit.out" 2>/dev/null) status=$(opt_value wh-ratio status-right 2>/dev/null))"
@@ -369,7 +370,7 @@ if [ "$(opt_value wh-ratio mouse)" = "on" ] && [ "$(opt_value wh-ratio history-l
 else
   fail "fresh cockpit options wrong: mouse=$(opt_value wh-ratio mouse) history=$(opt_value wh-ratio history-limit)"
 fi
-if hook_value wh-ratio after-split-window | grep -q 'bridge-guard.sh'; then
+if hook_value wh-ratio after-split-window | grep >/dev/null 'bridge-guard.sh'; then
   pass "fresh cockpit session installs the bridge guard split hook"
 else
   fail "fresh cockpit session missing bridge guard hook: $(hook_value wh-ratio after-split-window)"
@@ -390,7 +391,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   sleep 0.1
 done
 HOOK_AFTER_WINDOWS="$(tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | wc -l | tr -d ' ')"
-if [ "$(pane_count)" = 2 ] && [ "$HOOK_AFTER_WINDOWS" -gt "$HOOK_BEFORE_WINDOWS" ] && tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | grep -q '^agent-'; then
+if [ "$(pane_count)" = 2 ] && [ "$HOOK_AFTER_WINDOWS" -gt "$HOOK_BEFORE_WINDOWS" ] && tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | grep >/dev/null '^agent-'; then
   pass "bridge guard moves a third bridge pane into its own window"
 else
   fail "bridge guard did not restore bridge after split (before_windows=$HOOK_BEFORE_WINDOWS after_windows=$HOOK_AFTER_WINDOWS panes=$(pane_count) windows=$(tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | tr '\n' ' '))"
@@ -423,7 +424,7 @@ if [ "$(opt_value wh-ratio mouse)" = "on" ] && [ "$(opt_value wh-ratio history-l
 else
   fail "re-run cockpit options wrong: mouse=$(opt_value wh-ratio mouse) history=$(opt_value wh-ratio history-limit)"
 fi
-if hook_value wh-ratio after-split-window | grep -q 'bridge-guard.sh'; then
+if hook_value wh-ratio after-split-window | grep >/dev/null 'bridge-guard.sh'; then
   pass "cockpit re-run keeps the bridge guard split hook installed"
 else
   fail "re-run cockpit missing bridge guard hook: $(hook_value wh-ratio after-split-window)"

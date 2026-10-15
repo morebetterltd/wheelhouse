@@ -6,6 +6,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 SCRIPT="$(cd "$(dirname "$0")" && pwd)/principal-sentinel.sh"
 NEEDS="$(cd "$(dirname "$0")" && pwd)/needs.ts"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-principal-sentinel-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FAILED=0
 PASSED=0
 

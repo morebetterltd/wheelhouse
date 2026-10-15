@@ -80,7 +80,7 @@ sweep_stale_fixtures() {
     while IFS= read -r sf; do
       [ -f "$sf" ] || continue
       for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
+        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
           kill "$pid" 2>/dev/null
           echo "swept: killed leaked seat pid $pid (held open files under $d)"
         fi
@@ -94,6 +94,7 @@ sweep_stale_fixtures() {
 sweep_stale_fixtures
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"

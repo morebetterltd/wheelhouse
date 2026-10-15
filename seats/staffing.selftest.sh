@@ -3,6 +3,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PIDS=""
 cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; pkill -f "$FIX" >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
@@ -71,6 +72,14 @@ $OUT
 EOF
 }
 # Fixture shape note: bd ready/list rows above were built after capturing real `bd ready --json` and `bd list --json`; ids/titles are synthetic.
+: > "$ROOT/seats/run/staffing.lock"
+python3 - "$ROOT/seats/run/staffing.lock" <<'PY'
+import os, sys, time
+old = time.time() - 60
+os.utime(sys.argv[1], (old, old))
+PY
+run env BD_READY_COUNT=1 bun seats/staffing.ts check --dry-run --decision add-worker
+[ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && [ ! -e "$ROOT/seats/run/staffing.lock" ] && pass 'staffing recovers an old empty shared PID lock and makes a decision' || fail "incomplete staffing lock blocked check rc=$RC out=$OUT"
 run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && grep -q 'worker-e1 m1' "$ROOT/spawn-models.log" && pass 'G4-15 add-worker places first listed free entry with role model' || fail "add-worker failed rc=$RC out=$OUT"
 run env BD_READY_COUNT=3 bun seats/staffing.ts check
@@ -244,7 +253,7 @@ if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" env -u WHEELHOUSE_SEAT_PUSH
 git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-unpushed" >/dev/null 2>&1
 # log line fields/reasons.
 LOG_LINES=$(wc -l < "$ROOT/seats/logs/staffing.log" | tr -d ' ')
-awk 'NF{line=$0} END{print line}' "$ROOT/seats/logs/staffing.log" | grep -Eq 'decision=.* decider=rule conf=0.00 ready=[0-9]+ chained=[0-9]+ overlap=[0-9]+ backlog=[0-9]+ workers=[0-9]+/[0-9]+\.\.[0-9]+ reviewers=[0-9]+/[0-9]+\.\.[0-9]+ seat=.* entry=.* reason="[^"]+"' && [ "$LOG_LINES" -ge 12 ] && pass 'G4-39/G4-40 decision log has one parseable plain-English line per check' || fail "log shape/count failed lines=$LOG_LINES"
+awk 'NF{line=$0} END{print line}' "$ROOT/seats/logs/staffing.log" | grep -E >/dev/null 'decision=.* decider=rule conf=0.00 ready=[0-9]+ chained=[0-9]+ overlap=[0-9]+ backlog=[0-9]+ workers=[0-9]+/[0-9]+\.\.[0-9]+ reviewers=[0-9]+/[0-9]+\.\.[0-9]+ seat=.* entry=.* reason="[^"]+"' && [ "$LOG_LINES" -ge 12 ] && pass 'G4-39/G4-40 decision log has one parseable plain-English line per check' || fail "log shape/count failed lines=$LOG_LINES"
 # no pool touches nothing.
 NOPOOL="$FIX/nopool"; mkdir -p "$NOPOOL/seats" "$NOPOOL/wheelhouse"; selftest_copy_seat_runtime "$NOPOOL" "$HERE"; before=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)
 OUT="$(cd "$NOPOOL" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts check 2>&1)"; RC=$?; after=$(find "$NOPOOL/seats" -maxdepth 1 -type f -print | sort)

@@ -38,6 +38,7 @@ cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX
 trap cleanup EXIT INT TERM
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-walk-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
@@ -150,7 +151,7 @@ run_case(){
   build_proj "$proj" "$ns"
   rc=0; got=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY="$reply" bun seats/walk.ts 'claim text' --surface product:'echo product' --out "$out" 2>&1) || rc=$?
   if [ "$rc" -eq "$expect_rc" ]; then pass "$name exit $rc"; else fail "$name exit got $rc expected $expect_rc: $got"; fi
-  if printf '%s\n' "$got" | grep -qF "$expect_text"; then pass "$name printed $expect_text"; else fail "$name missing $expect_text: $got"; fi
+  if printf '%s\n' "$got" | grep -F >/dev/null "$expect_text"; then pass "$name printed $expect_text"; else fail "$name missing $expect_text: $got"; fi
   transcript="$out/transcript.txt"
   metadata="$out/walk.json"
   [ -s "$transcript" ] && pass "$name retained transcript" || fail "$name transcript missing"
@@ -158,7 +159,7 @@ run_case(){
   if [ -f "$metadata" ]; then
     if ! grep -qF "$FIX" "$metadata" && ! grep -qF "$HOME_FIX" "$metadata" && grep -q '"transcript": "\.\./out-' "$metadata"; then pass "$name walk.json transcript path is root-relative"
     else fail "$name walk.json contains an absolute fixture path or lacks a root-relative transcript: $(cat "$metadata" 2>/dev/null)"; fi
-    if ! printf '%s\n' "$got" | grep -qF "$FIX" && ! printf '%s\n' "$got" | grep -qF "$HOME_FIX" && printf '%s\n' "$got" | grep -q 'transcript: \.\./out-'; then pass "$name stdout prints root-relative evidence paths"
+    if ! printf '%s\n' "$got" | grep -F >/dev/null "$FIX" && ! printf '%s\n' "$got" | grep -F >/dev/null "$HOME_FIX" && printf '%s\n' "$got" | grep >/dev/null 'transcript: \.\./out-'; then pass "$name stdout prints root-relative evidence paths"
     else fail "$name stdout contains an absolute fixture path or lacks root-relative transcript: $got"; fi
   fi
   argv="$HOME_FIX/.pi-seats-$ns/verifier/argv.json"
@@ -202,7 +203,7 @@ run_stream_case(){
   [ "$harness" = codex ] && codex_key_env="OPENAI_CODEX_API_KEY=fixture-key"
   rc=0; out=$(cd "$proj" && env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STREAM_FILE="$stream" $codex_key_env bun seats/walk.ts 'claim' --surface product:fixture --out "$outdir" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] && pass "$name final-message stream exits WALKED-DONE" || fail "$name stream rc=$rc output=$out"
-  printf '%s\n' "$out" | grep -q 'VERDICT: WALKED-DONE' && pass "$name final-message stream prints verdict" || fail "$name stream missing verdict: $out"
+  printf '%s\n' "$out" | grep >/dev/null 'VERDICT: WALKED-DONE' && pass "$name final-message stream prints verdict" || fail "$name stream missing verdict: $out"
   [ -s "$outdir/walk.json" ] && grep -q '"verdict": "WALKED-DONE"' "$outdir/walk.json" && pass "$name final-message stream writes verdict file" || fail "$name stream missing verdict file: $(cat "$outdir/walk.json" 2>/dev/null)"
 }
 
@@ -279,7 +280,7 @@ phase 'GUI window-list guard refuses an obscured target before spawn'
 proj="$FIX/proj-gui"; ns="walk-gui"; build_proj "$proj" "$ns"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_JSON='[{"title":"Fixture Device","frontmost":true,"obscuredBy":"Bench Simulator Clone"}]' STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:gui:Fixture --out "$FIX/out-gui" 2>&1) || rc=$?
 [ "$rc" -eq 3 ] && pass 'obscured GUI target exits COULD-NOT-WALK (3)' || fail "obscured GUI target rc=$rc output=$out"
-printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep -q 'obscured by Bench Simulator Clone' && pass 'obscured GUI target names the obscuring window' || fail "obscured GUI target did not name the blocker: $out"
+printf '%s\n' "$out" | grep >/dev/null 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep >/dev/null 'obscured by Bench Simulator Clone' && pass 'obscured GUI target names the obscuring window' || fail "obscured GUI target did not name the blocker: $out"
 [ ! -f "$HOME_FIX/.pi-seats-$ns/verifier/cwd.txt" ] && pass 'obscured GUI target does not spawn the verifier seat' || fail 'obscured GUI target spawned stub pi before the guard'
 if grep -q '"mode": "window-list"' "$FIX/out-gui/walk.json" && grep -q 'Bench Simulator Clone' "$FIX/out-gui/walk.json"; then pass 'walk.json records the window-list guard mode and blocker'; else fail "walk.json missing guard mode/blocker: $(cat "$FIX/out-gui/walk.json" 2>/dev/null)"; fi
 
@@ -292,7 +293,7 @@ for case in failcmd malformed wrongshape; do
   esac
   rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_COMMAND="$cmd" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:gui:Fixture --out "$outdir" 2>&1) || rc=$?
   [ "$rc" -eq 3 ] && pass "GUI command $case exits COULD-NOT-WALK (3)" || fail "GUI command $case rc=$rc output=$out"
-  printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep -q "$want" && pass "GUI command $case names the window-list failure" || fail "GUI command $case did not name failure '$want': $out"
+  printf '%s\n' "$out" | grep >/dev/null 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep >/dev/null "$want" && pass "GUI command $case names the window-list failure" || fail "GUI command $case did not name failure '$want': $out"
   [ -s "$outdir/walk.json" ] && grep -q "$want" "$outdir/walk.json" && pass "GUI command $case writes walk.json with reason" || fail "GUI command $case walk.json missing reason: $(cat "$outdir/walk.json" 2>/dev/null)"
   [ ! -f "$HOME_FIX/.pi-seats-$ns/verifier/cwd.txt" ] && pass "GUI command $case does not spawn the verifier seat" || fail "GUI command $case spawned stub pi before guard refusal"
 done
@@ -313,21 +314,21 @@ end_ms=$(node -e 'console.log(Date.now())')
 exec 9>&-
 elapsed_ms=$((end_ms - start_ms))
 [ "$rc" -eq 0 ] && pass 'stdin-reading verifier exits 0' || fail "stdin-reading verifier rc=$rc output=$out"
-printf '%s\n' "$out" | grep -q 'VERDICT: WALKED-DONE' && pass 'stdin-reading verifier walk completes with a verdict' || fail "stdin-reading verifier missing verdict: $out"
+printf '%s\n' "$out" | grep >/dev/null 'VERDICT: WALKED-DONE' && pass 'stdin-reading verifier walk completes with a verdict' || fail "stdin-reading verifier missing verdict: $out"
 [ "$elapsed_ms" -lt 5000 ] && pass "stdin-reading verifier completed under 5s (${elapsed_ms}ms)" || fail "stdin-reading verifier exceeded 5s (${elapsed_ms}ms): $out"
 
 phase 'timeout names phase and honors per-walk budget env'
 proj="$FIX/proj-timeout"; ns="walk-timeout"; build_proj "$proj" "$ns"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=200 STUB_SLEEP_MS=1000 STUB_REPLY=$'working before timeout\nVERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-timeout" 2>&1) || rc=$?
 [ "$rc" -eq 3 ] && pass 'timeout exits as COULD-NOT-WALK (3)' || fail "timeout rc=$rc output=$out"
-printf '%s\n' "$out" | grep -q 'VERDICT: COULD-NOT-WALK — timed out after 200ms during run verifier walk' && pass 'timeout verdict names budget and phase' || fail "timeout did not name budget/phase: $out"
+printf '%s\n' "$out" | grep >/dev/null 'VERDICT: COULD-NOT-WALK — timed out after 200ms during run verifier walk' && pass 'timeout verdict names budget and phase' || fail "timeout did not name budget/phase: $out"
 if grep -q '"phase": "run verifier walk"' "$FIX/out-timeout/walk.json" && grep -q 'timed out after 200ms during run verifier walk' "$FIX/out-timeout/walk.json"; then pass 'timeout metadata records phase'; else fail "timeout metadata missing phase: $(cat "$FIX/out-timeout/walk.json" 2>/dev/null)"; fi
 
 phase 'upgrade surface requires baseline'
 proj="$FIX/proj-upgrade"; ns="walk-upgrade"; build_proj "$proj" "$ns"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface upgrade:runbooks/UPGRADE.md --out "$FIX/out-upgrade" 2>&1) || rc=$?
 [ "$rc" -eq 1 ] && pass 'upgrade without baseline exits 1' || fail "upgrade without baseline rc=$rc output=$out"
-printf '%s\n' "$out" | grep -q -- 'requires --baseline' && pass 'upgrade baseline refusal named' || fail "upgrade baseline refusal missing: $out"
+printf '%s\n' "$out" | grep >/dev/null -- 'requires --baseline' && pass 'upgrade baseline refusal named' || fail "upgrade baseline refusal missing: $out"
 
 phase 'credential refusal distinct and no live pi required'
 proj="$FIX/proj-refuse"; ns="walk-refuse"; build_proj "$proj" "$ns"

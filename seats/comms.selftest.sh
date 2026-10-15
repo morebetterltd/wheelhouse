@@ -6,6 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-comms-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0; SERVER_PID=""
 cleanup(){ [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
@@ -36,7 +37,8 @@ function remember(kind:string, row:any){ fs.appendFileSync(`${dir}/${kind}.jsonl
 function hidden(){ return fs.existsSync(`${dir}/fail-readback`); }
 Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
  const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : undefined;
- append({method:req.method, url:u.pathname+u.search, body});
+ const loggedUrl=u.pathname.replace(/^\/bot[^/]+\//, "/bot[redacted]/")+u.search;
+ append({method:req.method, url:loggedUrl, body});
  if(u.pathname.includes("/sendMessage")){ msg++; const r={message_id:msg,chat:{id:body.chat_id},text:body.text}; remember("telegram", r); return Response.json({ok:true,result:r}); }
  if(u.pathname.endsWith("/chat.postMessage")){ msg++; const ts=`1790000000.${String(msg).padStart(6,"0")}`; remember("slack", {ts,channel:body.channel,user:"BOT",text:body.text}); return Response.json({ok:true,ts,message:{ts,text:body.text}}); }
  if(u.pathname.endsWith("/conversations.history")){ const fail=`${dir}/fail-read-once`; if (fs.existsSync(fail)) { fs.unlinkSync(fail); return Response.json({ok:false,error:"fixture read failed"},{status:500}); } let messages=rows("slack.jsonl"); if(hidden()) messages=messages.map((m:any)=>({...m,text:"dropped"})); return Response.json({ok:true,messages}); }
@@ -62,7 +64,7 @@ if [ $rc -eq 2 ] && grep -q 'STOP: channel C08EXAMPLE is not declared in seats/c
 
 reset_logs
 base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms.ts" request partners "need a word with Tyler" > "$FIX/request.out" 2>&1; rc=$?; RELAY_ID="$(cat "$FIX/request.out" | tr -d '\r\n')"
-if [ $rc -eq 0 ] && echo "$RELAY_ID" | grep -Eq '^relay-[0-9a-z]{4}$' && [ "$(count_rows request)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'seat relay request records one request row and makes zero network calls'; else fail "request leg rc=$rc id=$RELAY_ID ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null) req=$(count_req) out=$(cat "$FIX/request.out")"; fi
+if [ $rc -eq 0 ] && echo "$RELAY_ID" | grep -E >/dev/null '^relay-[0-9a-z]{4}$' && [ "$(count_rows request)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'seat relay request records one request row and makes zero network calls'; else fail "request leg rc=$rc id=$RELAY_ID ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null) req=$(count_req) out=$(cat "$FIX/request.out")"; fi
 base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request1.out" 2>&1; rc=$?
 base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request2.out" 2>&1; rc2=$?
 HERALD_MATCHES="$(node -e 'const fs=require("fs"); const rows=fs.existsSync(process.argv[1])?fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse):[]; console.log(rows.filter(r=>r.class==="relay-request"&&r.seat==="worker-1"&&r.state==="input-required"&&r.detail.includes("relay "+process.argv[2])).length)' "$ROOT/seats/inbox.jsonl" "$RELAY_ID")"
@@ -99,7 +101,7 @@ if [ $rc -eq 1 ] && grep -q 'STOP: send unverified: slack read-back did not retu
 
 reset_logs
 base_env bun "$ROOT/seats/comms.ts" send principal hi > "$FIX/principal.out" 2>&1; rc=$?
-if [ $rc -eq 0 ] && grep -q '^sent principal 111:' "$FIX/principal.out" && [ "$(grep -c 'sendMessage' "$FIX/requests.jsonl")" -eq 1 ] && [ "$(count_rows sent)" -eq 1 ] && grep -q '"readBack":"echo"' "$ROOT/seats/comms.jsonl"; then pass 'telegram principal send records echo read-back'; else fail "telegram leg rc=$rc out=$(cat "$FIX/principal.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
+if [ $rc -eq 0 ] && grep -q '^sent principal 111:' "$FIX/principal.out" && [ "$(grep -c 'sendMessage' "$FIX/requests.jsonl")" -eq 1 ] && [ "$(count_rows sent)" -eq 1 ] && grep -q '"readBack":"echo"' "$ROOT/seats/comms.jsonl" && ! grep -Fq 'tg-token' "$FIX/requests.jsonl"; then pass 'telegram principal send records echo read-back without logging bot credential'; else fail "telegram send/logging leg rc=$rc (captured output withheld)"; fi
 
 reset_logs
 base_env bun "$ROOT/seats/comms.ts" send dev hi > "$FIX/dev.out" 2>&1; rc=$?

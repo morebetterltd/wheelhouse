@@ -1,0 +1,92 @@
+{
+  "baseline": {
+    "exit": 1,
+    "full_reflog_equal": true,
+    "before": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    },
+    "after": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    }
+  },
+  "unit-fixed": {
+    "exit": 0,
+    "full_reflog_equal": true,
+    "before": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    },
+    "after": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    }
+  },
+  "unit-original": {
+    "exit": 1,
+    "full_reflog_equal": true,
+    "before": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    },
+    "after": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    }
+  },
+  "shared-lock": {
+    "exit": 0,
+    "full_reflog_equal": true,
+    "before": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    },
+    "after": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    }
+  },
+  "adapter-fixed": {
+    "exit": 0,
+    "full_reflog_equal": true,
+    "before": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    },
+    "after": {
+      "head": "0e315a80e5337a78530172c0014759738c9471b4",
+      "last3": "0e315a8 HEAD@{0}: commit: overnight-pause: resume worker-3 too\n0a0d0ac HEAD@{1}: commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\n9245d05 HEAD@{2}: commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\n",
+      "reflog": "commit: overnight-pause: resume worker-3 too\ncommit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14\ncommit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)\ncommit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it\nmerge c0a0f98: Fast-forward\n",
+      "diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "full_reflog_sha256": "94621aa4f0065608dc0add2749ead90ee620db6d581b26fe06f05ab31037c2ca"
+    }
+  }
+}

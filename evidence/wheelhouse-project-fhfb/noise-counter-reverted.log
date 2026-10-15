@@ -1,0 +1,89 @@
+before: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+RUN ['python3', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-3/seats/fixtures/recover-process-noise.py', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-fhfb/counter-reverted/seats/recover.selftest.sh', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-fhfb/reverted-noise']
+{
+  "selftest": "[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-fhfb/counter-reverted/seats/recover.selftest.sh",
+  "selftest_exit": 1,
+  "dummy_pid": 27127,
+  "native_ps": {
+    "command": [
+      "ps",
+      "-p",
+      "27127",
+      "-o",
+      "command="
+    ],
+    "exit": 0,
+    "stdout": "pi \n",
+    "stderr": ""
+  },
+  "dummy_started_after_before_count": true,
+  "dummy_alive_through_after_count": true,
+  "dummy_stopped_while_selftest_active": true,
+  "dummy_exit": -15,
+  "dummy_root_outside_FIX": true
+}
+
+1. SIGKILL mid-turn — DEAD, bead named, printed resume re-attaches the same session
+  ok    stub mimics the title rewrite: the live seat's ps line is bare 'pi', no argv
+  ok    seat pid 25711 force-killed mid-turn
+  ok    recover exits 0
+  ok    killed seat classified DEAD
+  ok    the unfinished bead is named on the seat line
+  ok    exact resume command printed
+  ok    the killed seat's orphaned FIFO was removed and printed
+  ok    the printed resume command runs clean
+  ok    resume re-attached via --session
+  ok    the SAME session file was re-attached and grew — no acceptance state lost
+  ok    lastBead survived the kill/resume cycle
+
+2. commander-restart simulation — fresh process, state.json only, all classes correct
+  ok    fresh recover process exits 0
+  ok    live seat classified RUNNING (holds its FIFO, despite a bare-pi ps line)
+  ok    dead pid with intact session classified DEAD, resume offered
+  ok    entry with no session artifacts classified STALE, no resume offered
+  ok    live-but-reused pid classified DEAD and called out (restart hazard)
+  ok    argv spoof (tail -f on the role brief) classified DEAD — identity is fds, not command lines
+
+3. double-resume refusal — an attached session gets REFUSED, not a command
+  ok    ghost sharing a RUNNING seat's session is DEAD
+  ok    resume REFUSED, naming who holds the session
+  ok    no resume command printed for the refused seat
+
+4. orphaned FIFO cleanup — dead and unrecorded FIFOs go, the live one stays
+  ok    dead seat's FIFO removed and printed
+  ok    FIFO with no state entry removed and printed
+  ok    the RUNNING seat's FIFO was left alone
+
+5. no duplicate integration — recover observes; its only writes are FIFO removals
+  ok    state.json byte-identical after recover (no lastBead mutation, no re-dispatch record)
+  FAIL  fixture pi launch count changed: 7 -> 8
+  ok    no bd calls (fake bd on PATH logged nothing)
+
+6. real binary — the premise probe: pi's ps title is bare, its FIFO is not hidden
+  SKIP  real-binary probe: WHEELHOUSE_SKIP_REAL_PI=1
+
+7. canary — can these checks detect a broken recover?
+  ok    canary: a recover that skips FIFO cleanup is caught (orphan still on disk)
+  ok    real recover refuses when a live process holds the session file open (fd path, not argv)
+  ok    canary: a recover with the attachment check cut prints the double-resume — and is caught
+  FAIL  canary: own pi launch not detected (7 -> 7, exit 1): stub pi: no PI_CODING_AGENT_DIR
+
+2 check(s) failed.
+If the failures are in phases 1-6, recover broke, pi's process shape
+changed, or output wording moved. If a failure is in the canary, fix
+this test first.
+
+after: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+umbrella safety: PASS (0 permitted new reflog entries); test exit=1

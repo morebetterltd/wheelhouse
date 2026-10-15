@@ -6,13 +6,14 @@ command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "selftest: git required" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-digest-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 run_digest(){ HOME="$FAKE_HOME" WHEELHOUSE_DIGEST_ROOT="$PROJ" PATH="$PROJ/bin:$PATH" bun "$PROJ/seats/digest.ts" "$@"; }
-assert_contains(){ printf '%s' "$1" | grep -q -- "$2"; }
+assert_contains(){ printf '%s' "$1" | grep >/dev/null -- "$2"; }
 
 PROJ="$FIX/project"; FAKE_HOME="$FIX/fake-home"; mkdir -p "$PROJ/bin" "$PROJ/seats/logs" "$PROJ/seats/verdicts" "$PROJ/wheelhouse" "$FAKE_HOME"
 selftest_copy_seat_runtime "$PROJ" "$ROOT/seats"
@@ -34,8 +35,8 @@ cat > "$PROJ/bin/bd" <<'EOF'
 #!/usr/bin/env bash
 set -u
 args="$*"
-if printf '%s' "$args" | grep -q -- '--status closed'; then cat "$WHEELHOUSE_FIXTURE_CLOSED"; exit 0; fi
-if printf '%s' "$args" | grep -q -- '--label needs-review'; then cat "$WHEELHOUSE_FIXTURE_REVIEW"; exit 0; fi
+if printf '%s' "$args" | grep >/dev/null -- '--status closed'; then cat "$WHEELHOUSE_FIXTURE_CLOSED"; exit 0; fi
+if printf '%s' "$args" | grep >/dev/null -- '--label needs-review'; then cat "$WHEELHOUSE_FIXTURE_REVIEW"; exit 0; fi
 printf '[]\n'
 EOF
 chmod +x "$PROJ/bin/bd"
@@ -93,7 +94,7 @@ if assert_contains "$OUT" 'Build the package' && assert_contains "$OUT" 'On goal
 # 3 needs
 if assert_contains "$OUT" 'Choose release train — question' && assert_contains "$OUT" 'Cleared:' && assert_contains "$OUT" 'Approve fixture — approval'; then pass "open and cleared needs print, including need without machine bead"; else fail "needs missing: $OUT"; fi
 # 4 bounces
-if assert_contains "$OUT" 'Fix the retry' && assert_contains "$OUT" 'tests failed; rework delivered' && assert_contains "$OUT" 'Fix the docs' && assert_contains "$OUT" 'docs missing; rework not started' && assert_contains "$OUT" 'Explain the refusal' && assert_contains "$OUT" 'no reason given; rework not started' && ! assert_contains "$OUT" 'Old bounce' && ! printf '%s' "$OUT" | grep -q 'verifier gate verdict — demo-back'; then pass "bounce rows use bd titles, reasons, rework state, and window filtering"; else fail "bounce missing: $OUT"; fi
+if assert_contains "$OUT" 'Fix the retry' && assert_contains "$OUT" 'tests failed; rework delivered' && assert_contains "$OUT" 'Fix the docs' && assert_contains "$OUT" 'docs missing; rework not started' && assert_contains "$OUT" 'Explain the refusal' && assert_contains "$OUT" 'no reason given; rework not started' && ! assert_contains "$OUT" 'Old bounce' && ! printf '%s' "$OUT" | grep >/dev/null 'verifier gate verdict — demo-back'; then pass "bounce rows use bd titles, reasons, rework state, and window filtering"; else fail "bounce missing: $OUT"; fi
 # 5 distress
 if assert_contains "$OUT" 'STOP: timed out' && assert_contains "$OUT" '20 min' && ! assert_contains "$OUT" '10 min' && assert_contains "$OUT" '→ APPROVE' && assert_contains "$OUT" '5 events, 1 still failing'; then pass "distress rows print details elapsed recovery and still-failing summary"; else fail "distress missing: $OUT"; fi
 # 6 stalled
@@ -104,20 +105,20 @@ if assert_contains "$OUT" '3 tasks titled "closed holder"' && ! assert_contains 
 HRC=0; HUMAN="$(run_digest --human --since "$SINCE" --until "$UNTIL" 2>"$FIX/human.err")" || HRC=$?; HC=0; while IFS= read -r line; do [ -n "$line" ] || continue; WHEELHOUSE_NEEDS_ROOT="$FIX/human-guard" bun "$PROJ/seats/needs.ts" open --title "$line" --body x --kind notify >/dev/null 2>&1 || HC=$((HC+1)); done <<EOF
 $HUMAN
 EOF
-if [ $HRC -eq 0 ] && ! printf '%s' "$HUMAN" | grep -Eiq 'demo-[a-z0-9]+|bead' && [ $HC -eq 0 ]; then pass "human output has no ids/bead and passes needs humanTextGuard"; else fail "human guard failed rc=$HRC count=$HC err=$(cat "$FIX/human.err") output=$HUMAN"; fi
+if [ $HRC -eq 0 ] && ! printf '%s' "$HUMAN" | grep -Ei >/dev/null 'demo-[a-z0-9]+|bead' && [ $HC -eq 0 ]; then pass "human output has no ids/bead and passes needs humanTextGuard"; else fail "human guard failed rc=$HRC count=$HC err=$(cat "$FIX/human.err") output=$HUMAN"; fi
 # 9 json
 JSON="$(run_digest --json --since "$SINCE" --until "$UNTIL")"; if printf '%s' "$JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{const j=JSON.parse(s); for(const k of ["window","namespace","seats","shipped","blocked","cleared","inReview","sentBack","failed","alerts"]) if(!(k in j)) process.exit(1);})'; then pass "json output has required top-level keys"; else fail "json missing keys: $JSON"; fi
 
 # 13 account labels stay out of every rendering
-if ! printf '%s\n%s\n%s' "$OUT" "$HUMAN" "$JSON" | grep -q 'claude-code-oauth-demo-own\|pool-oauth-demo-own\|SECRET-SHOULD-NOT-PRINT'; then pass "seats and pool account labels and account fields do not reach digest output"; else fail "account data leaked into output"; fi
+if ! printf '%s\n%s\n%s' "$OUT" "$HUMAN" "$JSON" | grep >/dev/null 'claude-code-oauth-demo-own\|pool-oauth-demo-own\|SECRET-SHOULD-NOT-PRINT'; then pass "seats and pool account labels and account fields do not reach digest output"; else fail "account data leaked into output"; fi
 # 14 failed detail lines are truncated before long tails
-if printf '%s' "$OUT" | grep -q 'STOP: timed out.*…' && ! printf '%s' "$OUT" | grep -q 'END-SHOULD-BE-TRUNCATED'; then pass "failed detail lines are truncated"; else fail "failed detail was not truncated: $OUT"; fi
+if printf '%s' "$OUT" | grep >/dev/null 'STOP: timed out.*…' && ! printf '%s' "$OUT" | grep >/dev/null 'END-SHOULD-BE-TRUNCATED'; then pass "failed detail lines are truncated"; else fail "failed detail was not truncated: $OUT"; fi
 # 15 human output scrubs absolute fixture root and fake HOME paths
-if ! printf '%s' "$HUMAN" | grep -q "$PROJ" && ! printf '%s' "$HUMAN" | grep -q "$FAKE_HOME" && printf '%s' "$HUMAN" | grep -q '\[local-path\]'; then pass "human output scrubs install root and fake HOME paths"; else fail "human output leaked local paths: $HUMAN"; fi
+if ! printf '%s' "$HUMAN" | grep >/dev/null "$PROJ" && ! printf '%s' "$HUMAN" | grep >/dev/null "$FAKE_HOME" && printf '%s' "$HUMAN" | grep >/dev/null '\[local-path\]'; then pass "human output scrubs install root and fake HOME paths"; else fail "human output leaked local paths: $HUMAN"; fi
 # 16 no-dash bounce falls back to no reason given rather than echoing VERDICT: BOUNCE
-if printf '%s' "$OUT" | grep -q 'Explain the refusal.*no reason given' && ! printf '%s' "$OUT" | grep -q 'Explain the refusal.*VERDICT: BOUNCE'; then pass "bounce without dash uses no reason given"; else fail "no-dash bounce reason wrong: $OUT"; fi
+if printf '%s' "$OUT" | grep >/dev/null 'Explain the refusal.*no reason given' && ! printf '%s' "$OUT" | grep >/dev/null 'Explain the refusal.*VERDICT: BOUNCE'; then pass "bounce without dash uses no reason given"; else fail "no-dash bounce reason wrong: $OUT"; fi
 # 17 human push keeps the full push value with ids scrubbed
-if printf '%s' "$HUMAN" | grep -q 'push: NOT CONSIDERED' && ! printf '%s' "$HUMAN" | grep -q 'push: NOT;' && ! printf '%s' "$HUMAN" | grep -q 'demo-ship'; then pass "human push keeps full value and scrubs ids"; else fail "human push value wrong: $HUMAN"; fi
+if printf '%s' "$HUMAN" | grep >/dev/null 'push: NOT CONSIDERED' && ! printf '%s' "$HUMAN" | grep >/dev/null 'push: NOT;' && ! printf '%s' "$HUMAN" | grep >/dev/null 'demo-ship'; then pass "human push keeps full value and scrubs ids"; else fail "human push value wrong: $HUMAN"; fi
 # 10 canaries
 cp "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.with-distress"; grep -v 'demo-stop-ok\|demo-stop-bad' "$PROJ/seats/inbox.with-distress" > "$PROJ/seats/inbox.jsonl"; NOFAIL="$(run_digest --since "$SINCE" --until "$UNTIL")"; mv "$PROJ/seats/inbox.with-distress" "$PROJ/seats/inbox.jsonl"; sed -i.bak '/^product-repo=/d' "$PROJ/wheelhouse/.template-source"; FALLBACK="$(run_digest --since "$SINCE" --until "$UNTIL")"; printf 'product-repo=product\n' >> "$PROJ/wheelhouse/.template-source"; rm -f "$PROJ/wheelhouse/.template-source.bak"
 if ! assert_contains "$NOFAIL" 'STOP: timed out' && assert_contains "$FALLBACK" 'Shipped'; then pass "canary removes distress line and product-repo fallback still renders"; else fail "canary failed nofail=$NOFAIL fallback=$FALLBACK"; fi
@@ -132,19 +133,19 @@ rm -f "$PROJ/seats/run/digest.last" "$PROJ/seats/run/desk.port"
 opened_before="$(grep -c '"type":"opened"' "$PROJ/seats/needs.jsonl" 2>/dev/null || echo 0)"
 NID1="$(run_digest --notify --since "$SINCE" --until "$UNTIL" 2>"$FIX/notify.err")"; NRC1=$?
 opened_after="$(grep -c '"type":"opened"' "$PROJ/seats/needs.jsonl" 2>/dev/null || echo 0)"
-if [ $NRC1 -eq 0 ] && printf '%s' "$NID1" | grep -Eq '^need-[a-z0-9]+' && [ $((opened_after-opened_before)) -eq 1 ] && node -e 'const fs=require("fs"); const rows=fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).map(JSON.parse); const ev=rows.at(-1); const until=new Date(process.argv[2]).toISOString(); if(ev.type!=="opened"||ev.kind!=="notify"||ev.machine?.source!=="digest:"+until||!/Build the package/.test(ev.body)||!/\[Nothing open\.\]/.test(ev.body)||/Full page:/.test(ev.body)) process.exit(1);' "$PROJ/seats/needs.jsonl" "$UNTIL"; then pass "--notify opens one notify need through needs.ts with human digest body"; else fail "notify open failed rc=$NRC1 id=$NID1 before=$opened_before after=$opened_after err=$(cat "$FIX/notify.err") ledger=$(tail -3 "$PROJ/seats/needs.jsonl")"; fi
+if [ $NRC1 -eq 0 ] && printf '%s' "$NID1" | grep -E >/dev/null '^need-[a-z0-9]+' && [ $((opened_after-opened_before)) -eq 1 ] && node -e 'const fs=require("fs"); const rows=fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).map(JSON.parse); const ev=rows.at(-1); const until=new Date(process.argv[2]).toISOString(); if(ev.type!=="opened"||ev.kind!=="notify"||ev.machine?.source!=="digest:"+until||!/Build the package/.test(ev.body)||!/\[Nothing open\.\]/.test(ev.body)||/Full page:/.test(ev.body)) process.exit(1);' "$PROJ/seats/needs.jsonl" "$UNTIL"; then pass "--notify opens one notify need through needs.ts with human digest body"; else fail "notify open failed rc=$NRC1 id=$NID1 before=$opened_before after=$opened_after err=$(cat "$FIX/notify.err") ledger=$(tail -3 "$PROJ/seats/needs.jsonl")"; fi
 NID2="$(run_digest --notify --since "$SINCE" --until "$UNTIL" 2>"$FIX/notify-rerun.err")"; NRC2=$?
 opened_rerun="$(grep -c '"type":"opened"' "$PROJ/seats/needs.jsonl" 2>/dev/null || echo 0)"
 if [ $NRC2 -eq 0 ] && [ "$NID2" = "$NID1" ] && [ "$opened_rerun" = "$opened_after" ]; then pass "--notify rerun for same until prints existing id and appends nothing"; else fail "notify rerun dedupe failed rc=$NRC2 id1=$NID1 id2=$NID2 opened_after=$opened_after opened_rerun=$opened_rerun err=$(cat "$FIX/notify-rerun.err")"; fi
 last_written="$(cat "$PROJ/seats/run/digest.last" 2>/dev/null || true)"
 BARE_ID="$(run_digest --notify 2>"$FIX/notify-bare.err")"; BARE_RC=$?
 BARE_JSON="$(WHEELHOUSE_NEEDS_ROOT="$PROJ" bun "$PROJ/seats/needs.ts" show "$BARE_ID" 2>/dev/null || true)"
-if [ "$last_written" = "$(node -e 'console.log(new Date(process.argv[1]).toISOString())' "$UNTIL")" ] && [ $BARE_RC -eq 0 ] && printf '%s' "$BARE_JSON" | grep -Eq 'Jan 01.*07:00 PM EST'; then pass "digest.last records until and bare --notify uses it as the next since"; else fail "digest.last/bare notify failed last=$last_written bare_rc=$BARE_RC body=$BARE_JSON err=$(cat "$FIX/notify-bare.err")"; fi
+if [ "$last_written" = "$(node -e 'console.log(new Date(process.argv[1]).toISOString())' "$UNTIL")" ] && [ $BARE_RC -eq 0 ] && printf '%s' "$BARE_JSON" | grep -E >/dev/null 'Jan 01.*07:00 PM EST'; then pass "digest.last records until and bare --notify uses it as the next since"; else fail "digest.last/bare notify failed last=$last_written bare_rc=$BARE_RC body=$BARE_JSON err=$(cat "$FIX/notify-bare.err")"; fi
 printf 'http://127.0.0.1:65530/needs\n' > "$PROJ/seats/run/desk.port"
 DESK_UNTIL=2026-01-05T00:00:00.000Z
 DESK_ID="$(run_digest --notify --since 2026-01-04T00:00:00Z --until "$DESK_UNTIL" 2>"$FIX/notify-desk.err")"; DESK_RC=$?
 DESK_JSON="$(WHEELHOUSE_NEEDS_ROOT="$PROJ" bun "$PROJ/seats/needs.ts" show "$DESK_ID" 2>/dev/null || true)"
-if [ $DESK_RC -eq 0 ] && printf '%s' "$DESK_JSON" | grep -q 'Full page: http://127.0.0.1:65530/digest'; then pass "--notify appends Full page digest URL when desk.port exists"; else fail "notify desk URL missing rc=$DESK_RC id=$DESK_ID body=$DESK_JSON err=$(cat "$FIX/notify-desk.err")"; fi
+if [ $DESK_RC -eq 0 ] && printf '%s' "$DESK_JSON" | grep >/dev/null 'Full page: http://127.0.0.1:65530/digest'; then pass "--notify appends Full page digest URL when desk.port exists"; else fail "notify desk URL missing rc=$DESK_RC id=$DESK_ID body=$DESK_JSON err=$(cat "$FIX/notify-desk.err")"; fi
 # Canary: if human rendering leaks ids, needs.ts refuses the notify and digest.last is not written.
 cp "$PROJ/seats/digest.ts" "$FIX/digest.good.ts"
 python3 - "$PROJ/seats/digest.ts" <<'PY'

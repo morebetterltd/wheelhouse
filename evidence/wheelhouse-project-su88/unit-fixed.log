@@ -1,0 +1,23 @@
+before: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+RUN ['bun', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-3/seats/fixtures/adapter-state-lock.ts', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-worktrees/worker-3/seats/adapter.ts', '[home]/Documents/_projects/morebetter-ltd/wheelhouse-project/.wheelhouse-runs/wheelhouse-project-su88/fixed-cases']
+PASS old closed empty state.lock is reclaimed and real state write commits
+PASS old closed malformed state.lock is reclaimed and real state write commits
+PASS fresh incomplete lock gets grace, then the same aged lock is reclaimed
+PASS old open empty lock is protected, then reclaimed only after close
+PASS live PID is never stolen by acquisition or an old owner's release
+PASS failed PID write never publishes an empty state.lock or leaks a candidate
+adapter state lock: PASS (0 failure(s))
+after: git -C <umbrella> reflog --format=%gs -5
+commit: overnight-pause: resume worker-3 too
+commit: Roster: add worker-3 (Codex, gpt-6.1-sol:high, own login), Keenan 2026-10-14
+commit: overnight-pause: check each worker is RUNNING after resume and retry up to 3 times (silent STOPPED seen on Meridian; wheelhouse-project-uqxw)
+commit: Reinstall the fleet pre-push guard (lost in the 12:34 fixture reset, see sg0z) and track it so a reset cannot drop it
+merge c0a0f98: Fast-forward
+
+umbrella safety: PASS (0 permitted new reflog entries); test exit=0

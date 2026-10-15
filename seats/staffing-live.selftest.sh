@@ -6,6 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 REAL_PI="$(command -v pi 2>/dev/null || true)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing-live.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 skip(){ PASS=$((PASS+1)); echo "ok $PASS - SKIP $*"; }
@@ -102,7 +103,7 @@ else
     pid=$!; REAL_PIDS="$REAL_PIDS $pid"
     seen=""
     for _ in $(seq 1 40); do seen="$(ps -p "$pid" -o command= 2>/dev/null | sed 's/ *$//')"; [ "$seen" = pi ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
-    if ! kill -0 "$pid" 2>/dev/null || [ "$seen" != pi ] || ! lsof -Fn -p "$pid" 2>/dev/null | grep -qF "n$fifo"; then ok_real=0; echo "real-pi probe failed for $entry pid=$pid ps=$seen err=$(tail -c 200 "$REAL_RUN/$entry.err" 2>/dev/null)" >&2; fi
+    if ! kill -0 "$pid" 2>/dev/null || [ "$seen" != pi ] || ! lsof -Fn -p "$pid" 2>/dev/null | grep -F >/dev/null "n$fifo"; then ok_real=0; echo "real-pi probe failed for $entry pid=$pid ps=$seen err=$(tail -c 200 "$REAL_RUN/$entry.err" 2>/dev/null)" >&2; fi
   done
   for pid in $REAL_PIDS; do kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
   [ "$ok_real" = 1 ] && pass "real pi starts in scratch login-free RPC state and each process holds its entry FIFO" || fail "real-pi scratch process/account probe failed"

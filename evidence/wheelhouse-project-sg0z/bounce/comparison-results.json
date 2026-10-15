@@ -1,0 +1,56 @@
+{
+  "requestedComparisons": [
+    {
+      "suite": "adapter",
+      "tree": "sg0z",
+      "tip": "9f4055dcc058b7754c709c1d9782f1a61aa0e5ce",
+      "exit": 0,
+      "capture": "bounce-adapter-sg0z-restored.log"
+    },
+    {
+      "suite": "adapter",
+      "tree": "main",
+      "tip": "6cb9dc9c2208d8baabb129a1f88fa8f06fd0d5d9",
+      "exit": 0,
+      "capture": "bounce-adapter-main.log"
+    },
+    {
+      "suite": "prune",
+      "tree": "sg0z",
+      "tip": "9f4055dcc058b7754c709c1d9782f1a61aa0e5ce",
+      "exit": 0,
+      "capture": "bounce-prune-sg0z.log"
+    },
+    {
+      "suite": "prune",
+      "tree": "main",
+      "tip": "6cb9dc9c2208d8baabb129a1f88fa8f06fd0d5d9",
+      "exit": 0,
+      "capture": "bounce-prune-main.log"
+    }
+  ],
+  "main1cAdapterExit": 0,
+  "samePathCeilingOffExit": 0,
+  "samePathCeilingOnExit": 0,
+  "pureSgOtherLegFailures": [
+    {
+      "capture": "bounce-adapter-sg0z-retry.log",
+      "exit": 1,
+      "failedAssertions": 3,
+      "leg": "2b pinned-cwd get_state launch timeout"
+    },
+    {
+      "capture": "bounce-adapter-sg0z-final.log",
+      "exit": 1,
+      "failedAssertions": 3,
+      "leg": "2b pinned-cwd get_state launch timeout"
+    }
+  ],
+  "firstSgAttempt": {
+    "suiteExit": -9,
+    "wrapperExit": 247,
+    "status": "interrupted before 2a; inconclusive"
+  },
+  "allThreeArchivesMatchPinnedSeatsTrees": true,
+  "allThreeEnclosingReposUnchanged": true
+}

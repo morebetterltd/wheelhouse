@@ -106,12 +106,17 @@ trap cleanup EXIT INT TERM
 
 # --- fixture -----------------------------------------------------------------
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-recover-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
 # /usr/sbin is where macOS keeps lsof; recover dies honestly without it.
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/sbin:/sbin:/usr/bin:/bin"
+# Only this fixture's executable writes this ledger, even when it exits quickly
+# or rewrites its title. Another fleet's bare `pi` can never enter this count.
+PI_PIDS="$FIX/pi-starts.pids"
+: > "$PI_PIDS"
 
 # Fake bd: if recover ever reaches for the graph, this logs the call and the
 # no-bd-calls assertion in phase 5 catches it.
@@ -134,6 +139,7 @@ cat > "$BIN/pi" <<STUB
 #!/usr/bin/env node
 process.title = "pi"; // the real pi does this too — ps shows NO argv
 const fs = require("fs"), path = require("path"), crypto = require("crypto");
+fs.appendFileSync("$PI_PIDS", String(process.pid) + "\n");
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
 const args = process.argv.slice(2);
@@ -232,7 +238,7 @@ recover_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/se
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seat_line() { printf '%s\n' "$OUT" | grep "^$1 "; }
 state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
-pi_count() { ps -axo command= | sed 's/ *$//' | grep -cx pi | tr -d ' '; }
+pi_count() { awk 'END { print NR + 0 }' "$PI_PIDS"; }
 
 # a pid that is definitely dead (spawned, then reaped)
 sleep 0.01 & DEADPID=$!
@@ -263,9 +269,9 @@ else fail "could not kill the stub seat"; fi
 recover_run
 if [ $RC -eq 0 ]; then pass "recover exits 0"
 else fail "recover exited ${RC}: $OUT"; fi
-if seat_line worker-1 | grep -q 'DEAD'; then pass "killed seat classified DEAD"
+if seat_line worker-1 | grep >/dev/null 'DEAD'; then pass "killed seat classified DEAD"
 else fail "worker-1 not classified DEAD: $OUT"; fi
-if seat_line worker-1 | grep -q 'bead bead-98m'; then pass "the unfinished bead is named on the seat line"
+if seat_line worker-1 | grep >/dev/null 'bead bead-98m'; then pass "the unfinished bead is named on the seat line"
 else fail "lastBead bead-98m not named: $OUT"; fi
 if says "resume: bun $PROJ/seats/adapter.ts resume worker-1"; then
   pass "exact resume command printed"
@@ -274,7 +280,7 @@ if says "removed orphaned FIFO: $PROJ/seats/run/worker-1.stdin"; then
   pass "the killed seat's orphaned FIFO was removed and printed"
 else fail "orphaned FIFO of the killed seat not cleaned: $OUT"; fi
 
-RESUME_CMD="$(printf '%s\n' "$OUT" | sed -n 's/^  resume: \(.*\)   #.*$/\1/p' | head -1)"
+RESUME_CMD="$(printf '%s\n' "$OUT" | sed -n 's/^  resume: \(.*\)   #.*$/\1/p' | sed -n '1p')"
 RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" sh -c "$RESUME_CMD" 2>&1)" || RC=$?
 if [ $RC -eq 0 ]; then pass "the printed resume command runs clean"
 else fail "printed resume command failed (exit $RC): $OUT"; fi
@@ -307,18 +313,18 @@ fs.writeFileSync('$STATE',JSON.stringify(s,null,2)+'\n');
 recover_run
 if [ $RC -eq 0 ]; then pass "fresh recover process exits 0"
 else fail "recover exited ${RC}: $OUT"; fi
-if seat_line worker-1 | grep -q 'RUNNING'; then pass "live seat classified RUNNING (holds its FIFO, despite a bare-pi ps line)"
+if seat_line worker-1 | grep >/dev/null 'RUNNING'; then pass "live seat classified RUNNING (holds its FIFO, despite a bare-pi ps line)"
 else fail "worker-1 should be RUNNING: $OUT"; fi
-if seat_line worker-dead | grep -q 'DEAD' && says "resume worker-dead"; then
+if seat_line worker-dead | grep >/dev/null 'DEAD' && says "resume worker-dead"; then
   pass "dead pid with intact session classified DEAD, resume offered"
 else fail "worker-dead misclassified: $OUT"; fi
-if seat_line worker-stale | grep -q 'STALE' && ! says "resume worker-stale"; then
+if seat_line worker-stale | grep >/dev/null 'STALE' && ! says "resume worker-stale"; then
   pass "entry with no session artifacts classified STALE, no resume offered"
 else fail "worker-stale misclassified: $OUT"; fi
-if seat_line worker-reuse | grep -q 'DEAD' && seat_line worker-reuse | grep -q 'reused or foreign'; then
+if seat_line worker-reuse | grep >/dev/null 'DEAD' && seat_line worker-reuse | grep >/dev/null 'reused or foreign'; then
   pass "live-but-reused pid classified DEAD and called out (restart hazard)"
 else fail "worker-reuse (pid held by 'sleep 300') misclassified: $OUT"; fi
-if seat_line worker-spoof | grep -q 'DEAD' && ! seat_line worker-spoof | grep -q 'RUNNING'; then
+if seat_line worker-spoof | grep >/dev/null 'DEAD' && ! seat_line worker-spoof | grep >/dev/null 'RUNNING'; then
   pass "argv spoof (tail -f on the role brief) classified DEAD — identity is fds, not command lines"
 else fail "worker-spoof (tail -f carrying the brief path in argv) misclassified: $OUT"; fi
 
@@ -331,9 +337,9 @@ s.seats['worker-ghost']={...w,pid:$DEADPID,lastBead:'bead-ghost'};
 fs.writeFileSync('$STATE',JSON.stringify(s,null,2)+'\n');
 "
 recover_run
-if seat_line worker-ghost | grep -q 'DEAD'; then pass "ghost sharing a RUNNING seat's session is DEAD"
+if seat_line worker-ghost | grep >/dev/null 'DEAD'; then pass "ghost sharing a RUNNING seat's session is DEAD"
 else fail "worker-ghost not DEAD: $OUT"; fi
-if says "REFUSED double-resume" && printf '%s\n' "$OUT" | grep -A1 '^worker-ghost ' | grep -q 'worker-1'; then
+if says "REFUSED double-resume" && printf '%s\n' "$OUT" | grep -A1 '^worker-ghost ' | grep >/dev/null 'worker-1'; then
   pass "resume REFUSED, naming who holds the session"
 else fail "no refusal naming worker-1: $OUT"; fi
 if ! says "resume worker-ghost"; then
@@ -356,15 +362,16 @@ else fail "worker-1.stdin was removed while the seat is RUNNING"; fi
 
 phase "5. no duplicate integration — recover observes; its only writes are FIFO removals"
 cp "$STATE" "$FIX/state.before"
-PI_BEFORE="$(pi_count)"
+PI_BEFORE="$(pi_count)" || exit 2
+[ "$PI_BEFORE" -gt 0 ] || fail "fixture pi launch ledger is empty despite the completed spawn/resume"
 recover_run
 if cmp -s "$STATE" "$FIX/state.before"; then
   pass "state.json byte-identical after recover (no lastBead mutation, no re-dispatch record)"
-else fail "recover MUTATED state.json: $(diff "$FIX/state.before" "$STATE" | head -5)"; fi
-PI_AFTER="$(pi_count)"
+else fail "recover MUTATED state.json: $(diff "$FIX/state.before" "$STATE" | sed -n '1,5p')"; fi
+PI_AFTER="$(pi_count)" || exit 2
 if [ "$PI_AFTER" = "$PI_BEFORE" ]; then
-  pass "no pi spawned (bare-'pi'-titled process count: $PI_BEFORE before, $PI_AFTER after)"
-else fail "pi process count changed: $PI_BEFORE -> $PI_AFTER"; fi
+  pass "no pi spawned (fixture stub launches: $PI_BEFORE before, $PI_AFTER after)"
+else fail "fixture pi launch count changed: $PI_BEFORE -> $PI_AFTER"; fi
 if [ ! -s "$BD_LOG" ]; then
   pass "no bd calls (fake bd on PATH logged nothing)"
 else fail "recover called bd: $(cat "$BD_LOG")"; fi
@@ -400,7 +407,7 @@ else
     else
       fail "real pi's ps line is '$PS_LINE' after 20s — the title-rewrite premise changed; re-examine recover's identity mechanism AND this suite"
     fi
-    if lsof -Fn -p "$PROBE_PID" 2>/dev/null | grep -qF "n$RPDIR/probe.stdin"; then
+    if lsof -Fn -p "$PROBE_PID" 2>/dev/null | grep -F >/dev/null "n$RPDIR/probe.stdin"; then
       pass "real pi holds its stdin FIFO where lsof sees it — the identity mechanism recover relies on"
     else
       fail "lsof does not show the FIFO on the real pi — recover's fd-based identity would misclassify real seats"
@@ -464,6 +471,15 @@ EOF
   fi
   kill "$TAIL_PID" 2>/dev/null; TAIL_PID=""
 fi
+
+# A launch that exits before a host ps snapshot must still trip the counter.
+PI_BEFORE="$(pi_count)" || exit 2
+RC=0
+OUT="$(env -u PI_CODING_AGENT_DIR PATH="$RUN_PATH" "$BIN/pi" </dev/null 2>&1)" || RC=$?
+PI_AFTER="$(pi_count)" || exit 2
+if [ "$RC" -eq 1 ] && says "stub pi: no PI_CODING_AGENT_DIR" && [ "$PI_AFTER" -eq $((PI_BEFORE + 1)) ]; then
+  pass "canary: launch counter catches a short-lived fixture pi after it has exited"
+else fail "canary: own pi launch not detected ($PI_BEFORE -> $PI_AFTER, exit $RC): $OUT"; fi
 
 adapter_run stop worker-1
 
