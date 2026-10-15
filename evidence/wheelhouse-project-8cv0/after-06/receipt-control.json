@@ -1,0 +1,10 @@
+{
+  "exit": 1,
+  "removed": "selftest-sweep: PASS <task-worktree>/seats/concurrency.selftest.sh",
+  "aggregateUnchanged": true,
+  "aggregates": [
+    "selftest-sweep: PASS (48 suite(s))",
+    "selftest-sweep: PASS (1 suite(s))"
+  ],
+  "failure": "PASS inventory differs"
+}

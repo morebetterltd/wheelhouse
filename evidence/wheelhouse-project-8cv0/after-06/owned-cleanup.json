@@ -1,0 +1,11 @@
+{
+  "action": "post-gate TERM only validated own fixture heralds",
+  "pids": [
+    30527,
+    32971
+  ],
+  "before": "30527     1 Thu Oct 15 08:03:07 2026     bun seats/herald.ts\n32971     1 Thu Oct 15 08:03:12 2026     bun seats/herald.ts",
+  "cwd": "p30527\nfcwd\nn<bead-run>/after-06/tmp/wheelhouse-staffing-live.hSSQtW/project\np32971\nfcwd\nn<bead-run>/after-06/tmp/wheelhouse-staffing-live.hSSQtW/canary-herald",
+  "automaticCleanup": false,
+  "productionOrForeignSignals": false
+}

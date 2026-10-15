@@ -1,0 +1,137 @@
+node:assert:150
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: PASS inventory differs
++ actual - expected
+... Skipped lines
+
+  [
+    'adapter.selftest.sh',
+    'alerts.selftest.sh',
+    'channel-credentials.selftest.sh',
+    'channels.selftest.sh',
+...
+    'comms.selftest.sh',
+-   'concurrency.selftest.sh',
+    'courier.selftest.sh',
+    'desk.selftest.sh',
+    'digest.selftest.sh',
+    'evidence-scrub.selftest.sh',
+    'fleet-gate.selftest.sh',
+
+    at Object.<anonymous> (<task-worktree>/evidence/wheelhouse-project-8cv0/assert-sweep.cjs:11:8)
+    at Module._compile (node:internal/modules/cjs/loader:1706:14)
+    at Object..js (node:internal/modules/cjs/loader:1839:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [
+    'adapter.selftest.sh',
+    'alerts.selftest.sh',
+    'channel-credentials.selftest.sh',
+    'channels.selftest.sh',
+    'cockpit.selftest.sh',
+    'commander-voice-lint.selftest.sh',
+    'comms.selftest.sh',
+    'courier.selftest.sh',
+    'desk.selftest.sh',
+    'digest.selftest.sh',
+    'evidence-scrub.selftest.sh',
+    'fleet-gate.selftest.sh',
+    'fleet-pre-push-guard.selftest.sh',
+    'fleet-snapshot.selftest.sh',
+    'floor.selftest.sh',
+    'herald.selftest.sh',
+    'host-build-shim.selftest.sh',
+    'intent-check.selftest.sh',
+    'isolation.selftest.sh',
+    'legibility.selftest.sh',
+    'needs.selftest.sh',
+    'never-lose-work.selftest.sh',
+    'pid-ownership.selftest.sh',
+    'pipefail.selftest.sh',
+    'placeholder-grep.selftest.sh',
+    'pool.selftest.sh',
+    'principal-sentinel.selftest.sh',
+    'prune.selftest.sh',
+    'push-authority-lint.selftest.sh',
+    'recover.selftest.sh',
+    'report-issues.selftest.sh',
+    'reset.selftest.sh',
+    'seat-env.selftest.sh',
+    'seat-worktree.selftest.sh',
+    'selftest-lib.selftest.sh',
+    'selftest-sweep.selftest.sh',
+    'specimen-leak.selftest.sh',
+    'staffing-live.selftest.sh',
+    'staffing.selftest.sh',
+    'stop-all.selftest.sh',
+    'supervisor.selftest.sh',
+    'template-drift.selftest.sh',
+    'transports.selftest.sh',
+    'upgrade-runbook.selftest.sh',
+    'verify.selftest.sh',
+    'walk.selftest.sh',
+    'worktree-root.selftest.sh'
+  ],
+  expected: [
+    'adapter.selftest.sh',
+    'alerts.selftest.sh',
+    'channel-credentials.selftest.sh',
+    'channels.selftest.sh',
+    'cockpit.selftest.sh',
+    'commander-voice-lint.selftest.sh',
+    'comms.selftest.sh',
+    'concurrency.selftest.sh',
+    'courier.selftest.sh',
+    'desk.selftest.sh',
+    'digest.selftest.sh',
+    'evidence-scrub.selftest.sh',
+    'fleet-gate.selftest.sh',
+    'fleet-pre-push-guard.selftest.sh',
+    'fleet-snapshot.selftest.sh',
+    'floor.selftest.sh',
+    'herald.selftest.sh',
+    'host-build-shim.selftest.sh',
+    'intent-check.selftest.sh',
+    'isolation.selftest.sh',
+    'legibility.selftest.sh',
+    'needs.selftest.sh',
+    'never-lose-work.selftest.sh',
+    'pid-ownership.selftest.sh',
+    'pipefail.selftest.sh',
+    'placeholder-grep.selftest.sh',
+    'pool.selftest.sh',
+    'principal-sentinel.selftest.sh',
+    'prune.selftest.sh',
+    'push-authority-lint.selftest.sh',
+    'recover.selftest.sh',
+    'report-issues.selftest.sh',
+    'reset.selftest.sh',
+    'seat-env.selftest.sh',
+    'seat-worktree.selftest.sh',
+    'selftest-lib.selftest.sh',
+    'selftest-sweep.selftest.sh',
+    'specimen-leak.selftest.sh',
+    'staffing-live.selftest.sh',
+    'staffing.selftest.sh',
+    'stop-all.selftest.sh',
+    'supervisor.selftest.sh',
+    'template-drift.selftest.sh',
+    'transports.selftest.sh',
+    'upgrade-runbook.selftest.sh',
+    'verify.selftest.sh',
+    'walk.selftest.sh',
+    'worktree-root.selftest.sh'
+  ],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.21.0

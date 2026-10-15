@@ -1,0 +1,6 @@
+p30527
+fcwd
+n<bead-run>/after-06/tmp/wheelhouse-staffing-live.hSSQtW/project
+p32971
+fcwd
+n<bead-run>/after-06/tmp/wheelhouse-staffing-live.hSSQtW/canary-herald
