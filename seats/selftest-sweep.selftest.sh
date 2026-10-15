@@ -207,17 +207,22 @@ then
 else
   fail "active lock was not a complete marked directory"
 fi
-SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=B SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/B.out" 2> "$FIX/B.err" &
+# Readiness is a real queued retry, acknowledged after the diagnostic point.
+# The controller also signals early child exit, so absent output cannot hang.
+mkfifo "$FIX/B-ready"
+exec 9<>"$FIX/B-ready"
+SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=B SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bun "$HERE/fixtures/sweep-wait-diagnostic.ts" "$SWEEP" "$FIX" 4>&9 > "$FIX/B.out" 2> "$FIX/B.err" &
 PID_B=$!
-sleep 0.2
-if grep -q 'waiting for host-wide lock' "$FIX/B.err" && ! grep -q '^B start$' "$EVENTS" 2>/dev/null; then
+IFS= read -r WAIT_SIGNAL <&9
+if [ "$WAIT_SIGNAL" = ticket ] && grep -q "waiting for host-wide lock .*queue_position=1 holder=pid=$PID_A started=" "$FIX/B.err" && ! grep -q '^B start$' "$EVENTS" 2>/dev/null; then
   pass "second fixture sweep reports the holder and waits before starting"
 else
-  fail "second fixture sweep did not wait (B.err=$(cat "$FIX/B.err" 2>/dev/null) events=$(cat "$EVENTS" 2>/dev/null))"
+  fail "second fixture sweep did not wait (signal=$WAIT_SIGNAL B.err=$(cat "$FIX/B.err" 2>/dev/null) events=$(cat "$EVENTS" 2>/dev/null))"
 fi
 : > "$RELEASE_A"
 wait "$PID_A"; RC_A=$?
 wait "$PID_B"; RC_B=$?
+exec 9>&-
 ORDER="$(tr '\n' '|' < "$EVENTS")"
 if [ "$RC_A" -eq 0 ] && [ "$RC_B" -eq 0 ] && [ "$ORDER" = 'A start|A end|B start|B end|' ]; then
   pass "host-wide lock serializes concurrent fixture sweeps in order"
