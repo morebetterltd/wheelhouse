@@ -58,7 +58,7 @@ if(kind==='prune') {
   assert(start>=0&&end>start,'actual prune tmp allocation block absent');
   const cleanup=text.split('\n').find(line=>line.startsWith('cleanup(){'));
   assert(cleanup,'actual prune cleanup absent');
-  body=`. "$I8SM_SITE"\nFIX="$(selftest_make_fixture_dir "$TMPDIR/owned-fixture.XXXXXX")" || exit 2\nselftest_isolate_git "$FIX" || exit 2\nTMP_SCRATCH=()\n${cleanup}\nCLOSED_ID=fixture-closed\nOPEN_ID=fixture-open\n${text.slice(start,end)}\nprintf '%s\\n' "$CLOSED_TMP" "$OPEN_TMP" > "$I8SM_CASE/children"\ncleanup`;
+  body=`. "$I8SM_SITE"\nFIX="$(selftest_make_fixture_dir "$TMPDIR/owned-fixture.XXXXXX")" || exit 2\nselftest_isolate_git "$FIX" || exit 2\nTMP_SCRATCH=()\n${cleanup}\nCLOSED_ID=fixture-closed\nOPEN_ID=fixture-open\nROOT="$I8SM_CASE/install"\nmkdir -p "$ROOT/.wheelhouse-runs/$OPEN_ID-build"\nprintf 'open run fixture\\n' > "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt"\ntest -s "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt" || exit 94\n${text.slice(start,end)}\nprintf '%s\\n' "$CLOSED_TMP" "$OPEN_TMP" > "$I8SM_CASE/children"\nprintf '%s\\n' "$OPEN_RUNS_BEFORE" "$OPEN_TMP_BEFORE" > "$I8SM_CASE/hashes"\ncleanup`;
   site=path.join(source,'seats/selftest-lib.sh');
 }
 if(kind==='lsof') {
@@ -123,10 +123,16 @@ try {
   const failures:string[]=[];
   if(JSON.stringify(before)!==JSON.stringify(after))failures.push('OLD predictable name was adopted, changed, or deleted');
   if((result as {code:number|null}).code!==(kind==='bootstrap-second-fail'?1:0))failures.push('unexpected site exit '+JSON.stringify(result));
+  if(stderr!==(kind==='bootstrap-second-fail'?'I8SM_SECOND_ALLOCATION_REFUSED\n':''))failures.push('unexpected child stderr (not discarded): '+stderr);
   if(allocations.length===0)failures.push('no exclusive allocation observed');
   if(kind==='claude'&&fs.readFileSync(pkills,'utf8'))failures.push('driver attempted bare pkill -f');
   for(const file of allocations){if(!file.startsWith(tmp+'/'))failures.push('allocation escaped fixture TMPDIR: '+file);if(fs.existsSync(file))failures.push('owned allocation not cleaned: '+file);if(oldNames.includes(file))failures.push('old name adopted as allocation');}
-  if(kind==='prune'){const children=fs.readFileSync(path.join(root,'children'),'utf8').trim().split('\n');for(const file of children)if(oldNames.includes(file)||fs.existsSync(file))failures.push('prune child adopted old name or survived cleanup: '+file);}
+  if(kind==='prune'){
+    const children=fs.readFileSync(path.join(root,'children'),'utf8').trim().split('\n');
+    for(const file of children)if(oldNames.includes(file)||fs.existsSync(file))failures.push('prune child adopted old name or survived cleanup: '+file);
+    const hashes=fs.readFileSync(path.join(root,'hashes'),'utf8').trim().split('\n');
+    if(hashes.length!==2||hashes.some(h=>!(/^[a-f0-9]{64}$/).test(h)))failures.push('prune measured an absent run/tmp subject');
+  }
   if(kind.startsWith('bootstrap')&&kind!=='bootstrap-second-fail'&&!stdout.includes('INTEGRITY OK'))failures.push('actual integrity recipe did not finish');
   if(kind==='bootstrap-second-fail'&&!stderr.includes('I8SM_SECOND_ALLOCATION_REFUSED'))failures.push('second-allocation failure was not exercised');
   if(failures.length)throw Error(failures.join('; '));
