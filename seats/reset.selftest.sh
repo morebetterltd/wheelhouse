@@ -310,9 +310,9 @@ phase "4. canary — can the mid-turn check detect a reset with the refusal remo
 CAN="$FIX/can-a"
 build_proj "$CAN" can-a
 env ADAPTER="$ADAPTER" CAN_ADAPTER="$CAN/seats/adapter.ts" bun - <<'JS'
-const fs=(await import('node:fs')).default,src=fs.readFileSync(process.env.ADAPTER,'utf8'),old='    if (st.data?.isStreaming) {\n';
-if(!src.includes(old)) throw new Error('canary: could not find exact isStreaming refusal line');
-fs.writeFileSync(process.env.CAN_ADAPTER,src.replace(old,'    if (false && st.data?.isStreaming) {\n'));
+const fs=(await import('node:fs')).default,src=fs.readFileSync(process.env.ADAPTER,'utf8'),old='    if (st.data?.isStreaming) {\n      die(\n';
+if(src.split(old).length!==2) throw new Error('canary: expected exactly one reset isStreaming refusal');
+fs.writeFileSync(process.env.CAN_ADAPTER,src.replace(old,'    if (false && st.data?.isStreaming) {\n      die(\n'));
 JS
 if cmp -s "$ADAPTER" "$CAN/seats/adapter.ts"; then
   fail "canary: could not cut the isStreaming refusal — the line no longer matches, so the canary proves nothing"
