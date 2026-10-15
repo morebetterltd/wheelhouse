@@ -2,6 +2,8 @@
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 set -uo pipefail
+# Ordinary round trips exercise the commander; actor-specific legs opt in.
+unset BEADS_ACTOR
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 SCRIPT="${1:-$HERE/needs.ts}"
 SCRUB="$HERE/evidence-scrub.sh"
@@ -21,7 +23,7 @@ FIX="$(cd "$FIX" && pwd -P)" || exit 2
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats" "$ROOT/wheelhouse"
 printf 'namespace=wheelhouse-project\n' > "$ROOT/wheelhouse/.template-source"
 cat > "$ROOT/seats/seats.json" <<'JSON'
-{ "seats": { "worker-1": { "role": "worker" }, "reviewer": { "role": "verifier" } } }
+{ "seats": { "worker-1": { "role": "worker" }, "reviewer": { "role": "verifier" }, "commander": { "role": "commander" } } }
 JSON
 RUN_SCRIPT="$SCRIPT"
 run(){ RC=0; OUT="$(WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" "$@" 2>&1)" || RC=$?; }
@@ -64,7 +66,37 @@ cat >> "$ROOT/seats/needs.jsonl" <<JSONL
 JSONL
 run list --unread; if [ $RC -eq 0 ] && says "$MSG_NEED open question"; then pass "list --unread shows an unread human message"; else fail "list --unread missed human message (rc=$RC): $OUT"; fi
 SHOW="$(json show "$MSG_NEED")"; run list --unread; if [ $RC -eq 0 ] && ! says "$MSG_NEED" && printf '%s\n' "$SHOW" | grep -q '"type": "read"'; then pass "show clears unread human message"; else fail "show did not clear human message (rc=$RC out=$OUT show=$SHOW)"; fi
-phase "6. canary — refusal removal is caught"
+phase "6. only the commander opens, says, and closes; sentinel relay is once"
+STOP_NEEDS='STOP: seats do not open needs; write a line beginning @commander: in your own output and the commander opens the need'
+ledger_sha(){ [ -s "$ROOT/seats/needs.jsonl" ] || return 2; shasum -a 256 "$ROOT/seats/needs.jsonl" | awk '{print $1}'; }
+BEFORE="$(ledger_sha)"
+BEADS_ACTOR=worker-1 run open --title t --body b
+[ "$RC" -eq 2 ] && [ "$OUT" = "$STOP_NEEDS" ] && [ "$(ledger_sha)" = "$BEFORE" ] && pass 'actor refusal: worker open exits 2 with exact STOP and byte-identical ledger' || fail "worker open refusal rc=$RC: $OUT"
+BEADS_ACTOR=reviewer run say "$NEED2" 'Please decide'
+[ "$RC" -eq 2 ] && [ "$OUT" = "$STOP_NEEDS" ] && [ "$(ledger_sha)" = "$BEFORE" ] && pass 'say refusal: reviewer exits 2 with exact STOP and byte-identical ledger' || fail "reviewer say refusal rc=$RC: $OUT"
+BEADS_ACTOR=worker-1 run close "$NEED2"
+[ "$RC" -eq 2 ] && [ "$OUT" = "$STOP_NEEDS" ] && [ "$(ledger_sha)" = "$BEFORE" ] && pass 'close refusal: worker exits 2 without a ledger write' || fail "worker close refusal rc=$RC: $OUT"
+WHEELHOUSE_BEADS_ACTOR_WORKER_1=fixture-worker-alias BEADS_ACTOR=fixture-worker-alias run open --title t --body b
+[ "$RC" -eq 2 ] && [ "$OUT" = "$STOP_NEEDS" ] && [ "$(ledger_sha)" = "$BEFORE" ] && pass 'actor override maps back to the roster worker and refuses without a write' || fail "worker override refusal rc=$RC: $OUT"
+BEADS_ACTOR=someone-not-rostered run open --title t --body b --source unknown-actor
+[ "$RC" -eq 0 ] && [[ "$OUT" =~ ^need-[a-z0-9]{4}$ ]] && pass 'actor not on the roster may open a need' || fail "unrostered actor open rc=$RC: $OUT"
+BEADS_ACTOR=commander run open --title t --body b --source commander-actor
+COMMANDER_RC="$RC"; COMMANDER_ID="$OUT"
+WHEELHOUSE_BEADS_ACTOR_COMMANDER=fixture-commander-alias BEADS_ACTOR=fixture-commander-alias run open --title t --body b --source commander-alias
+[ "$COMMANDER_RC" -eq 0 ] && [[ "$COMMANDER_ID" =~ ^need-[a-z0-9]{4}$ ]] && [ "$RC" -eq 0 ] && [[ "$OUT" =~ ^need-[a-z0-9]{4}$ ]] && pass 'roster commander and its actor override may open needs' || fail "commander role/override open rc=$COMMANDER_RC/$RC: $COMMANDER_ID / $OUT"
+run open --title 'Sentinel question' --body 'Please decide' --source sentinel:abc123
+SENTINEL_ID="$OUT"; SENTINEL_RC="$RC"; AFTER_FIRST="$(ledger_sha)"
+run open --title 'Sentinel question replay' --body 'Please decide again' --source sentinel:abc123
+SECOND_RC="$RC"; SECOND_ID="$OUT"; AFTER_SECOND="$(ledger_sha)"
+run close "$SENTINEL_ID"; CLOSE_RC="$RC"; AFTER_CLOSE="$(ledger_sha)"
+run open --title 'Old sentinel re-read' --body 'Must not reopen' --source sentinel:abc123
+COUNT="$(grep -c '"source":"sentinel:abc123"' "$ROOT/seats/needs.jsonl" || true)"
+[ "$SENTINEL_RC" -eq 0 ] && [ "$SECOND_RC" -eq 0 ] && [ "$CLOSE_RC" -eq 0 ] && [ "$RC" -eq 0 ] && [ "$SENTINEL_ID" = "$SECOND_ID" ] && [ "$SENTINEL_ID" = "$OUT" ] && [ "$AFTER_FIRST" = "$AFTER_SECOND" ] && [ "$AFTER_CLOSE" = "$(ledger_sha)" ] && [ "$COUNT" -eq 1 ] && pass 'sentinel source dedupe: two opens and a third after close write one opened event' || fail "sentinel source dedupe failed rc=$SENTINEL_RC/$SECOND_RC/$CLOSE_RC/$RC ids=$SENTINEL_ID/$SECOND_ID/$OUT count=$COUNT"
+run open --title 'Recurring question' --body 'Please decide' --source recurring-question
+OLD_ID="$OUT"; run close "$OLD_ID"; run open --title 'New occurrence' --body 'Please decide' --source recurring-question
+COUNT="$(grep -c '"source":"recurring-question"' "$ROOT/seats/needs.jsonl" || true)"
+[ "$RC" -eq 0 ] && [ "$OLD_ID" != "$OUT" ] && [ "$COUNT" -eq 2 ] && pass 'non-sentinel source still reopens after close' || fail "ordinary source behavior changed rc=$RC old=$OLD_ID new=$OUT count=$COUNT"
+phase "7. canary — refusal removal is caught"
 SAB="$FIX/needs-no-refusal.ts"
 perl -0pe 's/export function humanTextGuard\(text:string, where:string, root=ROOT\)\{.*?\nfunction seatNames/export function humanTextGuard(text:string, where:string, root=ROOT){ }\nfunction seatNames/s' "$SCRIPT" > "$SAB"
 chmod +x "$SAB"

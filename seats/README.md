@@ -64,10 +64,16 @@ JSONL ledger for requests that need a principal or other human. It mirrors the
 herald inbox shape: one JSON object per line, never edited in place, ignored by
 git. `WHEELHOUSE_NEEDS_ROOT=/path/to/install` overrides the install root for
 fixtures and tools, the same way the herald has `WHEELHOUSE_HERALD_ROOT`.
+Only the commander may `open`, `say`, or `close` a human need; a non-commander
+roster seat's `BEADS_ACTOR` (including its configured actor override) is refused
+before any ledger write. Human/desk `answer`, `read`, `show`, and `list` are unchanged.
+
+A seat that needs a human writes a line beginning `@commander:` in its own output; the herald records a `sentinel` inbox row for the commander, who alone opens the human need.
+After reading that row, the commander runs `bun seats/needs.ts open --title <t> --body <b> --source sentinel:<inbox-row-id>`; repeating the row returns the existing need ID without another opened event, even after that need is closed.
 
 Subcommands:
 
-- `bun seats/needs.ts open --title <t> --body <b> [--option "<label>: <text>"]... [--default "<label>; applies <when>"] [--consequence <c>] [--kind question|approval|notify|task] [--bead <id>] [--seat <name>] [--source <opaque>] [--from-stdin]` opens a need and prints its `need-xxxx` id. `--from-stdin` reads an `@principal:` block: the first line must begin `@principal:`, the text after it becomes the title, and the remaining lines become the body; if there are no remaining lines, the body repeats the title so one-line sentinel requests are valid. `--source` de-duplicates repeat opens: if an open or answered need with that source already exists, the command appends nothing and prints the existing id.
+- `bun seats/needs.ts open --title <t> --body <b> [--option "<label>: <text>"]... [--default "<label>; applies <when>"] [--consequence <c>] [--kind question|approval|notify|task] [--bead <id>] [--seat <name>] [--source <opaque>] [--from-stdin]` opens a need and prints its `need-xxxx` id. `--from-stdin` reads an `@principal:` block: the first line must begin `@principal:`, the text after it becomes the title, and the remaining lines become the body; if there are no remaining lines, the body repeats the title so one-line sentinel requests are valid. `--source` de-duplicates repeat opens: a `sentinel:` source returns its existing id without a write even after closure; every other source de-duplicates only open or answered needs and may open a new need after closure.
 - `bun seats/needs.ts say <id> <text>` appends a commander message for the human.
 - `bun seats/needs.ts answer <id> <text> [--via desk|cli|<transport>]` records a human answer. If `<text>` equals an option label or option text, the folded state records `choice` as that label.
 - `bun seats/needs.ts show <id>` prints the folded JSON state for one need.
@@ -838,6 +844,9 @@ The herald is a standalone, non-LLM daemon. It tails every `seats/logs/*.jsonl` 
 | `need-message` | `input-required` | a human adds a message to a need in `seats/needs.jsonl` |
 | `relay-request` | `input-required` | a non-commander asks the commander to pass a declared-channel message through `seats/comms.jsonl` |
 | `inbound` | `terminal` | a declared readable stakeholder channel produced untrusted information |
+
+A seat that needs a human writes a line beginning `@commander:` in its own output; the herald records a `sentinel` inbox row for the commander, who alone opens the human need.
+After reading that row, the commander runs `bun seats/needs.ts open --title <t> --body <b> --source sentinel:<inbox-row-id>`; repeating the row returns the existing need ID without another opened event, even after that need is closed.
 
 Each inbox row carries a stable source identity (`source.log`, `source.offset`, source event type) and a content hash id. The herald persists its log offset and seen set after every processed line, and `--drain` deduplicates against every stable `id` it has ever drained, making append-before-state and eviction-horizon duplicate rows harmless before a commander reads them. The inbox is append-only; commander-side draining is a separate cursor, `seats/inbox.cursor`, advanced only by:
 
