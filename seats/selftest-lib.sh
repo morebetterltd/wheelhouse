@@ -56,6 +56,15 @@ selftest_disable_bd_metrics() {
   (cd "$metrics_root" && bd metrics off > "$metrics_root/bd-metrics-off.out" 2> "$metrics_root/bd-metrics-off.err") || { echo 'STOP: could not disable fixture bd metrics' >&2; return 2; }
 }
 
+# Call in the parent shell: selftest_make_fixture_dir usually runs in $(...),
+# so an export there would be lost. Children (including runtime/stub git) inherit
+# this boundary. Include the parent too: git starting AT a ceiling ignores it.
+selftest_isolate_git() {
+  git_fixture="$(cd "$1" && pwd -P)" || return 2
+  [ -f "$git_fixture/.wheelhouse-selftest-fixture" ] || { echo "STOP: git isolation needs a marked fixture: $git_fixture" >&2; return 2; }
+  export GIT_CEILING_DIRECTORIES="$git_fixture:$(dirname "$git_fixture")${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}"
+}
+
 selftest_copy_seat_runtime() {
   dest_root="${1:-}"
   src_seats="${2:-$(selftest_lib_root)/seats}"
@@ -90,7 +99,7 @@ selftest_scratch_graph() {
   rm -rf "$graph_root"
   mkdir -p "$graph_root"
   selftest_disable_bd_metrics "$graph_root" || return 2
-  git -C "$graph_root" init -q
+  GIT_CEILING_DIRECTORIES="$parent:$(dirname "$parent")${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}" git -C "$graph_root" init -q
   init_log="$graph_root/bd-init.log"
   if ! (cd "$graph_root" && "$bd_bin" init --non-interactive --skip-agents -p scratch) >"$init_log" 2>&1; then
     echo "STOP: bd init failed for scratch graph $graph_root:" >&2

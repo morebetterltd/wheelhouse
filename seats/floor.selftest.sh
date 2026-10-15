@@ -61,6 +61,7 @@ trap cleanup EXIT INT TERM
 
 # --- fixture -----------------------------------------------------------------
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-floor-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"   # macOS: /var/... is really /private/var/...
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats/logs" "$FIX/bin"

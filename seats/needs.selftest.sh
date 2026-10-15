@@ -19,6 +19,7 @@ cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}"; [ -n "$FIX" ] && selft
 trap cleanup EXIT INT TERM
 mkdir -p "${TMPDIR:-/tmp}"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-needs-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)" || exit 2
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats" "$ROOT/wheelhouse"
 printf 'namespace=wheelhouse-project\n' > "$ROOT/wheelhouse/.template-source"

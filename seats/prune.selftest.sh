@@ -26,6 +26,7 @@ fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-prune-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 export GIT_CEILING_DIRECTORIES="$FIX${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}"
 TMP_SCRATCH=()
