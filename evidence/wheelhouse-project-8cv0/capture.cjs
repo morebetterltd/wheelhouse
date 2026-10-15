@@ -62,7 +62,14 @@ if (fs.existsSync(path.join(root, 'lock-diagnosis/results.json'))) {
 }
 if (fs.existsSync(path.join(root, 'full.exit'))) {
   for (const ext of ['stdout', 'stderr', 'exit', 'before.json', 'after.json']) retain('full.'+ext);
-  for (const file of ['inventory-check.json', 'receipt-control.json', 'receipt-control.stderr']) retain(file);
+  if (Number(fs.readFileSync(path.join(root, 'full.exit'), 'utf8').trim()) === 0) {
+    for (const file of ['inventory-check.json', 'receipt-control.json', 'receipt-control.stderr']) retain(file);
+  } else {
+    const log = fs.readFileSync(path.join(root, 'full.stdout'), 'utf8');
+    const inner = [...log.matchAll(/^selftest-sweep: (START|PASS|FAIL) .*\/seats\/[^\n]+\.selftest\.sh(?: rc=\d+)?$/gm)];
+    fs.writeFileSync(path.join(dest, 'full-status.json'), JSON.stringify({ exit: Number(fs.readFileSync(path.join(root, 'full.exit'), 'utf8').trim()), expectedSuites: entries.filter(e=>e.file.endsWith('.selftest.sh')).length, innerStart: inner.filter(m=>m[1]==='START').length, innerPass: inner.filter(m=>m[1]==='PASS').length, innerFail: inner.filter(m=>m[1]==='FAIL').length, complete: false, greenGate: false, reason: 'scheduling pause after22:30 while queued; resume only after06:00' }, null, 2)+'\n');
+    for (const file of ['queued-stop.json', 'queued-stop.stdout', 'queued-stop.stderr', 'stop-queued.cjs', 'pause-guard.cjs', 'pause-guard.stdout', 'pause-guard.stderr', 'pause-result.json', 'full-wrapper-process.txt', 'full-outer-process.txt', 'full-outer-cwd.txt']) retain(file);
+  }
 }
 fs.writeFileSync(path.join(dest, 'capture-manifest.json'), JSON.stringify(manifest,null,2)+'\n');
 console.log(JSON.stringify({ runtime, retained: manifest.length, controls }));

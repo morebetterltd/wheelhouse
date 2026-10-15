@@ -127,9 +127,9 @@
   },
   {
     "file": "capture.cjs",
-    "rawBytes": 5758,
-    "rawSha256": "b17346038d4ecb9e6e64a598ab3583263482c5dcb7a5ec4871e22b420fd671b2",
-    "retainedSha256": "b17346038d4ecb9e6e64a598ab3583263482c5dcb7a5ec4871e22b420fd671b2"
+    "rawBytes": 6843,
+    "rawSha256": "1ff509def122ce79fb946c85952e8921b9c4192f018db12645de83c0947d7a60",
+    "retainedSha256": "1ff509def122ce79fb946c85952e8921b9c4192f018db12645de83c0947d7a60"
   },
   {
     "file": "lock-diagnosis.stdout",
@@ -178,5 +178,101 @@
     "rawBytes": 0,
     "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "retainedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "full.stdout",
+    "rawBytes": 402,
+    "rawSha256": "7af802f9188f21d36a0549b19186c1091db2fcb6fedd10869ac18872d7fbb3fe",
+    "retainedSha256": "0fb6f5cdb4da162d83d112c611a5e119f73de58c782b6c847bdeb66d3dc2b1d3"
+  },
+  {
+    "file": "full.stderr",
+    "rawBytes": 149,
+    "rawSha256": "72601e56e1c308f5cf9f3313bafb76e3d226dfedd3a2012ed06c7a24ff84af3b",
+    "retainedSha256": "72601e56e1c308f5cf9f3313bafb76e3d226dfedd3a2012ed06c7a24ff84af3b"
+  },
+  {
+    "file": "full.exit",
+    "rawBytes": 4,
+    "rawSha256": "9d9b18720961e9b4689fd763b85e7b6f36160ccd3a8a1c9ddc5103bb0f66c396",
+    "retainedSha256": "9d9b18720961e9b4689fd763b85e7b6f36160ccd3a8a1c9ddc5103bb0f66c396"
+  },
+  {
+    "file": "full.before.json",
+    "rawBytes": 81678,
+    "rawSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905",
+    "retainedSha256": "3065b8d80f33892c8db1037763f6f53782b22c0648b9d839747c7cfe0ae5f905"
+  },
+  {
+    "file": "full.after.json",
+    "rawBytes": 82020,
+    "rawSha256": "577af47e977fa9c29f210673e5efc9bf46c0df8176d4addcc06b2e033657a7a4",
+    "retainedSha256": "577af47e977fa9c29f210673e5efc9bf46c0df8176d4addcc06b2e033657a7a4"
+  },
+  {
+    "file": "queued-stop.json",
+    "rawBytes": 804,
+    "rawSha256": "cd47e65344be48122dd1f699568c77eaeb44a2fd5338447663458d3876f78483",
+    "retainedSha256": "67a6971320b4632a25016d88263ddb2c83bed9eafc3ae53472100bc2f6f333b3"
+  },
+  {
+    "file": "queued-stop.stdout",
+    "rawBytes": 704,
+    "rawSha256": "19e1b559f4cfb759cecb75f9298ad93321ec10ec234aaa2c1832123b52d7818d",
+    "retainedSha256": "0d0e649078c0db9b12d3327439f09e8aca20302f49093ebd6bdeaa8fd6ab0c06"
+  },
+  {
+    "file": "queued-stop.stderr",
+    "rawBytes": 0,
+    "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "retainedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "stop-queued.cjs",
+    "rawBytes": 1427,
+    "rawSha256": "d869b534239b6699154d0ae323c45c683e96c4b1d8d0266987c1e7832564fa1c",
+    "retainedSha256": "d869b534239b6699154d0ae323c45c683e96c4b1d8d0266987c1e7832564fa1c"
+  },
+  {
+    "file": "pause-guard.cjs",
+    "rawBytes": 2591,
+    "rawSha256": "78e9a6915d9e0f7e82b213185b3c2007c1964f7cf3c9ea034a0a5ba567d9b084",
+    "retainedSha256": "78e9a6915d9e0f7e82b213185b3c2007c1964f7cf3c9ea034a0a5ba567d9b084"
+  },
+  {
+    "file": "pause-guard.stdout",
+    "rawBytes": 77,
+    "rawSha256": "ece85605321ad71a163b5d998aa0b573f7b109d58653e2a52437391d8a23c419",
+    "retainedSha256": "ece85605321ad71a163b5d998aa0b573f7b109d58653e2a52437391d8a23c419"
+  },
+  {
+    "file": "pause-guard.stderr",
+    "rawBytes": 0,
+    "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "retainedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "pause-result.json",
+    "rawBytes": 128,
+    "rawSha256": "6c2b9a99a78e42581ca037d9848b2698b2c118bdad3f68f330d9ee779aaa5e25",
+    "retainedSha256": "6c2b9a99a78e42581ca037d9848b2698b2c118bdad3f68f330d9ee779aaa5e25"
+  },
+  {
+    "file": "full-wrapper-process.txt",
+    "rawBytes": 210,
+    "rawSha256": "1fc79b147abed063fbe266bbf9d33cd99ef9baacbeac8116ab20c07a196c4308",
+    "retainedSha256": "0f411cb445b06b5892526cc3a7a8c2f5f9c5987364ac99c7264c37e12fc5762c"
+  },
+  {
+    "file": "full-outer-process.txt",
+    "rawBytes": 70,
+    "rawSha256": "014fd0f165e5b20ea3e7a1c3aa7613ffdc837c8021610674a7dc1d59351ad4e4",
+    "retainedSha256": "014fd0f165e5b20ea3e7a1c3aa7613ffdc837c8021610674a7dc1d59351ad4e4"
+  },
+  {
+    "file": "full-outer-cwd.txt",
+    "rawBytes": 119,
+    "rawSha256": "c73a75116ffbae32e3a40203168263775c4dcc908075dcd43cd9b899e6bf4c5d",
+    "retainedSha256": "8c932d8c8af4a3d140edf7579614f54abcdec014f1099f6bbafca62bd731e58f"
   }
 ]
