@@ -50,7 +50,10 @@ for (const kind of selected) {
     const made = run("mkfifo", [log], root); native.push({command: ["mkfifo", log], ...made});
     assert.equal(made.code, 0, JSON.stringify(made)); assert(fs.lstatSync(log).isFIFO());
   } else if (!fs.existsSync(log)) fs.writeFileSync(log, kind === "valid-unsettled" ? unfinished : payload);
-  for (let i = 1; i <= 3; i++) fs.writeFileSync(log + "." + i, "KEEP archive " + i + "\n");
+  // The bead's minimal outside-file control must lose the .3 PATH, not just
+  // replace its bytes with a shifted .2. Other cases exercise a full chain.
+  const archiveSlots = kind === "outside-other" ? [3] : [1,2,3];
+  for (const i of archiveSlots) fs.writeFileSync(log + "." + i, "KEEP archive " + i + "\n");
   if (kind.startsWith("archive-")) {
     fs.unlinkSync(log + ".1");
     if (kind.startsWith("archive-symlink")) fs.symlinkSync(external, log + ".1");
@@ -63,7 +66,7 @@ for (const kind of selected) {
   const paths = [...new Set([stateFile, log, expected, external, external + ".3", ...[1,2,3].map(i => log + "." + i)])];
   if (kind === "archive-directory") paths.push(log + ".1/KEEP");
   const before = paths.map(file => ({file, data: snapshot(file)}));
-  for (const file of [stateFile, log, external, external + ".3", ...[1,2,3].map(i => log + "." + i)]) {
+  for (const file of [stateFile, log, external, external + ".3", ...archiveSlots.map(i => log + "." + i)]) {
     assert(!("missing" in (before.find(x => x.file === file)!.data as object)), "absent measurement subject: " + file);
   }
   const beforeLog = kind === "fifo" ? null : fs.readFileSync(log);
