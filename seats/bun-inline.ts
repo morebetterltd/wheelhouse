@@ -22,11 +22,11 @@ function substitutionEnd(text: string, start: number): number {
   }
   throw Error("unterminated shell command substitution in Bun program");
 }
-function quoted(text: string, start: number): { code: string; end: number } {
+function quoted(text: string, start: number, shell = true): { code: string; end: number } {
   const quote = text[start];
   for (let i = start + 1; i < text.length; i++) {
-    if (quote !== "'" && text[i] === "\\") { i++; continue; }
-    if (quote === '"' && text.startsWith("$(", i)) { i = substitutionEnd(text, i + 2); continue; }
+    if ((!shell || quote !== "'") && text[i] === "\\") { i++; continue; }
+    if (shell && quote === '"' && text.startsWith("$(", i)) { i = substitutionEnd(text, i + 2); continue; }
     if (text[i] === quote) return { code: text.slice(start + 1, i), end: i };
   }
   throw Error("unterminated quoted Bun program");
@@ -57,12 +57,18 @@ export function inlinePrograms(text: string): InlineProgram[] {
       if (input) programs.push({ offset, code: quoted(line, input.index + input[0].length - 1).code, mode });
     }
   }
-  // Native lock fault-injection fixtures run const code = `...` with this Bun's
-  // process.execPath. Inspect the source template, not spawnSync's rendering.
+  // Literal programs passed directly to Bun by the child_process APIs.
+  const native = /(?:spawn(?:Sync)?|execFile(?:Sync)?)\(\s*(?:process\.execPath|["']bun["'])\s*,\s*\[\s*["']-(?:e|p)["']\s*,\s*(?=["'`])/g;
+  for (const match of text.matchAll(native)) {
+    programs.push({ offset: match.index!, code: quoted(text, match.index! + match[0].length, false).code, mode: "programmatic literal" });
+  }
+  // Native lock fixtures and adapter's shell log filter use named templates.
+  // Inspect the source program, not spawnSync's or the shell's rendering.
   for (const match of text.matchAll(/\bconst\s+(\w+)\s*=\s*`([\s\S]*?)`\s*;/g)) {
     const name = match[1];
     const used = new RegExp(`(?:spawnSync|execFileSync)\\(\\s*(?:process\\.execPath|["']bun["'])\\s*,\\s*\\[\\s*["']-(?:e|p)["']\\s*,\\s*${name}\\b`).test(text);
-    if (used) programs.push({ offset: match.index!, code: match[2], mode: "programmatic eval" });
+    const shell = new RegExp(`process\\.execPath[^\\n]* -[ep] [^\\n]*\\$\\{${name}\\.replace`).test(text);
+    if (used || shell) programs.push({ offset: match.index!, code: match[2], mode: used ? "programmatic eval" : "generated shell eval" });
   }
   return programs;
 }
