@@ -1214,9 +1214,9 @@ cat > "$DELTA_STREAM" <<'JSONL'
 JSONL
 bun - "$RUN_PROJ/seats/adapter.ts" "$FIX/log-filter.js" <<'JS'
 const fs=(await import('node:fs')).default,[src,out]=process.argv.slice(2),s=fs.readFileSync(src,'utf8');
-const m=/const script = `([\s\S]*?)`;\n  return/.exec(s);
-if(!m) throw new Error('could not extract logFilterShell script');
-fs.writeFileSync(out,m[1]);
+const matches=[...s.matchAll(/const script = `([\s\S]*?)`;\n  return/g)];
+if(matches.length!==1) throw new Error('expected exactly one logFilterShell script');
+fs.writeFileSync(out,matches[0][1]);
 JS
 RC=0; node "$FIX/log-filter.js" < "$DELTA_STREAM" > "$DELTA_SLICE" 2> "$FIX/log-filter.err" || RC=$?
 DELTA_COUNT="$(bun -e 'console.log((await import("node:fs")).default.readFileSync(process.argv[1],"utf8").split("_delta").length-1)' "$DELTA_SLICE")"
