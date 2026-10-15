@@ -11,23 +11,31 @@ PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 
+# Exercise a worker caller even when this suite is launched by the commander.
+for caller in unset worker-1 commander; do
+  actor_env=(env -u BEADS_ACTOR)
+  [ "$caller" = unset ] || actor_env+=("BEADS_ACTOR=$caller")
+  RC=0
+  ACTOR="$("${actor_env[@]}" bash -c '. "$1"; printenv BEADS_ACTOR' _ "$HERE/selftest-lib.sh")" || RC=$?
+  if [ "$RC" -eq 0 ] && [ "$ACTOR" = wheelhouse-selftest ]; then
+    pass "fixture actor ignores caller BEADS_ACTOR=$caller"
+  else
+    fail "fixture actor inherited caller BEADS_ACTOR=$caller (rc=$RC actor=$ACTOR)"
+  fi
+done
+
 SRCROOT="$FIX/source"; DEST="$FIX/dest"
 mkdir -p "$SRCROOT"
 selftest_copy_seat_runtime "$SRCROOT" "$HERE"
 cat > "$SRCROOT/seats/fixture-added-module.ts" <<'TS'
 export const fixtureAddedModule = "copied";
 TS
-python3 - "$SRCROOT/seats/adapter.ts" <<'PY'
-import sys
-from pathlib import Path
-p=Path(sys.argv[1])
-s=p.read_text()
-if s.startswith('#!'):
-    first, rest = s.split('\n', 1)
-    p.write_text(first + '\nimport "./fixture-added-module";\n' + rest)
-else:
-    p.write_text('import "./fixture-added-module";\n' + s)
-PY
+bun - "$SRCROOT/seats/adapter.ts" <<'TS'
+import fs from "node:fs";
+const file = process.argv[2], source = fs.readFileSync(file, "utf8");
+const at = source.startsWith("#!") ? source.indexOf("\n") + 1 : 0;
+fs.writeFileSync(file, source.slice(0, at) + 'import "./fixture-added-module";\n' + source.slice(at));
+TS
 selftest_copy_seat_runtime "$DEST" "$SRCROOT/seats"
 if [ -f "$DEST/seats/fixture-added-module.ts" ] && grep -q 'fixture-added-module' "$DEST/seats/adapter.ts"; then
   pass "runtime copy helper carries a newly added adapter dependency into a fixture"
@@ -59,7 +67,7 @@ if command -v bd >/dev/null 2>&1; then
   mkdir -p "$INSTALL"
   git -C "$INSTALL" init -q
   if (cd "$INSTALL" && "$REAL_BD" init --non-interactive --skip-agents -p install >/dev/null 2>"$FIX/install-bd-init.err"); then
-    count_install(){ (cd "$INSTALL" && "$REAL_BD" list --json) | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'; }
+    count_install(){ (cd "$INSTALL" && "$REAL_BD" list --json) | bun -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(0,"utf8")).length)'; }
     before_count="$(count_install)"
     INSIDE="$INSTALL/inside-install"
     mkdir -p "$INSIDE"
@@ -79,7 +87,7 @@ if command -v bd >/dev/null 2>&1; then
       mkdir -p "$SCRATCH_WORK"
       (cd "$SCRATCH_WORK" && bd create 'isolated helper row' --json >/dev/null)
       after_isolated_count="$(count_install)"
-      scratch_count="$(cd "$SCRATCH_WORK" && bd list --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+      scratch_count="$(cd "$SCRATCH_WORK" && bd list --json | bun -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(0,"utf8")).length)')"
       if [ "$after_isolated_count" = "$before_isolated_count" ] && [ "$scratch_count" -ge 1 ]; then
         pass "selftest_scratch_graph isolates bd create from the fixture install graph"
       else
