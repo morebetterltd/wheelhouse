@@ -13,7 +13,6 @@ INDEX="$HERE/transports/index.ts"
 TRANSPORT="$HERE/transports/transport.ts"
 CHANNELS="$HERE/channels.ts"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-courier-selftest.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0; SERVER_PID=""; COURIER_PID=""; WATCHDOG_PID=""
@@ -79,11 +78,7 @@ cleanup(){ stop_courier; [ -n "$WATCHDOG_PID" ] && stop_child "$WATCHDOG_PID" "w
 trap cleanup EXIT INT TERM
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-port(){ python3 - <<'PY'
-import socket
-s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
-PY
-}
+port(){ bun -e 'const s=require("net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});'; }
 make_proj(){
   local p="$1"; mkdir -p "$p/seats/transports" "$p/seats/run" "$p/seats/logs" "$p/wheelhouse"
   selftest_copy_seat_runtime "$p" "$HERE"
@@ -152,21 +147,15 @@ start_courier_daemon(){
   (cd "$root" && exec env WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS="${WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS:-1000}" WHEELHOUSE_COURIER_INTERVAL_MS="$interval" bun seats/courier.ts >/dev/null 2> "$err") &
   COURIER_PID=$!
 }
-requests(){ python3 - <<'PY' "$FIX/requests.jsonl"
-import json,sys,os
-p=sys.argv[1]
-if not os.path.exists(p): sys.exit(0)
-for l in open(p):
- print(l.strip())
-PY
+requests(){ bun - "$FIX/requests.jsonl" <<'JS'
+const fs=require('fs'),p=process.argv[2]; if(!fs.existsSync(p)) process.exit(0);
+for(const line of fs.readFileSync(p,'utf8').replace(/\r\n?/g,'\n').match(/[^\n]*\n|[^\n]+$/g)??[]) console.log(line.trim());
+JS
 }
-count_ledger(){ PAT="$1" python3 - <<'PY' "$PROJ/seats/needs.jsonl"
-import json, os, sys
-pat=os.environ['PAT']; n=0
-for l in open(sys.argv[1]):
- if pat in l: n+=1
-print(n)
-PY
+count_ledger(){ PAT="$1" bun - "$PROJ/seats/needs.jsonl" <<'JS'
+const lines=require('fs').readFileSync(process.argv[2],'utf8').replace(/\r\n?/g,'\n').match(/[^\n]*\n|[^\n]+$/g)??[];
+console.log(lines.filter(line=>line.includes(process.env.PAT)).length);
+JS
 }
 PROJ="$FIX/proj"; make_proj "$PROJ"; write_server
 P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
