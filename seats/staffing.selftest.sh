@@ -72,7 +72,7 @@ EOF
 # Fixture shape note: bd ready/list rows above were built after capturing real `bd ready --json` and `bd list --json`; ids/titles are synthetic.
 : > "$ROOT/seats/run/staffing.lock"
 bun - "$ROOT/seats/run/staffing.lock" <<'JS'
-const old=Date.now()/1000-60; require('fs').utimesSync(process.argv[2],old,old);
+const old=Date.now()/1000-60; (await import('node:fs')).default.utimesSync(process.argv[2],old,old);
 JS
 run env BD_READY_COUNT=1 bun seats/staffing.ts check --dry-run --decision add-worker
 [ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && [ ! -e "$ROOT/seats/run/staffing.lock" ] && pass 'staffing recovers an old empty shared PID lock and makes a decision' || fail "incomplete staffing lock blocked check rc=$RC out=$OUT"
@@ -83,17 +83,17 @@ run env BD_READY_COUNT=3 bun seats/staffing.ts check
 READY_IDLE_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e 'import { decide } from "./seats/staffing.ts"; const old="2026-01-01T00:00:00.000Z"; const snap={at:new Date().toISOString(),ready:[{id:"ready-1",title:"Synthetic ready"}],readyCount:1,chainedCount:0,overlapCount:0,reviewBacklog:[],workers:{live:[{name:"worker-e1",busy:false,lastActivityAt:old,entry:"e1"},{name:"worker-e2",busy:false,lastActivityAt:old,entry:"e2"}],idle:2,busy:0},reviewers:{live:[],idle:0,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}}; const pool={root:process.cwd(),entries:{},roles:{workers:{min:1,max:4,entries:["e1","e2"],model:"m"},reviewers:{min:0,max:1,entries:[],model:"r"}},idle_drop_minutes:30}; console.log(JSON.stringify(decide(snap, pool, {version:1,seats:{},rateLimited:{}})));' 2>&1)"; READY_IDLE_RC=$?
 [ $READY_IDLE_RC -eq 0 ] && grep -q '"kind":"nothing"' <<<"$READY_IDLE_OUT" && pass 'G4-15 ready work + idle seat above min -> nothing' || fail "ready-idle drop guard failed rc=$READY_IDLE_RC out=$READY_IDLE_OUT"
 bun - "$ROOT/seats/state.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.seats['worker-e1'].lastBead='busy-bead'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e2' <<<"$OUT" || fail "second add did not use e2: $OUT"
 bun - "$ROOT/seats/state.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.seats['worker-e2'].lastBead='busy-bead'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e3' <<<"$OUT" || fail "third add did not use e3: $OUT"
 bun - "$ROOT/seats/state.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.seats['worker-e3'].lastBead='busy-bead'; fs.writeFileSync(p,JSON.stringify(j));
 JS
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e4' <<<"$OUT" || fail "fourth add did not use e4: $OUT"
@@ -110,7 +110,7 @@ printf 'namespace=staff\n' > "$REAL/wheelhouse/.template-source"; printf '# Flee
 selftest_copy_seat_runtime "$REAL" "$HERE"
 cp "$ROOT/seats/pool.json" "$REAL/seats/pool.json"
 bun - "$REAL/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 for(const e of Object.values(j.entries)) e.harness='pi';
 fs.writeFileSync(p,JSON.stringify(j));
 JS
@@ -124,7 +124,7 @@ SH
 chmod +x "$REAL/bin/bd"
 cat > "$REAL/bin/pi" <<'BUN'
 #!/usr/bin/env bun
-const fs=require('fs'),path=require('path'),readline=require('readline');
+const fs=(await import('node:fs')).default,path=(await import('node:path')).default,readline=(await import('node:readline')).default;
 const real=path.resolve(import.meta.dir,'..');
 // Preserve the recorded argv's spaced JSON array format used below.
 fs.appendFileSync(path.join(real,'pi-argv.log'),'['+process.argv.slice(2).map(x=>JSON.stringify(x)).join(', ')+']\n');
@@ -151,7 +151,7 @@ RC2=0; OUT2="$(cd "$REAL" && env HOME="$HOME_FIX" PATH="$REAL/bin:$BIN:$PATH" WH
 if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && grep -q -- '"--model", "m1"' "$REAL/pi-argv.log" && grep -q -- '"--model", "m2"' "$REAL/pi-argv.log"; then pass 'G4-25 real adapter passes role model per entry to fake pi'; else fail "real adapter model handoff failed rc=$RC/$RC2 out=$OUT/$OUT2 argv=$(cat "$REAL/pi-argv.log" 2>/dev/null || echo none)"; fi
 # No free subscription while under max: staffing records occupy every entry.
 bun - "$ROOT/seats/staffing.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.seats=Object.fromEntries(Array.from({length:4},(_,i)=>['worker-e'+(i+1),{role:'worker',entry:'e'+(i+1)}]));
 fs.writeFileSync(p,JSON.stringify(j));
 JS
@@ -160,14 +160,14 @@ run env BD_READY_COUNT=1 bun seats/staffing.ts check --dry-run --decision add-wo
 
 # Prepare shrink: e1/e2/e3 live and old idle; min=1 means successive checks drop to min.
 bun - "$ROOT/seats/staffing.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.seats={'worker-e1':{role:'worker',entry:'e1'},'worker-e2':{role:'worker',entry:'e2'},'worker-e3':{role:'worker',entry:'e3'}};
 fs.writeFileSync(p,JSON.stringify(j));
 JS
 (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/adapter.ts spawn worker-e3 >/dev/null 2>&1)
 run env BD_READY_COUNT=0 bun seats/staffing.ts check
 if bun - "$ROOT/seats/state.json" <<'JS'
-require('assert/strict').ok(!Object.hasOwn(JSON.parse(require('fs').readFileSync(process.argv[2],'utf8')).seats,'worker-e1'));
+(await import('node:assert/strict')).default.ok(!Object.hasOwn(JSON.parse((await import('node:fs')).default.readFileSync(process.argv[2],'utf8')).seats,'worker-e1'));
 JS
 then STATE_REMOVED=1; else STATE_REMOVED=0; fi
 [ $RC -eq 0 ] && grep -q 'decision=drop-seat' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && [ ! -d "$ROOT/.wheelhouse-worktrees/worker-e1" ] && [ "$STATE_REMOVED" = 1 ] && pass 'G4-20/G4-30 first idle shrink removes pid/state/worktree and frees entry' || fail "first drop failed: $OUT state=$(cat "$ROOT/seats/state.json" 2>/dev/null)"
@@ -182,7 +182,7 @@ run env BD_READY_COUNT=1 bun seats/staffing.ts check --decision add-worker
 # Busy seat protected; idle extra goes.
 run env BD_READY_COUNT=1 bun seats/staffing.ts check >/dev/null
 bun - "$ROOT/seats/state.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 for(const [seat,rec] of Object.entries(j.seats)) rec.lastBead=seat==='worker-e2'?'busy-bead':'closed-bead';
 fs.writeFileSync(p,JSON.stringify(j));
 JS
@@ -193,11 +193,11 @@ rm -f "$ROOT/seats/staffing.json" "$ROOT/seats/state.json"; rm -rf "$ROOT/.wheel
 (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" BD_READY_COUNT=1 bun seats/staffing.ts check > "$FIX/c1.out" 2>&1) & p1=$!
 (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" BD_READY_COUNT=1 bun seats/staffing.ts check > "$FIX/c2.out" 2>&1) & p2=$!
 wait $p1; r1=$?; wait $p2; r2=$?
-COUNT=$(bun -e 'console.log(Object.keys(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).seats).length)' "$ROOT/seats/staffing.json")
+COUNT=$(bun -e 'console.log(Object.keys(JSON.parse((await import("node:fs")).default.readFileSync(process.argv[1],"utf8")).seats).length)' "$ROOT/seats/staffing.json")
 [ $r1 -eq 0 ] && [ $r2 -eq 0 ] && [ "$COUNT" = 1 ] && pass 'G4-37 concurrent checks add exactly one seat' || fail "concurrency failed r=$r1/$r2 count=$COUNT outs=$(cat "$FIX/c1.out" "$FIX/c2.out")"
 # min=max pins role.
 bun - "$ROOT/seats/pool.json" <<'JS'
-const fs=require('fs'),p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
 j.roles.workers.min=j.roles.workers.max=1; fs.writeFileSync(p,JSON.stringify(j));
 JS
 run env BD_READY_COUNT=6 bun seats/staffing.ts check --decision add-worker
@@ -206,12 +206,12 @@ run env BD_READY_COUNT=0 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && ! grep -q 'decision=drop-seat' <<<"$OUT" && pass 'G4-5 min=max pins empty queue against drop' || fail "min=max empty queue failed: $OUT"
 rm -f "$ROOT/seats/staffing.json" "$ROOT/seats/state.json"; rm -rf "$ROOT/.wheelhouse-worktrees"; mkdir -p "$ROOT/.wheelhouse-worktrees"
 bun - "$ROOT/seats/staffing.json" <<'JS'
-require('fs').writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{}},null,2));
+(await import('node:fs')).default.writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{}},null,2));
 JS
 run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=verifier-rv1' <<<"$OUT" && ! grep -q 'decision=add-worker' <<<"$OUT" && pass 'G4-19 review backlog adds reviewer and not worker' || fail "reviewer add failed: $OUT"
 bun - "$ROOT/seats/seats.json" "$ROOT/seats/staffing.json" <<'JS'
-const fs=require('fs'); fs.writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{}},null,2));
+const fs=(await import('node:fs')).default; fs.writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{}},null,2));
 fs.writeFileSync(process.argv[3],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'},'verifier-rv1':{role:'verifier',entry:'rv1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{rv1:{at:'2026-01-01T00:00:00Z',detail:'test keeps rv1 unavailable'}}},null,2));
 JS
 MARKER="$ROOT/seats/run/verify.verifier-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID0=$!; printf '{"pid":%s,"bead":"other-bead"}\n' "$MPID0" > "$MARKER"
@@ -255,7 +255,7 @@ OUT="$(cd "$NOPOOL" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts 
 # Canary: removing clamp makes at-max leg fail.
 cp "$ROOT/seats/staffing.ts" "$ROOT/seats/staffing-broken.ts"
 bun - "$ROOT/seats/staffing-broken.ts" <<'JS'
-const fs=require('fs'),p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='let d: Decision;';
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='let d: Decision;';
 if(s.split(needle).length!==2) throw new Error('clamp canary source changed');
 fs.writeFileSync(p,s.replace(needle,'let d: Decision; const clamp = (x: any) => x;'));
 JS
