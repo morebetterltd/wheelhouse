@@ -9,6 +9,7 @@ trap cleanup EXIT INT TERM
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 SCRIPT="$HERE/template-drift.sh"
+bun "$HERE/fixtures/scratch-ownership.ts" drift "$HERE/.." "$FIX" && pass 'old pid scratch remains unrelated and intact' || fail 'scratch ownership collision'
 TEMPLATE="$FIX/template"; INSTALL="$FIX/install"
 mkdir -p "$TEMPLATE/seats/transports" "$TEMPLATE/runbooks" "$TEMPLATE/wheelhouse/crew" "$INSTALL/wheelhouse"
 ( cd "$TEMPLATE" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest )

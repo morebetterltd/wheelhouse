@@ -585,14 +585,17 @@ Run each of these and paste what it prints:
     installed="$ROOT/wheelhouse/${pair%%:*}"; template="$TEMPLATE/contracts/${pair##*:}"
     test -s "$installed" || { echo "FAIL ${pair%%:*} — installed file missing or empty"; FAILED=1; continue; }
     # the contract is everything above the FIRST exact '## This project' line
-    awk '/^## This project$/{exit} {print}' "$installed"  > /tmp/wh-a.$$
-    awk '/^## This project$/{exit} {print}' "$template"   > /tmp/wh-b.$$
-    if diff -q /tmp/wh-a.$$ /tmp/wh-b.$$ >/dev/null; then
+    # Never adopt an old pid-named file: unlink only our exclusive allocations.
+    compare_a=$(mktemp "${TMPDIR:-/tmp}/wh-a.XXXXXX") || { echo "FAIL cannot allocate contract comparison"; exit 1; }
+    compare_b=$(mktemp "${TMPDIR:-/tmp}/wh-b.XXXXXX") || { rm -f "$compare_a"; echo "FAIL cannot allocate contract comparison"; exit 1; }
+    awk '/^## This project$/{exit} {print}' "$installed"  > "$compare_a"
+    awk '/^## This project$/{exit} {print}' "$template"   > "$compare_b"
+    if diff -q "$compare_a" "$compare_b" >/dev/null; then
       echo "OK   ${pair%%:*}"
     else
-      echo "FAIL ${pair%%:*} — contract differs from the template:"; diff /tmp/wh-b.$$ /tmp/wh-a.$$; FAILED=1
+      echo "FAIL ${pair%%:*} — contract differs from the template:"; diff "$compare_b" "$compare_a"; FAILED=1
     fi
-    rm -f /tmp/wh-a.$$ /tmp/wh-b.$$
+    rm -f "$compare_a" "$compare_b"
   done
 
   # Every contract the TEMPLATE ships must appear in the list above. Derived from

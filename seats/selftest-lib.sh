@@ -146,7 +146,7 @@ selftest_fixture_processes() {
       lsof_bin="$(command -v lsof 2>/dev/null || true)"
       [ -n "$lsof_bin" ] || lsof_bin="/usr/sbin/lsof"
       if [ -x "$lsof_bin" ]; then
-        lsof_out="${TMPDIR:-/tmp}/wheelhouse-selftest-lsof.$$.out"
+        lsof_out="$(mktemp "${TMPDIR:-/tmp}/wheelhouse-selftest-lsof.XXXXXX")" || { echo 'STOP: cannot allocate selftest lsof capture' >&2; exit 2; }
         "$lsof_bin" -d cwd -Fpcn > "$lsof_out" 2>/dev/null || true
         awk -v root="$root" '
           function flush(){ if(pid && cwd && (cwd == root || index(cwd, root "/") == 1)) print pid " " cmd " [cwd " cwd "]" }

@@ -32,6 +32,7 @@ export GIT_CEILING_DIRECTORIES="$FIX${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIR
 TMP_SCRATCH=()
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; rm -rf ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
 trap cleanup EXIT INT TERM
+bun "$HERE/fixtures/scratch-ownership.ts" prune "$HERE/.." "$FIX" || exit 1
 export HOME="$FIX/home"
 mkdir -p "$HOME"
 # bd init's hooks must not detach telemetry flushers into these worktrees.
@@ -379,17 +380,17 @@ printf 'stale-lock\n' > "$ROOT/.wheelhouse-bench.lock.stale.12345/pid"
 mkdir -p "$ROOT/.wheelhouse-runs/$CLOSED_ID-build" "$ROOT/.wheelhouse-runs/$OPEN_ID-build"
 printf 'closed runs scratch\n' > "$ROOT/.wheelhouse-runs/$CLOSED_ID-build/file.txt"
 printf 'open runs scratch\n' > "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt"
-TMP_ROOT="${TMPDIR:-/private/tmp}"
-TMP_ROOT="${TMP_ROOT%/}"
-mkdir -p "$TMP_ROOT"
+# Own the parent, not merely a bead-derived name in somebody else's TMPDIR.
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-prune-tmp.XXXXXX")" || exit 2
+TMP_SCRATCH+=("$TMP_ROOT")
 # The scanner records physical paths, even if inherited TMPDIR is an alias.
-TMP_ROOT="$(cd "$TMP_ROOT" && pwd -P)"
+TMP_ROOT="$(cd "$TMP_ROOT" && pwd -P)" || exit 2
+export TMPDIR="$TMP_ROOT"
 CLOSED_TMP="$TMP_ROOT/$CLOSED_ID-derivedData"
 OPEN_TMP="$TMP_ROOT/$OPEN_ID-derivedData"
 mkdir -p "$CLOSED_TMP" "$OPEN_TMP"
 printf 'closed tmp scratch\n' > "$CLOSED_TMP/file.txt"
 printf 'open tmp scratch\n' > "$OPEN_TMP/file.txt"
-TMP_SCRATCH+=("$CLOSED_TMP" "$OPEN_TMP")
 OPEN_RUNS_BEFORE=$(shasum -a 256 "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt" | awk '{print $1}')
 OPEN_TMP_BEFORE=$(shasum -a 256 "$OPEN_TMP/file.txt" | awk '{print $1}')
 
