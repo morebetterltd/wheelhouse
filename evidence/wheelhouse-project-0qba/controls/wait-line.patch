@@ -1,0 +1,7 @@
+diff --git a/seats/selftest-sweep.sh b[run]/controls/no-wait-line.sh
+index 4b2d608..33684b8 100755
+--- a/seats/selftest-sweep.sh
++++ b[run]/controls/no-wait-line.sh
+@@ -36 +36 @@ acquire_lock(){
+-      info "selftest-sweep: waiting for host-wide lock $LOCK $result"
++      : # removed only the wait diagnostic

@@ -1,0 +1,18 @@
+before umbrella HEAD=4c55510d6235ec26adb1459f91872f5acaf1c2a2
+RUN ["bash","seats/selftest-sweep-queue.selftest.sh"]
+PASS first registered at queue_position=1 behind holder pid=7851
+PASS second registered at queue_position=2 behind holder pid=7851
+PASS third registered at queue_position=3 behind holder pid=7851
+PASS younger explicit attempt cannot pass the FIFO-barrier-held oldest waiter
+PASS three barrier-ordered waiters acquire FIFO with exclusive suite execution
+PASS dead registered at queue_position=1 behind holder pid=9577
+PASS live registered at queue_position=2 behind holder pid=9577
+PASS dead waiter is reaped by PID and does not block its live successor
+PASS cancelled registered at queue_position=1 behind holder pid=10155
+PASS cancelled waiter removes its ticket without releasing the live holder
+PASS unmarked queue refused intact without admitting a sweep
+PASS symlink queue refused intact without admitting a sweep
+PASS foreign-ticket queue refused intact without admitting a sweep
+selftest-sweep-queue: PASS
+after umbrella HEAD=4c55510d6235ec26adb1459f91872f5acaf1c2a2
+umbrella safety: PASS (0 permitted new reflog entries); test exit=0; signal=null

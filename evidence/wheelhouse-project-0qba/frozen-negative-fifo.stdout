@@ -1,0 +1,7 @@
+before umbrella HEAD=4bd0e7e7cf95891c830dd4480edac54f690660a1
+RUN ["bash","seats/selftest-sweep-queue.selftest.sh","[worktree]/seats/selftest-sweep.sh"]
+PASS first registered at queue_position=1 behind holder pid=37882
+PASS second registered at queue_position=2 behind holder pid=37882
+PASS third registered at queue_position=3 behind holder pid=37882
+after umbrella HEAD=4bd0e7e7cf95891c830dd4480edac54f690660a1
+umbrella safety: PASS (0 permitted new reflog entries); test exit=1; signal=null

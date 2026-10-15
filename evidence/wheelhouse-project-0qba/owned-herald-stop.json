@@ -1,0 +1,14 @@
+[
+  {
+    "pid": 16008,
+    "signal": "SIGTERM",
+    "ps": "16008     1 15341 Thu Oct 15 09:48:10 2026     bun seats/herald.ts\n",
+    "cwd": "p16008\nfcwd\nn[run]/tmp/wheelhouse-staffing-live.OYcsOi/project\n"
+  },
+  {
+    "pid": 21881,
+    "signal": "SIGTERM",
+    "ps": "21881     1 15341 Thu Oct 15 09:48:22 2026     bun seats/herald.ts\n",
+    "cwd": "p21881\nfcwd\nn[run]/tmp/wheelhouse-staffing-live.OYcsOi/canary-herald\n"
+  }
+]

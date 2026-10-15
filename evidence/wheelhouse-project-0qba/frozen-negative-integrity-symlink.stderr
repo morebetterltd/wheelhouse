@@ -1,0 +1,22 @@
+157 |       const s = fs.lstatSync(p, { bigint: true });
+158 |       return [String(s.dev), String(s.ino), s.isSymbolicLink() ? fs.readlinkSync(p) : s.isDirectory() ? fs.readdirSync(p).sort().map(n => [n, snapshot(path.join(p, n))]) : fs.readFileSync(p, "utf8")];
+159 |     }
+160 |     const before = snapshot(queue), keep = snapshot(target);
+161 |     const result = spawnSync("bun", [helper, "acquire", lock, String(process.pid), "b".repeat(32), ""], { encoding: "utf8" });
+162 |     assert.equal(result.status, 2, result.stdout + result.stderr); assert.deepEqual(snapshot(queue), before); assert.deepEqual(snapshot(target), keep); assert(!fs.existsSync(lock));
+                 ^
+AssertionError: 16777234:1234126961
+
+
+0 !== 2
+
+ generatedMessage: false,
+     actual: 0,
+   expected: 2,
+   operator: "strictEqual",
+       code: "ERR_ASSERTION"
+
+      at integrity ([run]/controls/integrity-symlink.ts:162:12)
+      at integrity ([run]/controls/integrity-symlink.ts:15:47)
+
+Bun v1.3.1 (macOS arm64)

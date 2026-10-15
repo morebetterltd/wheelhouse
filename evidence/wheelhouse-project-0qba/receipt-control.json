@@ -1,0 +1,5 @@
+{
+  "removedExactly": "selftest-sweep: PASS [worktree]/seats/selftest-sweep-queue.selftest.sh",
+  "aggregatesUnchanged": true,
+  "validatorExit": 1
+}

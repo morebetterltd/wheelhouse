@@ -1,0 +1,3 @@
+656:selftest-sweep: START [worktree]/seats/digest.selftest.sh
+679:digest.selftest: PASS (22 legs)
+680:selftest-sweep: PASS [worktree]/seats/digest.selftest.sh
