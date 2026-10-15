@@ -746,7 +746,7 @@ ext_cleanup --bead "$CB_ID" --wait 30 > "$FIX/ext-cb.out" & CB_PID=$!
 wait "$CA_PID"; CA_RC=$?; wait "$CB_PID"; CB_RC=$?
 [ "$CA_RC" -eq 0 ] && [ "$CB_RC" -eq 0 ] && [ ! -e "$ERUNS/$CA_ID-run" ] && [ ! -e "$ERUNS/$CB_ID-run" ] && pass 'two parallel bead-scoped cleanups both exit 0 and both run folders are gone' || fail "parallel cleanups rc=$CA_RC/$CB_RC: $(cat "$FIX/ext-ca.out" "$FIX/ext-cb.out")"
 [ "$(grep -c "removed run-scratch $ERUNS/$CA_ID-run " "$ELOG")" -eq 1 ] && [ "$(grep -c "removed run-scratch $ERUNS/$CB_ID-run " "$ELOG")" -eq 1 ] && pass 'cleanup log has exactly one removed line per bead (ISC-46)' || fail "log lines for A/B: $(grep -E "$CA_ID-run|$CB_ID-run" "$ELOG")"
-grep -q 'already running' "$FIX/ext-ca.out" "$FIX/ext-cb.out" && fail 'a --wait cleanup gave up with "already running"' || pass 'neither waiting cleanup gave up on the lock'
+if selftest_capture_lacks "$FIX/ext-ca.out" -q -- 'already running' && selftest_capture_lacks "$FIX/ext-cb.out" -q -- 'already running'; then pass 'neither waiting cleanup gave up on the lock'; else fail 'a --wait cleanup gave up or its capture is unavailable'; fi
 mkdir -p "$EXT/seats/run/cleanup.lock"; printf '%s\n' "$$" > "$EXT/seats/run/cleanup.lock/pid"
 T0=$(date +%s); OUT=$(ext_cleanup); RC=$?; T1=$(date +%s)
 [ "$RC" -eq 0 ] && [ "$OUT" = "already running" ] && [ $((T1-T0)) -le 3 ] && pass 'a cleanup while another holds the lock prints only "already running", exits 0, within ~1 s' || fail "lock refusal rc=$RC after $((T1-T0))s: $OUT"

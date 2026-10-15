@@ -11,7 +11,7 @@ const inventory = new Map([
   ["adapter.selftest.sh", 5], ["walk.selftest.sh", 3],
   ["verify.selftest.sh", 3], ["reset.selftest.sh", 2],
   ["herald.selftest.sh", 1], ["desk.selftest.sh", 6],
-  ["isolation.selftest.sh", 5], ["prune.selftest.sh", 4],
+  ["isolation.selftest.sh", 5], ["prune.selftest.sh", 5],
   ["concurrency.selftest.sh", 2], ["drivers/codex/selftest.sh", 1],
   ["channel-credentials.selftest.sh", 1], ["selftest-sweep.selftest.sh", 3],
 ]);
