@@ -42,6 +42,7 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
 VERIFY_DIR="$(cd "$(dirname "$VERIFY")" && pwd)"
+READINESS_DRIVER="$(dirname "$SELFTEST_LIB")/fixtures/verify-readiness.ts"
 BRIEFS="$VERIFY_DIR/briefs.ts"
 HARNESS="$VERIFY_DIR/harness.ts"
 FINAL_ASSISTANT="$VERIFY_DIR/final-assistant-message.ts"
@@ -172,6 +173,18 @@ if (process.env.STUB_CLOBBER_CORE_WORKTREE_REPO) {
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
+// Readiness is out-of-band: it must not count as verifier stdout/stderr.
+const watchdogDir = process.env.WHEELHOUSE_TEST_WATCHDOG_DIR;
+if (watchdogDir) {
+  fs.writeFileSync(path.join(watchdogDir, "ready"), JSON.stringify({pid:process.pid}));
+  while (!fs.existsSync(path.join(watchdogDir, "release"))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  if (process.env.STUB_TEST_EMIT_NOTHING === "eof") process.exit(0);
+  if (process.env.STUB_TEST_EMIT_NOTHING === "silent") {
+    fs.writeFileSync(path.join(watchdogDir, "silent"), "entered\n");
+    setInterval(() => {}, 1000);
+    return;
+  }
+}
 if (process.env.STUB_RUN_BENCH === "1") {
   const cp = require("child_process");
   const outDir = path.join(process.cwd(), "bench-out");
@@ -312,7 +325,8 @@ if (process.env.STUB_STREAM_FILE) {
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 if (process.env.STUB_SILENT === "1") {
-  setTimeout(() => {}, 10000);
+  if (watchdogDir) fs.writeFileSync(path.join(watchdogDir, "silent"), "entered\n");
+  setInterval(() => {}, 1000); // Remain silent until the explicitly fired watchdog stops us.
 } else if (process.env.STUB_STALL === "1") {
   // Match real pi behavior: without --mode json, a stalled one-shot emits no
   // JSON events before timeout, so this selftest catches a missing stream flag.
@@ -634,8 +648,9 @@ run_bench_check() {  # args pass through to verify.ts
 run_sweep_prompt_check() {  # $1 = bd-show file, remaining args pass through
   local bdfile="$1"
   shift
+  WATCHDOG_DIR="$(mktemp -d "$FIX/sweep-readiness.XXXXXX")"
   OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_BD_SHOW_FILE="$bdfile" STUB_SWEEP_PROMPT_CHECK=1 \
-    bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
+    bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" ready "$@" 2>&1)"
   RC=$?
 }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
@@ -802,24 +817,31 @@ SWEEP_LOCK="$FIX/review-sweep.lock"
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
 cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
-python3 - "$SWEEP_PROJ/seats/verify.ts" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1]); s=p.read_text(); s=s.replace('const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);', 'const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};'); p.write_text(s)
-PY
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
 cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
-# A real H4 holder outlives the reviewer's 3s watchdog; dispatcher must wait.
-bash -c 'printf "pid=%s\n" "$$" > "$1"; sleep 4; rm -f "$1"' _ "$SWEEP_LOCK" & HOLDER=$!
+# Hold H4 until the dispatcher log proves it waited, before verifier readiness.
+# The controller then releases the fixture holder. No elapsed-time comparison.
+HOLDER_RELEASE="$FIX/sweep-holder.release"
+bash -c 'printf "pid=%s\n" "$$" > "$1.new"; mv -f "$1.new" "$1"; while [ ! -f "$2" ]; do sleep 0.01; done; rm -f "$1"' _ "$SWEEP_LOCK" "$HOLDER_RELEASE" & HOLDER=$!
 while [ ! -f "$SWEEP_LOCK" ]; do sleep 0.01; done
-WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1 --timeout-ms 3000 --no-event-timeout-ms 3000 --first-output-timeout-ms 3000
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLDER_RELEASE="$HOLDER_RELEASE" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
 wait "$HOLDER"
 SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
 SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
   pass "full-sweep done: exact tip, H4 wait outside model limit, scratch bd, reviewer cites rc/log"
 else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$SWEEP_CHECK" 2>/dev/null)"; fi
+if [ -f "$WATCHDOG_DIR/holder-wait-observed" ] && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ -f "$WATCHDOG_DIR/output" ]; then
+  pass "sweep evidence waits for H4 and fixture readiness without a wall-clock verdict"
+else fail "sweep/readiness handshake was not observed"; fi
+for NO_OUTPUT_MODE in eof silent; do
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_EMIT_NOTHING="$NO_OUTPUT_MODE" run_sweep_prompt_check "$SWEEP_BD_SHOW" "bead-sweep-no-output-$NO_OUTPUT_MODE" fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && { says 'verifier emitted no VERDICT:' || says 'first-output deadline'; } && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ ! -e "$WATCHDOG_DIR/output" ]; then
+    pass "sweep evidence still refuses a ready verifier that emits nothing ($NO_OUTPUT_MODE)"
+  else fail "empty ready verifier was accepted ($NO_OUTPUT_MODE rc=$RC out=$OUT)"; fi
+done
 if [ -f "$STUB_SWEEP_PWD_MARKER" ] && node -e 'const r=require(process.argv[1]); if(!r.primary || r.cwd!==r.pwd || require("path").basename(r.cwd)!==".wheelhouse-sweep-graph") process.exit(1)' "$STUB_SWEEP_PWD_MARKER"; then
   pass "sweep graph init uses an independent primary repo and bound logical PWD"
 else fail "sweep graph init was not isolated from the reviewed repository"; fi
@@ -839,6 +861,11 @@ if [ $RC -eq 1 ] && says 'APPROVE with failed full sweep' && grep -q 'changed re
 else fail "suite mutation of reviewed tip accepted rc=$RC out=$OUT"; fi
 RUN_PATH="$SWEEP_SAVED_RUN_PATH"
 unset STUB_SWEEP_BASE_BD STUB_SWEEP_PWD_MARKER
+if [ "${WHEELHOUSE_VERIFY_SWEEP_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || { printf 'verify.selftest: FAIL (%s failures in sweep-readiness subset)\n' "$FAILED"; exit 1; }
+  printf 'verify.selftest: PASS (sweep-readiness subset)\n'
+  exit 0
+fi
 RUN_PROJ="$INST_PROJ"
 VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
 MISS_PROJ="$FIX/missing-brief-proj"
@@ -1012,8 +1039,9 @@ OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIM
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "tool progress beyond total timeout reaches a verdict instead of being killed"
 else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$RUN_PROJ/seats/verify.ts" bead-silent fleet/bead-1 worker-1 verifier --timeout-ms 5000 --first-output-timeout-ms 300 2>&1)"; RC=$?
-if [ $RC -eq 1 ] && says "verifier emitted no stdout/stderr within 300ms" && says "first-output deadline" && says "--first-output-timeout-ms"; then
+WATCHDOG_DIR="$(mktemp -d "$FIX/silent-readiness.XXXXXX")"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" silent bead-silent fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && [ -f "$WATCHDOG_DIR/expired-first" ] && says "verifier emitted no stdout/stderr within" && says "first-output deadline" && says "--first-output-timeout-ms"; then
   pass "silent verifier stops on the first-output deadline with an actionable reason"
 else fail "silent verifier did not stop on first-output deadline (exit $RC): $OUT"; fi
 SILENT_PARTIAL="$VDIR/bead-silent.partial.md"
