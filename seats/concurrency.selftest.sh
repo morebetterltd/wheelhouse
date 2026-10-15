@@ -421,7 +421,7 @@ fi
 # 3b: an adapter that swallows the capacity stamp.
 CAN_B="$FIX/can-b"
 build_proj "$CAN_B" can-b
-sed 's|^      state.seats\[name\].lastCapacityEvent = {$|      const unstamped = {|' \
+sed 's|^        state.seats\[name\].lastCapacityEvent = {$|        const unstamped = {|' \
   "$ADAPTER" > "$CAN_B/seats/adapter.ts"
 if cmp -s "$ADAPTER" "$CAN_B/seats/adapter.ts"; then
   fail "canary: could not cut the capacity stamp — the line no longer matches, so the canary proves nothing"
