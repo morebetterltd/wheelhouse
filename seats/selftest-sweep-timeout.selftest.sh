@@ -15,7 +15,10 @@ fail(){ printf 'FAIL %s\n' "$*"; FAILED=$((FAILED+1)); }
 cleanup(){
   trap '' INT TERM HUP
   if [ -n "$RESCUE_PID" ]; then printf 'done\n' >&7; wait "$RESCUE_PID" 2>/dev/null || true; fi
-  selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true
+  if declare -F kill_recorded_tree >/dev/null; then
+    kill_recorded_tree "$FIX/ordinary" CLEANUP
+    kill_recorded_tree "$FIX/term-ignored" CLEANUP
+  fi
   selftest_remove_fixture_dir "$FIX"
 }
 trap cleanup EXIT
@@ -31,12 +34,9 @@ export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$HERE/selftest-sweep-lock.ts"
 
 # Independent bounded containment for deliberately broken runner controls.
 # It is not the feature under test: if it fires, the regression leg FAILs.
-rescue_tree(){ (
-  trap - EXIT
-  trap '' INT TERM HUP
-  local dir="$1" message p g born fresh fp fg fb seen=" "
-  if read -r -t 15 -u 7 message; then exit 0; fi
-  printf 'independent fixture rescue\n' > "$dir/rescued"
+kill_recorded_tree(){
+  local dir="$1" reason="$2" p g born fresh fp fg fb seen=" "
+  [ -f "$dir/identities" ] || return 0
   while read -r p g born; do
     [[ "$p" =~ ^[1-9][0-9]*$ ]] && [[ "$g" =~ ^[1-9][0-9]*$ ]] || continue
     fresh="$(ps -p "$p" -o pid=,pgid=,lstart=)" || continue
@@ -45,9 +45,17 @@ rescue_tree(){ (
     [ "$g" -gt 1 ] && [ "$g" != "$TEST_PGID" ] || continue
     case "$seen" in *" $g "*) continue ;; esac
     seen="$seen$g "
-    printf 'RESCUE KILL owned pgid=%s anchor=%s birth=%s\n' "$g" "$p" "$born" >&2
+    printf '%s KILL owned pgid=%s anchor=%s birth=%s\n' "$reason" "$g" "$p" "$born" >&2
     kill -KILL -- "-$g" 2>/dev/null || true
   done < "$dir/identities"
+}
+rescue_tree(){ (
+  trap - EXIT
+  trap '' INT TERM HUP
+  local dir="$1" message
+  if read -r -t 15 -u 7 message; then exit 0; fi
+  printf 'independent fixture rescue\n' > "$dir/rescued"
+  kill_recorded_tree "$dir" RESCUE
 ); }
 TEST_PGID="$(ps -p "$$" -o pgid=)"; TEST_PGID="${TEST_PGID//[[:space:]]/}"
 
@@ -74,6 +82,7 @@ run_timeout_case(){
   cat > "$dir/00-hang.selftest.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
+cd "$CASE_DIR" || exit 2
 # New groups deliberately exercise descendants outside the leader's PGID.
 set -m
 if [ "$IGNORE_TERM" = 1 ]; then trap 'printf "TERM observed\n" >> "$CASE_DIR/term"' TERM; fi
