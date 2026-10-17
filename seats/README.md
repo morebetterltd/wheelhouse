@@ -453,6 +453,9 @@ the bead itself) and the branch's tip SHA, and parses the single
 canonical `account.dir` differs from the author; staffed reviewer identities
 are named `verifier-<entry>` and are never spawned by staffing.
 
+For Pi, `agent_end` with `willRetry: true` is not a terminal result: a provider
+retry may still deliver the verdict. It neither triggers no-verdict nor starts
+reaping a later verdict before a final non-retry `agent_end` arrives.
 When the reviewer emits its terminal result without a live `VERDICT:` line,
 `verify.ts` cancels the watchdogs immediately and exits **5 (no-verdict)**,
 distinct from an error (1) or busy/retry (4). It records the reason in the

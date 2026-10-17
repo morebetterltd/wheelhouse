@@ -356,7 +356,7 @@ function sawFinalReviewerResult(stdout: string, harness: HarnessName): boolean {
       } else if (harness === "codex") {
         if (event?.type === "turn.completed") return true;
       } else {
-        if (event?.type === "agent_end") return true;
+        if (event?.type === "agent_end" && event?.willRetry !== true) return true;
       }
     } catch {}
   }
