@@ -124,8 +124,9 @@ function repositories(root: string): string[] {
   return [...out].filter(Boolean);
 }
 
-function worktrees(repo: string): { path: string; branch: string; sha: string }[] {
+function worktrees(repo: string, strict = false): { path: string; branch: string; sha: string }[] {
   const r = run("git", ["worktree", "list", "--porcelain"], repo);
+  if (strict && !r.ok) throw new Error(`cannot verify worktree registrations: ${r.err || r.out}`);
   const out: { path: string; branch: string; sha: string }[] = [];
   let cur: any = {};
   for (const line of r.out.split("\n")) {
@@ -474,9 +475,9 @@ function scanBranches(repo: string, root: string, beads: Map<string, string>, re
 }
 
 
-function scanBeadRuns(root: string, beads: Map<string, string>, seats: Map<string, string>, live: Set<string> | null): Row[] {
+function scanBeadRuns(root: string, beads: Map<string, string>, seats: Map<string, string>, live: Set<string> | null, containers = [path.join(root, RUNS_DIRNAME), path.join(root, ".wheelhouse-build")]): Row[] {
   const rows: Row[] = [];
-  for (const runs of [path.join(root, RUNS_DIRNAME), path.join(root, ".wheelhouse-build")].filter(isDir)) {
+  for (const runs of containers.filter(isDir)) {
     for (const d of subdirs(runs)) {
       const b = beadPrefix(path.basename(d), beads);
       if (!b) continue;
@@ -879,6 +880,59 @@ const CLEANUP_CATEGORIES = new Set(["merged-worktree", "zero-commit-worktree", "
 
 interface CleanupOptions { root: string; dryRun: boolean; deadline: number | null; log: string; bead: string | null; wait: number }
 
+/** Only the exact seat/.wheelhouse-runs/<task> shape, never an arbitrary descendant. */
+function seatScratchLocation(root: string, p: string): { seatRoot: string; scratch: string } | null {
+  const parts = path.relative(root, path.resolve(p)).split(path.sep);
+  if (parts.length < 4 || parts[0] !== FLEET_CONTAINER || parts[2] !== RUNS_DIRNAME) return null;
+  const seatRoot = path.join(root, FLEET_CONTAINER, parts[1]);
+  return { seatRoot, scratch: path.join(seatRoot, RUNS_DIRNAME, parts[3]) };
+}
+
+/** Automatic cleanup only: aggregate controls under their explicitly owned run. */
+function scanSeatBeadRuns(root: string): Row[] {
+  const rows: Row[] = [], seats = seatAnchors(root), beads = beadStatuses(root);
+  const seatRoots = new Set(repositories(root).flatMap(repo => worktrees(repo, true))
+    .map(w => path.resolve(w.path)).filter(p => isFleetContainerPath(root, p)));
+  for (const seatRoot of seatRoots) {
+    const runs = path.join(seatRoot, RUNS_DIRNAME);
+    if (!fs.existsSync(runs)) continue;
+    // Refuse a linked seat or runs container before traversing/sizing its children.
+    try { cleanupPathIdentity(root, runs); }
+    catch (e: any) { rows.push(row("needs-review", false, root, runs, "", "none", `path mismatch: ${e.message}`, 0)); continue; }
+    rows.push(...scanBeadRuns(root, beads, seats, liveCwds(), [runs]));
+  }
+  return rows;
+}
+
+function registeredScratchWorktrees(root: string, target: string) {
+  return repositories(root).flatMap(repo => worktrees(repo, true)
+    .filter(w => insideOf(path.resolve(w.path), target))
+    .map(w => ({ ...w, path: path.resolve(w.path), repo })))
+    .sort((a, b) => b.path.length - a.path.length);
+}
+
+/** Same worktree refusal rules as the fleet scanner; no zero-commit open exception. */
+function checkedScratchWorktrees(root: string, target: string) {
+  const beads = beadStatuses(root), extra = extraIntegrationRefs([root]), isa = isaAnchors(root);
+  return registeredScratchWorktrees(root, target).map(w => {
+    const identity = cleanupPathIdentity(root, w.path);
+    const refuse = (reason: string): never => { throw new Error(`registered control ${w.path}: ${reason}`); };
+    if (isa.has(path.basename(w.path))) refuse("named by wheelhouse/ISA.md");
+    if (fs.existsSync(path.join(w.path, PLACEHOLDER_MARKER))) refuse(`${PLACEHOLDER_MARKER} left for the adapter`);
+    const tree = treeState(w.repo, w.path);
+    if (!tree.clean) refuse(`uncommitted changes (${tree.detail})`);
+    const pushing = pushInProgress(root, w.path, null);
+    if (pushing) refuse(`deferred: push in progress (${pushing})`);
+    if (w.branch) {
+      const bead = beadFor(w.branch, beads);
+      if (!isFleetBranch(w.branch) || !bead || bead[1] !== "closed") refuse("branch has no closed bead");
+      if (listedIntegrationRef(w.branch, extra)) refuse("listed integration ref in seats/integration-refs.txt");
+      if (!integratedRef(w.repo, w.sha, extra)) refuse("branch is not merged to an integration ref");
+    } else if (!onRemote(w.repo, w.sha)) refuse("detached snapshot not found on a remote ref");
+    return { ...w, identity };
+  });
+}
+
 function nowIso(): string { return new Date().toISOString().replace(/\.\d{3}Z$/, "Z"); }
 function rowIsForBead(r: Row, bead: string): boolean {
   const base = path.basename(r.path);
@@ -927,11 +981,17 @@ function cleanup(o: CleanupOptions): number {
   let removed = 0, kept = 0, freed = 0, failed = 0;
   const pastDeadline = () => o.deadline !== null && Date.now() / 1000 >= o.deadline;
   try {
-    let rows = scan([root], false).filter((r) => CLEANUP_CATEGORIES.has(r.category) || NEVER.has(r.category));
+    let rows = scan([root], false);
+    const nested = scanSeatBeadRuns(root);
+    // A control is evaluated as part of its owned scratch, not as an unrelated
+    // interactive checkout (nor independently of the parent's marker).
+    rows = rows.filter(r => !nested.some(n => r.path !== n.path && insideOf(r.path, n.path)));
+    rows.push(...nested);
+    rows = rows.filter((r) => CLEANUP_CATEGORIES.has(r.category) || NEVER.has(r.category));
     if (o.bead) rows = rows.filter((r) => rowIsForBead(r, o.bead!));
     const dry = o.dryRun ? "dry-run " : "";
     const inContainer = (p: string) => underAllowed(root, p) || DEFAULT_CONTAINERS.some((d) => insideOf(path.resolve(p), path.join(root, d)));
-    for (const r of rows) {
+    rowsLoop: for (const r of rows) {
       if (NEVER.has(r.category)) {
         // kept lines only for what cleanup could otherwise have touched: worktrees and bead scratch
         if (inContainer(r.path)) { emit(`${dry}kept ${r.category} ${r.path} reason=${r.category === "seat-anchor" ? `seat-anchor: ${r.reason}` : r.reason}`); kept++; }
@@ -949,17 +1009,19 @@ function cleanup(o: CleanupOptions): number {
       // Git registration records worktree ownership; plain scratch needs an
       // explicit creation record, not merely a closed-bead-looking name.
       const expectedBead = r.category === "run-scratch" ? /^scratch belongs to closed bead (.+)$/.exec(r.reason)?.[1] : undefined;
+      const nestedScratch = seatScratchLocation(root, r.path);
+      const ownershipRoot = nestedScratch?.seatRoot ?? root;
       let ownership: ReturnType<typeof scratchOwnership> | null = null;
       if (r.action === "rm") {
         try {
           if (r.category === "run-scratch" && !expectedBead) throw new Error("cannot bind scratch to a closed bead");
-          ownership = scratchOwnership(root, identity.real, expectedBead);
+          ownership = scratchOwnership(ownershipRoot, identity.real, expectedBead);
         }
         catch (e: any) { emit(`${dry}kept ${r.category} ${r.path} reason=unproven scratch ownership: ${e.message}`); kept++; continue; }
       }
       const changed = () => {
         if (!cleanupPathUnchanged(root, identity.real, identity)) return true;
-        try { return ownership !== null && JSON.stringify(scratchOwnership(root, identity.real, expectedBead)) !== JSON.stringify(ownership); }
+        try { return ownership !== null && JSON.stringify(scratchOwnership(ownershipRoot, identity.real, expectedBead)) !== JSON.stringify(ownership); }
         catch { return true; }
       };
       const keepChanged = () => {
@@ -979,6 +1041,11 @@ function cleanup(o: CleanupOptions): number {
         if (pushing) { emit(`${dry}kept ${r.category} ${r.path} reason=deferred: push in progress (${pushing})`); kept++; continue; }
         const tree = treeState(r.repo, r.path);
         if (!tree.clean) { emit(`${dry}kept ${r.category} ${r.path} reason=uncommitted changes (${tree.detail})`); kept++; continue; }
+      }
+      let controls: ReturnType<typeof checkedScratchWorktrees> = [];
+      if (nestedScratch && r.action === "rm") {
+        try { controls = checkedScratchWorktrees(root, identity.real); }
+        catch (e: any) { emit(`${dry}kept ${r.category} ${r.path} reason=${e.message}`); kept++; continue; }
       }
       if (o.dryRun) { emit(`dry-run would remove ${r.category} ${r.path} bytes=${r.size_bytes} reason=${r.reason}`); removed++; freed += r.size_bytes; continue; }
       try {
@@ -1001,6 +1068,20 @@ function cleanup(o: CleanupOptions): number {
             fs.rmSync(target, { recursive: true, force: true });
           }
         } else {
+          for (const control of controls) {
+            if (keepChanged()) continue rowsLoop;
+            if (!cleanupPathUnchanged(root, control.path, control.identity)) throw new Error(`registered control path changed during check: ${control.path}`);
+            // Re-read status/refs/registration just before Git acts, not only at scan time.
+            const current = checkedScratchWorktrees(root, target).find(w => w.path === control.path && w.repo === control.repo);
+            if (!current || current.sha !== control.sha || current.branch !== control.branch) throw new Error(`registered control changed during check: ${control.path}`);
+            archiveTag(control.repo, control.path, control.sha);
+            if (keepChanged()) continue rowsLoop;
+            if (!cleanupPathUnchanged(root, control.path, control.identity)) throw new Error(`registered control path changed during check: ${control.path}`);
+            const rm = run("git", ["worktree", "remove", "--force", control.path], control.repo);
+            if (!rm.ok) throw new Error(`registered control removal failed: ${rm.err || rm.out}`);
+            emit(`removed registered control ${control.path}`);
+          }
+          if (nestedScratch && registeredScratchWorktrees(root, target).length) throw new Error("registered controls remain; scratch kept");
           if (keepChanged()) continue;
           fs.rmSync(target, { recursive: true, force: true });
         }

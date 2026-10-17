@@ -58,6 +58,13 @@ if [ "${WHEELHOUSE_PRUNE_CLEANUP_IDENTITY_ONLY:-}" = 1 ]; then
   exit 0
 fi
 
+phase 'closed-task scratch inside seat worktrees (fresh allocations only)'
+if bun "$HERE/fixtures/prune-seat-scratch.ts" "$FIX/seat-scratch-cases" "$IDENTITY_SOURCE" "$PRUNE"; then
+  pass 'nested seat scratch cleanup regressions'
+else
+  fail 'nested seat scratch cleanup regressions'
+fi
+
 phase 'reviewed-row deletion safety (fresh allocations only)'
 REVIEWED="$FIX/reviewed"
 mkdir -p "$REVIEWED"
