@@ -69,6 +69,41 @@ trap finish_sweep EXIT
 trap 'interrupt_sweep 130' INT
 trap 'interrupt_sweep 143' TERM
 
+# File policy remains unconditional, including filtered sweeps. The tracked
+# invocation audit below separately distinguishes executable code from data.
+check_source_files(){
+  [ -d "$ROOT/seats" ] || { info "selftest-sweep: missing seats directory: $ROOT/seats"; return 1; }
+  find -L "$ROOT/seats" \( -type f -o -type l \) -print0 | (
+    rejected=0
+    while IFS= read -r -d '' file; do
+      case "$file" in
+        *.[pP][yY]) info "selftest-sweep: forbidden Python file: $file"; rejected=1; continue ;;
+      esac
+      [ -r "$file" ] || { info "selftest-sweep: unreadable source file: $file"; rejected=1; continue; }
+      # Only shebang files need a full first-line read; binary/large fixtures
+      # are probed for two bytes, never loaded wholesale.
+      prefix=""; IFS= read -r -n 2 prefix < "$file" || true
+      [ "$prefix" = '#!' ] || continue
+      first=""; IFS= read -r first < "$file" || true
+      # env -S also accepts a quoted split string, e.g. "python3 -u".
+      first="${first//\"/}"; first="${first//\'/}"
+      if printf '%s\n' "$first" | LC_ALL=C grep -E '^#![[:space:]]*([^[:space:]]*/)?python([0-9]+([.][0-9]+)*)?([[:space:]]|$)|^#![[:space:]]*([^[:space:]]*/)?env[[:space:]]+([^[:space:]]+[[:space:]]+)*([^[:space:]]*/)?python([0-9]+([.][0-9]+)*)?([[:space:]]|$)|^#![[:space:]]*([^[:space:]]*/)?env[[:space:]]+([^[:space:]]+[[:space:]]+)*(-S|--split-string=)([^[:space:]]*/)?python([0-9]+([.][0-9]+)*)?([[:space:]]|$)' >/dev/null; then
+        info "selftest-sweep: forbidden Python shebang: $file"
+        rejected=1
+      fi
+    done
+    exit "$rejected"
+  )
+}
+check_source_files || exit 1
+AUDITOR="$ROOT/seats/python-invocations.ts"
+if [ ! -f "$AUDITOR" ] || [ ! -r "$AUDITOR" ]; then
+  info "STOP: Python invocation auditor missing or unreadable: $AUDITOR"
+  exit 2
+fi
+# Refuse dependency calls before lock admission, queue registration or START.
+# Preserve exit2 for incomplete audits; an unexamined tree is not a test result.
+bun "$AUDITOR" "$ROOT" || exit "$?"
 acquire_lock
 
 shopt -s nullglob

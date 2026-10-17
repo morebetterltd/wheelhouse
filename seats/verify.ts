@@ -76,7 +76,7 @@
  */
 
 import * as crypto from "node:crypto";
-import { checkBeadContract, contractRemedy, parseContract } from "./contract";
+import { checkBeadContract, contractRemedy, parseContract, repoDeclarations } from "./contract";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -616,8 +616,7 @@ function defaultRepoArgFromTemplateSource(): string | undefined {
 }
 
 function repoDeclarationFromClaim(claim: string): string | null {
-  const m = claim.match(/^\s*Repo:\s*([^\s`'"]+)/mi);
-  return m ? m[1] : null;
+  return repoDeclarations(claim)?.[0] ?? null;
 }
 
 function repoArgFromClaim(claim: string): string | undefined {

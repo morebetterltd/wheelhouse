@@ -544,7 +544,7 @@ claims — direction reaching intake**, for the manual sync and status commands.
 
 ### Dispatch refuses work that is not a contract
 
-After copying `seats/`, run:
+After copying `seats/`, run the audit below. Use step 3's complete runtime copy, not `contract.ts` alone: Signal checks also load `intake.ts` and its shared helpers. This keeps the audit on the same intake implementation as dispatch and trace.
 
 ```bash
 contract_audit_rc=0
