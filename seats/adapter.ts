@@ -552,16 +552,28 @@ function rpcProgress(rec: RpcSeat, phase: () => string): () => void {
   };
 }
 
-/** Non-blocking FIFO writes: wait for startup/drain while the owned process
- * lives, not for a guessed budget. ENXIO after readiness and EPIPE are EOF.
+/** Serialize the WHOLE JSONL command, not individual writeSync chunks: a
+ * second writer's LF must never land inside a command larger than PIPE_BUF.
+ * Release before waiting for the RPC reply. Non-blocking writes/lock admission
+ * wait for signals, not deadlines. ENXIO after readiness and EPIPE are EOF.
  * Fresh launches have no startedAt yet and may not have opened stdin. */
 async function fifoWrite(rec: RpcSeat, obj: unknown): Promise<void> {
   const line = Buffer.from(JSON.stringify(obj) + "\n");
   const kind = String((obj as any)?.type ?? "command");
   let fd: number | null = null;
   let offset = 0;
-  const progress = rpcProgress(rec, () => `writing ${kind}, ${offset}/${line.length} bytes; awaiting pipe reader/drain`);
+  const lock = `${rec.fifo}.write.lock`;
+  let writeLock: number | null = null;
+  const progress = rpcProgress(rec, () => `writing ${kind}, ${offset}/${line.length} bytes; ${writeLock === null ? "awaiting FIFO command writer lock" : "awaiting pipe reader/drain"}`);
   try {
+    for (;;) {
+      assertRpcProcess(rec, `before writing ${kind}`);
+      const acquired = acquirePidLock(lock); // fifo-command-lock
+      if (acquired !== null) { writeLock = acquired; break; }
+      if (rec.startedAt) assertRpcReader(rec, `while waiting to write ${kind}`);
+      progress();
+      await sleep(25);
+    }
     for (;;) {
       assertRpcProcess(rec, `before writing ${kind}`);
       try {
@@ -589,7 +601,8 @@ async function fifoWrite(rec: RpcSeat, obj: unknown): Promise<void> {
     const delivery = offset > 0 ? "prompt not delivered (partial FIFO write?)" : `${kind} not delivered`;
     throw new Error(`${delivery} to ${rpcSeat(rec)}: wrote ${offset}/${line.length} bytes; ${why}`);
   } finally {
-    if (fd !== null) fs.closeSync(fd);
+    try { if (fd !== null) fs.closeSync(fd); }
+    finally { releasePidLock(lock, writeLock); }
   }
 }
 
@@ -663,6 +676,12 @@ async function rpc(rec: RpcSeat, command: Record<string, unknown>): Promise<any>
         obj = JSON.parse(line);
       } catch {
         continue; // not ours to police; the log is pi's raw stream
+      }
+      // An unparsable command has no recoverable request id. Fail closed on
+      // this transport error BEFORE matching an ack; never restart the seat.
+      if (obj.type === "response" && obj.command === "parse" && obj.success === false) {
+        const name = path.basename(rec.fifo, ".stdin");
+        throw new Error(`PI_PARSE_ERROR: ${rpcSeat(rec)} rejected ${command.type}: ${String(obj.error ?? "unknown pi parse error")}. Recovery: adapter.ts stop ${name} && adapter.ts resume ${name}`);
       }
       if (obj.type === "response" && obj.id === id) return obj;
     }
