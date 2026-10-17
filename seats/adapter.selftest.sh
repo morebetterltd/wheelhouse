@@ -2309,7 +2309,7 @@ phase "8. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
 CAN_A="$FIX/can-a"
 build_proj "$CAN_A" can-a
-sed 's|^  writeState(state); // spawn-record$|  ; // spawn-record|' "$ADAPTER" > "$CAN_A/seats/adapter.ts"
+sed 's|^  recordLaunchedSeat(name, record); // spawn-record$|  ; // spawn-record|' "$ADAPTER" > "$CAN_A/seats/adapter.ts"
 if cmp -s "$ADAPTER" "$CAN_A/seats/adapter.ts"; then
   fail "canary: could not cut the state write — the line no longer matches, so the canary proves nothing"
 else

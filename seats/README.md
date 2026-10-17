@@ -358,7 +358,12 @@ The process outlives
 the adapter: its stdin is a FIFO under `seats/run/`, its stdout appends raw
 to `seats/logs/<seat>.jsonl` (every event, one JSON line each; stderr lands
 beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
-one line, and reads the response out of the log.
+one line, and reads the response out of the log. A per-FIFO PID lock
+(`<seat>.stdin.write.lock`) covers the entire LF-terminated command, including
+all non-blocking partial writes: concurrent adapters cannot insert a command's
+newline inside another command larger than `PIPE_BUF`. The lock is released
+before waiting for the response. The stdin holder is the direct `0<>` FIFO
+redirection, not a line-splitting relay.
 
 The seat's process cwd is the seat's own worktree by construction, not a
 prompt telling it to `cd` there. A worker seat owns ONE persistent git
@@ -397,7 +402,15 @@ never leaves `status` naming the previous bead after the prompt has been sent.
 RPC readiness, state replies, FIFO drain and prompt acknowledgements have no
 elapsed-time failure budget: a live seat with an open pipe may answer late.
 The adapter waits for the matching response, or fails with the seat name and
-pid when the process dies or its pipe closes (EOF). Pending RPCs print `WAIT:`
+pid when the process dies or its pipe closes (EOF). A
+`command:"parse", success:false` response fails immediately when read, before
+acknowledgement matching, with `PI_PARSE_ERROR`, seat, pid, pi's error and
+`adapter.ts stop <seat> && adapter.ts resume <seat>`. Pi cannot recover a
+request id from malformed JSON: pending calls observing that transport error
+fail closed, rather than guessing which command failed. The adapter does not
+restart the seat. `adapter-framing.selftest.sh` measures real FIFO write bytes
+against an LF-only slow-reader stand-in and covers dispatch and both steer
+paths rejecting a command without ever acknowledging it. Pending RPCs print `WAIT:`
 progress every five seconds; that is reporting cadence, not a deadline.
 `status` reports observed process/log facts and never guesses WEDGED from a
 slow `get_state`; dispatch does not stop and relaunch a merely slow seat.
@@ -764,6 +777,10 @@ bash seats/selftest-sweep.sh
 ```
 
 It runs `seats/*.selftest.sh` serially and holds a host-wide lock so another seat or install on the same machine waits rather than starting a second full sweep. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
+
+Each admitted suite has a **3600-second** deadline (queue wait is not charged). Set `WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S` to a positive whole number of seconds to override it. At expiry the runner records `FAIL ... timed out after Ns`, sends TERM to the isolated suite tree, waits `WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S` (default **5 seconds**), then KILLs remaining owned groups/descendants. Native PID/PPID/PGID/birth records retain ownership across parent exit during grace. The runner reaps its suite and watchdog, continues with the next suite, includes timed-out paths in its summary, and releases its own host lock normally. A deadline is a harness failure, not evidence about the product behavior under test.
+
+The generous default is based on completed measurements read on 2026-10-17: concurrency **62s**, passing adapter output-capture lifetime **335s** (includes its wrapper), and an entire passing **53-suite** review at `49e2970` **843.256s**. The latter is a conservative upper bound on any single suite in that run, not an invented per-suite timing. 3600s is over four times even that whole-run bound and over ten times the measured adapter span. Queue-inclusive elapsed records are not used as precise suite runtimes. `selftest-sweep-timeout.selftest.sh` proves ordinary and TERM-ignoring idle sleep trees time out, the next suite runs, no recorded processes survive, and the released lock can be reused.
 
 FIFO admission uses a marked sibling `<lock>.queue` directory, leaving the active lock's exact three-file ownership contract unchanged. Registration under the same parent-directory flock assigns a monotonically ordered ticket (not a wall-clock timestamp). Only the oldest live ticket may acquire a free lock; a faster/newer poller cannot pass it. Wait messages report `queue_position`, the current holder and the head PID, updating when these change. Complete PID/host/token records are atomically published; definitive dead-PID tickets are reaped, while live/EPERM owners are preserved. TERM/INT removes only the cancelling runner's ticket, even before acquisition. Empty validated queues are removed without recursive deletion; malformed, foreign or symlinked queues fail closed. A process killed while staging an unpublished private candidate cannot leave an incomplete entry in the visible queue.
 
