@@ -1923,15 +1923,16 @@ async function cmdStop(name: string): Promise<void> {
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
-    writeState((state) => {
+    const message = writeState((state) => {
       const current = state.seats[name];
       if (current && sameSeatProcess(current, rec)) {
         current.pid = null;
         current.stoppedAt = new Date().toISOString();
         delete (current as any).cwd;
+        return `seat ${name} is not running; dead record cleared; session ${rec.sessionId ?? "-"} kept for resume`;
       }
     });
-    console.log(`seat ${name} is not running; dead record cleared; session ${rec.sessionId ?? "-"} kept for resume`);
+    if (message) console.log(message);
     return;
   }
   const driver = driverForRunningSeat(name, "adapter stop");
