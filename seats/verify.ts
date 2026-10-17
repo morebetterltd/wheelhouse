@@ -1071,12 +1071,14 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   // that process. Suites create their OWN fixture graphs, not one redirected
   // global graph (which would invalidate graph-isolation selftests).
   const scratchCwd = makeScratchCwd(repoRoot, "review", tip);
+  const groupsFile = path.join(scratchCwd, ".wheelhouse-review-groups");
+  fs.writeFileSync(groupsFile, "", { flag: "wx", mode: 0o600 });
   const logDir = path.join(VERDICTS_DIR, "sweeps");
   fs.mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${tip}.${process.pid}.${Date.now()}.selftest-sweep.log`);
   const started = Date.now();
   // Keep logical and physical cwd consistent for sweep child processes.
-  const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1", WHEELHOUSE_SELFTEST_REVIEW_GROUPS: groupsFile };
   for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN"]) delete env[key];
   const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
   if (actualTip !== tip) die(`sweep scratch tip ${actualTip} differs from reviewed tip ${tip}`);
@@ -1116,6 +1118,7 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
         trackReviewChild(child, { sweep: {
           lock: path.resolve(scratchCwd, env.WHEELHOUSE_SELFTEST_SWEEP_LOCK || "/tmp/wheelhouse-selftest-sweep.lock"),
           helper: env.WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER || path.join(scratchCwd, "seats/selftest-sweep-lock.ts"),
+          groupsFile,
         } });
         const finish = (code: number) => {
           if (!reviewCancelling) resolve(code);

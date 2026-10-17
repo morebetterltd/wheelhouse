@@ -17,6 +17,9 @@ async function until(test: () => boolean, ended: () => boolean, label: string) {
 function command(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) { const r = spawnSync(bin, args, { cwd, env, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout; }
 const cases = ["sweep", "reviewer"].flatMap(phase => (["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase, signal })));
 cases.push({ phase: "reviewer-orphan", signal: "SIGTERM" });
+cases.push(...(["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase: "sweep-stubborn", signal })));
+cases.push({ phase: "sweep-stubborn-long-grace", signal: "SIGTERM" });
+cases.push({ phase: "sweep-stubborn-runner-killed", signal: "SIGTERM" });
 const results: any[] = [];
 for (const { phase, signal } of cases) {
   const name = phase + "-" + signal, ledger = path.join(root, "groups." + name), dir = path.join(root, name), project = path.join(dir, "project"), bin = path.join(dir, "bin"), tmp = path.join(dir, "tmp"), lock = path.join(dir, "target-sweep.lock");
@@ -39,7 +42,7 @@ for (const { phase, signal } of cases) {
   fs.writeFileSync(idle, `#!/usr/bin/env bash
 set -eu
 role="$1"
-if [ "$role" = reviewer ]; then trap '' TERM INT HUP; else trap 'echo TERM >> "$CANCEL_CASE/$role.signals"; exit 0' TERM; fi
+if [ "$role" = reviewer ] || { [ "$role" = suite ] && [[ "$CANCEL_PHASE" = sweep-stubborn* ]]; }; then trap '' TERM INT HUP; else trap 'echo TERM >> "$CANCEL_CASE/$role.signals"; exit 0' TERM; fi
 sleep 600 &
 printf '%s\\n' "$!" > "$CANCEL_CASE/$role.sleep.pid"
 perl -e 'print getpgrp, "\\n"' > "$CANCEL_CASE/$role.pgid"
@@ -60,9 +63,11 @@ case "$1" in
  *) exit 1 ;;
 esac
 `, { mode: 0o755 });
-  fs.writeFileSync(path.join(project, "seats/idle.selftest.sh"), '#!/usr/bin/env bash\nset -eu\n[ "$CANCEL_PHASE" = sweep ] || exit 0\nexec bash "$CANCEL_IDLE" suite\n', { mode: 0o755 });
-  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, WHEELHOUSE_SELFTEST_SWEEP_LOCK: lock };
+  fs.writeFileSync(path.join(project, "seats/idle.selftest.sh"), '#!/usr/bin/env bash\nset -eu\n[[ "$CANCEL_PHASE" = sweep* ]] || exit 0\nexec bash "$CANCEL_IDLE" suite\n', { mode: 0o755 });
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, WHEELHOUSE_SELFTEST_SWEEP_LOCK: lock };
   delete env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN;
+  // Do not couple verifier teardown to the runner's deadline grace.
+  if (phase === "sweep-stubborn-long-grace") env.WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S = "120";
   command("git", ["init", "-q", "-b", "main"], project, env); command("git", ["add", "seats", "contracts"], project, env); command("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], project, env);
   const child = spawn("bun", [verify, "cancel-fixture", "main", "author", "reviewer"], { cwd: project, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
   let ended = false, out = "", err = ""; child.stdout!.on("data", b => out += b); child.stderr!.on("data", b => err += b); child.once("exit", () => ended = true);
@@ -71,16 +76,24 @@ esac
   fs.appendFileSync(ledger, String(child.pid!) + "\n");
   let canary: ReturnType<typeof spawn> | undefined, canaryClosed: Promise<unknown> | undefined, failure: any, measurement: any = {};
   try {
-    const role = phase === "sweep" ? "suite" : "reviewer";
+    const role = phase.startsWith("sweep") ? "suite" : "reviewer";
     await until(() => fs.existsSync(path.join(dir, role + ".pid")), () => ended, "idle target");
     const rolePid = Number(fs.readFileSync(path.join(dir, role + ".pid"), "utf8")), sleepPid = Number(fs.readFileSync(path.join(dir, role + ".sleep.pid"), "utf8")), roleGroup = Number(fs.readFileSync(path.join(dir, role + ".pgid"), "utf8"));
     assert(roleGroup > 0); groups.add(roleGroup);
     const scratch = command("git", ["worktree", "list", "--porcelain"], project, env).split("\n").filter(x => x.startsWith("worktree ")).map(x => x.slice(9)).filter(x => path.basename(x).startsWith("wheelhouse-")); assert(scratch.length >= 1);
+    const publishedGroups = scratch.flatMap(p => {
+      const file = path.join(p, ".wheelhouse-review-groups");
+      return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map(Number) : [];
+    });
     const runnerPid = Number(fs.readFileSync(path.join(dir, "runner.pid"), "utf8")), runnerGroup = Number(fs.readFileSync(path.join(dir, "runner.pgid"), "utf8")); assert(runnerPid > 0 && runnerGroup > 0); groups.add(runnerGroup);
     if (phase === "reviewer-orphan") await until(() => !pidAlive(rolePid), () => ended, "reviewer leader exit with same-group stub still alive");
     canary = spawn("bash", [idle, "foreign"], { cwd: scratch[0], env, stdio: "ignore", detached: true }); groups.add(canary.pid!); canaryClosed = new Promise(resolve => canary!.once("close", resolve));
     await until(() => fs.existsSync(path.join(dir, "foreign.pid")), () => false, "foreign group canary");
     const canaryGroup = Number(fs.readFileSync(path.join(dir, "foreign.pgid"), "utf8")); assert.equal(canaryGroup, canary.pid); assert.notEqual(canaryGroup, roleGroup); assert.notEqual(canaryGroup, runnerPid);
+    // A vanished runner cannot forward TERM or run its watchdog. Its own
+    // registry must still let the verifier reap the separate suite group.
+    const runnerKilled = phase === "sweep-stubborn-runner-killed";
+    if (runnerKilled) signalGroup(runnerGroup, "SIGKILL");
     // Signal ONLY the direct dispatcher we started, not its entire group.
     child.kill(signal);
     await until(() => ended, () => false, "cancelled dispatcher exit"); const result = await closed;
@@ -88,8 +101,8 @@ esac
     const listing = command("git", ["worktree", "list", "--porcelain"], project, env), scratchGone = scratch.every(p => !fs.existsSync(p) && !listing.includes("worktree " + p + "\n"));
     const absent = !fs.existsSync(lock); let admitted = false;
     if (absent) { const token = crypto.randomUUID().replace(/-/g, ""), r = spawnSync("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "acquire", lock, String(process.pid), token, ""], { cwd: project, env, encoding: "utf8" }); admitted = r.status === 0; if (admitted) command("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "release", lock, String(process.pid), token, r.stdout.trim()], project, env); }
-    measurement = { ...result, phase, requestedSignal: signal, recordedGroup: roleGroup, runnerPid, runnerGroup, survivors, scratchGone, lockAbsent: absent, lockAdmitted: admitted, foreignAlive: groupAlive(canaryGroup), foreignSignals: fs.existsSync(path.join(dir, "foreign.signals")) ? fs.readFileSync(path.join(dir, "foreign.signals"), "utf8") : "", handlerReturned: fs.existsSync(path.join(dir, "handler-returned")), stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded, reviewerStarted: fs.existsSync(path.join(dir, "reviewer.pid")) };
-    assert.equal(result.code, signal === "SIGTERM" ? 143 : signal === "SIGINT" ? 130 : 129); assert.equal(result.signal, null); assert(measurement.stdoutEOF && measurement.stderrEOF); assert.deepEqual(survivors, []); assert(scratchGone && absent && admitted); assert(measurement.foreignAlive && !measurement.foreignSignals); assert.equal(measurement.reviewerStarted, phase !== "sweep"); if (signal !== "SIGHUP") assert(measurement.handlerReturned, "production handler must return while asynchronous teardown joins children"); assert(err.includes("owned groups stopped, locks released, scratch removed"), err);
+    measurement = { ...result, phase, runnerKilled, requestedSignal: signal, recordedGroup: roleGroup, publishedGroups, runnerPid, runnerGroup, survivors, ownedGroupsGone: !groupAlive(roleGroup) && !groupAlive(runnerGroup), reportedClean: err.includes("owned groups stopped, locks released, scratch removed"), runnerGrace: phase === "sweep-stubborn-long-grace" ? 120 : 5, scratchGone, lockAbsent: absent, lockAdmitted: admitted, foreignAlive: groupAlive(canaryGroup), foreignSignals: fs.existsSync(path.join(dir, "foreign.signals")) ? fs.readFileSync(path.join(dir, "foreign.signals"), "utf8") : "", handlerReturned: fs.existsSync(path.join(dir, "handler-returned")), stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded, reviewerStarted: fs.existsSync(path.join(dir, "reviewer.pid")) };
+    assert.equal(result.code, signal === "SIGTERM" ? 143 : signal === "SIGINT" ? 130 : 129); assert.equal(result.signal, null); assert(measurement.stdoutEOF && measurement.stderrEOF); assert.deepEqual(survivors, []); assert(measurement.ownedGroupsGone, "all owned groups must be empty before clean stop"); if (phase.startsWith("sweep-stubborn")) assert(publishedGroups.includes(roleGroup), "real runner must publish suite group ownership before payload"); assert(scratchGone && absent && admitted); assert(measurement.foreignAlive && !measurement.foreignSignals); assert.equal(measurement.reviewerStarted, !phase.startsWith("sweep")); if (signal !== "SIGHUP") assert(measurement.handlerReturned, "production handler must return while asynchronous teardown joins children"); assert(err.includes("owned groups stopped, locks released, scratch removed"), err);
     console.log("PASS " + name + " " + JSON.stringify(measurement));
   } catch (e: any) { failure = e.stack ?? String(e); console.error("FAIL " + name + ": " + e.message); }
   finally {
