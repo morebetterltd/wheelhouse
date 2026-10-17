@@ -24,19 +24,20 @@ function git(args: string[], cwd: string) {
 }
 function keep(p: string) { fs.mkdirSync(p, { recursive: true }); fs.writeFileSync(path.join(p, "KEEP"), "owned fixture sentinel\n"); }
 function intact(p: string) { return fs.existsSync(path.join(p, "KEEP")) && fs.readFileSync(path.join(p, "KEEP"), "utf8") === "owned fixture sentinel\n"; }
-function fixture(name: string) {
-  const dir = fs.mkdtempSync(path.join(base, name + "-")), root = path.join(dir, "install"), repo = path.join(root, "product"), bin = path.join(dir, "bin"), outside = path.join(dir, "outside");
+function fixture(name: string, layout = "plain-umbrella") {
+  const dir = fs.mkdtempSync(path.join(base, name + "-")), root = path.join(dir, "install"), repo = layout === "single-repo" ? root : path.join(root, "product"), bin = path.join(dir, "bin"), outside = path.join(dir, "outside");
   fs.mkdirSync(repo, { recursive: true }); fs.mkdirSync(bin); fs.mkdirSync(outside);
   fs.cpSync(path.join(source, "seats"), path.join(root, "seats"), { recursive: true });
   fs.copyFileSync(prune, path.join(root, "seats", "prune.ts"));
   fs.writeFileSync(path.join(root, "seats", "state.json"), '{"seats":{}}');
   fs.writeFileSync(path.join(root, "seats", "seats.json"), '{"seats":{"worker-1":{},"worker-2":{}}}');
   fs.mkdirSync(path.join(root, ".beads"));
+  if (layout === "git-umbrella") git(["init", "-q", "-b", "main"], root);
   git(["init", "-q", "-b", "main"], repo);
   git(["config", "user.email", "selftest@example.invalid"], repo); git(["config", "user.name", "selftest"], repo);
   fs.writeFileSync(path.join(repo, "app.txt"), "base\n");
   fs.writeFileSync(path.join(repo, ".gitignore"), ".wheelhouse-runs/\n");
-  git(["add", "."], repo); git(["commit", "-q", "-m", "base"], repo);
+  git(["add", "app.txt", ".gitignore"], repo); git(["commit", "-q", "-m", "base"], repo);
   git(["update-ref", "refs/remotes/origin/main", "HEAD"], repo);
   const seat = path.join(root, ".wheelhouse-worktrees", "worker-1");
   git(["worktree", "add", "-q", "--detach", seat, "main"], repo);
@@ -75,8 +76,9 @@ function invoke(f: Fixture, args: string[] = []) {
   console.log("MEASUREMENT " + JSON.stringify({ fixture: path.basename(f.dir), ...r }));
   return r;
 }
-{
-  const f = fixture("closed-open-two-seats"), c = scratch(f), o = scratch(f, open);
+for (const layout of ["plain-umbrella", "git-umbrella", "single-repo"]) {
+  console.log(`seat scratch layout: ${layout}`);
+  const f = fixture("closed-open-two-seats-" + layout, layout), c = scratch(f), o = scratch(f, open);
   const extraControl = path.join(c.run, "negative-old-again");
   git(["worktree", "add", "-q", "--detach", extraControl, "main"], f.repo);
   const seat2 = path.join(f.root, ".wheelhouse-worktrees", "worker-2");
@@ -92,7 +94,7 @@ function invoke(f: Fixture, args: string[] = []) {
   check(nightly.code === 0 && !fs.existsSync(second.run) && !registered(f, second.control), "fleet-wide cleanup discovers a second seat's closed scratch");
   check(intact(o.run) && registered(f, o.control) && registered(f, f.seat) && registered(f, seat2), "open scratch and both rostered seat worktrees survive");
 }
-for (const kind of ["unmarked", "foreign-marker", "dirty", "unremote", "open-branch", "live", "seat-anchor", "isa", "push", "no-lsof", "report", "off", "swap", "symlink-runs", "symlink-seat"]) {
+for (const kind of ["unmarked", "foreign-marker", "dirty", "unremote", "open-branch", "detached-open-name", "live", "seat-anchor", "isa", "push", "no-lsof", "report", "off", "swap", "symlink-runs", "symlink-seat"]) {
   const f = fixture(kind), c = scratch(f, closed, f.seat, kind !== "unmarked");
   if (kind === "foreign-marker") { const m = JSON.parse(fs.readFileSync(path.join(c.run, SCRATCH_MARKER), "utf8")); m.root = f.outside; fs.writeFileSync(path.join(c.run, SCRATCH_MARKER), JSON.stringify(m)); }
   if (kind === "dirty") {
@@ -101,6 +103,10 @@ for (const kind of ["unmarked", "foreign-marker", "dirty", "unremote", "open-bra
   }
   if (kind === "unremote") { fs.writeFileSync(path.join(c.control, "app.txt"), "unremote fixture commit\n"); git(["add", "app.txt"], c.control); git(["commit", "-q", "-m", "unremote"], c.control); }
   if (kind === "open-branch") git(["switch", "-q", "-c", `fleet/${open}`], c.control);
+  if (kind === "detached-open-name") {
+    const renamed = path.join(c.run, `negative-${open}`);
+    git(["worktree", "move", c.control, renamed], f.repo); c.control = renamed;
+  }
   if (kind === "live" || kind === "swap") mode(f, kind);
   if (kind === "seat-anchor") fs.writeFileSync(path.join(f.root, "seats", "state.json"), JSON.stringify({ seats: { reviewer: { cwd: c.control } } }));
   if (kind === "isa") { fs.mkdirSync(path.join(f.root, "wheelhouse")); fs.writeFileSync(path.join(f.root, "wheelhouse", "ISA.md"), "`.wheelhouse-worktrees/negative-old`\n"); }

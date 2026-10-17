@@ -923,8 +923,9 @@ function checkedScratchWorktrees(root: string, target: string) {
     if (!tree.clean) refuse(`uncommitted changes (${tree.detail})`);
     const pushing = pushInProgress(root, w.path, null);
     if (pushing) refuse(`deferred: push in progress (${pushing})`);
+    const bead = beadFor(w.branch || path.basename(w.path), beads);
+    if (bead && bead[1] !== "closed") refuse(`bead ${bead[0]} is ${bead[1]}`);
     if (w.branch) {
-      const bead = beadFor(w.branch, beads);
       if (!isFleetBranch(w.branch) || !bead || bead[1] !== "closed") refuse("branch has no closed bead");
       if (listedIntegrationRef(w.branch, extra)) refuse("listed integration ref in seats/integration-refs.txt");
       if (!integratedRef(w.repo, w.sha, extra)) refuse("branch is not merged to an integration ref");
