@@ -55,17 +55,12 @@ inbox_count(){ [ -f "$ROOT/seats/inbox.jsonl" ] && wc -l < "$ROOT/seats/inbox.js
 need_open_count(){ [ -f "$ROOT/seats/needs.jsonl" ] && grep -c '"type":"opened"' "$ROOT/seats/needs.jsonl" || echo 0; }
 need_closed_count(){ [ -f "$ROOT/seats/needs.jsonl" ] && grep -c '"type":"closed"' "$ROOT/seats/needs.jsonl" || echo 0; }
 active(){ node -e 'const j=require(process.argv[1]); if(!j.alerts[process.argv[2]]?.active) process.exit(1)' "$ROOT/seats/run/fleet-snapshot.json" "$1"; }
-set_low_disk(){ python3 - "$ROOT/wheelhouse/.template-source" "$1" <<'PY'
-from pathlib import Path
-import sys,re
-p=Path(sys.argv[1]); v=sys.argv[2]; s=p.read_text(); s=re.sub(r'(?m)^alert-low-disk-gb=.*$', f'alert-low-disk-gb={v}', s); p.write_text(s)
-PY
+set_low_disk(){ bun - "$ROOT/wheelhouse/.template-source" "$1" <<'JS'
+const fs=(await import('node:fs')).default,[p,v]=process.argv.slice(2),s=fs.readFileSync(p,'utf8');
+fs.writeFileSync(p,s.replace(/^alert-low-disk-gb=.*$/gm,()=> 'alert-low-disk-gb='+v));
+JS
 }
-old_iso(){ python3 - <<'PY'
-from datetime import datetime, timedelta, timezone
-print((datetime.now(timezone.utc)-timedelta(minutes=20)).isoformat())
-PY
-}
+old_iso(){ bun -e 'console.log(new Date(Date.now()-20*60*1000).toISOString())'; }
 clear_runtime(){ rm -f "$ROOT/seats/run/fleet-snapshot.json" "$ROOT/seats/inbox.jsonl" "$ROOT/seats/needs.jsonl" "$ROOT/seats/logs/alerts.log" "$ROOT/seats/inbox.cursor" "$ROOT/seats/run/herald.target.json" "$ROOT/seats/run/alerts.lock"; printf '{"seats":{}}\n' > "$ROOT/seats/state.json"; set_low_disk 0; }
 quiet3(){ local before name; name="$1"; before="$(inbox_count)"; run_alert "$@"; run_alert bun seats/alerts.ts check --json; run_alert bun seats/alerts.ts check --json; [ "$(inbox_count)" = "$before" ]; }
 age_alert(){ node -e 'const fs=require("fs"); const f=process.argv[1], n=process.argv[2]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.alerts[n].since="2000-01-01T00:00:00.000Z"; fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n");' "$ROOT/seats/run/fleet-snapshot.json" "$1"; }
@@ -144,11 +139,9 @@ fi
 for content in '' 'not a pid'; do
   rm -f "$ROOT/seats/run/fleet-snapshot.json"
   printf '%s' "$content" > "$ROOT/seats/run/alerts.lock"
-  python3 - "$ROOT/seats/run/alerts.lock" <<'PY'
-import os, sys, time
-old = time.time() - 60
-os.utime(sys.argv[1], (old, old))
-PY
+  bun - "$ROOT/seats/run/alerts.lock" <<'JS'
+const old=Date.now()/1000-60; (await import('node:fs')).default.utimesSync(process.argv[2],old,old);
+JS
   run_alert bun seats/alerts.ts check --json
   [ $RC -eq 0 ] && [ -s "$ROOT/seats/run/fleet-snapshot.json" ] && [ ! -e "$ROOT/seats/run/alerts.lock" ] && pass "alerts writes a fresh snapshot after an old incomplete lock (${content:-empty})" || fail "incomplete alerts lock blocked snapshot rc=$RC out=$OUT"
 done
@@ -191,24 +184,20 @@ await new Promise((resolve) => setTimeout(resolve, 2000));
 TS
 SLOW_OUT="$FIX/slow-herald.out"; (cd "$SLOW" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$SLOW" timeout 1 bun seats/herald.ts --once >"$SLOW_OUT" 2>&1); SRC=$?
 [ "$SRC" = 0 ] && pass 'scan loop does not wait for a slow alerts child' || fail "slow alerts child blocked scan rc=$SRC out=$(cat "$SLOW_OUT" 2>/dev/null)"
-BROKEN="$FIX/no-alert-clock"; cp -R "$ROOT" "$BROKEN"; python3 - "$BROKEN/seats/herald.ts" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1]); s=p.read_text(); s=s.replace('const clocked = runStaffingClock(state) || runAlertsClock(state);','const clocked = runStaffingClock(state);')
-p.write_text(s)
-PY
+BROKEN="$FIX/no-alert-clock"; cp -R "$ROOT" "$BROKEN"; bun - "$BROKEN/seats/herald.ts" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='const clocked = runStaffingClock(state) || runAlertsClock(state);';
+if(s.split(needle).length!==2) throw new Error('alerts clock canary source changed');
+fs.writeFileSync(p,s.replace(needle,'const clocked = runStaffingClock(state);'));
+JS
 rm -f "$BROKEN/seats/run/fleet-snapshot.json"; (cd "$BROKEN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$BROKEN" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 timeout 1 bun seats/herald.ts --daemon >/dev/null 2>&1) || true
 [ ! -s "$BROKEN/seats/run/fleet-snapshot.json" ] && pass 'canary: removing runAlertsClock makes the herald snapshot leg fail' || fail 'canary without runAlertsClock still produced a snapshot'
 
 phase 'canary'
-CAN="$FIX/canary"; cp -R "$ROOT" "$CAN"; python3 - "$CAN/seats/alerts.ts" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1])
-s=p.read_text()
-s=s.replace('if(next.active&&(!was?.active||was.signature!==next.signature))','if(next.active)')
-p.write_text(s)
-PY
+CAN="$FIX/canary"; cp -R "$ROOT" "$CAN"; bun - "$CAN/seats/alerts.ts" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='if(next.active&&(!was?.active||was.signature!==next.signature))';
+if(s.split(needle).length!==2) throw new Error('alert transition canary source changed');
+fs.writeFileSync(p,s.replace(needle,'if(next.active)'));
+JS
 rm -f "$CAN/seats/inbox.jsonl" "$CAN/seats/run/fleet-snapshot.json"; (cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1 && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1); CCOUNT="$( [ -f "$CAN/seats/inbox.jsonl" ] && wc -l < "$CAN/seats/inbox.jsonl" | tr -d ' ' || echo 0 )"
 [ "$CCOUNT" -gt 2 ] && pass 'canary: fire-on-every-run variant fails the stays-quiet leg' || fail "canary did not produce repeated alert rows count=$CCOUNT"
 
