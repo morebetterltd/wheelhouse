@@ -144,6 +144,7 @@ fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
+if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) fs.appendFileSync(process.env.WHEELHOUSE_TEST_CHILD_LEDGER, JSON.stringify({event:"model",pid:process.pid}) + "\n");
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the verifier), not rely on an operator
 // export reaching this one-shot process.
@@ -691,10 +692,11 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.se
 
 phase "pool reviewer routing — shared author subscription is skipped"
 cp "$PROJ/seats/seats.json" "$FIX/seats-json.before-pool"
-python3 - <<PY
-import json, pathlib
-p=pathlib.Path('$PROJ/seats/seats.json'); j=json.load(open(p)); j['seats'].pop('verifier', None); p.write_text(json.dumps(j, indent=2))
-PY
+bun - "$PROJ/seats/seats.json" <<'TS'
+import fs from "node:fs";
+const p=process.argv[2],j=JSON.parse(fs.readFileSync(p,"utf8"));
+delete j.seats.verifier; fs.writeFileSync(p,JSON.stringify(j,null,2));
+TS
 mkdir -p "$HOME_FIX/.pi-seats-proj/pool/rv1" "$HOME_FIX/.pi-seats-proj/pool/rv2"
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv1/auth.json"
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv2/auth.json"
@@ -793,6 +795,7 @@ JS
 chmod +x "$SWEEP_BIN/bd"
 SWEEP_SAVED_RUN_PATH="$RUN_PATH"; RUN_PATH="$SWEEP_BIN:$RUN_PATH"
 cp -f "$VERIFY_DIR/selftest-sweep.sh" "$SWEEP_PROJ/seats/selftest-sweep.sh"
+cp -f "$VERIFY_DIR/python-invocations.ts" "$SWEEP_PROJ/seats/python-invocations.ts" || exit 2
 cat > "$SWEEP_PROJ/seats/slowed.selftest.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -808,8 +811,8 @@ fi
 exit "${SWEEP_FIXTURE_RC:-0}"
 SH
 chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
-# Detached evidence runs only committed files: include the runner companion.
-git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/slowed.selftest.sh
+# Detached evidence runs only committed files: include both runner companions.
+git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/slowed.selftest.sh
 git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
@@ -844,11 +847,8 @@ if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEE
 cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
 # Hold H4 until the dispatcher log proves it waited, before verifier readiness.
 # The controller then releases the fixture holder. No elapsed-time comparison.
-HOLDER_RELEASE="$FIX/sweep-holder.release"
-bash -c 'printf "pid=%s\n" "$$" > "$1.new"; mv -f "$1.new" "$1"; while [ ! -f "$2" ]; do sleep 0.01; done; rm -f "$1"' _ "$SWEEP_LOCK" "$HOLDER_RELEASE" & HOLDER=$!
-while [ ! -f "$SWEEP_LOCK" ]; do sleep 0.01; done
-WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLDER_RELEASE="$HOLDER_RELEASE" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
-wait "$HOLDER"
+# The readiness driver owns AND joins its H4 holder, including early-exit paths.
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLD_H4=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
 SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
 SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
@@ -857,6 +857,11 @@ else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$S
 if [ -f "$WATCHDOG_DIR/holder-wait-observed" ] && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ -f "$WATCHDOG_DIR/output" ]; then
   pass "sweep evidence waits for H4 and fixture readiness without a wall-clock verdict"
 else fail "sweep/readiness handshake was not observed"; fi
+# The readiness regression runs this real suite through its killed fixture leg.
+if [ "${WHEELHOUSE_VERIFY_EXIT_BEFORE_READY_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || { printf 'verify.selftest: FAIL (%s failures in early-exit subset)\n' "$FAILED"; exit 1; }
+  printf 'verify.selftest: PASS (early-exit subset)\n'; exit 0
+fi
 for NO_OUTPUT_MODE in eof silent; do
   WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_EMIT_NOTHING="$NO_OUTPUT_MODE" run_sweep_prompt_check "$SWEEP_BD_SHOW" "bead-sweep-no-output-$NO_OUTPUT_MODE" fleet/bead-1 worker-1
   if [ "$RC" = 1 ] && { says 'verifier emitted no VERDICT:' || says 'first-output deadline'; } && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ ! -e "$WATCHDOG_DIR/output" ]; then
@@ -1639,20 +1644,18 @@ check_verifier_fixture_manifest() {
   if [ -f "$root/contracts/BENCH.md" ]; then bench="$root/contracts/BENCH.md";
   elif [ -f "$root/wheelhouse/crew/BENCH.md" ]; then bench="$root/wheelhouse/crew/BENCH.md";
   else fail "verifier fixture manifest check could not find BENCH.md"; return; fi
-  if python3 - "$root" "$bench" <<'PY'
-import pathlib, re, sys
-root = pathlib.Path(sys.argv[1]); bench = pathlib.Path(sys.argv[2])
-fixture_dir = root / "seats" / "fixtures" / "verify-real"
-actual = sorted(str(p.relative_to(root)) for p in fixture_dir.glob("*.jsonl"))
-text = re.sub(r"<!--.*?-->", "", bench.read_text(), flags=re.S)
-listed = sorted(set(re.findall(r"fixture:\s*(seats/fixtures/verify-real/[^;\s]+\.jsonl)", text)))
-missing_from_bench = sorted(set(actual) - set(listed))
-missing_from_disk = sorted(set(listed) - set(actual))
-if missing_from_bench or missing_from_disk:
-    print("missing_from_bench=" + ",".join(missing_from_bench))
-    print("missing_from_disk=" + ",".join(missing_from_disk))
-    raise SystemExit(1)
-PY
+  if bun - "$root" "$bench" <<'TS'
+import fs from "node:fs";
+import path from "node:path";
+const [root,bench]=process.argv.slice(2),prefix="seats/fixtures/verify-real/";
+const actual=fs.readdirSync(path.join(root,prefix)).filter(p=>p.endsWith(".jsonl")).map(p=>prefix+p).sort();
+const text=fs.readFileSync(bench,"utf8").replace(/<!--[\s\S]*?-->/g,"");
+const listed=[...new Set([...text.matchAll(/fixture:\s*(seats\/fixtures\/verify-real\/[^;\s]+\.jsonl)/g)].map(m=>m[1]))].sort();
+const missing_from_bench=actual.filter(p=>!listed.includes(p)),missing_from_disk=listed.filter(p=>!actual.includes(p));
+if(missing_from_bench.length || missing_from_disk.length){
+ console.log("missing_from_bench="+missing_from_bench.join(",")); console.log("missing_from_disk="+missing_from_disk.join(",")); process.exitCode=1;
+}
+TS
   then pass "BENCH.md verifier wire-shape list matches real fixture files"; else fail "BENCH.md verifier wire-shape list and fixture files diverge"; fi
 }
 check_verifier_fixture_manifest
@@ -1664,15 +1667,15 @@ COMMENTED_BENCH="$FIX/commented-BENCH.md"
   done
   printf -- '-->\n'
 } > "$COMMENTED_BENCH"
-if python3 - "$VERIFY_DIR/.." "$COMMENTED_BENCH" <<'PY'
-import pathlib, re, sys
-root = pathlib.Path(sys.argv[1]); bench = pathlib.Path(sys.argv[2])
-fixture_dir = root / "seats" / "fixtures" / "verify-real"
-actual = sorted(str(p.relative_to(root)) for p in fixture_dir.glob("*.jsonl"))
-text = re.sub(r"<!--.*?-->", "", bench.read_text(), flags=re.S)
-listed = sorted(set(re.findall(r"fixture:\s*(seats/fixtures/verify-real/[^;\s]+\.jsonl)", text)))
-raise SystemExit(0 if not (set(actual) - set(listed)) else 1)
-PY
+if bun - "$VERIFY_DIR/.." "$COMMENTED_BENCH" <<'TS'
+import fs from "node:fs";
+import path from "node:path";
+const [root,bench]=process.argv.slice(2),prefix="seats/fixtures/verify-real/";
+const actual=fs.readdirSync(path.join(root,prefix)).filter(p=>p.endsWith(".jsonl")).map(p=>prefix+p);
+const text=fs.readFileSync(bench,"utf8").replace(/<!--[\s\S]*?-->/g,"");
+const listed=new Set([...text.matchAll(/fixture:\s*(seats\/fixtures\/verify-real\/[^;\s]+\.jsonl)/g)].map(m=>m[1]));
+if(actual.some(p=>!listed.has(p)))process.exitCode=1;
+TS
 then fail "BENCH.md verifier wire-shape manifest check accepted a commented-out fixture list"; else pass "BENCH.md verifier wire-shape manifest check rejects commented-out fixture lists"; fi
 set_verifier_harness pi
 run_stream "$REAL_FIXTURES_DIR/pi-v3-message-end.jsonl" bead-5-recorded-pi fleet/bead-1 worker-1

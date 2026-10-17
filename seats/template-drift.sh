@@ -8,7 +8,8 @@ JSON=0
 SRC_FILE="$ROOT/wheelhouse/.template-source"
 FORKS_FILE="$ROOT/wheelhouse/.template-forks"
 
-json_escape() { python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().rstrip("\n")))'; }
+# Keep the original JSON wire format, including ASCII escapes for Unicode.
+json_escape() { bun -e 'const fs=(await import("node:fs")).default; const s=JSON.stringify(fs.readFileSync(0,"utf8").replace(/\n+$/, "")); process.stdout.write(s.replace(/[\u007f-\uffff]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0"))+"\n");'; }
 fail_compare() {
   msg="$1"
   if [ "$JSON" = 1 ]; then printf '{"error":%s,"modified":[],"localOnly":[],"missing":[],"aheadBy":null,"comparedAgainst":null}\n' "$(printf '%s' "$msg" | json_escape)"; else printf 'DRIFT: cannot compare (%s)\n' "$msg"; fi
@@ -106,12 +107,15 @@ done
 if [ -n "$headref" ]; then ahead="$(git -C "$REPO" rev-list --count "$commit..$headref" 2>/dev/null || printf null)"; [ -n "$ahead" ] || ahead=null; fi
 
 if [ "$JSON" = 1 ]; then
-  python3 - "$commit" "$ahead" "$modified" "$local_only" "$missing" <<'PY'
-import json,sys
-commit,ahead,mod,loc,mis=sys.argv[1:6]
-def lines(s): return [x for x in s.split('\n') if x]
-print(json.dumps({"modified":lines(mod),"localOnly":lines(loc),"missing":lines(mis),"aheadBy":(None if ahead=='null' else int(ahead)),"comparedAgainst":commit}, indent=2))
-PY
+  bun -e '
+const [commit,ahead,mod,loc,mis]=process.argv.slice(1);
+const lines=s=>s.split("\n").filter(Boolean);
+if(ahead!=="null"&&!/^[+-]?\d+$/.test(ahead)) throw new Error("invalid ahead count");
+const count=ahead==="null"?"null":BigInt(ahead).toString();
+const json=JSON.stringify({modified:lines(mod),localOnly:lines(loc),missing:lines(mis),aheadBy:null,comparedAgainst:commit},null,2)
+  .replace(/^  "aheadBy": null,$/m,`  "aheadBy": ${count},`);
+process.stdout.write(json.replace(/[\u007f-\uffff]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0"))+"\n");
+' "$commit" "$ahead" "$modified" "$local_only" "$missing"
 else
   printf '%s' "$modified" | while IFS= read -r p; do [ -n "$p" ] && printf 'MODIFIED %s\n' "$p"; done
   printf '%s' "$local_only" | while IFS= read -r p; do [ -n "$p" ] && printf 'LOCAL-ONLY %s\n' "$p"; done
