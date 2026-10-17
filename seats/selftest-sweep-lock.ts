@@ -3,7 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { dlopen, FFIType, read, CString, toArrayBuffer } from "bun:ffi";
 
 const MARKER = "wheelhouse-selftest-sweep";
@@ -11,10 +12,76 @@ const FILES = ["pid", "started", MARKER].sort();
 const QUEUE = `${MARKER}-queue`;
 const WAITER = `${MARKER}-waiter`;
 const queueMarkers = new Map<number, [string, string]>();
-const HOST = os.hostname();
+const HOST = os.hostname(); // Diagnostic/legacy name only; networks may change it.
+let hostId: string | null = null;
+const descriptorPaths = new Map<number, string>();
+const observed: object[] = [];
+let diagnosed = false;
+let hostNames = new Set([HOST]);
+const HOST_RECORD = `${MARKER}-host`;
 const C = fs.constants;
 const darwin = process.platform === "darwin";
 class Refused extends Error {}
+function stableHostId(): string {
+  // Never fall back to the network name when a stable identity is unavailable.
+  let source: string;
+  if (darwin) {
+    const raw = execFileSync("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
+    const match = /^\s*"IOPlatformUUID" = "([0-9A-Fa-f-]+)"\s*$/m.exec(raw);
+    if (!match || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(match[1])) throw new Refused("stable hardware UUID unavailable");
+    source = `darwin:${match[1].toLowerCase()}`;
+  } else if (process.platform === "linux") {
+    const machine = fs.readFileSync("/etc/machine-id", "utf8").trim();
+    if (!/^[0-9a-f]{32}$/i.test(machine) || /^0+$/.test(machine)) throw new Refused("stable machine-id unavailable");
+    source = `linux:${machine.toLowerCase()}`;
+  } else throw new Refused("stable host identity unsupported on this platform");
+  return createHash("sha256").update(source).digest("hex");
+}
+function hostMatches(marker: any): boolean {
+  // Wire records stay byte-for-byte compatible in shape with older helpers.
+  // The sibling stable-ID cache binds previously observed names to this host.
+  return hostNames.has(marker.hostname);
+}
+function markerFields(marker: any, fields: string[]): boolean {
+  return !!marker && typeof marker === "object" && !Array.isArray(marker) && typeof marker.hostname === "string" &&
+    JSON.stringify(Object.keys(marker).sort()) === JSON.stringify(fields.sort());
+}
+function evidence(fd: number, file: string, data?: Buffer): object {
+  const s = fs.fstatSync(fd, { bigint: true });
+  return { path: file, device: String(s.dev), inode: String(s.ino), mtimeNs: String(s.mtimeNs), size: String(s.size),
+    ...(data ? { contents: data.toString("utf8"), contentsBase64: data.toString("base64") } : {}) };
+}
+function diagnose(error: any, parent?: number, name?: string) {
+  diagnosed = true;
+  const snapshots: object[] = [];
+  function capture(at: number, leaf: string, depth: number) {
+    const file = path.join(descriptorPaths.get(at) ?? "[unknown descriptor]", leaf);
+    let fd = -1;
+    try {
+      fd = openAt(at, leaf);
+      const s = fs.fstatSync(fd);
+      if (s.isDirectory()) {
+        const names = entries(fd); snapshots.push({ ...evidence(fd, file), entries: names });
+        if (depth) for (const member of names) capture(fd, member, depth - 1);
+      } else if (s.isFile() && s.size <= 16384) {
+        // Same bounded, no-follow, nonblocking read as validation. Full bytes
+        // for every admissible marker; oversize/nonregular objects stay inert.
+        const data = Buffer.alloc(16385), n = fs.readSync(fd, data, 0, data.length, 0);
+        snapshots.push(n <= 16384 ? evidence(fd, file, data.subarray(0, n)) : { ...evidence(fd, file), contentsUnavailable: "grew beyond 16384 bytes" });
+      } else snapshots.push({ ...evidence(fd, file), contentsUnavailable: "not a bounded regular marker (limit 16384 bytes)" });
+    } catch (e: any) {
+      // Metadata-only lstat is supplementary when no-follow open refuses a
+      // symlink. Never read its target or use this path observation to delete.
+      let metadata: object = {};
+      try { const s = fs.lstatSync(file, { bigint: true }); metadata = { inode: String(s.ino), device: String(s.dev), mtimeNs: String(s.mtimeNs), metadataOnly: true }; } catch {}
+      snapshots.push({ path: file, ...metadata, unavailable: e.message });
+    }
+    finally { if (fd >= 0) fs.closeSync(fd); }
+  }
+  if (parent !== undefined && name) { capture(parent, name, 1); capture(parent, `${name}.queue`, 1); capture(parent, `${name}.host`, 1); }
+  console.error("SELFTEST_LOCK_REFUSAL " + JSON.stringify({ operation: process.argv[2], lock: process.argv[3], reason: error.message,
+    host: { hostname: HOST, hostId, knownHostnames: [...hostNames], platform: process.platform }, observed, snapshots }));
+}
 let native: ReturnType<typeof dlopen>;
 function primitives() {
   if (!darwin && process.platform !== "linux") throw new Refused("atomic directory publication unsupported on this platform");
@@ -41,6 +108,7 @@ function z(s: string) { return Buffer.from(s + "\0"); }
 function openAt(parent: number, name: string, flags = C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK): number {
   const fd = native.symbols.openat(parent, z(name), flags) as number;
   if (fd < 0) { const n = errno(); throw Object.assign(new Refused(`open ${name} failed (errno ${n})`), { errno: n }); }
+  descriptorPaths.set(fd, path.join(descriptorPaths.get(parent) ?? "[unknown descriptor]", name));
   return fd;
 }
 function unlinkAt(parent: number, name: string, directory = false) {
@@ -85,6 +153,7 @@ function readFile(parent: number, name: string): [string, string] {
     if (!s.isFile() || s.size > 16384) throw new Refused(`${name} is not a bounded regular file`);
     const data = fs.readFileSync(fd);
     if (data.length > 16384) throw new Refused(`${name} grew while reading`);
+    observed.push(evidence(fd, descriptorPaths.get(fd)!, data));
     return [new TextDecoder("utf-8", { fatal: true }).decode(data), id(fd)];
   } finally { fs.closeSync(fd); }
 }
@@ -99,9 +168,9 @@ function inspect(parent: number, name: string): Snapshot {
       exactFiles(fd);
       const [raw, markerId] = readFile(fd, MARKER);
       const m = JSON.parse(raw);
-      if (!m || Array.isArray(m) || JSON.stringify(Object.keys(m).sort()) !== JSON.stringify(["kind", "version", "pid", "hostname", "started", "token"].sort())) throw new Refused("invalid marker fields");
+      if (!markerFields(m, ["kind", "version", "pid", "hostname", "started", "token"])) throw new Refused("invalid marker fields");
       if (m.kind !== MARKER || m.version !== 1 || !validPid(m.pid)) throw new Refused("invalid marker kind/version/pid");
-      if (m.hostname !== HOST) throw new Refused("marker hostname is not this host");
+      if (!hostMatches(m)) throw new Refused("marker host identity is not this host");
       if (typeof m.token !== "string" || !/^[0-9a-f]{32}$/.test(m.token)) throw new Refused("invalid marker token");
       timestamp(m.started);
       const [pid, pidId] = readFile(fd, "pid"), [started, startedId] = readFile(fd, "started");
@@ -193,6 +262,48 @@ function publish(parent: number, name: string, pid: number, token: string) {
   return publishDirectory(parent, name, [["pid", `${pid}\n`], ["started", `${started}\n`], [MARKER, JSON.stringify(marker) + "\n"]]);
 }
 
+function hostCache(parent: number, lockName: string): Set<string> {
+  // Sibling, NOT a fourth lock member or queue entry. Older helpers inspect
+  // only lockName and lockName.queue and leave this cache completely alone.
+  const name = `${lockName}.host`, digest = (s: string) => createHash("sha256").update(s).digest("hex");
+  let fd: number;
+  try { fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW); }
+  catch (e: any) {
+    if (e.errno !== 2) throw e;
+    publishDirectory(parent, name, [[HOST_RECORD, JSON.stringify({ kind: HOST_RECORD, version: 1, hostId }) + "\n"], [digest(HOST), HOST + "\n"]]);
+    fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+  }
+  try {
+    const record = JSON.parse(readFile(fd, HOST_RECORD)[0]);
+    if (!record || JSON.stringify(Object.keys(record).sort()) !== JSON.stringify(["hostId", "kind", "version"]) || record.kind !== HOST_RECORD || record.version !== 1 || record.hostId !== hostId) throw new Refused("foreign or invalid stable host cache");
+    const names = new Set<string>();
+    for (const member of entries(fd)) {
+      if (member === HOST_RECORD) continue;
+      const raw = readFile(fd, member)[0], hostname = raw.slice(0, -1);
+      if (!/^[0-9a-f]{64}$/.test(member) || !hostname || raw !== hostname + "\n" || /[\r\n\0]/.test(hostname) || digest(hostname) !== member) throw new Refused("invalid cached hostname");
+      names.add(hostname);
+    }
+    if (!names.has(HOST)) {
+      // Stage an alias outside the visible cache; atomic exclusive publication
+      // under the same parent flock. Never overwrite a foreign cache member.
+      if (native.symbols.fchdir(parent)) throw new Refused("cannot enter host cache parent");
+      const template = z(".sweep-host.XXXXXX"), out = native.symbols.mkstemp(template) as number;
+      if (out < 0) throw new Refused("cannot create hostname alias");
+      const temporary = template.toString().split("\0")[0], identity = id(out);
+      try { fs.writeFileSync(out, HOST + "\n"); renameExclusive(parent, temporary, digest(HOST), fd); }
+      finally {
+        fs.closeSync(out);
+        let leftover = -1;
+        try { leftover = openAt(parent, temporary); if (id(leftover) === identity) unlinkAt(parent, temporary); }
+        catch (e: any) { if (e.errno !== 2) throw e; }
+        finally { if (leftover >= 0) fs.closeSync(leftover); }
+      }
+      names.add(HOST);
+    }
+    return names;
+  } finally { fs.closeSync(fd); }
+}
+
 type Ticket = { name: string; identity: string; raw: string; pid: number; token: string; sequence: bigint };
 function queueFd(parent: number, name: string, create: boolean): number | null {
   let fd: number;
@@ -205,7 +316,7 @@ function queueFd(parent: number, name: string, create: boolean): number | null {
   }
   try {
     const anchor = readFile(fd, QUEUE), marker = JSON.parse(anchor[0]);
-    if (JSON.stringify(Object.keys(marker).sort()) !== JSON.stringify(["hostname", "kind", "version"]) || marker.kind !== QUEUE || marker.version !== 1 || marker.hostname !== HOST) throw new Refused("invalid queue marker");
+    if (!markerFields(marker, ["hostname", "kind", "version"]) || marker.kind !== QUEUE || marker.version !== 1 || !hostMatches(marker)) throw new Refused("invalid queue marker");
     queueMarkers.set(fd, anchor);
     return fd;
   } catch (e) { fs.closeSync(fd); throw e; }
@@ -217,7 +328,7 @@ function tickets(fd: number): Ticket[] {
     const match = /^([0-9]{20})\.([0-9a-f]{32})$/.exec(name);
     if (!match || BigInt(match[1]) === 0n) throw new Refused("unknown queue entry");
     const [raw, identity] = readFile(fd, name), m = JSON.parse(raw);
-    if (!m || JSON.stringify(Object.keys(m).sort()) !== JSON.stringify(["kind", "version", "pid", "hostname", "started", "token"].sort()) || m.kind !== WAITER || m.version !== 1 || m.hostname !== HOST || !validPid(m.pid) || m.token !== match[2]) throw new Refused("invalid waiter ownership record");
+    if (!markerFields(m, ["kind", "version", "pid", "hostname", "started", "token"]) || m.kind !== WAITER || m.version !== 1 || !hostMatches(m) || !validPid(m.pid) || m.token !== match[2]) throw new Refused("invalid waiter ownership record");
     timestamp(m.started);
     result.push({ name, identity, raw, pid: m.pid, token: m.token, sequence: BigInt(match[1]) });
   }
@@ -276,6 +387,7 @@ function removeEmptyQueue(parent: number, name: string, fd: number) {
 function parentFd(lock: string): number {
   // Shell resolves the physical parent once; reject subsequent ancestor links.
   let fd = fs.openSync("/", C.O_RDONLY | C.O_DIRECTORY);
+  descriptorPaths.set(fd, "/");
   try {
     for (const part of path.dirname(lock).split("/").filter(Boolean)) {
       const next = openAt(fd, part, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
@@ -286,6 +398,7 @@ function parentFd(lock: string): number {
 }
 function main(): number {
   const [op, lock, pidText, token, owned] = process.argv.slice(2);
+  hostId = stableHostId();
   if (!["acquire", "release"].includes(op)) throw new Refused("unknown operation");
   const name = path.basename(lock), pid = Number(pidText);
   if (!path.isAbsolute(lock) || ["", ".", ".."].includes(name) || !validPid(pid) || !/^[0-9a-f]{32}$/.test(token)) throw new Refused("invalid lock path/pid/token");
@@ -293,6 +406,7 @@ function main(): number {
   const parent = parentFd(lock);
   try {
     if (native.symbols.flock(parent, 2)) throw new Refused(`parent flock failed (errno ${errno()})`);
+    hostNames = hostCache(parent, name);
     const queueName = `${name}.queue`;
     if (op === "release") {
       if (owned) {
@@ -338,7 +452,11 @@ function main(): number {
       console.log(publish(parent, name, pid, token));
       return 0;
     } finally { fs.closeSync(queue); }
-  } finally { fs.closeSync(parent); }
+  } catch (e) { diagnose(e, parent, name); throw e; }
+  finally { fs.closeSync(parent); }
 }
 try { process.exitCode = main(); }
-catch (e: any) { console.error(`STOP: ${process.argv[3]} is not a selftest-sweep lock (${e.message})`); process.exitCode = 2; }
+catch (e: any) {
+  if (!diagnosed) diagnose(e);
+  console.error(`STOP: ${process.argv[3]} is not a selftest-sweep lock (${e.message})`); process.exitCode = 2;
+}
