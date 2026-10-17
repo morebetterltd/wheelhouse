@@ -1,0 +1,7 @@
+diff --git a/seats/selftest-sweep-lock.ts b[run]/controls/no-fifo.ts
+index 3805817..028f8aa 100644
+--- a/seats/selftest-sweep-lock.ts
++++ b[run]/controls/no-fifo.ts
+@@ -332 +332 @@ function main(): number {
+-      if (snapshot || current[0].token !== token) {
++      if (snapshot) { // removed FIFO head eligibility

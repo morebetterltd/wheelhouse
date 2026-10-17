@@ -1,0 +1,2 @@
+selftest-sweep: waiting for host-wide lock /private/tmp/wheelhouse-selftest-sweep.lock held by pid=49868 started=2026-10-15T01:27:36Z
+Terminated: 15

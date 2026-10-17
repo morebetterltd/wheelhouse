@@ -129,7 +129,7 @@ CONTRACT
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="$BIN:$PATH" # Preserve the installed host-budget shims in children.
+RUN_PATH="$BIN:$PATH" # Keep inherited host-budget and instrumentation shims.
 
 phase "0. fixture cleanup catches cwd-only descendants"
 CWD_ONLY_DIR="$FIX/cwd-only-holder"
@@ -382,7 +382,7 @@ wt_registered() {   # $1 = project dir, $2 = worktree path — true when git lis
 }
 wt_branch() { fgit -C "$1" branch --show-current 2>/dev/null; }   # $1 = worktree path
 state_get_in() {   # $1 = state.json, $2 = field, $3 = seat (default worker-1)
-  env HOME="$HOME_FIX" bun -e "const s=require('$1');const v=s.seats['${3:-worker-1}']?.['$2'];if(v!=null)console.log(v)" 2>/dev/null
+  env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$1','utf8'));const v=s.seats['${3:-worker-1}']?.['$2'];if(v!=null)console.log(v)" 2>/dev/null
 }
 build_proj() {   # $1 = project dir, $2 = seat namespace
   local proj="$1" ns="$2" seatdir
@@ -444,7 +444,7 @@ phase "0a. launch paths validate the whole roster before choosing a seat"
 BAD_ROSTER_PROJ="$FIX/bad-roster-proj"
 build_proj "$BAD_ROSTER_PROJ" badroster
 RUN_PROJ="$BAD_ROSTER_PROJ"
-env HOME="$HOME_FIX" PROJ="$BAD_ROSTER_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["bad-peer"]={role:"worker", provider:"anthropic", model:"stub", account:{dir:"~/.pi-seats-badroster/bad-peer", authRoute:"bogus"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+env HOME="$HOME_FIX" PROJ="$BAD_ROSTER_PROJ" bun -e 'import fs from "node:fs"; const p=process.env.PROJ+"/seats/seats.json"; const r=JSON.parse(fs.readFileSync(p,"utf8")); r.seats["bad-peer"]={role:"worker", provider:"anthropic", model:"stub", account:{dir:"~/.pi-seats-badroster/bad-peer", authRoute:"bogus"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 run spawn worker-1
 if [ $RC -eq 1 ] && says 'seat "bad-peer" has an invalid account.authRoute "bogus"'; then
   pass "spawn refuses before launch when a peer roster entry has a bad authRoute"
@@ -458,7 +458,7 @@ RUN_PROJ="$MODEL_PIN_PROJ"
 MODEL_PIN_ARGV="$HOME_FIX/.pi-seats-modelpin/worker-1/argv.json"
 for model_case in missing empty whitespace; do
   env PROJ="$MODEL_PIN_PROJ" MODEL_CASE="$model_case" bun -e '
-    const fs=require("fs"), p=process.env.PROJ+"/seats/seats.json", r=JSON.parse(fs.readFileSync(p,"utf8"));
+    import fs from "node:fs"; const  p=process.env.PROJ+"/seats/seats.json", r=JSON.parse(fs.readFileSync(p,"utf8"));
     if(process.env.MODEL_CASE==="missing") delete r.seats["worker-1"].model;
     else r.seats["worker-1"].model=process.env.MODEL_CASE==="empty"?"":"   ";
     fs.writeFileSync(p,JSON.stringify(r));
@@ -479,7 +479,7 @@ phase "0b. claude-code driver — spawn, dispatch ack, steer, settled, resume, s
 CLAUDE_PROJ="$FIX/claude-proj"
 build_proj "$CLAUDE_PROJ" claude
 RUN_PROJ="$CLAUDE_PROJ"
-env HOME="$HOME_FIX" PROJ="$CLAUDE_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["worker-1"].harness="claude-code"; r.seats["worker-1"].model="sonnet"; r.seats["worker-1"].allowedTools="Bash(printf *)"; r.seats["worker-1"].disallowedTools="Bash(rm -rf:*)"; r.seats["worker-1"].account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+env HOME="$HOME_FIX" PROJ="$CLAUDE_PROJ" bun -e 'import fs from "node:fs"; const p=process.env.PROJ+"/seats/seats.json"; const r=JSON.parse(fs.readFileSync(p,"utf8")); r.seats["worker-1"].harness="claude-code"; r.seats["worker-1"].model="sonnet"; r.seats["worker-1"].allowedTools="Bash(printf *)"; r.seats["worker-1"].disallowedTools="Bash(rm -rf:*)"; r.seats["worker-1"].account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 mkdir -p "$HOME_FIX/.pi-seats-claude/worker-1"
 printf '{"loggedIn":true}\n' > "$HOME_FIX/.pi-seats-claude/worker-1/.claude.json"
 ANTHROPIC_API_KEY=leak ANTHROPIC_AUTH_TOKEN=leak OPENAI_API_KEY=leak run spawn worker-1
@@ -502,13 +502,13 @@ run steer worker-1 "steer now"
 if [ $RC -eq 0 ]; then pass "claude-code steer mid-turn returns ack"; else fail "claude-code steer failed (rc=$RC): $OUT"; fi
 for _ in $(seq 1 100); do grep -q 'STEERED' "$CLAUDE_LOG" 2>/dev/null && break; sleep 0.05; done
 if grep -q 'STEERED' "$CLAUDE_LOG"; then pass "claude-code steer reaches the running turn"; else fail "claude-code steer text did not settle"; fi
-CLAUDE_SESSION_FILE="$(env HOME="$HOME_FIX" bun -e "const s=require('$CLAUDE_PROJ/seats/state.json'); console.log(s.seats['worker-1'].sessionFile||'')")"
+CLAUDE_SESSION_FILE="$(env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$CLAUDE_PROJ/seats/state.json','utf8')); console.log(s.seats['worker-1'].sessionFile||'')")"
 if [ -n "$CLAUDE_SESSION_FILE" ] && [ -f "$CLAUDE_SESSION_FILE" ] && grep -q 'Claude_replaces_non_alnum' <<<"$CLAUDE_SESSION_FILE"; then pass "claude-code locates Claude's session file instead of deriving cwd slug"; else fail "claude-code did not record the actual session file: $CLAUDE_SESSION_FILE"; fi
 run stop worker-1
 if [ $RC -eq 0 ] && grep -q 'stopped' <<<"$OUT"; then pass "claude-code stop exits 0"; else fail "claude-code stop failed (rc=$RC): $OUT"; fi
 run resume worker-1
 if [ $RC -eq 0 ]; then pass "claude-code resume exits 0 with recorded session"; else fail "claude-code resume failed: $OUT"; fi
-pid="$(env HOME="$HOME_FIX" bun -e "const s=require('$CLAUDE_PROJ/seats/state.json'); console.log(s.seats['worker-1'].pid)")"
+pid="$(env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$CLAUDE_PROJ/seats/state.json','utf8')); console.log(s.seats['worker-1'].pid)")"
 kill -9 "$pid" 2>/dev/null || true
 run status
 if [ $RC -eq 0 ] && grep -q 'DIED' <<<"$OUT"; then pass "claude-code dead-process status reports DIED"; else fail "claude-code dead-process status did not report DIED (rc=$RC): $OUT"; fi
@@ -523,7 +523,7 @@ STATE="$PROJ/seats/state.json"
 LOG="$PROJ/seats/logs/worker-1.jsonl"
 ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
-state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
+state_get() { env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE','utf8'));const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
 live_cwd_for_pid() {
   local pid="$1"
   [ -n "$pid" ] || return 0
@@ -572,7 +572,7 @@ mkdir -p "$REUSE_PROJ/seats/run" "$REUSE_PROJ/seats/logs"
 (sh -c 'trap "" TERM; while :; do sleep 1; done') &
 FOREIGN_PID=$!
 env HOME="$HOME_FIX" PROJ="$REUSE_PROJ" PID="$FOREIGN_PID" bun -e '
-  const fs = require("fs"), path = require("path");
+  import fs from "node:fs"; import path from "node:path";
   const proj = process.env.PROJ;
   const fifo = path.join(proj, "seats", "run", "worker-1.stdin");
   const log = path.join(proj, "seats", "logs", "worker-1.jsonl");
@@ -608,7 +608,7 @@ rm -f "$DEAD_FIFO_PROJ/seats/run/worker-1.stdin"
 mkfifo "$DEAD_FIFO_PROJ/seats/run/worker-1.stdin"
 : > "$LOG"
 env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" bun -e '
-  const fs = require("fs"), path = require("path");
+  import fs from "node:fs"; import path from "node:path";
   const proj = process.env.PROJ;
   const state = { seats: { "worker-1": { pid: 99999999, startedAt: "2026-01-01T00:00:00.000Z", accountDir: path.join(process.env.HOME, ".pi-seats-deadfifo", "worker-1"), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", "worker-1.stdin"), log: path.join(proj, "seats", "logs", "worker-1.jsonl"), sessionId: "s-dead", sessionFile: null } } };
   fs.writeFileSync(path.join(proj, "seats", "state.json"), JSON.stringify(state, null, 2)+"\n");
@@ -619,7 +619,7 @@ if [ $RC -eq 0 ] && says "seat worker-1 is not running"; then
 else fail "stop on dead pid/unread FIFO did not return cleanly within timeout (rc=$RC): $OUT"; fi
 (sh -c 'while :; do sleep 1; done') & NO_READER_PID=$!
 env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" PID="$NO_READER_PID" bun -e '
-  const fs = require("fs"), path = require("path"), cp = require("child_process");
+  import fs from "node:fs"; import path from "node:path"; import cp from "node:child_process";
   const proj = process.env.PROJ, pid = Number(process.env.PID);
   const live = Date.parse(cp.spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).stdout.trim());
   const state = { seats: { "worker-1": { pid, startedAt: new Date(live).toISOString(), accountDir: path.join(process.env.HOME, ".pi-seats-deadfifo", "worker-1"), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", "worker-1.stdin"), log: path.join(proj, "seats", "logs", "worker-1.jsonl"), sessionId: "s-noreader", sessionFile: null } } };
@@ -636,7 +636,7 @@ if ! cmp -s "$ADAPTER" "$BROKEN_ADAPTER"; then
   cp "$BROKEN_ADAPTER" "$DEAD_FIFO_PROJ/seats/adapter.ts"
   perl -0pi -e 's/\n  if \(fifo && fs\.existsSync\(fifo\) && !fifoHasReader\(fifo\)\) return false;//' "$DEAD_FIFO_PROJ/seats/seat-activity.ts"
   env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" PID="$NO_READER_PID" bun -e '
-    const fs = require("fs"), path = require("path"), cp = require("child_process");
+    import fs from "node:fs"; import path from "node:path"; import cp from "node:child_process";
     const proj = process.env.PROJ, pid = Number(process.env.PID);
     const live = Date.parse(cp.spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).stdout.trim());
     const state = { seats: { "worker-1": { pid, startedAt: new Date(live).toISOString(), accountDir: path.join(process.env.HOME, ".pi-seats-deadfifo", "worker-1"), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", "worker-1.stdin"), log: path.join(proj, "seats", "logs", "worker-1.jsonl"), sessionId: "s-noreader", sessionFile: null } } };
@@ -678,7 +678,7 @@ LABEL_PROJ="$FIX/label-proj"
 build_proj "$LABEL_PROJ" labeled
 RUN_PROJ="$LABEL_PROJ"; STATE="$LABEL_PROJ/seats/state.json"; ARGV="$HOME_FIX/.pi-seats-labeled/worker-1/argv.json"
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].account.label = "fixture-human-account";
@@ -706,7 +706,7 @@ run stop worker-1 >/dev/null 2>&1
 AUTHROUTE_OK_PROJ="$FIX/authroute-ok-proj"
 build_proj "$AUTHROUTE_OK_PROJ" authroute-ok
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].account.authRoute = "api_key";
@@ -721,7 +721,7 @@ run stop worker-1 >/dev/null 2>&1
 AUTHROUTE_ENV_PROJ="$FIX/authroute-env-proj"
 build_proj "$AUTHROUTE_ENV_PROJ" authroute-env
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].provider = "openai";
@@ -755,7 +755,7 @@ RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1
 AUTHROUTE_BAD_PROJ="$FIX/authroute-bad-proj"
 build_proj "$AUTHROUTE_BAD_PROJ" authroute-bad
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].account.authRoute = "sudo";
@@ -773,7 +773,7 @@ SKILL_OK_PROJ="$FIX/skill-ok-proj"
 build_proj "$SKILL_OK_PROJ" skill-ok
 mkdir -p "$HOME_FIX/skills/research-skill"
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].skills = ["~/skills/research-skill"];
@@ -791,7 +791,7 @@ run stop worker-1 >/dev/null 2>&1
 SKILL_BAD_PROJ="$FIX/skill-bad-proj"
 build_proj "$SKILL_BAD_PROJ" skill-bad
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].skills = ["~/skills/missing-skill"];
@@ -816,7 +816,7 @@ run stop worker-1 >/dev/null 2>&1
 SHADOW_OK_PROJ="$FIX/shadow-ok-proj"
 build_proj "$SHADOW_OK_PROJ" shadow-ok
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].shadow = true;
@@ -832,7 +832,7 @@ run stop worker-1 >/dev/null 2>&1
 SHADOW_BAD_PROJ="$FIX/shadow-bad-proj"
 build_proj "$SHADOW_BAD_PROJ" shadow-bad
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].shadow = "yes";
@@ -849,7 +849,7 @@ phase "roster model suffix — malformed thinking suffix is pi's validation fail
 BAD_SUFFIX_PROJ="$FIX/bad-suffix-proj"
 build_proj "$BAD_SUFFIX_PROJ" bad-suffix
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].model = "stub-model-1:turbo";
@@ -867,7 +867,7 @@ CAPACITY_PROJ="$FIX/capacity-proj"
 build_proj "$CAPACITY_PROJ" capacity
 RUN_PROJ="$CAPACITY_PROJ"; STATE="$CAPACITY_PROJ/seats/state.json"; LOG="$CAPACITY_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-capacity/worker-1/argv.json"
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats["worker-1"].account.label = "fixture-quota-account";
@@ -1115,12 +1115,12 @@ else fail "seat cwd after dispatch was $(cat "$CWD_FILE" 2>/dev/null) — expect
 if wt_registered "$PROJ" "$SEAT_WT" && [ "$(wt_branch "$SEAT_WT")" = "fleet/bead-x" ] && says "created worktree"; then
   pass "first dispatch created the seat worktree: registered by git worktree list and on fleet/bead-x"
 else fail "seat worktree not created as expected (registered=$(wt_registered "$PROJ" "$SEAT_WT" && echo yes || echo no) branch=$(wt_branch "$SEAT_WT")): $OUT"; fi
-env HOME="$HOME_FIX" STATE="$STATE" CLAIMED_CWD="$SEAT_WT" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=require(f); s.seats["dead-peer"]={pid:999999999,cwd:process.env.CLAIMED_CWD,lastBead:"dead-peer"}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+env HOME="$HOME_FIX" STATE="$STATE" CLAIMED_CWD="$SEAT_WT" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["dead-peer"]={pid:999999999,cwd:process.env.CLAIMED_CWD,lastBead:"dead-peer"}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 run dispatch worker-1 bead-x "dead peer cwd claim should not block"
 if [ $RC -eq 0 ] && ! says "occupied by seat dead-peer" && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$SEAT_WT" ]; then
   pass "dispatch ignores another seat's recorded cwd when that seat's pid is dead"
 else fail "dead peer recorded cwd blocked dispatch or moved the seat (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null)): $OUT"; fi
-env HOME="$HOME_FIX" STATE="$STATE" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=require(f); delete s.seats["dead-peer"]; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+env HOME="$HOME_FIX" STATE="$STATE" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); delete s.seats["dead-peer"]; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 if [ "$(fgit -C "$SEAT_WT" rev-parse HEAD)" = "$(fgit -C "$PROJ" rev-parse origin/main)" ] && [ -z "$(fgit -C "$SEAT_WT" status --porcelain)" ]; then
   pass "the new bead branch was cut from origin/main and the worktree is clean"
 else fail "bead branch base/cleanliness wrong: HEAD=$(fgit -C "$SEAT_WT" rev-parse HEAD) origin/main=$(fgit -C "$PROJ" rev-parse origin/main) status=$(fgit -C "$SEAT_WT" status --porcelain)"; fi
@@ -1213,18 +1213,13 @@ cat > "$DELTA_STREAM" <<'JSONL'
 {"id":"delta-response","type":"response","command":"prompt","success":true}
 JSONL
 bun - "$RUN_PROJ/seats/adapter.ts" "$FIX/log-filter.js" <<'JS'
-import fs from 'node:fs';
-const [src,out]=process.argv.slice(2),s=fs.readFileSync(src,'utf8');
+const fs=(await import('node:fs')).default,[src,out]=process.argv.slice(2),s=fs.readFileSync(src,'utf8');
 const matches=[...s.matchAll(/const script = `([\s\S]*?)`;\n  return/g)];
-if(matches.length!==1)throw new Error('expected exactly one logFilterShell script');
+if(matches.length!==1) throw new Error('expected exactly one logFilterShell script');
 fs.writeFileSync(out,matches[0][1]);
 JS
 RC=0; node "$FIX/log-filter.js" < "$DELTA_STREAM" > "$DELTA_SLICE" 2> "$FIX/log-filter.err" || RC=$?
-DELTA_COUNT="$(bun - "$DELTA_SLICE" <<'JS'
-import fs from 'node:fs';
-console.log(fs.readFileSync(process.argv[2],'utf8').split('_delta').length-1);
-JS
-)"
+DELTA_COUNT="$(bun -e 'console.log((await import("node:fs")).default.readFileSync(process.argv[1],"utf8").split("_delta").length-1)' "$DELTA_SLICE")"
 if [ $RC -eq 0 ] && [ "$DELTA_COUNT" = 0 ] && grep -q '"type":"message_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_end"' "$DELTA_SLICE" && grep -q 'echo: DELTAS payload' "$DELTA_SLICE" && grep -q '"type":"response"' "$DELTA_SLICE"; then
   pass "message_update *_delta stream frames are dropped while settle, tool, and response events remain"
 else fail "delta filtering wrong (exit $RC delta_count=$DELTA_COUNT err=$(cat "$FIX/log-filter.err" 2>/dev/null) slice=$(cat "$DELTA_SLICE" 2>/dev/null))"; fi
@@ -1240,33 +1235,32 @@ if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'echo: Bead bead-x' 5 && gr
   pass "after live rotation, get_state answers and the writer's next event lands in the current log"
 else fail "dispatch after live rotation did not read responses from the current log (exit $RC): $OUT current=$(cat "$LOG" 2>/dev/null) archive_tail=$(tail -5 "$LOG.1" 2>/dev/null)"; fi
 
-phase "2a. wedged idle seat — status diagnoses, dispatch stop+resumes and retries once"
+phase "2a. live idle seat — no timeout-driven WEDGED verdict or relaunch"
 ANSWERING_PID_BEFORE="$(state_get pid)"
 run dispatch worker-1 bead-x "answering seat should not relaunch"
 if [ $RC -eq 0 ] && [ "$(state_get pid)" = "$ANSWERING_PID_BEFORE" ] && ! says "WEDGED"; then
   pass "answering idle seat dispatches without a relaunch"
 else fail "answering idle seat was relaunched or diagnosed wedged (exit $RC): before=$ANSWERING_PID_BEFORE after=$(state_get pid) out=$OUT"; fi
-WEDGED_AGENT_DIR="${ARGV%argv.json}"
-touch "$WEDGED_AGENT_DIR/ignore-get-state"
+LIVE_AGENT_DIR="${ARGV%argv.json}"
+LIVE_SESSION_BEFORE="$(state_get sessionFile)"
+touch "$LIVE_AGENT_DIR/ignore-get-state"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WEDGED_GET_STATE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && grep -q 'worker-1.*WEDGED' <<<"$OUT" && says 'remedy: bun seats/adapter.ts stop worker-1; bun seats/adapter.ts resume worker-1'; then
-  pass "status renders an idle get_state-timeout seat as WEDGED with remedy"
-else fail "status did not render WEDGED/remedy for ignored get_state (exit $RC): $OUT"; fi
-WEDGED_PID_BEFORE="$(state_get pid)"
-WEDGED_SESSION_BEFORE="$(state_get sessionFile)"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "wedged seat self-heals" 2>&1)" || RC=$?
-WEDGED_PID_AFTER="$(state_get pid)"
-if [ $RC -eq 0 ] && says "WEDGED" && says "stopping and resuming" && says "retrying dispatch once" && [ "$WEDGED_PID_AFTER" != "$WEDGED_PID_BEFORE" ]; then
-  pass "dispatch self-heals an idle get_state timeout by stop+resume and retry"
-else fail "dispatch did not self-heal WEDGED seat (exit $RC): before=$WEDGED_PID_BEFORE after=$WEDGED_PID_AFTER out=$OUT"; fi
-if [ "$(state_get sessionFile)" = "$WEDGED_SESSION_BEFORE" ] && grep -Fq -- "\"--session\",\"$WEDGED_SESSION_BEFORE\"" "$ARGV" 2>/dev/null; then
-  pass "wedged self-heal keeps the recorded session"
-else fail "wedged self-heal did not keep session: before=$WEDGED_SESSION_BEFORE after=$(state_get sessionFile) argv=$(cat "$ARGV" 2>/dev/null)"; fi
-if grep -q 'wedged seat self-heals' "$LOG" 2>/dev/null; then
-  pass "wedged self-heal retry delivered the dispatch after resume"
-else fail "wedged self-heal did not deliver retried prompt: $(tail -20 "$LOG" 2>/dev/null)"; fi
+if [ $RC -eq 0 ] && grep -q 'worker-1.*RUNNING' <<<"$OUT" && ! says 'WEDGED'; then
+  pass "status reports a live silent responder RUNNING, not guessed WEDGED"
+else fail "status guessed a failure for a live silent responder (exit $RC): $OUT"; fi
+rm -f "$LIVE_AGENT_DIR/ignore-get-state"
+run dispatch worker-1 bead-x "live seat continues without self-heal"
+if [ $RC -eq 0 ] && [ "$(state_get pid)" = "$ANSWERING_PID_BEFORE" ] && ! says "WEDGED"; then
+  pass "dispatch keeps the live seat instead of timeout-driven stop+resume"
+else fail "dispatch restarted a live seat (exit $RC): $OUT"; fi
+if [ "$(state_get sessionFile)" = "$LIVE_SESSION_BEFORE" ]; then
+  pass "live dispatch keeps the recorded session"
+else fail "live dispatch changed session: before=$LIVE_SESSION_BEFORE after=$(state_get sessionFile)"; fi
+if grep -q 'live seat continues without self-heal' "$LOG" 2>/dev/null; then
+  pass "live dispatch still delivers the prompt"
+else fail "live dispatch did not deliver prompt: $(tail -20 "$LOG" 2>/dev/null)"; fi
 
-phase "2b. dispatch — late prompt ack after delivery is a warning, not stale state"
+phase "2b. dispatch — wait for late prompt acknowledgement, not an elapsed budget"
 SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
 LATE_PROJ="$FIX/late-ack-proj"
 build_proj "$LATE_PROJ" late-ack
@@ -1275,8 +1269,8 @@ RUN_PROJ="$LATE_PROJ"; STATE="$LATE_PROJ/seats/state.json"; LOG="$LATE_PROJ/seat
 # cross-bead dispatch no longer relaunches the seat, so they go on the spawn.
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_PROMPT_ACK_DELAY_MS=800 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)" || RC=$?
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_PROMPT_ACK_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack fixture" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && says "prompt delivered, ack late" && says "new-bead"; then pass "late prompt ack after delivery exits 0 with warning"
-else fail "late prompt ack dispatch did not warn/succeed (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "dispatched new-bead" && ! says "ack late"; then pass "late prompt acknowledgement is awaited and succeeds without timeout warning"
+else fail "late prompt acknowledgement was not awaited (exit $RC): $OUT"; fi
 if [ "$(state_get lastBead)" = "new-bead" ] && grep -q 'Bead new-bead' "$LOG" 2>/dev/null; then
   pass "late prompt ack leaves state.json on the new bead after log delivery"
 else fail "late prompt ack left stale state/log: lastBead=$(state_get lastBead) log=$(tail -5 "$LOG" 2>/dev/null)"; fi
@@ -1287,8 +1281,8 @@ build_proj "$NO_DELIVERY_PROJ" no-delivery
 RUN_PROJ="$NO_DELIVERY_PROJ"; STATE="$NO_DELIVERY_PROJ/seats/state.json"; LOG="$NO_DELIVERY_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-no-delivery/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-no-delivery/worker-1/cwd.txt"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)" || RC=$?
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_PROMPT_ACK_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)" || RC=$?
-if [ $RC -ne 0 ] && says "timed out after 200ms waiting for prompt response" && ! says "prompt delivered, ack late"; then pass "late prompt ack without delivery remains a STOP"
-else fail "late prompt ack without delivery did not STOP (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "dispatched new-bead" && ! says "timed out"; then pass "late success acknowledgement without early delivery events is still authoritative"
+else fail "late success acknowledgement was guessed missing (exit $RC): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
 
 FIFO_TIMEOUT_PROJ="$FIX/fifo-timeout-proj"
@@ -1299,8 +1293,9 @@ if [ $RC -eq 0 ]; then pass "fifo timeout setup: spawn exits 0 with a live pause
 else fail "fifo timeout setup spawn failed (exit $RC): $OUT"; fi
 HUGE_PROMPT="$(node -e 'process.stdout.write("H".repeat(128 * 1024))')"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_FIFO_WRITE_MS=200 WHEELHOUSE_PROMPT_ACK_MS=1000 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "$HUGE_PROMPT" 2>&1)" || RC=$?
-if [ $RC -ne 0 ] && says "prompt not delivered (partial FIFO write?)"; then pass "fifo write timeout names possible partial FIFO write"
-else fail "fifo write timeout did not report partial FIFO write (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "dispatched new-bead" && ! says "partial FIFO write"; then pass "live FIFO backpressure waits for drain instead of a write deadline"
+else fail "live FIFO backpressure was guessed failed (exit $RC): $OUT"; fi
+# Signal-driven partial-write/EOF failure is covered by adapter-rpc.selftest.sh.
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$SAVE_RUN_PROJ"; STATE="$SAVE_STATE"; LOG="$SAVE_LOG"; ARGV="$SAVE_ARGV"; CWD_FILE="$SAVE_CWD_FILE"
 
@@ -1370,27 +1365,27 @@ phase "4. state survives the adapter — every invocation is a fresh process"
 BIGLOG="$PROJ/seats/logs/worker-big.jsonl"
 cp "$STATE" "$FIX/state-before-big.json"
 bun - "$BIGLOG" <<'JS'
-import fs from 'node:fs';import path from 'node:path';
-const p=process.argv[2];fs.mkdirSync(path.dirname(p),{recursive:true});
-const fd=fs.openSync(p,'w');try{fs.ftruncateSync(fd,2*1024*1024*1024+1024);fs.writeSync(fd,'{"type":"agent_end"}\n');}finally{fs.closeSync(fd);}
+import fs from 'node:fs'; import path from 'node:path';
+const p=process.argv[2]; fs.mkdirSync(path.dirname(p),{recursive:true});
+const fd=fs.openSync(p,'w'); try { fs.ftruncateSync(fd,2*1024*1024*1024+1024); fs.writeSync(fd,'{"type":"agent_end"}\n'); } finally { fs.closeSync(fd); }
 JS
-bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-big']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BIGLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
+bun -e "import fs from 'node:fs'; const p='$STATE'; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.seats['worker-big']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BIGLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "worker-big" && says "last-event agent_end"; then pass "status reads last event from a synthetic >2GB sparse log without full-file parsing"
 else fail "status did not survive synthetic >2GB log (exit $RC): $OUT"; fi
 BADLOG="$PROJ/seats/logs/worker-badlog.jsonl"
 bun - "$BADLOG" <<'JS'
-import fs from 'node:fs';import path from 'node:path';
-const p=process.argv[2];fs.mkdirSync(path.dirname(p),{recursive:true});
-const fd=fs.openSync(p,'w');try{fs.ftruncateSync(fd,2*1024*1024*1024+1024);fs.writeSync(fd,'not json at tail but process is alive\n');}finally{fs.closeSync(fd);}
+import fs from 'node:fs'; import path from 'node:path';
+const p=process.argv[2]; fs.mkdirSync(path.dirname(p),{recursive:true});
+const fd=fs.openSync(p,'w'); try { fs.ftruncateSync(fd,2*1024*1024*1024+1024); fs.writeSync(fd,'not json at tail but process is alive\n'); } finally { fs.closeSync(fd); }
 JS
-bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-badlog']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BADLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
+bun -e "import fs from 'node:fs'; const p='$STATE'; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.seats['worker-badlog']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BADLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "worker-badlog" && says "RUNNING" && says "log too large to parse"; then pass "oversize unparsable log keeps live seat visible with log-too-large marker"
 else fail "oversize unparsable log aborted or hid live seat (exit $RC): $OUT"; fi
 ROTLOG="$PROJ/seats/logs/worker-rotate.jsonl"
 printf '{"type":"agent_start"}\n' > "$ROTLOG"
-bun -e "const fs=require('fs'); const p='$STATE'; const s=require(p); s.seats['worker-rotate']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$ROTLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
+bun -e "import fs from 'node:fs'; const p='$STATE'; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.seats['worker-rotate']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$ROTLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=1 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ -f "$ROTLOG" ] && [ ! -f "$ROTLOG.1" ]; then pass "rotation refuses mid-turn logs whose last event is not agent_settled/agent_end"
 else fail "rotation moved an unsettled log (exit $RC): $OUT"; fi
@@ -1437,7 +1432,7 @@ mv -f "$PROJ/seats/seats.json.missing-fixture" "$PROJ/seats/seats.json"
 run resume worker-1 >/dev/null 2>&1
 PID_BEFORE="$(state_get pid)"
 cp "$PROJ/seats/seats.json" "$PROJ/seats/seats.json.good"
-env HOME="$HOME_FIX" PROJ="$PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["bad-peer"]={role:"worker", provider:"anthropic", model:"stub", account:{dir:"~/.pi-seats-alpha/bad-peer", authRoute:"definitely-not-valid"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+env HOME="$HOME_FIX" PROJ="$PROJ" bun -e 'import fs from "node:fs"; const p=process.env.PROJ+"/seats/seats.json"; const r=JSON.parse(fs.readFileSync(p,"utf8")); r.seats["bad-peer"]={role:"worker", provider:"anthropic", model:"stub", account:{dir:"~/.pi-seats-alpha/bad-peer", authRoute:"definitely-not-valid"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 run stop worker-1
 if [ $RC -eq 0 ] && ! kill -0 "$PID_BEFORE" 2>/dev/null; then
   pass "stop validates only the named running seat, not another seat's broken authRoute"
@@ -1516,7 +1511,7 @@ OLD_SESS="$(state_get sessionFile)"
 # stale registration itself and recreates the worktree on the next dispatch.
 rm -rf "$SEAT_WT"
 run stop worker-1 >/dev/null 2>&1
-env HOME="$HOME_FIX" STATE="$STATE" MISSING_CWD="$SEAT_WT" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=require(f); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+env HOME="$HOME_FIX" STATE="$STATE" MISSING_CWD="$SEAT_WT" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 run dispatch worker-1 bead-z "hello after prune"
 if [ $RC -eq 0 ]; then pass "pruned cwd dispatch: stopped-seat dispatch exits 0 via fallback"
 else fail "pruned cwd dispatch: exited ${RC}: $OUT"; fi
@@ -1535,7 +1530,7 @@ else fail "pruned cwd dispatch: seat worktree not recreated (dir=$(test -d "$SEA
 run stop worker-1
 MISSING_CWD="$PROJ/.wheelhouse-worktrees/pruned-resume-cwd"
 OLD_SESS="$(state_get sessionFile)"
-env HOME="$HOME_FIX" MISSING_CWD="$MISSING_CWD" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+env HOME="$HOME_FIX" MISSING_CWD="$MISSING_CWD" bun -e 'import fs from "node:fs"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 run resume worker-1
 if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "session continuity intentionally dropped" && says "resuming fresh in $SEAT_WT"; then
   pass "pruned cwd resume: existing seat worktree fallback line names missing cwd and chosen cwd (ISC-38)"
@@ -1546,7 +1541,7 @@ else fail "pruned cwd resume: did not fresh-start in the seat worktree (session 
 run stop worker-1
 rm -rf "$SEAT_WT"
 OLD_SESS="$(state_get sessionFile)"
-env HOME="$HOME_FIX" MISSING_CWD="$MISSING_CWD" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+env HOME="$HOME_FIX" MISSING_CWD="$MISSING_CWD" bun -e 'import fs from "node:fs"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); s.seats["worker-1"].cwd=process.env.MISSING_CWD; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 run resume worker-1
 if [ $RC -ne 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "refusing to resume a worker in the repo root"; then
   pass "pruned cwd resume: missing seat worktree refuses instead of falling back to the project root"
@@ -1557,18 +1552,18 @@ else fail "pruned cwd resume: refusal unexpectedly launched a session (session b
 mkdir -p "$MISSING_CWD"
 run stop worker-1
 
-phase "6c. readiness timeout cleanup, orphan status, and queued steer"
+phase "6c. readiness error cleanup, orphan status, and slow steer"
 CLEAN_PROJ="$FIX/cleanup-proj"
 build_proj "$CLEAN_PROJ" cleanup
 RUN_PROJ="$CLEAN_PROJ"; STATE="$CLEAN_PROJ/seats/state.json"; LOG="$CLEAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cleanup/worker-1/argv.json"
 run spawn worker-1
 run stop worker-1 >/dev/null 2>&1
-env HOME="$HOME_FIX" STATE="$STATE" CWD="$CLEAN_PROJ" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=require(f); s.seats["worker-1"].cwd=process.env.CWD; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_STALL_ONCE=2000 STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)" || RC=$?
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$CLEAN_PROJ" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"].cwd=process.env.CWD; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_FAIL_ONCE='fixture readiness refusal' STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)" || RC=$?
 CLEAN_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | sed -n '1p')"
 if [ $RC -ne 0 ] && says "launch-only cleanup" && says "SIGKILL" && [ -n "$CLEAN_PID" ] && ! kill -0 "$CLEAN_PID" 2>/dev/null; then
-  pass "launch readiness timeout kills only the newly spawned unready pid before STOP"
-else fail "launch readiness timeout did not clean up spawned pid (exit $RC pid=$CLEAN_PID): $OUT"; fi
+  pass "launch readiness refusal kills only the newly spawned unready pid before STOP"
+else fail "launch readiness refusal did not clean up spawned pid (exit $RC pid=$CLEAN_PID): $OUT"; fi
 if [ -z "$(state_get pid)" ] && [ -n "$(state_get sessionFile)" ]; then
   pass "launch cleanup leaves the stopped pre-existing state record intact"
 else fail "launch cleanup changed the stopped state record (pid=$(state_get pid), session=$(state_get sessionFile))"; fi
@@ -1602,7 +1597,7 @@ run stop worker-1 >/dev/null 2>&1
 MIXED_PROJ="$FIX/mixed-harness-orphan-proj"
 build_proj "$MIXED_PROJ" mixed
 RUN_PROJ="$MIXED_PROJ"; STATE="$MIXED_PROJ/seats/state.json"; LOG="$MIXED_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-mixed/worker-1/argv.json"
-env HOME="$HOME_FIX" PROJ="$MIXED_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["reviewer"]={role:"verifier", harness:"claude-code", provider:"anthropic", model:"sonnet", account:{dir:"~/.pi-seats-mixed/reviewer", authRoute:"oauth"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+env HOME="$HOME_FIX" PROJ="$MIXED_PROJ" bun -e 'import fs from "node:fs"; const p=process.env.PROJ+"/seats/seats.json"; const r=JSON.parse(fs.readFileSync(p,"utf8")); r.seats["reviewer"]={role:"verifier", harness:"claude-code", provider:"anthropic", model:"sonnet", account:{dir:"~/.pi-seats-mixed/reviewer", authRoute:"oauth"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 mkdir -p "$HOME_FIX/.pi-seats-mixed/reviewer"
 printf '{"loggedIn":true}\n' > "$HOME_FIX/.pi-seats-mixed/reviewer/.claude.json"
 run spawn worker-1
@@ -1650,9 +1645,9 @@ run spawn worker-1
 printf '2000\n' > "$HOME_FIX/.pi-seats-steer-slow/worker-1/stall-next-get-state"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=300 bun "$RUN_PROJ/seats/adapter.ts" steer worker-1 'queued from slow state' 2>&1)" || RC=$?
 COMMANDS="$HOME_FIX/.pi-seats-steer-slow/worker-1/commands.jsonl"
-if [ $RC -eq 0 ] && says "queued steer" && grep -q '"streamingBehavior":"steer"' "$COMMANDS" 2>/dev/null && grep -q 'queued from slow state' "$COMMANDS" 2>/dev/null; then
-  pass "slow get_state steer queues prompt with streamingBehavior=steer instead of losing text"
-else fail "slow get_state steer was not queued (exit $RC): $OUT commands=$(cat "$COMMANDS" 2>/dev/null)"; fi
+if [ $RC -eq 0 ] && says "steered worker-1 idle-started" && ! says "queued steer" && grep -q '"streamingBehavior":"steer"' "$COMMANDS" 2>/dev/null && grep -q 'queued from slow state' "$COMMANDS" 2>/dev/null; then
+  pass "slow get_state steer waits for the state reply, preserving steer text and behavior"
+else fail "slow get_state steer did not await its reply (exit $RC): $OUT commands=$(cat "$COMMANDS" 2>/dev/null)"; fi
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
@@ -1661,7 +1656,7 @@ STATUS_COST_PROJ="$FIX/status-cost-proj"
 build_proj "$STATUS_COST_PROJ" status-cost
 mkdir -p "$STATUS_COST_PROJ/seats/logs"
 env HOME="$HOME_FIX" PROJ="$STATUS_COST_PROJ" ME="$$" bun -e '
-  const fs = require("fs"), path = require("path");
+  import fs from "node:fs"; import path from "node:path";
   const proj = process.env.PROJ, seats = {};
   for (let i = 1; i <= 6; i++) {
     const name = `cost-${i}`;
@@ -1830,14 +1825,14 @@ fgit -C "$CAP_PROJ" worktree remove --force "$CAP_PROJ/.wheelhouse-worktrees/for
 # The selftest-only override pins the cap at 1; one live worktree held by a
 # recorded (stopped) seat is enough to refuse, and the refusal names it.
 fgit -C "$CAP_PROJ" worktree move "$CAP_PROJ/.wheelhouse-worktrees/foreign-x1" "$CAP_PROJ/.wheelhouse-worktrees/worker-2"
-env HOME="$HOME_FIX" HOLDER="$CAP_PROJ/.wheelhouse-worktrees/worker-2" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-2"]={pid:null,cwd:process.env.HOLDER,lastBead:"foreign-x1",lastDispatchAt:"2026-01-01T00:00:00.000Z",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+env HOME="$HOME_FIX" HOLDER="$CAP_PROJ/.wheelhouse-worktrees/worker-2" bun -e 'import fs from "node:fs"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); s.seats["worker-2"]={pid:null,cwd:process.env.HOLDER,lastBead:"foreign-x1",lastDispatchAt:"2026-01-01T00:00:00.000Z",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_MAX_LIVE_WORKTREES=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 cap-bead "over the override cap" 2>&1)" || RC=$?
 if [ $RC -ne 0 ] && printf '%s\n' "$OUT" | grep -E >/dev/null 'live 1 .* cap 1 .* [Ww]ait for seat worker-2' && [ ! -e "$CAP_WT" ] && [ "$(state_get pid)" = "$CAP_PID_BEFORE" ]; then
   pass "WHEELHOUSE_MAX_LIVE_WORKTREES=1 refuses a fresh seat's worktree and names the seat holding the slot"
 else fail "override cap refusal wrong (exit $RC wt=$(test -e "$CAP_WT" && echo exists || echo absent)): $OUT"; fi
 # A seat that runs from the root ("worktree": false) takes no slot: it
 # dispatches fine under the same cap and creates no worktree.
-env HOME="$HOME_FIX" bun -e 'const fs=require("fs"); const f=process.argv[1]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.seats["worker-root"]={role:"worker",worktree:false,provider:"anthropic",model:"stub-model-1:high",account:{dir:"~/.pi-seats-cap/worker-root"}}; fs.writeFileSync(f, JSON.stringify(j,null,2)+"\n")' "$CAP_PROJ/seats/seats.json"
+env HOME="$HOME_FIX" bun -e 'import fs from "node:fs"; const f=process.argv[1]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.seats["worker-root"]={role:"worker",worktree:false,provider:"anthropic",model:"stub-model-1:high",account:{dir:"~/.pi-seats-cap/worker-root"}}; fs.writeFileSync(f, JSON.stringify(j,null,2)+"\n")' "$CAP_PROJ/seats/seats.json"
 mkdir -p "$HOME_FIX/.pi-seats-cap/worker-root"
 printf '{\n  "%s": true\n}\n' "$CAP_PROJ" > "$HOME_FIX/.pi-seats-cap/worker-root/trust.json"
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-cap/worker-root/auth.json"
@@ -1848,7 +1843,7 @@ if [ $RC -eq 0 ] && [ "$(cat "$HOME_FIX/.pi-seats-cap/worker-root/cwd.txt" 2>/de
 else fail "root-running seat dispatch failed or made a worktree (exit $RC cwd=$(cat "$HOME_FIX/.pi-seats-cap/worker-root/cwd.txt" 2>/dev/null)): $OUT"; fi
 run stop worker-root >/dev/null 2>&1
 # Free the slot: the worker's worktree is created once live < cap again.
-env HOME="$HOME_FIX" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); delete s.seats["worker-2"]; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+env HOME="$HOME_FIX" bun -e 'import fs from "node:fs"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); delete s.seats["worker-2"]; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 fgit -C "$CAP_PROJ" worktree remove --force "$CAP_PROJ/.wheelhouse-worktrees/worker-2"
 run dispatch worker-1 cap-bead "under the cap"
 if [ $RC -eq 0 ] && wt_registered "$CAP_PROJ" "$CAP_WT" && [ "$(wt_branch "$CAP_WT")" = "fleet/cap-bead" ] && wait_for "$LOG" 'echo: Bead cap-bead' 5; then
@@ -1863,32 +1858,32 @@ build_proj "$LEG_PROJ" legacy
 RUN_PROJ="$LEG_PROJ"; STATE="$LEG_PROJ/seats/state.json"; LOG="$LEG_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-legacy/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-legacy/worker-1/cwd.txt"
 LEG_WTS="$LEG_PROJ/.wheelhouse-worktrees"
 mkdir -p "$LEG_WTS" "$LEG_PROJ/seats/logs"
-env HOME="$HOME_FIX" PROJ="$LEG_PROJ" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); for (const n of ["worker-2","worker-3"]) r.seats[n]={role:"worker",provider:"anthropic",model:"stub-model-1:high",account:{dir:`~/.pi-seats-legacy/${n}`}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+env HOME="$HOME_FIX" PROJ="$LEG_PROJ" bun -e 'import fs from "node:fs"; const p=process.env.PROJ+"/seats/seats.json"; const r=JSON.parse(fs.readFileSync(p,"utf8")); for (const n of ["worker-2","worker-3"]) r.seats[n]={role:"worker",provider:"anthropic",model:"stub-model-1:high",account:{dir:`~/.pi-seats-legacy/${n}`}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 for s in worker-2 worker-3; do mkdir -p "$HOME_FIX/.pi-seats-legacy/$s"; printf '{\n  "%s": true\n}\n' "$LEG_PROJ" > "$HOME_FIX/.pi-seats-legacy/$s/trust.json"; printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-legacy/$s/auth.json"; done
 for n in $(seq 1 12); do fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/closed-$n" -b "fleet/closed-$n" main; done
 node -e 'const fs=require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify(Array.from({length:12}, (_,i)=>({id:`closed-${i+1}`, status:"closed"}))))' "$FIX/legacy-closed-beads.json"
 FIXTURE_BD_CLOSED_FILE="$FIX/legacy-closed-beads.json"
 fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/open-bead" -b "fleet/open-bead" main
 LEG_SESSION="$HOME_FIX/.pi-seats-legacy/worker-1/sessions/legacy-session.jsonl"; mkdir -p "$(dirname "$LEG_SESSION")"; printf '{"type":"session"}\n' > "$LEG_SESSION"
-env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/open-bead" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"open-bead",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/open-bead" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"open-bead",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 run spawn worker-2
 run dispatch worker-2 new-bead "new bead despite closed legacy worktrees"
 if [ $RC -eq 0 ] && [ "$(wt_branch "$(seat_wt "$LEG_PROJ" worker-2)")" = "fleet/new-bead" ]; then
   pass "legacy worktrees: closed-bead legacy directories do not count against the dispatch cap"
 else fail "legacy worktrees: worker-2 dispatch was blocked by closed legacy dirs (exit $RC): $OUT"; fi
-env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/open-bead" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"open-bead",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/open-bead" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"open-bead",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 run dispatch worker-1 open-bead "same legacy bead again"
 if [ $RC -eq 0 ] && { [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$LEG_PROJ" worker-1)" ] || [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$LEG_WTS/open-bead" ]; } && [ "$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")" = "fleet/open-bead" ]; then
   pass "legacy worktrees: redispatching the open bead reuses or adopts its legacy worktree"
 else fail "legacy worktrees: open legacy bead was not reused/adopted (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null) branch=$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")): $OUT"; fi
-env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/closed-1" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"closed-1",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/closed-1" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"closed-1",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 run dispatch worker-1 closed-override "closed legacy cwd must not override the seat worktree"
 if [ $RC -eq 0 ] && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$LEG_PROJ" worker-1)" ] && [ "$(wt_branch "$(seat_wt "$LEG_PROJ" worker-1)")" = "fleet/closed-override" ]; then
   pass "legacy worktrees: a recorded cwd for a closed bead does not override the new bead's seat worktree"
 else fail "legacy worktrees: closed-bead recorded cwd overrode the seat worktree (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null) branch=$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")): $OUT"; fi
 LEG_MISSING_CWD="$(cat "$CWD_FILE" 2>/dev/null)"
 run stop worker-1 >/dev/null 2>&1
-env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_MISSING_CWD" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"closed-override",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_MISSING_CWD" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"closed-override",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 fgit -C "$LEG_PROJ" worktree remove --force "$LEG_MISSING_CWD" >/dev/null 2>&1 || rm -rf "$LEG_MISSING_CWD"
 run resume worker-1
 if [ $RC -ne 0 ] && says "refusing to resume a worker in the repo root"; then
@@ -1896,7 +1891,7 @@ if [ $RC -ne 0 ] && says "refusing to resume a worker in the repo root"; then
 else fail "legacy worktrees: missing legacy cwd resume did not refuse safely (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null)): $OUT"; fi
 fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/odd-bead" -b fleet/ootb-sync-20260924 main
 ODD_SESSION="$HOME_FIX/.pi-seats-legacy/worker-3/sessions/odd-session.jsonl"; mkdir -p "$(dirname "$ODD_SESSION")"; printf '{"type":"session"}\n' > "$ODD_SESSION"
-env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/odd-bead" SESSION="$ODD_SESSION" LOG="$LEG_PROJ/seats/logs/worker-3.jsonl" bun -e 'const fs=require("fs"); const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-3"]={pid:null,cwd:process.env.CWD,lastBead:"odd-bead",sessionFile:process.env.SESSION,sessionId:"odd-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/odd-bead" SESSION="$ODD_SESSION" LOG="$LEG_PROJ/seats/logs/worker-3.jsonl" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-3"]={pid:null,cwd:process.env.CWD,lastBead:"odd-bead",sessionFile:process.env.SESSION,sessionId:"odd-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
 run dispatch worker-3 odd-bead "nonstandard branch legacy bead"
 if [ $RC -eq 0 ] && [ "$(wt_branch "$(cat "$HOME_FIX/.pi-seats-legacy/worker-3/cwd.txt" 2>/dev/null)")" = "fleet/ootb-sync-20260924" ]; then
   pass "legacy worktrees: a bead on a non-fleet/bead branch keeps its existing branch"
@@ -2172,7 +2167,7 @@ else fail "push gate: stale lease did not refuse safely (exit $RC branch=$(wt_br
 
 # ISC-63: two seats never share a worktree.
 OCC_PID_BEFORE="$(state_get pid)"
-env HOME="$HOME_FIX" HOLDER="$WT" HOLDER_PID="$$" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); s.seats["worker-2"]={pid:Number(process.env.HOLDER_PID),cwd:process.env.HOLDER,lastBead:"bead-o0",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+env HOME="$HOME_FIX" HOLDER="$WT" HOLDER_PID="$$" bun -e 'import fs from "node:fs"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); s.seats["worker-2"]={pid:Number(process.env.HOLDER_PID),cwd:process.env.HOLDER,lastBead:"bead-o0",log:process.argv[1].replace(/state\.json$/,"logs/worker-2.jsonl")}; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 run dispatch worker-1 bead-o1 "into an occupied worktree"
 if [ $RC -ne 0 ] && says "occupied by seat worker-2" && says "two seats never share a worktree"; then
   pass "occupied worktree: dispatch exits non-zero naming the occupying seat (ISC-63)"
@@ -2180,7 +2175,7 @@ else fail "occupied worktree: dispatch was not refused naming worker-2 (exit $RC
 if [ "$(state_get pid)" = "$OCC_PID_BEFORE" ] && kill -0 "$OCC_PID_BEFORE" 2>/dev/null && [ "$(wt_branch "$WT")" = "fleet/bead-r1" ] && [ "$(state_get lastBead)" = "bead-r1" ]; then
   pass "occupied worktree: the refusal leaves the seat running on fleet/bead-r1"
 else fail "occupied worktree: refusal changed the seat (pid before=$OCC_PID_BEFORE after=$(state_get pid) branch=$(wt_branch "$WT") lastBead=$(state_get lastBead))"; fi
-env HOME="$HOME_FIX" bun -e 'const fs=require("fs"); const s=require(process.argv[1]); delete s.seats["worker-2"]; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
+env HOME="$HOME_FIX" bun -e 'import fs from "node:fs"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); delete s.seats["worker-2"]; fs.writeFileSync(process.argv[1], JSON.stringify(s,null,2)+"\n")' "$STATE"
 
 # ISC-40: a .pruned-placeholder is recreated; one with extra entries is refused.
 run stop worker-1 >/dev/null 2>&1
@@ -2245,7 +2240,7 @@ for sf in "$PROJ/seats/state.json" "$CAP_PROJ/seats/state.json" "$WT_PROJ/seats/
   while IFS= read -r cwd; do
     [ -n "$cwd" ] || continue
     [ -d "$cwd" ] || CWD_MISSING="$CWD_MISSING $sf:$cwd"
-  done < <(env HOME="$HOME_FIX" bun -e "for (const [n,r] of Object.entries(require('$sf').seats||{})) if (r && r.cwd) console.log(r.cwd)" 2>/dev/null)
+  done < <(env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; for (const [n,r] of Object.entries(JSON.parse(fs.readFileSync('$sf','utf8')).seats||{})) if (r && r.cwd) console.log(r.cwd)" 2>/dev/null)
 done
 if [ -z "$CWD_MISSING" ]; then pass "every cwd recorded in the worktree fixtures' seats/state.json is an existing directory"
 else fail "recorded seat cwd(s) do not exist:$CWD_MISSING"; fi
@@ -2337,7 +2332,7 @@ EOF
   rrun() { RC=0; OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_RPC_TIMEOUT_MS=90000 bun "$RPROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
   RSTATE="$RPROJ/seats/state.json"
   RLOG="$RPROJ/seats/logs/worker-1.jsonl"
-  rstate_get() { bun -e "const s=require('$RSTATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
+  rstate_get() { bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$RSTATE','utf8'));const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
   rassert_state_cwd_is_live_cwd() {
     local label="$1" pid live recorded
     pid="$(rstate_get pid)"

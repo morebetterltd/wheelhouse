@@ -1,0 +1,6 @@
+p16008
+fcwd
+n[run]/tmp/wheelhouse-staffing-live.OYcsOi/project
+p21881
+fcwd
+n[run]/tmp/wheelhouse-staffing-live.OYcsOi/canary-herald

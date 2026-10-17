@@ -9,7 +9,7 @@ selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 selftest_copy_seat_runtime "$FIX" "$HERE"
-bun - "$HERE" "$FIX" <<'TS'
+bun - "$HERE" "$FIX" <<'TS' || exit $?
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -65,3 +65,4 @@ if(!selected || selected==="disabled-watchdog")await check("disabled-watchdog",t
 assert.equal(failures,0,"readiness regressions");
 console.log(`verify-readiness.selftest: PASS (${checks} deterministic checks)`);
 TS
+bun "$HERE/fixtures/verify-exit-regression.ts" "$HERE" "$FIX"

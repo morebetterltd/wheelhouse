@@ -1,0 +1,21 @@
+{
+  "at": "2026-10-15T02:33:22.958Z",
+  "action": "TERM validated owned outer official runner; scheduling pause after 22:30, before any inner suite starts",
+  "outer": 39836,
+  "wrapper": 39321,
+  "innerStartsBeforeSignal": 0,
+  "checks": [
+    [
+      "full-wrapper-process.txt",
+      "39321     1 Wed Oct 14 21:32:32 2026     node <bead-run>/check-run.cjs full bash seats/selftest-sweep.sh"
+    ],
+    [
+      "full-outer-process.txt",
+      "39836 39321 Wed Oct 14 21:32:33 2026     bash seats/selftest-sweep.sh"
+    ],
+    [
+      "full-outer-cwd.txt",
+      "p39836\nfcwd\nn<task-worktree>"
+    ]
+  ]
+}

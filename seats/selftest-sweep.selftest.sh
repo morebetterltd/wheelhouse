@@ -19,9 +19,10 @@ fs.writeFileSync(p.join(dir,"wheelhouse-selftest-sweep"),JSON.stringify({kind:"w
 }
 
 FAILED=0
+CHECKED=0
 FIX=""
-pass(){ printf 'ok - %s\n' "$*"; }
-fail(){ printf 'not ok - %s\n' "$*"; FAILED=$((FAILED + 1)); }
+pass(){ CHECKED=$((CHECKED + 1)); printf 'ok - %s\n' "$*"; }
+fail(){ CHECKED=$((CHECKED + 1)); printf 'not ok - %s\n' "$*"; FAILED=$((FAILED + 1)); }
 cleanup(){
   [ -n "$FIX" ] && selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
@@ -52,11 +53,14 @@ chmod +x "$SUITES/fixture.selftest.sh"
 # Exercise the default (override unset), but relocate only its constant /tmp
 # prefix into this fixture. Otherwise a full sweep would wait on its own lock.
 default_tmpdir_leg(){
-  local runner="$FIX/default-runner.sh" host="$FIX/default-host"
+  local runner="$FIX/default-project/seats/selftest-sweep.sh" host="$FIX/default-host"
   local tmp_a="$FIX/tmp-A" tmp_b="$FIX/tmp-B" events="$FIX/default-events.log"
   local release="$FIX/default-release" pid_a pid_b rc_a rc_b order
-  mkdir -p "$host" "$tmp_a" "$tmp_b"
+  mkdir -p "$(dirname "$runner")" "$host" "$tmp_a" "$tmp_b"
   sed "/^LOCK=/s|/tmp|$host|g" "$SWEEP" > "$runner"
+  cp -f "$(dirname "$SWEEP")/python-invocations.ts" "$(dirname "$runner")/python-invocations.ts" || exit 2
+  git -C "$FIX/default-project" init -q -b main || exit 2
+  git -C "$FIX/default-project" add seats || exit 2
   env -u WHEELHOUSE_SELFTEST_SWEEP_LOCK TMPDIR="$tmp_a" SWEEP_RELEASE="$release" SWEEP_ID=TA SWEEP_EVENTS="$events" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$runner" > "$FIX/TA.out" 2> "$FIX/TA.err" &
   pid_a=$!
   for _ in $(seq 1 100); do grep -q '^TA start$' "$events" 2>/dev/null && break; sleep 0.05; done
@@ -85,6 +89,71 @@ default_tmpdir_leg(){
   else
     fail "different TMPDIR default sweep order wrong (rcA=$rc_a rcB=$rc_b order=$order)"
   fi
+}
+# A copied real runner scans its own seats tree even with a filtered pattern.
+source_policy_leg(){
+  local project="$FIX/source-project" file kind rc ran
+  mkdir -p "$project/seats/nested space" "$FIX/source-linked"
+  cp -f "$SWEEP" "$project/seats/selftest-sweep.sh"
+  cp -f "$(dirname "$SWEEP")/python-invocations.ts" "$project/seats/python-invocations.ts" || exit 2
+  printf '#!/usr/bin/env bash\nprintf ran > "$POLICY_RAN"\n' > "$project/seats/pass.selftest.sh"
+  git -C "$project" init -q -b main || exit 2
+  git -C "$project" add seats || exit 2
+  ran="$project/ran"
+  for kind in suffix direct env split quoted compact split-equals no-newline linked; do
+    file="$project/seats/nested space/no-extension"
+    case "$kind" in
+      suffix) file="$file.py"; printf 'not even executable\n' > "$file" ;;
+      direct) printf '#!/opt/venv/bin/python3.12\n' > "$file" ;;
+      env) printf '#!/usr/bin/env python3\n' > "$file" ;;
+      split) printf '#!/usr/bin/env -S python3 -u\n' > "$file" ;;
+      quoted) printf '#!/usr/bin/env -S "python3 -u"\n' > "$file" ;;
+      compact) printf '#!/usr/bin/env -Spython3\n' > "$file" ;;
+      split-equals) printf '#!/usr/bin/env --split-string="python3 -u"\n' > "$file" ;;
+      no-newline) printf '#! /usr/bin/python' > "$file" ;;
+      linked)
+        printf '#!/usr/bin/env python2.7\n' > "$FIX/source-linked/script"
+        file="$project/seats/link"; ln -s "$FIX/source-linked" "$file" ;;
+    esac
+    rc=0
+    POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+    if [ "$rc" != 0 ] && [ ! -e "$ran" ] && grep -F 'forbidden Python' "$project/err" >/dev/null; then
+      pass "source guard rejects $kind before even a filtered suite runs"
+    else
+      fail "source guard missed $kind (rc=$rc suiteRan=$([ -e "$ran" ] && echo yes || echo no))"
+    fi
+    rm -f "$ran" "$file"
+  done
+  printf '#!/usr/bin/env bash\npython3 -c "print(1)"\n' > "$project/seats/inline.sh"
+  git -C "$project" add seats/inline.sh || exit 2
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 1 ] && [ ! -e "$ran" ] && [ ! -e "$project/lock" ] && [ ! -e "$project/lock.queue" ] && ! grep -q 'selftest-sweep: START ' "$project/out" && grep -F 'forbidden Python invocation' "$project/err" >/dev/null; then
+    pass 'tracked inline call fails before lock, queue or filtered suite START'
+  else fail "tracked invocation guard missed inline call (rc=$rc)"; fi
+  # The same tracked path may contain ordinary arguments, not an interpreter call.
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "python3 is inert fixture data"\n' > "$project/seats/inline.sh"
+  printf 'documentation\n#!/usr/bin/env python3\n' > "$project/seats/embedded.txt"
+  rm -f "$ran"
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 0 ] && [ -f "$ran" ]; then pass 'source guard permits inert inline arguments and non-first-line shebang text'
+  else fail "source guard incorrectly rejects inert data (rc=$rc)"; fi
+  rm -f "$ran"
+  mv -f "$project/seats/inline.sh" "$FIX/saved-inline.sh" || exit 2
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 2 ] && [ ! -e "$ran" ] && [ ! -e "$project/lock" ] && [ ! -e "$project/lock.queue" ] && grep -F 'cannot audit tracked source' "$project/err" >/dev/null; then
+    pass 'unreadable tracked source remains incomplete exit2 before admission'
+  else fail "source audit setup failure lost incomplete status (rc=$rc)"; fi
+  mv -f "$FIX/saved-inline.sh" "$project/seats/inline.sh" || exit 2
+  mv -f "$project/seats/python-invocations.ts" "$FIX/saved-auditor.ts" || exit 2
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 2 ] && [ ! -e "$ran" ] && [ ! -e "$project/lock" ] && [ ! -e "$project/lock.queue" ] && grep -F 'auditor missing or unreadable' "$project/err" >/dev/null; then
+    pass 'missing invocation auditor fails2 before admission, never bypasses policy'
+  else fail "missing invocation auditor did not fail incomplete (rc=$rc)"; fi
+  mv -f "$FIX/saved-auditor.ts" "$project/seats/python-invocations.ts" || exit 2
 }
 default_tmpdir_leg
 if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
@@ -190,6 +259,7 @@ if [ "${WHEELHOUSE_SELFTEST_SWEEP_OWNERSHIP_ONLY:-0}" = 1 ]; then
   [ "$FAILED" = 0 ] && { echo 'selftest-sweep.selftest: PASS (15 ownership checks)'; exit 0; }
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1
 fi
+source_policy_leg
 
 RELEASE_A="$FIX/release-A"
 SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=A SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/A.out" 2> "$FIX/A.err" &
@@ -207,17 +277,22 @@ then
 else
   fail "active lock was not a complete marked directory"
 fi
-SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=B SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/B.out" 2> "$FIX/B.err" &
+# Readiness is a real queued retry, acknowledged after the diagnostic point.
+# The controller also signals early child exit, so absent output cannot hang.
+mkfifo "$FIX/B-ready"
+exec 9<>"$FIX/B-ready"
+SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=B SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bun "$HERE/fixtures/sweep-wait-diagnostic.ts" "$SWEEP" "$FIX" 4>&9 > "$FIX/B.out" 2> "$FIX/B.err" &
 PID_B=$!
-sleep 0.2
-if grep -q 'waiting for host-wide lock' "$FIX/B.err" && ! grep -q '^B start$' "$EVENTS" 2>/dev/null; then
+IFS= read -r WAIT_SIGNAL <&9
+if [ "$WAIT_SIGNAL" = ticket ] && grep -q "waiting for host-wide lock .*queue_position=1 holder=pid=$PID_A started=" "$FIX/B.err" && ! grep -q '^B start$' "$EVENTS" 2>/dev/null; then
   pass "second fixture sweep reports the holder and waits before starting"
 else
-  fail "second fixture sweep did not wait (B.err=$(cat "$FIX/B.err" 2>/dev/null) events=$(cat "$EVENTS" 2>/dev/null))"
+  fail "second fixture sweep did not wait (signal=$WAIT_SIGNAL B.err=$(cat "$FIX/B.err" 2>/dev/null) events=$(cat "$EVENTS" 2>/dev/null))"
 fi
 : > "$RELEASE_A"
 wait "$PID_A"; RC_A=$?
 wait "$PID_B"; RC_B=$?
+exec 9>&-
 ORDER="$(tr '\n' '|' < "$EVENTS")"
 if [ "$RC_A" -eq 0 ] && [ "$RC_B" -eq 0 ] && [ "$ORDER" = 'A start|A end|B start|B end|' ]; then
   pass "host-wide lock serializes concurrent fixture sweeps in order"
@@ -282,7 +357,11 @@ EPERM="$FIX/eperm.lock"
 make_lock "$EPERM" 1
 SWEEP_ID=H SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$EPERM" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/eperm.out" 2> "$FIX/eperm.err" &
 PID_G=$!
-sleep 0.2
+for _ in $(seq 1 100); do
+  grep -q 'waiting for host-wide lock' "$FIX/eperm.err" && break
+  kill -0 "$PID_G" 2>/dev/null || break
+  sleep 0.05
+ done
 if [ -d "$EPERM" ] && grep -q 'waiting for host-wide lock' "$FIX/eperm.err" && ! grep -q 'removing stale lock' "$FIX/eperm.err"; then
   pass "EPERM holder pid is treated as live instead of stale"
 else
@@ -325,7 +404,7 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "selftest-sweep.selftest: PASS (26 checks)"
+  echo "selftest-sweep.selftest: PASS ($CHECKED checks)"
 else
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"
   exit 1

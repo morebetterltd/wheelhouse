@@ -1,0 +1,7 @@
+diff --git a/seats/selftest-sweep-lock.ts b[run]/controls/no-reap.ts
+index 3805817..bb6362e 100644
+--- a/seats/selftest-sweep-lock.ts
++++ b[run]/controls/no-reap.ts
+@@ -259 +259 @@ function pruneTickets(fd: number): Ticket[] {
+-  for (const ticket of all) if (!alive(ticket.pid)) {
++  for (const ticket of all) if (false && !alive(ticket.pid)) { // removed dead PID reap

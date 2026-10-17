@@ -1,0 +1,5 @@
+before umbrella HEAD=4bd0e7e7cf95891c830dd4480edac54f690660a1
+RUN ["bash","seats/selftest-sweep-queue.selftest.sh","[run]/controls/no-cancel.sh"]
+PASS cancelled registered at queue_position=1 behind holder pid=40097
+after umbrella HEAD=4bd0e7e7cf95891c830dd4480edac54f690660a1
+umbrella safety: PASS (0 permitted new reflog entries); test exit=1; signal=null

@@ -1,0 +1,48 @@
+[
+  {
+    "leg": "fifo",
+    "source": "seats/selftest-sweep-lock.ts",
+    "sourceSha256": "0b9f0aecc41e679f29a1c1c96b0a528ec8b8ee03505b0b6b58ff1da70d9615ac",
+    "variantSha256": "eb9545c16a1b4e9bcf0b07e1add3f40263fb94032d60d779e944af06eae9b30c",
+    "exactOneEdit": true
+  },
+  {
+    "leg": "dead",
+    "source": "seats/selftest-sweep-lock.ts",
+    "sourceSha256": "0b9f0aecc41e679f29a1c1c96b0a528ec8b8ee03505b0b6b58ff1da70d9615ac",
+    "variantSha256": "986edc473471eccf68f31816daceac48ada160b18e86e4529e6db61f0124fb37",
+    "exactOneEdit": true
+  },
+  {
+    "leg": "cancel",
+    "source": "seats/selftest-sweep.sh",
+    "sourceSha256": "abbf314bfd3e6b81388ed7a0d2c74f66874ca4d8c989bdfe792e39beb603dd54",
+    "variantSha256": "45f77b5002f90ec270fe56257451fc4664f6b1509e615056652c066c1f52c538",
+    "exactOneEdit": true
+  },
+  {
+    "leg": "wait-line",
+    "source": "seats/selftest-sweep.sh",
+    "sourceSha256": "abbf314bfd3e6b81388ed7a0d2c74f66874ca4d8c989bdfe792e39beb603dd54",
+    "variantSha256": "07ba21435f738e43bf291758a19a3dda9b668a0e18c3fe231e0b30127b11cc38",
+    "exactOneEdit": true
+  },
+  {
+    "leg": "integrity",
+    "baseline": "c43b08b:seats/selftest-sweep-lock.ts",
+    "sha256": "ac485b2acc4d8ccbdda45bd0cacf9f8c5f3387d539d43a713090154f722a9ca4",
+    "byteIdentical": true
+  },
+  {
+    "leg": "integrity-symlink",
+    "sourceSha256": "799795e8afb9915961c7fefb9a30ea3973385f872e9a30e806d9c47f652e5df2",
+    "selectedSha256": "70cd71f5f032eb3133792c791295828c8707f07bec33b3b9b89cc9c40273e4fb",
+    "onlyCaseSelectionChanged": true
+  },
+  {
+    "leg": "integrity-foreign-ticket",
+    "sourceSha256": "799795e8afb9915961c7fefb9a30ea3973385f872e9a30e806d9c47f652e5df2",
+    "selectedSha256": "2aac84ac9894314ee36eea7f4201915a33abd7384d942562975ca629b4aea282",
+    "onlyCaseSelectionChanged": true
+  }
+]
