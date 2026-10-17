@@ -79,7 +79,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { resolveRoleBrief } from "./briefs";
+import { resolveRoleBrief, scratchPromptLines } from "./briefs";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
@@ -1329,6 +1329,7 @@ async function main(): Promise<void> {
     `Branch under review: ${branch}`,
     `Branch repository: ${repoRoot}`,
     `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT)`,
+    ...scratchPromptLines(ROOT, beadId),
     `Tip SHA at dispatch: ${tip}`,
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
