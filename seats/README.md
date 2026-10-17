@@ -394,11 +394,19 @@ current turn if the seat is mid-stream; redirecting the CURRENT turn is what
 `steer` is for. Before waiting for Pi's prompt acknowledgement, the adapter
 records the target bead and prompt in `state.json`, so a slow resumed session
 never leaves `status` naming the previous bead after the prompt has been sent.
-The prompt acknowledgement deadline is `WHEELHOUSE_PROMPT_ACK_MS` (default
-60000 ms, deliberately longer than the generic RPC wait for warm resumed
-sessions). If the acknowledgement times out but the log shows the prompt frame
-or a turn start after the send, dispatch exits 0 with `WARNING: prompt
-delivered, ack late`; it STOPs only when the log shows no delivery. `stop` is SIGTERM — Pi's graceful path — and deliberately
+RPC readiness, state replies, FIFO drain and prompt acknowledgements have no
+elapsed-time failure budget: a live seat with an open pipe may answer late.
+The adapter waits for the matching response, or fails with the seat name and
+pid when the process dies or its pipe closes (EOF). Pending RPCs print `WAIT:`
+progress every five seconds; that is reporting cadence, not a deadline.
+`status` reports observed process/log facts and never guesses WEDGED from a
+slow `get_state`; dispatch does not stop and relaunch a merely slow seat.
+`WHEELHOUSE_PROMPT_ACK_MS`, `WHEELHOUSE_FIFO_WRITE_MS` and
+`WHEELHOUSE_WEDGED_GET_STATE_MS` no longer decide RPC outcomes.
+`WHEELHOUSE_RPC_TIMEOUT_MS` remains a legacy stop/SIGKILL-confirmation setting
+only, not an RPC budget. `adapter-rpc.selftest.sh` covers held replies beyond
+the old logical budgets, live backpressure, death, EOF and partial writes.
+`stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
 attached to it (`--session`), rooted back in the same cwd it was running in,

@@ -77,7 +77,7 @@ interface SeatDriver {
   launch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh?: boolean): Promise<void>;
   probe(name: string, entry: SeatEntry): void;
   getState(rec: SeatRecord): Promise<any>;
-  prompt(rec: SeatRecord, message: string, streamingBehavior: "followUp" | "steer", timeoutMs?: number): Promise<any>;
+  prompt(rec: SeatRecord, message: string, streamingBehavior: "followUp" | "steer"): Promise<any>;
   steer(rec: SeatRecord, text: string): Promise<any>;
   stop(state: State, name: string, rec: SeatRecord): Promise<string>;
 }
@@ -89,17 +89,14 @@ const RUN_DIR = path.join(SEATS_DIR, "run");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
 const ROSTER_FILE = path.join(SEATS_DIR, "seats.json");
 
-// One knob for every wait in this file; the selftest raises it for real pi.
+// Legacy stop/SIGKILL confirmation only; RPC never fails on elapsed time.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_RPC_TIMEOUT_MS || 20000);
-const PROMPT_ACK_MS = Number(process.env.WHEELHOUSE_PROMPT_ACK_MS || 60000);
-const FIFO_WRITE_MS = Number(process.env.WHEELHOUSE_FIFO_WRITE_MS || 3000);
 const SPAWN_TERM_GRACE_MS = Number(process.env.WHEELHOUSE_SPAWN_TERM_GRACE_MS || 2000);
 const LOG_TAIL_BYTES = Number(process.env.WHEELHOUSE_LOG_TAIL_BYTES || 1024 * 1024);
 const LOG_ROTATE_BYTES = Number(process.env.WHEELHOUSE_LOG_ROTATE_BYTES || 256 * 1024 * 1024);
 const LOG_ROTATE_KEEP = Number(process.env.WHEELHOUSE_LOG_ROTATE_KEEP || 3);
 const LOG_EVENT_STRING_BYTES = Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES || 64 * 1024);
 const ORPHAN_CONFIRM_MS = Number(process.env.WHEELHOUSE_ORPHAN_CONFIRM_MS || 3000);
-const WEDGED_GET_STATE_MS = Number(process.env.WHEELHOUSE_WEDGED_GET_STATE_MS || Math.min(TIMEOUT_MS, 3000));
 
 // SPLICE 2/6 (seat worktrees): where a seat works and how its worktree is
 // prepared. A worker seat owns ONE persistent worktree,
@@ -531,45 +528,79 @@ function requireLaunchCredential(name: string, entry: SeatEntry, accountDir: str
 // Talking to a running seat: FIFO in, log out
 // ---------------------------------------------------------------------------
 
-/**
- * Append one LF-terminated JSON line to the seat's FIFO. Non-blocking open:
- * if no process holds the read side, the open fails with ENXIO — which is the
- * honest answer, "this seat is not running" — instead of hanging forever.
- * Retried briefly because a just-spawned seat opens its end a moment after
- * the adapter returns from spawn.
- */
-async function fifoWrite(fifo: string, obj: unknown, retryMs = FIFO_WRITE_MS): Promise<void> {
+type RpcSeat = { fifo: string; log: string; pid: number | null; startedAt?: string };
+
+function rpcSeat(rec: RpcSeat): string {
+  return `seat "${path.basename(rec.fifo, ".stdin")}" (pid ${rec.pid ?? "-"})`;
+}
+
+function assertRpcProcess(rec: RpcSeat, phase: string): void {
+  // Command entry already establishes seat ownership. Do not turn a slow
+  // lsof subprocess into a false death verdict while waiting for its reply.
+  if (!barePidAlive(rec.pid)) throw new Error(`${rpcSeat(rec)} process died ${phase} — check the .stderr.log beside its event log`);
+}
+
+function rpcProgress(rec: RpcSeat, phase: () => string): () => void {
+  let last = performance.now();
+  return () => {
+    const now = performance.now();
+    // Reporting cadence ONLY, never a success/failure deadline.
+    if (now - last >= 5000) {
+      process.stderr.write(`WAIT: ${rpcSeat(rec)} ${phase()}; process alive; waiting for a signal, not a timeout\n`);
+      last = now;
+    }
+  };
+}
+
+/** Non-blocking FIFO writes: wait for startup/drain while the owned process
+ * lives, not for a guessed budget. ENXIO after readiness and EPIPE are EOF.
+ * Fresh launches have no startedAt yet and may not have opened stdin. */
+async function fifoWrite(rec: RpcSeat, obj: unknown): Promise<void> {
   const line = Buffer.from(JSON.stringify(obj) + "\n");
-  const deadline = Date.now() + retryMs;
+  const kind = String((obj as any)?.type ?? "command");
   let fd: number | null = null;
   let offset = 0;
+  const progress = rpcProgress(rec, () => `writing ${kind}, ${offset}/${line.length} bytes; awaiting pipe reader/drain`);
   try {
     for (;;) {
+      assertRpcProcess(rec, `before writing ${kind}`);
       try {
-        fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+        fd = fs.openSync(rec.fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
         break;
       } catch (e: any) {
-        if (e.code !== "ENXIO" || Date.now() > deadline) {
-          throw new Error(`cannot write to ${fifo}: ${e.code ?? e.message} — is the seat running?`);
-        }
+        if (e.code !== "ENXIO" || rec.startedAt) throw e;
+        progress();
         await sleep(100);
       }
     }
     while (offset < line.length) {
+      assertRpcProcess(rec, `while writing ${kind}`);
       try {
         const n = fs.writeSync(fd, line, offset, line.length - offset);
         if (n > 0) { offset += n; continue; }
       } catch (e: any) {
         if (e.code !== "EAGAIN" && e.code !== "EWOULDBLOCK") throw e;
       }
-      if (Date.now() > deadline) {
-        throw new Error(`prompt not delivered (partial FIFO write?) to ${fifo}: wrote ${offset}/${line.length} bytes before timeout`);
-      }
+      progress();
       await sleep(25);
     }
   } catch (e: any) {
-    if (String(e?.message ?? "").includes("partial FIFO write")) throw e;
-    throw new Error(`cannot write to ${fifo}: ${e.code ?? e.message} — is the seat running?`);
+    const why = e.code === "ENXIO" || e.code === "EPIPE" ? "pipe closed (EOF)" : e.code ?? e.message;
+    const delivery = offset > 0 ? "prompt not delivered (partial FIFO write?)" : `${kind} not delivered`;
+    throw new Error(`${delivery} to ${rpcSeat(rec)}: wrote ${offset}/${line.length} bytes; ${why}`);
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+function assertRpcReader(rec: RpcSeat, phase: string): void {
+  assertRpcProcess(rec, phase);
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(rec.fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+  } catch (e: any) {
+    if (e.code === "ENXIO" || e.code === "ENOENT") throw new Error(`${rpcSeat(rec)} pipe closed (EOF) ${phase}`);
+    throw new Error(`${rpcSeat(rec)} pipe check failed ${phase}: ${e.code ?? e.message}`);
   } finally {
     if (fd !== null) fs.closeSync(fd);
   }
@@ -617,17 +648,13 @@ function promptCommand(message: string, streamingBehavior: "followUp" | "steer")
   return { type: "prompt", message, streamingBehavior };
 }
 
-async function rpc(
-  rec: { fifo: string; log: string; pid: number | null },
-  command: Record<string, unknown>,
-  timeoutMs = TIMEOUT_MS
-): Promise<any> {
+async function rpc(rec: RpcSeat, command: Record<string, unknown>): Promise<any> {
   const id = crypto.randomUUID();
   let offset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
-  const sentOffset = offset;
-  await fifoWrite(rec.fifo, { ...command, id });
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  await fifoWrite(rec, { ...command, id });
+  const phase = `while waiting for ${command.type} response`;
+  const progress = rpcProgress(rec, () => `${phase}; pipe open`);
+  for (;;) {
     const r = logLinesFrom(rec.log, offset);
     offset = r.offset;
     for (const line of r.lines) {
@@ -639,32 +666,10 @@ async function rpc(
       }
       if (obj.type === "response" && obj.id === id) return obj;
     }
-    if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
-      throw new Error(`seat process died while waiting for ${command.type} response — check the .stderr.log beside its event log`);
-    }
+    assertRpcReader(rec, phase);
+    progress();
     await sleep(100);
   }
-  const err: any = new Error(`timed out after ${timeoutMs}ms waiting for ${command.type} response`);
-  err.code = "WHEELHOUSE_RPC_TIMEOUT";
-  err.logOffset = sentOffset;
-  err.commandType = command.type;
-  err.commandId = id;
-  throw err;
-}
-
-function promptDeliveredAfter(rec: { log: string }, offset: number, prompt: string): boolean {
-  const r = logLinesFrom(rec.log, offset);
-  for (const line of r.lines) {
-    let obj: any;
-    try { obj = JSON.parse(line); } catch { continue; }
-    if (obj.type === "agent_start" || obj.type === "turn_start") return true;
-    if (obj.type === "message_start" || obj.type === "message_end") {
-      const role = obj.message?.role;
-      const text = textOf(obj.message?.content);
-      if (role === "user" && text.includes(prompt)) return true;
-    }
-  }
-  return false;
 }
 
 async function terminateSpawnedOnly(pid: number): Promise<string> {
@@ -1008,7 +1013,7 @@ const PI_DRIVER: SeatDriver = {
   launch: piLaunch,
   probe: piProbe,
   getState: (rec) => rpc(rec, { type: "get_state" }),
-  prompt: (rec, message, streamingBehavior, timeoutMs = PROMPT_ACK_MS) => rpc(rec, promptCommand(message, streamingBehavior), timeoutMs),
+  prompt: (rec, message, streamingBehavior) => rpc(rec, promptCommand(message, streamingBehavior)),
   steer: (rec, text) => rpc(rec, { type: "steer", message: text }),
   stop: stopRecord,
 };
@@ -1166,7 +1171,7 @@ const CLAUDE_DRIVER: SeatDriver = {
   launch: claudeLaunch,
   probe: claudeProbe,
   getState: (rec) => rpc(rec, { type: "get_state" }),
-  prompt: (rec, message, streamingBehavior, timeoutMs = PROMPT_ACK_MS) => rpc(rec, promptCommand(message, streamingBehavior), timeoutMs),
+  prompt: (rec, message, streamingBehavior) => rpc(rec, promptCommand(message, streamingBehavior)),
   steer: (rec, text) => rpc(rec, { type: "steer", message: text }),
   stop: stopRecord,
 };
@@ -1233,7 +1238,7 @@ function codexProbe(name: string, entry: SeatEntry): void {
   if (result.status === 0 && ok) { console.log("OK"); return; }
   if (result.stdout) process.stdout.write(result.stdout); if (result.stderr) process.stderr.write(result.stderr); process.exit(result.status ?? 1);
 }
-const CODEX_DRIVER: SeatDriver = { name: "codex", launch: codexLaunch, probe: codexProbe, getState: (rec) => rpc(rec, { type: "get_state" }), prompt: (rec, message, streamingBehavior, timeoutMs = PROMPT_ACK_MS) => rpc(rec, promptCommand(message, streamingBehavior), timeoutMs), steer: (rec, text) => rpc(rec, { type: "steer", message: text }), stop: stopRecord };
+const CODEX_DRIVER: SeatDriver = { name: "codex", launch: codexLaunch, probe: codexProbe, getState: (rec) => rpc(rec, { type: "get_state" }), prompt: (rec, message, streamingBehavior) => rpc(rec, promptCommand(message, streamingBehavior)), steer: (rec, text) => rpc(rec, { type: "steer", message: text }), stop: stopRecord };
 
 function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatDriver {
   const harness = harnessNameForSeat(name, entry);
@@ -1407,36 +1412,11 @@ function requireRunning(name: string): SeatRecord {
   return rec;
 }
 
-async function healWedgedSeat(name: string, rec: SeatRecord, context: string): Promise<SeatRecord> {
-  const entry = requireSeat(name);
-  const driver = driverForRunningSeat(name, context);
-  const oldPid = rec.pid;
-  const sessionFile = rec.sessionFile;
-  const cwd = rec.cwd ?? ROOT;
-  console.log(`seat ${name}: WEDGED — idle seat timed out answering get_state during ${context}; stopping and resuming with session ${sessionFile ?? rec.sessionId ?? "-"}`);
-  const state = readState();
-  const current = state.seats[name];
-  if (!current) die(`seat "${name}" disappeared while healing WEDGED seat`);
-  try {
-    console.log(await driver.stop(state, name, current));
-  } catch (e: any) {
-    die(`seat "${name}" is WEDGED but stop failed while healing after get_state timeout: ${e.message}. Remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}`);
-  }
-  try {
-    await driverForSeat(name, entry, context).launch(name, entry, sessionFile, cwd);
-  } catch (e: any) {
-    die(`seat "${name}" is WEDGED — get_state still timed out or failed after stop+resume during ${context}: ${e.message}. Remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}`);
-  }
-  const healed = requireRunning(name);
-  console.log(`seat ${name}: WEDGED self-heal resumed pid ${oldPid ?? "-"} -> ${healed.pid ?? "-"}; retrying ${context} once`);
-  return healed;
-}
-
 // SPLICE 4/6 (seat worktrees): dispatch prepares the seat's own worktree on
 // the bead's branch, relaunches only when the seat's cwd actually changes
 // (first dispatch from the root, or a pruned cwd), and kicks the closed-bead
 // cleanup for the bead the seat just left.
-async function cmdDispatch(name: string, beadId: string, text: string, base: string | null = null, retriedWedged = false): Promise<void> {
+async function cmdDispatch(name: string, beadId: string, text: string, base: string | null = null): Promise<void> {
   let rec = readState().seats[name];
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
   // Looked up lazily: a running seat whose roster entry was removed can still
@@ -1459,11 +1439,6 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     try {
       st = await sameCwdDriver.getState(rec);
     } catch (e: any) {
-      if (isRpcTimeout(e, "get_state") && seatIdleByLog(rec)) {
-        if (retriedWedged) die(`seat "${name}" is WEDGED — idle get_state timed out again after stop+resume; remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}. stderr tail:\n${stderrTail(rec)}`);
-        await healWedgedSeat(name, rec, crossBead ? "cross-bead dispatch" : "dispatch");
-        return cmdDispatch(name, beadId, text, base, true);
-      }
       die(`get_state failed while checking seat "${name}" before ${crossBead ? "cross-bead " : ""}dispatch: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
     }
     if (!st.success) die(`get_state failed while checking seat "${name}" before ${crossBead ? "cross-bead " : ""}dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
@@ -1535,12 +1510,8 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   writeState(state);
   let resp: any;
   try {
-    resp = await sameCwdDriver.prompt(rec, promptText, "followUp", PROMPT_ACK_MS);
+    resp = await sameCwdDriver.prompt(rec, promptText, "followUp");
   } catch (e: any) {
-    if (e?.code === "WHEELHOUSE_RPC_TIMEOUT" && promptDeliveredAfter(rec, Number(e.logOffset ?? 0), promptText)) {
-      console.log(`WARNING: prompt delivered, ack late for ${beadId} to ${name}; watch ${rec.log}`);
-      return;
-    }
     die(`dispatch prompt failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
   }
   if (!resp.success) {
@@ -1583,10 +1554,7 @@ async function cmdSteer(name: string, text: string): Promise<void> {
   try {
     st = await driver.getState(rec);
   } catch (e: any) {
-    if (!String(e.message || e).includes("timed out")) die(`steer preflight get_state failed: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
-    await fifoWrite(rec.fifo, promptCommand(text, "steer"));
-    console.log(`queued steer for ${name}: preflight get_state timed out; wrote prompt with streamingBehavior=steer`);
-    return;
+    die(`steer preflight get_state failed: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
   }
   if (!st.success) die(`steer preflight get_state failed: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
   if (st.data?.isStreaming) {
@@ -1744,9 +1712,6 @@ function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, Proce
 }
 
 function seatIdleByLog(rec: SeatRecord): boolean { return agentSettledEvent(lastEvent(rec.log)); }
-function isRpcTimeout(e: any, commandType?: string): boolean {
-  return e?.code === "WHEELHOUSE_RPC_TIMEOUT" && (commandType === undefined || e?.commandType === commandType);
-}
 
 function logHasUnfinishedToolCall(log: string): boolean {
   try {
@@ -1882,16 +1847,9 @@ async function cmdStatus(): Promise<void> {
     const parkedQuota = Boolean(rec.lastCapacityEvent);
     const stalled = Boolean(rec.lastStalledEvent) || logLastStalledEvent(rec.log);
     const last = lastEvent(rec.log);
-    let wedged = false;
-    if (alive && agentSettledEvent(last)) {
-      try {
-        const st = await rpc(rec, { type: "get_state" }, WEDGED_GET_STATE_MS);
-        if (!st.success) wedged = false;
-      } catch (e: any) {
-        if (isRpcTimeout(e, "get_state")) wedged = true;
-      }
-    }
-    const word = parkedQuota ? "PARKED" : wedged ? "WEDGED" : alive && stalled ? "STALLED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
+    // Status reports observed process/log facts, not a guessed get_state
+    // deadline. A live, slow responder is not evidence of a wedged seat.
+    const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
     const pid = alive ? `pid ${rec.pid}` : died ? (bareAlive ? `pid ${rec.pid} foreign` : `pid ${rec.pid} gone`) : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
@@ -1902,9 +1860,6 @@ async function cmdStatus(): Promise<void> {
     rotateLogIfSafe(rec.log, last);
     if (died) {
       console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? "is alive but is not this seat (no FIFO/start-time proof)" : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
-    }
-    if (wedged) {
-      console.log(`${" ".repeat(16)} WEDGED: idle seat is alive but get_state timed out; remedy: bun seats/adapter.ts stop ${name}; bun seats/adapter.ts resume ${name}`);
     }
     if (rec.lastCapacityEvent) {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
