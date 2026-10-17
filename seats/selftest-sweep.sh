@@ -46,32 +46,40 @@ RUNNER_PGID="${RUNNER_PGID//[[:space:]]/}"
 # PID/PPID/PGID/birth records are eligible. Retain identities across TERM so
 # an orphaned child is still owned after its parent exits during the grace.
 signal_suite_tree(){
-  local signal="$1" root="$2" dir="$3" owner group born p parent g birth i j changed groups_seen=" " oldp oldg oldbirth
-  local pids=() parents=() pgids=() births=() owned=()
+  local signal="$1" root="$2" dir="$3" owner group born p parent g birth i j ancestor changed groups_seen=" " oldp oldg oldbirth
+  local pids=() parents=() pgids=() births=() owned=() active=()
+  local previous_pids=() previous_groups=() previous_births=()
   read -r owner group born < "$dir/owner" || return 2
   [ "$owner" = "$root" ] && [ "$group" = "$root" ] || return 2
+  if [ -f "$dir/targets" ]; then
+    while read -r oldp oldg oldbirth; do
+      i=${#previous_pids[@]}
+      previous_pids[i]="$oldp"; previous_groups[i]="$oldg"; previous_births[i]="$oldbirth"
+    done < "$dir/targets"
+  fi
   ps -axo pid=,ppid=,pgid=,lstart= > "$dir/processes" || return 2
   i=0
   while read -r p parent g birth; do
     pids[i]="$p"; parents[i]="$parent"; pgids[i]="$g"; births[i]="$birth"; owned[i]=0
     if [ "$p" = "$root" ] && [ "$g" = "$group" ] && [ "$birth" = "$born" ]; then owned[i]=1; fi
-    if [ -f "$dir/targets" ]; then
-      while read -r oldp oldg oldbirth; do
-        if [ "$p" = "$oldp" ] && [ "$g" = "$oldg" ] && [ "$birth" = "$oldbirth" ]; then owned[i]=1; fi
-      done < "$dir/targets"
-    fi
+    for ((j=0;j<${#previous_pids[@]};j++)); do
+      if [ "$p" = "${previous_pids[j]}" ] && [ "$g" = "${previous_groups[j]}" ] && [ "$birth" = "${previous_births[j]}" ]; then owned[i]=1; break; fi
+    done
+    if [ "${owned[i]}" = 1 ]; then active[${#active[@]}]="$i"; fi
     i=$((i+1))
   done < "$dir/processes"
-  # Expand ancestry and group membership to a fixed point before signaling.
+  # Expand against only the owned cohort, not every host PID for every row.
+  # Likewise load retained identities once, never reopening them per host PID.
+  # A small suite tree must not make deadline cleanup quadratic in host size.
   changed=1
   while [ "$changed" = 1 ]; do
     changed=0
     for ((i=0;i<${#pids[@]};i++)); do
       [ "${owned[i]}" = 0 ] || continue
-      for ((j=0;j<${#pids[@]};j++)); do
-        [ "${owned[j]}" = 1 ] || continue
-        if [ "${parents[i]}" = "${pids[j]}" ] || { [ "${pgids[i]}" = "${pgids[j]}" ] && [ "${pgids[i]}" != "$RUNNER_PGID" ]; }; then
-          owned[i]=1; changed=1; break
+      for ((j=0;j<${#active[@]};j++)); do
+        ancestor="${active[j]}"
+        if [ "${parents[i]}" = "${pids[ancestor]}" ] || { [ "${pgids[i]}" = "${pgids[ancestor]}" ] && [ "${pgids[i]}" != "$RUNNER_PGID" ]; }; then
+          owned[i]=1; active[${#active[@]}]="$i"; changed=1; break
         fi
       done
     done
