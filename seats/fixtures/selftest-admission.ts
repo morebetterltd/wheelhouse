@@ -155,6 +155,16 @@ async function killedSupervisor() {
     assert.equal(fs.readFileSync(path.join(c.dir, "events"), "utf8"), "holder enter\nholder exit\nsuccessor enter\nsuccessor exit\n");
   } finally { await c.cleanup(); }
 }
+async function relocatedLibrary() {
+  const c = new Case("relocated-library");
+  try {
+    const copy = path.join(c.dir, "copied-lib.sh"); fs.copyFileSync(library, copy);
+    const bad = c.start("missing-companion", "direct", "quick", { ADMISSION_LIB: copy, WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER: "" });
+    await c.joined(bad, 2); assert(bad.err.includes("lock helper missing or unreadable")); assert(!bad.out.includes("QUICK"));
+    const good = c.start("pinned-companion", "direct", "quick", { ADMISSION_LIB: copy }); await c.joined(good);
+    assert(/OWNER pinned-companion \d+/.test(good.out)); c.clear();
+  } finally { await c.cleanup(); }
+}
 async function unavailable() {
   const c = new Case("missing-helper");
   try { const p = c.start("refused", "direct", "quick", { WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER: path.join(c.dir, "absent.ts") }); await c.joined(p, 2); assert(!p.out.includes("QUICK")); c.clear(); }
@@ -170,7 +180,7 @@ const legs: [string, () => Promise<void>][] = [
   ["queued TERM", queuedSignal], ["holding TERM", () => holdingSignal("SIGTERM", 143)], ["holding INT", () => holdingSignal("SIGINT", 130)],
   ["holding HUP", () => holdingSignal("SIGHUP", 129)], ["holding QUIT", () => holdingSignal("SIGQUIT", 131)],
   ["killed supervisor retains live suite ownership", killedSupervisor],
-  ["missing helper refusal", unavailable],
+  ["relocated library requires its companion", relocatedLibrary], ["missing helper refusal", unavailable],
 ];
 let failures = 0;
 for (const [name, run] of legs) {
