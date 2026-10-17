@@ -1,0 +1,53 @@
+{
+  "commit": "6ab625e362d5ba6d796c3ea618d5bcb823869bfb",
+  "records": [
+    {
+      "name": "clean",
+      "status": 0,
+      "stdout": "{\n  \"modified\": [],\n  \"localOnly\": [],\n  \"missing\": [],\n  \"aheadBy\": 0,\n  \"comparedAgainst\": \"6ab625e362d5ba6d796c3ea618d5bcb823869bfb\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "name": "drift",
+      "status": 1,
+      "stdout": "{\n  \"modified\": [\n    \"seats/a.sh\",\n    \"seats/\\u00e9\\ud83d\\ude00.sh\"\n  ],\n  \"localOnly\": [\n    \"seats/local \\\"q\\\".sh\"\n  ],\n  \"missing\": [\n    \"runbooks/help.md\"\n  ],\n  \"aheadBy\": 0,\n  \"comparedAgainst\": \"6ab625e362d5ba6d796c3ea618d5bcb823869bfb\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "name": "ahead",
+      "status": 1,
+      "stdout": "{\n  \"modified\": [\n    \"seats/a.sh\",\n    \"seats/\\u00e9\\ud83d\\ude00.sh\"\n  ],\n  \"localOnly\": [\n    \"seats/local \\\"q\\\".sh\"\n  ],\n  \"missing\": [\n    \"runbooks/help.md\"\n  ],\n  \"aheadBy\": 1,\n  \"comparedAgainst\": \"6ab625e362d5ba6d796c3ea618d5bcb823869bfb\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "name": "null-ahead",
+      "status": 1,
+      "stdout": "{\n  \"modified\": [\n    \"seats/a.sh\",\n    \"seats/\\u00e9\\ud83d\\ude00.sh\"\n  ],\n  \"localOnly\": [\n    \"seats/local \\\"q\\\".sh\"\n  ],\n  \"missing\": [\n    \"runbooks/help.md\"\n  ],\n  \"aheadBy\": null,\n  \"comparedAgainst\": \"6ab625e362d5ba6d796c3ea618d5bcb823869bfb\"\n}\n",
+      "stderr": ""
+    },
+    {
+      "name": "missing-source",
+      "status": 3,
+      "stdout": "{\"error\":\"missing wheelhouse/.template-source\",\"modified\":[],\"localOnly\":[],\"missing\":[],\"aheadBy\":null,\"comparedAgainst\":null}\n",
+      "stderr": ""
+    },
+    {
+      "name": "unicode-error",
+      "status": 3,
+      "stdout": "{\"error\":\"cannot fetch \\u00e9\\ud83d\\ude00 from source\",\"modified\":[],\"localOnly\":[],\"missing\":[],\"aheadBy\":null,\"comparedAgainst\":null}\n",
+      "stderr": ""
+    },
+    {
+      "name": "scalar",
+      "input": "quote \" slash \\ tab\t CR\r LF\n é😀\n\n",
+      "status": 0,
+      "stdout": "\"quote \\\" slash \\\\ tab\\t CR\\r LF\\n \\u00e9\\ud83d\\ude00\"\n",
+      "stderr": ""
+    }
+  ],
+  "capture": {
+    "source": "367725c:seats/template-drift.sh",
+    "command": "node capture-runtime.mjs <original script> <owned root>",
+    "configuration": "local Git fixture, core.quotePath=false; all stdout/stderr/status captured before replacement"
+  }
+}

@@ -68,26 +68,22 @@ done
 LIVE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.keys(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).length)}catch{console.log(0)}' "$PROJ/seats/staffing.json")
 STATE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$PROJ/seats/state.json")
 if [ "$LIVE_COUNT" = 3 ] && [ "$STATE_COUNT" = 3 ] && grep -q 'decision=add-worker' "$PROJ/seats/logs/staffing.log"; then pass "herald staffing clock grows three live workers without commander action"; else fail "staffing clock did not grow workers live=$LIVE_COUNT state=$STATE_COUNT log=$(cat "$PROJ/seats/logs/staffing.log" 2>/dev/null) herald=$(cat "$FIX/herald.err" 2>/dev/null)"; fi
-if python3 - "$FIX/env.jsonl" "$PROJ/seats/state.json" "$PROJ/seats/staffing.json" "$PROJ/seats/pool.json" <<'PY'
-import json, os, subprocess, sys
-rows=[json.loads(l) for l in open(sys.argv[1])]
-by_pid={int(r['pid']):r for r in rows}
-state=json.load(open(sys.argv[2]))['seats']
-staff=json.load(open(sys.argv[3]))['seats']
-pool=json.load(open(sys.argv[4]))['entries']
-checked=[]
-for seat in sorted(k for k in staff if k.startswith('worker-')):
-    entry=staff[seat]['entry']; pid=int(state[seat]['pid']); expected=os.path.realpath(os.path.expanduser(pool[entry]['account']['dir']))
-    row=by_pid.get(pid)
-    assert row, f'missing env row for pid {pid} seat {seat}'
-    actual=os.path.realpath(os.path.expanduser(row['PI_CODING_AGENT_DIR']))
-    assert actual == expected, f'{seat} pid {pid} account {actual} != {expected}'
-    lsof=subprocess.run(['lsof','-Fn','-p',str(pid)], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    assert lsof.returncode == 0 and f'n{state[seat]["fifo"]}' in lsof.stdout, f'{seat} pid {pid} does not hold fifo {state[seat]["fifo"]}'
-    checked.append(f'{seat} pid={pid} entry={entry} dir={actual}')
-assert len(checked)==3, checked
-print('\n'.join(checked))
-PY
+if bun - "$FIX/env.jsonl" "$PROJ/seats/state.json" "$PROJ/seats/staffing.json" "$PROJ/seats/pool.json" <<'JS'
+const fs=(await import('node:fs')).default,path=(await import('node:path')).default,assert=(await import('node:assert/strict')).default,{spawnSync}=(await import('node:child_process')).default;
+const [rowsFile,stateFile,staffFile,poolFile]=process.argv.slice(2),read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
+const rows=fs.readFileSync(rowsFile,'utf8').split('\n').filter(Boolean).map(JSON.parse);
+const byPid=new Map(rows.map(r=>[Number(r.pid),r])),state=read(stateFile).seats,staff=read(staffFile).seats,pool=read(poolFile).entries;
+const directory=p=>fs.realpathSync(p.startsWith('~/')?path.join(process.env.HOME,p.slice(2)):p),checked=[];
+for(const seat of Object.keys(staff).filter(s=>s.startsWith('worker-')).sort()) {
+ const entry=staff[seat].entry,pid=Number(state[seat].pid),expected=directory(pool[entry].account.dir),row=byPid.get(pid);
+ assert.ok(row,'missing env row for pid '+pid+' seat '+seat);
+ const actual=directory(row.PI_CODING_AGENT_DIR); assert.equal(actual,expected,seat+' pid '+pid+' account');
+ const opened=spawnSync('lsof',['-Fn','-p',String(pid)],{encoding:'utf8'});
+ assert.ok(opened.status===0&&opened.stdout.includes('n'+state[seat].fifo),seat+' pid '+pid+' does not hold fifo '+state[seat].fifo+'; '+opened.stderr);
+ checked.push(seat+' pid='+pid+' entry='+entry+' dir='+actual);
+}
+assert.equal(checked.length,3); console.log(checked.join('\n'));
+JS
 then pass "live harness processes use their pool entry dirs"; else fail "process/entry table failed: env=$(cat "$FIX/env.jsonl" 2>/dev/null) state=$(cat "$PROJ/seats/state.json" 2>/dev/null)"; fi
 if [ "${WHEELHOUSE_SKIP_REAL_PI:-}" = 1 ]; then
   skip "real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1"
@@ -137,12 +133,12 @@ if grep -q '^staffing: next check in ' "$FIX/status.out"; then pass "herald --st
 # growth precondition does NOT happen. If this passes with growth, the suite no
 # longer proves herald is what launches staffing.
 CAN="$FIX/canary-herald"; cp -R "$PROJ" "$CAN"; rm -f "$CAN/seats/staffing.json" "$CAN/seats/state.json"; rm -rf "$CAN/.wheelhouse-worktrees"; mkdir -p "$CAN/.wheelhouse-worktrees"
-python3 - "$CAN/seats/herald.ts" <<'PY'
-from pathlib import Path
-p=Path(__import__('sys').argv[1]); s=p.read_text()
-s=s.replace('const launched = launchDetached("staffing", ["bun", "seats/staffing.ts", "check"], 0, STAFFING_OUT_LOG);', 'const launched = false; // canary disables real staffing launch')
-p.write_text(s)
-PY
+bun - "$CAN/seats/herald.ts" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8');
+const needle='const launched = launchDetached("staffing", ["bun", "seats/staffing.ts", "check"], 0, STAFFING_OUT_LOG);';
+if(s.split(needle).length!==2) throw new Error('staffing launch canary source changed');
+fs.writeFileSync(p,s.replace(needle,'const launched = false; // canary disables real staffing launch'));
+JS
 (cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" OPENAI_API_KEY=fixture-key LIVE_ENV_LOG="$FIX/canary-env.jsonl" WHEELHOUSE_CLEANUP=0 WHEELHOUSE_HERALD_ROOT="$CAN" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_STAFFING_INTERVAL_MS=50 bun seats/herald.ts) > "$FIX/canary-herald.out" 2> "$FIX/canary-herald.err" & CAN_PID=$!
 for _ in $(seq 1 20); do [ -f "$CAN/seats/state.json" ] && break; sleep 0.1; done
 kill "$CAN_PID" 2>/dev/null || true

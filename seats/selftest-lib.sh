@@ -5,6 +5,10 @@
 
 SELFTEST_INVOCATION_PWD="${SELFTEST_INVOCATION_PWD:-$(pwd -P)}"
 
+# Fixtures must not borrow the identity of the seat/operator running the suite.
+# Identity-construction/refusal legs may still explicitly unset/override this.
+export BEADS_ACTOR=wheelhouse-selftest
+
 with_timeout() {
   seconds="${1:-}"
   shift || true

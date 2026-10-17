@@ -131,7 +131,7 @@ CONTRACT
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:/bin"
+RUN_PATH="$BIN:$PATH" # Keep inherited host-budget and instrumentation shims.
 
 phase "0. fixture cleanup catches cwd-only descendants"
 CWD_ONLY_DIR="$FIX/cwd-only-holder"
@@ -1248,20 +1248,14 @@ cat > "$DELTA_STREAM" <<'JSONL'
 {"type":"agent_end","messages":[]}
 {"id":"delta-response","type":"response","command":"prompt","success":true}
 JSONL
-python3 - "$RUN_PROJ/seats/adapter.ts" "$FIX/log-filter.js" <<'PY'
-import re,sys
-src,out=sys.argv[1:]
-s=open(src).read()
-m=re.search(r"const script = `([\s\S]*?)`;\n  return", s)
-if not m: raise SystemExit("could not extract logFilterShell script")
-open(out,"w").write(m.group(1))
-PY
+bun - "$RUN_PROJ/seats/adapter.ts" "$FIX/log-filter.js" <<'JS'
+const fs=(await import('node:fs')).default,[src,out]=process.argv.slice(2),s=fs.readFileSync(src,'utf8');
+const matches=[...s.matchAll(/const script = `([\s\S]*?)`;\n  return/g)];
+if(matches.length!==1) throw new Error('expected exactly one logFilterShell script');
+fs.writeFileSync(out,matches[0][1]);
+JS
 RC=0; node "$FIX/log-filter.js" < "$DELTA_STREAM" > "$DELTA_SLICE" 2> "$FIX/log-filter.err" || RC=$?
-DELTA_COUNT="$(python3 - "$DELTA_SLICE" <<'PY'
-import sys
-print(open(sys.argv[1]).read().count('_delta'))
-PY
-)"
+DELTA_COUNT="$(bun -e 'console.log((await import("node:fs")).default.readFileSync(process.argv[1],"utf8").split("_delta").length-1)' "$DELTA_SLICE")"
 if [ $RC -eq 0 ] && [ "$DELTA_COUNT" = 0 ] && grep -q '"type":"message_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_end"' "$DELTA_SLICE" && grep -q 'echo: DELTAS payload' "$DELTA_SLICE" && grep -q '"type":"response"' "$DELTA_SLICE"; then
   pass "message_update *_delta stream frames are dropped while settle, tool, and response events remain"
 else fail "delta filtering wrong (exit $RC delta_count=$DELTA_COUNT err=$(cat "$FIX/log-filter.err" 2>/dev/null) slice=$(cat "$DELTA_SLICE" 2>/dev/null))"; fi
@@ -1277,33 +1271,32 @@ if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'echo: Bead bead-x' 5 && gr
   pass "after live rotation, get_state answers and the writer's next event lands in the current log"
 else fail "dispatch after live rotation did not read responses from the current log (exit $RC): $OUT current=$(cat "$LOG" 2>/dev/null) archive_tail=$(tail -5 "$LOG.1" 2>/dev/null)"; fi
 
-phase "2a. wedged idle seat — status diagnoses, dispatch stop+resumes and retries once"
+phase "2a. live idle seat — no timeout-driven WEDGED verdict or relaunch"
 ANSWERING_PID_BEFORE="$(state_get pid)"
 run dispatch worker-1 bead-x "answering seat should not relaunch"
 if [ $RC -eq 0 ] && [ "$(state_get pid)" = "$ANSWERING_PID_BEFORE" ] && ! says "WEDGED"; then
   pass "answering idle seat dispatches without a relaunch"
 else fail "answering idle seat was relaunched or diagnosed wedged (exit $RC): before=$ANSWERING_PID_BEFORE after=$(state_get pid) out=$OUT"; fi
-WEDGED_AGENT_DIR="${ARGV%argv.json}"
-touch "$WEDGED_AGENT_DIR/ignore-get-state"
+LIVE_AGENT_DIR="${ARGV%argv.json}"
+LIVE_SESSION_BEFORE="$(state_get sessionFile)"
+touch "$LIVE_AGENT_DIR/ignore-get-state"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WEDGED_GET_STATE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && grep -q 'worker-1.*WEDGED' <<<"$OUT" && says 'remedy: bun seats/adapter.ts stop worker-1; bun seats/adapter.ts resume worker-1'; then
-  pass "status renders an idle get_state-timeout seat as WEDGED with remedy"
-else fail "status did not render WEDGED/remedy for ignored get_state (exit $RC): $OUT"; fi
-WEDGED_PID_BEFORE="$(state_get pid)"
-WEDGED_SESSION_BEFORE="$(state_get sessionFile)"
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "wedged seat self-heals" 2>&1)" || RC=$?
-WEDGED_PID_AFTER="$(state_get pid)"
-if [ $RC -eq 0 ] && says "WEDGED" && says "stopping and resuming" && says "retrying dispatch once" && [ "$WEDGED_PID_AFTER" != "$WEDGED_PID_BEFORE" ]; then
-  pass "dispatch self-heals an idle get_state timeout by stop+resume and retry"
-else fail "dispatch did not self-heal WEDGED seat (exit $RC): before=$WEDGED_PID_BEFORE after=$WEDGED_PID_AFTER out=$OUT"; fi
-if [ "$(state_get sessionFile)" = "$WEDGED_SESSION_BEFORE" ] && grep -Fq -- "\"--session\",\"$WEDGED_SESSION_BEFORE\"" "$ARGV" 2>/dev/null; then
-  pass "wedged self-heal keeps the recorded session"
-else fail "wedged self-heal did not keep session: before=$WEDGED_SESSION_BEFORE after=$(state_get sessionFile) argv=$(cat "$ARGV" 2>/dev/null)"; fi
-if grep -q 'wedged seat self-heals' "$LOG" 2>/dev/null; then
-  pass "wedged self-heal retry delivered the dispatch after resume"
-else fail "wedged self-heal did not deliver retried prompt: $(tail -20 "$LOG" 2>/dev/null)"; fi
+if [ $RC -eq 0 ] && grep -q 'worker-1.*RUNNING' <<<"$OUT" && ! says 'WEDGED'; then
+  pass "status reports a live silent responder RUNNING, not guessed WEDGED"
+else fail "status guessed a failure for a live silent responder (exit $RC): $OUT"; fi
+rm -f "$LIVE_AGENT_DIR/ignore-get-state"
+run dispatch worker-1 bead-x "live seat continues without self-heal"
+if [ $RC -eq 0 ] && [ "$(state_get pid)" = "$ANSWERING_PID_BEFORE" ] && ! says "WEDGED"; then
+  pass "dispatch keeps the live seat instead of timeout-driven stop+resume"
+else fail "dispatch restarted a live seat (exit $RC): $OUT"; fi
+if [ "$(state_get sessionFile)" = "$LIVE_SESSION_BEFORE" ]; then
+  pass "live dispatch keeps the recorded session"
+else fail "live dispatch changed session: before=$LIVE_SESSION_BEFORE after=$(state_get sessionFile)"; fi
+if grep -q 'live seat continues without self-heal' "$LOG" 2>/dev/null; then
+  pass "live dispatch still delivers the prompt"
+else fail "live dispatch did not deliver prompt: $(tail -20 "$LOG" 2>/dev/null)"; fi
 
-phase "2b. dispatch — late prompt ack after delivery is a warning, not stale state"
+phase "2b. dispatch — wait for late prompt acknowledgement, not an elapsed budget"
 SAVE_RUN_PROJ="$RUN_PROJ"; SAVE_STATE="$STATE"; SAVE_LOG="$LOG"; SAVE_ARGV="$ARGV"; SAVE_CWD_FILE="$CWD_FILE"
 LATE_PROJ="$FIX/late-ack-proj"
 build_proj "$LATE_PROJ" late-ack
@@ -1312,8 +1305,8 @@ RUN_PROJ="$LATE_PROJ"; STATE="$LATE_PROJ/seats/state.json"; LOG="$LATE_PROJ/seat
 # cross-bead dispatch no longer relaunches the seat, so they go on the spawn.
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_PROMPT_ACK_DELAY_MS=800 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)" || RC=$?
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_PROMPT_ACK_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack fixture" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && says "prompt delivered, ack late" && says "new-bead"; then pass "late prompt ack after delivery exits 0 with warning"
-else fail "late prompt ack dispatch did not warn/succeed (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "dispatched new-bead" && ! says "ack late"; then pass "late prompt acknowledgement is awaited and succeeds without timeout warning"
+else fail "late prompt acknowledgement was not awaited (exit $RC): $OUT"; fi
 if [ "$(state_get lastBead)" = "new-bead" ] && grep -q 'Bead new-bead' "$LOG" 2>/dev/null; then
   pass "late prompt ack leaves state.json on the new bead after log delivery"
 else fail "late prompt ack left stale state/log: lastBead=$(state_get lastBead) log=$(tail -5 "$LOG" 2>/dev/null)"; fi
@@ -1324,8 +1317,8 @@ build_proj "$NO_DELIVERY_PROJ" no-delivery
 RUN_PROJ="$NO_DELIVERY_PROJ"; STATE="$NO_DELIVERY_PROJ/seats/state.json"; LOG="$NO_DELIVERY_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-no-delivery/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-no-delivery/worker-1/cwd.txt"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_PROMPT_ACK_DELAY_MS=800 STUB_PROMPT_ACK_NO_DELIVERY=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 old-bead 2>&1)" || RC=$?
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_PROMPT_ACK_MS=200 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "late ack without delivery" 2>&1)" || RC=$?
-if [ $RC -ne 0 ] && says "timed out after 200ms waiting for prompt response" && ! says "prompt delivered, ack late"; then pass "late prompt ack without delivery remains a STOP"
-else fail "late prompt ack without delivery did not STOP (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "dispatched new-bead" && ! says "timed out"; then pass "late success acknowledgement without early delivery events is still authoritative"
+else fail "late success acknowledgement was guessed missing (exit $RC): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
 
 FIFO_TIMEOUT_PROJ="$FIX/fifo-timeout-proj"
@@ -1336,8 +1329,9 @@ if [ $RC -eq 0 ]; then pass "fifo timeout setup: spawn exits 0 with a live pause
 else fail "fifo timeout setup spawn failed (exit $RC): $OUT"; fi
 HUGE_PROMPT="$(node -e 'process.stdout.write("H".repeat(128 * 1024))')"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_FIFO_WRITE_MS=200 WHEELHOUSE_PROMPT_ACK_MS=1000 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 new-bead "$HUGE_PROMPT" 2>&1)" || RC=$?
-if [ $RC -ne 0 ] && says "prompt not delivered (partial FIFO write?)"; then pass "fifo write timeout names possible partial FIFO write"
-else fail "fifo write timeout did not report partial FIFO write (exit $RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "dispatched new-bead" && ! says "partial FIFO write"; then pass "live FIFO backpressure waits for drain instead of a write deadline"
+else fail "live FIFO backpressure was guessed failed (exit $RC): $OUT"; fi
+# Signal-driven partial-write/EOF failure is covered by adapter-rpc.selftest.sh.
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$SAVE_RUN_PROJ"; STATE="$SAVE_STATE"; LOG="$SAVE_LOG"; ARGV="$SAVE_ARGV"; CWD_FILE="$SAVE_CWD_FILE"
 
@@ -1406,25 +1400,21 @@ wait_for "$LOG" 'echo: Bead bead-y' 5 >/dev/null   # let the slow turn finish
 phase "4. state survives the adapter — every invocation is a fresh process"
 BIGLOG="$PROJ/seats/logs/worker-big.jsonl"
 cp "$STATE" "$FIX/state-before-big.json"
-python3 - <<PY
-from pathlib import Path
-p=Path('$BIGLOG'); p.parent.mkdir(parents=True, exist_ok=True)
-with p.open('wb') as f:
-    f.truncate(2*1024*1024*1024 + 1024)
-    f.write(b'{"type":"agent_end"}\n')
-PY
+bun - "$BIGLOG" <<'JS'
+import fs from 'node:fs'; import path from 'node:path';
+const p=process.argv[2]; fs.mkdirSync(path.dirname(p),{recursive:true});
+const fd=fs.openSync(p,'w'); try { fs.ftruncateSync(fd,2*1024*1024*1024+1024); fs.writeSync(fd,'{"type":"agent_end"}\n'); } finally { fs.closeSync(fd); }
+JS
 bun -e "import fs from 'node:fs'; const p='$STATE'; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.seats['worker-big']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BIGLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "worker-big" && says "last-event agent_end"; then pass "status reads last event from a synthetic >2GB sparse log without full-file parsing"
 else fail "status did not survive synthetic >2GB log (exit $RC): $OUT"; fi
 BADLOG="$PROJ/seats/logs/worker-badlog.jsonl"
-python3 - <<PY
-from pathlib import Path
-p=Path('$BADLOG'); p.parent.mkdir(parents=True, exist_ok=True)
-with p.open('wb') as f:
-    f.truncate(2*1024*1024*1024 + 1024)
-    f.write(b'not json at tail but process is alive\n')
-PY
+bun - "$BADLOG" <<'JS'
+import fs from 'node:fs'; import path from 'node:path';
+const p=process.argv[2]; fs.mkdirSync(path.dirname(p),{recursive:true});
+const fd=fs.openSync(p,'w'); try { fs.ftruncateSync(fd,2*1024*1024*1024+1024); fs.writeSync(fd,'not json at tail but process is alive\n'); } finally { fs.closeSync(fd); }
+JS
 bun -e "import fs from 'node:fs'; const p='$STATE'; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.seats['worker-badlog']={...s.seats['worker-1'], pid:Number('$(state_get pid)'), log:'$BADLOG', role:'worker'}; fs.writeFileSync(p, JSON.stringify(s,null,2)+'\\n')"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_ROTATE_BYTES=$((1024*1024*1024*3)) bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "worker-badlog" && says "RUNNING" && says "log too large to parse"; then pass "oversize unparsable log keeps live seat visible with log-too-large marker"
@@ -1598,18 +1588,18 @@ else fail "pruned cwd resume: refusal unexpectedly launched a session (session b
 mkdir -p "$MISSING_CWD"
 run stop worker-1
 
-phase "6c. readiness timeout cleanup, orphan status, and queued steer"
+phase "6c. readiness error cleanup, orphan status, and slow steer"
 CLEAN_PROJ="$FIX/cleanup-proj"
 build_proj "$CLEAN_PROJ" cleanup
 RUN_PROJ="$CLEAN_PROJ"; STATE="$CLEAN_PROJ/seats/state.json"; LOG="$CLEAN_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-cleanup/worker-1/argv.json"
 run spawn worker-1
 run stop worker-1 >/dev/null 2>&1
 env HOME="$HOME_FIX" STATE="$STATE" CWD="$CLEAN_PROJ" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"].cwd=process.env.CWD; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
-RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_STALL_ONCE=2000 STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)" || RC=$?
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_GET_STATE_FAIL_ONCE='fixture readiness refusal' STUB_IGNORE_SIGTERM=1 WHEELHOUSE_RPC_TIMEOUT_MS=300 WHEELHOUSE_SPAWN_TERM_GRACE_MS=200 bun "$RUN_PROJ/seats/adapter.ts" resume worker-1 2>&1)" || RC=$?
 CLEAN_PID="$(printf '%s\n' "$OUT" | sed -n 's/.*spawned pid \([0-9][0-9]*\).*/\1/p' | sed -n '1p')"
 if [ $RC -ne 0 ] && says "launch-only cleanup" && says "SIGKILL" && [ -n "$CLEAN_PID" ] && ! kill -0 "$CLEAN_PID" 2>/dev/null; then
-  pass "launch readiness timeout kills only the newly spawned unready pid before STOP"
-else fail "launch readiness timeout did not clean up spawned pid (exit $RC pid=$CLEAN_PID): $OUT"; fi
+  pass "launch readiness refusal kills only the newly spawned unready pid before STOP"
+else fail "launch readiness refusal did not clean up spawned pid (exit $RC pid=$CLEAN_PID): $OUT"; fi
 if [ -z "$(state_get pid)" ] && [ -n "$(state_get sessionFile)" ]; then
   pass "launch cleanup leaves the stopped pre-existing state record intact"
 else fail "launch cleanup changed the stopped state record (pid=$(state_get pid), session=$(state_get sessionFile))"; fi
@@ -1691,9 +1681,9 @@ run spawn worker-1
 printf '2000\n' > "$HOME_FIX/.pi-seats-steer-slow/worker-1/stall-next-get-state"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_RPC_TIMEOUT_MS=300 bun "$RUN_PROJ/seats/adapter.ts" steer worker-1 'queued from slow state' 2>&1)" || RC=$?
 COMMANDS="$HOME_FIX/.pi-seats-steer-slow/worker-1/commands.jsonl"
-if [ $RC -eq 0 ] && says "queued steer" && grep -q '"streamingBehavior":"steer"' "$COMMANDS" 2>/dev/null && grep -q 'queued from slow state' "$COMMANDS" 2>/dev/null; then
-  pass "slow get_state steer queues prompt with streamingBehavior=steer instead of losing text"
-else fail "slow get_state steer was not queued (exit $RC): $OUT commands=$(cat "$COMMANDS" 2>/dev/null)"; fi
+if [ $RC -eq 0 ] && says "steered worker-1 idle-started" && ! says "queued steer" && grep -q '"streamingBehavior":"steer"' "$COMMANDS" 2>/dev/null && grep -q 'queued from slow state' "$COMMANDS" 2>/dev/null; then
+  pass "slow get_state steer waits for the state reply, preserving steer text and behavior"
+else fail "slow get_state steer did not await its reply (exit $RC): $OUT commands=$(cat "$COMMANDS" 2>/dev/null)"; fi
 run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
