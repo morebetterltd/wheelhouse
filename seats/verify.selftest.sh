@@ -143,6 +143,7 @@ fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
+if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) fs.appendFileSync(process.env.WHEELHOUSE_TEST_CHILD_LEDGER, JSON.stringify({event:"model",pid:process.pid}) + "\n");
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the verifier), not rely on an operator
 // export reaching this one-shot process.
@@ -679,10 +680,11 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.se
 
 phase "pool reviewer routing — shared author subscription is skipped"
 cp "$PROJ/seats/seats.json" "$FIX/seats-json.before-pool"
-python3 - <<PY
-import json, pathlib
-p=pathlib.Path('$PROJ/seats/seats.json'); j=json.load(open(p)); j['seats'].pop('verifier', None); p.write_text(json.dumps(j, indent=2))
-PY
+bun - "$PROJ/seats/seats.json" <<'TS'
+import fs from "node:fs";
+const p=process.argv[2],j=JSON.parse(fs.readFileSync(p,"utf8"));
+delete j.seats.verifier; fs.writeFileSync(p,JSON.stringify(j,null,2));
+TS
 mkdir -p "$HOME_FIX/.pi-seats-proj/pool/rv1" "$HOME_FIX/.pi-seats-proj/pool/rv2"
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv1/auth.json"
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv2/auth.json"
@@ -781,6 +783,7 @@ JS
 chmod +x "$SWEEP_BIN/bd"
 SWEEP_SAVED_RUN_PATH="$RUN_PATH"; RUN_PATH="$SWEEP_BIN:$RUN_PATH"
 cp -f "$VERIFY_DIR/selftest-sweep.sh" "$SWEEP_PROJ/seats/selftest-sweep.sh"
+cp -f "$VERIFY_DIR/python-invocations.ts" "$SWEEP_PROJ/seats/python-invocations.ts" || exit 2
 cat > "$SWEEP_PROJ/seats/slowed.selftest.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -796,8 +799,8 @@ fi
 exit "${SWEEP_FIXTURE_RC:-0}"
 SH
 chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
-# Detached evidence runs only committed files: include the runner companion.
-git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/slowed.selftest.sh
+# Detached evidence runs only committed files: include both runner companions.
+git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/slowed.selftest.sh
 git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
@@ -824,11 +827,8 @@ if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEE
 cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
 # Hold H4 until the dispatcher log proves it waited, before verifier readiness.
 # The controller then releases the fixture holder. No elapsed-time comparison.
-HOLDER_RELEASE="$FIX/sweep-holder.release"
-bash -c 'printf "pid=%s\n" "$$" > "$1.new"; mv -f "$1.new" "$1"; while [ ! -f "$2" ]; do sleep 0.01; done; rm -f "$1"' _ "$SWEEP_LOCK" "$HOLDER_RELEASE" & HOLDER=$!
-while [ ! -f "$SWEEP_LOCK" ]; do sleep 0.01; done
-WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLDER_RELEASE="$HOLDER_RELEASE" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
-wait "$HOLDER"
+# The readiness driver owns AND joins its H4 holder, including early-exit paths.
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLD_H4=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
 SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
 SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
@@ -837,6 +837,11 @@ else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$S
 if [ -f "$WATCHDOG_DIR/holder-wait-observed" ] && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ -f "$WATCHDOG_DIR/output" ]; then
   pass "sweep evidence waits for H4 and fixture readiness without a wall-clock verdict"
 else fail "sweep/readiness handshake was not observed"; fi
+# The readiness regression runs this real suite through its killed fixture leg.
+if [ "${WHEELHOUSE_VERIFY_EXIT_BEFORE_READY_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || { printf 'verify.selftest: FAIL (%s failures in early-exit subset)\n' "$FAILED"; exit 1; }
+  printf 'verify.selftest: PASS (early-exit subset)\n'; exit 0
+fi
 for NO_OUTPUT_MODE in eof silent; do
   WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_EMIT_NOTHING="$NO_OUTPUT_MODE" run_sweep_prompt_check "$SWEEP_BD_SHOW" "bead-sweep-no-output-$NO_OUTPUT_MODE" fleet/bead-1 worker-1
   if [ "$RC" = 1 ] && { says 'verifier emitted no VERDICT:' || says 'first-output deadline'; } && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ ! -e "$WATCHDOG_DIR/output" ]; then
@@ -1319,7 +1324,7 @@ VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 phase "1c. verifier account.authRoute=env — exported provider key is identity"
 ENV_PROJ="$FIX/env-proj"
 build_proj "$ENV_PROJ" env "$VERIFY"
-bun -e "const fs=require('fs'); const p='$ENV_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.account.authRoute='env'; fs.rmSync('$HOME_FIX/.pi-seats-env/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$ENV_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.account.authRoute='env'; fs.rmSync('$HOME_FIX/.pi-seats-env/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
 RUN_PROJ="$ENV_PROJ"; VARGV="$HOME_FIX/.pi-seats-env/verifier/argv.json"; VDIR="$ENV_PROJ/seats/verdicts"
 cat > "$REPLY" <<'EOF'
 Env-route verifier checked.
@@ -1364,7 +1369,7 @@ Mixed harness verifier checked.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
-bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 printf '{"oauthAccount":{"email":"verifier@example.test","accessToken":"fixture-token"}}\n' > "$HOME_FIX/.pi-seats-mixedv/verifier/.claude.json"
 RUN_PROJ="$MIX_PROJ"; VDIR="$MIX_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
 run bead-1 fleet/bead-1 worker-1
@@ -1395,11 +1400,11 @@ Mixed harness verifier checked.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
-bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const args = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const flagAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 && /^--/.test(args[i+2] ?? ""); };
   if (args.at(-1).startsWith("--")) process.exit(1);
@@ -1409,7 +1414,7 @@ if [ $RC -eq 0 ] && bun -e '
 ' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
   pass "claude-code verifier one-shot passes tool lists before --model with a following flag and prompt last"
 else fail "claude-code verifier one-shot tool-list argv order wrong (rc=$RC argv=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null))"; fi
-bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
@@ -1462,7 +1467,7 @@ rm -f "$VINVOKED"
 # A roster whose verifier points at the AUTHOR's directory:
 cp "$PROJ/seats/seats.json" "$FIX/seats.json.good"
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats.verifier.account.dir = j.seats["worker-1"].account.dir;
@@ -1569,7 +1574,7 @@ if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPRO
 else fail "final-message conflicting verdicts did not STOP (exit $RC): $OUT"; fi
 set_verifier_harness() {
   env HOME="$HOME_FIX" bun -e '
-    const fs = require("fs");
+    import fs from "node:fs";
     const file = process.argv[1], harness = process.argv[2], dir = process.argv[3];
     const j = JSON.parse(fs.readFileSync(file, "utf8"));
     if (harness === "pi") delete j.seats.verifier.harness;
@@ -1591,20 +1596,18 @@ check_verifier_fixture_manifest() {
   if [ -f "$root/contracts/BENCH.md" ]; then bench="$root/contracts/BENCH.md";
   elif [ -f "$root/wheelhouse/crew/BENCH.md" ]; then bench="$root/wheelhouse/crew/BENCH.md";
   else fail "verifier fixture manifest check could not find BENCH.md"; return; fi
-  if python3 - "$root" "$bench" <<'PY'
-import pathlib, re, sys
-root = pathlib.Path(sys.argv[1]); bench = pathlib.Path(sys.argv[2])
-fixture_dir = root / "seats" / "fixtures" / "verify-real"
-actual = sorted(str(p.relative_to(root)) for p in fixture_dir.glob("*.jsonl"))
-text = re.sub(r"<!--.*?-->", "", bench.read_text(), flags=re.S)
-listed = sorted(set(re.findall(r"fixture:\s*(seats/fixtures/verify-real/[^;\s]+\.jsonl)", text)))
-missing_from_bench = sorted(set(actual) - set(listed))
-missing_from_disk = sorted(set(listed) - set(actual))
-if missing_from_bench or missing_from_disk:
-    print("missing_from_bench=" + ",".join(missing_from_bench))
-    print("missing_from_disk=" + ",".join(missing_from_disk))
-    raise SystemExit(1)
-PY
+  if bun - "$root" "$bench" <<'TS'
+import fs from "node:fs";
+import path from "node:path";
+const [root,bench]=process.argv.slice(2),prefix="seats/fixtures/verify-real/";
+const actual=fs.readdirSync(path.join(root,prefix)).filter(p=>p.endsWith(".jsonl")).map(p=>prefix+p).sort();
+const text=fs.readFileSync(bench,"utf8").replace(/<!--[\s\S]*?-->/g,"");
+const listed=[...new Set([...text.matchAll(/fixture:\s*(seats\/fixtures\/verify-real\/[^;\s]+\.jsonl)/g)].map(m=>m[1]))].sort();
+const missing_from_bench=actual.filter(p=>!listed.includes(p)),missing_from_disk=listed.filter(p=>!actual.includes(p));
+if(missing_from_bench.length || missing_from_disk.length){
+ console.log("missing_from_bench="+missing_from_bench.join(",")); console.log("missing_from_disk="+missing_from_disk.join(",")); process.exitCode=1;
+}
+TS
   then pass "BENCH.md verifier wire-shape list matches real fixture files"; else fail "BENCH.md verifier wire-shape list and fixture files diverge"; fi
 }
 check_verifier_fixture_manifest
@@ -1616,15 +1619,15 @@ COMMENTED_BENCH="$FIX/commented-BENCH.md"
   done
   printf -- '-->\n'
 } > "$COMMENTED_BENCH"
-if python3 - "$VERIFY_DIR/.." "$COMMENTED_BENCH" <<'PY'
-import pathlib, re, sys
-root = pathlib.Path(sys.argv[1]); bench = pathlib.Path(sys.argv[2])
-fixture_dir = root / "seats" / "fixtures" / "verify-real"
-actual = sorted(str(p.relative_to(root)) for p in fixture_dir.glob("*.jsonl"))
-text = re.sub(r"<!--.*?-->", "", bench.read_text(), flags=re.S)
-listed = sorted(set(re.findall(r"fixture:\s*(seats/fixtures/verify-real/[^;\s]+\.jsonl)", text)))
-raise SystemExit(0 if not (set(actual) - set(listed)) else 1)
-PY
+if bun - "$VERIFY_DIR/.." "$COMMENTED_BENCH" <<'TS'
+import fs from "node:fs";
+import path from "node:path";
+const [root,bench]=process.argv.slice(2),prefix="seats/fixtures/verify-real/";
+const actual=fs.readdirSync(path.join(root,prefix)).filter(p=>p.endsWith(".jsonl")).map(p=>prefix+p);
+const text=fs.readFileSync(bench,"utf8").replace(/<!--[\s\S]*?-->/g,"");
+const listed=new Set([...text.matchAll(/fixture:\s*(seats\/fixtures\/verify-real\/[^;\s]+\.jsonl)/g)].map(m=>m[1]));
+if(actual.some(p=>!listed.has(p)))process.exitCode=1;
+TS
 then fail "BENCH.md verifier wire-shape manifest check accepted a commented-out fixture list"; else pass "BENCH.md verifier wire-shape manifest check rejects commented-out fixture lists"; fi
 set_verifier_harness pi
 run_stream "$REAL_FIXTURES_DIR/pi-v3-message-end.jsonl" bead-5-recorded-pi fleet/bead-1 worker-1
@@ -1682,7 +1685,7 @@ if ! says "account label:"; then
   pass "a verifier roster without account.label still reaches the provider-error path"
 else fail "unlabeled verifier unexpectedly printed an account.label: $OUT"; fi
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats.verifier.account.label = "fixture-verifier-account";
@@ -1694,7 +1697,7 @@ if [ $RC -eq 1 ] && says "pi exited 3" && says "account label: fixture-verifier-
   pass "provider-error stderr path includes verifier account.label when present"
 else fail "provider-error path did not include verifier account.label (exit $RC): $OUT"; fi
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   delete j.seats.verifier.account.label;
@@ -1722,7 +1725,7 @@ else fail "identity-less verifier not refused (exit $RC): $OUT"; fi
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-alpha/verifier/auth.json"
 CLAUDE_ID_PROJ="$FIX/claude-identity-stop"
 build_proj "$CLAUDE_ID_PROJ" claudeid "$VERIFY"
-bun -e "const fs=require('fs'); const p='$CLAUDE_ID_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.account.authRoute='oauth'; fs.rmSync('$HOME_FIX/.pi-seats-claudeid/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$CLAUDE_ID_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.account.authRoute='oauth'; fs.rmSync('$HOME_FIX/.pi-seats-claudeid/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
 RUN_PROJ="$CLAUDE_ID_PROJ"; VDIR="$CLAUDE_ID_PROJ/seats/verdicts"
 RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-claude-id fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && says "no identity" && says "CLAUDE_CONFIG_DIR" && says "claude" && ! says "PI_CODING_AGENT_DIR"; then
@@ -1877,7 +1880,7 @@ if cmp -s "$VERIFY" "$FIX/can-a-verify.ts"; then
 else
   build_proj "$CAN_A" can-a "$FIX/can-a-verify.ts"
   env HOME="$HOME_FIX" bun -e '
-    const fs = require("fs");
+    import fs from "node:fs";
     const f = process.argv[1];
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
     j.seats.verifier.account.dir = j.seats["worker-1"].account.dir;
@@ -2143,7 +2146,7 @@ EOF
   # (always together — see the roster gotcha in README.md):
   #   WHEELHOUSE_REAL_PI_PROVIDER=... WHEELHOUSE_REAL_PI_MODEL=...
   env HOME="$RHOME" bun -e '
-    const fs = require("fs");
+    import fs from "node:fs";
     const f = process.argv[1];
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
     const p = process.env.WHEELHOUSE_REAL_PI_PROVIDER, m = process.env.WHEELHOUSE_REAL_PI_MODEL;

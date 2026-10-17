@@ -102,16 +102,8 @@ await test("live PID is never stolen by acquisition or an old owner's release", 
 
 await test("failed PID write never publishes an empty state.lock or leaks a candidate", () => {
   reset(); const before = fs.readFileSync(state, "utf8");
-  const code = `
-    const fs = require('node:fs'), original = fs.writeFileSync;
-    fs.writeFileSync = function(fd, ...args) {
-      if (typeof fd === 'number') throw Error('fixture PID write refusal');
-      return original.call(this, fd, ...args);
-    };
-    process.argv = [process.execPath, ${JSON.stringify(adapter)}, 'stop', 'worker-1'];
-    await import(${JSON.stringify(adapter)});
-  `;
-  const r = spawnSync(process.execPath, ["-e", code], { env, encoding: "utf8", timeout: 10_000 });
+  const helper = path.join(import.meta.dir, "pid-write-fault.cjs");
+  const r = spawnSync(process.execPath, [helper, "adapter", adapter], { env, encoding: "utf8", timeout: 10_000 });
   assert.equal(r.status, 1); assert.match(r.stderr, /fixture PID write refusal/);
   assert.equal(fs.existsSync(lock), false, "PID write failure left an empty public state.lock");
   assert.equal(fs.readdirSync(seats).some(n => n.startsWith("state.lock.tmp.")), false);

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { constants } from "node:os";
 import { randomUUID } from "node:crypto";
 
 type Timer = { dir: string; kind: string; callback: () => void; active: boolean };
@@ -49,6 +50,11 @@ export function instrument(source: string): string {
   return `${header}import {arm as fixtureArm,cancel as fixtureCancel,stop as fixtureStop,output as fixtureOutput} from ${JSON.stringify(import.meta.path)};\n${source.slice(header.length)}`;
 }
 
+export function ledger(event: Record<string, unknown>): void {
+  const file = process.env.WHEELHOUSE_TEST_CHILD_LEDGER;
+  if (file) fs.appendFileSync(file, JSON.stringify(event) + "\n");
+}
+
 export async function until(test: () => boolean, exited: () => boolean, label: string): Promise<void> {
   while (!test()) {
     if (exited()) throw new Error(`fixture exited before ${label}`);
@@ -76,41 +82,83 @@ export async function settle<T>(dir: string, result: Promise<T>, exited: () => b
   return result;
 }
 
+type Exit = { code: number | null; signal: NodeJS.Signals | null; error?: string };
+function own(name: string, label: string, bin: string, args: string[], env: NodeJS.ProcessEnv) {
+  const child = spawn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+  child.stdout!.pipe(process.stdout, { end: false }); child.stderr!.pipe(process.stderr, { end: false });
+  let exit: Exit | undefined;
+  ledger({ event: "spawn", name, fixture: label, pid: child.pid });
+  const closed = new Promise<Exit>(resolve => {
+    // Exit, not stdio EOF, is the readiness terminal event. EOF is joined below.
+    child.once("exit", (code, signal) => { exit = { code, signal }; ledger({ event: "exit", name, fixture: label, pid: child.pid, ...exit }); });
+    child.once("error", error => { exit = { code: 1, signal: null, error: error.message }; });
+    child.once("close", (code, signal) => { exit ??= { code, signal }; resolve(exit); });
+  });
+  return { child, closed, exited: () => exit !== undefined, status: () => exit };
+}
+function status(exit: Exit): number { return exit.code ?? (exit.signal ? 128 + constants.signals[exit.signal] : 1); }
+
 async function drive(): Promise<void> {
   const [sourceFile, dir, mode, ...args] = process.argv.slice(2);
   if (!sourceFile || !dir || !["ready", "silent"].includes(mode)) throw new Error("usage: verify-readiness.ts <verify.ts> <owned-state-dir> <ready|silent> <verify args...>");
   if (!fs.statSync(dir).isDirectory() || fs.readdirSync(dir).length) throw new Error("fixture clock needs a fresh state directory");
   const copy = path.join(path.dirname(sourceFile), `.verify-readiness-${randomUUID()}.ts`);
-  fs.writeFileSync(copy, instrument(fs.readFileSync(sourceFile, "utf8")), { flag: "wx" });
-  let ended = false;
-  const child = spawn("bun", [copy, ...args], { env: { ...process.env, WHEELHOUSE_TEST_WATCHDOG_DIR: dir }, stdio: ["ignore", "pipe", "pipe"] });
-  child.stdout!.pipe(process.stdout); child.stderr!.pipe(process.stderr);
-  const result = new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => { ended = true; resolve(code ?? (signal ? 143 : 1)); });
-  });
-  const terminate = () => { child.kill("SIGTERM"); };
+  const label = args[0] || path.basename(dir);
+  let source = fs.readFileSync(sourceFile, "utf8");
+  if (process.env.WHEELHOUSE_TEST_KILL_FIXTURE === label) {
+    const at = source.startsWith("#!") ? source.indexOf("\n") + 1 : 0;
+    source = source.slice(0, at) + 'process.kill(process.pid, "SIGKILL");\n' + source.slice(at);
+  }
+  fs.writeFileSync(copy, instrument(source), { flag: "wx" });
+  let fixture: ReturnType<typeof own> | undefined, holder: ReturnType<typeof own> | undefined;
+  const holderRelease = path.join(dir, "holder.release");
+  let cancelled = false;
+  const terminate = () => { cancelled = true; fixture?.child.kill("SIGTERM"); };
   process.once("SIGTERM", terminate); process.once("SIGINT", terminate);
   try {
     // A held sweep is released only after the dispatcher has actually waited,
     // while the verifier still cannot have signalled ready. No sleep duration.
-    const holderRelease = process.env.STUB_TEST_HOLDER_RELEASE;
-    if (holderRelease) {
+    if (process.env.STUB_TEST_HOLD_H4 === "1") {
+      const lock = process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK;
+      if (!lock) throw new Error("fixture H4 holder needs its private lock path");
+      holder = own("holder", label, "bash", ["-c", 'printf "pid=%s\\n" "$$" > "$1.new"; mv -f "$1.new" "$1"; while [ ! -f "$2" ]; do sleep 0.01; done; rm -f "$1"', "_", lock, holderRelease], process.env);
+      await until(() => fs.existsSync(lock), () => holder!.exited() || cancelled, "H4 holder publication");
+    }
+    fixture = own("fixture", label, "bun", [copy, ...args], { ...process.env, WHEELHOUSE_TEST_WATCHDOG_DIR: dir });
+    const child = fixture.child, ended = () => fixture!.exited() || cancelled;
+    const result = fixture.closed.then(status);
+    if (holder) {
       const logs = path.join(path.dirname(sourceFile), "verdicts", "sweeps");
-      await until(() => fs.existsSync(logs) && fs.readdirSync(logs).filter(name => name.includes(`.${child.pid}.`)).some(name => fs.readFileSync(path.join(logs, name), "utf8").includes("waiting for host-wide lock")), () => ended, "dispatcher H4 wait");
+      await until(() => fs.existsSync(logs) && fs.readdirSync(logs).filter(name => name.includes(`.${child.pid}.`)).some(name => fs.readFileSync(path.join(logs, name), "utf8").includes("waiting for host-wide lock")), () => ended() || holder!.exited(), "dispatcher H4 wait");
       if (exists(dir, "ready")) throw new Error("verifier started before held sweep was released");
       record(dir, "holder-wait-observed");
       fs.writeFileSync(holderRelease, "release\n");
     }
-    await ready(dir, () => ended);
-    if (mode === "silent") await expireSilent(dir, () => ended);
-    const rc = mode === "ready" ? await settle(dir, result, () => ended) : await result;
+    await ready(dir, ended);
+    if (mode === "silent") await expireSilent(dir, ended);
+    const rc = mode === "ready" ? await settle(dir, result, ended) : await result;
     record(dir, "result.json", JSON.stringify({ rc, ready: exists(dir, "readiness-observed"), output: exists(dir, "output"), stop: exists(dir, "stop") ? fs.readFileSync(path.join(dir, "stop"), "utf8") : null }));
     process.exitCode = rc;
+  } catch (error: any) {
+    const fixtureExit = fixture?.status(), holderExit = holder?.status();
+    const exit = fixtureExit ?? holderExit;
+    const detail = exit ? `exit=${status(exit)} signal=${exit.signal ?? "none"}${exit.error ? ` error=${exit.error}` : ""}` : "controller error";
+    ledger({ event: "fixture-failure", fixture: label, ready: exists(dir, "ready"), armed: exists(dir, "armed-first"), ...exit });
+    throw new Error(`${!fixtureExit && holderExit ? "H4 holder" : "fixture"} ${label}: ${error.message}; ${detail}`);
   } finally {
-    if (!ended) { terminate(); await result; }
+    // Every file waiter is owned here, not by a caller blocked in wait(1).
+    release(dir);
+    if (holder) {
+      fs.writeFileSync(holderRelease, "release\n");
+      ledger({ event: "holder-cleanup", fixture: label, pid: holder.child.pid, release: holderRelease, released: fs.existsSync(holderRelease) });
+      await holder.closed;
+    }
+    if (fixture) {
+      if (!fixture.exited()) fixture.child.kill("SIGTERM");
+      await fixture.closed; // Both stdout/stderr EOF, including inherited pipes.
+    }
     process.removeListener("SIGTERM", terminate); process.removeListener("SIGINT", terminate);
     fs.unlinkSync(copy); // Only the unique file this invocation created.
   }
 }
-if (import.meta.main) drive().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (import.meta.main) drive().catch(error => { console.error(`FAIL ${error.message}`); process.exitCode = 1; });

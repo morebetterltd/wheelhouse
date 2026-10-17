@@ -92,7 +92,7 @@ EOF
 RUN_PROJ=""
 run(){ RC=0; OUT="$(with_timeout 30 env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says(){ case "$OUT" in *"$1"*) return 0;; *) return 1;; esac; }
-state_get(){ env HOME="$HOME_FIX" bun -e "const s=require('$RUN_PROJ/seats/state.json');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
+state_get(){ env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$RUN_PROJ/seats/state.json','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
 wait_for(){ local file="$1" text="$2" i=0; while [ $i -lt 50 ]; do [ -f "$file" ] && grep -q "$text" "$file" && return 0; sleep 0.1; i=$((i+1)); done; return 1; }
 
 phase "1. all-idle stop-all stops every running rostered seat"
@@ -125,7 +125,7 @@ phase "2b. codex-harness seats use the shared stop path and do not abort later s
 PROJ3="$FIX/proj3"; build_proj "$PROJ3" gamma; RUN_PROJ="$PROJ3"
 run spawn worker-a; [ $RC -eq 0 ] || fail "codex setup spawn a failed: $OUT"
 run spawn worker-b; [ $RC -eq 0 ] || fail "codex setup spawn b failed: $OUT"
-env HOME="$HOME_FIX" PROJ="$PROJ3" bun -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); r.seats["worker-a"].harness="codex"; r.seats["worker-a"].provider="openai-codex"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+env HOME="$HOME_FIX" PROJ="$PROJ3" bun -e 'import fs from "node:fs"; const p=process.env.PROJ+"/seats/seats.json"; const r=JSON.parse(fs.readFileSync(p,"utf8")); r.seats["worker-a"].harness="codex"; r.seats["worker-a"].provider="openai-codex"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 run stop-all
 if [ $RC -eq 0 ] && says "worker-a stopped" && says "worker-b stopped"; then pass "stop-all stops codex-harness records through the shared stop path and continues to later pi seats"; else fail "stop-all did not stop codex and pi seats (rc=$RC): $OUT"; fi
 if [ -z "$(state_get worker-a pid)" ] && [ -z "$(state_get worker-b pid)" ]; then pass "codex-harness and pi records both have pid cleared"; else fail "codex/pi stop-all left pids in state"; fi

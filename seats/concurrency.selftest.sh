@@ -80,7 +80,16 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
+launch_diagnostics() {
+  [ -d "$HOME_FIX" ] || return 0
+  while IFS= read -r record; do
+    printf 'fixture launch record %s: ' "$record"; cat "$record"
+    local stderr_file="${record/stub-launch./stub-stderr.}"
+    printf 'fixture child stderr: '; cat "${stderr_file%.json}.log" 2>/dev/null || true
+  done < <(find "$HOME_FIX" -name 'stub-launch.*.json' -type f)
+}
 cleanup() {
+  [ "$FAILED" = 0 ] || launch_diagnostics
   selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
@@ -133,11 +142,16 @@ RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname
 #   - a prompt containing "WORKDIR:<path>" makes the stub touch
 #     <path>/touched-by-<bead-id> before finishing the turn — the on-disk
 #     footprint the worktree-isolation assertions read.
-cat > "$BIN/pi" <<STUB
+cp -f "$HERE/fixtures/concurrency-stub-supervisor.cjs" "$BIN/pi"
+cat > "$BIN/pi-stub.cjs" <<STUB
 #!/usr/bin/env node
 const fs = require("fs"), path = require("path"), crypto = require("crypto");
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
+if (process.env.WHEELHOUSE_CONCURRENCY_STUB_EXIT) {
+  process.stderr.write("fixture forced launch exit " + process.env.WHEELHOUSE_CONCURRENCY_STUB_EXIT + "\n");
+  process.exit(Number(process.env.WHEELHOUSE_CONCURRENCY_STUB_EXIT));
+}
 const args = process.argv.slice(2);
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
@@ -147,12 +161,16 @@ const sessionId = crypto.randomUUID();
 const sessionFile = path.join(sessDir, sessionId + ".jsonl");
 fs.writeFileSync(sessionFile, JSON.stringify({ type: "session-start" }) + "\n");
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+let held = false, streaming = false;
 function handle(cmd) {
   const id = cmd.id;
   switch (cmd.type) {
     case "get_state":
       out({ id, type: "response", command: "get_state", success: true,
-            data: { isStreaming: false, sessionFile, sessionId, messageCount: 0 } });
+            data: { isStreaming: streaming, sessionFile, sessionId, messageCount: 0 } });
+      break;
+    case "barrier_probe":
+      out({ id, type: "response", command: "barrier_probe", success: true, data: { held } });
       break;
     case "prompt": {
       if (/QUOTA/.test(cmd.message)) {
@@ -161,17 +179,39 @@ function handle(cmd) {
         break;
       }
       out({ id, type: "response", command: "prompt", success: true });
-      out({ type: "agent_start" });
       const bead = (cmd.message.match(/^Bead (\S+)/) || [])[1] || "unknown";
       const wd = (cmd.message.match(/WORKDIR:(\S+)/) || [])[1];
+      const barrier = (cmd.message.match(/BARRIER:(\S+)/) || [])[1];
+      let done = false, watcher;
       const finish = () => {
+        if (done) return;
+        done = true; held = false; streaming = false;
+        if (watcher) watcher.close();
         if (wd) fs.writeFileSync(path.join(wd, "touched-by-" + bead), bead + "\n");
         fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message }) + "\n");
         out({ type: "message_end", message: { role: "assistant",
               content: [{ type: "text", text: "echo: " + cmd.message }] } });
         out({ type: "agent_end", messages: [] });
+        if (barrier) fs.writeFileSync(path.join(barrier, bead + ".finished"), "finished\n");
       };
-      if (/SLOW/.test(cmd.message)) setTimeout(finish, 3000); else finish();
+      const start = () => {
+        streaming = true;
+        out({ type: "agent_start" });
+        if (!barrier) { finish(); return; }
+        held = true;
+        const released = () => { if (fs.existsSync(path.join(barrier, "release"))) finish(); };
+        watcher = fs.watch(barrier, released);
+        released();
+      };
+      if (barrier && process.env.WHEELHOUSE_CONCURRENCY_SERIAL_TURNS && bead === "bead-b") {
+        // Real serialization sabotage: B cannot start until A has finished.
+        let queued = true;
+        const unqueue = () => {
+          if (queued && fs.existsSync(path.join(barrier, "bead-a.finished"))) { queued = false; watcher.close(); start(); }
+        };
+        watcher = fs.watch(barrier, unqueue);
+        unqueue();
+      } else start();
       break;
     }
     default:
@@ -233,10 +273,13 @@ PROJ="$FIX/proj"
 build_proj "$PROJ" alpha
 RUN_PROJ="$PROJ"
 
-run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run() {
+  RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?
+  if [ "$RC" != 0 ] && [ "${1:-}" = spawn ]; then launch_diagnostics; fi
+}
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 state_get() {   # $1 = seat, $2 = field  (reads $RUN_PROJ's state.json)
-  env HOME="$HOME_FIX" bun -e "const s=require('$RUN_PROJ/seats/state.json');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"
+  env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$RUN_PROJ/seats/state.json','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"
 }
 wait_for() {   # $1 = file, $2 = substring, $3 = seconds
   local i=0 max=$((${3:-10} * 10))
@@ -251,8 +294,8 @@ LOG_A="$PROJ/seats/logs/worker-a.jsonl"
 LOG_B="$PROJ/seats/logs/worker-b.jsonl"
 
 # --- the two-seat exercise, parameterized so the canary can reuse it ---------
-# Spawns both seats of $RUN_PROJ, dispatches SLOW bead-a/bead-b back-to-back
-# (each naming its own worktree), asserts overlap, waits both turns out, and
+# Spawns both seats of $RUN_PROJ, dispatches barrier-held bead-a/bead-b
+# (each naming its own worktree), proves overlap before release, and
 # asserts log/worktree isolation. $1 = label. Each worker seat works in its
 # own adapter-made worktree, .wheelhouse-worktrees/<seat>, on fleet/<bead>.
 run_two_seat_exercise() {
@@ -271,17 +314,21 @@ run_two_seat_exercise() {
     pass "${label}: each seat has its OWN FIFO ($(basename "$fa"), $(basename "$fb"))"
   else fail "${label}: FIFOs missing or shared (a=$fa b=$fb)"; fi
 
-  # Both dispatches go out before either turn is waited on — that is the
-  # concurrency under test. SLOW keeps both turns in flight long enough to
-  # observe the overlap. The adapter roots each seat in its own seat
-  # worktree; the stub's WORKDIR marker names where to leave the proof
-  # footprint.
-  run dispatch worker-a bead-a "SLOW MARKER-ALPHA work bead-a in WORKDIR:$wta"
+  # Each accepted turn waits for OUR release file, never a guessed duration.
+  # Probe acknowledgements are ordered after prompts in each seat's FIFO.
+  local barrier="$RUN_PROJ/turn-barrier" barrier_rc=0
+  mkdir -p "$barrier"
+  rm -f "$barrier/release"
+  run dispatch worker-a bead-a "BARRIER:$barrier MARKER-ALPHA work bead-a in WORKDIR:$wta"
   [ $RC -eq 0 ] && pass "${label}: bead-a dispatched to worker-a" || fail "${label}: dispatch a exited ${RC}: $OUT"
-  run dispatch worker-b bead-b "SLOW MARKER-BRAVO work bead-b in WORKDIR:$wtb"
+  run dispatch worker-b bead-b "BARRIER:$barrier MARKER-BRAVO work bead-b in WORKDIR:$wtb"
   [ $RC -eq 0 ] && pass "${label}: bead-b dispatched to worker-b (before bead-a's turn ended)" || fail "${label}: dispatch b exited ${RC}: $OUT"
 
-  # Overlap: both pids alive, both logs mid-turn (agent_start, no agent_end).
+  "$NODE_BIN" "$HERE/fixtures/concurrency-barrier.cjs" "$RUN_PROJ" "$barrier" || barrier_rc=$?
+  if [ "$barrier_rc" = 0 ]; then pass "${label}: controller observed both held turns before release"
+  else fail "${label}: barrier did not prove concurrent turns"; fi
+
+  # Overlap remains held while these independent PID/log/status checks run.
   local pa pb
   pa="$(state_get worker-a pid)"; pb="$(state_get worker-b pid)"
   if kill -0 "$pa" 2>/dev/null && kill -0 "$pb" 2>/dev/null; then
@@ -296,6 +343,7 @@ run_two_seat_exercise() {
     pass "${label}: status shows both seats RUNNING"
   else fail "${label}: status does not show two RUNNING seats: $OUT"; fi
 
+  touch "$barrier/release"
   wait_for "$la" '"agent_end"' 15 && pass "${label}: worker-a's turn finished" || fail "${label}: no agent_end in worker-a's log"
   wait_for "$lb" '"agent_end"' 15 && pass "${label}: worker-b's turn finished" || fail "${label}: no agent_end in worker-b's log"
 
@@ -344,7 +392,7 @@ run_state_race() { # label delay-ms project
   wait "$PA"; RCA=$?
   wait "$PB"; RCB=$?
   if [ $RCA -eq 0 ] && [ $RCB -eq 0 ]; then pass "$label: concurrent spawns both exit 0"
-  else fail "$label: concurrent spawns failed (a=$RCA $(cat "$OUT_A") / b=$RCB $(cat "$OUT_B"))"; fi
+  else fail "$label: concurrent spawns failed (a=$RCA $(cat "$OUT_A") / b=$RCB $(cat "$OUT_B"))"; launch_diagnostics; fi
   if [ -n "$(state_get worker-a pid)" ] && [ -n "$(state_get worker-b pid)" ]; then
     pass "$label: state lock preserves both seat records in state.json"
   else fail "$label: one seat record was erased from state.json: $(cat "$RUN_PROJ/seats/state.json" 2>/dev/null)"; fi
@@ -417,6 +465,31 @@ else
   RUN_PROJ="$CAN_A" run stop worker-a > /dev/null 2>&1
   RUN_PROJ="$CAN_A" run stop worker-b > /dev/null 2>&1
 fi
+
+# Force B to queue behind A's completion, retaining healthy distinct seats.
+CAN_SERIAL="$FIX/can-serial"
+build_proj "$CAN_SERIAL" can-serial
+CANARY_FAILED_BEFORE=$FAILED
+RUN_PROJ="$CAN_SERIAL"
+WHEELHOUSE_CONCURRENCY_SERIAL_TURNS=1 run_two_seat_exercise "serialized canary" > "$FIX/serialized-canary.out" 2>&1
+if [ "$FAILED" -gt "$CANARY_FAILED_BEFORE" ] && grep -F 'barrier did not prove concurrent turns' "$FIX/serialized-canary.out" >/dev/null; then
+  FAILED=$CANARY_FAILED_BEFORE
+  pass 'canary: serialized turns fail the same barrier assertion'
+  printf 'BEGIN expected non-overlap failure evidence\n'; cat "$FIX/serialized-canary.out"; printf 'END expected non-overlap failure evidence\n'
+else
+  FAILED=$((CANARY_FAILED_BEFORE + 1))
+  fail 'canary: non-overlapping turns escaped the barrier assertion'
+fi
+
+# Record an actual native child exit and stderr before fixture cleanup.
+CAN_EXIT="$FIX/can-exit"
+build_proj "$CAN_EXIT" can-exit
+RUN_PROJ="$CAN_EXIT"
+WHEELHOUSE_CONCURRENCY_STUB_EXIT=23 run spawn worker-a
+EXIT_RECORD="$HOME_FIX/.pi-seats-can-exit/worker-a/stub-launch.json"
+if [ "$RC" != 0 ] && "$NODE_BIN" -e 'const fs=require("fs"),p=process.argv[1],r=JSON.parse(fs.readFileSync(p)); if(r.code!==23 || r.signal!==null || !r.exited || !fs.readFileSync(p.replace("stub-launch.json","stub-stderr.log"),"utf8").includes("fixture forced launch exit 23")) process.exit(1); console.log("captured native fixture child exit="+r.code+" signal="+r.signal)' "$EXIT_RECORD"; then
+  pass 'canary: launch exit cause and stderr retained before teardown'
+else fail 'canary: launch exit diagnostics missing or wrong'; fi
 
 # 3b: an adapter that swallows the capacity stamp.
 CAN_B="$FIX/can-b"
