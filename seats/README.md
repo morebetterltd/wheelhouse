@@ -535,6 +535,22 @@ must launch this long-running dispatcher in the background (for example with
 `nohup`) and poll the retained log/verdict, rather than putting the whole
 dispatch under that caller's command timeout.
 
+On TERM, INT or HUP, `verify.ts` stops its recorded sweep/reviewer process
+groups (each spawned with `detached: true`), gives TERM a 1.5-second grace,
+escalates remaining groups to KILL, and joins process/stdio completion before
+removing its scratch worktrees. Exit is nonzero. The runner's existing TERM
+trap forwards cancellation to its suite groups. If the runner needed KILL,
+only its captured owner/token/inode lock record is released through the normal
+lock helper; a replacement lock is untouched. Cancellation does not launch a
+reviewer after stopping a sweep. Failure to confirm shutdown retains scratch
+and reports incomplete cleanup.
+
+Group IDs recorded at spawn are the ownership proof; there is no process-table,
+environment, cwd or argv ownership search. A stub/tool that deliberately leaves
+those groups is outside this cancellation guarantee. The regression uses idle
+sleeping stubs, a TERM-ignoring reviewer, a same-group orphan, and an unrelated
+same-cwd process in a different group which must remain alive.
+
 `process.on("exit", ...)` cannot run on SIGKILL, so killing the dispatcher
 process mid-verification leaves the scratch worktree (and its `git
 worktree` registration) behind — same gap class recover.ts's fixture
