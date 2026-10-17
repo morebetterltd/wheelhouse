@@ -459,11 +459,19 @@ current turn if the seat is mid-stream; redirecting the CURRENT turn is what
 `steer` is for. Before waiting for Pi's prompt acknowledgement, the adapter
 records the target bead and prompt in `state.json`, so a slow resumed session
 never leaves `status` naming the previous bead after the prompt has been sent.
-The prompt acknowledgement deadline is `WHEELHOUSE_PROMPT_ACK_MS` (default
-60000 ms, deliberately longer than the generic RPC wait for warm resumed
-sessions). If the acknowledgement times out but the log shows the prompt frame
-or a turn start after the send, dispatch exits 0 with `WARNING: prompt
-delivered, ack late`; it STOPs only when the log shows no delivery. `stop` is SIGTERM — Pi's graceful path — and deliberately
+RPC readiness, state replies, FIFO drain and prompt acknowledgements have no
+elapsed-time failure budget: a live seat with an open pipe may answer late.
+The adapter waits for the matching response, or fails with the seat name and
+pid when the process dies or its pipe closes (EOF). Pending RPCs print `WAIT:`
+progress every five seconds; that is reporting cadence, not a deadline.
+`status` reports observed process/log facts and never guesses WEDGED from a
+slow `get_state`; dispatch does not stop and relaunch a merely slow seat.
+`WHEELHOUSE_PROMPT_ACK_MS`, `WHEELHOUSE_FIFO_WRITE_MS` and
+`WHEELHOUSE_WEDGED_GET_STATE_MS` no longer decide RPC outcomes.
+`WHEELHOUSE_RPC_TIMEOUT_MS` remains a legacy stop/SIGKILL-confirmation setting
+only, not an RPC budget. `adapter-rpc.selftest.sh` covers held replies beyond
+the old logical budgets, live backpressure, death, EOF and partial writes.
+`stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
 attached to it (`--session`), rooted back in the same cwd it was running in,
@@ -760,16 +768,19 @@ Until the herald writes the first snapshot it prints `🚢 FLEET: no snapshot ye
 
 ## Work contract shape gate
 
-`seats/contract.ts` parses the plain-text grammar in `wheelhouse/GRAPH.md`, **Every bead is a contract**. Every outcome names its consumer, surface and that consumer's check: person-on-surface → walk, person-reading → read, machine → run. Outcomes have sequential ids from O1; Intent is non-blank and precedes Outcomes. Signal and Skills are parsed but their enforcement is separate from this shape gate.
+`seats/contract.ts` parses the plain-text grammar in `wheelhouse/GRAPH.md`, **Every bead is a contract**. Every outcome names its consumer, surface and that consumer's check: person-on-surface → walk, person-reading → read, machine → run. Outcomes have sequential ids from O1; Intent is non-blank and precedes Outcomes. Signal is required at dispatch/review; Skills enforcement arrives separately.
 
 ```bash
 bun seats/contract.ts check <bead-id>
 bun seats/contract.ts check --file <path>
 bun seats/contract.ts audit
+bun seats/contract.ts trace <bead-id|merge-sha>
 bun seats/contract.ts lint-intent --file <path>
 ```
 
 `check` exits 0 for a valid contract, 2 for invalid shape (printing every error with bead/file, outcome and field), 3 for unreadable input. `audit` checks open and in_progress beads, prints one line per failing bead with its first error, and exits 0 if all pass, 1 if any are invalid, 3 if bd is unreadable. Root defaults to the script's parent directory, overridable with `WHEELHOUSE_CONTRACT_ROOT`. `readBeadText` reads `bd show <id> --json` from that root, joining title/description/notes/design/body, or accepting non-JSON stdout for plain-file stubs. With `WHEELHOUSE_SKIP_BD=1`, a readable `WHEELHOUSE_CONTRACT_FIXTURE` is required; a failed bd read may use that explicit fixture, but there is no empty-text pass. `lint-intent --file <path>` checks an intent alone: literal first-line `Intent:`, non-blank prose and no numbered build steps, outcome rows/fields or `Outcomes:` header. It exits 0 for valid shape or 2 naming the first offending line (also 2 for an unreadable file). It does not read the graph or prove the intent's meaning; the intent skill pairs it with a fresh-reader check.
+
+`Signal:` accepts `sig-<id>` (a posted row in `seats/intake.jsonl`), `isa-gap: <claim>` (shape `[A-Z]+[0-9-]+`, not ISA existence), or `install-procedure`. Missing/invalid Signal refuses naming the bead. A missing ledger prints an id-check-skipped line; an existing unreadable/malformed ledger refuses. With `WHEELHOUSE_SKIP_BD=1`, `WHEELHOUSE_INTAKE_FIXTURE=<ledger>` supplies it; an unset fixture prints the skip line. `trace` reads merge → contract → Signal → intake (and lists all matching merges when starting from a bead), exits 0 for a complete chain or 2 naming an unresolved link, and never writes Git, the graph or the ledger. Repo selection is the bead's `Repo:` paths (including `TEMPLATE (template/)`, `template/`, `TEMPLATE.`, or `UMBRELLA`), then `product-repo=`/`product-repos=`, then the root. SHA lookup also checks immediate child git roots before checking the bead's declared repos.
 
 Dispatch checks before RPC, state writes, worktree switching or launch. `WHEELHOUSE_DISPATCH_FORCE=1` cannot bypass it. `spawn <seat> <bead-id>` only prepares a worktree and sends no prompt, so it is not gated. `verify.ts` applies the same check before reviewer selection, refusing with exit 5.
 
@@ -826,7 +837,9 @@ It runs `seats/*.selftest.sh` serially and holds a host-wide lock so another sea
 
 FIFO admission uses a marked sibling `<lock>.queue` directory, leaving the active lock's exact three-file ownership contract unchanged. Registration under the same parent-directory flock assigns a monotonically ordered ticket (not a wall-clock timestamp). Only the oldest live ticket may acquire a free lock; a faster/newer poller cannot pass it. Wait messages report `queue_position`, the current holder and the head PID, updating when these change. Complete PID/host/token records are atomically published; definitive dead-PID tickets are reaped, while live/EPERM owners are preserved. TERM/INT removes only the cancelling runner's ticket, even before acquisition. Empty validated queues are removed without recursive deletion; malformed, foreign or symlinked queues fail closed. A process killed while staging an unpublished private candidate cannot leave an incomplete entry in the visible queue.
 
-The runner uses bun's FFI for macOS/Linux exclusive directory-rename support; unsupported primitives fail closed. Only the helper's reserved lock-held status retries; missing/unreadable helpers and all other runtime errors STOP with exit 2. Fixtures that pin or copy the runner must include its helper at that same tip. Parent-directory `flock` serializes new lock transitions without creating a separate cleanup/guard path. Older installed runners do not share that transition mutex: upgrade/sync the runner and its `selftest-sweep-lock.ts` helper only with the host lock idle; this is not a claim that an old runner has gained the ownership check or FIFO admission. All contenders need the upgraded runner/helper for queue-order guarantees; legacy holders remain readable, but legacy acquirers do not enroll.
+The runner uses bun's FFI for macOS/Linux exclusive directory-rename support; unsupported primitives fail closed. Only the helper's reserved lock-held status retries; missing/unreadable helpers and all other runtime errors STOP with exit 2. Fixtures that pin or copy the runner must include both `selftest-sweep-lock.ts` and `python-invocations.ts` at that same tip. Parent-directory `flock` serializes new lock transitions without creating a separate cleanup/guard path. Older installed runners do not share that transition mutex: upgrade/sync the runner and its `selftest-sweep-lock.ts` helper only with the host lock idle; this is not a claim that an old runner has gained the ownership check or FIFO admission. All contenders need the upgraded runner/helper for queue-order guarantees; legacy holders remain readable, but legacy acquirers do not enroll.
+
+Source policy runs before lock admission, queue registration or suite START, including filtered sweeps. It rejects Python files and first-line Python interpreters under `seats/`, then audits literal command positions, executable payloads and process APIs in tracked `seats/` code. Inert comments, arguments, captures and fixture data are allowed. A shebang, executable permission bit or code-looking linked target overrides a data suffix; opaque computed commands are not evaluated by the static audit. Missing companions or unexamined tracked sources fail with exit 2, not a completed-test result. No Python prerequisite should be added.
 
 Individual suites are still run directly when only a touched surface needs proof:
 

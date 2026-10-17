@@ -28,6 +28,8 @@ A fast-forward merge of a branch that lags what the worker committed prints a ge
 
 This is the other half of the worker's obligation to report a head that is the branch's. Two people reporting truthfully about different refs is enough to lose work, and neither of them can see it from where they stand.
 
+The merge subject names fleet/<bead-id>, so the merge records the contract it closed; seats/intent-check.sh fails a merge whose subject names no bead, and bun seats/contract.ts trace <sha> reads the chain back to the signal.
+
 ### Move the claims with the merge
 
 A merge that changes what is true of the project is not integrated until `wheelhouse/ISA.md`'s Claims move with it. Append or amend a claim citing the merged tip and the evidence home named by `wheelhouse/GRAPH.md`'s *Where evidence lives*, and if the claim names a consumer surface, either cite the verifier walk of that surface or carry the explicit not-walked statement `INTENT.md` permits. A silent claim on a consumer-surface change — neither walked nor marked not-walked — is an integration defect, because a later reader cannot tell whether the surface was exercised or skipped.

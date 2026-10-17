@@ -2,6 +2,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fold, INTAKE_KINDS, type IntakeEvent, type IntakeRow } from "./intake";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_CONTRACT_ROOT || path.join(import.meta.dir, ".."));
 const CHECKS = { "person-on-surface": "walk", "person-reading": "read", machine: "run" } as const;
@@ -32,6 +33,7 @@ export function parseContract(text: string): Contract {
   let sawIntent = false, sawOutcomes = false;
   let outcome: Outcome | undefined;
   let fields = new Set<string>();
+  let sawSignal = false;
   const pair = (value: string): [string, string] => {
     const m = value.match(/^(\S+)[ \t]+(?:—|-)[ \t]*(.*)$/);
     return m ? [m[1], m[2].trim()] : [value.trim().split(/\s/)[0] ?? "", ""];
@@ -46,6 +48,10 @@ export function parseContract(text: string): Contract {
     const meta = line.match(/^(Trace|Integration|Signal|Skills):[ \t]*(.*)$/);
     if (meta && !section) {
       const key = meta[1].toLowerCase() as "trace" | "integration" | "signal" | "skills";
+      if (key === "signal") {
+        if (sawSignal) parsed.errors.push("contract: Signal: duplicate line");
+        sawSignal = true;
+      }
       parsed[key] = meta[2].trim();
       continue;
     }
@@ -89,7 +95,7 @@ export function parseContract(text: string): Contract {
   return parsed;
 }
 
-/** Shape only here: sibling beads add Skills/Signal enforcement at the gates. */
+/** Shape/Signal syntax here; gate-level validation resolves posted intake ids. */
 export function validateContract(parsed: Contract, options: { requireSkills?: boolean; requireSignal?: boolean } = {}): string[] {
   const errors = [...parsed.errors];
   if (!parsed.intent) errors.push("contract: Intent: must contain at least one non-blank line before Outcomes:");
@@ -111,7 +117,10 @@ export function validateContract(parsed: Contract, options: { requireSkills?: bo
     if (!o.checkHow) errors.push(`${o.id}: check: how missing after dash`);
   });
   if (options.requireSkills && !parsed.skills) errors.push("contract: Skills: missing");
-  if (options.requireSignal && !parsed.signal) errors.push("contract: Signal: missing");
+  if (options.requireSignal) {
+    if (!parsed.signal) errors.push("contract: Signal: missing");
+    else if (!/^(?:sig-[a-z0-9]+|isa-gap: [A-Z]+[0-9-]+|install-procedure)$/.test(parsed.signal)) errors.push(`contract: Signal: invalid ${JSON.stringify(parsed.signal)}; expected sig-<id>, isa-gap: <claim>, or install-procedure`);
+  }
   return [...new Set(errors)];
 }
 
@@ -154,13 +163,147 @@ export function readBeadText(root: string, beadId: string): BeadText {
   return text.trim() ? { text, error: null } : { text: null, error: `bd show ${beadId} returned empty bead text` };
 }
 
-export function checkBeadContract(root: string, beadId: string): { text: string | null; errors: string[]; unreadable: boolean } {
+function intakeRows(root: string, strict: boolean): Map<string, IntakeRow> | null {
+  const fixture = process.env.WHEELHOUSE_INTAKE_FIXTURE;
+  if (process.env.WHEELHOUSE_SKIP_BD === "1" && !fixture) {
+    if (strict) throw new Error("intake ledger link missing: WHEELHOUSE_INTAKE_FIXTURE is unset");
+    console.error("Signal: intake id check skipped: WHEELHOUSE_SKIP_BD=1 and WHEELHOUSE_INTAKE_FIXTURE is unset");
+    return null;
+  }
+  const file = process.env.WHEELHOUSE_SKIP_BD === "1" ? fixture! : path.join(root, "seats", "intake.jsonl");
+  let text: string;
+  try { text = fs.readFileSync(file, "utf8"); }
+  catch (e: any) {
+    let absent = false;
+    if (e.code === "ENOENT") {
+      try { fs.lstatSync(file); } catch (statError: any) { absent = statError.code === "ENOENT"; }
+    }
+    if (absent && process.env.WHEELHOUSE_SKIP_BD !== "1" && !strict) {
+      console.error(`Signal: intake id check skipped: ledger missing at ${file}`);
+      return null;
+    }
+    throw new Error(`intake ledger link unreadable at ${file}: ${e.message}`);
+  }
+  try {
+    const events = text.split("\n").filter(line => line.trim()).map((line, i) => {
+      const ev = JSON.parse(line);
+      if (!ev || !["posted", "disposed"].includes(ev.type) || typeof ev.id !== "string" || typeof ev.at !== "string") throw new Error(`invalid event at line ${i + 1}`);
+      if (ev.type === "posted" && (!(INTAKE_KINDS as readonly string[]).includes(ev.kind) || [ev.source, ev.title, ev.text].some(v => typeof v !== "string"))) throw new Error(`invalid posted event at line ${i + 1}`);
+      if (ev.type === "disposed" && !["produced", "parked", "dropped"].includes(ev.disposition)) throw new Error(`invalid disposition at line ${i + 1}`);
+      return ev as IntakeEvent;
+    });
+    return fold(events);
+  } catch (e: any) { throw new Error(`intake ledger link invalid at ${file}: ${e.message}`); }
+}
+function contractErrors(root: string, text: string, requireSignal: boolean): string[] {
+  const parsed = parseContract(text);
+  const errors = validateContract(parsed, { requireSignal });
+  if (requireSignal && /^sig-[a-z0-9]+$/.test(parsed.signal)) {
+    try {
+      const rows = intakeRows(root, false);
+      if (rows && !rows.has(parsed.signal)) errors.push(`contract: Signal: ${parsed.signal} is not a posted intake event`);
+    } catch (e: any) { errors.push(`contract: Signal: ${parsed.signal}: ${e.message}`); }
+  }
+  return errors;
+}
+export function checkBeadContract(root: string, beadId: string, options: { requireSignal?: boolean } = {}): { text: string | null; errors: string[]; unreadable: boolean } {
   const read = readBeadText(root, beadId);
   return read.error !== null ? { text: null, errors: [`${beadId}: contract: unreadable: ${read.error}`], unreadable: true }
-    : { text: read.text, errors: validateContract(parseContract(read.text)).map(e => `${beadId}: ${e}`), unreadable: false };
+    : { text: read.text, errors: contractErrors(root, read.text, options.requireSignal ?? true).map(e => `${beadId}: ${e}`), unreadable: false };
+}
+
+/** Shared read-only Repo: grammar: paths/lists, NAME (path/), TEMPLATE., UMBRELLA. */
+export function repoDeclarations(text: string): string[] | null {
+  let fenced = false;
+  for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
+    if (/^\s*(?:```|~~~)/.test(line)) { fenced = !fenced; continue; }
+    if (fenced || /^\s*>/.test(line)) continue;
+    const match = line.match(/^[ \t]*Repo:[ \t]*(.*)$/i);
+    if (!match) continue;
+    return match[1].split(/[,;]/).map(entry => {
+      const named = entry.trim().match(/^([A-Za-z][\w-]*)\.?\s+\(([^)]+)\)/);
+      let value = named && !/^(?:\w+:\/\/|git@)/.test(named[2]) ? named[2].trim() : entry.trim().split(/\s/)[0];
+      if (value !== "." && value !== ".." && !/[\\/]\.\.?$/.test(value)) value = value.replace(/\.$/, "");
+      if (/^UMBRELLA$/i.test(value)) return ".";
+      if (/^TEMPLATE$/i.test(value)) return "template/";
+      return value;
+    }).filter(Boolean);
+  }
+  return null;
+}
+function defaultRepos(root: string): string[] {
+  let source = "";
+  try { source = fs.readFileSync(path.join(root, "wheelhouse", ".template-source"), "utf8"); }
+  catch (e: any) { if (e.code !== "ENOENT") throw new Error(`repository link unreadable: ${e.message}`); }
+  const value = source.split("\n").map(line => line.match(/^product-repos?=(.*)$/)?.[1]).find(v => v?.trim());
+  return value ? value.split(/[,;]/).map(v => v.trim()).filter(Boolean) : ["."];
+}
+function gitRead(repo: string, args: string[]): string {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(repo) };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[key];
+  const r = spawnSync("git", ["-C", repo, ...args], { env, encoding: "utf8", timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
+  if (r.status !== 0 || r.error) throw new Error(`repository link at ${repo}: ${(r.stderr || r.error?.message || `git exit ${r.status}`).trim()}`);
+  return r.stdout.trimEnd();
+}
+function ownRepo(root: string, value: string): string {
+  let candidate = path.resolve(root, value);
+  if (value === "template/" && !fs.existsSync(candidate) && fs.existsSync(path.join(root, "contracts"))) candidate = root;
+  const real = fs.realpathSync(candidate);
+  if (!fs.existsSync(path.join(real, ".git"))) throw new Error(`repository link at ${candidate}: not its own git root`);
+  if (fs.realpathSync(gitRead(real, ["rev-parse", "--show-toplevel"])) !== real) throw new Error(`repository link at ${candidate}: not its own git root`);
+  return real;
+}
+type Merge = { sha: string; subject: string; repo: string; parents: string[] };
+function mergeRecords(repo: string, sha?: string): Merge[] {
+  const args = sha ? ["show", "--no-patch", "--format=%H%x00%P%x00%s", `${sha}^{commit}`] : ["log", "--all", "--merges", "--format=%H%x00%P%x00%s"];
+  return gitRead(repo, args).split("\n").filter(Boolean).map(line => {
+    const [sha, parentText, subject] = line.split("\0");
+    if (!/^[0-9a-f]{40}$/.test(sha) || parentText === undefined || subject === undefined) throw new Error("merge link: invalid Git record");
+    return { sha, parents: parentText.split(" ").filter(Boolean), subject, repo };
+  }).filter(row => row.parents.length > 1);
+}
+function subjectBeads(subject: string): string[] {
+  return [...new Set([...subject.matchAll(/(?:^|[^A-Za-z0-9_/-])fleet\/([A-Za-z0-9][A-Za-z0-9._-]*)/g)].map(m => m[1]))];
+}
+export function traceContract(root: string, target: string): string {
+  let beadId = target, input: Merge | undefined;
+  if (/^[0-9a-f]{7,40}$/i.test(target)) {
+    const candidates = [...defaultRepos(root), ".", ...fs.readdirSync(root, { withFileTypes: true }).filter(e => (e.isDirectory() || e.isSymbolicLink()) && fs.existsSync(path.join(root, e.name, ".git"))).map(e => e.name)];
+    for (const value of [...new Set(candidates)]) {
+      try { input = mergeRecords(ownRepo(root, value), target)[0]; } catch { continue; }
+      if (input) break;
+    }
+    if (!input) throw new Error(`merge link missing: ${target} is not a readable merge in the product repositories`);
+    const ids = subjectBeads(input.subject);
+    if (!ids.length) throw new Error(`merge subject names no bead: ${input.sha}`);
+    if (ids.length !== 1) throw new Error(`merge subject names multiple beads: ${input.sha}`);
+    beadId = ids[0];
+  }
+  const read = readBeadText(root, beadId);
+  if (read.error !== null) throw new Error(`bead link missing: ${beadId}: ${read.error}`);
+  const parsed = parseContract(read.text);
+  if (!parsed.signal) throw new Error(`bead ${beadId} has no Signal:`);
+  const signalErrors = validateContract(parsed, { requireSignal: true }).filter(e => e.includes("Signal:"));
+  if (signalErrors.length) throw new Error(`bead ${beadId}: ${signalErrors.join("; ")}`);
+  let row: IntakeRow | undefined;
+  if (parsed.signal.startsWith("sig-")) {
+    row = intakeRows(root, true)!.get(parsed.signal);
+    if (!row) throw new Error(`signal link missing: ${parsed.signal} is not a posted intake event`);
+  }
+  const declared = repoDeclarations(read.text) ?? defaultRepos(root);
+  if (!declared.length) throw new Error(`repository link missing: bead ${beadId} has an empty Repo:`);
+  const repos = [...new Set(declared.map(value => ownRepo(root, value)))];
+  const merges = repos.flatMap(repo => mergeRecords(repo)).filter(m => subjectBeads(m.subject).length === 1 && subjectBeads(m.subject)[0] === beadId);
+  if (!merges.length) throw new Error(`merge link missing: no merge names fleet/${beadId}`);
+  if (input && !merges.some(m => m.sha === input!.sha)) throw new Error(`merge link missing: ${input.sha} is not in the bead's declared repositories`);
+  const lines = input ? [`Merge: ${input.sha} — ${input.subject}`] : [];
+  lines.push(`Contract: fleet/${beadId}`, `Bead: ${beadId}`, `Signal: ${parsed.signal}`);
+  if (row) lines.push("Intake:", `  id: ${row.id}`, `  kind: ${row.posted.kind}`, `  source: ${JSON.stringify(row.posted.source)}`, `  title: ${JSON.stringify(row.posted.title)}`, `  posted at: ${row.posted.at}`, `  disposition: ${row.disposition?.disposition ?? "open"}`);
+  lines.push("Merges:", ...merges.map(m => `  ${m.sha} (${m.repo}) — ${m.subject}`));
+  return lines.join("\n");
 }
 export function contractRemedy(beadId: string, errors: string[]): string {
-  return `${beadId} is not a contract: ${errors.join("; ")} — fix: write the Intent: and Outcomes: sections per wheelhouse/GRAPH.md (Every bead is a contract) and dispatch again`;
+  return `${beadId} is not a contract: ${errors.join("; ")} — fix: write Signal:, Intent: and Outcomes: per wheelhouse/GRAPH.md (Every bead is a contract) and dispatch again`;
 }
 
 function cli(): number {
@@ -176,7 +319,7 @@ function cli(): number {
     if (args[0] === "--file" && args.length === 2) {
       const read = fixtureText(args[1]);
       if (read.error !== null) { console.error(`${args[1]}: contract: unreadable: ${read.error}`); return 3; }
-      const errors = validateContract(parseContract(read.text));
+      const errors = contractErrors(ROOT, read.text, true);
       for (const e of errors) console.error(`${args[1]}: ${e}`);
       return errors.length ? 2 : 0;
     }
@@ -205,7 +348,11 @@ function cli(): number {
     }
     return invalid ? 1 : 0;
   }
-  console.error("usage: contract.ts check <bead-id> | check --file <path> | audit | lint-intent --file <path>");
+  if (command === "trace" && args.length === 1 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(args[0])) {
+    try { console.log(traceContract(ROOT, args[0])); return 0; }
+    catch (e: any) { console.error(`trace: ${e.message}`); return 2; }
+  }
+  console.error("usage: contract.ts check <bead-id> | check --file <path> | audit | trace <bead-id|merge-sha> | lint-intent --file <path>");
   return 3;
 }
 if (import.meta.main) process.exitCode = cli();
