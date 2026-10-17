@@ -69,8 +69,8 @@ trap finish_sweep EXIT
 trap 'interrupt_sweep 130' INT
 trap 'interrupt_sweep 143' TERM
 
-# Source policy is unconditional, including filtered sweeps. Check actual
-# files, not embedded heredocs/inline calls (tracked separately in 9yms).
+# File policy remains unconditional, including filtered sweeps. The tracked
+# invocation audit below separately distinguishes executable code from data.
 check_source_files(){
   [ -d "$ROOT/seats" ] || { info "selftest-sweep: missing seats directory: $ROOT/seats"; return 1; }
   find -L "$ROOT/seats" \( -type f -o -type l \) -print0 | (
@@ -96,6 +96,14 @@ check_source_files(){
   )
 }
 check_source_files || exit 1
+AUDITOR="$ROOT/seats/python-invocations.ts"
+if [ ! -f "$AUDITOR" ] || [ ! -r "$AUDITOR" ]; then
+  info "STOP: Python invocation auditor missing or unreadable: $AUDITOR"
+  exit 2
+fi
+# Refuse dependency calls before lock admission, queue registration or START.
+# Preserve exit2 for incomplete audits; an unexamined tree is not a test result.
+bun "$AUDITOR" "$ROOT" || exit "$?"
 acquire_lock
 
 shopt -s nullglob
