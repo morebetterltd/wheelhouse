@@ -19,6 +19,7 @@ specs.push(
   ]),
   ...["traversal","run-symlink","leaf-symlink","parent-fifo"].map(variant => ({kind:"state-"+variant,group:"staffing",action:"state",seat:variant==="traversal"?"../../victim/KEEP":"worker-safe"})),
   {kind:"main-drop",group:"staffing",action:"main",seat:"../../victim/KEEP"},
+  {kind:"drop-run-symlink",group:"staffing",action:"drop",seat:"worker-safe",role:"workers"},
 );
 const cases = specs.filter(s => selected === "all" || s.group === selected);
 assert(cases.length);
@@ -82,7 +83,7 @@ for(const spec of cases){
   }
   registration=git(["worktree","list","--porcelain"]);
  }
- if(spec.kind==="state-run-symlink"){
+ if(spec.kind==="state-run-symlink"||spec.kind==="drop-run-symlink"){
   fs.rmdirSync(path.join(root,"seats/run"));fs.symlinkSync(path.join(root,"victim"),path.join(root,"seats/run"));
   fs.writeFileSync(path.join(root,"victim/worker-safe.stdin"),"KEEP aliased run file\n");paths.push(path.join(root,"victim/worker-safe.stdin"),path.join(root,"seats/run"));
  }else if(spec.kind==="state-leaf-symlink"){
@@ -108,6 +109,7 @@ for(const spec of cases){
   if(!outcome?.error?.message.includes(expected))problems.push("missing named worktree refusal");
   if(registration!==afterRegistration)problems.push("worktree registration changed");
  }else if(spec.action==="state") {if(!outcome?.error?.message.includes("seats/run"))problems.push("unsafe state removal not refused");}
+ else if(spec.kind==="drop-run-symlink") {if(outcome?.value?.kind!=="nothing"||!outcome?.value?.reason?.includes("seats/run"))problems.push("unsafe run path did not refuse before stop");}
  else if(outcome?.value?.kind!=="nothing"||!outcome?.value?.reason?.startsWith("invalid seat name "))problems.push("invalid decision did not become named nothing");
  // main normally writes its own serialized decision/log; it must not reach
  // adapter/removeState/unregister or mutate any external/run/state subject.
