@@ -455,7 +455,7 @@ quota, or retries. It runs seats; noticing them is the commander's job.
 bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
 ```
 
-One invocation = one verdict. Unlike the seats above, the verifier is
+One invocation delivers a verdict or a named `no-verdict` outcome. Unlike the seats above, the verifier is
 EPHEMERAL: `verify.ts` spawns one `pi -p --no-session` on the verifier
 seat's account — no session saved, nothing to resume — with
 the resolved REVIEWER brief appended to the system prompt, hands it the bead
@@ -465,6 +465,19 @@ the bead itself) and the branch's tip SHA, and parses the single
 `verify.ts` picks the first free non-external verifier identity whose
 canonical `account.dir` differs from the author; staffed reviewer identities
 are named `verifier-<entry>` and are never spawned by staffing.
+
+For Pi, `agent_end` with `willRetry: true` is not a terminal result: a provider
+retry may still deliver the verdict. It neither triggers no-verdict nor starts
+reaping a later verdict before a final non-retry `agent_end` arrives.
+When the reviewer emits its terminal result without a live `VERDICT:` line,
+`verify.ts` cancels the watchdogs immediately and exits **5 (no-verdict)**,
+distinct from an error (1) or busy/retry (4). It records the reason in the
+inbox, posts a task comment as `verifier-gate`, and writes a separate
+`<bead>.no-verdict.<id>.md` working record without overwriting interim or
+previous records; known interim/partial files in the disposable checkout
+are copied out before cleanup. Notification failures are explicit in the output/record,
+not silently treated as delivered. A sweep that will outlive the turn needs
+an interim record and a collecting dispatch, never a promise to return.
 
 Unlike a worker seat, the verifier's process cwd is never a bead's
 worktree — but as of this bead it is not the project root either. The
