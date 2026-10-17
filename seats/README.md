@@ -358,7 +358,12 @@ The process outlives
 the adapter: its stdin is a FIFO under `seats/run/`, its stdout appends raw
 to `seats/logs/<seat>.jsonl` (every event, one JSON line each; stderr lands
 beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
-one line, and reads the response out of the log.
+one line, and reads the response out of the log. A per-FIFO PID lock
+(`<seat>.stdin.write.lock`) covers the entire LF-terminated command, including
+all non-blocking partial writes: concurrent adapters cannot insert a command's
+newline inside another command larger than `PIPE_BUF`. The lock is released
+before waiting for the response. The stdin holder is the direct `0<>` FIFO
+redirection, not a line-splitting relay.
 
 The seat's process cwd is the seat's own worktree by construction, not a
 prompt telling it to `cd` there. A worker seat owns ONE persistent git
@@ -397,7 +402,15 @@ never leaves `status` naming the previous bead after the prompt has been sent.
 RPC readiness, state replies, FIFO drain and prompt acknowledgements have no
 elapsed-time failure budget: a live seat with an open pipe may answer late.
 The adapter waits for the matching response, or fails with the seat name and
-pid when the process dies or its pipe closes (EOF). Pending RPCs print `WAIT:`
+pid when the process dies or its pipe closes (EOF). A
+`command:"parse", success:false` response fails immediately when read, before
+acknowledgement matching, with `PI_PARSE_ERROR`, seat, pid, pi's error and
+`adapter.ts stop <seat> && adapter.ts resume <seat>`. Pi cannot recover a
+request id from malformed JSON: pending calls observing that transport error
+fail closed, rather than guessing which command failed. The adapter does not
+restart the seat. `adapter-framing.selftest.sh` measures real FIFO write bytes
+against an LF-only slow-reader stand-in and covers dispatch and both steer
+paths rejecting a command without ever acknowledging it. Pending RPCs print `WAIT:`
 progress every five seconds; that is reporting cadence, not a deadline.
 `status` reports observed process/log facts and never guesses WEDGED from a
 slow `get_state`; dispatch does not stop and relaunch a merely slow seat.
