@@ -1070,8 +1070,9 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
     text = bytes.toString("utf8").replace(/\r\n/g, "\n");
     const after = fs.fstatSync(fd), leaf = fs.lstatSync(file);
     if (!leaf.isFile() || leaf.isSymbolicLink() || [after, leaf].some(s => s.dev !== stat.dev || s.ino !== stat.ino || s.size !== stat.size || s.mtimeMs !== stat.mtimeMs || s.ctimeMs !== stat.ctimeMs || s.nlink !== 1)) refuse("log changed while reading");
-    // Only resolve a leaf AFTER the nonblocking descriptor proved it regular.
-    logPath = fs.realpathSync(file);
+    // Keep the absolute supplied path. Never realpath the leaf: it can be
+    // replaced with a FIFO after lstat even though our descriptor is regular.
+    logPath = file;
   } catch (e: any) { return refuse(`cannot read safe log: ${e.message}`); }
   finally { if (fd !== undefined) fs.closeSync(fd); }
   const header = /^tip=([0-9a-f]{40}|[0-9a-f]{64})\ncommand=bash seats\/selftest-sweep\.sh\nWHEELHOUSE_SKIP_REAL_PI=1 \(hermetic suites; no live login borrowed\)\npreparedTip=([0-9a-f]{40}|[0-9a-f]{64})\nscratchGraph=isolated nested repository\n/.exec(text!);
