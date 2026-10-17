@@ -26,6 +26,15 @@ github-issue-repos=fixture/repo
 EOF
 cat > "$ROOT/seats/template-drift.sh" <<'SH'
 #!/usr/bin/env bash
+case "${DRIFT_CASE:-}" in
+  garbage) printf 'not-json\n'; exit 0 ;;
+  empty) exit 0 ;;
+  schema) printf '{}\n'; exit 0 ;;
+  crash) printf 'fixture crash\n' >&2; exit 7 ;;
+  signal) kill -TERM "$$" ;;
+  compare-error) printf '{"error":"fixture cannot compare"}\n'; exit 3 ;;
+  real) printf '{"modified":["seats/example.ts"],"localOnly":["runbooks/local.md"],"missing":["runbooks/missing.md"],"aheadBy":1,"comparedAgainst":"fixture"}\n'; exit 1 ;;
+esac
 if [ "${DRIFT_ON:-0}" = 1 ]; then printf '{"error":null,"modified":["README.md"],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; elif [ "${DRIFT_AHEAD:-0}" = 1 ]; then printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":2,"comparedAgainst":"fixture"}\n'; else printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; fi
 SH
 chmod +x "$ROOT/seats/template-drift.sh"
@@ -50,7 +59,16 @@ case "${GH_UNTRIAGED:-0}" in
 esac
 SH
 chmod +x "$BIN/gh"
-run_alert(){ OUT="$(cd "$ROOT" && env HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" "$@" 2>&1)"; RC=$?; }
+run_alert(){ OUT="$(cd "$ROOT" && env HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" "$@" 2>&1)"; RC=$?;
+  if [ "$RC" = 0 ] && [ -f "$ROOT/seats/inbox.jsonl" ]; then
+    node --input-type=module - "$ROOT" <<'JS' || fail 'every herald alert row must name its condition and retain concrete detail'
+import fs from 'node:fs';import assert from 'node:assert/strict';const root=process.argv[2],rows=fs.readFileSync(root+'/seats/inbox.jsonl','utf8').split('\n').filter(Boolean).map(l=>JSON.parse(l)).filter(r=>r.class==='alert'),snapshot=JSON.parse(fs.readFileSync(root+'/seats/run/fleet-snapshot.json','utf8'));
+for(const row of rows){assert(row.detail.startsWith('Alert '+row.source.name+': '));assert(row.detail.includes('Cost:'));assert(row.detail.includes('Next:'));}
+// A fixture may deliberately delete its snapshot while retaining old inbox rows;
+// retention across a real clear is checked separately below.
+JS
+  fi
+}
 inbox_count(){ [ -f "$ROOT/seats/inbox.jsonl" ] && wc -l < "$ROOT/seats/inbox.jsonl" | tr -d ' ' || echo 0; }
 need_open_count(){ [ -f "$ROOT/seats/needs.jsonl" ] && grep -c '"type":"opened"' "$ROOT/seats/needs.jsonl" || echo 0; }
 need_closed_count(){ [ -f "$ROOT/seats/needs.jsonl" ] && grep -c '"type":"closed"' "$ROOT/seats/needs.jsonl" || echo 0; }
@@ -128,6 +146,50 @@ DRIFT_AHEAD=1 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && active template-drift && pass 'template-drift fires when template main is ahead without file drift' || fail "drift ahead failed rc=$RC out=$OUT"
 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared template-drift' "$ROOT/seats/logs/alerts.log" && pass 'template-drift ahead clears' || fail "drift ahead clear failed"
+
+phase 'drift failures are not drift; rows retain the concrete observation'
+for mode in garbage empty schema crash signal compare-error; do
+  clear_runtime; DRIFT_CASE="$mode" run_alert bun seats/alerts.ts check --json
+  if [ "$RC" = 0 ] && node --input-type=module - "$ROOT" "$mode" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const[root,mode]=process.argv.slice(2),j=JSON.parse(fs.readFileSync(root+'/seats/run/fleet-snapshot.json','utf8')),rows=fs.readFileSync(root+'/seats/inbox.jsonl','utf8').trim().split('\n').map(l=>JSON.parse(l));
+assert.equal(j.drift.status,'check-failed');assert(j.drift.reason);assert.equal(j.alerts['template-drift'].active,false);assert.equal(j.alerts['template-drift-check-failed'].active,true);assert.equal(rows.length,1);assert.equal(rows[0].source.name,'template-drift-check-failed');assert(rows[0].detail.includes(j.drift.reason));assert.equal(j.alerts['template-drift-check-failed'].detail,rows[0].detail);
+if(mode==='garbage')assert.equal(j.drift.stdout,'not-json\n');if(mode==='crash'){assert.equal(j.drift.exitCode,7);assert.equal(j.drift.stderr,'fixture crash\n');}if(mode==='signal')assert.equal(j.drift.signal,'SIGTERM');
+JS
+  then pass "drift $mode is check-failed with its reason, never template-drift"
+  else fail "drift $mode classification/detail failed rc=$RC out=$OUT"; fi
+ done
+cat > "$FIX/drift-spawn-error.mjs" <<'JS'
+import * as cp from 'node:child_process';import {mock} from 'bun:test';
+const original={...cp};
+const spawnSync=(cmd,args,options)=>{
+  if(cmd==='bash'&&args?.[0]?.endsWith('/template-drift.sh')){
+    if(options?.timeout!==undefined)throw new Error('drift spawn still has a fixed timeout');
+    return {status:null,signal:null,error:Object.assign(new Error('fixture spawn error ETIMEDOUT'),{code:'ETIMEDOUT'}),stdout:'',stderr:'fixture partial stderr'};
+  }
+  return original.spawnSync(cmd,args,options);
+};
+mock.module('node:child_process',()=>({...original,spawnSync,default:{...original.default,spawnSync}}));
+JS
+clear_runtime; run_alert bun --preload "$FIX/drift-spawn-error.mjs" seats/alerts.ts check --json
+if [ "$RC" = 0 ] && node --input-type=module - "$ROOT" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const j=JSON.parse(fs.readFileSync(process.argv[2]+'/seats/run/fleet-snapshot.json','utf8'));assert.equal(j.drift.status,'check-failed');assert(j.drift.reason.includes('ETIMEDOUT'));assert.equal(j.drift.stderr,'fixture partial stderr');assert.equal(j.alerts['template-drift'].active,false);
+JS
+then pass 'spawn error ETIMEDOUT is retained as check-failed without a drift deadline'; else fail "spawn error handling failed rc=$RC out=$OUT"; fi
+clear_runtime; DRIFT_CASE=real run_alert bun seats/alerts.ts check --json
+if [ "$RC" = 0 ] && node --input-type=module - "$ROOT" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const root=process.argv[2],j=JSON.parse(fs.readFileSync(root+'/seats/run/fleet-snapshot.json','utf8')),rows=fs.readFileSync(root+'/seats/inbox.jsonl','utf8').trim().split('\n').map(l=>JSON.parse(l));assert.equal(j.drift.status,'drift');assert.equal(j.drift.exitCode,1);assert.equal(j.alerts['template-drift-check-failed'].active,false);assert.equal(rows.length,1);assert.equal(rows[0].source.name,'template-drift');for(const value of['template-drift','seats/example.ts','runbooks/local.md','runbooks/missing.md','aheadBy=1'])assert(rows[0].detail.includes(value),value);assert.equal(j.alerts['template-drift'].detail,rows[0].detail);
+JS
+then pass 'real drift exit1 names modified/local-only/missing files and ahead count in the row and snapshot'
+else fail "real drift detail missing rc=$RC out=$OUT"; fi
+run_alert bun seats/alerts.ts check --json
+if node --input-type=module - "$ROOT" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const j=JSON.parse(fs.readFileSync(process.argv[2]+'/seats/run/fleet-snapshot.json','utf8'));assert.equal(j.drift.status,'clean');assert.equal(j.alerts['template-drift'].active,false);assert(j.alerts['template-drift'].detail.includes('seats/example.ts'));
+JS
+then pass 'clear retains the concrete detail that previously fired'; else fail 'clear lost fired detail'; fi
+if node --input-type=module - "$ROOT/seats/alerts.ts" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const source=fs.readFileSync(process.argv[2],'utf8'),body=source.slice(source.indexOf('function driftInfo()'),source.indexOf('function alertRow('));assert(body.length>0);assert(!/\btimeout\s*:/.test(body));
+JS
+then pass 'drift check has no fixed wall-clock spawn budget'; else fail 'drift check still uses a wall-clock spawn budget'; fi
 
 phase 'shared PID lock recovery and ownership'
 mkdir -p "$FIX/lock-regressions"
