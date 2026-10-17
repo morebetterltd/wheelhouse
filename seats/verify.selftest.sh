@@ -306,6 +306,13 @@ if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
 }
 const reply = process.env.STUB_REPLY_FILE;
 let text = reply ? fs.readFileSync(reply, "utf8") : "";
+if (process.env.STUB_MUTATE_BATCH_LOG) {
+  const file = process.env.STUB_MUTATE_BATCH_LOG;
+  const before = fs.readFileSync(file, "utf8");
+  const after = before.replace(/\nelapsedMs=(\d+)\n$/, (_, n) => `\nelapsedMs=${Number(n)+1}\n`);
+  if (after === before) throw new Error("batch mutation fixture footer changed");
+  fs.writeFileSync(file, after);
+}
 if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
   const cp = require("child_process");
   const repo = process.env.STUB_MOVE_BRANCH_REPO;
@@ -821,7 +828,7 @@ SWEEP_LOCK="$FIX/review-sweep.lock"
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
 cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
-bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
 cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
@@ -832,6 +839,7 @@ WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLD_H4=1 run_sweep_promp
 SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
 SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
+  BATCH_SEED_LOG="$SWEEP_LOG"
   pass "full-sweep done: exact tip, H4 wait outside model limit, scratch bd, reviewer cites rc/log"
 else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$SWEEP_CHECK" 2>/dev/null)"; fi
 if [ -f "$WATCHDOG_DIR/holder-wait-observed" ] && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ -f "$WATCHDOG_DIR/output" ]; then
@@ -872,6 +880,45 @@ if [ "${WHEELHOUSE_VERIFY_SWEEP_ONLY:-0}" = 1 ]; then
   printf 'verify.selftest: PASS (sweep-readiness subset)\n'
   exit 0
 fi
+phase "0a3. one captured passing batch sweep — validation and CLI reuse"
+if [ -n "${BATCH_SEED_LOG:-}" ] && [ -s "$BATCH_SEED_LOG" ]; then
+  if bun "$HERE/fixtures/verify-batch-sweep.ts" "$VERIFY_DIR" "$FIX" "$BATCH_SEED_LOG" "$SWEEP_TIP"; then pass "batch validator accepts descendant and refuses every unsafe fixture"
+  else fail "batch validator regression"; fi
+  git -C "$SWEEP_PROJ" update-ref refs/heads/main "$SWEEP_TIP" || exit 2
+  git -C "$SWEEP_PROJ" branch fleet/batch-reviewed "$SWEEP_TIP^" || exit 2
+  BATCH_REVIEWED="$(git -C "$SWEEP_PROJ" rev-parse fleet/batch-reviewed)"
+  BATCH_INVOKED="$HOME_FIX/.pi-seats-sweep/verifier/invoked"
+  RUN_PROJ="$SWEEP_PROJ"
+  printf 'Batch evidence rc=0 log=%s\nVERDICT: APPROVE\n' "$BATCH_SEED_LOG" > "$REPLY"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-accept fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG"
+  if [ "$RC" = 0 ] && says 'VERDICT: APPROVE' && grep -q -- "- batch-tip: $SWEEP_TIP" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" && grep -q -- "- tip: $BATCH_REVIEWED" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" && grep -Fq -- "- log: $BATCH_SEED_LOG" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md"; then
+    pass "batch CLI reuses one real passing descendant sweep and records batch/reviewed tip and log"
+  else fail "batch CLI acceptance/record failed rc=$RC out=$OUT"; fi
+  rm -f "$BATCH_INVOKED"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-missing fleet/batch-reviewed worker-1 verifier --batch-sweep "$FIX/no-batch-log"
+  if [ "$RC" = 1 ] && says 'batch sweep refused' && [ ! -e "$BATCH_INVOKED" ]; then pass "invalid batch flag STOPs before reviewer spawn, never falls back to a sweep"
+  else fail "invalid batch flag spawned or fell back rc=$RC out=$OUT"; fi
+  run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-noarg fleet/batch-reviewed worker-1 verifier --batch-sweep
+  if [ "$RC" = 1 ] && says '--batch-sweep requires'; then pass "batch flag without a log argument is refused"
+  else fail "batch flag accepted no argument rc=$RC out=$OUT"; fi
+  run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-duplicate fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG" --batch-sweep "$BATCH_SEED_LOG"
+  if [ "$RC" = 1 ] && says 'may be supplied only once'; then pass "duplicate batch flag is refused"
+  else fail "duplicate batch flag accepted rc=$RC out=$OUT"; fi
+  BATCH_MUTATING="$FIX/batch-mutating.log"; cp -f "$BATCH_SEED_LOG" "$BATCH_MUTATING"
+  printf 'Batch evidence rc=0 log=%s\nVERDICT: APPROVE\n' "$BATCH_MUTATING" > "$REPLY"
+  STUB_MUTATE_BATCH_LOG="$BATCH_MUTATING" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-mutated fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_MUTATING"
+  if [ "$RC" = 1 ] && says 'batch sweep log changed during review'; then pass "batch log is revalidated and byte-fingerprinted after reviewer exit"
+  else fail "changed batch log accepted rc=$RC out=$OUT"; fi
+  printf 'Batch evidence rc=0 log=%s\nVERDICT: APPROVE\n' "$BATCH_SEED_LOG" > "$REPLY"
+  STUB_MOVE_BRANCH_REPO="$SWEEP_PROJ" STUB_MOVE_BRANCH=main WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-main-moved fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG"
+  if [ "$RC" = 1 ] && says 'first-parent chain does not reach current main'; then pass "batch cannot outlive a main move outside its first-parent chain"
+  else fail "main moved outside batch but reuse accepted rc=$RC out=$OUT"; fi
+  git -C "$SWEEP_PROJ" reset --hard "$SWEEP_TIP" >/dev/null || exit 2
+  printf 'Missing batch citation.\nVERDICT: APPROVE\n' > "$REPLY"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-citation fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG"
+  if [ "$RC" = 1 ] && says 'must cite full-sweep'; then pass "batch reuse retains the final evidence rc/log citation gate"
+  else fail "batch citation omitted but accepted rc=$RC out=$OUT"; fi
+else fail "no actual passing fixture sweep capture for batch tests"; fi
 RUN_PROJ="$INST_PROJ"
 VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
 MISS_PROJ="$FIX/missing-brief-proj"
