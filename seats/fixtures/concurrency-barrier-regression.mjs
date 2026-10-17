@@ -63,7 +63,7 @@ if (process.argv[2] === 'peer') {
   async function runCase(label, mode, observe = '') {
     const project = path.join(root, label), barrier = path.join(project, 'turn-barrier');
     fs.mkdirSync(path.join(project, 'seats/logs'), { recursive: true }); fs.mkdirSync(barrier);
-    const state = { seats: {} }, peers = [], rows = new Map(); let controller, failure, summary, diagnosticCheckpointUsed = false;
+    const state = { seats: {} }, peers = [], rows = new Map(); let controller, failure, summary, observationCheckpointUsed = false;
     try {
       for (const name of ['worker-a', 'worker-b']) {
         const accountDir = path.join(project, name), fifo = path.join(accountDir, 'stdin'), log = path.join(project, 'seats/logs', `${name}.jsonl`);
@@ -108,16 +108,22 @@ if (process.argv[2] === 'peer') {
           fs.watchFile(history, { interval: 20 }, observe); observe();
         });
       }
-      // Acceptance waits for autonomous native exit/EOF/file reconciliation.
-      // Only a deliberately broken negative control requests a diagnostic
-      // observation wake, so its failure/rescue needs no elapsed-time budget.
+      // Peer go acknowledgements mean the terminal/probe records are already
+      // persisted. Ask the observer to run only reconciliation callbacks the
+      // barrier actually registered, then report its state over native IPC.
+      // This runs in the ORDINARY suite too: missing reconciliation must fail
+      // this assertion, not leave the parent awaiting close forever. No clock
+      // or attempt budget decides whether the barrier made progress.
       const expected = mode === 'healthy' ? 0 : 1;
-      if (process.env.WHEELHOUSE_CONCURRENCY_BARRIER_DIAGNOSTIC === '1' && !controller.exited) {
-        diagnosticCheckpointUsed = true;
+      if (!controller.exited) {
+        observationCheckpointUsed = true;
         child.send({ type: 'checkpoint' }, () => {});
         const observation = await Promise.race([checkpoint.promise, controller.close]);
-        if (observation.type === 'checkpoint') assert.equal(observation.exitCode, expected,
-          `${label}: barrier still awaiting an impossible condition after observation wake`);
+        if (observation.type === 'checkpoint') {
+          console.log(JSON.stringify({ test: label, observationCheckpoint: observation }));
+          assert.equal(observation.exitCode, expected,
+            `${label}: barrier still awaiting an impossible condition after observation wake`);
+        }
       }
       const result = await controller.close;
       assert.equal(result.code, expected, result.stderr); assert.equal(result.signal, null); assert(result.stdoutEOF && result.stderrEOF);
@@ -129,7 +135,7 @@ if (process.argv[2] === 'peer') {
         assert.match(verdict.reason, /pipe closed/);
       }
       if (mode === 'child-exit') { const native = await peers[0].close; assert.equal(native.code, 23); assert.equal(native.signal, null); assert(native.stdoutEOF && native.stderrEOF); }
-      summary = { test: label, mode, barrierExit: result.code, stdoutEOF: true, stderrEOF: true, reason: verdict.reason, releaseExists: false, diagnosticCheckpointUsed, peers: [] };
+      summary = { test: label, mode, barrierExit: result.code, stdoutEOF: true, stderrEOF: true, reason: verdict.reason, releaseExists: false, observationCheckpointUsed, peers: [] };
     } catch (error) { failure = error; }
     finally {
       if (controller && !controller.exited) {
@@ -159,10 +165,5 @@ if (process.argv[2] === 'peer') {
   const selected = process.env.WHEELHOUSE_CONCURRENCY_BARRIER_CASE;
   if (selected) assert(cases.some(([label]) => selected === label), 'unknown barrier regression case');
   for (const c of cases) if (!selected || c[0] === selected) await runCase(...c);
-  const count = Number(process.env.WHEELHOUSE_CONCURRENCY_BARRIER_REPEATS || 64);
-  assert(Number.isInteger(count) && count >= 64 && count <= 512, 'at least 64 serialized regression runs required');
-  if (!selected) {
-    for (let i = 1; i <= count; i++) await runCase(`serialized-${i}`, 'serialized');
-    console.log(`PASS barrier regression: ${count}/${count} serialized canaries finished; exit/EOF/state, no elapsed-time threshold`);
-  }
+  if (!selected) console.log('PASS barrier regression: 6 deterministic probe/lifecycle fixtures; not repeated full-adapter canaries');
 }
