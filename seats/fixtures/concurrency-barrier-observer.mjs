@@ -32,11 +32,13 @@ fs.writeSync = function(...args) {
 };
 process.on('message', message => {
   if (message.type !== 'checkpoint') return;
-  // Fix-removed controls ONLY: an observation wake after native output has
-  // reached the state files. Acceptance runs never send this message; they
-  // must finish autonomously. No elapsed-time verdict in either path.
+  // Ordinary regression checkpoint: the parent already observed the native
+  // peer acknowledgements and persisted their records. Invoke only callbacks
+  // registered by the actual barrier, not a substitute implementation of it.
+  // A barrier with no reconciliation stays pending and fails the parent's
+  // assertion immediately after this IPC response, without a timeout verdict.
   for (const listener of reconciliations) listener();
-  process.send?.({ type: 'checkpoint', exitCode: process.exitCode ?? null });
+  process.send?.({ type: 'checkpoint', exitCode: process.exitCode ?? null, reconciliations: reconciliations.length });
 });
 // Instrumentation must not keep an otherwise completed barrier alive.
 process.channel?.unref();
