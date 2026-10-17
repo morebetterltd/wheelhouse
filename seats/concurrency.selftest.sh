@@ -135,6 +135,25 @@ BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
 
+barrier_regression() {
+  "$NODE_BIN" "$HERE/fixtures/concurrency-barrier-regression.mjs" "$FIX/barrier-regression" \
+    "$HERE/fixtures/concurrency-barrier.cjs" "$HERE/fixtures/concurrency-stub-supervisor.cjs" \
+    "$HERE/fixtures/concurrency-barrier-observer.mjs"
+}
+if [ "${WHEELHOUSE_CONCURRENCY_BARRIER_ONLY:-}" = 1 ]; then
+  barrier_regression
+  exit $?
+fi
+
+# Run the deterministic regression BEFORE any full-adapter barrier can wait.
+# An old/broken barrier must fail the ordinary suite here and release its caller
+# (including a sweep lock holder), not hang in a later serialized canary.
+phase "0. deterministic barrier lifecycle and lost-notification regression"
+if ! barrier_regression; then
+  fail 'deterministic barrier regression failed; refusing later barrier exercises'
+  exit 1
+fi
+
 # The stub pi: same long-lived RPC shape as adapter.selftest.sh's, with two
 # additions this exercise needs:
 #   - a prompt containing QUOTA answers success:false with a 429-shaped
