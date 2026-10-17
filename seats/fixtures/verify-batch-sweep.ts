@@ -25,8 +25,9 @@ git("checkout", "-q", "batch");
 const seed = fs.readFileSync(seedFile, "utf8");
 const swap = (source: string, from: string, to: string) => {
   for (const key of ["tip", "preparedTip", "finalTip"]) {
-    const needle = `${key}=${from}\n`; assert.equal(source.split(needle).length, 2, `one ${key} record`);
-    source = source.replace(needle, `${key}=${to}\n`);
+    const needle = `${key}=${from}`, lines = source.split("\n");
+    assert.equal(lines.filter(line => line === needle).length, 1, `one anchored ${key} record`);
+    source = lines.map(line => line === needle ? `${key}=${to}` : line).join("\n");
   }
   return source;
 };
