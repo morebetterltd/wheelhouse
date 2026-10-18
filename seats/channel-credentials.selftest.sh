@@ -77,7 +77,7 @@ BAD_CMD='printf "%s" "$FAKE_COMMAND_TOKEN"; printf "%s" "$FAKE_COMMAND_TOKEN" >&
 run_check "FAKE_COMMAND_TOKEN=$FAKE" "WHEELHOUSE_TEAMS_TOKEN_CMD=$BAD_CMD"
 if [ "$RC" -eq 2 ] && has 'teams token command failed' && has 'WHEELHOUSE_TEAMS_TOKEN_CMD' && no_value; then pass 'Teams failed command reveals neither command stdout nor stderr'; else fail 'Teams command failure'; fi
 RC=0; OUT="$(clean_env "FAKE_COMMAND_TOKEN=$FAKE" "WHEELHOUSE_TEAMS_TOKEN_CMD=$BAD_CMD" bun "$ROOT/seats/comms.ts" send graph hello 2>&1)" || RC=$?
-if [ "$RC" -eq 1 ] && has 'teams token command failed' && no_value && [ -f "$ROOT/seats/comms.jsonl" ] && ! grep -Fq "$FAKE" "$ROOT/seats/comms.jsonl" && ! grep -Fq "$FAKE" "$ROOT/seats/channels.json" && ! grep -Fq "$FAKE" "$ROOT/seats/seats.json"; then pass 'A2: failed send logs and records no command credential value'; else fail 'Teams failed-send credential leak'; fi
+if [ "$RC" -eq 1 ] && has 'teams token command failed' && no_value && selftest_capture_lacks "$ROOT/seats/comms.jsonl" -Fq -- "$FAKE" && selftest_capture_lacks "$ROOT/seats/channels.json" -Fq -- "$FAKE" && selftest_capture_lacks "$ROOT/seats/seats.json" -Fq -- "$FAKE"; then pass 'A2: failed send logs and records no command credential value'; else fail 'Teams failed-send credential leak'; fi
 
 if [ "$FAILED" -eq 0 ]; then echo 'channel-credentials.selftest: PASS'; exit 0; fi
 printf 'channel-credentials.selftest: FAIL (%s failure(s))\n' "$FAILED"

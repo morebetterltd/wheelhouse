@@ -491,10 +491,10 @@ LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launche
 if cmp -s "$FIX/contract-state.before" "$REFUSE_PROJ/seats/state.json" && cmp -s "$FIX/contract-worktrees.before" "$FIX/signal-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/signal-status.after" && [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ]; then pass 'Signal refusal: state, worktree and launch count unchanged'; else fail 'Signal refusal: side effect occurred'; fi
 if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 RUN_PROJ="$PROJ"
-phase "0a0. state lock recovers abandoned incomplete writers without stealing live owners"
+phase "0a0. state lock waits visibly for live holders; safely reclaims abandoned writers"
 mkdir -p "$FIX/state-lock-cases"
 if bun "$HERE/fixtures/adapter-state-lock.ts" "$ADAPTER" "$FIX/state-lock-cases"; then
-  pass "state lock recovery, grace, open/live owners, safe release and atomic publication"
+  pass "state lock recovery, grace, open/live owners, cancellation, publication and past-5000ms release"
 else fail "adapter state-lock regression failed"; fi
 
 phase "0a. launch paths validate the whole roster before choosing a seat"
@@ -1018,7 +1018,7 @@ PATH="$CODEX_TMP/bin:$PATH" OPENAI_API_KEY=leak ANTHROPIC_API_KEY=leak ANTHROPIC
 [ $RC -eq 0 ] && pass "codex spawn exits 0 through the adapter" || fail "codex spawn failed: $OUT"
 session_file=$(node -e 'const s=require(process.argv[1]).seats["worker-1"]; process.stdout.write(s.sessionFile||"")' "$CODEX_TMP/proj/seats/state.json")
 [ -n "$session_file" ] && [ -f "$session_file" ] && pass "codex records thread.path session file that exists" || fail "codex session file missing: $session_file"
-if grep -q leak "$CODEX_TMP/home/codex/codex-env.json"; then fail "codex child env leaked provider credentials"; else pass "codex child env strips provider credential variables"; fi
+if selftest_capture_lacks "$CODEX_TMP/home/codex/codex-env.json" -q -- leak; then pass "codex child env strips provider credential variables"; else fail "codex child env leaked provider credentials or capture unavailable"; fi
 PATH="$CODEX_TMP/bin:$PATH" run probe worker-1; [ $RC -eq 0 ] && [ "$OUT" = "OK" ] && grep -Fq '"argv":["login","status"]' "$CODEX_TMP/home/codex/codex-calls.jsonl" && pass "codex probe checks login status and accepts exact OK agent_message" || fail "codex probe failed/login not checked (rc=$RC out=$OUT calls=$(cat "$CODEX_TMP/home/codex/codex-calls.jsonl" 2>/dev/null))"
 PATH="$CODEX_TMP/bin:$PATH" run dispatch worker-1 bead-codex "tools please"; [ $RC -eq 0 ] && pass "codex dispatch ack exits 0" || fail "codex dispatch ack failed (rc=$RC): $OUT"
 wait_for "$LOG" '"type":"agent_end"'
@@ -1373,7 +1373,7 @@ PIN_SESS_BEFORE="$(state_get sessionFile)"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 STUB_PIN_SESSION_CWD=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-b "hello pinned" 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && says "starting a fresh session"; then pass "pinned-cwd first dispatch drops session continuity and says so"
 else fail "pinned-cwd dispatch did not fresh-start as specified (exit $RC): $OUT"; fi
-if [ "$(state_get sessionFile)" != "$PIN_SESS_BEFORE" ] && ! grep -q "\"--session\",\"$PIN_SESS_BEFORE\"" "$ARGV" 2>/dev/null; then
+if [ "$(state_get sessionFile)" != "$PIN_SESS_BEFORE" ] && selftest_capture_lacks "$ARGV" -q -- "\"--session\",\"$PIN_SESS_BEFORE\""; then
   pass "pinned-cwd fallback records a new session, not the immovable old one"
 else fail "pinned-cwd fallback kept the old session file or argv: before=$PIN_SESS_BEFORE after=$(state_get sessionFile) argv=$(cat "$ARGV" 2>/dev/null)"; fi
 if [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$PINPROJ")" ]; then pass "pinned-cwd fresh session starts in the seat worktree"
@@ -1463,7 +1463,7 @@ if ! says "account fixture-human-account"; then
 else fail "status carried a label from a different roster into an unlabeled seat: $OUT"; fi
 
 phase "5. no tokens — identity never leaks into state or logs"
-if ! grep -q "$SENTINEL" "$STATE" && ! grep -rq "$SENTINEL" "$PROJ/seats/logs/"; then
+if selftest_capture_lacks "$STATE" -q -- "$SENTINEL" && ! grep -rq "$SENTINEL" "$PROJ/seats/logs/"; then
   pass "auth.json's content appears nowhere in state.json or the logs"
 else fail "the auth sentinel leaked into state.json or a log"; fi
 
@@ -1578,7 +1578,7 @@ else fail "pruned cwd dispatch: exited ${RC}: $OUT"; fi
 if says "not running" && says "session continuity intentionally dropped" && says "recorded cwd is gone" && says "falling back to fresh spawn"; then
   pass "pruned cwd dispatch: stopped-seat fallback announcement is visible and names why"
 else fail "pruned cwd dispatch: fallback announcement missing — the recorded cwd was gone when dispatch started, but adapter.ts checks recordedCwdExists only after prepareSeatCwd recreated the worktree at the same path (exit $RC): $OUT"; fi
-if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null; then
+if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && selftest_capture_lacks "$ARGV" -q -- "\"--session\",\"$OLD_SESS\""; then
   pass "pruned cwd dispatch: fallback used a fresh session rather than --session"
 else fail "pruned cwd dispatch: fallback still attached the pruned-cwd session"; fi
 if [ "$(state_get lastBead)" = "bead-z" ]; then
@@ -1595,7 +1595,7 @@ run resume worker-1
 if [ $RC -eq 0 ] && says "recorded seat cwd is gone: $MISSING_CWD" && says "session continuity intentionally dropped" && says "resuming fresh in $SEAT_WT"; then
   pass "pruned cwd resume: existing seat worktree fallback line names missing cwd and chosen cwd (ISC-38)"
 else fail "pruned cwd resume: missing fallback line for seat worktree (exit $RC): $OUT"; fi
-if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && ! grep -q "\"--session\",\"$OLD_SESS\"" "$ARGV" 2>/dev/null && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$SEAT_WT" ]; then
+if [ "$(state_get sessionFile)" != "$OLD_SESS" ] && selftest_capture_lacks "$ARGV" -q -- "\"--session\",\"$OLD_SESS\"" && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$SEAT_WT" ]; then
   pass "pruned cwd resume: falls back with a fresh session in the seat worktree"
 else fail "pruned cwd resume: did not fresh-start in the seat worktree (session before=$OLD_SESS after=$(state_get sessionFile) cwd=$(cat "$CWD_FILE" 2>/dev/null) argv=$(cat "$ARGV" 2>/dev/null))"; fi
 run stop worker-1
@@ -2351,7 +2351,7 @@ phase "8. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
 CAN_A="$FIX/can-a"
 build_proj "$CAN_A" can-a
-sed 's|^  recordLaunchedSeat(name, record); // spawn-record$|  ; // spawn-record|' "$ADAPTER" > "$CAN_A/seats/adapter.ts"
+sed 's|^  await recordLaunchedSeat(name, record); // spawn-record$|  ; // spawn-record|' "$ADAPTER" > "$CAN_A/seats/adapter.ts"
 if cmp -s "$ADAPTER" "$CAN_A/seats/adapter.ts"; then
   fail "canary: could not cut the state write — the line no longer matches, so the canary proves nothing"
 else

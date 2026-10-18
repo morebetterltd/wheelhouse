@@ -26,6 +26,8 @@ elif [ -d "$ROOT/seats/verdicts" ]; then
   FILES=$(find "$ROOT/seats/verdicts" -type f -name '*.md' -print | sort)
 fi
 
+HIT="$(mktemp "${TMPDIR:-/tmp}/push-authority-hit.XXXXXX")" || { echo 'UNRUNNABLE: cannot allocate push-authority capture' >&2; exit 2; }
+trap 'rm -f "$HIT"' EXIT
 FAIL=0
 COUNT=0
 while IFS= read -r f; do
@@ -41,13 +43,12 @@ while IFS= read -r f; do
     printf 'FAIL push-authority: %s has %s push verdict lines; REVIEWER.md/verify.ts require exactly one\n' "$f" "$PUSH_COUNT"
     FAIL=1
   fi
-  if [ "$GRANTS_PUSH" -eq 1 ] && printf '%s\n' "$PUSH_LINES" | grep -Ei '^[0-9]+:(- push:|PUSH:)[[:space:]]*HOLD.*principal[ -]?only|^[0-9]+:(- push:|PUSH:).*principal[ -]?only' >"${TMPDIR:-/tmp}/push-authority-hit.$$"; then
+  if [ "$GRANTS_PUSH" -eq 1 ] && printf '%s\n' "$PUSH_LINES" | grep -Ei '^[0-9]+:(- push:|PUSH:)[[:space:]]*HOLD.*principal[ -]?only|^[0-9]+:(- push:|PUSH:).*principal[ -]?only' >"$HIT"; then
     while IFS= read -r hit; do
       printf 'FAIL push-authority: %s:%s contradicts INTEGRATOR.md project push grant\n' "$f" "$hit"
-    done < "${TMPDIR:-/tmp}/push-authority-hit.$$"
+    done < "$HIT"
     FAIL=1
   fi
-  rm -f "${TMPDIR:-/tmp}/push-authority-hit.$$"
 done <<EOF_FILES
 $FILES
 EOF_FILES

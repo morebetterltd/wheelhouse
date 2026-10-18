@@ -154,8 +154,8 @@ JS
   [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
 fi
 if grep -q 'Write the guide' "$FIX/board.html" && grep -q 'Build the package' "$FIX/board.html" && grep -q 'sent back' "$FIX/board.html" && grep -q 'Open need' "$FIX/board.html"; then pass "GET /board renders board cards and need link"; else fail "GET /board missing expected card text"; fi
-if ! grep -Eq '<(form|button|input|textarea)([ >])' "$FIX/board.html" && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/board")" = 404 ]; then pass "board has no write controls and no POST route"; else fail "board exposed write controls or POST route"; fi
-if ! grep -Eq 'demo-[a-z0-9-]+' "$FIX/board.html"; then pass "board HTML hides namespace ids"; else fail "board HTML leaked ids: $(grep -Eo 'demo-[a-z0-9-]+' "$FIX/board.html" | sort -u | tr '\n' ' ')"; fi
+if selftest_capture_lacks "$FIX/board.html" -Eq -- '<(form|button|input|textarea)([ >])' && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/board")" = 404 ]; then pass "board has no write controls and no POST route"; else fail "board exposed write controls or POST route"; fi
+if selftest_capture_lacks "$FIX/board.html" -Eq -- 'demo-[a-z0-9-]+'; then pass "board HTML hides namespace ids"; else fail "board HTML leaked ids: $(grep -Eo 'demo-[a-z0-9-]+' "$FIX/board.html" | sort -u | tr '\n' ' ')"; fi
 SINCE="2026-09-21T00:00:00Z"; UNTIL="2026-09-22T00:00:00Z"; DIGEST_Q="since=$SINCE&until=$UNTIL"
 for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P/digest?$DIGEST_Q" > "$FIX/digest.html" 2>/dev/null || true; grep -q 'Ship the button' "$FIX/digest.html" 2>/dev/null && break; sleep 0.1; done
 curl -fsS "http://127.0.0.1:$P/api/digest.json?$DIGEST_Q" > "$FIX/digest.json" || fail "GET /api/digest.json failed"
@@ -175,8 +175,8 @@ HOURS_AT="$(bun -e 'console.log(new Date().toISOString())')"
 printf '{"type":"opened","id":"need-hours","at":"%s","kind":"question","title":"Current hours question","body":"Prove relative windows serve content","options":[],"machine":{"bead":"demo-hours"}}\n' "$HOURS_AT" >> "$PROJ/seats/needs.jsonl"
 for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P/digest?hours=1" > "$FIX/digest-hours.html" 2>/dev/null || true; grep -q 'Current hours question' "$FIX/digest-hours.html" 2>/dev/null && break; sleep 0.1; done
 if grep -q 'Current hours question' "$FIX/digest-hours.html"; then pass "GET /digest?hours=N serves real digest content from a stable relative-window cache key"; else fail "GET /digest?hours=N did not serve current fixture content: $(cat "$FIX/digest-hours.html" 2>/dev/null)"; fi
-if ! grep -Eiq 'demo-[a-z0-9-]+|bead' "$FIX/digest.html"; then pass "digest HTML hides namespace ids and the word bead"; else fail "digest HTML leaked ids or bead: $(grep -Eio 'demo-[a-z0-9-]+|bead' "$FIX/digest.html" | sort -u | tr '\n' ' ')"; fi
-if ! grep -Eq '<(form|button|input|textarea)([ >])' "$FIX/digest.html" && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/digest")" = 404 ] && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/api/digest.json")" = 404 ]; then pass "digest has no write controls and no POST routes"; else fail "digest exposed write controls or POST routes"; fi
+if selftest_capture_lacks "$FIX/digest.html" -Eiq -- 'demo-[a-z0-9-]+|bead'; then pass "digest HTML hides namespace ids and the word bead"; else fail "digest HTML leaked ids or bead: $(grep -Eio 'demo-[a-z0-9-]+|bead' "$FIX/digest.html" | sort -u | tr '\n' ' ')"; fi
+if selftest_capture_lacks "$FIX/digest.html" -Eq -- '<(form|button|input|textarea)([ >])' && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/digest")" = 404 ] && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/api/digest.json")" = 404 ]; then pass "digest has no write controls and no POST routes"; else fail "digest exposed write controls or POST routes"; fi
 curl -fsS "http://127.0.0.1:$P/digest" > "$FIX/digest-default.html" || fail "GET /digest default failed"
 if grep -q 'Digest: last 24 h' "$FIX/digest-default.html" && ! grep -q "$SINCE" "$FIX/digest-default.html"; then pass "query-window digest does not overwrite the default digest snapshot or heading"; else fail "query-window digest overwrote default heading: $(grep -Eo 'Digest: [^<]+' "$FIX/digest-default.html" | sed -n '1p')"; fi
 if [ "$(curl -sS -o "$FIX/digest-bad.txt" -w '%{http_code}' "http://127.0.0.1:$P/digest?since=garbage")" = 400 ] && [ "$(curl -sS -o "$FIX/digest-bad-api.txt" -w '%{http_code}' "http://127.0.0.1:$P/api/digest.json?hours=not-a-number")" = 400 ]; then pass "bad digest window input returns 400 instead of stale content"; else fail "bad digest window input did not return 400: page=$(cat "$FIX/digest-bad.txt" 2>/dev/null) api=$(cat "$FIX/digest-bad-api.txt" 2>/dev/null)"; fi
@@ -198,7 +198,7 @@ else
   for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P4/digest?$DIGEST_Q" > "$FIX/digest-canary.html" 2>/dev/null || true; grep -q 'demo-merged' "$FIX/digest-canary.html" 2>/dev/null && break; sleep 0.1; done
   if grep -q 'demo-merged' "$FIX/digest-canary.html"; then pass "canary: disabling digest id filter leaks demo- in the page"; else fail "canary did not expose digest id leak: $(cat "$FIX/digest-canary.html" 2>/dev/null)"; fi
 fi
-if ! grep -q 'demo-ab12' "$FIX/needs.html" && ! grep -qi 'worker-1\|seat\|bead' "$FIX/needs.html"; then pass "HTML hides machine bead id and seat jargon"; else fail "HTML leaked machine fields: $(grep -oi 'demo-ab12\|worker-1\|seat\|bead' "$FIX/needs.html" | sort -u | tr '\n' ' ')"; fi
+if selftest_capture_lacks "$FIX/needs.html" -q -- 'demo-ab12' && selftest_capture_lacks "$FIX/needs.html" -qi -- 'worker-1\|seat\|bead'; then pass "HTML hides machine bead id and seat jargon"; else fail "HTML leaked machine fields: $(grep -oi 'demo-ab12\|worker-1\|seat\|bead' "$FIX/needs.html" | sort -u | tr '\n' ' ')"; fi
 before="$(grep -c '"type":"answered"' "$PROJ/seats/needs.jsonl")"
 curl -fsS -X POST -d 'text=Salad&choice=B' "http://127.0.0.1:$P/api/needs/need-open/answer" >/dev/null || fail "POST answer failed"
 after="$(grep -c '"type":"answered"' "$PROJ/seats/needs.jsonl")"
@@ -255,7 +255,7 @@ else
   cp "$ANSWERED_CAN" "$FIX/answeredcan/seats/desk.ts"; cp "$NEEDS" "$FIX/answeredcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/answeredcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/answeredcan/seats/needs.jsonl"
   PANS="$(port)"; (cd "$FIX/answeredcan" && exec env WHEELHOUSE_DESK_ROOT="$FIX/answeredcan" WHEELHOUSE_DESK_PORT="$PANS" bun "$FIX/answeredcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$PANS/needs" > "$FIX/answered-canary.html" 2>/dev/null && break; sleep 0.1; done
-  if ! grep -q 'action="/api/needs/need-old/message"' "$FIX/answered-canary.html"; then pass "canary: making answered needs inactive removes controls and is caught"; else fail "canary did not remove answered controls"; fi
+  if selftest_capture_lacks "$FIX/answered-canary.html" -q -- 'action="/api/needs/need-old/message"'; then pass "canary: making answered needs inactive removes controls and is caught"; else fail "canary did not remove answered controls"; fi
   [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
 fi
 CAN="$FIX/canary.ts"; cp "$PROJ/seats/desk.ts" "$CAN"

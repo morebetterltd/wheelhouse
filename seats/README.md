@@ -824,6 +824,19 @@ seat name, written by the adapter and read by every later invocation:
 | `model` | The roster's model pin at launch, if any. |
 | `lastBead` / `lastDispatchAt` | The most recent dispatch, for `status`. |
 
+Writers serialize through `seats/state.lock`. A waiter has no wall-clock
+expiry (the old `WHEELHOUSE_STATE_LOCK_TIMEOUT_MS` knob no longer applies):
+a live recorded PID is never timed out or reclaimed. `lock.ts` retains the
+su88 dead/incomplete-owner grace, open-file proof and replacement-safe release
+rules. A stuck live owner requires inspection, not automatic deletion.
+Contending CLI invocations print `WAIT:` to stderr immediately, on owner
+changes and periodically, naming the recorded holder and wait-start ISO time.
+The retry/report cadences are not deadlines; a notice does not claim that a
+live PID is making forward progress. SIGINT/SIGTERM cancel only the waiter,
+name the holder and signal reason, and exit 130/143 without touching the
+owner's lock or state. Acquisition is async, but k047's fresh read, synchronous
+mutation callback, write and rename remain in one non-yielding lock hold.
+
 Like the roster, it holds NO tokens — names, paths, pids, and session ids
 only. It is per-machine runtime state, not product, and git ignores it along
 with `seats/run/` and `seats/logs/`.

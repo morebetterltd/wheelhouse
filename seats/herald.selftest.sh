@@ -486,7 +486,7 @@ else
 fi
 if grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "sent poke attempt is logged with timestamp and pane"
 else fail "sent poke attempt was not logged: $(cat "$POKE_LOG" 2>/dev/null || echo none)"; fi
-if ! grep -q 'malicious\|rm -rf\|please type' "$SEND_LOG" 2>/dev/null; then pass "seat-authored text never enters send-keys"
+if selftest_capture_lacks "$SEND_LOG" -q -- 'malicious\|rm -rf\|please type'; then pass "seat-authored text never enters send-keys"
 else fail "seat text leaked into send-keys: $(cat "$SEND_LOG")"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
