@@ -11,6 +11,8 @@ PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 
+if bun "$HERE/fixtures/scratch-ownership.ts" lsof "$HERE/.." "$FIX"; then pass 'lsof capture leaves old pid file intact'; else fail 'lsof scratch ownership collision'; fi
+
 # Exercise a worker caller even when this suite is launched by the commander.
 for caller in unset worker-1 commander; do
   actor_env=(env -u BEADS_ACTOR)
@@ -34,6 +36,16 @@ else
 fi
 if [ "${WHEELHOUSE_SELFTEST_OWNERSHIP_ONLY:-}" = 1 ]; then
   if [ "$FAIL" -eq 0 ]; then echo "selftest-lib.selftest: PASS ($PASS checks, ownership only)"; exit 0; fi
+  echo "selftest-lib.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1
+fi
+
+if bun "$HERE/fixtures/selftest-stale-fixtures.mjs" "$FIX/stale-fixtures" "$HERE/selftest-lib.sh" "$HERE"; then
+  pass 'stale sweeps remove only marked dead-owner allocations for all six prefixes'
+else
+  fail 'stale sweep fixture checks'
+fi
+if [ "${WHEELHOUSE_SELFTEST_STALE_ONLY:-}" = 1 ]; then
+  if [ "$FAIL" -eq 0 ]; then echo "selftest-lib.selftest: PASS ($PASS checks, stale only)"; exit 0; fi
   echo "selftest-lib.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1
 fi
 

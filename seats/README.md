@@ -561,6 +561,34 @@ must launch this long-running dispatcher in the background (for example with
 `nohup`) and poll the retained log/verdict, rather than putting the whole
 dispatch under that caller's command timeout.
 
+On TERM, INT or HUP, `verify.ts` stops its detached sweep/reviewer groups,
+gives TERM a 1.5-second grace, then independently KILLs remaining owned groups.
+The runner records each suite's future pgid in `.wheelhouse-review-groups`
+inside the verifier-owned review scratch **before** its fixed launcher calls
+`setsid` or starts suite code. Before publication the launcher is still in the
+runner group, so killing the runner cannot leave an unrecorded escaped suite.
+No acknowledgement round trip or suite wait on the verifier is required. Only
+a wholly absent suite group is retired from the registry (atomic replacement);
+suite payloads do not inherit the registry capability.
+
+Cancellation rereads the registry, KILLs the runner group first if needed,
+then rereads and KILLs its published suite groups itself. It confirms all those
+groups are absent and joins direct child/stdio completion before removing
+scratch or reporting a clean stop. This does not depend on the runner's TERM
+grace, and works if the runner/watchdog was already KILLed. Unexpected runner
+exit with owned survivors starts the same teardown before main can remove its
+registry or launch a reviewer. Exit is nonzero. Only the captured owner/token/
+inode lock record is released through the normal helper; replacement locks
+are untouched. Incomplete shutdown retains scratch and reports failure.
+
+Spawned groups and the fixed launcher's registry are the ownership proof;
+verifier teardown does not search process tables, environment, cwd or argv.
+Tools that deliberately leave these groups without publishing ownership remain
+outside this guarantee. The regression uses idle sleeping stubs, TERM-ignoring
+suites at 5-second and 120-second runner grace, a KILLed runner, a TERM-ignoring
+reviewer, a same-group orphan, and an unrelated same-cwd process in a different
+group which must remain alive.
+
 ### Reuse one passing sweep for a review batch
 
 An integrator can start a separate batch branch at current `main`, merge the candidate tips into it, and obtain **one normal dispatcher full-sweep log at that combined tip**. Then each candidate still gets its own independent review, but can reuse that sweep:
@@ -611,6 +639,21 @@ The exit code IS the verdict, so the commander's scripts can branch on it:
 | `1` | error — no verdict exists: a STOP, a dead pi, a timeout, or output with no (or an ambiguous) `VERDICT:` line. Never treat as a verdict. |
 
 The post-output stall watchdog is the smaller of `--timeout-ms` / `WHEELHOUSE_VERIFY_TIMEOUT_MS` and `--no-event-timeout-ms` / `WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS`. With defaults of 900000 ms for `--timeout-ms` and 600000 ms for `--no-event-timeout-ms`, the effective default quiet-period limit is 600000 ms (10 minutes). This is not a wall-clock cap on the whole verifier turn: after output begins, each stream event resets the watchdog. To allow a verifier to legitimately go quiet between stream events for longer, raise `--no-event-timeout-ms <ms>`; for quiet periods longer than the `--timeout-ms` value, raise `--timeout-ms <ms>` too. Explicit flags win over their environment variables. Separate knobs cover first-output silence (`--first-output-timeout-ms` / `WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS`). On timeout, `verify.ts` writes `seats/verdicts/<bead-id>.partial.md`, prints elapsed time and the last tool/phase it saw, and exits 1. A timeout is not a provider/auth failure and does not start the probe cadence.
+
+A refused answer is retained, with its complete captured stdout/stderr and
+refusal reason, in a unique private `seats/verdicts/refused/<bead>.<id>.json`
+marked `REFUSED`, `notAVerdict: true`. It is diagnostic data, not verdict
+Markdown; canonical `<bead>.md` readers and `*.md` inventories do not count
+it. A completed but refused answer gets at most one automatic corrective
+attempt **inside the same invocation**: identical seat/account/model, tools,
+environment and scratch cwd, with the original prompt, prior answer and
+refusal reason as context. It asks for a restatement of final evidence,
+including the exact sweep citation, **reusing the already-completed sweep**,
+never rerunning it. This is context replay, not a persisted harness session.
+Both attempts pass the same acceptance checks. If the second is also refused,
+both diagnostics remain and no new verdict file or verdict settle event is
+written (exit 1). Process/auth/watchdog failures are retained but not retried.
+Existing verdict records from earlier invocations are not deleted.
 
 DISCOVER files no beads. The verifier's proposal is recorded for the
 commander, who decides what the graph should say about it — a verifier
@@ -712,6 +755,19 @@ seat name, written by the adapter and read by every later invocation:
 | `sessionId` / `sessionFile` | Pi's session, as `get_state` reported it; `sessionFile` is what `resume` reattaches. |
 | `model` | The roster's model pin at launch, if any. |
 | `lastBead` / `lastDispatchAt` | The most recent dispatch, for `status`. |
+
+Writers serialize through `seats/state.lock`. A waiter has no wall-clock
+expiry (the old `WHEELHOUSE_STATE_LOCK_TIMEOUT_MS` knob no longer applies):
+a live recorded PID is never timed out or reclaimed. `lock.ts` retains the
+su88 dead/incomplete-owner grace, open-file proof and replacement-safe release
+rules. A stuck live owner requires inspection, not automatic deletion.
+Contending CLI invocations print `WAIT:` to stderr immediately, on owner
+changes and periodically, naming the recorded holder and wait-start ISO time.
+The retry/report cadences are not deadlines; a notice does not claim that a
+live PID is making forward progress. SIGINT/SIGTERM cancel only the waiter,
+name the holder and signal reason, and exit 130/143 without touching the
+owner's lock or state. Acquisition is async, but k047's fresh read, synchronous
+mutation callback, write and rename remain in one non-yielding lock hold.
 
 Like the roster, it holds NO tokens — names, paths, pids, and session ids
 only. It is per-machine runtime state, not product, and git ignores it along

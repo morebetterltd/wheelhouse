@@ -11,6 +11,9 @@ SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
 WATCHDOG_PID=""
 SUITE_STATE=""
+# Optional verifier-owned registry. Only our fixed launcher publishes pgids;
+# suite payloads do not inherit this capability.
+REVIEW_GROUPS="${WHEELHOUSE_SELFTEST_REVIEW_GROUPS:-}"
 SUITE_TIMED_OUT=0
 SUITE_RC=0
 # Measured: concurrency 62s; passing adapter capture <=335s; a whole
@@ -119,6 +122,21 @@ suite_watchdog(){ (
   signal_suite_tree KILL "$root" "$dir" || { info 'STOP: cannot identify suite tree for KILL'; exit 2; }
 ); }
 
+retire_review_group(){
+  [ -n "$REVIEW_GROUPS" ] || return 0
+  perl -MFcntl=:DEFAULT -MErrno=ESRCH -e '
+    my ($file, $pid) = @ARGV;
+    exit 0 if kill 0, -$pid;
+    exit 0 if $! != ESRCH; # EPERM/unknown is not proof the group is gone.
+    sysopen(my $in, $file, O_RDONLY|O_NOFOLLOW|O_NONBLOCK) or die "registry read: $!\n";
+    my @keep = grep { $_ ne "$pid\n" } <$in>; close $in;
+    my $tmp = "$file.$$.new";
+    sysopen(my $out, $tmp, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0600) or die "registry stage: $!\n";
+    print $out @keep or die "registry write: $!\n"; close $out or die "registry close: $!\n";
+    rename $tmp, $file or die "registry publish: $!\n";
+  ' "$REVIEW_GROUPS" "$CURRENT_SUITE_PID"
+}
+
 start_suite(){
   SUITE_TIMED_OUT=0
   SUITE_STATE="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/wheelhouse-suite-deadline.XXXXXX")" || exit 2
@@ -126,8 +144,19 @@ start_suite(){
   exec 9<> "$SUITE_STATE/control"
   exec 8<> "$SUITE_STATE/grace"
   rm -f "$SUITE_STATE/control" "$SUITE_STATE/grace"
-  perl -MPOSIX=setsid -e 'setsid or die "setsid: $!\n"; exec @ARGV or die "exec @ARGV: $!\n"' \
-    bash -c 'ps -p "$$" -o pid=,pgid=,lstart= > "$2/owner" || exit 2; exec bash "$1"' \
+  # Publish while still in the runner group. KILL before publication therefore
+  # kills the launcher too; after publication the verifier knows its future
+  # pgid even if the runner dies before setsid/exec. No verifier ack is needed.
+  perl -MFcntl=:DEFAULT -MPOSIX=setsid -e '
+    my $registry = shift @ARGV;
+    if (length $registry) {
+      sysopen(my $out, $registry, O_WRONLY|O_APPEND|O_NOFOLLOW|O_NONBLOCK) or die "registry open: $!\n";
+      print $out "$$\n" or die "registry append: $!\n"; close $out or die "registry close: $!\n";
+    }
+    setsid or die "setsid: $!\n";
+    exec @ARGV or die "exec @ARGV: $!\n";
+  ' "$REVIEW_GROUPS" \
+    bash -c 'unset WHEELHOUSE_SELFTEST_REVIEW_GROUPS; ps -p "$$" -o pid=,pgid=,lstart= > "$2/owner" || exit 2; exec bash "$1"' \
     suite "$1" "$SUITE_STATE" 8>&- 9>&- &
   CURRENT_SUITE_PID=$!
   suite_watchdog "$CURRENT_SUITE_PID" "$SUITE_STATE" & WATCHDOG_PID=$!
@@ -147,6 +176,7 @@ finish_current_suite(){
   [ ! -f "$SUITE_STATE/timed-out" ] || SUITE_TIMED_OUT=1
   exec 8>&- 9>&-
   rm -rf "$SUITE_STATE"
+  retire_review_group || { info 'STOP: cannot retire review suite group'; SUITE_RC=2; }
   CURRENT_SUITE_PID=""; WATCHDOG_PID=""; SUITE_STATE=""
   [ "$watch_rc" = 0 ] || SUITE_RC=2
 }

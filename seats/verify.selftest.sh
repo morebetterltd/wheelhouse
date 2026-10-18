@@ -96,33 +96,9 @@ trap cleanup EXIT INT TERM
 # alone proves nothing after reuse — then removes the dir, printing
 # everything it swept.
 FIX_PREFIX="wheelhouse-verify-selftest"
-sweep_stale_fixtures() {
-  # find, not a glob: a glob with no match stays literal in bash but is an
-  # error in zsh, and these scripts are exercised under both.
-  local base="${TMPDIR:-/tmp}" d stamp phys sf pid
-  while IFS= read -r d; do
-    [ -d "$d" ] || continue
-    stamp="${d##*/}"; stamp="${stamp#"$FIX_PREFIX".}"; stamp="${stamp%%.*}"
-    case "$stamp" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$stamp" 2>/dev/null && continue   # owner still running — not stale
-    phys="$(cd "$d" 2>/dev/null && pwd -P)" || phys="$d"
-    while IFS= read -r sf; do
-      [ -f "$sf" ] || continue
-      for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
-          kill "$pid" 2>/dev/null
-          echo "swept: killed leaked seat pid $pid (held open files under $d)"
-        fi
-      done
-    done < <(find "$d" -mindepth 3 -maxdepth 3 -path "*/seats/state.json" 2>/dev/null)
-    rm -rf "$d"
-    echo "swept: removed stale fixture $d"
-  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -name "$FIX_PREFIX.*" 2>/dev/null)
-  return 0
-}
-sweep_stale_fixtures
+selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 
-FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
@@ -817,6 +793,9 @@ printf 'sweep cwd tip=%s\n' "$(git rev-parse HEAD)"
 bd create 'sweep scratch bead' --json >/dev/null
 printf 'scratch bd create ok\n'
 printf 'fixture sweep PASS\n'
+if [ -n "${STUB_REFUSAL_SWEEP_LEDGER:-}" ]; then
+  git rev-parse HEAD >> "$STUB_REFUSAL_SWEEP_LEDGER"
+fi
 if [ "${SWEEP_FIXTURE_MOVE_TIP:-0}" = 1 ]; then
   git -c user.name=selftest -c user.email=selftest@local commit --allow-empty -qm 'bad suite mutation'
 fi
@@ -841,6 +820,17 @@ EOF
 RUN_PROJ="$SWEEP_PROJ"
 VARGV="$HOME_FIX/.pi-seats-sweep/verifier/argv.json"
 SWEEP_LOCK="$FIX/review-sweep.lock"
+phase "0a3. refused output and one in-invocation corrective attempt"
+if env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR \
+  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$VERIFY_DIR/fixtures/verify-refusal.ts" \
+  "$SWEEP_PROJ/seats/verify.ts" "$SWEEP_PROJ" "$FIX/refusal-tests" "$SWEEP_BD_SHOW" "$SWEEP_LOCK"; then
+  pass "all harnesses retain refusals, admit no premature verdict, bound retry, and reuse the completed sweep"
+else fail "refusal/restatement regression failed"; fi
+if [ "${WHEELHOUSE_VERIFY_REFUSAL_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || { printf 'verify.selftest: FAIL (%s failures in refusal subset)\n' "$FAILED"; exit 1; }
+  printf 'verify.selftest: PASS (refusal subset)\n'
+  exit 0
+fi
 # First reproduce the old dispatch path: no precomputed evidence, model tool
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
@@ -1206,7 +1196,7 @@ then pass "prompt routes unavailable interview-mode claims to a named non-author
 if grep -q '"BEADS_ACTOR":"verifier"' "${VARGV%argv.json}env.json" 2>/dev/null; then
   pass "the ephemeral verifier's own env carries BEADS_ACTOR=verifier, with no operator export"
 else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:verifier set by verify.ts itself"; fi
-if ! grep -q "$PROJ/seats/bin" "${VARGV%argv.json}env.json" 2>/dev/null; then
+if selftest_capture_lacks "${VARGV%argv.json}env.json" -q -- "$PROJ/seats/bin"; then
   pass "host budget absent: verifier PATH is not rewritten to seats/bin"
 else fail "host budget absent: verifier PATH unexpectedly included seats/bin: $(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
 cat > "$REPLY" <<EOF
@@ -1382,7 +1372,7 @@ else fail "mid-pass branch move did not produce moved APPROVE (exit $RC): $OUT";
 if grep -q "tip: $MOVE_PIN" "$VDIR/bead-move.md" 2>/dev/null && grep -q "branch has since moved to $MOVE_TIP" "$VDIR/bead-move.md" && grep -q "push: NOT CONSIDERED — branch moved; re-verify at $MOVE_TIP before publish" "$VDIR/bead-move.md"; then
   pass "mid-pass branch move verdict file records pinned tip, move note, and NOT CONSIDERED push"
 else fail "mid-pass branch move verdict file missing pinned/moved/push detail: $(cat "$VDIR/bead-move.md" 2>/dev/null)"; fi
-if ! grep -q "DISCOVER" "$VDIR/bead-move.md" 2>/dev/null && ! says "DISCOVER"; then
+if selftest_capture_lacks "$VDIR/bead-move.md" -q -- "DISCOVER" && ! says "DISCOVER"; then
   pass "mid-pass branch move is never rendered as DISCOVER"
 else fail "mid-pass branch move leaked DISCOVER: $OUT $(cat "$VDIR/bead-move.md" 2>/dev/null)"; fi
 RUN_PROJ="$PROJ"
@@ -1457,7 +1447,7 @@ else fail "claude-code verifier one-shot did not request stream-json with --verb
 if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && ! grep -q 'contracts/REVIEWER.md' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
   pass "claude-code verifier one-shot carries reviewer brief text, not the path"
 else fail "claude-code verifier one-shot carried path or missed brief text: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
-if ! grep -q -- 'permission-mode\|allowed-tools\|disallowed-tools' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
+if selftest_capture_lacks "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" -q -- 'permission-mode\|allowed-tools\|disallowed-tools'; then
   pass "claude-code verifier one-shot omits tool permission flags when the seat has no tool lists"
 else fail "claude-code verifier one-shot unexpectedly carried tool permission flags: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
 cat > "$REPLY" <<'EOF'
@@ -1729,10 +1719,14 @@ run_without_default_push bead-5 fleet/bead-1 worker-1
 if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
   pass "two conflicting live VERDICT: lines exit 1 and print both final-message candidates"
 else fail "ambiguous double verdict not refused with candidates (exit $RC): $OUT"; fi
-if grep -q '"type":"message_end"' "$VDIR/.raw.md" 2>/dev/null && grep -q 'VERDICT: APPROVE' "$VDIR/.raw.md" && grep -q 'VERDICT: BOUNCE' "$VDIR/.raw.md"; then
-  pass "ambiguous double verdict writes raw json stdout to seats/verdicts/.raw.md before STOP"
+if bun -e 'import fs from "node:fs"; import a from "node:assert/strict";
+  const dir=process.argv[1]; a.ok(fs.statSync(dir).isDirectory());
+  const rows=fs.readdirSync(dir).filter(n=>n.startsWith("bead-5.")).map(n=>JSON.parse(fs.readFileSync(`${dir}/${n}`,"utf8"))).filter(r=>r.reason.startsWith("verifier emitted 2 live VERDICT:"));
+  a.equal(rows.length,2); for(const r of rows){a.equal(r.status,"REFUSED");a.equal(r.notAVerdict,true);a.match(r.stdout, /"type":"message_end"/);a.ok(r.stdout.includes("VERDICT: APPROVE") && r.stdout.includes("VERDICT: BOUNCE"));}
+' "$VDIR/refused"; then
+  pass "ambiguous double verdict retains both raw json answers marked REFUSED, never verdict Markdown"
 else
-  fail "ambiguous double verdict raw stdout missing json verdicts; raw was: $(cat "$VDIR/.raw.md" 2>/dev/null)"
+  fail "ambiguous double verdict raw answers or refusal reasons were not retained"
 fi
 cat > "$REPLY" <<'EOF'
 VERDICT: BOUNCE — NOT BENCHED: something
@@ -1979,7 +1973,7 @@ fi
 
 # 9b: a verify.ts that reports a verdict it never recorded
 CAN_B="$FIX/can-b"
-sed 's|^  fs.writeFileSync(verdictFile, record); // verdict-write$|  ; // verdict-write|' \
+sed 's|^[[:space:]]*fs.writeFileSync(verdictFile, record); // verdict-write$|  ; // verdict-write|' \
   "$VERIFY" > "$FIX/can-b-verify.ts"
 if cmp -s "$VERIFY" "$FIX/can-b-verify.ts"; then
   fail "canary: could not cut the verdict write — the line no longer matches, so the canary proves nothing"
