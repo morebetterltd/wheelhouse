@@ -683,7 +683,7 @@ VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
 phase "fixture containment — exclusive H4 publication and bounded release wait"
 BOUNDS_DIR="$(mktemp -d "$FIX/holder-bounds.XXXXXX")"
 if bun "$READINESS_DRIVER" "$VERIFY" "$BOUNDS_DIR" holder-bounds; then
-  pass "H4 fixture refuses occupied locks and fails a missing-release waiter (native exits 73/124)"
+  pass "H4 real-helper fixture refuses occupied locks and fails a missing-release waiter (native exits 1/124)"
 else fail "H4 fixture publication/bounded waiter regression"; fi
 
 phase "verifier gate STOP reaches the dispatch inbox"

@@ -103,21 +103,6 @@ export async function settle<T>(dir: string, result: Promise<T>, exited: () => b
   return result;
 }
 
-// Kernel link(2), not mv/ln directory-target semantics: publication must refuse
-// an existing lock of ANY type. The holder and its controller are both bounded.
-export const HOLDER_SCRIPT = String.raw`set -eu
-printf "pid=%s\n" "$$" > "$1.new"
-perl -e 'link($ARGV[0],$ARGV[1]) or die "exclusive fixture publication: $!\n"' "$1.new" "$1" || exit 73
-rm -f "$1.new"
-printf 'published\n' > "$5"
-deadline=$((SECONDS+$4))
-while [ ! -f "$2" ]; do
-  [ "$SECONDS" -lt "$deadline" ] || { echo 'fixture holder containment deadline waiting for release' >&2; exit 124; }
-  kill -0 "$3" 2>/dev/null || exit 125
-  sleep 0.01
-done
-rm -f "$1"
-`;
 type Exit = { code: number | null; signal: NodeJS.Signals | null; error?: string };
 function own(name: string, label: string, bin: string, args: string[], env: NodeJS.ProcessEnv) {
   const child = spawn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -136,9 +121,25 @@ function status(exit: Exit): number { return exit.code ?? (exit.signal ? 128 + c
 
 // Use the runner's real lock protocol: shell mv can instead put a PID file
 // INSIDE a leftover directory lock, corrupting it before the dispatcher waits.
+// The actual holder (not a separate shell surrogate) retains main's bounded
+// admission/release wait and parent-liveness containment. Neither is a verifier
+// readiness verdict: only real admission publishes the ready file.
 async function holdH4(lock: string, releaseFile: string, readyFile: string, helper: string): Promise<void> {
+  const seconds = Number(process.env.WHEELHOUSE_VERIFY_FIXTURE_HOLDER_SECONDS ?? 300);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error("fixture holder guard must be positive seconds");
+  const deadline = Date.now() + seconds * 1000, parent = process.ppid;
   const token = randomUUID().replaceAll("-", "");
   let identity: string | undefined, stopped = 0;
+  const waiting = () => {
+    if (stopped || fs.existsSync(releaseFile)) return false;
+    if (Date.now() >= deadline) {
+      console.error("fixture holder containment deadline waiting for admission/release");
+      stopped = 124; return false;
+    }
+    try { if (parent <= 1) { stopped = 125; return false; } process.kill(parent, 0); }
+    catch (e: any) { if (e.code !== "ESRCH") throw e; stopped = 125; return false; }
+    return true;
+  };
   const term = () => { stopped = 143; }, interrupt = () => { stopped = 130; };
   process.once("SIGTERM", term); process.once("SIGINT", interrupt);
   const transition = async (op: "acquire" | "release") => {
@@ -156,7 +157,7 @@ async function holdH4(lock: string, releaseFile: string, readyFile: string, help
     return { code, out: out.trim() };
   };
   try {
-    while (!stopped && !fs.existsSync(releaseFile)) {
+    while (waiting()) {
       const result = await transition("acquire");
       if (result.code === 0) {
         if (!/^\d+:\d+$/.test(result.out)) throw new Error("H4 admission lacks directory identity");
@@ -168,29 +169,34 @@ async function holdH4(lock: string, releaseFile: string, readyFile: string, help
       fs.writeFileSync(`${readyFile}.waiting`, `${result.out}\n`);
       await Bun.sleep(10); // Queue scheduling only, never a readiness deadline.
     }
-    while (!stopped && identity && !fs.existsSync(releaseFile)) await Bun.sleep(10);
+    while (identity && waiting()) await Bun.sleep(10);
   } finally {
-    const released = await transition("release");
-    process.removeListener("SIGTERM", term); process.removeListener("SIGINT", interrupt);
-    if (released.code !== 0) throw new Error(`H4 holder release failed: exit ${released.code}`);
+    try {
+      const released = await transition("release");
+      if (released.code !== 0) throw new Error(`H4 holder release failed: exit ${released.code}`);
+    } finally {
+      process.removeListener("SIGTERM", term); process.removeListener("SIGINT", interrupt);
+    }
   }
   if (stopped) process.exitCode = stopped;
 }
 
-async function holderBounds(dir: string): Promise<void> {
+async function holderBounds(dir: string, helper: string): Promise<void> {
   for (const occupied of [true, false]) {
     const sub = path.join(dir, occupied ? "occupied" : "absent-release"); fs.mkdirSync(sub);
     const lock = path.join(sub, "lock"), release = path.join(sub, "release"), published = path.join(sub, "published");
     if (occupied) { fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, "KEEP"), "unchanged\n"); }
-    const holder = own("holder-probe", "holder-bounds", "bash", ["-c", HOLDER_SCRIPT, "_", lock, release, String(process.pid), "1", published], process.env);
+    const holder = own("holder-probe", "holder-bounds", "bun", [import.meta.path, "--hold-h4", lock, release, published, helper], { ...process.env, WHEELHOUSE_VERIFY_FIXTURE_HOLDER_SECONDS: "1" });
     let rescued = false;
     const guard = setTimeout(() => { rescued = true; holder.child.kill("SIGKILL"); }, 300_000);
     let exit: Exit;
     try { exit = await holder.closed; } finally { clearTimeout(guard); }
-    const expected = occupied ? 73 : 124;
+    // The real helper refuses this foreign directory (exit2); holdH4 reports
+    // the admission failure (exit1). A missing release must expire natively.
+    const expected = occupied ? 1 : 124;
     if (rescued || exit.code !== expected || exit.signal) throw new Error(`holder bounds proof failed: occupied=${occupied} actual=${JSON.stringify(exit)} expected=${expected} rescued=${rescued}`);
     if (occupied && (fs.readdirSync(lock).join() !== "KEEP" || fs.readFileSync(path.join(lock, "KEEP"), "utf8") !== "unchanged\n")) throw new Error("holder publication changed an occupied lock");
-    if (!occupied && !fs.existsSync(published)) throw new Error("bounded holder never acquired its own lock");
+    if (!occupied && (!fs.existsSync(published) || fs.existsSync(lock))) throw new Error("bounded holder must acquire and release its own lock");
     console.log(`PASS holder ${occupied ? "exclusive publication refuses occupied directory unchanged" : "missing release fails bounded waiter"}: exit=${expected}, signal=none, rescue=false`);
   }
 }
@@ -199,7 +205,7 @@ async function drive(): Promise<void> {
   const [sourceFile, dir, mode, ...args] = process.argv.slice(2);
   if (!sourceFile || !dir || !["ready", "silent", "progress", "holder-bounds"].includes(mode)) throw new Error("usage: verify-readiness.ts <verify.ts> <owned-state-dir> <ready|silent|progress|holder-bounds> <verify args...>");
   if (!fs.statSync(dir).isDirectory() || fs.readdirSync(dir).length) throw new Error("fixture clock needs a fresh state directory");
-  if (mode === "holder-bounds") { await holderBounds(dir); return; }
+  if (mode === "holder-bounds") { await holderBounds(dir, path.join(path.dirname(sourceFile), "selftest-sweep-lock.ts")); return; }
   const copy = path.join(path.dirname(sourceFile), `.verify-readiness-${randomUUID()}.ts`);
   const label = args[0] || path.basename(dir);
   let source = fs.readFileSync(sourceFile, "utf8");
