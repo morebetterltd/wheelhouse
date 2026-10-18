@@ -9,13 +9,28 @@ const [kind, sourceArg, parentArg] = process.argv.slice(2);
 assert(['claude','drift','prune','lsof','push','bootstrap','bootstrap-second-fail'].includes(kind));
 const source = fs.realpathSync(sourceArg), parent = fs.realpathSync(parentArg);
 assert(fs.statSync(path.join(parent,'.wheelhouse-selftest-fixture')).isFile(), 'owned parent required');
-const root = fs.mkdtempSync(path.join(parent,'scratch-ownership-'));
+// Cleanup now requires a same-run marker AT its root, not merely an owned
+// ancestor. Allocate through the reviewed helper; never forge its metadata or
+// weaken cleanup's authorization. The owning shell exports its Git boundary
+// immediately, and the caller already inherits the enclosing fixture boundary.
+const library=path.resolve(import.meta.dir,'../selftest-lib.sh');
+const gitEnv={...process.env};
+for(const name of ['GIT_DIR','GIT_WORK_TREE','GIT_COMMON_DIR','GIT_INDEX_FILE','GIT_OBJECT_DIRECTORY','GIT_ALTERNATE_OBJECT_DIRECTORIES'])delete gitEnv[name];
+const allocate=spawnSync('bash',['-c',String.raw`. "$1"
+FIX="$(selftest_make_fixture_dir "$2/scratch-ownership.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
+printf '%s\n' "$FIX"
+`,'scratch-ownership-allocation',library,parent],{cwd:source,env:gitEnv,encoding:'utf8',timeout:30000});
+console.log('CAPTURE scratch-ownership allocation '+JSON.stringify({exit:allocate.status,signal:allocate.signal,error:allocate.error?.message??null,stdout:allocate.stdout,stderr:allocate.stderr}));
+assert.equal(allocate.error,undefined);assert.equal(allocate.signal,null);assert.equal(allocate.status,0);assert.equal(allocate.stderr,'');
+const root=allocate.stdout.trim();
+assert.equal(fs.realpathSync(root),root);assert.equal(path.dirname(root),parent);
+const caseMarker=fs.readFileSync(path.join(root,'.wheelhouse-selftest-fixture'),'utf8');
+assert(caseMarker.includes(`nonce=${process.env.WHEELHOUSE_SELFTEST_FIXTURE_NONCE}\nroot=${root}\n`),'case root is a recorded allocation of this run');
 const tmp = path.join(root,'tmp'), bin = path.join(root,'bin');
 fs.mkdirSync(tmp); fs.mkdirSync(bin);
 const ledger = path.join(root,'allocations'), calls = path.join(root,'mktemp.calls'), pkills = path.join(root,'pkill.calls');
 for(const file of [ledger,calls,pkills])fs.writeFileSync(file,'');
-const gitEnv={...process.env};
-for(const name of ['GIT_DIR','GIT_WORK_TREE','GIT_COMMON_DIR','GIT_INDEX_FILE','GIT_OBJECT_DIRECTORY','GIT_ALTERNATE_OBJECT_DIRECTORIES'])delete gitEnv[name];
 function command(cmd: string, args: string[], cwd = root, env = gitEnv) {
   const r=spawnSync(cmd,args,{cwd,env,encoding:'utf8',timeout:30000});
   console.log('CAPTURE scratch-ownership '+JSON.stringify({cmd,args,cwd,exit:r.status,signal:r.signal,error:r.error?.message??null,stdout:r.stdout,stderr:r.stderr}));
@@ -142,7 +157,6 @@ finally {
   if(child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');
   // Validate every residual candidate's membership in the isolated group
   // before using the shared process drainer. Never signal by argv alone.
-  const library=path.resolve(import.meta.dir,'../selftest-lib.sh');
   const cleanupEnv={...env,I8SM_KIND:'cleanup',I8SM_LIBRARY:library};
   const inspected=command('bash',['-c','. "$I8SM_LIBRARY"; selftest_fixture_processes "$I8SM_CASE"'],source,cleanupEnv);
   if(inspected.status!==0)error??=Error('cannot inspect owned fixture survivors: '+inspected.stderr);
@@ -155,6 +169,6 @@ finally {
   }
   if(validated){const cleanup=command('bash',['-c','. "$I8SM_LIBRARY"; selftest_cleanup_fixture_processes "$I8SM_CASE"'],source,cleanupEnv);if(cleanup.status!==0)error??=Error('owned fixture cleanup failed: '+cleanup.stderr);}
 }
-console.log('MEASUREMENT scratch-ownership '+JSON.stringify({kind,pid:child.pid,site,oldNames,before,after,allocations,result,stdout,stderr,ownership,pkillSafetyShim:fs.readFileSync(pkills,'utf8'),failure:error instanceof Error?error.message:error??null}));
+console.log('MEASUREMENT scratch-ownership '+JSON.stringify({kind,pid:child.pid,site,caseRoot:root,caseMarker,oldNames,before,after,allocations,result,stdout,stderr,ownership,pkillSafetyShim:fs.readFileSync(pkills,'utf8'),failure:error instanceof Error?error.message:error??null}));
 if(error)throw error;
 console.log(`PASS scratch ownership ${kind}: old KEEP/identity intact; exclusive allocations cleaned`);
