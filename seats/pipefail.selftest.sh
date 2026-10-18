@@ -10,48 +10,38 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 # Alternate source directory is for removed-fix checks; no adapter is executed.
 SOURCE="${1:-$HERE}"
-python3 - "$SOURCE" "$FIX" <<'PY'
-from pathlib import Path
-import sys
-source,fix=map(Path,sys.argv[1:])
-adapter=(source/'adapter.selftest.sh').read_text().splitlines()
-herald=(source/'herald.selftest.sh').read_text().splitlines()
-checks=[line for line in adapter if line.startswith('if [ $RC -eq 0 ] && ') and "'PRUNED worktree merged-worktree'" in line]
-assert len(checks)==1, 'adapter auto_prune check must exist exactly once'
-grep=checks[0].split(' && ',1)[1].split(' && [ ! -e ',1)[0]
-heads=[line for line in adapter if line.startswith('CLEAN_PID="$(')]
-assert len(heads)==1, 'adapter first-pid check must exist exactly once'
-head=heads[0].split('"$(',1)[1].rsplit(')"',1)[0]
-awks=[line for line in herald if 'found="$(printf' in line]
-assert len(awks)==1, 'herald first-pane check must exist exactly once'
-awk=awks[0].split('"$(',1)[1].rsplit(')"',1)[0]
-# At least 4 MiB, including many matching records after the first. The old
-# readers close before those bytes are written; the fix must drain them all.
-pad='padding line '+('x'*100)+'\n'
-match='PRUNED worktree merged-worktree fixture\n'
-(fix/'grep-early').write_text(match+pad*40000)
-(fix/'grep-late').write_text(pad*40000+match)
-(fix/'grep-absent').write_text(pad*40000)
-(fix/'head-early').write_text('spawned pid 123\n'*300000)
-(fix/'awk-early').write_text('%77\t/fixture\n'*350000)
-for name,check in [('grep',grep),('head',head),('awk',awk)]:
-    (fix/(name+'.sh')).write_text('''set -uo pipefail
-OUT="$(< "$1")"
-FAKE_TMUX_PANE_PATHS="$OUT"
-target=%77
-if [ "${PRODUCER_FAIL:-0}" = 1 ]; then
-  printf(){ builtin printf "$@"; return 7; }
-fi
-'''+check+'''
-rc=$? stages=("${PIPESTATUS[@]}")
-builtin printf 'pipeline=%s stages=%s\n' "$rc" "${stages[*]}" >&2
-exit "$rc"
-''')
-    print(name+' shipped expression: '+check)
-for name in ['grep-early','grep-late','grep-absent','head-early','awk-early']:
-    assert (fix/name).stat().st_size>=4*1024*1024
-    print(name+' bytes='+str((fix/name).stat().st_size))
-PY
+bun - "$SOURCE" "$FIX" <<'JS'
+const fs=(await import('node:fs')).default,path=(await import('node:path')).default,assert=(await import('node:assert/strict')).default;
+const [source,fix]=process.argv.slice(2);
+const adapter=fs.readFileSync(path.join(source,'adapter.selftest.sh'),'utf8').split('\n');
+const herald=fs.readFileSync(path.join(source,'herald.selftest.sh'),'utf8').split('\n');
+const checks=adapter.filter(s=>s.startsWith('if [ $RC -eq 0 ] && ')&&s.includes("'PRUNED worktree merged-worktree'"));
+assert.equal(checks.length,1,'adapter auto_prune check must exist exactly once');
+const grep=checks[0].slice(checks[0].indexOf(' && ')+4).split(' && [ ! -e ')[0];
+const heads=adapter.filter(s=>s.startsWith('CLEAN_PID="$('));
+assert.equal(heads.length,1,'adapter first-pid check must exist exactly once');
+const awks=herald.filter(s=>s.includes('found="$(printf'));
+assert.equal(awks.length,1,'herald first-pane check must exist exactly once');
+const inner=s=>s.slice(s.indexOf('"$(')+3,s.lastIndexOf(')"'));
+const pad='padding line '+'x'.repeat(100)+'\n', match='PRUNED worktree merged-worktree fixture\n';
+for(const [name,data] of Object.entries({
+  'grep-early':match+pad.repeat(40000), 'grep-late':pad.repeat(40000)+match,
+  'grep-absent':pad.repeat(40000), 'head-early':'spawned pid 123\n'.repeat(300000),
+  'awk-early':'%77\t/fixture\n'.repeat(350000)
+})) fs.writeFileSync(path.join(fix,name),data);
+const before=['set -uo pipefail','OUT="$(< "$1")"','FAKE_TMUX_PANE_PATHS="$OUT"','target=%77',
+  'if [ "${PRODUCER_FAIL:-0}" = 1 ]; then','  printf(){ builtin printf "$@"; return 7; }','fi',''].join('\n');
+const after=['','rc=$? stages=("${PIPESTATUS[@]}")',
+  'builtin printf \'pipeline=%s stages=%s\\n\' "$rc" "${stages[*]}" >&2','exit "$rc"',''].join('\n');
+for(const [name,check] of [['grep',grep],['head',inner(heads[0])],['awk',inner(awks[0])]]) {
+  fs.writeFileSync(path.join(fix,name+'.sh'),before+check+after);
+  console.log(name+' shipped expression: '+check);
+}
+for(const name of ['grep-early','grep-late','grep-absent','head-early','awk-early']) {
+  const size=fs.statSync(path.join(fix,name)).size; assert.ok(size>=4*1024*1024);
+  console.log(name+' bytes='+size);
+}
+JS
 [ "$?" = 0 ] || exit 2
 FAILED=0
 for name in grep head awk; do

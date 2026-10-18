@@ -24,6 +24,19 @@ for caller in unset worker-1 commander; do
   fi
 done
 
+# Override only the exercised child library for exact pre-fix controls; this
+# harness's enclosing allocation and Git boundary always use the fixed helper.
+OWNERSHIP_LIB="${WHEELHOUSE_SELFTEST_OWNERSHIP_LIB:-$HERE/selftest-lib.sh}"
+if bun "$HERE/fixtures/selftest-fixture-ownership.mjs" "$FIX/ownership" "$OWNERSHIP_LIB"; then
+  pass 'fixture mutation requires this run allocation nonce and physical path'
+else
+  fail 'fixture ownership regression'
+fi
+if [ "${WHEELHOUSE_SELFTEST_OWNERSHIP_ONLY:-}" = 1 ]; then
+  if [ "$FAIL" -eq 0 ]; then echo "selftest-lib.selftest: PASS ($PASS checks, ownership only)"; exit 0; fi
+  echo "selftest-lib.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1
+fi
+
 SRCROOT="$FIX/source"; DEST="$FIX/dest"
 mkdir -p "$SRCROOT"
 selftest_copy_seat_runtime "$SRCROOT" "$HERE"

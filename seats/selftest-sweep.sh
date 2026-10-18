@@ -9,6 +9,15 @@ PATTERN="${WHEELHOUSE_SELFTEST_SWEEP_PATTERN:-$ROOT/seats/*.selftest.sh}"
 LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-/tmp/wheelhouse-selftest-sweep.lock}"
 SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
+WATCHDOG_PID=""
+SUITE_STATE=""
+SUITE_TIMED_OUT=0
+SUITE_RC=0
+# Measured: concurrency 62s; passing adapter capture <=335s; a whole
+# successful 53-suite review sweep took 843.256s (2026-10-17, wxuh 49e2970).
+# One hour is >4x that conservative bound, not a guessed short test budget.
+SUITE_TIMEOUT_S="${WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S:-3600}"
+SUITE_GRACE_S="${WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S:-5}"
 OWNED_LOCK=""
 ENROLLED=0
 LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$ROOT/seats/selftest-sweep-lock.ts}"
@@ -22,6 +31,125 @@ LOCK_TOKEN="$(bun -e 'console.log(crypto.randomUUID().replace(/-/g,""))')" || ex
 
 say(){ printf '%s\n' "$*"; }
 info(){ say "$*" >&2; }
+
+for setting in SUITE_TIMEOUT_S SUITE_GRACE_S; do
+  value="${!setting}"
+  if [[ ! "$value" =~ ^[1-9][0-9]{0,8}$ ]]; then
+    info "STOP: $setting must be positive whole seconds (got '$value')"
+    exit 2
+  fi
+done
+RUNNER_PGID="$(ps -p "$$" -o pgid=)" || exit 2
+RUNNER_PGID="${RUNNER_PGID//[[:space:]]/}"
+
+# Only the isolated suite group and descendants identified from fresh native
+# PID/PPID/PGID/birth records are eligible. Retain identities across TERM so
+# an orphaned child is still owned after its parent exits during the grace.
+signal_suite_tree(){
+  local signal="$1" root="$2" dir="$3" owner group born p parent g birth i j ancestor changed groups_seen=" " oldp oldg oldbirth
+  local pids=() parents=() pgids=() births=() owned=() active=()
+  local previous_pids=() previous_groups=() previous_births=()
+  read -r owner group born < "$dir/owner" || return 2
+  [ "$owner" = "$root" ] && [ "$group" = "$root" ] || return 2
+  if [ -f "$dir/targets" ]; then
+    while read -r oldp oldg oldbirth; do
+      i=${#previous_pids[@]}
+      previous_pids[i]="$oldp"; previous_groups[i]="$oldg"; previous_births[i]="$oldbirth"
+    done < "$dir/targets"
+  fi
+  ps -axo pid=,ppid=,pgid=,lstart= > "$dir/processes" || return 2
+  i=0
+  while read -r p parent g birth; do
+    pids[i]="$p"; parents[i]="$parent"; pgids[i]="$g"; births[i]="$birth"; owned[i]=0
+    if [ "$p" = "$root" ] && [ "$g" = "$group" ] && [ "$birth" = "$born" ]; then owned[i]=1; fi
+    for ((j=0;j<${#previous_pids[@]};j++)); do
+      if [ "$p" = "${previous_pids[j]}" ] && [ "$g" = "${previous_groups[j]}" ] && [ "$birth" = "${previous_births[j]}" ]; then owned[i]=1; break; fi
+    done
+    if [ "${owned[i]}" = 1 ]; then active[${#active[@]}]="$i"; fi
+    i=$((i+1))
+  done < "$dir/processes"
+  # Expand against only the owned cohort, not every host PID for every row.
+  # Likewise load retained identities once, never reopening them per host PID.
+  # A small suite tree must not make deadline cleanup quadratic in host size.
+  changed=1
+  while [ "$changed" = 1 ]; do
+    changed=0
+    for ((i=0;i<${#pids[@]};i++)); do
+      [ "${owned[i]}" = 0 ] || continue
+      for ((j=0;j<${#active[@]};j++)); do
+        ancestor="${active[j]}"
+        if [ "${parents[i]}" = "${pids[ancestor]}" ] || { [ "${pgids[i]}" = "${pgids[ancestor]}" ] && [ "${pgids[i]}" != "$RUNNER_PGID" ]; }; then
+          owned[i]=1; active[${#active[@]}]="$i"; changed=1; break
+        fi
+      done
+    done
+  done
+  : > "$dir/targets.next"
+  for ((i=0;i<${#pids[@]};i++)); do
+    [ "${owned[i]}" = 1 ] || continue
+    printf '%s %s %s\n' "${pids[i]}" "${pgids[i]}" "${births[i]}" >> "$dir/targets.next"
+    g="${pgids[i]}"
+    if [ "$g" != "$RUNNER_PGID" ] && [ "$g" -gt 1 ]; then
+      case "$groups_seen" in *" $g "*) continue ;; esac
+      groups_seen="$groups_seen$g "
+      info "selftest-sweep: $signal owned suite tree pgid=$g"
+      kill -"$signal" -- "-$g" 2>/dev/null || true
+    else
+      info "selftest-sweep: $signal owned suite descendant pid=${pids[i]}"
+      kill -"$signal" "${pids[i]}" 2>/dev/null || true
+    fi
+  done
+  mv -f "$dir/targets.next" "$dir/targets"
+}
+
+suite_watchdog(){ (
+  # This asynchronous child must never run the parent's lock-release traps.
+  trap - EXIT
+  trap '' INT TERM HUP
+  local root="$1" dir="$2" message=""
+  if read -r -t "$SUITE_TIMEOUT_S" -u 9 message; then
+    [ "$message" = stop ] || exit 0
+  else
+    printf '%s\n' "$SUITE_TIMEOUT_S" > "$dir/timed-out"
+  fi
+  signal_suite_tree TERM "$root" "$dir" || { info 'STOP: cannot identify suite tree for TERM'; exit 2; }
+  # Separate unwritten FIFO: a parent's normal completion cannot cancel the
+  # grace/escalation after TERM has already caused the suite leader to exit.
+  read -r -t "$SUITE_GRACE_S" -u 8 message || true
+  signal_suite_tree KILL "$root" "$dir" || { info 'STOP: cannot identify suite tree for KILL'; exit 2; }
+); }
+
+start_suite(){
+  SUITE_TIMED_OUT=0
+  SUITE_STATE="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/wheelhouse-suite-deadline.XXXXXX")" || exit 2
+  mkfifo -m 600 "$SUITE_STATE/control" "$SUITE_STATE/grace" || exit 2
+  exec 9<> "$SUITE_STATE/control"
+  exec 8<> "$SUITE_STATE/grace"
+  rm -f "$SUITE_STATE/control" "$SUITE_STATE/grace"
+  perl -MPOSIX=setsid -e 'setsid or die "setsid: $!\n"; exec @ARGV or die "exec @ARGV: $!\n"' \
+    bash -c 'ps -p "$$" -o pid=,pgid=,lstart= > "$2/owner" || exit 2; exec bash "$1"' \
+    suite "$1" "$SUITE_STATE" 8>&- 9>&- &
+  CURRENT_SUITE_PID=$!
+  suite_watchdog "$CURRENT_SUITE_PID" "$SUITE_STATE" & WATCHDOG_PID=$!
+}
+
+finish_current_suite(){
+  local mode="$1" watch_rc=0
+  [ -n "$CURRENT_SUITE_PID" ] || return 0
+  if [ "$mode" = stop ]; then printf 'stop\n' >&9; fi
+  if [ -n "$WATCHDOG_PID" ]; then
+    if [ "$mode" != stop ]; then wait "$CURRENT_SUITE_PID"; SUITE_RC=$?; printf 'done\n' >&9; fi
+    wait "$WATCHDOG_PID" || watch_rc=$?
+  else
+    suite_watchdog "$CURRENT_SUITE_PID" "$SUITE_STATE" || watch_rc=$?
+  fi
+  if [ "$mode" = stop ]; then wait "$CURRENT_SUITE_PID"; SUITE_RC=$?; fi
+  [ ! -f "$SUITE_STATE/timed-out" ] || SUITE_TIMED_OUT=1
+  exec 8>&- 9>&-
+  rm -rf "$SUITE_STATE"
+  CURRENT_SUITE_PID=""; WATCHDOG_PID=""; SUITE_STATE=""
+  [ "$watch_rc" = 0 ] || SUITE_RC=2
+}
 
 acquire_lock(){
   local previous="" result rc
@@ -52,25 +180,24 @@ release_lock(){
 finish_sweep(){
   local rc=$?
   trap - EXIT
+  if [ -n "$CURRENT_SUITE_PID" ]; then finish_current_suite stop; fi
+  if [ -n "$SUITE_STATE" ]; then exec 8>&- 9>&-; rm -rf "$SUITE_STATE"; fi
   release_lock || rc=2
   exit "$rc"
 }
 interrupt_sweep(){
   local rc="$1"
-  trap - INT TERM
-  if [ -n "$CURRENT_SUITE_PID" ] && kill -0 "$CURRENT_SUITE_PID" 2>/dev/null; then
-    kill -TERM -- "-$CURRENT_SUITE_PID" 2>/dev/null || kill -TERM "$CURRENT_SUITE_PID" 2>/dev/null || true
-    wait "$CURRENT_SUITE_PID" 2>/dev/null || true
-  fi
-  release_lock || rc=2
+  trap '' INT TERM HUP
+  finish_current_suite stop
   exit "$rc"
 }
 trap finish_sweep EXIT
 trap 'interrupt_sweep 130' INT
 trap 'interrupt_sweep 143' TERM
+trap 'interrupt_sweep 129' HUP
 
-# Source policy is unconditional, including filtered sweeps. Check actual
-# files, not embedded heredocs/inline calls (tracked separately in 9yms).
+# File policy remains unconditional, including filtered sweeps. The tracked
+# invocation audit below separately distinguishes executable code from data.
 check_source_files(){
   [ -d "$ROOT/seats" ] || { info "selftest-sweep: missing seats directory: $ROOT/seats"; return 1; }
   find -L "$ROOT/seats" \( -type f -o -type l \) -print0 | (
@@ -96,6 +223,14 @@ check_source_files(){
   )
 }
 check_source_files || exit 1
+AUDITOR="$ROOT/seats/python-invocations.ts"
+if [ ! -f "$AUDITOR" ] || [ ! -r "$AUDITOR" ]; then
+  info "STOP: Python invocation auditor missing or unreadable: $AUDITOR"
+  exit 2
+fi
+# Refuse dependency calls before lock admission, queue registration or START.
+# Preserve exit2 for incomplete audits; an unexamined tree is not a test result.
+bun "$AUDITOR" "$ROOT" || exit "$?"
 acquire_lock
 
 shopt -s nullglob
@@ -107,15 +242,20 @@ if [ "${#suites[@]}" -eq 0 ]; then
 fi
 
 failures=0
+timeout_summary=""
+info "selftest-sweep: suite timeout=${SUITE_TIMEOUT_S}s TERM grace=${SUITE_GRACE_S}s"
 for suite in "${suites[@]}"; do
   [ -f "$suite" ] || continue
   say "selftest-sweep: START $suite"
-  perl -MPOSIX=setsid -e 'setsid or die "setsid: $!\n"; exec @ARGV or die "exec @ARGV: $!\n"' bash "$suite" &
-  CURRENT_SUITE_PID=$!
-  wait "$CURRENT_SUITE_PID"
-  rc=$?
-  CURRENT_SUITE_PID=""
-  if [ "$rc" -eq 0 ]; then
+  start_suite "$suite"
+  finish_current_suite done
+  rc="$SUITE_RC"
+  if [ "$SUITE_TIMED_OUT" = 1 ]; then
+    say "selftest-sweep: FAIL $suite timed out after ${SUITE_TIMEOUT_S}s (TERM then KILL after ${SUITE_GRACE_S}s grace; rc=$rc)"
+    failures=$((failures + 1))
+    timeout_summary="${timeout_summary}selftest-sweep: timeout summary: $suite timed out after ${SUITE_TIMEOUT_S}s
+"
+  elif [ "$rc" -eq 0 ]; then
     say "selftest-sweep: PASS $suite"
   else
     say "selftest-sweep: FAIL $suite rc=$rc"
@@ -127,5 +267,6 @@ if [ "$failures" -eq 0 ]; then
   say "selftest-sweep: PASS (${#suites[@]} suite(s))"
   exit 0
 fi
+[ -z "$timeout_summary" ] || printf '%s' "$timeout_summary"
 say "selftest-sweep: FAIL ($failures failure(s) of ${#suites[@]} suite(s))"
 exit 1

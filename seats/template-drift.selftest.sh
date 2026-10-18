@@ -8,7 +8,8 @@ cleanup(){ selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
-SCRIPT="$HERE/template-drift.sh"
+SCRIPT="${1:-$HERE/template-drift.sh}"
+bun "$HERE/fixtures/template-drift-json.ts" "$SCRIPT" "$FIX/json-parity" "$HERE/fixtures/template-drift-json-reference.json" || fail 'original JSON output parity without Python'
 TEMPLATE="$FIX/template"; INSTALL="$FIX/install"
 mkdir -p "$TEMPLATE/seats/transports" "$TEMPLATE/runbooks" "$TEMPLATE/wheelhouse/crew" "$INSTALL/wheelhouse"
 ( cd "$TEMPLATE" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest )
@@ -107,13 +108,12 @@ install contract changed
 local project half
 EOF
 run; [ $RC -eq 1 ] && grep -q '^MODIFIED wheelhouse/crew/WORKER.md$' <<<"$OUT" && pass 'contract-half changes report MODIFIED' || fail "contract-half failed rc=$RC out=$OUT"
-run_json; [ $RC -eq 1 ] && python3 - <<'PY' <<<"$OUT"
-import json,sys
-j=json.load(sys.stdin)
-assert 'wheelhouse/crew/WORKER.md' in j['modified']
-assert isinstance(j['localOnly'], list) and isinstance(j['missing'], list)
-assert j['comparedAgainst']
-PY
+run_json; [ $RC -eq 1 ] && bun -e '
+const assert=(await import("node:assert/strict")).default, j=JSON.parse((await import("node:fs")).default.readFileSync(0,"utf8"));
+assert.ok(j.modified.includes("wheelhouse/crew/WORKER.md"));
+assert.ok(Array.isArray(j.localOnly)&&Array.isArray(j.missing));
+assert.ok(j.comparedAgainst);
+' <<<"$OUT"
 [ $? -eq 0 ] && pass '--json shape includes arrays and comparedAgainst' || fail "json shape failed rc=$RC out=$OUT"
 cat > "$INSTALL/wheelhouse/.template-source" <<EOF
 source=$FIX/no-such-remote
@@ -124,15 +124,14 @@ run; [ $RC -eq 3 ] && grep -q '^DRIFT: cannot compare' <<<"$OUT" && pass 'unreac
 # Canary: if the split rule is removed, the project-half-only leg reports drift.
 BROKEN="$FIX/template-drift-nosplit.sh"
 cp "$SCRIPT" "$BROKEN"
-python3 - "$BROKEN" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1])
-s=p.read_text()
-s=s.replace("split_contract() { awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}' \"$1\"; }", 'split_contract() { cat "$1"; }')
-s=s.replace('if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null | awk \'BEGIN{p=1} /^## This project$/{p=0} p{print}\'', 'if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null')
-p.write_text(s)
-PY
+bun - "$BROKEN" <<'JS'
+const fs=(await import('node:fs')).default, p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
+for(const [old,replacement] of [
+  [`split_contract() { awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}' "$1"; }`, 'split_contract() { cat "$1"; }'],
+  [`if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null | awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}'`, 'if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null']
+]) { if(s.split(old).length!==2) throw new Error('canary source changed'); s=s.replace(old,replacement); }
+fs.writeFileSync(p,s);
+JS
 chmod +x "$BROKEN"
 cat > "$INSTALL/wheelhouse/.template-source" <<EOF
 source=$TEMPLATE
