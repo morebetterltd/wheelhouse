@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+. "$ROOT/seats/selftest-lib.sh"
 FIX="${TMPDIR:-$ROOT/.wheelhouse-runs/wheelhouse-project-er5m.3/tmp}/claude-code-driver.$$"
 mkdir -p "$FIX/bin" "$FIX/account" "$FIX/cwd" "$FIX/run" "$FIX/logs"
 trap 'pkill -f "$FIX" 2>/dev/null || true; rm -rf "$FIX"' EXIT
