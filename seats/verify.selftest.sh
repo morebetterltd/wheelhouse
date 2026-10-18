@@ -101,10 +101,12 @@ selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+# Nested reviews run only tiny tracked fixture suites, not the host inventory.
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/fixture-sweep.lock"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
+RUN_PATH="$BIN:$PATH" # Keep fixture mocks before inherited host-budget shims.
 
 # The stub pi: one shot. Records argv and PI_CODING_AGENT_DIR into the agent
 # dir, touches an "invoked" marker, prints the scripted reply named by
@@ -248,12 +250,13 @@ if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
   const readonly = cp.spawnSync("bd", ["create", "reviewer must not write"], { encoding: "utf8" });
   if (!log) {
     const attempted = cp.spawnSync("bash", ["seats/selftest-sweep.sh"], { timeout: 150, encoding: "utf8" });
-    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\n`}})+"\n");
+    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : "BOUNCE"}\nPUSH: NOT CONSIDERED\n`}})+"\n");
     process.exit(0);
   }
   const verdict = ok && readonly.status !== 0 ? "APPROVE" : "BOUNCE";
+  if (process.env.STUB_SWEEP_DELETE_LOG === "1" && log) fs.unlinkSync(log);
   const citation = process.env.STUB_SWEEP_OMIT_CITATION === "1" ? "sweep omitted" : `sweep evidence rc=${rc} log=${log}`;
-  process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`${citation}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : verdict}\nPUSH: NOT CONSIDERED\n`}})+"\n");
+  process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`${citation}\nVERDICT: ${process.env.STUB_SWEEP_VERDICT || (process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : verdict)}\nPUSH: NOT CONSIDERED\n`}})+"\n");
   process.exit(0);
 }
 if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
@@ -460,10 +463,13 @@ done
 verb="${1:-}"
 case "$verb" in
   show)
+    [ "${STUB_BD_SHOW_FAIL:-0}" != 1 ] || { echo 'fixture bd show unavailable' >&2; exit 1; }
     if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf 'fixture bead\n'; fi
     exit 0 ;;
   comments)
     printf 'fixture comments\n'; exit 0 ;;
+  where)
+    node -e 'console.log(JSON.stringify({path:require("fs").realpathSync(".beads")}))'; exit $? ;;
   init)
     if [ "$readonly" = 1 ]; then printf "operation '%s' is not allowed in read-only mode\n" "$verb" >&2; exit 1; fi
     mkdir -p .beads; printf 'fixture graph\n' > .beads/fixture; exit 0 ;;
@@ -484,6 +490,16 @@ chmod +x "$BIN/bd"
 # the brief at <root>/contracts/REVIEWER.md, and the root to be a git repo
 # holding the branch under review.
 SENTINEL='SENTINEL-TOKEN-9c2e'
+build_sweep_fixture() {   # real runner, one tiny tracked fixture suite
+  local proj="$1"
+  cp -f "$VERIFY_DIR/selftest-sweep.sh" "$proj/seats/selftest-sweep.sh" || exit 2
+  cat > "$proj/seats/fixture.selftest.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+bd create 'sweep scratch bead' --json >/dev/null
+printf 'scratch bd create ok\nfixture sweep PASS\n'
+SH
+}
 build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   local proj="$1" ns="$2" src="$3" d
   mkdir -p "$proj/seats" "$proj/contracts"
@@ -516,9 +532,10 @@ EOF
     printf '{\n  "%s": true\n}\n' "$proj" > "$HOME_FIX/.pi-seats-$ns/$d/trust.json"
     printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-$ns/$d/auth.json"
   done
+  build_sweep_fixture "$proj"
   ( cd "$proj" &&
     git init -q &&
-    git add seats/README.md &&
+    git add seats/README.md seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
@@ -581,13 +598,18 @@ EOF
     printf '{\n  "%s": true\n}\n' "$umb" > "$HOME_FIX/.pi-seats-$ns/$d/trust.json"
     printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-$ns/$d/auth.json"
   done
+  build_sweep_fixture "$umb"
   ( cd "$umb" &&
     git init -q &&
-    git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
+    git add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
+  mkdir -p "$product/seats"
+  selftest_copy_seat_runtime "$product" "$VERIFY_DIR"
+  build_sweep_fixture "$product"
   ( cd "$product" &&
     git init -q &&
     mkdir -p evidence && printf 'product branch evidence\n' > evidence/bench.log &&
-    git add evidence/bench.log &&
+    git add evidence/bench.log seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build umbrella product git repo" >&2; exit 2; }
 }
@@ -758,6 +780,8 @@ else fail "installed layout: machine-local bench did not run with writable scrat
 phase "0a2. dispatcher-owned full sweep evidence for reviewer"
 SWEEP_PROJ="$FIX/sweep-proj"
 build_proj "$SWEEP_PROJ" sweep "$VERIFY"
+# Keep the slowed-only inventory used by the batch-validation repository.
+git -C "$SWEEP_PROJ" rm -q seats/fixture.selftest.sh || exit 2
 # Real bd 1.2.2 may redirect a linked-worktree init to its shared ancestor;
 # keep graph setup in an independent primary repo with consistent cwd/PWD.
 SWEEP_BIN="$FIX/sweep-bin"; mkdir -p "$SWEEP_BIN"
@@ -769,6 +793,7 @@ if(process.argv[2]==='where') {
   console.log(JSON.stringify({path:fs.realpathSync(require('path').join(process.cwd(),'.beads'))})); process.exit(0);
 }
 if(process.argv[2]==='init') {
+  if(process.env.STUB_SWEEP_INIT_FAIL==='1') { console.error('fixture sweep graph init failure'); process.exit(73); }
   const cwd=fs.realpathSync(process.cwd()),pwd=process.env.PWD ? fs.realpathSync(process.env.PWD) : '';
   const primary=fs.statSync(require('path').join(cwd,'.git')).isDirectory();
   if(pwd!==cwd || !primary) { console.error('scratch bd init requires an isolated primary repo and consistent PWD'); process.exit(73); }
@@ -831,13 +856,136 @@ if [ "${WHEELHOUSE_VERIFY_REFUSAL_ONLY:-0}" = 1 ]; then
   printf 'verify.selftest: PASS (refusal subset)\n'
   exit 0
 fi
+phase "0a2b. every review needs a dispatcher receipt"
+check_dispatcher_receipts() {
+  local variant="$1" before="$FAILED" style outcome proposed incomplete_bead
+  SWEEP_GENERIC_CLAIM="$FIX/implicit-sweep-claim.txt"
+  for style in lock-recovery state-writes process-isolation; do
+    case "$style" in
+      lock-recovery) outcome='The lock selftest passes and never steals a live owner.' ;;
+      state-writes) outcome='The adapter recovers an abandoned empty state.lock and preserves live owners.' ;;
+      process-isolation) outcome='The no-pi-spawned assertion counts only processes the test itself could have started.' ;;
+    esac
+    printf 'Trace: %s regression\n\nIntent:\nCheck the claimed behavior independently.\n\nOutcomes:\n- O1 %s\n  consumer: machine — fixture runner\n  surface: fixture state and process records\n  check: run — inspect the claimed behavior\n' "$style" "$outcome" > "$SWEEP_GENERIC_CLAIM"
+    WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" "bead-implicit-$style" fleet/bead-1 worker-1
+    if [ "$RC" = 0 ] && [ -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" ] && grep -q '## Dispatcher full-sweep result' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" && grep -q 'sweep evidence rc=0 log=' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md"; then
+      pass "$style claim without sweep keywords still gets a dispatcher receipt"
+    else fail "$style claim bypassed dispatcher sweep rc=$RC out=$OUT"; fi
+  done
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_BD_SHOW_FAIL=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-show-failed fleet/bead-1 worker-1
+  if [ "$RC" = 0 ] && [ -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-show-failed.md" ] && grep -q '## Dispatcher full-sweep result' "$SWEEP_PROJ/seats/verdicts/bead-implicit-show-failed.md"; then
+    pass "unavailable bead text does not skip the dispatcher sweep"
+  else fail "unavailable bead text bypassed sweep rc=$RC out=$OUT"; fi
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" SWEEP_FIXTURE_RC=7 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-failed fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'APPROVE with failed full sweep' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-failed.md" ]; then
+    pass "failed dispatcher sweep blocks APPROVE even without sweep keywords"
+  else fail "failed implicit sweep approved rc=$RC out=$OUT"; fi
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_INIT_FAIL=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-init-failed fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'fixture sweep graph init failure' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-init-failed.md" ]; then
+    pass "dispatcher setup error is named and blocks APPROVE for an implicit claim"
+  else fail "sweep setup error swallowed rc=$RC out=$OUT"; fi
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_DELETE_LOG=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-log-missing fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'cannot record APPROVE without a dispatcher full-sweep result' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-log-missing.md" ]; then
+    pass "missing retained dispatcher receipt blocks APPROVE"
+  else fail "missing dispatcher log accepted rc=$RC out=$OUT"; fi
+  for proposed in BOUNCE DISCOVER; do
+    incomplete_bead="bead-implicit-init-$proposed"
+    WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_INIT_FAIL=1 STUB_SWEEP_VERDICT="$proposed" run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" "$incomplete_bead" fleet/bead-1 worker-1
+    if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'fixture sweep graph init failure' && [ ! -f "$SWEEP_PROJ/seats/verdicts/$incomplete_bead.md" ] && bun - "$SWEEP_PROJ/seats/inbox.jsonl" "$incomplete_bead" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const rows=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(s=>JSON.parse(s)).filter(r=>r.title===`verifier gate STOP — ${process.argv[3]}`);
+assert.equal(rows.length,1);assert.equal(rows[0].class,'distress');assert.equal(rows[0].state,'failed');assert.match(rows[0].detail,/INCOMPLETE review:.*fixture sweep graph init failure/);
+JS
+    then pass "setup failure records an incomplete review even when verifier proposes $proposed";
+    else fail "setup failure recorded $proposed instead of incomplete (rc=$RC out=$OUT)"; fi
+  done
+  SWEEP_BAD_LOCK="$FIX/refused-review-sweep-$variant.lock"
+  mkdir "$SWEEP_BAD_LOCK"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_BAD_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-lock-refused fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'lock helper failed (exit 2)' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-lock-refused.md" ] && [ -d "$SWEEP_BAD_LOCK" ] && bun - "$SWEEP_PROJ/seats/inbox.jsonl" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const rows=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(s=>JSON.parse(s)).filter(r=>r.title==='verifier gate STOP — bead-implicit-lock-refused');
+assert.equal(rows.length,1);assert.equal(rows[0].class,'distress');assert.equal(rows[0].state,'failed');assert.match(rows[0].detail,/INCOMPLETE review:.*lock helper failed \(exit 2\)/);
+JS
+  then pass 'runner lock refusal records an incomplete review with its reason, not BOUNCE';
+  else fail "runner lock refusal recorded a completed review (rc=$RC out=$OUT)"; fi
+  NO_SUITE_PROJ="$FIX/no-suite-proj-$variant"
+  build_proj "$NO_SUITE_PROJ" "nosuite-$variant" "$VERIFY"
+  ( cd "$NO_SUITE_PROJ" && git rm -q seats/fixture.selftest.sh && git -c user.email=selftest@local -c user.name=selftest commit -q -m no-suite && git branch -f fleet/bead-1 HEAD ) || exit 2
+  RUN_PROJ="$NO_SUITE_PROJ"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-no-suite fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'no runnable seats/*.selftest.sh suites' && [ ! -f "$NO_SUITE_PROJ/seats/verdicts/bead-no-suite.md" ]; then
+    pass 'branch without runnable suites is incomplete, not a completed BOUNCE';
+  else fail "empty suite inventory recorded a completed review (rc=$RC out=$OUT)"; fi
+  NO_RUNNER_PROJ="$FIX/no-runner-proj-$variant"
+  build_proj "$NO_RUNNER_PROJ" "no-runner-$variant" "$VERIFY"
+  git -C "$NO_RUNNER_PROJ" rm -q seats/selftest-sweep.sh seats/fixture.selftest.sh
+  git -C "$NO_RUNNER_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m no-runner
+  git -C "$NO_RUNNER_PROJ" branch -f fleet/bead-1 HEAD
+  RUN_PROJ="$NO_RUNNER_PROJ"
+  run_with_bd_show "$SWEEP_GENERIC_CLAIM" bead-no-runner fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'reviewed tip has no seats/selftest-sweep.sh runner' && [ ! -f "$NO_RUNNER_PROJ/seats/verdicts/bead-no-runner.md" ]; then
+    pass "branch without a sweep runner is explicitly incomplete, never APPROVE"
+  else fail "missing branch runner approved rc=$RC out=$OUT"; fi
+  RUN_PROJ="$SWEEP_PROJ"
+  [ "$FAILED" = "$before" ]
+}
+check_dispatcher_receipts fixed || true
+# Same assertions against an owned fix-removed copy, in this one suite run.
+# Restore the wording skip and remove only the new receipt/incomplete guards.
+RECEIPT_CONTROL="$FIX/receipt-control.ts"
+bun - "$VERIFY" "$RECEIPT_CONTROL" <<'JS' || exit 2
+import fs from 'node:fs';import assert from 'node:assert/strict';
+let s=fs.readFileSync(process.argv[2],'utf8');
+const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);';
+assert.equal(s.split(call).length,2);
+s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
+const start=s.indexOf('      // Setup/spawn/pinning failures are not completed BOUNCE/DISCOVER');
+const end=s.indexOf('      if (sweep.logPath && requireSweepCitation)',start);
+assert(start>0 && end>start);s=s.slice(0,start)+s.slice(end);
+fs.writeFileSync(process.argv[3],s);
+JS
+SAVED_SWEEP_PROJ="$SWEEP_PROJ"; SAVED_VERIFY="$VERIFY"
+SWEEP_PROJ="$FIX/sweep-control-proj"
+build_proj "$SWEEP_PROJ" sweep-control "$RECEIPT_CONTROL"
+RUN_PROJ="$SWEEP_PROJ"; VERIFY="$RECEIPT_CONTROL"
+( check_dispatcher_receipts removed ) > "$FIX/receipt-control.out" 2> "$FIX/receipt-control.err"
+CONTROL_RC=$?
+SWEEP_PROJ="$SAVED_SWEEP_PROJ"; RUN_PROJ="$SWEEP_PROJ"; VERIFY="$SAVED_VERIFY"
+if [ "$CONTROL_RC" = 1 ] && [ ! -s "$FIX/receipt-control.err" ] && node - "$FIX/receipt-control.out" <<'JS'
+const fs=require('fs'),assert=require('assert/strict'),s=fs.readFileSync(process.argv[2],'utf8');
+const failed=s.split('\n').filter(line=>line.startsWith('  FAIL  '));
+assert.equal(failed.length,12,s);
+for(const phrase of ['lock-recovery claim bypassed','state-writes claim bypassed','process-isolation claim bypassed','unavailable bead text bypassed','failed implicit sweep approved','sweep setup error swallowed','missing dispatcher log accepted','setup failure recorded BOUNCE','setup failure recorded DISCOVER','runner lock refusal recorded a completed review','empty suite inventory recorded a completed review','missing branch runner approved']) assert(failed.some(line=>line.includes(phrase)),phrase);
+JS
+then
+  node - "$FIX/receipt-control.out" <<'JS'
+const fs=require('fs');for(const line of fs.readFileSync(process.argv[2],'utf8').split('\n').filter(line=>line.startsWith('  FAIL  '))) console.log('CONTROL (fix removed) '+line.trim());
+JS
+  pass "fix-removed wording skip and receipt guards fail all 12 dispatcher regressions (exit 1)";
+else fail "receipt regression negative control was insensitive (exit $CONTROL_RC): $(cat "$FIX/receipt-control.out" "$FIX/receipt-control.err")"; fi
 # First reproduce the old dispatch path: no precomputed evidence, model tool
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
 cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
-bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep-old.lock" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-sweep-bypassed fleet/bead-1 worker-1
+if [ "$RC" = 1 ] && says 'cannot record APPROVE without a dispatcher full-sweep result' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-sweep-bypassed.md" ]; then
+  pass "a bypassed dispatcher call cannot record APPROVE"
+else fail "bypassed dispatcher result approved rc=$RC out=$OUT"; fi
+# The same bypass with only the final APPROVE guard removed must accept it:
+# this proves the independent finalization guard, not merely execution policy.
+bun - "$SWEEP_PROJ/seats/verify.ts" <<'JS' || exit 2
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const p=process.argv[2],s=fs.readFileSync(p,'utf8'),start=s.indexOf('      // Fail closed before publishing authority'),end=s.indexOf('      if (sweep.logPath && requireSweepCitation)',start);
+assert(start>0 && end>start);fs.writeFileSync(p,s.slice(0,start)+s.slice(end));
+JS
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-sweep-bypass-control fleet/bead-1 worker-1
+if [ "$RC" = 0 ] && grep -q '^- verdict: APPROVE$' "$SWEEP_PROJ/seats/verdicts/bead-sweep-bypass-control.md"; then
+  pass "fix-removed final APPROVE guard exposes the bypass (unsafe fixture exit 0)"
+else fail "APPROVE receipt guard negative control was insensitive rc=$RC out=$OUT"; fi
 cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
 # Hold H4 until the dispatcher log proves it waited, before verifier readiness.
 # The controller then releases the fixture holder. No elapsed-time comparison.
