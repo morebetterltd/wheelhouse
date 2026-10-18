@@ -75,17 +75,26 @@ selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+# Nested reviews run the tiny committed fixture inventory, never another host
+# sweep while this suite holds the canonical lock.
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep.lock"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin:/usr/sbin"
+RUN_PATH="$BIN:$PATH" # Fixture mocks precede inherited host-budget shims.
 
 # Stub bd: a couple of ready beads; `bd show` fails so verify.ts takes its
 # read-the-bead-yourself fallback.
 cat > "$BIN/bd" <<'EOF'
 #!/bin/sh
-[ "$1" = "ready" ] || exit 1
-echo "wh-001  P2  ready  a waiting bead"
+case "${1:-}" in
+  ready) echo "wh-001  P2  ready  a waiting bead" ;;
+  # The dispatcher's sweep owns a fresh nested graph. The reviewer still uses
+  # the production read-only wrapper; show deliberately fails as before.
+  init) mkdir -p "${BEADS_DIR:-.beads}" ;;
+  where) node -e 'console.log(JSON.stringify({path:require("fs").realpathSync(".beads")}))' ;;
+  *) exit 1 ;;
+esac
 EOF
 chmod +x "$BIN/bd"
 
@@ -255,10 +264,21 @@ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier; do
   fi
 done
 
+# Every review must run the dispatcher gate. Track the actual runner and its
+# companions plus one tiny suite; an empty fixture tip is not an exemption.
+for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts; do
+  cp -f "$SRC/$f" "$PROJ/seats/$f" || exit 2
+done
+cat > "$PROJ/seats/fixture.selftest.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+printf 'legibility fixture sweep PASS\n'
+SH
 # A git repo: verify.ts resolves branches and reads evidence at the tip.
 ( cd "$PROJ" &&
   git init -q &&
-  git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base &&
+  git add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+  git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
   git branch fleet/bead-rev && git branch fleet/bead-ev ) \
   || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 
@@ -268,6 +288,18 @@ REPLY="$FIX/reply.txt"
 
 arun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 vrun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$PROJ/seats/verify.ts" "$@" 2>&1)" || RC=$?; }
+fixture_sweep_receipt() {
+  node - "$VDIR/$1.md" <<'JS'
+const fs=require('fs'),assert=require('assert/strict');
+const record=fs.readFileSync(process.argv[2],'utf8');
+assert(record.includes('## Dispatcher full-sweep result'));
+const tip=record.match(/^- tip: ([0-9a-f]+)$/m)?.[1],log=record.match(/^- log: (.+)$/m)?.[1];
+assert(tip&&log);const st=fs.lstatSync(log);assert(st.isFile()&&st.size>0);
+const text=fs.readFileSync(log,'utf8');
+for(const expected of [`tip=${tip}`,`preparedTip=${tip}`,`finalTip=${tip}`,'command=bash seats/selftest-sweep.sh','legibility fixture sweep PASS','selftest-sweep: PASS (1 suite(s))','\nrc=0\n'])assert(text.includes(expected),expected);
+console.log(`fixture dispatcher receipt: rc=0 tip=${tip} suites=1`);
+JS
+}
 render() { local f="${1:-$PROJ/seats/floor.ts}"; shift 2>/dev/null
            RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS="${COLS:-160}" LINES=70 NO_COLOR=1 bun "$f" --once "$@" 2>&1)" || RC=$?; }
 says()   { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
@@ -395,8 +427,8 @@ VERDICT: BOUNCE
 PUSH: HOLD — review blocked until the author fixes the mismatch
 EOF
 vrun bead-rev fleet/bead-rev r-seat verifier
-if [ $RC -eq 2 ] && grep -q "verdict: BOUNCE" "$VDIR/bead-rev.md" 2>/dev/null; then
-  pass "real verify.ts run recorded a BOUNCE verdict for bead-rev"
+if [ $RC -eq 2 ] && grep -q "verdict: BOUNCE" "$VDIR/bead-rev.md" 2>/dev/null && fixture_sweep_receipt bead-rev; then
+  pass "real verify.ts run recorded a BOUNCE verdict for bead-rev with a passing dispatcher receipt"
 else fail "verify.ts BOUNCE run: rc=$RC (want 2): $OUT"; fi
 cat > "$PROJ/seats/logs/r-seat.jsonl" <<'EOF'
 {"type":"agent_start"}
@@ -436,8 +468,8 @@ VERDICT: BOUNCE
 PUSH: HOLD — proof/shot.png is absent from the branch
 EOF
 vrun bead-ev fleet/bead-ev e-seat verifier --evidence proof/shot.png
-if [ $RC -eq 2 ] && grep -q "UNSATISFIED" "$VDIR/bead-ev.md" 2>/dev/null; then
-  pass "BOUNCE with failed floor checks is recorded, checks carried in the file"
+if [ $RC -eq 2 ] && grep -q "UNSATISFIED" "$VDIR/bead-ev.md" 2>/dev/null && fixture_sweep_receipt bead-ev; then
+  pass "BOUNCE with failed floor checks is recorded, checks and passing dispatcher receipt carried in the file"
 else fail "BOUNCE-with-unsatisfied run: rc=$RC (want 2), or no UNSATISFIED in the record"; fi
 cat > "$PROJ/seats/logs/e-seat.jsonl" <<'EOF'
 {"type":"agent_start"}
