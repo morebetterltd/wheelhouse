@@ -3,7 +3,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
-for tool in bash dirname grep bun node git; do
+for tool in bash dirname grep bun node git ps; do
   type -P "$tool" >/dev/null || { echo "selftest: $tool is required" >&2; exit 2; }
 done
 BASH_BIN="$(type -P bash)"
@@ -16,9 +16,10 @@ mkdir -p "$FIX/home" "$FIX/tmp" "$FIX/no-rg"
 export HOME="$FIX/home" XDG_CONFIG_HOME="$FIX/home/.config" TMPDIR="$FIX/tmp"
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$FIX/gitconfig"
 printf '[user]\n name = selftest\n email = selftest@example.invalid\n[commit]\n gpgsign = false\n[init]\n defaultBranch = main\n' > "$GIT_CONFIG_GLOBAL"
-# Only this static-source suite gets a minimal PATH. Keep walk's normal PATH
-# (including any host build shims) intact: it launches Bun and Node children.
-for tool in bash dirname grep; do
+# Keep this static-source suite's PATH minimal and rg-free, but retain the
+# admission prerequisites: Bun runs the lock helper and ps proves ancestry.
+# Walk keeps its normal PATH (including host build shims) for Bun/Node children.
+for tool in bash dirname grep bun ps; do
   ln -s "$(type -P "$tool")" "$FIX/no-rg/$tool"
 done
 
@@ -41,6 +42,8 @@ for layout in template project; do
   # Clear an exported shell function too, so it cannot mask the missing binary.
   (cd "$root" && env -u BASH_ENV -u ENV PATH="$FIX/no-rg" "$BASH_BIN" --noprofile --norc -c '
     unset -f rg
+    if ! command -v bun >/dev/null || ! command -v ps >/dev/null; then echo "STOP: no-rg PATH lacks bun/ps admission prerequisites" >&2; exit 2; fi
+    echo "PASS bun and ps admission prerequisites available on minimal child PATH"
     if command -v rg >/dev/null 2>&1; then echo "STOP: no-rg PATH unexpectedly resolves rg" >&2; exit 2; fi
     echo "PASS rg unavailable on child PATH (no shell function either)"
     exec "$@"
