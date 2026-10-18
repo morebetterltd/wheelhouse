@@ -133,7 +133,8 @@ if (mode === 'guard') {
   fs.symlinkSync(root, path.join(root, 'dir-alias'));
   fs.linkSync(fifo, path.join(root, 'hardlink.stdin'));
   const check = spawnSync('bun', ['--preload', preload, '-e', `
-const assert=require('assert/strict'),path=require('path');
+import assert from 'node:assert/strict';
+import path from 'node:path';
 const {openPathsMatch}=await import(process.argv[1]);const root=process.argv[2],fifo=path.join(root,'seat.stdin');
 for(const alias of [fifo,path.join(root,'leaf.stdin'),path.join(root,'dir-alias/seat.stdin'),path.join(root,'hardlink.stdin')])assert.equal(openPathsMatch([fifo],alias),true,alias);
 assert.equal(openPathsMatch([fifo],path.join(root,'other.stdin')),false);
