@@ -1918,7 +1918,8 @@ node -e 'const fs=require("fs"); fs.writeFileSync(process.argv[1], JSON.stringif
 FIXTURE_BD_CLOSED_FILE="$FIX/legacy-closed-beads.json"
 fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/open-bead" -b "fleet/open-bead" main
 LEG_SESSION="$HOME_FIX/.pi-seats-legacy/worker-1/sessions/legacy-session.jsonl"; mkdir -p "$(dirname "$LEG_SESSION")"; printf '{"type":"session"}\n' > "$LEG_SESSION"
-env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/open-bead" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"open-bead",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+# No adapter call has written state.json in this fresh fixture yet.
+env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/open-bead" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s={seats:{}}; s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"open-bead",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")' && [ -s "$STATE" ] || { echo "STOP: legacy-proj initial state seed failed" >&2; exit 2; }
 run spawn worker-2
 run dispatch worker-2 new-bead "new bead despite closed legacy worktrees"
 if [ $RC -eq 0 ] && [ "$(wt_branch "$(seat_wt "$LEG_PROJ" worker-2)")" = "fleet/new-bead" ]; then
