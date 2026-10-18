@@ -82,6 +82,20 @@ function diagnose(error: any, parent?: number, name?: string) {
   console.error("SELFTEST_LOCK_REFUSAL " + JSON.stringify({ operation: process.argv[2], lock: process.argv[3], reason: error.message,
     host: { hostname: HOST, hostId, knownHostnames: [...hostNames], platform: process.platform }, observed, snapshots }));
 }
+// Async supervisor failures may occur outside a transition's pinned parent.
+// Reopen only for a diagnostic snapshot; never repair state from this path.
+function diagnoseLock(error: any, lock: string) {
+  let parent: number | undefined;
+  try {
+    if (!native) primitives();
+    const canonical = canonicalLock(lock);
+    parent = parentFd(canonical);
+    if (native.symbols.flock(parent, 2)) throw new Refused(`diagnostic flock failed (errno ${errno()})`);
+    diagnose(error, parent, path.basename(canonical));
+  } catch {
+    if (!diagnosed) diagnose(error);
+  } finally { if (parent !== undefined) fs.closeSync(parent); }
+}
 let native: ReturnType<typeof dlopen>;
 function primitives() {
   if (!darwin && process.platform !== "linux") throw new Refused("atomic directory publication unsupported on this platform");
@@ -398,7 +412,6 @@ function parentFd(lock: string): number {
 }
 function main(): number {
   const [op, lock, pidText, token, owned] = process.argv.slice(2);
-  hostId = stableHostId();
   if (!["acquire", "release"].includes(op)) throw new Refused("unknown operation");
   const name = path.basename(lock), pid = Number(pidText);
   if (!path.isAbsolute(lock) || ["", ".", ".."].includes(name) || !validPid(pid) || !/^[0-9a-f]{32}$/.test(token)) throw new Refused("invalid lock path/pid/token");
@@ -465,6 +478,7 @@ function ancestorOwnsLock(lock: string): boolean {
   const parent = parentFd(lock);
   try {
     if (native.symbols.flock(parent, 2)) throw new Refused(`parent flock failed (errno ${errno()})`);
+    hostNames = hostCache(parent, path.basename(lock));
     let snapshot: Snapshot;
     try { snapshot = inspect(parent, path.basename(lock)); }
     catch (e: any) { if (e.errno === 2) return false; throw e; }
@@ -489,7 +503,8 @@ function ancestorOwnsLock(lock: string): boolean {
       if (JSON.stringify(inspect(parent, path.basename(lock))) !== JSON.stringify(snapshot)) throw new Refused("inherited lock changed during ancestry check");
       return true;
     } finally { fs.closeSync(queue); }
-  } finally { fs.closeSync(parent); }
+  } catch (e) { diagnose(e, parent, path.basename(lock)); throw e; }
+  finally { fs.closeSync(parent); }
 }
 
 /** Own release outside the suite's traps, but register the gated suite PID.
@@ -562,7 +577,10 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
     if (enrolled) {
       const result = transition("release");
       if (result.stderr) process.stderr.write(result.stderr);
-      if (result.error || result.status !== 0) { console.error("STOP: suite lock release failed"); code = 2; interrupted = null; }
+      if (result.error || result.status !== 0) {
+        diagnoseLock(new Refused(`suite lock release failed: ${result.error ?? `exit ${result.status} signal ${result.signal}`}`), lock);
+        console.error("STOP: suite lock release failed"); code = 2; interrupted = null;
+      }
     }
     for (const [signal, handler] of handlers) process.off(signal, handler);
   }
@@ -570,11 +588,12 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
 }
 try {
   const [operation, lock, ...command] = process.argv.slice(2);
+  hostId = stableHostId();
   if (operation === "inherited") process.exitCode = ancestorOwnsLock(canonicalLock(lock)) ? 0 : 75;
   else if (operation === "supervise") process.exitCode = await superviseSuite(canonicalLock(lock), command);
   else process.exitCode = main();
 }
 catch (e: any) {
-  if (!diagnosed) diagnose(e);
+  if (!diagnosed) diagnoseLock(e, process.argv[3]);
   console.error(`STOP: ${process.argv[3]} is not a selftest-sweep lock (${e.message})`); process.exitCode = 2;
 }

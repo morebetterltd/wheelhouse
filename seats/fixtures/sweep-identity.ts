@@ -35,9 +35,10 @@ function rewrite(file: string, mutate: (value: any) => void) {
   const before = fs.statSync(file, { bigint: true }); fs.writeFileSync(file, JSON.stringify(value) + "\n");
   assert.equal(fs.statSync(file, { bigint: true }).ino, before.ino, "rewrite really preserves the marker inode");
 }
-function diagnostic(r: ReturnType<typeof call>, file: string) {
+function diagnostic(r: ReturnType<typeof call>, file: string, operation?: string) {
   assert.equal(r.status, 2, r.stdout + r.stderr);
-  const lines = r.stderr.split("\n").filter(x => x.startsWith("SELFTEST_LOCK_REFUSAL ")); assert.equal(lines.length, 1, r.stderr);
+  const lines = r.stderr.split("\n").filter(x => x.startsWith("SELFTEST_LOCK_REFUSAL ")).filter(x => !operation || JSON.parse(x.slice("SELFTEST_LOCK_REFUSAL ".length)).operation === operation);
+  assert.equal(lines.length, 1, r.stderr);
   const d = JSON.parse(lines[0].slice("SELFTEST_LOCK_REFUSAL ".length)), stat = fs.statSync(file, { bigint: true });
   assert.equal(d.host.hostname, os.hostname()); assert.match(d.host.hostId, /^[0-9a-f]{64}$/); assert.equal(d.host.platform, process.platform);
   const rows = [...d.observed, ...d.snapshots].filter(x => x.path === file && x.contentsBase64);
@@ -88,7 +89,7 @@ async function rewritten(dir: string, kind: "lock" | "queue" | "waiter") {
 }
 async function writer(dir: string) {
   const owned = acquired(dir), lock = path.join(dir, "host.lock");
-  // Exact publication command from verify-readiness.ts's hold-H4 branch.
+  // Legacy publication command captured from verify-readiness.ts at 76bd232.
   // Native mv targets an existing directory: it adds a fourth member instead
   // of replacing the directory. This proves that writer, not the old outage.
   const command = 'printf "pid=%s\\n" "$$" > "$1.new"; mv -f "$1.new" "$1"';
@@ -115,7 +116,57 @@ async function compatibility(dir: string) {
   const final = call(dir, "release", tokenB, admittedAgain.stdout.trim()); assert.equal(final.status, 0, final.stderr);
   assert(!fs.existsSync(lock)); assert(!fs.existsSync(lock + ".queue"));
 }
-const cases = [["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
+function mode(dir: string, operation: string, command: string[] = [], file = helper, env = process.env) {
+  const args = [file, operation, path.join(dir, "host.lock"), ...command];
+  const r = spawnSync("bun", args, { env, encoding: "utf8" });
+  assert(!r.error, String(r.error)); assert.equal(r.signal, null);
+  fs.appendFileSync(path.join(dir, "calls.jsonl"), JSON.stringify({ command: ["bun", ...args], status: r.status, stdout: r.stdout, stderr: r.stderr }) + "\n");
+  return r;
+}
+async function inheritedNetwork(dir: string) {
+  const before = helpers.get("network-before")!, after = helpers.get("network-after")!, owned = acquired(dir, before);
+  const r = mode(dir, "inherited", [], after); assert.equal(r.status, 0, r.stderr);
+  release(dir, owned, after);
+}
+async function inheritedRefusal(dir: string, kind: "extra" | "queue" | "waiter") {
+  acquired(dir); const lock = path.join(dir, "host.lock"); let file = path.join(lock, marker);
+  if (kind === "extra") fs.writeFileSync(path.join(lock, "unexpected"), "do not delete\n");
+  else {
+    file = kind === "queue" ? path.join(lock + ".queue", anchor) : path.join(lock + ".queue", fs.readdirSync(lock + ".queue").find(x => x.endsWith(tokenA))!);
+    rewrite(file, v => { v.hostname = "unobserved-foreign-host"; });
+  }
+  const raw = fs.readFileSync(file); diagnostic(mode(dir, "inherited"), file, "inherited"); assert(fs.readFileSync(file).equals(raw));
+}
+async function supervisedRefusal(dir: string, kind: "command" | "poll" | "acquire" | "release") {
+  const lock = path.join(dir, "host.lock"), file = path.join(lock, marker), stamp = path.join(dir, "ran");
+  let command: string[] = [], env = process.env;
+  if (kind === "release") {
+    const mutate = path.join(dir, "mutate.ts");
+    fs.writeFileSync(mutate, 'import fs from "node:fs"; const [file, stamp] = process.argv.slice(2); const m=JSON.parse(fs.readFileSync(file,"utf8")); m.hostname="unobserved-foreign-host"; fs.writeFileSync(file,JSON.stringify(m)+"\\n"); fs.writeFileSync(stamp,"ran\\n");\n');
+    command = ["bash", "-c", 'exec bun "$1" "$2" "$3"', "fixture", mutate, file, stamp];
+  } else {
+    acquired(dir);
+    if (kind !== "command") command = ["bash", "-c", 'printf "ran\\n" > "$1"', "fixture", stamp];
+    if (kind === "poll") env = { ...process.env, WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS: "invalid" };
+    if (kind === "acquire") fs.writeFileSync(path.join(lock, "unexpected"), "do not delete\n");
+  }
+  const r = mode(dir, "supervise", command, helper, env);
+  assert.equal(fs.existsSync(stamp), kind === "release", "only the admitted release-refusal payload ran");
+  const raw = fs.readFileSync(file); diagnostic(r, file, "supervise"); assert(fs.readFileSync(file).equals(raw));
+}
+async function supervisedNetwork(dir: string) {
+  const before = helpers.get("network-before")!, after = helpers.get("network-after")!, owned = acquired(dir, before), lock = path.join(dir, "host.lock"), stamp = path.join(dir, "ran");
+  const child = spawn("bun", [after, "supervise", lock, "bash", "-c", 'sleep 0.01; printf "ran\\n" > "$1"', "fixture", stamp], { stdio: ["ignore", "pipe", "pipe"] });
+  let out = "", err = "", closed = false; child.stdout.on("data", b => out += b); child.stderr.on("data", b => err += b);
+  const done = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", rc => { closed = true; resolve(rc); }); });
+  try {
+    while (!err.includes("waiting for host-wide lock")) { assert(!closed, out + err); await Bun.sleep(10); }
+    assert(!fs.existsSync(stamp)); release(dir, owned, after);
+    assert.equal(await done, 0, out + err); assert.equal(fs.readFileSync(stamp, "utf8"), "ran\n");
+    assert(!fs.existsSync(lock)); assert(!fs.existsSync(lock + ".queue"));
+  } finally { if (!closed) child.kill("SIGTERM"); await done; fs.writeFileSync(path.join(dir, "supervisor.out"), out); fs.writeFileSync(path.join(dir, "supervisor.err"), err); }
+}
+const cases = [["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
 const selected = process.env.WHEELHOUSE_IDENTITY_TEST_CASE;
 assert(!selected || cases.some(([name]) => name === selected), "known selected identity leg");
 for (const [name, run] of cases) {
