@@ -358,7 +358,12 @@ The process outlives
 the adapter: its stdin is a FIFO under `seats/run/`, its stdout appends raw
 to `seats/logs/<seat>.jsonl` (every event, one JSON line each; stderr lands
 beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
-one line, and reads the response out of the log.
+one line, and reads the response out of the log. A per-FIFO PID lock
+(`<seat>.stdin.write.lock`) covers the entire LF-terminated command, including
+all non-blocking partial writes: concurrent adapters cannot insert a command's
+newline inside another command larger than `PIPE_BUF`. The lock is released
+before waiting for the response. The stdin holder is the direct `0<>` FIFO
+redirection, not a line-splitting relay.
 
 The seat's process cwd is the seat's own worktree by construction, not a
 prompt telling it to `cd` there. A worker seat owns ONE persistent git
@@ -397,7 +402,15 @@ never leaves `status` naming the previous bead after the prompt has been sent.
 RPC readiness, state replies, FIFO drain and prompt acknowledgements have no
 elapsed-time failure budget: a live seat with an open pipe may answer late.
 The adapter waits for the matching response, or fails with the seat name and
-pid when the process dies or its pipe closes (EOF). Pending RPCs print `WAIT:`
+pid when the process dies or its pipe closes (EOF). A
+`command:"parse", success:false` response fails immediately when read, before
+acknowledgement matching, with `PI_PARSE_ERROR`, seat, pid, pi's error and
+`adapter.ts stop <seat> && adapter.ts resume <seat>`. Pi cannot recover a
+request id from malformed JSON: pending calls observing that transport error
+fail closed, rather than guessing which command failed. The adapter does not
+restart the seat. `adapter-framing.selftest.sh` measures real FIFO write bytes
+against an LF-only slow-reader stand-in and covers dispatch and both steer
+paths rejecting a command without ever acknowledging it. Pending RPCs print `WAIT:`
 progress every five seconds; that is reporting cadence, not a deadline.
 `status` reports observed process/log facts and never guesses WEDGED from a
 slow `get_state`; dispatch does not stop and relaunch a merely slow seat.
@@ -442,7 +455,7 @@ quota, or retries. It runs seats; noticing them is the commander's job.
 bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
 ```
 
-One invocation = one verdict. Unlike the seats above, the verifier is
+One invocation delivers a verdict or a named `no-verdict` outcome. Unlike the seats above, the verifier is
 EPHEMERAL: `verify.ts` spawns one `pi -p --no-session` on the verifier
 seat's account — no session saved, nothing to resume — with
 the resolved REVIEWER brief appended to the system prompt, hands it the bead
@@ -452,6 +465,19 @@ the bead itself) and the branch's tip SHA, and parses the single
 `verify.ts` picks the first free non-external verifier identity whose
 canonical `account.dir` differs from the author; staffed reviewer identities
 are named `verifier-<entry>` and are never spawned by staffing.
+
+For Pi, `agent_end` with `willRetry: true` is not a terminal result: a provider
+retry may still deliver the verdict. It neither triggers no-verdict nor starts
+reaping a later verdict before a final non-retry `agent_end` arrives.
+When the reviewer emits its terminal result without a live `VERDICT:` line,
+`verify.ts` cancels the watchdogs immediately and exits **5 (no-verdict)**,
+distinct from an error (1) or busy/retry (4). It records the reason in the
+inbox, posts a task comment as `verifier-gate`, and writes a separate
+`<bead>.no-verdict.<id>.md` working record without overwriting interim or
+previous records; known interim/partial files in the disposable checkout
+are copied out before cleanup. Notification failures are explicit in the output/record,
+not silently treated as delivered. A sweep that will outlive the turn needs
+an interim record and a collecting dispatch, never a promise to return.
 
 Unlike a worker seat, the verifier's process cwd is never a bead's
 worktree — but as of this bead it is not the project root either. The
@@ -534,6 +560,20 @@ it as durable graph evidence. A caller with its own hard per-command cap
 must launch this long-running dispatcher in the background (for example with
 `nohup`) and poll the retained log/verdict, rather than putting the whole
 dispatch under that caller's command timeout.
+
+### Reuse one passing sweep for a review batch
+
+An integrator can start a separate batch branch at current `main`, merge the candidate tips into it, and obtain **one normal dispatcher full-sweep log at that combined tip**. Then each candidate still gets its own independent review, but can reuse that sweep:
+
+```bash
+bun seats/verify.ts <bead> <candidate-branch> <author-seat> <reviewer-seat> --batch-sweep /absolute/path/to/the.selftest-sweep.log
+```
+
+This opt-in flag reads evidence; it never launches another sweep and never silently falls back if the evidence is unsafe. Without it, the existing dispatcher behavior is unchanged. Use the complete log emitted by the normal dispatcher, including its recorded tip, exact `bash seats/selftest-sweep.sh` command, hermetic `WHEELHOUSE_SKIP_REAL_PI=1`, prepared/final tip, outer suite records, passing full-suite summary, `rc=0` and elapsed time. A snippet, filtered pass, red result, incomplete/mismatched envelope or missing log is not reusable. The reader requires a nonempty single-link regular file (not a symlink/FIFO/directory), at most64MiB.
+
+The reviewed commit must be an ancestor of the recorded batch commit. The batch commit's **first-parent chain** must reach current local `refs/heads/main` in the selected branch repository; merely merging main as a second parent does not qualify. The log must be fresh relative to the reviewed commit's committer timestamp (mtime and available birthtime), not future-dated. The full outer suite inventory must match the batch tree. Keep the file unmodified: it is read safely and byte-fingerprinted, and the evidence and current-main ancestry are checked again after review.
+
+The prompt and verdict distinguish the reviewed tip from the **batch tip**, record the log path and SHA-256, and still require the reviewer to cite `rc=0` and that exact log. Reusing a sweep does not reuse a verdict, approve another branch, cover a candidate added later, or prove skipped live-login/provider legs. If main advances outside that batch's first-parent chain, a candidate changes to a tip outside it, or the sweep is red/stale, prepare a new combined tree and obtain new passing evidence. Preserve the decisive output on the bead before citing these machine-local working-copy logs as durable evidence.
 
 `process.on("exit", ...)` cannot run on SIGKILL, so killing the dispatcher
 process mid-verification leaves the scratch worktree (and its `git
@@ -751,6 +791,10 @@ bash seats/selftest-sweep.sh
 
 It runs `seats/*.selftest.sh` serially and holds a host-wide lock so another seat or install on the same machine waits rather than starting a second full sweep. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
 
+Each admitted suite has a **3600-second** deadline (queue wait is not charged). Set `WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S` to a positive whole number of seconds to override it. At expiry the runner records `FAIL ... timed out after Ns`, sends TERM to the isolated suite tree, waits `WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S` (default **5 seconds**), then KILLs remaining owned groups/descendants. Native PID/PPID/PGID/birth records retain ownership across parent exit during grace. The runner reaps its suite and watchdog, continues with the next suite, includes timed-out paths in its summary, and releases its own host lock normally. A deadline is a harness failure, not evidence about the product behavior under test.
+
+The generous default is based on completed measurements read on 2026-10-17: concurrency **62s**, passing adapter output-capture lifetime **335s** (includes its wrapper), and an entire passing **53-suite** review at `49e2970` **843.256s**. The latter is a conservative upper bound on any single suite in that run, not an invented per-suite timing. 3600s is over four times even that whole-run bound and over ten times the measured adapter span. Queue-inclusive elapsed records are not used as precise suite runtimes. `selftest-sweep-timeout.selftest.sh` proves ordinary and TERM-ignoring idle sleep trees time out, the next suite runs, no recorded processes survive, and the released lock can be reused.
+
 FIFO admission uses a marked sibling `<lock>.queue` directory, leaving the active lock's exact three-file ownership contract unchanged. Registration under the same parent-directory flock assigns a monotonically ordered ticket (not a wall-clock timestamp). Only the oldest live ticket may acquire a free lock; a faster/newer poller cannot pass it. Wait messages report `queue_position`, the current holder and the head PID, updating when these change. Complete PID/host/token records are atomically published; definitive dead-PID tickets are reaped, while live/EPERM owners are preserved. TERM/INT removes only the cancelling runner's ticket, even before acquisition. Empty validated queues are removed without recursive deletion; malformed, foreign or symlinked queues fail closed. A process killed while staging an unpublished private candidate cannot leave an incomplete entry in the visible queue.
 
 The helper retains observed network hostnames in a persistent sibling `<lock>.host` directory, bound to a SHA-256 identity derived from macOS `IOPlatformUUID` (`ioreg`) or Linux `/etc/machine-id`. This lets it recognize lock, queue and waiter markers written before a network-name change, without changing their wire fields. Identity acquisition failure stops rather than falling back to a mutable name. A legacy hostname never observed in this endpoint's cache cannot retrospectively prove its machine after that name changes. Every helper refusal emits a `SELFTEST_LOCK_REFUSAL` JSON record on stderr with operation/reason, current hostname/stable identity, observed marker bytes and a refusal-time lock/queue snapshot (paths, device/inode, nanosecond mtime, full text and base64 bytes). Reads remain no-follow/nonblocking and bounded at 16 KiB per regular marker; missing, unreadable, oversize or nonregular entries are explicitly identified instead of followed or read without a bound. Observed reads and later snapshots are separate because an outside writer need not honor the flock. Diagnostics never authorize removal or repair.
@@ -760,6 +804,8 @@ The helper retains observed network hostnames in a persistent sibling `<lock>.ho
 The runner uses bun's FFI for macOS/Linux exclusive directory-rename support; unsupported primitives fail closed. Only the helper's reserved lock-held status retries; missing/unreadable helpers and all other runtime errors STOP with exit 2. Fixtures that pin or copy the runner must include both `selftest-sweep-lock.ts` and `python-invocations.ts` at that same tip. Parent-directory `flock` serializes new lock transitions without creating a separate cleanup/guard path. Older installed runners do not share that transition mutex: upgrade/sync the runner and its `selftest-sweep-lock.ts` helper only with the host lock idle; this is not a claim that an old runner has gained the ownership check or FIFO admission. All contenders need the upgraded runner/helper for queue-order guarantees; legacy holders remain readable, but legacy acquirers do not enroll.
 
 Source policy runs before lock admission, queue registration or suite START, including filtered sweeps. It rejects Python files and first-line Python interpreters under `seats/`, then audits literal command positions, executable payloads and process APIs in tracked `seats/` code. Inert comments, arguments, captures and fixture data are allowed. A shebang, executable permission bit or code-looking linked target overrides a data suffix; opaque computed commands are not evaluated by the static audit. Missing companions or unexamined tracked sources fail with exit 2, not a completed-test result. No Python prerequisite should be added.
+
+Every maintained suite loads `selftest-lib.sh` before fixture work (including the driver suites). Direct Bash launches now queue on that same lock/FIFO automatically. The library re-enters the script or `bash -c` command under the lock helper, preserving arguments, cwd and active shell options; suite traps and `exec` cannot replace the supervisor's release. A gated suite PID owns the token before its body can start: killing its supervisor does not make a still-running suite appear stale. TERM/INT/HUP/QUIT forward to the owned suite group and retain admission through its cleanup; the existing dead-owner protocol recovers an owner after it exits without release. Nested suites reuse a validated token-owned lock/FIFO head only when its owner is their actual ancestor (or their own suite PID), never from an exported bypass flag. Deliberate private fixture lock paths remain separate domains. Install the library and helper together; even shell-only suites now require Bun for admission. Unsupported interactive/stdin-only entry forms fail closed rather than running unlocked.
 
 Individual suites are still run directly when only a touched surface needs proof:
 
