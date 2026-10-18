@@ -88,31 +88,9 @@ trap cleanup EXIT INT TERM
 
 # --- stale-fixture sweep (same rule as the sibling selftests) ----------------
 FIX_PREFIX="wheelhouse-isolation-selftest"
-sweep_stale_fixtures() {
-  local base="${TMPDIR:-/tmp}" d stamp phys sf spid
-  while IFS= read -r d; do
-    [ -d "$d" ] || continue
-    stamp="${d##*/}"; stamp="${stamp#"$FIX_PREFIX".}"; stamp="${stamp%%.*}"
-    case "$stamp" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$stamp" 2>/dev/null && continue
-    phys="$(cd "$d" 2>/dev/null && pwd -P)" || phys="$d"
-    while IFS= read -r sf; do
-      [ -f "$sf" ] || continue
-      for spid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$spid" 2>/dev/null && lsof -p "$spid" 2>/dev/null | grep -F >/dev/null "$phys"; then
-          kill "$spid" 2>/dev/null
-          echo "swept: killed leaked seat pid $spid (held open files under $d)"
-        fi
-      done
-    done < <(find "$d" -mindepth 3 -maxdepth 3 -path "*/seats/state.json" 2>/dev/null)
-    rm -rf "$d"
-    echo "swept: removed stale fixture $d"
-  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -name "$FIX_PREFIX.*" 2>/dev/null)
-  return 0
-}
-sweep_stale_fixtures
+selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 
-FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"

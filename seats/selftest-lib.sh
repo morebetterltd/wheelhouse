@@ -123,6 +123,10 @@ selftest_recheck_fixture_path() {
 
 selftest_make_fixture_dir() {
   template="${1:-}"
+  # Stale-reclaiming suites can record their stable suite name rather than
+  # a pid-bearing mktemp pattern. Other callers keep their existing metadata.
+  local allocation_prefix="${2:-${template##*/}}"
+  case "$allocation_prefix" in ''|*$'\n'*) selftest_fixture_refused "$template" 'invalid allocation prefix'; return 2;; esac
   selftest_fixture_nonce_valid || { selftest_fixture_refused "$template" 'parent shell run nonce is missing or invalid'; return 2; }
   export WHEELHOUSE_SELFTEST_FIXTURE_NONCE
   [ -n "$template" ] || { echo "STOP: mktemp fixture template is empty" >&2; return 2; }
@@ -137,11 +141,99 @@ selftest_make_fixture_dir() {
   case "$fixture${template##*/}" in *$'\n'*) selftest_fixture_refused "$fixture" 'newline in allocation metadata'; return 2;; esac
   started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || { selftest_fixture_refused "$fixture" 'could not record allocation time'; return 2; }
   if ! (set -o noclobber; printf 'prefix=%s\npid=%s\nstarted=%s\nnonce=%s\nroot=%s\n' \
-    "${template##*/}" "$$" "$started" "$WHEELHOUSE_SELFTEST_FIXTURE_NONCE" "$fixture" > "$fixture/.wheelhouse-selftest-fixture"); then
+    "$allocation_prefix" "$$" "$started" "$WHEELHOUSE_SELFTEST_FIXTURE_NONCE" "$fixture" > "$fixture/.wheelhouse-selftest-fixture"); then
     selftest_fixture_refused "$fixture" 'could not exclusively publish allocation marker'; return 2
   fi
   printf '%s\n' "$fixture"
 }
+# A stale owner needs TWO native absence observations. Only the captured C
+# locale ESRCH message is definitive; EPERM and unknown failures stay alive.
+selftest_stale_owner_gone() {
+  local pid="$1" killed kill_rc ps_output ps_rc
+  killed="$(LC_ALL=C kill -0 "$pid" 2>&1)"; kill_rc=$?
+  if [ "$kill_rc" = 0 ]; then SELFTEST_STALE_REASON='owner is alive'; return 1; fi
+  case "$killed" in
+    *' - No such process') ;;
+    *'Operation not permitted'*|*'Permission denied'*) SELFTEST_STALE_REASON='owner permission denied (alive)'; return 1 ;;
+    *) SELFTEST_STALE_REASON='owner liveness is unknown'; return 1 ;;
+  esac
+  # Diagnostics are intentionally retained with output: ANY nonempty channel
+  # is a refusal, never counted as an empty process inventory.
+  ps_output="$(LC_ALL=C ps -p "$pid" -o pid= 2>&1)"; ps_rc=$?
+  if [ "$ps_rc" != 1 ] || [ -n "$ps_output" ]; then SELFTEST_STALE_REASON='ps did not prove owner absent'; return 1; fi
+  SELFTEST_STALE_REASON=''
+  return 0
+}
+
+selftest_stale_marker_matches() {
+  local dir="$1" prefix="$2" pid="$3" marker="$1/.wheelhouse-selftest-fixture"
+  local p n started nonce root extra
+  SELFTEST_STALE_REASON='missing or non-regular root allocation marker'
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
+  SELFTEST_STALE_REASON='malformed allocation marker'
+  if ! {
+    IFS= read -r -n 4096 p && IFS= read -r -n 4096 n &&
+    IFS= read -r -n 4096 started && IFS= read -r -n 4096 nonce &&
+    IFS= read -r -n 4096 root && ! IFS= read -r -n 4096 extra && [ -z "$extra" ]
+  } < "$marker"; then return 1; fi
+  [ "$p" = "prefix=$prefix" ] || { SELFTEST_STALE_REASON='allocation prefix mismatch'; return 1; }
+  [ "$n" = "pid=$pid" ] || { SELFTEST_STALE_REASON='allocation pid mismatch'; return 1; }
+  case "$started" in started=????-??-??T??:??:??Z) ;; *) return 1;; esac
+  case "$nonce" in nonce=*) nonce="${nonce#nonce=}";; *) return 1;; esac
+  [ "${#nonce}" = 32 ] || return 1
+  case "$nonce" in *[!0-9a-f]*) return 1;; esac
+  [ "$root" = "root=$dir" ] || { SELFTEST_STALE_REASON='allocation root mismatch'; return 1; }
+  SELFTEST_STALE_REASON=''
+  return 0
+}
+
+# Reclaim only a prior selftest allocation recorded at this exact root. This
+# is distinct from current-run removal: a dead run necessarily has another
+# nonce. Name/pid alone, an ancestor marker or copied marker never authorizes it.
+selftest_sweep_stale_fixtures() {
+  local prefix="${1:-}" base="${TMPDIR:-/tmp}" d stamp phys sf pid
+  local SELFTEST_STALE_REASON='' marker_before marker_after
+  case "$prefix" in ''|*[!a-zA-Z0-9_-]*) echo 'STOP: invalid stale fixture prefix' >&2; return 2;; esac
+  base="$(cd "$base" && pwd -P)" || { echo 'STOP: cannot inspect stale fixture TMPDIR' >&2; return 2; }
+  while IFS= read -r -d '' d; do
+    if [ ! -d "$d" ] || [ -L "$d" ]; then echo "skipped: $d (not a physical directory)"; continue; fi
+    # Holding cwd pins the original directory inode for rechecks, so observed
+    # same-name replacements are rejected before removal.
+    (
+    cd "$d" 2>/dev/null || { echo "skipped: $d (cannot inspect directory)"; exit 0; }
+    phys="$(pwd -P)"
+    stamp="${d##*/}"; stamp="${stamp#"$prefix".}"; stamp="${stamp%%.*}"
+    case "$stamp" in ''|0|0*|*[!0-9]*) echo "skipped: $d (invalid owner pid in name)"; exit 0;; esac
+    if [ "${#stamp}" -gt 10 ] || [ "$stamp" -gt 2147483647 ]; then echo "skipped: $d (invalid owner pid in name)"; exit 0; fi
+    if ! selftest_stale_marker_matches "$phys" "$prefix" "$stamp" || ! selftest_stale_owner_gone "$stamp"; then
+      echo "skipped: $d ($SELFTEST_STALE_REASON)"; exit 0
+    fi
+    marker_before="$(<"$phys/.wheelhouse-selftest-fixture")"
+    if [ -L "$d" ] || [ ! . -ef "$phys" ]; then echo "skipped: $d (allocation directory changed)"; exit 0; fi
+    # Retain the existing per-suite seat rule: recorded state pid AND native
+    # lsof proof under this already-authorized fixture, never bare kill -0.
+    while IFS= read -r sf; do
+      [ -f "$sf" ] || continue
+      for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
+        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
+          kill "$pid" 2>/dev/null
+          echo "swept: killed leaked seat pid $pid (held open files under $d)"
+        fi
+      done
+    done < <(find "$phys" -mindepth 3 -maxdepth 3 -path '*/seats/state.json' 2>/dev/null)
+    # Recheck after any process cleanup and before deleting. A missing/changed
+    # marker or a newly live/reused owner is not permission to keep going.
+    if ! selftest_stale_marker_matches "$phys" "$prefix" "$stamp" || ! selftest_stale_owner_gone "$stamp" || [ -L "$d" ] || [ ! . -ef "$phys" ]; then
+      echo "skipped: $d (${SELFTEST_STALE_REASON:-allocation changed})"; exit 0
+    fi
+    marker_after="$(<"$phys/.wheelhouse-selftest-fixture")"
+    if [ "$marker_before" != "$marker_after" ]; then echo "skipped: $d (allocation marker changed)"; exit 0; fi
+    rm -rf "$phys" || exit 2
+    echo "swept: removed stale fixture $d"
+    ) || return 2
+  done < <(find "$base" -mindepth 1 -maxdepth 1 -name "$prefix.*" -print0)
+}
+
 # Metrics are global bd configuration, not per-graph state. bd 1.2.2 writes
 # HOME/.config/bd even with a different XDG_CONFIG_HOME, so pin BOTH to an
 # owned fixture before init; exporting XDG alone is not sufficient.
