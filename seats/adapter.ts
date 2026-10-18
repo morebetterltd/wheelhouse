@@ -67,10 +67,11 @@ import { harnessNameForSeat, requirePiHarness } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
-import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
+import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
+import { prepareTaskScratch } from "./cleanup-identity";
 
 interface SeatDriver {
   readonly name: string;
@@ -198,29 +199,7 @@ function expandTilde(p: string): string {
   return p;
 }
 
-/**
- * A seat name is used as a path segment (run/<seat>.stdin, logs/<seat>.jsonl)
- * and lands inside the quoted shell command that launches pi. A bead id is
- * used the same way at dispatch (recover.ts's printed resume-suggestion
- * quotes it back). Anything that is not one plain segment — separators,
- * dot-dirs, whitespace, quotes — would write outside seats/, break the
- * launch line, or split printed output across lines, so it is refused
- * loudly, naming the offending key. Same rules as verify.ts's validateSegment.
- */
-function validateSegment(kind: string, value: string): string {
-  const bad =
-    value.length === 0 ? "empty" :
-    value === "." || value === ".." ? "a dot segment" :
-    /[/\\]/.test(value) ? "a path separator" :
-    /\s/.test(value) ? "whitespace" :
-    /['"`]/.test(value) ? "a quote character" :
-    null;
-  if (bad !== null) {
-    die(`invalid ${kind} ${JSON.stringify(value)} (${bad}) — must be a single path segment: no /, no .., no whitespace, no quotes`);
-  }
-  return value;
-}
-
+// Segment validation is shared with library callers in seat-worktree.ts.
 function validateSeatName(name: string): string {
   return validateSegment("seat name", name);
 }
@@ -564,16 +543,28 @@ function rpcProgress(rec: RpcSeat, phase: () => string): () => void {
   };
 }
 
-/** Non-blocking FIFO writes: wait for startup/drain while the owned process
- * lives, not for a guessed budget. ENXIO after readiness and EPIPE are EOF.
+/** Serialize the WHOLE JSONL command, not individual writeSync chunks: a
+ * second writer's LF must never land inside a command larger than PIPE_BUF.
+ * Release before waiting for the RPC reply. Non-blocking writes/lock admission
+ * wait for signals, not deadlines. ENXIO after readiness and EPIPE are EOF.
  * Fresh launches have no startedAt yet and may not have opened stdin. */
 async function fifoWrite(rec: RpcSeat, obj: unknown): Promise<void> {
   const line = Buffer.from(JSON.stringify(obj) + "\n");
   const kind = String((obj as any)?.type ?? "command");
   let fd: number | null = null;
   let offset = 0;
-  const progress = rpcProgress(rec, () => `writing ${kind}, ${offset}/${line.length} bytes; awaiting pipe reader/drain`);
+  const lock = `${rec.fifo}.write.lock`;
+  let writeLock: number | null = null;
+  const progress = rpcProgress(rec, () => `writing ${kind}, ${offset}/${line.length} bytes; ${writeLock === null ? "awaiting FIFO command writer lock" : "awaiting pipe reader/drain"}`);
   try {
+    for (;;) {
+      assertRpcProcess(rec, `before writing ${kind}`);
+      const acquired = acquirePidLock(lock); // fifo-command-lock
+      if (acquired !== null) { writeLock = acquired; break; }
+      if (rec.startedAt) assertRpcReader(rec, `while waiting to write ${kind}`);
+      progress();
+      await sleep(25);
+    }
     for (;;) {
       assertRpcProcess(rec, `before writing ${kind}`);
       try {
@@ -601,7 +592,8 @@ async function fifoWrite(rec: RpcSeat, obj: unknown): Promise<void> {
     const delivery = offset > 0 ? "prompt not delivered (partial FIFO write?)" : `${kind} not delivered`;
     throw new Error(`${delivery} to ${rpcSeat(rec)}: wrote ${offset}/${line.length} bytes; ${why}`);
   } finally {
-    if (fd !== null) fs.closeSync(fd);
+    try { if (fd !== null) fs.closeSync(fd); }
+    finally { releasePidLock(lock, writeLock); }
   }
 }
 
@@ -675,6 +667,12 @@ async function rpc(rec: RpcSeat, command: Record<string, unknown>): Promise<any>
         obj = JSON.parse(line);
       } catch {
         continue; // not ours to police; the log is pi's raw stream
+      }
+      // An unparsable command has no recoverable request id. Fail closed on
+      // this transport error BEFORE matching an ack; never restart the seat.
+      if (obj.type === "response" && obj.command === "parse" && obj.success === false) {
+        const name = path.basename(rec.fifo, ".stdin");
+        throw new Error(`PI_PARSE_ERROR: ${rpcSeat(rec)} rejected ${command.type}: ${String(obj.error ?? "unknown pi parse error")}. Recovery: adapter.ts stop ${name} && adapter.ts resume ${name}`);
       }
       if (obj.type === "response" && obj.id === id) return obj;
     }
@@ -1475,6 +1473,10 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
   }
 
+  // Prepare scratch before launching or prompting the worker. A legacy run
+  // without a creation record remains unowned: dispatch never adopts it.
+  const scratch = prepareTaskScratch(ROOT, beadId);
+  if (!scratch.owned) console.log(`scratch ${scratch.target} is unmarked; kept unowned, automatic cleanup will refuse it (legacy scratch needs human review)`);
   // Snapshot BEFORE preparing: preparing may recreate a pruned seat worktree
   // at the very path the seat last recorded, and that must still count as a
   // cwd change (fresh session, relaunch), never as "same place as before".
