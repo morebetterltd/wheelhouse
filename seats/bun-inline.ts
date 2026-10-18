@@ -1,10 +1,11 @@
 // Lexical guard for inline Bun programs. Node snippets and code run from files
 // are deliberately allowed. This is not a general shell/JavaScript interpreter:
 // cover literal eval/print words, stdin heredocs/printf pipelines, runtime
-// selectors, and the named template programs used by our spawnSync fixtures.
+// selectors, and literal/transparent named argv, options and stdin in JS/TS.
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { programmaticPrograms } from "./bun-inline-programmatic";
 
 export type InlineProgram = { offset: number; code: string; mode: string };
 const commonJS = /\brequire\s*\(|\bmodule\s*\./;
@@ -56,18 +57,12 @@ export function inlinePrograms(text: string): InlineProgram[] {
       if (input) programs.push({ offset, code: quoted(line, input.index + input[0].length - 1).code, mode });
     }
   }
-  // Literal programs passed directly to Bun by the child_process APIs.
-  const native = /(?:spawn(?:Sync)?|execFile(?:Sync)?)\(\s*(?:process\.execPath|["']bun["'])\s*,\s*\[\s*["']-(?:e|p)["']\s*,\s*(?=["'`])/g;
-  for (const match of text.matchAll(native)) {
-    programs.push({ offset: match.index!, code: quoted(text, match.index! + match[0].length, false).code, mode: "programmatic literal" });
-  }
-  // Native lock fixtures and adapter's shell log filter use named templates.
-  // Inspect the source program, not spawnSync's or the shell's rendering.
+  programs.push(...programmaticPrograms(text));
+  // Adapter's generated shell log filter is not a child_process argv call.
   for (const match of text.matchAll(/\bconst\s+(\w+)\s*=\s*`([\s\S]*?)`\s*;/g)) {
     const name = match[1];
-    const used = new RegExp(`(?:spawnSync|execFileSync)\\(\\s*(?:process\\.execPath|["']bun["'])\\s*,\\s*\\[\\s*["']-(?:e|p)["']\\s*,\\s*${name}\\b`).test(text);
     const shell = new RegExp(`process\\.execPath[^\\n]* -[ep] [^\\n]*\\$\\{${name}\\.replace`).test(text);
-    if (used || shell) programs.push({ offset: match.index!, code: match[2], mode: used ? "programmatic eval" : "generated shell eval" });
+    if (shell) programs.push({ offset: match.index!, code: match[2], mode: "generated shell eval" });
   }
   return programs;
 }
