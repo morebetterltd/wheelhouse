@@ -739,8 +739,10 @@ The exit code IS the verdict, so the commander's scripts can branch on it:
 | `0` | APPROVE — the bead's done holds, evidence in the output. May carry the brief's `— NOT BENCHED: <gap>` qualifier, preserved in the verdict file: read it before merging on a partial-coverage approval. |
 | `2` | BOUNCE — defects listed; redispatch to the author |
 | `3` | DISCOVER — the bead itself needs the commander's judgment |
-| `1` | error — no verdict exists: a STOP, a dead pi, a timeout, or output with no (or an ambiguous) `VERDICT:` line. Never treat as a verdict. |
-| `5` | refused: not a contract — invalid Intent/Outcomes or unreadable bead; no reviewer identity chosen and no harness spawned. Fix the contract before retrying. |
+| `1` | other errors — no verdict exists: a STOP, a dead pi, a timeout, or a malformed/ambiguous verdict. Never treat as a verdict. |
+| `4` | reviewer busy — retry when an eligible verifier seat is free. |
+| `5` | no-verdict — the reviewer ended its turn without a judgment; never treat as approval or a timeout. |
+| `6` | refused: not a contract — invalid Intent/Outcomes or unreadable bead; no reviewer identity chosen and no harness spawned. Fix the contract before retrying. |
 
 The post-output stall watchdog is the smaller of `--timeout-ms` / `WHEELHOUSE_VERIFY_TIMEOUT_MS` and `--no-event-timeout-ms` / `WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS`. With defaults of 900000 ms for `--timeout-ms` and 600000 ms for `--no-event-timeout-ms`, the effective default quiet-period limit is 600000 ms (10 minutes). This is not a wall-clock cap on the whole verifier turn: after output begins, each stream event resets the watchdog. To allow a verifier to legitimately go quiet between stream events for longer, raise `--no-event-timeout-ms <ms>`; for quiet periods longer than the `--timeout-ms` value, raise `--timeout-ms <ms>` too. Explicit flags win over their environment variables. Separate knobs cover first-output silence (`--first-output-timeout-ms` / `WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS`). On timeout, `verify.ts` writes `seats/verdicts/<bead-id>.partial.md`, prints elapsed time and the last tool/phase it saw, and exits 1. A timeout is not a provider/auth failure and does not start the probe cadence.
 
