@@ -55,9 +55,11 @@ try {
   // Same configured command as the transport; timing is a measurement, not a
   // threshold. Reset its extra count so it cannot satisfy the per-call check.
   const configured = process.env.WHEELHOUSE_TEAMS_TOKEN_CMD!; assert(configured);
+  reset(); // Do not attribute earlier env/file-token calls to this calibration.
   const calibration = await capture("configured-command-calibration", ["bash", "-lc", configured]);
   assert.equal(calibration.code, 0, diagnostic(calibration)); assert.equal(calibration.signal, null);
   assert.equal(calibration.stdout, "teams-cmd-token");
+  assert.equal(calibration.callTimings.length, 0, "calibration must not inherit another case's transport timings");
   console.log(`# TOKEN_CMD timing configured-command elapsedMs=${calibration.elapsedMs.toFixed(3)} (no timing verdict)`);
   reset();
   const normal = await capture("per-call", ["bun", check, "teams", "chats/cmd"]);
