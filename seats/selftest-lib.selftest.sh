@@ -37,6 +37,16 @@ if [ "${WHEELHOUSE_SELFTEST_OWNERSHIP_ONLY:-}" = 1 ]; then
   echo "selftest-lib.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1
 fi
 
+if bun "$HERE/fixtures/selftest-stale-fixtures.mjs" "$FIX/stale-fixtures" "$HERE/selftest-lib.sh" "$HERE"; then
+  pass 'stale sweeps remove only marked dead-owner allocations for all six prefixes'
+else
+  fail 'stale sweep fixture checks'
+fi
+if [ "${WHEELHOUSE_SELFTEST_STALE_ONLY:-}" = 1 ]; then
+  if [ "$FAIL" -eq 0 ]; then echo "selftest-lib.selftest: PASS ($PASS checks, stale only)"; exit 0; fi
+  echo "selftest-lib.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1
+fi
+
 SRCROOT="$FIX/source"; DEST="$FIX/dest"
 mkdir -p "$SRCROOT"
 selftest_copy_seat_runtime "$SRCROOT" "$HERE"
