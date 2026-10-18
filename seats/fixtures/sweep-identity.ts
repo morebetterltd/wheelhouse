@@ -8,6 +8,8 @@ import { spawn, spawnSync } from "node:child_process";
 const [root, helper, runner] = process.argv.slice(2);
 // Exact current-main helper captured at 76bd232 (blob 3805817f...).
 const oldHelper = path.join(import.meta.dir, "sweep-lock-v1.ts");
+const compatibilityHelper = process.env.WHEELHOUSE_IDENTITY_COMPAT_HELPER || oldHelper;
+assert(fs.statSync(compatibilityHelper).isFile());
 assert(fs.statSync(oldHelper).isFile());
 const oldBytes = fs.readFileSync(oldHelper);
 assert.equal(createHash("sha1").update(`blob ${oldBytes.length}\0`).update(oldBytes).digest("hex"), "3805817fedd7e663527097697d3a54df27ea735c", "frozen current-main helper is byte-exact");
@@ -166,7 +168,73 @@ async function supervisedNetwork(dir: string) {
     assert(!fs.existsSync(lock)); assert(!fs.existsSync(lock + ".queue"));
   } finally { if (!closed) child.kill("SIGTERM"); await done; fs.writeFileSync(path.join(dir, "supervisor.out"), out); fs.writeFileSync(path.join(dir, "supervisor.err"), err); }
 }
-const cases = [["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
+async function identityAvailability(dir: string, kind: "path" | "missing" | "error" | "malformed") {
+  const lock = path.join(dir, "host.lock"), nativeOwned = acquired(dir);
+  const cacheFile = path.join(lock + ".host", marker + "-host");
+  const cache = fs.existsSync(cacheFile) ? { bytes: fs.readFileSync(cacheFile), ino: fs.statSync(cacheFile).ino } : undefined;
+  let file = helper, env = process.env;
+  if (kind === "path") {
+    const bin = path.join(dir, "minimal-bin"); fs.mkdirSync(bin); fs.symlinkSync(fs.realpathSync(process.execPath), path.join(bin, "bun"));
+    const shims = (process.env.PATH ?? "").split(path.delimiter).filter(p => p.endsWith("/seats/bin"));
+    env = { ...process.env, PATH: [...shims, bin, "/usr/bin", "/bin"].join(path.delimiter) };
+    assert(!env.PATH!.split(path.delimiter).includes("/usr/sbin"));
+    const absent = spawnSync("bash", ["-c", "command -v ioreg"], { env, encoding: "utf8" });
+    assert.equal(absent.status, 1); assert.equal(absent.stdout, "");
+    fs.writeFileSync(path.join(dir, "path-probe.json"), JSON.stringify({ command: ["bash", "-c", "command -v ioreg"], status: absent.status, stdout: absent.stdout, stderr: absent.stderr, PATH: env.PATH }));
+  } else {
+    // Redirect only the native identity source in a disposable helper copy.
+    // No OS binary, machine-id, platform ABI or installed helper is changed.
+    const provider = path.join(dir, "identity-source");
+    if (process.platform === "darwin") {
+      if (kind !== "missing") fs.writeFileSync(provider, kind === "error" ? "#!/bin/sh\nexit 73\n" : "#!/bin/sh\nprintf 'not a hardware UUID\\n'\n", { mode: 0o700 });
+      const pattern = /execFileSync\("(?:\/usr\/sbin\/)?ioreg"/g;
+      assert.equal([...source.matchAll(pattern)].length, 1);
+      file = path.join(dir, "helper.ts"); fs.writeFileSync(file, source.replace(pattern, `execFileSync(${JSON.stringify(provider)}`));
+    } else {
+      assert.equal(process.platform, "linux", "availability fixture supports native macOS/Linux");
+      if (kind === "error") fs.mkdirSync(provider);
+      if (kind === "malformed") fs.writeFileSync(provider, "not a machine id\n");
+      const needle = 'fs.readFileSync("/etc/machine-id", "utf8")'; assert.equal(source.split(needle).length, 2);
+      file = path.join(dir, "helper.ts"); fs.writeFileSync(file, source.replace(needle, `fs.readFileSync(${JSON.stringify(provider)}, "utf8")`));
+    }
+    if (kind === "missing") assert(!fs.existsSync(provider), "missing identity source really is absent");
+  }
+  const op = (operation: string, command: string[] = []) => mode(dir, operation, command, file, env);
+  // A fallback must also handle markers/cache made while hardware ID worked.
+  const inherited = op("inherited"); assert.equal(inherited.status, 0, inherited.stderr);
+  const wait = op("acquire", [String(process.pid), tokenB, ""]); assert.equal(wait.status, 75, wait.stderr);
+  assert.equal(op("release", [String(process.pid), tokenA, nativeOwned]).status, 0);
+  const next = op("acquire", [String(process.pid), tokenB, ""]); assert.equal(next.status, 0, next.stderr);
+  const legacyWait = mode(dir, "acquire", [String(process.pid), tokenA, ""], compatibilityHelper); assert.equal(legacyWait.status, 75, legacyWait.stderr);
+  assert.equal(op("release", [String(process.pid), tokenB, next.stdout.trim()]).status, 0);
+  const legacyNext = mode(dir, "acquire", [String(process.pid), tokenA, ""], compatibilityHelper); assert.equal(legacyNext.status, 0, legacyNext.stderr);
+  assert.equal(mode(dir, "release", [String(process.pid), tokenA, legacyNext.stdout.trim()], compatibilityHelper).status, 0);
+  const stamp = path.join(dir, "ran");
+  const supervised = op("supervise", ["bash", "-c", 'printf "ran\\n" > "$1"', "fixture", stamp]); assert.equal(supervised.status, 0, supervised.stderr); assert.equal(fs.readFileSync(stamp, "utf8"), "ran\n");
+  const again = op("acquire", [String(process.pid), tokenA, ""]); assert.equal(again.status, 0, again.stderr);
+  const extra = path.join(lock, "unexpected"); fs.writeFileSync(extra, "diagnostic source witness\n");
+  const d = diagnostic(op("inherited"), path.join(lock, marker), "inherited");
+  assert.equal(d.host.identitySource, kind === "path" && cache ? process.platform === "darwin" ? "darwin-ioplatformuuid" : "linux-machine-id" : "hostname");
+  assert(Array.isArray(d.host.identityFailures));
+  if (kind !== "path") { assert.equal(d.host.identityFailures.length, 1); assert.equal(d.host.identityFailures[0].source, process.platform === "darwin" ? "darwin-ioplatformuuid" : "linux-machine-id"); }
+  fs.unlinkSync(extra); assert.equal(op("release", [String(process.pid), tokenA, again.stdout.trim()]).status, 0);
+  assert(!fs.existsSync(lock)); assert(!fs.existsSync(lock + ".queue"));
+  if (cache) { assert(fs.readFileSync(cacheFile).equals(cache.bytes), "fallback never overwrites the stable host cache"); assert.equal(fs.statSync(cacheFile).ino, cache.ino); }
+  let freshStatuses: number[] | undefined;
+  if (kind !== "path") {
+    const fresh = path.join(dir, "fresh"); fs.mkdirSync(fresh);
+    const first = mode(fresh, "acquire", [String(process.pid), tokenA, ""], file, env); assert.equal(first.status, 0, first.stderr);
+    assert.equal(mode(fresh, "acquire", [String(process.pid), tokenB, ""], compatibilityHelper).status, 75);
+    assert.equal(mode(fresh, "release", [String(process.pid), tokenA, first.stdout.trim()], file, env).status, 0);
+    const legacy = mode(fresh, "acquire", [String(process.pid), tokenB, ""], compatibilityHelper); assert.equal(legacy.status, 0, legacy.stderr);
+    assert.equal(mode(fresh, "release", [String(process.pid), tokenB, legacy.stdout.trim()], compatibilityHelper).status, 0);
+    assert(!fs.existsSync(path.join(fresh, "host.lock"))); assert(!fs.existsSync(path.join(fresh, "host.lock.queue"))); assert(!fs.existsSync(path.join(fresh, "host.lock.host")), "hostname fallback does not persist a misleading stable cache");
+    freshStatuses = fs.readFileSync(path.join(fresh, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line).status);
+  }
+  const calls = fs.readFileSync(path.join(dir, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  fs.writeFileSync(path.join(dir, "identity-observation.json"), JSON.stringify({ kind, source: d.host.identitySource, failures: d.host.identityFailures, statuses: calls.map(c => c.status), stableCachePreserved: !!cache, freshStatuses }, null, 2) + "\n");
+}
+const cases = [["minimal-path", (d: string) => identityAvailability(d, "path")], ["identity-source-missing", (d: string) => identityAvailability(d, "missing")], ["identity-source-error", (d: string) => identityAvailability(d, "error")], ["identity-source-malformed", (d: string) => identityAvailability(d, "malformed")], ["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
 const selected = process.env.WHEELHOUSE_IDENTITY_TEST_CASE;
 assert(!selected || cases.some(([name]) => name === selected), "known selected identity leg");
 for (const [name, run] of cases) {

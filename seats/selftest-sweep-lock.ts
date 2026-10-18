@@ -14,6 +14,9 @@ const WAITER = `${MARKER}-waiter`;
 const queueMarkers = new Map<number, [string, string]>();
 const HOST = os.hostname(); // Diagnostic/legacy name only; networks may change it.
 let hostId: string | null = null;
+type IdentitySource = "darwin-ioplatformuuid" | "linux-machine-id" | "hostname";
+let identitySource: IdentitySource = "hostname";
+const identityFailures: { source: IdentitySource; reason: string }[] = [];
 const descriptorPaths = new Map<number, string>();
 const observed: object[] = [];
 let diagnosed = false;
@@ -23,19 +26,33 @@ const C = fs.constants;
 const darwin = process.platform === "darwin";
 class Refused extends Error {}
 function stableHostId(): string {
-  // Never fall back to the network name when a stable identity is unavailable.
-  let source: string;
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+  const unavailable = (source: IdentitySource, error: any) => identityFailures.push({ source,
+    reason: typeof error?.code === "string" ? error.code : typeof error?.status === "number" ? `exit:${error.status}` : "unavailable" });
   if (darwin) {
-    const raw = execFileSync("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
-    const match = /^\s*"IOPlatformUUID" = "([0-9A-Fa-f-]+)"\s*$/m.exec(raw);
-    if (!match || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(match[1])) throw new Refused("stable hardware UUID unavailable");
-    source = `darwin:${match[1].toLowerCase()}`;
+    try {
+      // System location, independent of a suite's deliberately minimal PATH.
+      const raw = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
+      const match = /^\s*"IOPlatformUUID" = "([0-9A-Fa-f-]+)"\s*$/m.exec(raw);
+      if (match && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(match[1]) && !/^0+$/.test(match[1].replaceAll("-", ""))) {
+        identitySource = "darwin-ioplatformuuid";
+        return digest(`darwin:${match[1].toLowerCase()}`);
+      }
+      identityFailures.push({ source: "darwin-ioplatformuuid", reason: "invalid-value" });
+    } catch (error) { unavailable("darwin-ioplatformuuid", error); }
   } else if (process.platform === "linux") {
-    const machine = fs.readFileSync("/etc/machine-id", "utf8").trim();
-    if (!/^[0-9a-f]{32}$/i.test(machine) || /^0+$/.test(machine)) throw new Refused("stable machine-id unavailable");
-    source = `linux:${machine.toLowerCase()}`;
-  } else throw new Refused("stable host identity unsupported on this platform");
-  return createHash("sha256").update(source).digest("hex");
+    try {
+      const machine = fs.readFileSync("/etc/machine-id", "utf8").trim();
+      if (/^[0-9a-f]{32}$/i.test(machine) && !/^0+$/.test(machine)) {
+        identitySource = "linux-machine-id";
+        return digest(`linux:${machine.toLowerCase()}`);
+      }
+      identityFailures.push({ source: "linux-machine-id", reason: "invalid-value" });
+    } catch (error) { unavailable("linux-machine-id", error); }
+  }
+  // Lookup failure must not turn an otherwise valid legacy lock into STOP.
+  identitySource = "hostname";
+  return digest(`hostname:${HOST}`);
 }
 function hostMatches(marker: any): boolean {
   // Wire records stay byte-for-byte compatible in shape with older helpers.
@@ -80,7 +97,7 @@ function diagnose(error: any, parent?: number, name?: string) {
   }
   if (parent !== undefined && name) { capture(parent, name, 1); capture(parent, `${name}.queue`, 1); capture(parent, `${name}.host`, 1); }
   console.error("SELFTEST_LOCK_REFUSAL " + JSON.stringify({ operation: process.argv[2], lock: process.argv[3], reason: error.message,
-    host: { hostname: HOST, hostId, knownHostnames: [...hostNames], platform: process.platform }, observed, snapshots }));
+    host: { hostname: HOST, hostId, identitySource, identityFailures, knownHostnames: [...hostNames], platform: process.platform }, observed, snapshots }));
 }
 // Async supervisor failures may occur outside a transition's pinned parent.
 // Reopen only for a diagnostic snapshot; never repair state from this path.
@@ -277,6 +294,9 @@ function publish(parent: number, name: string, pid: number, token: string) {
 }
 
 function hostCache(parent: number, lockName: string): Set<string> {
+  // A weaker fallback cannot authenticate hardware-bound aliases. Do not
+  // overwrite or reject a previous stable cache just because lookup failed.
+  if (identitySource === "hostname") return new Set([HOST]);
   // Sibling, NOT a fourth lock member or queue entry. Older helpers inspect
   // only lockName and lockName.queue and leave this cache completely alone.
   const name = `${lockName}.host`, digest = (s: string) => createHash("sha256").update(s).digest("hex");
