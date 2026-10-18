@@ -56,7 +56,7 @@ grep -q '"type":"turn_end"' "$TMP/log.jsonl"; grep -q '"type":"agent_end"' "$TMP
 grep -q '"id":"mid".*"isStreaming":true' "$TMP/log.jsonl"
 grep -q '"id":"idle".*"isStreaming":false' "$TMP/log.jsonl"
 [ "$(grep -c '"type":"agent_end"' "$TMP/log.jsonl")" -eq 1 ]
-! grep -q leak "$TMP/home/codex/env.json"
+selftest_capture_lacks "$TMP/home/codex/env.json" -q -- leak
 PATH="$TMP/bin:$PATH" HOME="$TMP/home" bun "$ROOT/seats/drivers/codex/shim.ts" --log "$TMP/auth-log.jsonl" --raw-log "$TMP/auth-raw.jsonl" --err-log "$TMP/auth-err.log" --account-dir "$TMP/home/codex" --brief "$TMP/proj/contracts/WORKER.md" --model gpt-5.5 --cwd "$TMP/proj" --actor worker-1 < <(printf '{"id":"a","type":"prompt","message":"AUTH failure"}
 ') & apid=$!
 for i in {1..100}; do [ -f "$TMP/auth-log.jsonl" ] && grep -q '"authDead":true' "$TMP/auth-log.jsonl" && break; sleep .1; done

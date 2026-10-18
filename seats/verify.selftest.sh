@@ -1196,7 +1196,7 @@ then pass "prompt routes unavailable interview-mode claims to a named non-author
 if grep -q '"BEADS_ACTOR":"verifier"' "${VARGV%argv.json}env.json" 2>/dev/null; then
   pass "the ephemeral verifier's own env carries BEADS_ACTOR=verifier, with no operator export"
 else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:verifier set by verify.ts itself"; fi
-if ! grep -q "$PROJ/seats/bin" "${VARGV%argv.json}env.json" 2>/dev/null; then
+if selftest_capture_lacks "${VARGV%argv.json}env.json" -q -- "$PROJ/seats/bin"; then
   pass "host budget absent: verifier PATH is not rewritten to seats/bin"
 else fail "host budget absent: verifier PATH unexpectedly included seats/bin: $(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
 cat > "$REPLY" <<EOF
@@ -1372,7 +1372,7 @@ else fail "mid-pass branch move did not produce moved APPROVE (exit $RC): $OUT";
 if grep -q "tip: $MOVE_PIN" "$VDIR/bead-move.md" 2>/dev/null && grep -q "branch has since moved to $MOVE_TIP" "$VDIR/bead-move.md" && grep -q "push: NOT CONSIDERED — branch moved; re-verify at $MOVE_TIP before publish" "$VDIR/bead-move.md"; then
   pass "mid-pass branch move verdict file records pinned tip, move note, and NOT CONSIDERED push"
 else fail "mid-pass branch move verdict file missing pinned/moved/push detail: $(cat "$VDIR/bead-move.md" 2>/dev/null)"; fi
-if ! grep -q "DISCOVER" "$VDIR/bead-move.md" 2>/dev/null && ! says "DISCOVER"; then
+if selftest_capture_lacks "$VDIR/bead-move.md" -q -- "DISCOVER" && ! says "DISCOVER"; then
   pass "mid-pass branch move is never rendered as DISCOVER"
 else fail "mid-pass branch move leaked DISCOVER: $OUT $(cat "$VDIR/bead-move.md" 2>/dev/null)"; fi
 RUN_PROJ="$PROJ"
@@ -1447,7 +1447,7 @@ else fail "claude-code verifier one-shot did not request stream-json with --verb
 if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && ! grep -q 'contracts/REVIEWER.md' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
   pass "claude-code verifier one-shot carries reviewer brief text, not the path"
 else fail "claude-code verifier one-shot carried path or missed brief text: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
-if ! grep -q -- 'permission-mode\|allowed-tools\|disallowed-tools' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
+if selftest_capture_lacks "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" -q -- 'permission-mode\|allowed-tools\|disallowed-tools'; then
   pass "claude-code verifier one-shot omits tool permission flags when the seat has no tool lists"
 else fail "claude-code verifier one-shot unexpectedly carried tool permission flags: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
 cat > "$REPLY" <<'EOF'

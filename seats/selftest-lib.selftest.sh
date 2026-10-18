@@ -11,6 +11,8 @@ PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 
+if bun "$HERE/fixtures/scratch-ownership.ts" lsof "$HERE/.." "$FIX"; then pass 'lsof capture leaves old pid file intact'; else fail 'lsof scratch ownership collision'; fi
+
 # Exercise a worker caller even when this suite is launched by the commander.
 for caller in unset worker-1 commander; do
   actor_env=(env -u BEADS_ACTOR)

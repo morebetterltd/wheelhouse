@@ -19,6 +19,8 @@ FAIL=0
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 
+if bun "$SCRIPT_DIR/fixtures/scratch-ownership.ts" push "$SCRIPT_DIR/.." "$FIX"; then pass 'push-authority capture leaves old pid file intact'; else fail 'push-authority scratch ownership collision'; fi
+
 mkproj() {
   local dir="$1" grant="$2"
   mkdir -p "$dir/wheelhouse" "$dir/seats/verdicts"
