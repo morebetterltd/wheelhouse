@@ -31,8 +31,12 @@ for (const { phase, signal } of cases) {
   // Passive callback after production signal handlers. Old synchronous exits
   // never reach it; new shutdown must allow handlers to return and then join.
   // Do NOT add a HUP listener to old source (that would alter its default exit).
-  const verify = path.join(project, "seats/verify.ts"), text = fs.readFileSync(verify, "utf8"), anchor = "  const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);";
-  assert.equal(text.split(anchor).length, 2);
+  const verify = path.join(project, "seats/verify.ts"), text = fs.readFileSync(verify, "utf8");
+  // Main may select reused batch evidence before the normal dispatcher call.
+  // Observe its complete declaration without changing either execution path.
+  const anchors = text.match(/^  const sweep = [^\n]*\brunFullSweepIfRequired\(claim, repoRoot, tip, realBd, basePath\);$/gm) ?? [];
+  assert.equal(anchors.length, 1, "one dispatcher sweep declaration");
+  const anchor = anchors[0];
   const observed = text.replace(anchor, '  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => fs.writeFileSync(process.env.CANCEL_CASE! + "/handler-returned", sig));\n  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "before-sweep\\n");\n' + anchor + '\n  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "after-sweep\\n");');
   fs.writeFileSync(verify, observed.replace('  const res = await runOneShot(', '  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "before-reviewer\\n");\n  const res = await runOneShot('));
   fs.writeFileSync(path.join(project, "contracts/REVIEWER.md"), "Inert cancellation reviewer.\n");
