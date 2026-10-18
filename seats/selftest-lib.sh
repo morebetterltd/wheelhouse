@@ -214,3 +214,27 @@ EOF
   fi
   return 0
 }
+
+# Admission happens on source, before fixture allocation or suite work. A
+# supervisor owns the lock so a suite's later traps/exec cannot replace release.
+selftest_admit_suite() {
+  local helper="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$(selftest_lib_root)/seats/selftest-sweep-lock.ts}"
+  local lock="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-/tmp/wheelhouse-selftest-sweep.lock}" rc option
+  local options=()
+  [ -r "$helper" ] || { echo "STOP: selftest lock helper missing or unreadable: $helper" >&2; exit 2; }
+  if bun "$helper" inherited "$lock"; then return 0; else rc=$?; fi
+  [ "$rc" -eq 75 ] || exit "$rc"
+  # Preserve active shell options without exporting them into unrelated child
+  # programs. Both normal suite scripts and bash -c library consumers re-enter
+  # through the verified ancestor path; no trusted 'already locked' env flag.
+  for option in ${SHELLOPTS//:/ }; do options+=( -o "$option" ); done
+  if [ -n "${BASH_EXECUTION_STRING:-}" ]; then
+    exec bun "$helper" supervise "$lock" "$BASH" "${options[@]}" -c "$BASH_EXECUTION_STRING" "$0" "$@"
+  elif [ -f "$0" ]; then
+    exec bun "$helper" supervise "$lock" "$BASH" "${options[@]}" -- "$0" "$@"
+  else
+    echo 'STOP: selftest admission requires a Bash script or bash -c invocation' >&2
+    exit 2
+  fi
+}
+selftest_admit_suite "$@"

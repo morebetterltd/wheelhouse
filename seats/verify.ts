@@ -69,9 +69,9 @@
  * configuration: omitted --repo defaults to that product repository. Explicit
  * --repo still wins. Evidence paths stay relative to the selected repository.
  *
- * Exit: 0 APPROVE | 2 BOUNCE | 3 DISCOVER | 1 anything else (including a
- * malformed or missing verdict — the machine must never mistake an error
- * for a judgment).
+ * Exit: 0 APPROVE | 2 BOUNCE | 3 DISCOVER | 4 reviewer busy/retry |
+ * 5 no-verdict (reviewer ended its turn without a judgment) | 1 other errors.
+ * A no-verdict outcome is recorded, never treated as an approval or timeout.
  */
 
 import * as crypto from "node:crypto";
@@ -356,7 +356,7 @@ function sawFinalReviewerResult(stdout: string, harness: HarnessName): boolean {
       } else if (harness === "codex") {
         if (event?.type === "turn.completed") return true;
       } else {
-        if (event?.type === "agent_end") return true;
+        if (event?.type === "agent_end" && event?.willRetry !== true) return true;
       }
     } catch {}
   }
@@ -464,6 +464,7 @@ interface OneShotRunResult {
   status: number | null;
   signal: NodeJS.Signals | null;
   error?: Error & { code?: string };
+  outcome?: "no-verdict";
 }
 
 function runOneShot(
@@ -496,7 +497,7 @@ function runOneShot(
       if (noEventTimer) clearTimeout(noEventTimer);
       if (finalKillTimer) clearTimeout(finalKillTimer);
       if (markerFile) { try { fs.unlinkSync(markerFile); } catch {} }
-      resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error });
+      resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error, outcome: result.outcome });
     };
     const killProcessGroup = (signal: NodeJS.Signals) => {
       if (!child.pid) return;
@@ -513,7 +514,13 @@ function runOneShot(
       if (sawFinalVerdictMessage || done) return;
       const stdout = out();
       if (!sawFinalReviewerResult(stdout, opts.harness)) return;
-      if (liveVerdictCandidates(stdout, opts.harness).length === 0 || livePushCandidates(stdout, opts.harness).length === 0) return;
+      if (liveVerdictCandidates(stdout, opts.harness).length === 0) { // no-verdict-terminal
+        killProcessGroup("SIGTERM");
+        setTimeout(() => killProcessGroup("SIGKILL"), 1000).unref?.();
+        finish({ status: 0, outcome: "no-verdict" });
+        return;
+      }
+      if (livePushCandidates(stdout, opts.harness).length === 0) return;
       sawFinalVerdictMessage = true;
       finalKillTimer = setTimeout(() => {
         killProcessGroup("SIGTERM");
@@ -532,6 +539,7 @@ function runOneShot(
       noEventTimer = setTimeout(() => killFor(code, message), stallMs);
     };
     const collect = (chunks: Buffer[], current: () => number, setBytes: (n: number) => void, chunk: Buffer) => {
+      if (done) return;
       sawOutput = true;
       clearTimeout(firstOutputTimer);
       resetNoEventTimer();
@@ -1240,6 +1248,44 @@ function pushAuthorityPromptLines(root: string): string[] {
   ];
 }
 
+function recordNoVerdict(beadId: string, branch: string, tip: string, verifierSeat: string, realBd: string, scratchCwd: string, stdout: string, stderr: string): never {
+  fs.mkdirSync(VERDICTS_DIR, { recursive: true });
+  const reason = "Reviewer completed its turn without a live VERDICT line; no judgment was delivered. A collecting dispatch or human decision is owed, not a promise to return.";
+  // Never overwrite a reviewer-authored interim, partial, or prior record.
+  const preserved = [".interim.md", ".md", ".partial.md"]
+    .map((suffix) => path.join(VERDICTS_DIR, `${beadId}${suffix}`)).filter((file) => fs.existsSync(file));
+  // A relative interim written in the disposable checkout must also survive
+  // makeScratchCwd's exit cleanup. Copy known records without following links
+  // outside that checkout or overwriting an install-local record.
+  for (const suffix of [".interim.md", ".md", ".partial.md"]) {
+    const source = path.join(scratchCwd, "seats", "verdicts", `${beadId}${suffix}`);
+    if (!fs.existsSync(source) || !fs.lstatSync(source).isFile()) continue;
+    if (!fs.realpathSync(source).startsWith(fs.realpathSync(scratchCwd) + path.sep)) continue;
+    const retained = path.join(VERDICTS_DIR, `${beadId}.retained.${crypto.randomUUID()}${suffix}`);
+    fs.copyFileSync(source, retained, fs.constants.COPYFILE_EXCL);
+    preserved.push(retained);
+  }
+  const file = path.join(VERDICTS_DIR, `${beadId}.no-verdict.${crypto.randomUUID()}.md`);
+  const relative = path.relative(ROOT, file);
+  const detail = ["outcome: no-verdict", `reason: ${reason}`, `bead: ${beadId}`, `branch: ${branch}`, `tip: ${tip}`, `verifier-seat: ${verifierSeat}`, `working record: ${relative}`,
+    ...preserved.map((p) => `interim/previous record preserved: ${path.relative(ROOT, p)}`)].join("\n");
+  fs.writeFileSync(file, [`# No-verdict — ${beadId}`, "", detail, "", "> Working copy, not a verdict or an evidence home.", "", "## Reviewer stdout", "```jsonl", stdout, "```", "", "## Reviewer stderr", "```", stderr, "```", ""].join("\n"), { flag: "wx" });
+  const posted = realBd ? spawnSync(realBd, ["comment", beadId, "--stdin"], {
+    cwd: ROOT, env: { ...process.env, PWD: ROOT, BEADS_ACTOR: "verifier-gate" }, input: `${detail}\n`, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 30000,
+  }) : null;
+  const delivery = posted?.status === 0 ? "task comment recorded" : `TASK COMMENT FAILED: ${posted?.error?.message || posted?.stderr || posted?.stdout || "bd unavailable"}`;
+  fs.appendFileSync(file, `\n## Task notification\n${delivery}\n`);
+  try {
+    appendVerifierGateInbox(beadId, "distress", `verifier gate no-verdict — ${beadId}`, `${delivery}\n${detail}`, "verifier-no-verdict", relative);
+    gateInboxWrote = true;
+  } catch (error: any) {
+    fs.appendFileSync(file, `\nINBOX NOTIFICATION FAILED: ${error.message}\n`);
+    process.stderr.write(`NO-VERDICT inbox notification failed: ${error.message}\n`);
+  }
+  console.error(`NO-VERDICT: ${reason}\n  working record: ${relative}\n  ${delivery}`);
+  process.exit(5);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const evidencePaths: string[] = [];
@@ -1422,6 +1468,8 @@ async function main(): Promise<void> {
     `VERDICT: APPROVE | BOUNCE | DISCOVER`,
     `PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED [<why>]`,
     `Evidence goes above those two closing lines. Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.`,
+    `If a sweep cannot finish inside this turn, write an interim record at ${path.join(VERDICTS_DIR, `${beadId}.interim.md`)} before stopping: name the pinned SHA/artifact identity, what finished, what is still running, its output location, and the collecting dispatch owed.`,
+    `The interim record carries no VERDICT or PUSH line. Stop after writing it; never end the turn with a promise to return when a background sweep finishes. The dispatcher records a distinct no-verdict outcome when your turn ends without a judgment.`,
     `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
   ].join("\n");
 
@@ -1449,6 +1497,8 @@ async function main(): Promise<void> {
   const elapsedMs = Date.now() - startedAt;
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
+
+  if (res.outcome === "no-verdict") recordNoVerdict(beadId, branch, tip, verifierSeat, realBd, scratchCwd, stdout, stderr);
 
   if (res.error) {
     if ((res.error as any).code === "WHEELHOUSE_FIRST_OUTPUT_TIMEOUT") {
