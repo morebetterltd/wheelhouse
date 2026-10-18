@@ -67,8 +67,18 @@ for (const name of cases.filter(x => !selected || x === selected)) {
     // from the helper's idempotent no-op on an already released lock.
     const src = fs.readFileSync(runner, 'utf8'), anchor = 'release_lock(){\n';
     assert.equal(src.split(anchor).length, 2);
-    const seats = path.join(dir, 'runner/seats'); fs.mkdirSync(seats, {recursive: true});
-    testRunner = path.join(seats, 'selftest-sweep.sh');
+    const project = path.join(dir, 'runner');
+    // Main's runner audits a real tracked runtime before START. Copy the full
+    // shared runtime under our owned fixture, not an isolated sweep script.
+    const setup = spawnSync('bash', ['-c', String.raw`. "$1"
+selftest_copy_seat_runtime "$2" "$3" || exit 2
+git -C "$2" init -q -b main || exit 2
+[ "$(git -C "$2" rev-parse --show-toplevel)" = "$2" ] || exit 2
+git -C "$2" add seats || exit 2
+`, 'signal-runner-setup', path.join(here, 'selftest-lib.sh'), project, here], {env: {...process.env}, encoding: 'utf8'});
+    console.log('CAPTURE signal runner setup ' + JSON.stringify({name, status: setup.status, signal: setup.signal, error: setup.error?.message ?? null, stdout: setup.stdout, stderr: setup.stderr}));
+    assert.ifError(setup.error); assert.equal(setup.signal, null); assert.equal(setup.status, 0, setup.stderr);
+    testRunner = path.join(project, 'seats/selftest-sweep.sh');
     fs.writeFileSync(testRunner, src.replace(anchor, anchor + '  printf "cleanup\\n" >> "$SIGNAL_SWEEP_CLEANUPS"\n'));
   }
   const child = spawn('bash', [sweep ? testRunner : path.join(dir, 'one.selftest.sh')], { env, stdio: ['pipe', 'pipe', 'pipe'] });

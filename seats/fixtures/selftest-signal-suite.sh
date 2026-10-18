@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Controlled suite: the parent chooses when to signal a real wait for our child.
 set -u
+# Only the sweep's acquire/release calls use the observer. Admission must exec
+# the real supervisor rather than accidentally turning this fixture into the
+# observer program's unrelated CLI when inherited/supervise is requested.
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$SIGNAL_REAL_LOCK_HELPER"
 . "$SELFTEST_SIGNAL_LIB"
 FIX="$(selftest_make_fixture_dir "$TMPDIR/wheelhouse-signal-child.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
