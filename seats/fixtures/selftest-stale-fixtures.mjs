@@ -23,14 +23,17 @@ plant "$A"; plant "$B"; plant "$C"
 [ -f "$A/KEEP" ] && [ -f "$B/KEEP" ] && [ -f "$C/KEEP" ] || exit 2
 marker "$B" another-suite 999999
 marker "$C" "$PREFIX" "$DEAD_PID"
-for kind in bad-pid bad-root empty-marker marker-fifo marker-link trailing-marker; do plant "$TMPDIR/$PREFIX.999999.$kind"; done
-marker "$TMPDIR/$PREFIX.999999.bad-pid" "$PREFIX" 999998
-marker "$TMPDIR/$PREFIX.999999.bad-root" "$PREFIX" 999999 "$A"
-: > "$TMPDIR/$PREFIX.999999.empty-marker/.wheelhouse-selftest-fixture"
-mkfifo "$TMPDIR/$PREFIX.999999.marker-fifo/.wheelhouse-selftest-fixture"
-ln -s "$C/.wheelhouse-selftest-fixture" "$TMPDIR/$PREFIX.999999.marker-link/.wheelhouse-selftest-fixture"
-marker "$TMPDIR/$PREFIX.999999.trailing-marker" "$PREFIX" 999999
-printf junk >> "$TMPDIR/$PREFIX.999999.trailing-marker/.wheelhouse-selftest-fixture"
+# These additional marker checks use a valid dead pid too: otherwise Darwin's
+# range error would mask a removed marker predicate.
+for kind in foreign-dead bad-pid bad-root empty-marker marker-fifo marker-link trailing-marker; do plant "$TMPDIR/$PREFIX.$DEAD_PID.$kind"; done
+marker "$TMPDIR/$PREFIX.$DEAD_PID.foreign-dead" another-suite "$DEAD_PID"
+marker "$TMPDIR/$PREFIX.$DEAD_PID.bad-pid" "$PREFIX" 999999
+marker "$TMPDIR/$PREFIX.$DEAD_PID.bad-root" "$PREFIX" "$DEAD_PID" "$A"
+: > "$TMPDIR/$PREFIX.$DEAD_PID.empty-marker/.wheelhouse-selftest-fixture"
+mkfifo "$TMPDIR/$PREFIX.$DEAD_PID.marker-fifo/.wheelhouse-selftest-fixture"
+ln -s "$C/.wheelhouse-selftest-fixture" "$TMPDIR/$PREFIX.$DEAD_PID.marker-link/.wheelhouse-selftest-fixture"
+marker "$TMPDIR/$PREFIX.$DEAD_PID.trailing-marker" "$PREFIX" "$DEAD_PID"
+printf junk >> "$TMPDIR/$PREFIX.$DEAD_PID.trailing-marker/.wheelhouse-selftest-fixture"
 LIVE="$TMPDIR/$PREFIX.1.live"; plant "$LIVE"; marker "$LIVE" "$PREFIX" 1
 # Actual allocation tests the explicit suite-prefix API. Its owner is alive.
 OWN="$(selftest_make_fixture_dir "$TMPDIR/$PREFIX.$$.allocated-XXXXXX" "$PREFIX")" || exit 2
@@ -74,8 +77,8 @@ for(const suite of suites){
  child.stdout.on('end',()=>stdoutEOF=true);child.stderr.on('end',()=>stderrEOF=true);
  const native=await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));});
  fs.writeFileSync(path.join(dir,'stdout'),stdout);fs.writeFileSync(path.join(dir,'stderr'),stderr);
- const keep=kind=>{const file=path.join(dir,'tmp',`${prefix}.999999.${kind}`,'KEEP');return fs.existsSync(file)&&fs.readFileSync(file,'utf8')==='KEEP\n';};
- const state={unmarkedKeep:keep('unmarked'),foreignKeep:keep('foreign'),ownedRemoved:!fs.existsSync(path.join(dir,'tmp',`${prefix}.${deadPid}.owned`)),badPidKeep:keep('bad-pid'),badRootKeep:keep('bad-root'),emptyMarkerKeep:keep('empty-marker'),fifoMarkerKeep:keep('marker-fifo'),symlinkMarkerKeep:keep('marker-link'),trailingMarkerKeep:keep('trailing-marker'),liveKeep:fs.existsSync(path.join(dir,'tmp',`${prefix}.1.live/KEEP`)),psUnknownKeep:fs.existsSync(path.join(dir,'ps-error',`${prefix}.${deadPid}.unknown/KEEP`)),signals:fs.existsSync(path.join(dir,'signals'))};
+ const keep=(kind,pid=deadPid)=>{const file=path.join(dir,'tmp',`${prefix}.${pid}.${kind}`,'KEEP');return fs.existsSync(file)&&fs.readFileSync(file,'utf8')==='KEEP\n';};
+ const state={unmarkedKeep:keep('unmarked',999999),foreignKeep:keep('foreign',999999),foreignDeadKeep:keep('foreign-dead'),ownedRemoved:!fs.existsSync(path.join(dir,'tmp',`${prefix}.${deadPid}.owned`)),badPidKeep:keep('bad-pid'),badRootKeep:keep('bad-root'),emptyMarkerKeep:keep('empty-marker'),fifoMarkerKeep:keep('marker-fifo'),symlinkMarkerKeep:keep('marker-link'),trailingMarkerKeep:keep('trailing-marker'),liveKeep:fs.existsSync(path.join(dir,'tmp',`${prefix}.1.live/KEEP`)),psUnknownKeep:fs.existsSync(path.join(dir,'ps-error',`${prefix}.${deadPid}.unknown/KEEP`)),signals:fs.existsSync(path.join(dir,'signals'))};
  let error=null;
  try{
   assert.equal(native.code,0);assert.equal(native.signal,null);assert(stdoutEOF&&stderrEOF);
