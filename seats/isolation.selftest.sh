@@ -351,7 +351,7 @@ arun() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 STATE_A="$PROJA/seats/state.json"
 LOG_A="$PROJA/seats/logs/worker-a.jsonl"
-astate_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE_A');const v=s.seats['worker-a']?.['$1'];if(v!=null)console.log(v)"; }
+astate_get() { env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE_A','utf8'));const v=s.seats['worker-a']?.['$1'];if(v!=null)console.log(v)"; }
 wait_for_from() {   # $1 = file, $2 = byte offset, $3 = substring, $4 = seconds
   local i=0 max=$((${4:-10} * 10))
   while [ $i -lt $max ]; do

@@ -42,7 +42,7 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
 VERIFY_DIR="$(cd "$(dirname "$VERIFY")" && pwd)"
-READINESS_DRIVER="$(dirname "$SELFTEST_LIB")/fixtures/verify-readiness.ts"
+READINESS_DRIVER="${WHEELHOUSE_TEST_VERIFY_READINESS_DRIVER:-$(dirname "$SELFTEST_LIB")/fixtures/verify-readiness.ts}"
 BRIEFS="$VERIFY_DIR/briefs.ts"
 HARNESS="$VERIFY_DIR/harness.ts"
 FINAL_ASSISTANT="$VERIFY_DIR/final-assistant-message.ts"
@@ -143,6 +143,7 @@ fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
+if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) fs.appendFileSync(process.env.WHEELHOUSE_TEST_CHILD_LEDGER, JSON.stringify({event:"model",pid:process.pid}) + "\n");
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the verifier), not rely on an operator
 // export reaching this one-shot process.
@@ -232,7 +233,7 @@ if (process.env.STUB_CANONICAL_WRITE_REPO) {
 if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
   const cp = require("child_process");
   const started = Date.now();
-  const grep = cp.spawnSync("grep", ["-R", "--", "wheelhouse-selftest-never-match", "seats"], { cwd: process.cwd(), timeout: 2000, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const grep = cp.spawnSync("grep", ["-R", "--", "wheelhouse-selftest-never-match", "seats"], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const elapsedMs = Date.now() - started;
   const prompt = process.argv[process.argv.length - 1] || "";
   fs.writeFileSync(path.join(agentDir, "runtime-grep-check.txt"), JSON.stringify({
@@ -305,6 +306,13 @@ if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
 }
 const reply = process.env.STUB_REPLY_FILE;
 let text = reply ? fs.readFileSync(reply, "utf8") : "";
+if (process.env.STUB_MUTATE_BATCH_LOG) {
+  const file = process.env.STUB_MUTATE_BATCH_LOG;
+  const before = fs.readFileSync(file, "utf8");
+  const after = before.replace(/\nelapsedMs=(\d+)\n$/, (_, n) => `\nelapsedMs=${Number(n)+1}\n`);
+  if (after === before) throw new Error("batch mutation fixture footer changed");
+  fs.writeFileSync(file, after);
+}
 if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
   const cp = require("child_process");
   const repo = process.env.STUB_MOVE_BRANCH_REPO;
@@ -334,13 +342,13 @@ if (process.env.STUB_SILENT === "1") {
   if (streamRequested) {
     process.stdout.write(JSON.stringify({type:"tool_execution_start",toolName:"bash",args:{cmd:"cargo test"}})+"\n");
   }
-  setTimeout(() => {}, 10000);
+  setInterval(() => {}, 1000); // Held until the watchdog, not a finite lease.
 } else if (process.env.STUB_STALL_AFTER_TOOL_END === "1") {
   if (streamRequested) {
     process.stdout.write(JSON.stringify({type:"tool_execution_start",toolName:"bash",args:{cmd:"cargo test"}})+"\n");
     process.stdout.write(JSON.stringify({type:"tool_execution_end",toolName:"bash",exitCode:0})+"\n");
   }
-  setTimeout(() => {}, 10000);
+  setInterval(() => {}, 1000); // Held until the watchdog, not a finite lease.
 } else if (process.env.STUB_PI_QUOTED_VERDICT_MIDRUN === "1") {
   process.on("SIGTERM", () => process.exit(143));
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
@@ -360,7 +368,7 @@ if (process.env.STUB_SILENT === "1") {
 } else if (process.env.STUB_HANG_CHILD_AFTER_RESULT === "1") {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
   const cp = require("child_process");
-  const child = cp.spawn(process.execPath, ["-e", "setTimeout(()=>{}, 10000)"], { stdio: ["ignore", "inherit", "inherit"] });
+  const child = cp.spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] });
   fs.writeFileSync(path.join(agentDir, "hanging-child-pid.txt"), String(child.pid));
   if (streamRequested) {
     process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n");
@@ -369,18 +377,29 @@ if (process.env.STUB_SILENT === "1") {
   process.exit(0);
 } else if (process.env.STUB_SLOW_TOOL_OUTPUT === "1" || process.env.STUB_LONG_TOOL_PROGRESS === "1") {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
-  const write = (obj) => process.stdout.write(JSON.stringify(obj)+"\n");
+  const write = (obj) => fs.writeSync(1, JSON.stringify(obj)+"\n");
   if (streamRequested) {
     write({type:"tool_execution_start",toolName:"bash",args:{cmd:"slow selftest"}});
-    if (process.env.STUB_LONG_TOOL_PROGRESS === "1") {
+    if (process.env.STUB_LONG_TOOL_PROGRESS === "1" && watchdogDir) {
+      const ack = n => { while (!fs.existsSync(path.join(watchdogDir, `progress-ack-${n}`))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10); };
+      ack(1); // The start record above must actually reach collect().
+      for (let i = 1; i <= 6; i++) {
+        fs.writeSync(1, JSON.stringify({type:"tool_execution_update",toolName:"bash",output:`still running ${i}`})+"\n"); ack(i+1);
+      }
+      fs.writeSync(1, JSON.stringify({type:"tool_execution_end",toolName:"bash",exitCode:0})+"\n"); ack(8);
+      fs.writeSync(1, JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n"); ack(9);
+      process.exit(Number(process.env.STUB_EXIT || 0));
+    } else if (process.env.STUB_LONG_TOOL_PROGRESS === "1") {
       for (let i = 1; i <= 6; i++) setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:`still running ${i}`}), i * 100);
       setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), 700);
       setTimeout(() => { write({type:"message_end",message:{role:"assistant",content:text}}); process.exit(Number(process.env.STUB_EXIT || 0)); }, 760);
     } else {
-      setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 1"}), 80);
-      setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 2"}), 160);
-      setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), 240);
-      setTimeout(() => { write({type:"message_end",message:{role:"assistant",content:text}}); process.exit(Number(process.env.STUB_EXIT || 0)); }, 320);
+      // Optional idle gap is a causal regression stimulus, never host load.
+      const gap = Number(process.env.WHEELHOUSE_VERIFY_TEST_IDLE_GAP_MS || 0);
+      setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 1"}), gap + 80);
+      setTimeout(() => write({type:"tool_execution_update",toolName:"bash",output:"still running 2"}), gap + 160);
+      setTimeout(() => write({type:"tool_execution_end",toolName:"bash",exitCode:0}), gap + 240);
+      setTimeout(() => { write({type:"message_end",message:{role:"assistant",content:text}}); process.exit(Number(process.env.STUB_EXIT || 0)); }, gap + 320);
     }
   } else {
     process.stdout.write(text);
@@ -661,6 +680,12 @@ VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
 
+phase "fixture containment — exclusive H4 publication and bounded release wait"
+BOUNDS_DIR="$(mktemp -d "$FIX/holder-bounds.XXXXXX")"
+if bun "$READINESS_DRIVER" "$VERIFY" "$BOUNDS_DIR" holder-bounds; then
+  pass "H4 fixture refuses occupied locks and fails a missing-release waiter (native exits 73/124)"
+else fail "H4 fixture publication/bounded waiter regression"; fi
+
 phase "verifier gate STOP reaches the dispatch inbox"
 if [ -f "$PROJ/seats/inbox.jsonl" ]; then BEFORE_INBOX_LINES="$(wc -l < "$PROJ/seats/inbox.jsonl" | tr -d ' ')"; else BEFORE_INBOX_LINES=0; fi
 run bead-no-branch fleet/does-not-exist worker-1
@@ -679,10 +704,11 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.se
 
 phase "pool reviewer routing — shared author subscription is skipped"
 cp "$PROJ/seats/seats.json" "$FIX/seats-json.before-pool"
-python3 - <<PY
-import json, pathlib
-p=pathlib.Path('$PROJ/seats/seats.json'); j=json.load(open(p)); j['seats'].pop('verifier', None); p.write_text(json.dumps(j, indent=2))
-PY
+bun - "$PROJ/seats/seats.json" <<'TS'
+import fs from "node:fs";
+const p=process.argv[2],j=JSON.parse(fs.readFileSync(p,"utf8"));
+delete j.seats.verifier; fs.writeFileSync(p,JSON.stringify(j,null,2));
+TS
 mkdir -p "$HOME_FIX/.pi-seats-proj/pool/rv1" "$HOME_FIX/.pi-seats-proj/pool/rv2"
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv1/auth.json"
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv2/auth.json"
@@ -716,7 +742,7 @@ run bead-pool-all-share fleet/bead-1 author-state
 if [ $RC -ne 0 ] && says "SAME account directory" && says "waiting for a reviewer"; then pass "pool verifier routing STOPs with waiting wording when every reviewer shares author subscription"; else fail "all-shared reviewer STOP failed rc=$RC out=$OUT"; fi
 run bead-pool-explicit-same fleet/bead-1 author-state verifier-rv2
 if [ $RC -eq 1 ] && says "SAME account directory"; then pass "pool-present explicit verifier still runs the disk distinctness STOP before spawn"; else fail "pool explicit distinctness STOP failed rc=$RC out=$OUT"; fi
-mkdir -p "$PROJ/seats/run"; (sleep 60) & BUSY_RV2=$!; printf '{"pid":%s,"bead":"other"}\n' "$BUSY_RV2" > "$PROJ/seats/run/verify.verifier-rv2.json"
+mkdir -p "$PROJ/seats/run"; (cd "$FIX"; "$NODE_BIN" -e 'setInterval(()=>{},1000)') & BUSY_RV2=$!; printf '{"pid":%s,"bead":"other"}\n' "$BUSY_RV2" > "$PROJ/seats/run/verify.verifier-rv2.json"
 cat > "$PROJ/seats/state.json" <<'JSON'
 {"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv1"}}}
 JSON
@@ -781,6 +807,7 @@ JS
 chmod +x "$SWEEP_BIN/bd"
 SWEEP_SAVED_RUN_PATH="$RUN_PATH"; RUN_PATH="$SWEEP_BIN:$RUN_PATH"
 cp -f "$VERIFY_DIR/selftest-sweep.sh" "$SWEEP_PROJ/seats/selftest-sweep.sh"
+cp -f "$VERIFY_DIR/python-invocations.ts" "$SWEEP_PROJ/seats/python-invocations.ts" || exit 2
 cat > "$SWEEP_PROJ/seats/slowed.selftest.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -799,8 +826,8 @@ fi
 exit "${SWEEP_FIXTURE_RC:-0}"
 SH
 chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
-# Detached evidence runs only committed files: include the runner companion.
-git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/slowed.selftest.sh
+# Detached evidence runs only committed files: include both runner companions.
+git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/slowed.selftest.sh
 git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
@@ -832,25 +859,28 @@ fi
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
 cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
-bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
-WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep-old.lock" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
 cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
 # Hold H4 until the dispatcher log proves it waited, before verifier readiness.
 # The controller then releases the fixture holder. No elapsed-time comparison.
-HOLDER_RELEASE="$FIX/sweep-holder.release"
-bash -c 'printf "pid=%s\n" "$$" > "$1.new"; mv -f "$1.new" "$1"; while [ ! -f "$2" ]; do sleep 0.01; done; rm -f "$1"' _ "$SWEEP_LOCK" "$HOLDER_RELEASE" & HOLDER=$!
-while [ ! -f "$SWEEP_LOCK" ]; do sleep 0.01; done
-WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLDER_RELEASE="$HOLDER_RELEASE" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
-wait "$HOLDER"
+# The readiness driver owns AND joins its H4 holder, including early-exit paths.
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLD_H4=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
 SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
 SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
+  BATCH_SEED_LOG="$SWEEP_LOG"
   pass "full-sweep done: exact tip, H4 wait outside model limit, scratch bd, reviewer cites rc/log"
 else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$SWEEP_CHECK" 2>/dev/null)"; fi
 if [ -f "$WATCHDOG_DIR/holder-wait-observed" ] && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ -f "$WATCHDOG_DIR/output" ]; then
   pass "sweep evidence waits for H4 and fixture readiness without a wall-clock verdict"
 else fail "sweep/readiness handshake was not observed"; fi
+# The readiness regression runs this real suite through its killed fixture leg.
+if [ "${WHEELHOUSE_VERIFY_EXIT_BEFORE_READY_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || { printf 'verify.selftest: FAIL (%s failures in early-exit subset)\n' "$FAILED"; exit 1; }
+  printf 'verify.selftest: PASS (early-exit subset)\n'; exit 0
+fi
 for NO_OUTPUT_MODE in eof silent; do
   WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_EMIT_NOTHING="$NO_OUTPUT_MODE" run_sweep_prompt_check "$SWEEP_BD_SHOW" "bead-sweep-no-output-$NO_OUTPUT_MODE" fleet/bead-1 worker-1
   if [ "$RC" = 1 ] && { says 'verifier emitted no VERDICT:' || says 'first-output deadline'; } && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ ! -e "$WATCHDOG_DIR/output" ]; then
@@ -881,6 +911,45 @@ if [ "${WHEELHOUSE_VERIFY_SWEEP_ONLY:-0}" = 1 ]; then
   printf 'verify.selftest: PASS (sweep-readiness subset)\n'
   exit 0
 fi
+phase "0a3. one captured passing batch sweep — validation and CLI reuse"
+if [ -n "${BATCH_SEED_LOG:-}" ] && [ -s "$BATCH_SEED_LOG" ]; then
+  if bun "$HERE/fixtures/verify-batch-sweep.ts" "$VERIFY_DIR" "$FIX" "$BATCH_SEED_LOG" "$SWEEP_TIP"; then pass "batch validator accepts descendant and refuses every unsafe fixture"
+  else fail "batch validator regression"; fi
+  git -C "$SWEEP_PROJ" update-ref refs/heads/main "$SWEEP_TIP" || exit 2
+  git -C "$SWEEP_PROJ" branch fleet/batch-reviewed "$SWEEP_TIP^" || exit 2
+  BATCH_REVIEWED="$(git -C "$SWEEP_PROJ" rev-parse fleet/batch-reviewed)"
+  BATCH_INVOKED="$HOME_FIX/.pi-seats-sweep/verifier/invoked"
+  RUN_PROJ="$SWEEP_PROJ"
+  printf 'Batch evidence rc=0 log=%s\nVERDICT: APPROVE\n' "$BATCH_SEED_LOG" > "$REPLY"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-accept fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG"
+  if [ "$RC" = 0 ] && says 'VERDICT: APPROVE' && grep -q -- "- batch-tip: $SWEEP_TIP" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" && grep -q -- "- tip: $BATCH_REVIEWED" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" && grep -Fq -- "- log: $BATCH_SEED_LOG" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md"; then
+    pass "batch CLI reuses one real passing descendant sweep and records batch/reviewed tip and log"
+  else fail "batch CLI acceptance/record failed rc=$RC out=$OUT"; fi
+  rm -f "$BATCH_INVOKED"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-missing fleet/batch-reviewed worker-1 verifier --batch-sweep "$FIX/no-batch-log"
+  if [ "$RC" = 1 ] && says 'batch sweep refused' && [ ! -e "$BATCH_INVOKED" ]; then pass "invalid batch flag STOPs before reviewer spawn, never falls back to a sweep"
+  else fail "invalid batch flag spawned or fell back rc=$RC out=$OUT"; fi
+  run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-noarg fleet/batch-reviewed worker-1 verifier --batch-sweep
+  if [ "$RC" = 1 ] && says '--batch-sweep requires'; then pass "batch flag without a log argument is refused"
+  else fail "batch flag accepted no argument rc=$RC out=$OUT"; fi
+  run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-duplicate fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG" --batch-sweep "$BATCH_SEED_LOG"
+  if [ "$RC" = 1 ] && says 'may be supplied only once'; then pass "duplicate batch flag is refused"
+  else fail "duplicate batch flag accepted rc=$RC out=$OUT"; fi
+  BATCH_MUTATING="$FIX/batch-mutating.log"; cp -f "$BATCH_SEED_LOG" "$BATCH_MUTATING"
+  printf 'Batch evidence rc=0 log=%s\nVERDICT: APPROVE\n' "$BATCH_MUTATING" > "$REPLY"
+  STUB_MUTATE_BATCH_LOG="$BATCH_MUTATING" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-mutated fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_MUTATING"
+  if [ "$RC" = 1 ] && says 'batch sweep log changed during review'; then pass "batch log is revalidated and byte-fingerprinted after reviewer exit"
+  else fail "changed batch log accepted rc=$RC out=$OUT"; fi
+  printf 'Batch evidence rc=0 log=%s\nVERDICT: APPROVE\n' "$BATCH_SEED_LOG" > "$REPLY"
+  STUB_MOVE_BRANCH_REPO="$SWEEP_PROJ" STUB_MOVE_BRANCH=main WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-main-moved fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG"
+  if [ "$RC" = 1 ] && says 'first-parent chain does not reach current main'; then pass "batch cannot outlive a main move outside its first-parent chain"
+  else fail "main moved outside batch but reuse accepted rc=$RC out=$OUT"; fi
+  git -C "$SWEEP_PROJ" reset --hard "$SWEEP_TIP" >/dev/null || exit 2
+  printf 'Missing batch citation.\nVERDICT: APPROVE\n' > "$REPLY"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-citation fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG"
+  if [ "$RC" = 1 ] && says 'must cite full-sweep'; then pass "batch reuse retains the final evidence rc/log citation gate"
+  else fail "batch citation omitted but accepted rc=$RC out=$OUT"; fi
+else fail "no actual passing fixture sweep capture for batch tests"; fi
 RUN_PROJ="$INST_PROJ"
 VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
 MISS_PROJ="$FIX/missing-brief-proj"
@@ -1018,7 +1087,10 @@ cat > "$REPLY" <<EOF
 Slow selftest produced output until it finished.
 VERDICT: APPROVE
 EOF
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SLOW_TOOL_OUTPUT=1 bun "$RUN_PROJ/seats/verify.ts" bead-slow-tool fleet/bead-1 worker-1 verifier --timeout-ms 5000 --no-event-timeout-ms 250 2>&1)"; RC=$?
+# Ten-minute quiet budgets on integration legs that must NOT trip. The small
+# 150/300ms progress semantics are proved below with acknowledged virtual time,
+# while native 1500/300ms silence legs above must still actually fire.
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SLOW_TOOL_OUTPUT=1 bun "$RUN_PROJ/seats/verify.ts" bead-slow-tool fleet/bead-1 worker-1 verifier --timeout-ms 600000 --no-event-timeout-ms 600000 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "no-event watchdog does not trip while a long-running tool keeps streaming output"
 else fail "no-event watchdog tripped on a still-streaming tool (exit $RC): $OUT"; fi
@@ -1027,13 +1099,13 @@ Reviewer wrote the final machine lines before a background child inherited stdou
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED
 EOF
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_HANG_CHILD_AFTER_RESULT=1 bun "$RUN_PROJ/seats/verify.ts" bead-post-result-hang fleet/bead-1 worker-1 verifier --timeout-ms 5000 --no-event-timeout-ms 300 2>&1)"; RC=$?
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_HANG_CHILD_AFTER_RESULT=1 bun "$RUN_PROJ/seats/verify.ts" bead-post-result-hang fleet/bead-1 worker-1 verifier --timeout-ms 600000 --no-event-timeout-ms 600000 2>&1)"; RC=$?
 HANG_CHILD_PID="$(cat "$HOME_FIX/.pi-seats-alpha/verifier/hanging-child-pid.txt" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q 'VERDICT: APPROVE' "$VDIR/bead-post-result-hang.md" 2>/dev/null; then
   pass "post-result background child cannot keep verify open after final VERDICT/PUSH lines"
 else fail "post-result background child kept verify open or verdict was not recorded (exit $RC child=$HANG_CHILD_PID): $OUT"; fi
 if [ -n "$HANG_CHILD_PID" ]; then
-  for _ in $(seq 1 20); do kill -0 "$HANG_CHILD_PID" 2>/dev/null || break; sleep 0.1; done
+  for _ in $(seq 1 3000); do kill -0 "$HANG_CHILD_PID" 2>/dev/null || break; sleep 0.1; done
 fi
 if [ -z "$HANG_CHILD_PID" ] || ! kill -0 "$HANG_CHILD_PID" 2>/dev/null; then
   pass "post-result background child process group is reaped"
@@ -1046,13 +1118,14 @@ Finished after quoting the previous review without being reaped mid-run.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED
 EOF
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_PI_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-pi-quoted-verdict fleet/bead-1 worker-1 verifier --no-event-timeout-ms 1000 2>&1)"; RC=$?
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_PI_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-pi-quoted-verdict fleet/bead-1 worker-1 verifier --no-event-timeout-ms 600000 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143" && grep -q 'VERDICT: APPROVE' "$VDIR/bead-pi-quoted-verdict.md" 2>/dev/null; then
   pass "pi quoted mid-run verdict is not reaped before agent_end"
 else fail "pi quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$RUN_PROJ/seats/verify.ts" bead-progress-past-total fleet/bead-1 worker-1 verifier --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
-  pass "tool progress beyond total timeout reaches a verdict instead of being killed"
+WATCHDOG_DIR="$(mktemp -d "$FIX/progress-clock.XXXXXX")"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" progress bead-progress-past-total fleet/bead-1 worker-1 verifier --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && [ -s "$WATCHDOG_DIR/progress-proof" ]; then
+  pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
 else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
 WATCHDOG_DIR="$(mktemp -d "$FIX/silent-readiness.XXXXXX")"
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" silent bead-silent fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
@@ -1333,7 +1406,7 @@ VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 phase "1c. verifier account.authRoute=env — exported provider key is identity"
 ENV_PROJ="$FIX/env-proj"
 build_proj "$ENV_PROJ" env "$VERIFY"
-bun -e "const fs=require('fs'); const p='$ENV_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.account.authRoute='env'; fs.rmSync('$HOME_FIX/.pi-seats-env/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$ENV_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.account.authRoute='env'; fs.rmSync('$HOME_FIX/.pi-seats-env/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
 RUN_PROJ="$ENV_PROJ"; VARGV="$HOME_FIX/.pi-seats-env/verifier/argv.json"; VDIR="$ENV_PROJ/seats/verdicts"
 cat > "$REPLY" <<'EOF'
 Env-route verifier checked.
@@ -1359,11 +1432,18 @@ if [ $RC -eq 0 ] && grep -q "$BUDGET_PROJ/seats/bin" "${VARGV%argv.json}env.json
   pass "host budget enabled: verifier PATH includes this project's seats/bin"
 else fail "host budget enabled: verifier PATH missing seats/bin (exit $RC): $OUT env=$(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
 LOCK="$FIX/verify-budget.lock"
-perl -MFcntl=:flock -e 'open(my $fh, ">>", $ARGV[0]) or die $!; flock($fh, LOCK_EX) or die $!; sleep 10' "$LOCK" &
+LOCK_READY="$FIX/verify-budget.ready"
+LOCK_RELEASE="$FIX/verify-budget.release"
+mkfifo "$LOCK_RELEASE"
+exec 7<> "$LOCK_RELEASE"
+perl -MFcntl=:flock -e 'open(my $fh, ">>", $ARGV[0]) or die $!; flock($fh, LOCK_EX) or die $!; open(my $ready, ">", $ARGV[1]) or die $!; print $ready "held\n"; close($ready); open(my $release, "<", $ARGV[2]) or die $!; scalar(<$release>);' "$LOCK" "$LOCK_READY" "$LOCK_RELEASE" 7>&- &
 LOCK_PID=$!
-sleep 0.2
+LOCK_DEADLINE=$((SECONDS+300))
+while [ ! -s "$LOCK_READY" ] && kill -0 "$LOCK_PID" 2>/dev/null && [ "$SECONDS" -lt "$LOCK_DEADLINE" ]; do sleep 0.05; done
+[ -s "$LOCK_READY" ] || fail "host-budget fixture never published its held-flock acknowledgement"
 RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" WHEELHOUSE_BUILD_LOCK="$LOCK" bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 2>&1)" || RC=$?
-kill "$LOCK_PID" 2>/dev/null || true
+printf 'release\n' >&7
+exec 7>&-
 wait "$LOCK_PID" 2>/dev/null || true
 if [ $RC -eq 1 ] && says "host build lock is held by another bead" && says "timeout-ms is not spent queued"; then
   pass "host budget enabled: verify refuses to start while another bead holds the build lock"
@@ -1378,7 +1458,7 @@ Mixed harness verifier checked.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
-bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 printf '{"oauthAccount":{"email":"verifier@example.test","accessToken":"fixture-token"}}\n' > "$HOME_FIX/.pi-seats-mixedv/verifier/.claude.json"
 RUN_PROJ="$MIX_PROJ"; VDIR="$MIX_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
 run bead-1 fleet/bead-1 worker-1
@@ -1400,7 +1480,7 @@ VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
 rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLAUDE_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-quoted-verdict fleet/bead-1 worker-1 verifier --no-event-timeout-ms 1000 2>&1)"; RC=$?
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLAUDE_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-quoted-verdict fleet/bead-1 worker-1 verifier --no-event-timeout-ms 600000 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143"; then
   pass "claude-code quoted mid-run verdict is not reaped before the final result event"
 else fail "claude-code quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
@@ -1409,11 +1489,11 @@ Mixed harness verifier checked.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
-bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const args = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const flagAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 && /^--/.test(args[i+2] ?? ""); };
   if (args.at(-1).startsWith("--")) process.exit(1);
@@ -1423,7 +1503,7 @@ if [ $RC -eq 0 ] && bun -e '
 ' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
   pass "claude-code verifier one-shot passes tool lists before --model with a following flag and prompt last"
 else fail "claude-code verifier one-shot tool-list argv order wrong (rc=$RC argv=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null))"; fi
-bun -e "const fs=require('fs'); const p='$MIX_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
@@ -1476,7 +1556,7 @@ rm -f "$VINVOKED"
 # A roster whose verifier points at the AUTHOR's directory:
 cp "$PROJ/seats/seats.json" "$FIX/seats.json.good"
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats.verifier.account.dir = j.seats["worker-1"].account.dir;
@@ -1583,7 +1663,7 @@ if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPRO
 else fail "final-message conflicting verdicts did not STOP (exit $RC): $OUT"; fi
 set_verifier_harness() {
   env HOME="$HOME_FIX" bun -e '
-    const fs = require("fs");
+    import fs from "node:fs";
     const file = process.argv[1], harness = process.argv[2], dir = process.argv[3];
     const j = JSON.parse(fs.readFileSync(file, "utf8"));
     if (harness === "pi") delete j.seats.verifier.harness;
@@ -1605,20 +1685,18 @@ check_verifier_fixture_manifest() {
   if [ -f "$root/contracts/BENCH.md" ]; then bench="$root/contracts/BENCH.md";
   elif [ -f "$root/wheelhouse/crew/BENCH.md" ]; then bench="$root/wheelhouse/crew/BENCH.md";
   else fail "verifier fixture manifest check could not find BENCH.md"; return; fi
-  if python3 - "$root" "$bench" <<'PY'
-import pathlib, re, sys
-root = pathlib.Path(sys.argv[1]); bench = pathlib.Path(sys.argv[2])
-fixture_dir = root / "seats" / "fixtures" / "verify-real"
-actual = sorted(str(p.relative_to(root)) for p in fixture_dir.glob("*.jsonl"))
-text = re.sub(r"<!--.*?-->", "", bench.read_text(), flags=re.S)
-listed = sorted(set(re.findall(r"fixture:\s*(seats/fixtures/verify-real/[^;\s]+\.jsonl)", text)))
-missing_from_bench = sorted(set(actual) - set(listed))
-missing_from_disk = sorted(set(listed) - set(actual))
-if missing_from_bench or missing_from_disk:
-    print("missing_from_bench=" + ",".join(missing_from_bench))
-    print("missing_from_disk=" + ",".join(missing_from_disk))
-    raise SystemExit(1)
-PY
+  if bun - "$root" "$bench" <<'TS'
+import fs from "node:fs";
+import path from "node:path";
+const [root,bench]=process.argv.slice(2),prefix="seats/fixtures/verify-real/";
+const actual=fs.readdirSync(path.join(root,prefix)).filter(p=>p.endsWith(".jsonl")).map(p=>prefix+p).sort();
+const text=fs.readFileSync(bench,"utf8").replace(/<!--[\s\S]*?-->/g,"");
+const listed=[...new Set([...text.matchAll(/fixture:\s*(seats\/fixtures\/verify-real\/[^;\s]+\.jsonl)/g)].map(m=>m[1]))].sort();
+const missing_from_bench=actual.filter(p=>!listed.includes(p)),missing_from_disk=listed.filter(p=>!actual.includes(p));
+if(missing_from_bench.length || missing_from_disk.length){
+ console.log("missing_from_bench="+missing_from_bench.join(",")); console.log("missing_from_disk="+missing_from_disk.join(",")); process.exitCode=1;
+}
+TS
   then pass "BENCH.md verifier wire-shape list matches real fixture files"; else fail "BENCH.md verifier wire-shape list and fixture files diverge"; fi
 }
 check_verifier_fixture_manifest
@@ -1630,15 +1708,15 @@ COMMENTED_BENCH="$FIX/commented-BENCH.md"
   done
   printf -- '-->\n'
 } > "$COMMENTED_BENCH"
-if python3 - "$VERIFY_DIR/.." "$COMMENTED_BENCH" <<'PY'
-import pathlib, re, sys
-root = pathlib.Path(sys.argv[1]); bench = pathlib.Path(sys.argv[2])
-fixture_dir = root / "seats" / "fixtures" / "verify-real"
-actual = sorted(str(p.relative_to(root)) for p in fixture_dir.glob("*.jsonl"))
-text = re.sub(r"<!--.*?-->", "", bench.read_text(), flags=re.S)
-listed = sorted(set(re.findall(r"fixture:\s*(seats/fixtures/verify-real/[^;\s]+\.jsonl)", text)))
-raise SystemExit(0 if not (set(actual) - set(listed)) else 1)
-PY
+if bun - "$VERIFY_DIR/.." "$COMMENTED_BENCH" <<'TS'
+import fs from "node:fs";
+import path from "node:path";
+const [root,bench]=process.argv.slice(2),prefix="seats/fixtures/verify-real/";
+const actual=fs.readdirSync(path.join(root,prefix)).filter(p=>p.endsWith(".jsonl")).map(p=>prefix+p);
+const text=fs.readFileSync(bench,"utf8").replace(/<!--[\s\S]*?-->/g,"");
+const listed=new Set([...text.matchAll(/fixture:\s*(seats\/fixtures\/verify-real\/[^;\s]+\.jsonl)/g)].map(m=>m[1]));
+if(actual.some(p=>!listed.has(p)))process.exitCode=1;
+TS
 then fail "BENCH.md verifier wire-shape manifest check accepted a commented-out fixture list"; else pass "BENCH.md verifier wire-shape manifest check rejects commented-out fixture lists"; fi
 set_verifier_harness pi
 run_stream "$REAL_FIXTURES_DIR/pi-v3-message-end.jsonl" bead-5-recorded-pi fleet/bead-1 worker-1
@@ -1700,7 +1778,7 @@ if ! says "account label:"; then
   pass "a verifier roster without account.label still reaches the provider-error path"
 else fail "unlabeled verifier unexpectedly printed an account.label: $OUT"; fi
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   j.seats.verifier.account.label = "fixture-verifier-account";
@@ -1712,7 +1790,7 @@ if [ $RC -eq 1 ] && says "pi exited 3" && says "account label: fixture-verifier-
   pass "provider-error stderr path includes verifier account.label when present"
 else fail "provider-error path did not include verifier account.label (exit $RC): $OUT"; fi
 env HOME="$HOME_FIX" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
   delete j.seats.verifier.account.label;
@@ -1740,7 +1818,7 @@ else fail "identity-less verifier not refused (exit $RC): $OUT"; fi
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-alpha/verifier/auth.json"
 CLAUDE_ID_PROJ="$FIX/claude-identity-stop"
 build_proj "$CLAUDE_ID_PROJ" claudeid "$VERIFY"
-bun -e "const fs=require('fs'); const p='$CLAUDE_ID_PROJ/seats/seats.json'; const j=require(p); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.account.authRoute='oauth'; fs.rmSync('$HOME_FIX/.pi-seats-claudeid/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$CLAUDE_ID_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.account.authRoute='oauth'; fs.rmSync('$HOME_FIX/.pi-seats-claudeid/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
 RUN_PROJ="$CLAUDE_ID_PROJ"; VDIR="$CLAUDE_ID_PROJ/seats/verdicts"
 RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-claude-id fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && says "no identity" && says "CLAUDE_CONFIG_DIR" && says "claude" && ! says "PI_CODING_AGENT_DIR"; then
@@ -1895,7 +1973,7 @@ if cmp -s "$VERIFY" "$FIX/can-a-verify.ts"; then
 else
   build_proj "$CAN_A" can-a "$FIX/can-a-verify.ts"
   env HOME="$HOME_FIX" bun -e '
-    const fs = require("fs");
+    import fs from "node:fs";
     const f = process.argv[1];
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
     j.seats.verifier.account.dir = j.seats["worker-1"].account.dir;
@@ -1993,9 +2071,12 @@ bash -c '
   mkdir -p "$dir"
   git -C "$2" worktree add --detach "$dir" HEAD >/dev/null 2>&1
   printf "%s\n%s\n" "$pid" "$dir" > "$1/live-owner.txt"
-  sleep 5
+  deadline=$((SECONDS+300))
+  while [ ! -f "$1/live-owner.release" ]; do [ "$SECONDS" -lt "$deadline" ] || exit 124; sleep 0.05; done
 ' _ "$FIX" "$PROJ" &
-while [ ! -f "$FIX/live-owner.txt" ]; do sleep 0.05; done
+LIVE_OWNER_CHILD=$!
+LIVE_READY_DEADLINE=$((SECONDS+300))
+while [ ! -f "$FIX/live-owner.txt" ] && kill -0 "$LIVE_OWNER_CHILD" 2>/dev/null && [ "$SECONDS" -lt "$LIVE_READY_DEADLINE" ]; do sleep 0.05; done
 LIVE_OWNER_PID=$(sed -n '1p' "$FIX/live-owner.txt")
 LIVE_DIR=$(sed -n '2p' "$FIX/live-owner.txt")
 if git -C "$PROJ" worktree list | grep -F >/dev/null "$ORPHAN_DIR" \
@@ -2021,12 +2102,13 @@ else fail "the live worktree was swept even though its owner pid is still alive"
 
 CONCURRENT_OUT_A="$FIX/concurrent-verify-a.out"
 CONCURRENT_OUT_B="$FIX/concurrent-verify-b.out"
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$CONCURRENT_OUT_A" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$CONCURRENT_OUT_A" 2>&1) &
 CONCURRENT_PID_A=$!
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$CONCURRENT_OUT_B" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$CONCURRENT_OUT_B" 2>&1) &
 CONCURRENT_PID_B=$!
 CONCURRENT_DIRS=""
-for _ in $(seq 1 100); do
+CONCURRENT_READY_DEADLINE=$((SECONDS+300))
+while [ "$SECONDS" -lt "$CONCURRENT_READY_DEADLINE" ]; do
   CONCURRENT_DIRS="$(git -C "$PROJ" worktree list --porcelain 2>/dev/null | awk -v a="wheelhouse-verify-${CONCURRENT_PID_A}-" -v b="wheelhouse-verify-${CONCURRENT_PID_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
   [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ] && break
   sleep 0.05
@@ -2053,8 +2135,12 @@ kill "$CONCURRENT_PID_A" "$CONCURRENT_PID_B" 2>/dev/null || true
 wait "$CONCURRENT_PID_A" 2>/dev/null || true
 wait "$CONCURRENT_PID_B" 2>/dev/null || true
 
-kill "$LIVE_OWNER_PID" 2>/dev/null
-i=0; while kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+if [ "$LIVE_OWNER_PID" = "$LIVE_OWNER_CHILD" ] && kill -0 "$LIVE_OWNER_CHILD" 2>/dev/null; then
+  printf 'release\n' > "$FIX/live-owner.release"
+  wait "$LIVE_OWNER_CHILD" 2>/dev/null || true
+else
+  fail "live scratch owner exited before its release (recorded=$LIVE_OWNER_PID child=$LIVE_OWNER_CHILD)"
+fi
 run   # a second sweep pass, now that the "live" owner has actually exited
 if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
   pass "once its owner pid actually exits, a later sweep reclaims that worktree too"
@@ -2068,10 +2154,11 @@ KILL_SHA_BRANCH="89abcdef0123456789abcdef0123456789abcdef"
 git -C "$KILL_PROJ" branch "$KILL_SHA_BRANCH" HEAD >/dev/null 2>&1
 OUT_FILE="$FIX/killed-verify.out"
 KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$OUT_FILE" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
-for _ in $(seq 1 100); do
+KILLED_READY_DEADLINE=$((SECONDS+300))
+while [ "$SECONDS" -lt "$KILLED_READY_DEADLINE" ]; do
   KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
   [ -n "$KILLED_DIR" ] && break
   sleep 0.05
@@ -2100,10 +2187,11 @@ signal_cleanup_case() {
   build_proj "$sig_proj" "$ns" "$VERIFY"
   git -C "$sig_proj" config --local core.worktree "$sig_proj"
   before="$(core_worktree_snapshot "$sig_proj")"
-  (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 STUB_CLOBBER_CORE_WORKTREE_REPO="$sig_proj" bun "$sig_proj/seats/verify.ts" "bead-$ns" fleet/bead-1 worker-1 verifier --timeout-ms 30000 >"$out_file" 2>&1) &
+  (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 STUB_CLOBBER_CORE_WORKTREE_REPO="$sig_proj" bun "$sig_proj/seats/verify.ts" "bead-$ns" fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$out_file" 2>&1) &
   local dispatcher_pid=$!
   dir=""
-  for _ in $(seq 1 100); do
+  local ready_deadline=$((SECONDS+300))
+  while [ "$SECONDS" -lt "$ready_deadline" ]; do
     dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
     [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/verifier/core-worktree-clobber.txt" ] && break
     sleep 0.05
@@ -2161,7 +2249,7 @@ EOF
   # (always together — see the roster gotcha in README.md):
   #   WHEELHOUSE_REAL_PI_PROVIDER=... WHEELHOUSE_REAL_PI_MODEL=...
   env HOME="$RHOME" bun -e '
-    const fs = require("fs");
+    import fs from "node:fs";
     const f = process.argv[1];
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
     const p = process.env.WHEELHOUSE_REAL_PI_PROVIDER, m = process.env.WHEELHOUSE_REAL_PI_MODEL;

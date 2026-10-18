@@ -5,6 +5,34 @@
 
 SELFTEST_INVOCATION_PWD="${SELFTEST_INVOCATION_PWD:-$(pwd -P)}"
 
+# Initialize in the sourcing parent: almost all allocations run inside $(...),
+# whose exports cannot reach that parent. Descendants inherit the same run.
+# This is an allocation correlation token, not a secret/authentication scheme.
+# Read system randomness using Bash builtins, including on a minimal PATH.
+selftest_initialize_fixture_nonce() {
+  [ -z "${WHEELHOUSE_SELFTEST_FIXTURE_NONCE:-}" ] || return 0
+  local LC_ALL=C bytes="" chunk nonce="" i byte_value
+  # Bash cannot store NUL bytes. read's NUL delimiter discards those; retain
+  # sixteen non-NUL random bytes and serialize them as 32 lowercase hex digits.
+  while [ "${#bytes}" -lt 16 ]; do
+    IFS= read -r -n 16 -d '' chunk < /dev/urandom || { echo 'STOP: cannot read selftest allocation randomness' >&2; return 2; }
+    bytes="$bytes$chunk"
+  done
+  for ((i=0; i<16; i++)); do
+    # Bash 3.2 reports high bytes as signed character constants. Mask before
+    # hex formatting, otherwise e.g. 0x96 expands to ffffffffffffff96.
+    printf -v byte_value '%d' "'${bytes:$i:1}"
+    printf -v nonce '%s%02x' "$nonce" "$((byte_value & 255))"
+  done
+  WHEELHOUSE_SELFTEST_FIXTURE_NONCE="$nonce"
+}
+selftest_initialize_fixture_nonce || return 2
+export WHEELHOUSE_SELFTEST_FIXTURE_NONCE
+
+# Fixtures must not borrow the identity of the seat/operator running the suite.
+# Identity-construction/refusal legs may still explicitly unset/override this.
+export BEADS_ACTOR=wheelhouse-selftest
+
 with_timeout() {
   seconds="${1:-}"
   shift || true
@@ -29,8 +57,74 @@ selftest_has_fixture_marker() {
   done
   return 1
 }
+selftest_fixture_nonce_valid() {
+  local nonce="${WHEELHOUSE_SELFTEST_FIXTURE_NONCE:-}"
+  [ "${#nonce}" -eq 32 ] || return 1
+  case "$nonce" in *[!0-9a-f]*) return 1;; esac
+}
+
+# Exact allocation marker only. A copied marker cannot claim a different path.
+selftest_require_fixture_owner() {
+  local dir="$1" marker="$1/.wheelhouse-selftest-fixture"
+  local prefix_line pid_line started_line nonce_line root_line extra
+  selftest_fixture_nonce_valid || { selftest_fixture_refused "$dir" 'missing or invalid run nonce'; return 2; }
+  [ -f "$marker" ] && [ ! -L "$marker" ] || { selftest_fixture_refused "$dir" 'missing or non-regular allocation marker'; return 2; }
+  # Bounded fields; no evaluation of marker content or unbounded file read.
+  if ! {
+    IFS= read -r -n 4096 prefix_line && IFS= read -r -n 4096 pid_line &&
+    IFS= read -r -n 4096 started_line && IFS= read -r -n 4096 nonce_line &&
+    IFS= read -r -n 4096 root_line && ! IFS= read -r -n 4096 extra
+  } < "$marker"; then
+    selftest_fixture_refused "$dir" 'malformed allocation marker'; return 2
+  fi
+  case "$prefix_line" in prefix=?*) ;; *) selftest_fixture_refused "$dir" 'missing allocation prefix'; return 2;; esac
+  case "$pid_line" in pid=?*) ;; *) selftest_fixture_refused "$dir" 'missing allocation pid'; return 2;; esac
+  case "${pid_line#pid=}" in 0|*[!0-9]*) selftest_fixture_refused "$dir" 'invalid allocation pid'; return 2;; esac
+  case "$started_line" in started=?*) ;; *) selftest_fixture_refused "$dir" 'missing allocation start time'; return 2;; esac
+  [ "$nonce_line" = "nonce=$WHEELHOUSE_SELFTEST_FIXTURE_NONCE" ] || { selftest_fixture_refused "$dir" 'allocation marker nonce mismatch'; return 2; }
+  [ "$root_line" = "root=$dir" ] || { selftest_fixture_refused "$dir" 'allocation marker path mismatch'; return 2; }
+}
+
+# Resolve existing ancestors BEFORE making anything. Missing child components
+# are allowed only beneath a real allocation belonging to this run. The nearest
+# marker is a boundary: a foreign child marker cannot borrow an owned ancestor.
+selftest_owned_fixture_path() {
+  local requested="${1:-}" existing suffix="" leaf canon cursor
+  [ -n "$requested" ] || { selftest_fixture_refused "$requested" 'empty destination'; return 2; }
+  existing="$requested"
+  while [ ! -e "$existing" ] && [ ! -L "$existing" ]; do
+    leaf="${existing##*/}"
+    case "$leaf" in ''|.|..) selftest_fixture_refused "$requested" 'ambiguous destination'; return 2;; esac
+    suffix="/$leaf$suffix"
+    existing="$(dirname "$existing")"
+  done
+  canon="$(cd "$existing" 2>/dev/null && pwd -P)" || { selftest_fixture_refused "$requested" 'destination ancestor is not a directory'; return 2; }
+  canon="$canon$suffix"
+  cursor="$canon"
+  while [ "$cursor" != / ]; do
+    if [ -e "$cursor/.wheelhouse-selftest-fixture" ] || [ -L "$cursor/.wheelhouse-selftest-fixture" ]; then
+      if ! selftest_require_fixture_owner "$cursor"; then
+        selftest_fixture_refused "$requested" "destination is not owned by this run (allocation $cursor)"
+        return 2
+      fi
+      printf '%s\n' "$canon"
+      return 0
+    fi
+    cursor="$(dirname "$cursor")"
+  done
+  selftest_fixture_refused "$requested" 'destination is outside this run allocation'
+}
+
+selftest_recheck_fixture_path() {
+  local expected="$1" resolved
+  resolved="$(selftest_owned_fixture_path "$expected")" || return 2
+  [ "$resolved" = "$expected" ] && [ ! -L "$expected" ] || { selftest_fixture_refused "$expected" 'destination path changed'; return 2; }
+}
+
 selftest_make_fixture_dir() {
   template="${1:-}"
+  selftest_fixture_nonce_valid || { selftest_fixture_refused "$template" 'parent shell run nonce is missing or invalid'; return 2; }
+  export WHEELHOUSE_SELFTEST_FIXTURE_NONCE
   [ -n "$template" ] || { echo "STOP: mktemp fixture template is empty" >&2; return 2; }
   made="$(mktemp -d "$template")" || { echo "STOP: mktemp failed for fixture template: $template" >&2; return 2; }
   [ -n "$made" ] || selftest_fixture_refused "$made" "mktemp returned an empty path" || return 2
@@ -40,7 +134,12 @@ selftest_make_fixture_dir() {
   [ "$fixture" != "/" ] || selftest_fixture_refused "$fixture" "refuses filesystem root" || return 2
   if selftest_path_contains "$fixture" "$cwd"; then selftest_fixture_refused "$fixture" "fixture would contain caller cwd $cwd" || return 2; fi
   if selftest_path_contains "$fixture" "$repo"; then selftest_fixture_refused "$fixture" "fixture would contain repository root $repo" || return 2; fi
-  : > "$fixture/.wheelhouse-selftest-fixture"
+  case "$fixture${template##*/}" in *$'\n'*) selftest_fixture_refused "$fixture" 'newline in allocation metadata'; return 2;; esac
+  started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || { selftest_fixture_refused "$fixture" 'could not record allocation time'; return 2; }
+  if ! (set -o noclobber; printf 'prefix=%s\npid=%s\nstarted=%s\nnonce=%s\nroot=%s\n' \
+    "${template##*/}" "$$" "$started" "$WHEELHOUSE_SELFTEST_FIXTURE_NONCE" "$fixture" > "$fixture/.wheelhouse-selftest-fixture"); then
+    selftest_fixture_refused "$fixture" 'could not exclusively publish allocation marker'; return 2
+  fi
   printf '%s\n' "$fixture"
 }
 # Metrics are global bd configuration, not per-graph state. bd 1.2.2 writes
@@ -70,10 +169,18 @@ selftest_copy_seat_runtime() {
   src_seats="${2:-$(selftest_lib_root)/seats}"
   [ -n "$dest_root" ] || { echo "STOP: selftest_copy_seat_runtime needs destination root" >&2; return 2; }
   [ -d "$src_seats" ] || { echo "STOP: selftest_copy_seat_runtime source missing: $src_seats" >&2; return 2; }
-  mkdir -p "$dest_root/seats"
-  find "$src_seats" -maxdepth 1 \( -name '*.ts' -o -name '*.sh' \) ! -name '*.selftest.sh' -type f -exec cp -f {} "$dest_root/seats/" \;
-  [ ! -d "$src_seats/drivers" ] || { rm -rf "$dest_root/seats/drivers"; cp -R "$src_seats/drivers" "$dest_root/seats/drivers"; }
-  [ ! -d "$src_seats/transports" ] || { rm -rf "$dest_root/seats/transports"; cp -R "$src_seats/transports" "$dest_root/seats/transports"; }
+  local dest_seats child
+  dest_root="$(selftest_owned_fixture_path "$dest_root")" || return 2
+  dest_seats="$(selftest_owned_fixture_path "$dest_root/seats")" || return 2
+  # Preflight both replacement trees, before even copying top-level files.
+  for child in "$dest_root/seats" "$dest_seats/drivers" "$dest_seats/transports"; do
+    [ ! -L "$child" ] || { selftest_fixture_refused "$child" 'symlinked runtime destination'; return 2; }
+    selftest_owned_fixture_path "$child" >/dev/null || return 2
+  done
+  mkdir -p "$dest_seats" || return 2
+  find "$src_seats" -maxdepth 1 \( -name '*.ts' -o -name '*.sh' \) ! -name '*.selftest.sh' -type f -exec cp -f {} "$dest_seats/" \;
+  [ ! -d "$src_seats/drivers" ] || { selftest_recheck_fixture_path "$dest_seats/drivers" || return 2; rm -rf "$dest_seats/drivers"; cp -R "$src_seats/drivers" "$dest_seats/drivers"; }
+  [ ! -d "$src_seats/transports" ] || { selftest_recheck_fixture_path "$dest_seats/transports" || return 2; rm -rf "$dest_seats/transports"; cp -R "$src_seats/transports" "$dest_seats/transports"; }
 }
 
 selftest_shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\''/g")"; }
@@ -83,19 +190,18 @@ selftest_scratch_graph() {
   [ -n "$graph_root" ] || { echo "STOP: selftest_scratch_graph needs a destination directory" >&2; return 2; }
   bd_bin="$(command -v bd 2>/dev/null || true)"
   [ -n "$bd_bin" ] || { echo "STOP: selftest_scratch_graph requires bd on PATH" >&2; return 2; }
+  graph_root="$(selftest_owned_fixture_path "$graph_root")" || return 2
+  [ ! -e "$graph_root/.wheelhouse-selftest-fixture" ] && [ ! -L "$graph_root/.wheelhouse-selftest-fixture" ] || { selftest_fixture_refused "$graph_root" 'cannot reset an allocation root'; return 2; }
   parent="$(dirname "$graph_root")"
   mkdir -p "$parent" || { echo "STOP: selftest_scratch_graph could not create parent: $parent" >&2; return 2; }
-  graph_root="$(cd "$parent" && pwd -P)/$(basename "$graph_root")"
   repo="$(selftest_lib_root)"
   cwd="$SELFTEST_INVOCATION_PWD"
   if selftest_path_contains "$graph_root" "$repo" || selftest_path_contains "$graph_root" "$cwd"; then
     echo "STOP: selftest_scratch_graph destination must be outside the install/worktree: $graph_root" >&2
     return 2
   fi
-  if ! selftest_has_fixture_marker "$parent"; then
-    echo "STOP: selftest_scratch_graph destination must live under selftest_make_fixture_dir: $graph_root" >&2
-    return 2
-  fi
+  # Recheck immediately before reset; an ancestor's generic marker is not proof.
+  selftest_owned_fixture_path "$graph_root" >/dev/null || return 2
   rm -rf "$graph_root"
   mkdir -p "$graph_root"
   selftest_disable_bd_metrics "$graph_root" || return 2
@@ -122,12 +228,14 @@ EOF
 selftest_remove_fixture_dir() {
   fixture="${1:-}"
   [ -n "$fixture" ] || return 0
-  canon="$(cd "$fixture" 2>/dev/null && pwd -P)" || return 0
-  [ -f "$canon/.wheelhouse-selftest-fixture" ] || { echo "STOP: refusing to remove fixture path not made by selftest_make_fixture_dir: $canon" >&2; return 2; }
+  [ -e "$fixture" ] || [ -L "$fixture" ] || return 0
+  canon="$(cd "$fixture" 2>/dev/null && pwd -P)" || { selftest_fixture_refused "$fixture" 'cannot canonicalize allocation'; return 2; }
+  selftest_require_fixture_owner "$canon" || return 2
   cwd="$SELFTEST_INVOCATION_PWD"; repo="$(selftest_lib_root)"
   [ "$canon" != "/" ] || selftest_fixture_refused "$canon" "refuses filesystem root" || return 2
   if selftest_path_contains "$canon" "$cwd"; then selftest_fixture_refused "$canon" "fixture would contain caller cwd $cwd" || return 2; fi
   if selftest_path_contains "$canon" "$repo"; then selftest_fixture_refused "$canon" "fixture would contain repository root $repo" || return 2; fi
+  selftest_require_fixture_owner "$canon" || return 2
   rm -rf "$canon"
 }
 
@@ -176,6 +284,11 @@ selftest_cleanup_fixture_processes() {
   root="${1:-}"
   shift || true
   [ -n "$root" ] || return 0
+  [ -e "$root" ] || [ -L "$root" ] || return 0
+  local canonical_root
+  canonical_root="$(cd "$root" 2>/dev/null && pwd -P)" || { selftest_fixture_refused "$root" 'cannot canonicalize allocation'; return 2; }
+  root="$canonical_root"
+  selftest_require_fixture_owner "$root" || return 2
 
   selftest_stop_fixture_adapters "$root"
 
@@ -210,3 +323,27 @@ EOF
   fi
   return 0
 }
+
+# Admission happens on source, before fixture allocation or suite work. A
+# supervisor owns the lock so a suite's later traps/exec cannot replace release.
+selftest_admit_suite() {
+  local helper="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$(selftest_lib_root)/seats/selftest-sweep-lock.ts}"
+  local lock="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-/tmp/wheelhouse-selftest-sweep.lock}" rc option
+  local options=()
+  [ -r "$helper" ] || { echo "STOP: selftest lock helper missing or unreadable: $helper" >&2; exit 2; }
+  if bun "$helper" inherited "$lock"; then return 0; else rc=$?; fi
+  [ "$rc" -eq 75 ] || exit "$rc"
+  # Preserve active shell options without exporting them into unrelated child
+  # programs. Both normal suite scripts and bash -c library consumers re-enter
+  # through the verified ancestor path; no trusted 'already locked' env flag.
+  for option in ${SHELLOPTS//:/ }; do options+=( -o "$option" ); done
+  if [ -n "${BASH_EXECUTION_STRING:-}" ]; then
+    exec bun "$helper" supervise "$lock" "$BASH" "${options[@]}" -c "$BASH_EXECUTION_STRING" "$0" "$@"
+  elif [ -f "$0" ]; then
+    exec bun "$helper" supervise "$lock" "$BASH" "${options[@]}" -- "$0" "$@"
+  else
+    echo 'STOP: selftest admission requires a Bash script or bash -c invocation' >&2
+    exit 2
+  fi
+}
+selftest_admit_suite "$@"

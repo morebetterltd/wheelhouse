@@ -116,10 +116,9 @@ if git -C "$TEMPLATE" rev-parse --verify --quiet "origin/${TARGET:-main}^{commit
 fi
 git -C "$TEMPLATE" cat-file -e "${BASE}^{commit}"
 sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+# Preserve an existing separate-product record; only older installs need the default.
 grep -q '^product-repo=' wheelhouse/.template-source \
-  && sed -i.bak "s|^product-repo=.*|product-repo=$(pwd -P)|" wheelhouse/.template-source \
   || echo "product-repo=$(pwd -P)" >> wheelhouse/.template-source
-rm -f wheelhouse/.template-source.bak
 # One-time for installs older than merge-target=: replace the placeholder with the branch reviewed work integrates into.
 grep -q '^merge-target=' wheelhouse/.template-source || echo "merge-target=<the merge target branch>" >> wheelhouse/.template-source
 grep '^merge-target=' wheelhouse/.template-source
@@ -174,8 +173,10 @@ if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gi
 for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
   grep -qxF "$e" .gitignore 2>/dev/null || printf '%s\n' "$e" >> .gitignore
 done
-seats/install-fleet-pre-push-guard.sh
+seats/install-fleet-pre-push-guard.sh || { echo "STOP: fleet pre-push guard installation failed" >&2; exit 1; }
 ```
+
+The installer above protects both the container and the separate product Git root named by `product-repo=` in `wheelhouse/.template-source`. Preserve that value during upgrades; for an older install using the default, correct it before running the installer if the product is separate (absolute paths or paths relative to the install root are accepted). Each repository keeps its own hooks location, including a shared `.beads/hooks`, and its previous pre-push hook. Re-running refreshes the guard path without nesting wrappers or losing the previous hook. The product does not need a `seats/` directory: both hooks invoke the guard shipped with this install. Review the per-repository installation output; invalid/missing product roots stop the command rather than silently leaving them unguarded. The guard remains a bypassable tripwire, not credential isolation.
 
 `seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. Current template seats include optional dynamic-staffing pool support (`seats/pool.ts`, `seats/roster.ts`, `seats/pool.json.example`, and `seats/pool.selftest.sh`); copying the template files does not create `seats/pool.json`, so existing fixed-roster installs keep their current behavior unless they deliberately add a pool. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
 
@@ -206,8 +207,8 @@ If the project does not opt in, do not write `seats/host-budget.json`; keep the 
 If this project already had Pi seats, open `seats/seats.json` now and inspect every carried seat. Current rosters may record two fields older Pi rosters do not: `account.authRoute`, which is the credential route (`oauth`, `api_key`, or `env`) that gave the seat its identity, and `shadow`, which is a boolean only for intentional mirror seats. Back-fill `account.authRoute` for each carried seat from the route you actually use — OAuth `/login` for `openai-codex` subscription accounts, a file-backed provider entry in that seat's `auth.json` for `api_key`, or an exported provider env var for `env` — and do not record any credential material. Then read the JSON and probe every seat so both syntax and route are checked by the copied machinery:
 
 ```bash
-bun -e 'console.log(JSON.stringify(require("./seats/seats.json"), null, 2))'
-for seat in $(bun -e 'const j=require("./seats/seats.json"); console.log(Object.keys(j.seats||{}).join("\n"))'); do
+bun -e 'import fs from "node:fs"; console.log(JSON.stringify(JSON.parse(fs.readFileSync("./seats/seats.json","utf8")), null, 2))'
+for seat in $(bun -e 'import fs from "node:fs"; const j=JSON.parse(fs.readFileSync("./seats/seats.json","utf8")); console.log(Object.keys(j.seats||{}).join("\n"))'); do
   seats/seat-env.sh "$(sed -n 's/^namespace=//p' wheelhouse/.template-source | tail -1)" "$seat"
   bun seats/adapter.ts probe "$seat"
 done

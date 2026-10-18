@@ -219,7 +219,7 @@ RUN_PROJ="$PROJ"
 STATE="$PROJ/seats/state.json"
 LOG="$PROJ/seats/logs/worker-1.jsonl"
 ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
-state_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
+state_get() { env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE','utf8'));const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
 
 wait_for() {   # $1 = file, $2 = substring, $3 = seconds
   local i=0 max=$((${3:-10} * 10))
@@ -309,15 +309,11 @@ run stop worker-1 >/dev/null 2>&1
 phase "4. canary — can the mid-turn check detect a reset with the refusal removed?"
 CAN="$FIX/can-a"
 build_proj "$CAN" can-a
-env ADAPTER="$ADAPTER" CAN_ADAPTER="$CAN/seats/adapter.ts" python3 - <<'PY'
-import os
-from pathlib import Path
-src = Path(os.environ["ADAPTER"]).read_text()
-old = "    if (st.data?.isStreaming) {\n"
-if old not in src:
-    raise SystemExit("canary: could not find exact isStreaming refusal line")
-Path(os.environ["CAN_ADAPTER"]).write_text(src.replace(old, "    if (false && st.data?.isStreaming) {\n", 1))
-PY
+env ADAPTER="$ADAPTER" CAN_ADAPTER="$CAN/seats/adapter.ts" bun - <<'JS'
+const fs=(await import('node:fs')).default,src=fs.readFileSync(process.env.ADAPTER,'utf8'),old='    if (st.data?.isStreaming) {\n      die(\n';
+if(src.split(old).length!==2) throw new Error('canary: expected exactly one reset isStreaming refusal');
+fs.writeFileSync(process.env.CAN_ADAPTER,src.replace(old,'    if (false && st.data?.isStreaming) {\n      die(\n'));
+JS
 if cmp -s "$ADAPTER" "$CAN/seats/adapter.ts"; then
   fail "canary: could not cut the isStreaming refusal — the line no longer matches, so the canary proves nothing"
 else
