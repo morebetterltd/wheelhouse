@@ -14,10 +14,13 @@ seats/inbox.cursor
 seats/inbox.seen.json
 seats/run/
 
-# verdict files are the commander's WORKING COPIES, never product: evidence
-# the graph can cite lives on the bead or at a committed path the bead names
-# (wheelhouse/GRAPH.md, "Where evidence lives") — a tracked verdicts/ would
-# invite citing a path that dies with this checkout
+# Task reports, graph exports and diagnostic captures belong on the bead,
+# never in the public template, even after scrubbing. A forced add is caught
+# by seats/no-tracked-evidence.selftest.sh (index and HEAD).
+/evidence/
+
+# Verdict files are working copies. Paste decisive output on the bead before
+# citing it (wheelhouse/GRAPH.md, "Where evidence lives").
 seats/verdicts/
 
 # fleet runtime: seat worktrees and per-bead scratch are machine-local, never product
