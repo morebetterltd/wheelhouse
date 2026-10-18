@@ -1975,7 +1975,8 @@ build_proj "$REPORT_PROJ" cleanupreport
 cp "$ADAPTER_DIR/prune.ts" "$REPORT_PROJ/seats/prune.ts"
 mkdir -p "$REPORT_PROJ/wheelhouse" "$REPORT_PROJ/.beads" "$REPORT_PROJ/fakebin" "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch"
 printf 'cleanup=report\n' > "$REPORT_PROJ/wheelhouse/.template-source"
-printf 'scratch\n' > "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt"
+# Historical unmarked scratch remains a negative case, never hand-marked.
+printf 'legacy scratch\n' > "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt"
 cat > "$REPORT_PROJ/fakebin/bd" <<'EOF'
 #!/usr/bin/env bash
 if [ "$1" = "list" ] && printf '%s\n' "$@" | grep >/dev/null -- '--status=closed'; then
@@ -1988,10 +1989,19 @@ chmod +x "$REPORT_PROJ/fakebin/bd"
 RUN_PROJ="$REPORT_PROJ"; STATE="$REPORT_PROJ/seats/state.json"; LOG="$REPORT_PROJ/seats/logs/worker-1.jsonl"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$REPORT_PROJ/fakebin:$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 bead-report 2>&1)" || RC=$?
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$REPORT_PROJ/fakebin:$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-report "first cleanup report" 2>&1)" || RC=$?
+# The production dispatch creates/records the canonical task root. No test API
+# call supplies its marker; the old unmarked sibling must still be refused.
+if [ $RC -eq 0 ] && [ -f "$REPORT_PROJ/.wheelhouse-runs/bead-report/.wheelhouse-cleanup-scratch.json" ]; then
+  pass "cleanup=report: dispatch creates the marked canonical task scratch"
+else fail "cleanup=report dispatch did not create marked task scratch (rc=$RC out=$OUT)"; fi
+printf 'scratch\n' > "$REPORT_PROJ/.wheelhouse-runs/bead-report/file.txt"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$REPORT_PROJ/fakebin:$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-after-report "cleanup report" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && [ -e "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt" ] && grep -q 'dry-run would remove run-scratch' "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null && grep -q 'dry-run cleanup done' "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null; then
+if [ $RC -eq 0 ] && [ -e "$REPORT_PROJ/.wheelhouse-runs/bead-report/file.txt" ] && grep -F "dry-run would remove run-scratch $REPORT_PROJ/.wheelhouse-runs/bead-report bytes=" "$REPORT_PROJ/seats/logs/cleanup.log" >/dev/null 2>&1 && grep -q 'dry-run cleanup done' "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null; then
   pass "cleanup=report: cross-bead cleanup writes a would-remove report and deletes nothing"
 else fail "cleanup=report did not dry-run to log or preserved scratch wrong (rc=$RC out=$OUT log=$(cat "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null))"; fi
+if [ -e "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt" ] && [ ! -e "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/.wheelhouse-cleanup-scratch.json" ] && grep -F "dry-run kept run-scratch $REPORT_PROJ/.wheelhouse-runs/bead-report-scratch reason=unproven scratch ownership" "$REPORT_PROJ/seats/logs/cleanup.log" >/dev/null 2>&1; then
+  pass "cleanup=report: old unmarked scratch stays refused, not adopted"
+else fail "cleanup=report adopted or failed to refuse old unmarked scratch"; fi
 run stop worker-1 >/dev/null 2>&1
 OFF_PROJ="$FIX/cleanup-off-proj"
 build_proj "$OFF_PROJ" cleanupoff

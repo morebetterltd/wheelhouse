@@ -235,9 +235,10 @@ export function acquireCleanupLock(root: string, waitSeconds: number): (() => vo
 }
 
 /** Explicitly record an owned run at creation; never infer ownership from name. */
-export function recordCleanupScratch(root: string, target: string, bead: string) {
+export function recordCleanupScratch(root: string, target: string, bead: string, createdIdentity?: string) {
   root = fs.realpathSync(root); target = path.resolve(target);
   const proof = cleanupPathIdentity(root, target);
+  if (createdIdentity !== undefined && proof.chain.at(-1)!.identity !== createdIdentity) throw new CleanupRefused(`created scratch changed before recording: ${target}`);
   if (![".wheelhouse-runs", ".wheelhouse-build", ".wheelhouse-worktrees"].some(c => path.dirname(target) === path.join(root, c))) throw new CleanupRefused(`not a direct cleanup scratch child: ${target}`);
   if (!bead || ![bead, `${bead}-`, `${bead}_`].some(p => path.basename(target) === p || (p !== bead && path.basename(target).startsWith(p)))) throw new CleanupRefused(`scratch name does not match bead ${bead}: ${target}`);
   const m = { ...record("wheelhouse-cleanup-scratch", root, proof.chain.at(-1)!.identity), target, bead };
@@ -265,6 +266,59 @@ export function recordCleanupScratch(root: string, target: string, bead: string)
         unlinkAt(fd, temporary);
       }
     } finally { fs.closeSync(fd); }
+  }
+}
+/** Dispatch creates canonical task scratch; never adopt an existing unmarked run.
+ * Publish a private empty directory exclusively, retaining its descriptor so
+ * recordCleanupScratch cannot accidentally claim a replacement at that name. */
+export function prepareTaskScratch(root: string, bead: string) {
+  if (!bead || bead === "." || bead === ".." || /[/\\\s'"`]/.test(bead)) throw new CleanupRefused(`invalid scratch bead: ${JSON.stringify(bead)}`);
+  root = fs.realpathSync(root);
+  const target = path.join(root, ".wheelhouse-runs", bead), r = runtime(root);
+  let rootFd = -1, parent = -1, candidate = -1, temporary = "";
+  try {
+    if (native.symbols.flock(r.fd, 2)) fail("lock scratch creation");
+    rootFd = fs.openSync(root, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+    if (native.symbols.mkdirat(rootFd, z(".wheelhouse-runs"), 0o700) && errno() !== 17) fail("mkdir .wheelhouse-runs");
+    parent = openAt(rootFd, ".wheelhouse-runs", true);
+    const proof = cleanupPathIdentity(root, path.dirname(target));
+    if (proof.chain.at(-1)!.identity !== id(parent)) throw new CleanupRefused("scratch parent changed during creation");
+    const unchanged = () => { if (!cleanupPathUnchanged(root, path.dirname(target), proof)) throw new CleanupRefused("scratch parent changed during creation"); };
+    // An existing marker is validated, not replaced. Missing markers remain
+    // missing, including legacy empty directories; only the creator can claim.
+    const existing = () => {
+      unchanged();
+      try { scratchOwnership(root, target, bead); return { target, owned: true }; }
+      catch (e: any) { if (e.errno === 2) return { target, owned: false }; throw e; }
+    };
+    let present = -1;
+    try { present = openAt(parent, bead, true); }
+    catch (e: any) { if (e.errno !== 2) throw e; }
+    if (present >= 0) { fs.closeSync(present); return existing(); }
+    temporary = `.scratch-create-${randomUUID()}`;
+    if (native.symbols.mkdirat(parent, z(temporary), 0o700)) fail("mkdir scratch candidate");
+    candidate = openAt(parent, temporary, true);
+    unchanged();
+    try { renameExclusive(parent, temporary, bead); }
+    catch (e: any) { if (e.errno === 17 || e.errno === 39 || e.errno === 66) return existing(); throw e; }
+    temporary = "";
+    unchanged();
+    recordCleanupScratch(root, target, bead, id(candidate));
+    return { target, owned: true };
+  } finally {
+    try {
+      if (temporary && candidate >= 0) {
+        const current = openAt(parent, temporary, true);
+        try { if (id(current) !== id(candidate) || entries(candidate).length) throw new CleanupRefused("private scratch candidate changed; kept"); }
+        finally { fs.closeSync(current); }
+        unlinkAt(parent, temporary, true);
+      }
+    } finally {
+      if (candidate >= 0) fs.closeSync(candidate);
+      if (parent >= 0) fs.closeSync(parent);
+      if (rootFd >= 0) fs.closeSync(rootFd);
+      native.symbols.flock(r.fd, 8); fs.closeSync(r.fd);
+    }
   }
 }
 export function scratchOwnership(root: string, target: string, bead?: string) {
