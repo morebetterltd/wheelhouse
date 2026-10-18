@@ -111,7 +111,7 @@ HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
 # /usr/sbin is where macOS keeps lsof; recover dies honestly without it.
-RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/sbin:/sbin:/usr/bin:/bin"
+RUN_PATH="$BIN:$PATH" # Keep the noise-controller and host-budget shims.
 # Only this fixture's executable writes this ledger, even when it exits quickly
 # or rewrites its title. Another fleet's bare `pi` can never enter this count.
 PI_PIDS="$FIX/pi-starts.pids"
@@ -236,7 +236,7 @@ adapter_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SK
 recover_run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/recover.ts" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seat_line() { printf '%s\n' "$OUT" | grep "^$1 "; }
-state_get() { env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
+state_get() { env HOME="$HOME_FIX" bun -e 'import fs from "node:fs";const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const v=s.seats[process.argv[2]]?.[process.argv[3]];if(v!=null)console.log(v)' "$STATE" "$1" "$2"; }
 pi_count() { awk 'END { print NR + 0 }' "$PI_PIDS"; }
 
 # a pid that is definitely dead (spawned, then reaped)
