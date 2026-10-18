@@ -76,7 +76,7 @@ template_content() {
 }
 install_content() { if is_contract_half "$1"; then split_contract "$ROOT/$1"; else cat "$ROOT/$1"; fi; }
 
-TMP="${TMPDIR:-/tmp}/wheelhouse-template-drift.$$"; mkdir -p "$TMP" || exit 2
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-template-drift.XXXXXX")" || exit 2
 trap 'rm -rf "$TMP"' EXIT INT TERM
 : > "$TMP/install"; : > "$TMP/template"
 ( cd "$ROOT" && find seats runbooks wheelhouse -type f 2>/dev/null | while read -r p; do is_wanted "$p" && printf '%s\n' "$p"; done ) | sort > "$TMP/install"

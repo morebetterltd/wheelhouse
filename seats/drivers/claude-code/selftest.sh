@@ -2,9 +2,14 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 . "$ROOT/seats/selftest-lib.sh"
-FIX="${TMPDIR:-$ROOT/.wheelhouse-runs/wheelhouse-project-er5m.3/tmp}/claude-code-driver.$$"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/claude-code-driver.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
+cleanup(){ selftest_cleanup_fixture_processes "$FIX" || return; selftest_remove_fixture_dir "$FIX"; }
+trap cleanup EXIT
+if [ "${WHEELHOUSE_SCRATCH_COLLISION_CHILD:-}" != 1 ]; then
+  bun "$ROOT/seats/fixtures/scratch-ownership.ts" claude "$ROOT" "$FIX" || exit 1
+fi
 mkdir -p "$FIX/bin" "$FIX/account" "$FIX/cwd" "$FIX/run" "$FIX/logs"
-trap 'pkill -f "$FIX" 2>/dev/null || true; rm -rf "$FIX"' EXIT
 cat > "$FIX/bin/claude" <<'STUB'
 #!/usr/bin/env node
 const fs=require('fs'),path=require('path');
