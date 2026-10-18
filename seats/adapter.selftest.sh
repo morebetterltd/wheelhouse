@@ -479,10 +479,10 @@ run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELH
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
-phase "0a0. state lock recovers abandoned incomplete writers without stealing live owners"
+phase "0a0. state lock waits visibly for live holders; safely reclaims abandoned writers"
 mkdir -p "$FIX/state-lock-cases"
 if bun "$HERE/fixtures/adapter-state-lock.ts" "$ADAPTER" "$FIX/state-lock-cases"; then
-  pass "state lock recovery, grace, open/live owners, safe release and atomic publication"
+  pass "state lock recovery, grace, open/live owners, cancellation, publication and past-5000ms release"
 else fail "adapter state-lock regression failed"; fi
 
 phase "0a. launch paths validate the whole roster before choosing a seat"
@@ -2338,7 +2338,7 @@ phase "8. canary — can these checks detect a broken adapter?"
 # 7a: an adapter that never records what it spawned
 CAN_A="$FIX/can-a"
 build_proj "$CAN_A" can-a
-sed 's|^  recordLaunchedSeat(name, record); // spawn-record$|  ; // spawn-record|' "$ADAPTER" > "$CAN_A/seats/adapter.ts"
+sed 's|^  await recordLaunchedSeat(name, record); // spawn-record$|  ; // spawn-record|' "$ADAPTER" > "$CAN_A/seats/adapter.ts"
 if cmp -s "$ADAPTER" "$CAN_A/seats/adapter.ts"; then
   fail "canary: could not cut the state write — the line no longer matches, so the canary proves nothing"
 else

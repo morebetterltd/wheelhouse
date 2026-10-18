@@ -70,7 +70,8 @@ import { hasPool, loadPool, seatEntryFor } from "./pool";
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
 import { QUOTA_RE } from "./quota";
-import { acquirePidLock, releasePidLock } from "./lock";
+import { releasePidLock } from "./lock";
+import { waitForStateLock, StateLockCancelled } from "./state-lock";
 import { prepareTaskScratch } from "./cleanup-identity";
 
 interface SeatDriver {
@@ -394,15 +395,8 @@ function sleepMs(ms: number): void {
   if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function acquireStateLock(): number {
-  const lock = path.join(SEATS_DIR, "state.lock");
-  const deadline = Date.now() + Number(process.env.WHEELHOUSE_STATE_LOCK_TIMEOUT_MS || 5000);
-  while (true) {
-    const fd = acquirePidLock(lock);
-    if (fd !== null) return fd;
-    if (Date.now() >= deadline) die(`timed out waiting for ${lock}`);
-    sleepMs(25);
-  }
+async function acquireStateLock(): Promise<number> {
+  return waitForStateLock(path.join(SEATS_DIR, "state.lock"));
 }
 
 function releaseStateLock(fd: number): void {
@@ -411,9 +405,9 @@ function releaseStateLock(fd: number): void {
 
 /** Mutators receive only the fresh state read during this lock hold.
  * RPC/process waits stay outside: never commit a pre-wait State snapshot. */
-function writeState<T>(update: (state: State) => T): T {
+async function writeState<T>(update: (state: State) => T): Promise<T> {
   const testDelay = Number(process.env.WHEELHOUSE_STATE_WRITE_DELAY_MS || 0);
-  const fd = acquireStateLock();
+  const fd = await acquireStateLock();
   try {
     const state = readState();
     const before = JSON.stringify(state);
@@ -433,8 +427,8 @@ function writeState<T>(update: (state: State) => T): T {
   }
 }
 
-function recordLaunchedSeat(name: string, record: SeatRecord): void {
-  writeState((state) => {
+async function recordLaunchedSeat(name: string, record: SeatRecord): Promise<void> {
+  await writeState((state) => {
     const lastBead = state.seats[name]?.lastBead;
     state.seats[name] = { ...record, ...(lastBead ? { lastBead } : {}) };
   });
@@ -750,7 +744,7 @@ function eventIsSuccessfulTurnEnd(obj: any): boolean {
   return stopReasonOf(obj) !== "error";
 }
 
-function syncCapacityFromLog(name: string, roster: Record<string, SeatEntry>): SeatRecord | undefined {
+async function syncCapacityFromLog(name: string, roster: Record<string, SeatEntry>): Promise<SeatRecord | undefined> {
   return writeState((state) => {
     const rec = state.seats[name];
     if (rec) syncCapacityRecordFromLog(name, rec, roster);
@@ -806,8 +800,8 @@ function syncCapacityRecordFromLog(name: string, rec: SeatRecord, roster: Record
 
 
 /** Last few KB of the seat's stderr log — where pi complains about limits. */
-function recordLaunchFailure(name: string, existing: SeatRecord | undefined, detail: string): void {
-  writeState((state) => {
+async function recordLaunchFailure(name: string, existing: SeatRecord | undefined, detail: string): Promise<void> {
+  await writeState((state) => {
     state.seats[name] = {
       ...(state.seats[name] ?? existing ?? {}),
       pid: null,
@@ -981,12 +975,12 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     st = await rpc(probe, { type: "get_state" });
   } catch (e: any) {
     const cleanup = await terminateSpawnedOnly(pid);
-    recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
+    await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
   }
   if (!st.success) {
     const cleanup = await terminateSpawnedOnly(pid);
-    recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
+    await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
     die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
   }
 
@@ -1019,7 +1013,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     sessionFile: st.data?.sessionFile ?? null,
     model: entry.model,
   };
-  recordLaunchedSeat(name, record); // spawn-record
+  await recordLaunchedSeat(name, record); // spawn-record
   console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
 }
@@ -1132,12 +1126,12 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
     st = await rpc(probe, { type: "get_state" });
   } catch (e: any) {
     const cleanup = await terminateSpawnedOnly(pid);
-    recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
+    await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
   }
   if (!st.success) {
     const cleanup = await terminateSpawnedOnly(pid);
-    recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
+    await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
     die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
   }
 
@@ -1158,7 +1152,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
     sessionFile: st.data?.sessionFile ?? null,
     model: st.data?.model ?? entry.model,
   };
-  recordLaunchedSeat(name, record);
+  await recordLaunchedSeat(name, record);
   console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
 }
@@ -1220,11 +1214,11 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   const shellCmd = `exec ${q(process.execPath)} ${args.map(q).join(" ")} 0<> ${q(fifo)} 2>> ${q(errLog)}`;
   const child = spawn("bash", ["-c", shellCmd], { cwd, env: codexChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" }); child.unref();
   const pid = child.pid!, probe = { fifo, log, pid }; let st: any;
-  try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
-  if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
+  try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
+  if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
   const record: SeatRecord = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
-  recordLaunchedSeat(name, record); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`); console.log(`  events -> ${log}`);
+  await recordLaunchedSeat(name, record); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`); console.log(`  events -> ${log}`);
 }
 function codexProbe(name: string, entry: SeatEntry): void {
   const labelSuffix = accountLabelSuffix(entry); const accountDir = codexAccountDir(entry);
@@ -1267,7 +1261,7 @@ async function cmdSpawn(name: string, beadId?: string, base: string | null = nul
   const entry = requireSeat(name);
   const cwd = beadId ? prepareSeatCwd(name, entry, beadId, base) : ROOT;
   await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, cwd);
-  if (beadId) writeState((state) => {
+  if (beadId) await writeState((state) => {
     if (state.seats[name]) state.seats[name].lastBead = beadId;
   });
 }
@@ -1307,8 +1301,8 @@ function piProbe(name: string, entry: SeatEntry): void {
   process.exit(result.status ?? 1);
 }
 
-function clearCapacityAfterProbe(name: string): void {
-  const at = writeState((state) => {
+async function clearCapacityAfterProbe(name: string): Promise<void> {
+  const at = await writeState((state) => {
     const rec = state.seats[name];
     if (!rec?.lastCapacityEvent) return null;
     const logOffset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
@@ -1320,10 +1314,10 @@ function clearCapacityAfterProbe(name: string): void {
   if (at) console.log(`capacity cleared at ${at} (probe OK at ${at})`);
 }
 
-function cmdProbe(name: string): void {
+async function cmdProbe(name: string): Promise<void> {
   const entry = requireSeat(name);
   driverForSeat(name, entry, "adapter probe").probe(name, entry);
-  clearCapacityAfterProbe(name);
+  await clearCapacityAfterProbe(name);
 }
 
 function cmdProbeEntry(entryName: string): void {
@@ -1363,7 +1357,7 @@ async function cmdResume(name: string): Promise<void> {
   }
   const wasMidTool = logHasUnfinishedToolCall(rec.log);
   await driverForSeat(name, entry, "adapter resume").launch(name, entry, rec.sessionFile, resumeCwd);
-  if (wasMidTool) markSeatStalledAfterResume(name, rec.lastBead);
+  if (wasMidTool) await markSeatStalledAfterResume(name, rec.lastBead);
 }
 
 /**
@@ -1407,7 +1401,7 @@ async function cmdReset(name: string): Promise<void> {
   // state.json must already show no session to resume into, not the stale
   // one reset was meant to drop. This also supports the documented upgrade
   // path where an operator stops an idle seat before changing its harness.
-  writeState((state) => {
+  await writeState((state) => {
     if (!state.seats[name]) return;
     state.seats[name].sessionId = null;
     state.seats[name].sessionFile = null;
@@ -1517,7 +1511,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
   const promptText = `Bead ${beadId}\n\n${text}`;
-  writeState((state) => {
+  await writeState((state) => {
     state.seats[name].lastBead = beadId;
     state.seats[name].lastDispatchAt = new Date().toISOString();
     state.seats[name].lastPrompt = promptText;
@@ -1537,7 +1531,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     // process is gone. Anything else stays a plain failure.
     const blob = `${resp.error ?? ""}\n${stderrTail(rec)}`;
     if (QUOTA_RE.test(blob)) {
-      writeState((state) => {
+      await writeState((state) => {
         const label = accountLabel(undefined, state.seats[name]);
         state.seats[name].lastCapacityEvent = {
           at: "time unknown",
@@ -1549,7 +1543,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
     die(`dispatch failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
   }
-  writeState((state) => {
+  await writeState((state) => {
     const landed = state.seats[name];
     if (resp.data?.sessionId) landed.sessionId = resp.data.sessionId;
     if (resp.data?.sessionFile) landed.sessionFile = resp.data.sessionFile;
@@ -1754,10 +1748,10 @@ function appendSeatLog(log: string, obj: any): void {
   fs.appendFileSync(log, `${JSON.stringify(obj)}\n`);
 }
 
-function markSeatStalledAfterResume(name: string, bead: string | undefined): void {
+async function markSeatStalledAfterResume(name: string, bead: string | undefined): Promise<void> {
   const at = new Date().toISOString();
   const detail = `resume detected prior turn was cut off during a tool call${bead ? ` for bead ${bead}` : ""}; commander must redispatch or reset`;
-  const rec = writeState((state) => {
+  const rec = await writeState((state) => {
     const rec = state.seats[name];
     if (rec) rec.lastStalledEvent = { at, detail };
     return rec;
@@ -1899,7 +1893,7 @@ async function cmdStatus(): Promise<void> {
     const ownedLog = ownedSeatLog(name, state.seats[name]?.log);
     // Invalid log records are not read either: lastEvent opens its argument,
     // so allowing a FIFO here could hang status before the rotation guard.
-    const rec = ownedLog ? syncCapacityFromLog(name, roster) : state.seats[name];
+    const rec = ownedLog ? await syncCapacityFromLog(name, roster) : state.seats[name];
     if (!rec) continue;
     const bareAlive = barePidAlive(rec.pid);
     const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
@@ -1953,7 +1947,7 @@ async function stopRecord(name: string, rec: SeatRecord): Promise<string> {
   if (pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     throw new Error(`pid ${rec.pid} is still alive after SIGTERM and ${TIMEOUT_MS}ms — look at it before escalating`);
   }
-  writeState((state) => {
+  await writeState((state) => {
     const current = state.seats[name];
     if (!current || !sameSeatProcess(current, rec)) return;
     current.pid = null;
@@ -1969,7 +1963,7 @@ async function cmdStop(name: string): Promise<void> {
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
-    const message = writeState((state) => {
+    const message = await writeState((state) => {
       const current = state.seats[name];
       if (current && sameSeatProcess(current, rec)) {
         current.pid = null;
@@ -2028,6 +2022,7 @@ async function cmdStopAll(): Promise<void> {
     try {
       console.log(await driver.stop(name, rec));
     } catch (e: any) {
+      if (e instanceof StateLockCancelled) throw e;
       console.log(`seat ${name}: REPORT stop failed; left for human inspection — ${e.message}`);
     }
   }
@@ -2087,4 +2082,10 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => die(e.message));
+main().catch((e) => {
+  if (e instanceof StateLockCancelled) {
+    process.stderr.write(`STOP: ${e.message}\n`);
+    process.exit(e.exitCode);
+  }
+  die(e.message);
+});
