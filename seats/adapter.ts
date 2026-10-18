@@ -70,7 +70,7 @@ import { hasPool, loadPool, seatEntryFor } from "./pool";
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
 import { QUOTA_RE } from "./quota";
-import { releasePidLock } from "./lock";
+import { acquirePidLock, releasePidLock } from "./lock";
 import { waitForStateLock, StateLockCancelled } from "./state-lock";
 import { prepareTaskScratch } from "./cleanup-identity";
 
