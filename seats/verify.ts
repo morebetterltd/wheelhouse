@@ -85,6 +85,7 @@ import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, typ
 import { effectiveRoster } from "./roster";
 import { hasPool } from "./pool";
 import { finalAssistantText, liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
+import { installReviewSignals, reviewCancelling, reviewChildrenStopped, reviewScratchCleanups, trackReviewChild } from "./verify-cancellation";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -138,7 +139,8 @@ function assertHostBuildLockAvailable(): void {
  * suites at the pinned SHA; stray writes have somewhere harmless to land.
  * Removed on every exit path
  * via `process.on("exit", ...)`, which still fires synchronous cleanup
- * when `die()` calls `process.exit()` mid-run. The one path that skips
+ * when `die()` calls `process.exit()` mid-run. TERM/INT/HUP instead join the
+ * groups we started before invoking these cleanups. The one path that skips
  * "exit" — a SIGKILL of the dispatcher — is handled by
  * sweepStaleScratchWorktrees() below, run once at the top of every
  * invocation, not by anything here.
@@ -164,6 +166,7 @@ function restoreCoreWorktreeConfig(repoRoot: string, before: CoreWorktreeConfig)
 }
 
 export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD"): string {
+  if (import.meta.main) installReviewSignals();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`));
   const coreWorktreeBefore = readCoreWorktreeConfig(repoRoot);
   try {
@@ -175,14 +178,18 @@ export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "ve
   }
   let cleaned = false;
   const cleanup = () => {
-    if (cleaned) return;
+    if (cleaned || (reviewCancelling && !reviewChildrenStopped)) return;
     cleaned = true;
+    reviewScratchCleanups.delete(cleanup);
     removeScratchWorktree(repoRoot, dir);
     sweepShaNamedBranches(repoRoot);
     restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
   };
+  reviewScratchCleanups.add(cleanup);
   process.on("exit", cleanup);
-  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
+  // Importers such as walk.ts keep their existing scratch-only behavior;
+  // this coordinator owns only the dispatcher entry point's child groups.
+  if (!import.meta.main) for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
   return dir;
 }
 
@@ -479,6 +486,7 @@ function runOneShot(
       fs.mkdirSync(path.dirname(markerFile), { recursive: true });
       fs.writeFileSync(markerFile, JSON.stringify({ pid: child.pid, bead: opts.marker!.bead, startedAt: new Date().toISOString() }, null, 2) + "\n");
     }
+    const owned = trackReviewChild(child, { marker: markerFile ?? undefined });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -490,17 +498,20 @@ function runOneShot(
     let noEventTimer: ReturnType<typeof setTimeout> | null = null;
     const out = () => Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8");
     const err = () => Buffer.concat(stderrChunks, stderrBytes).toString("utf8");
-    const finish = (result: Partial<OneShotRunResult>) => {
-      if (done) return;
-      done = true;
+    const cancelTimers = () => {
       clearTimeout(firstOutputTimer);
       if (noEventTimer) clearTimeout(noEventTimer);
       if (finalKillTimer) clearTimeout(finalKillTimer);
+    };
+    const finish = (result: Partial<OneShotRunResult>) => {
+      if (done || reviewCancelling) return;
+      done = true;
+      cancelTimers();
       if (markerFile) { try { fs.unlinkSync(markerFile); } catch {} }
       resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error, outcome: result.outcome });
     };
     const killProcessGroup = (signal: NodeJS.Signals) => {
-      if (!child.pid) return;
+      if (!child.pid || reviewCancelling) return;
       try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch {} }
     };
     const killFor = (code: string, message: string) => {
@@ -531,6 +542,7 @@ function runOneShot(
     const firstOutputTimer = setTimeout(() => {
       if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT", `no verifier output within ${opts.firstOutputTimeoutMs}ms`);
     }, opts.firstOutputTimeoutMs);
+    owned.onCancel = cancelTimers;
     const resetNoEventTimer = () => {
       if (noEventTimer) clearTimeout(noEventTimer);
       const stallMs = Math.min(opts.noEventTimeoutMs, opts.timeoutMs);
@@ -539,7 +551,7 @@ function runOneShot(
       noEventTimer = setTimeout(() => killFor(code, message), stallMs);
     };
     const collect = (chunks: Buffer[], current: () => number, setBytes: (n: number) => void, chunk: Buffer) => {
-      if (done) return;
+      if (done || reviewCancelling) return;
       sawOutput = true;
       clearTimeout(firstOutputTimer);
       resetNoEventTimer();
@@ -1131,12 +1143,14 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   // that process. Suites create their OWN fixture graphs, not one redirected
   // global graph (which would invalidate graph-isolation selftests).
   const scratchCwd = makeScratchCwd(repoRoot, "review", tip);
+  const groupsFile = path.join(scratchCwd, ".wheelhouse-review-groups");
+  fs.writeFileSync(groupsFile, "", { flag: "wx", mode: 0o600 });
   const logDir = path.join(VERDICTS_DIR, "sweeps");
   fs.mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${tip}.${process.pid}.${Date.now()}.selftest-sweep.log`);
   const started = Date.now();
   // Keep logical and physical cwd consistent for sweep child processes.
-  const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1", WHEELHOUSE_SELFTEST_REVIEW_GROUPS: groupsFile };
   for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN"]) delete env[key];
   const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
   if (actualTip !== tip) die(`sweep scratch tip ${actualTip} differs from reviewed tip ${tip}`);
@@ -1172,14 +1186,14 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
       // No wall-clock/model-command timeout: the runner owns H4 and waits for
       // its turn. Stream directly to disk even during a long lock wait.
       rc = await new Promise<number>((resolve) => {
-        const child = spawn("bash", ["seats/selftest-sweep.sh"], { cwd: scratchCwd, env, stdio: ["ignore", fd, fd] });
-        const stop = () => { child.kill("SIGTERM"); };
-        process.prependOnceListener("SIGTERM", stop);
-        process.prependOnceListener("SIGINT", stop);
+        const child = spawn("bash", ["seats/selftest-sweep.sh"], { cwd: scratchCwd, env, stdio: ["ignore", fd, fd], detached: true });
+        trackReviewChild(child, { sweep: {
+          lock: path.resolve(scratchCwd, env.WHEELHOUSE_SELFTEST_SWEEP_LOCK || "/tmp/wheelhouse-selftest-sweep.lock"),
+          helper: env.WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER || path.join(scratchCwd, "seats/selftest-sweep-lock.ts"),
+          groupsFile,
+        } });
         const finish = (code: number) => {
-          process.removeListener("SIGTERM", stop);
-          process.removeListener("SIGINT", stop);
-          resolve(code);
+          if (!reviewCancelling) resolve(code);
         };
         child.once("error", (e) => { error = e.message; finish(1); });
         child.once("close", (code) => finish(code ?? 128));

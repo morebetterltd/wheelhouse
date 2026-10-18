@@ -561,6 +561,34 @@ must launch this long-running dispatcher in the background (for example with
 `nohup`) and poll the retained log/verdict, rather than putting the whole
 dispatch under that caller's command timeout.
 
+On TERM, INT or HUP, `verify.ts` stops its detached sweep/reviewer groups,
+gives TERM a 1.5-second grace, then independently KILLs remaining owned groups.
+The runner records each suite's future pgid in `.wheelhouse-review-groups`
+inside the verifier-owned review scratch **before** its fixed launcher calls
+`setsid` or starts suite code. Before publication the launcher is still in the
+runner group, so killing the runner cannot leave an unrecorded escaped suite.
+No acknowledgement round trip or suite wait on the verifier is required. Only
+a wholly absent suite group is retired from the registry (atomic replacement);
+suite payloads do not inherit the registry capability.
+
+Cancellation rereads the registry, KILLs the runner group first if needed,
+then rereads and KILLs its published suite groups itself. It confirms all those
+groups are absent and joins direct child/stdio completion before removing
+scratch or reporting a clean stop. This does not depend on the runner's TERM
+grace, and works if the runner/watchdog was already KILLed. Unexpected runner
+exit with owned survivors starts the same teardown before main can remove its
+registry or launch a reviewer. Exit is nonzero. Only the captured owner/token/
+inode lock record is released through the normal helper; replacement locks
+are untouched. Incomplete shutdown retains scratch and reports failure.
+
+Spawned groups and the fixed launcher's registry are the ownership proof;
+verifier teardown does not search process tables, environment, cwd or argv.
+Tools that deliberately leave these groups without publishing ownership remain
+outside this guarantee. The regression uses idle sleeping stubs, TERM-ignoring
+suites at 5-second and 120-second runner grace, a KILLed runner, a TERM-ignoring
+reviewer, a same-group orphan, and an unrelated same-cwd process in a different
+group which must remain alive.
+
 ### Reuse one passing sweep for a review batch
 
 An integrator can start a separate batch branch at current `main`, merge the candidate tips into it, and obtain **one normal dispatcher full-sweep log at that combined tip**. Then each candidate still gets its own independent review, but can reuse that sweep:
