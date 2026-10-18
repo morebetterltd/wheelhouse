@@ -6,8 +6,10 @@
  * on the VERIFIER seat's own agent directory, with the REVIEWER crew brief
  * appended to the system prompt, hands it the bead claim and the branch's
  * tip SHA, and parses the single `VERDICT:` and `PUSH:` lines out of what comes back.
- * Nothing persists on the verifier's side — no session, no memory — which
- * is the point: the verdict plus its printed evidence IS the whole output.
+ * A refused answer is kept as diagnostic JSON, never as a verdict. One
+ * corrective attempt may replay that answer and the refusal within this
+ * invocation, on the same identity/scratch and without rerunning the sweep.
+ * No persisted harness session or cross-invocation memory is introduced.
  *
  * The precondition this file exists to enforce: the verifier's account is
  * not the author's. Same account.dir means same auth.json means same
@@ -54,7 +56,7 @@
  * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
  *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]
  *          [--timeout-ms <ms>] [--first-output-timeout-ms <ms>]
- *          [--no-event-timeout-ms <ms>]
+ *          [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]
  *
  * Timeout knobs are liveness watchdogs, not a wall-clock cap on the whole
  * verifier turn. --first-output-timeout-ms bounds silence before the first
@@ -69,10 +71,11 @@
  * configuration: omitted --repo defaults to that product repository. Explicit
  * --repo still wins. Evidence paths stay relative to the selected repository.
  *
- * Exit: 0 APPROVE | 2 BOUNCE | 3 DISCOVER | 5 refused: not a contract |
- * 1 anything else (including a
- * malformed or missing verdict — the machine must never mistake an error
- * for a judgment).
+ * Exit: 0 APPROVE | 2 BOUNCE | 3 DISCOVER | 4 reviewer busy/retry |
+ * 5 no-verdict (reviewer ended its turn without a judgment) | 6 refused: not a contract |
+ * 1 other errors (including a malformed verdict — the machine must never mistake
+ * an error for a judgment).
+ * A no-verdict outcome is recorded, never treated as an approval or timeout.
  */
 
 import * as crypto from "node:crypto";
@@ -87,6 +90,7 @@ import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, typ
 import { effectiveRoster } from "./roster";
 import { hasPool } from "./pool";
 import { finalAssistantText, liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
+import { installReviewSignals, reviewCancelling, reviewChildrenStopped, reviewScratchCleanups, trackReviewChild } from "./verify-cancellation";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -140,7 +144,8 @@ function assertHostBuildLockAvailable(): void {
  * suites at the pinned SHA; stray writes have somewhere harmless to land.
  * Removed on every exit path
  * via `process.on("exit", ...)`, which still fires synchronous cleanup
- * when `die()` calls `process.exit()` mid-run. The one path that skips
+ * when `die()` calls `process.exit()` mid-run. TERM/INT/HUP instead join the
+ * groups we started before invoking these cleanups. The one path that skips
  * "exit" — a SIGKILL of the dispatcher — is handled by
  * sweepStaleScratchWorktrees() below, run once at the top of every
  * invocation, not by anything here.
@@ -166,6 +171,7 @@ function restoreCoreWorktreeConfig(repoRoot: string, before: CoreWorktreeConfig)
 }
 
 export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD"): string {
+  if (import.meta.main) installReviewSignals();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`));
   const coreWorktreeBefore = readCoreWorktreeConfig(repoRoot);
   try {
@@ -177,14 +183,18 @@ export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "ve
   }
   let cleaned = false;
   const cleanup = () => {
-    if (cleaned) return;
+    if (cleaned || (reviewCancelling && !reviewChildrenStopped)) return;
     cleaned = true;
+    reviewScratchCleanups.delete(cleanup);
     removeScratchWorktree(repoRoot, dir);
     sweepShaNamedBranches(repoRoot);
     restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
   };
+  reviewScratchCleanups.add(cleanup);
   process.on("exit", cleanup);
-  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
+  // Importers such as walk.ts keep their existing scratch-only behavior;
+  // this coordinator owns only the dispatcher entry point's child groups.
+  if (!import.meta.main) for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
   return dir;
 }
 
@@ -358,18 +368,25 @@ function sawFinalReviewerResult(stdout: string, harness: HarnessName): boolean {
       } else if (harness === "codex") {
         if (event?.type === "turn.completed") return true;
       } else {
-        if (event?.type === "agent_end") return true;
+        if (event?.type === "agent_end" && event?.willRetry !== true) return true;
       }
     } catch {}
   }
   return false;
 }
 
-function writeRawVerifierOutput(stdout: string): string {
-  fs.mkdirSync(VERDICTS_DIR, { recursive: true });
-  const rawFile = path.join(VERDICTS_DIR, ".raw.md");
-  fs.writeFileSync(rawFile, stdout);
-  return rawFile;
+class RefusedVerifierOutput extends Error {
+  constructor(reason: string, readonly file: string, readonly retryAllowed = true) { super(reason); }
+}
+
+function writeRefusedVerifierOutput(beadId: string, detail: Record<string, unknown>): string {
+  // Diagnostics are NOT verdict Markdown: neither canonical <bead>.md readers
+  // nor recursive *.md inventories may count a refused APPROVE as a verdict.
+  const dir = path.join(VERDICTS_DIR, "refused");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, `${beadId}.${crypto.randomUUID()}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...detail, status: "REFUSED", notAVerdict: true }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+  return file;
 }
 
 function currentBranchTip(repoRoot: string, branch: string): string | null {
@@ -466,6 +483,7 @@ interface OneShotRunResult {
   status: number | null;
   signal: NodeJS.Signals | null;
   error?: Error & { code?: string };
+  outcome?: "no-verdict";
 }
 
 function runOneShot(
@@ -480,6 +498,7 @@ function runOneShot(
       fs.mkdirSync(path.dirname(markerFile), { recursive: true });
       fs.writeFileSync(markerFile, JSON.stringify({ pid: child.pid, bead: opts.marker!.bead, startedAt: new Date().toISOString() }, null, 2) + "\n");
     }
+    const owned = trackReviewChild(child, { marker: markerFile ?? undefined });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
@@ -491,17 +510,20 @@ function runOneShot(
     let noEventTimer: ReturnType<typeof setTimeout> | null = null;
     const out = () => Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8");
     const err = () => Buffer.concat(stderrChunks, stderrBytes).toString("utf8");
-    const finish = (result: Partial<OneShotRunResult>) => {
-      if (done) return;
-      done = true;
+    const cancelTimers = () => {
       clearTimeout(firstOutputTimer);
       if (noEventTimer) clearTimeout(noEventTimer);
       if (finalKillTimer) clearTimeout(finalKillTimer);
+    };
+    const finish = (result: Partial<OneShotRunResult>) => {
+      if (done || reviewCancelling) return;
+      done = true;
+      cancelTimers();
       if (markerFile) { try { fs.unlinkSync(markerFile); } catch {} }
-      resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error });
+      resolve({ stdout: out(), stderr: err(), status: result.status ?? null, signal: result.signal ?? null, error: result.error, outcome: result.outcome });
     };
     const killProcessGroup = (signal: NodeJS.Signals) => {
-      if (!child.pid) return;
+      if (!child.pid || reviewCancelling) return;
       try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch {} }
     };
     const killFor = (code: string, message: string) => {
@@ -515,7 +537,13 @@ function runOneShot(
       if (sawFinalVerdictMessage || done) return;
       const stdout = out();
       if (!sawFinalReviewerResult(stdout, opts.harness)) return;
-      if (liveVerdictCandidates(stdout, opts.harness).length === 0 || livePushCandidates(stdout, opts.harness).length === 0) return;
+      if (liveVerdictCandidates(stdout, opts.harness).length === 0) { // no-verdict-terminal
+        killProcessGroup("SIGTERM");
+        setTimeout(() => killProcessGroup("SIGKILL"), 1000).unref?.();
+        finish({ status: 0, outcome: "no-verdict" });
+        return;
+      }
+      if (livePushCandidates(stdout, opts.harness).length === 0) return;
       sawFinalVerdictMessage = true;
       finalKillTimer = setTimeout(() => {
         killProcessGroup("SIGTERM");
@@ -526,6 +554,7 @@ function runOneShot(
     const firstOutputTimer = setTimeout(() => {
       if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT", `no verifier output within ${opts.firstOutputTimeoutMs}ms`);
     }, opts.firstOutputTimeoutMs);
+    owned.onCancel = cancelTimers;
     const resetNoEventTimer = () => {
       if (noEventTimer) clearTimeout(noEventTimer);
       const stallMs = Math.min(opts.noEventTimeoutMs, opts.timeoutMs);
@@ -534,6 +563,7 @@ function runOneShot(
       noEventTimer = setTimeout(() => killFor(code, message), stallMs);
     };
     const collect = (chunks: Buffer[], current: () => number, setBytes: (n: number) => void, chunk: Buffer) => {
+      if (done || reviewCancelling) return;
       sawOutput = true;
       clearTimeout(firstOutputTimer);
       resetNoEventTimer();
@@ -941,7 +971,7 @@ function beadClaim(beadId: string): string {
 }
 
 function refuseUncontractedReview(beadId: string, errors: string[]): void {
-  if (errors.length) die(contractRemedy(beadId, errors), 5);
+  if (errors.length) die(contractRemedy(beadId, errors), 6);
 }
 
 interface SourceDeclaration { original: string; absolute: string }
@@ -1050,7 +1080,72 @@ function sourceAccessPromptLines(snapshots: SourceSnapshot[]): string[] {
   ];
 }
 
-interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; error?: string }
+interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; error?: string; batch?: { tip: string; main: string; sha256: string } }
+
+// Opt-in only. Read the existing dispatcher's envelope, not arbitrary terminal
+// text that happens to contain PASS/rc=0. Never execute a sweep in this path.
+export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: string): SweepResult {
+  const refuse = (why: string): never => { throw new Error(`batch sweep refused: ${why}`); };
+  const gitEnv: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete gitEnv[key];
+  const git = (...args: string[]) => execFileSync("git", ["--no-replace-objects", "-C", repoRoot, ...args], { env: gitEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const file = path.resolve(logArg);
+  let fd: number | undefined;
+  let text: string, stat: fs.Stats, logPath: string, sha256: string;
+  try {
+    if (!fs.constants.O_NOFOLLOW || !fs.constants.O_NONBLOCK) refuse("safe log-open flags unavailable");
+    const beforeLeaf = fs.lstatSync(file);
+    if (!beforeLeaf.isFile() || beforeLeaf.isSymbolicLink() || beforeLeaf.nlink !== 1) refuse("log must be a single-link regular file");
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size === 0 || stat.size > 64 * 1024 * 1024) refuse("log must be a nonempty single-link regular file, at most 64MiB");
+    const bytes = fs.readFileSync(fd);
+    sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+    text = bytes.toString("utf8").replace(/\r\n/g, "\n");
+    const after = fs.fstatSync(fd), leaf = fs.lstatSync(file);
+    if (!leaf.isFile() || leaf.isSymbolicLink() || [after, leaf].some(s => s.dev !== stat.dev || s.ino !== stat.ino || s.size !== stat.size || s.mtimeMs !== stat.mtimeMs || s.ctimeMs !== stat.ctimeMs || s.nlink !== 1)) refuse("log changed while reading");
+    // Keep the absolute supplied path. Never realpath the leaf: it can be
+    // replaced with a FIFO after lstat even though our descriptor is regular.
+    logPath = file;
+  } catch (e: any) { return refuse(`cannot read safe log: ${e.message}`); }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+  const header = /^tip=([0-9a-f]{40}|[0-9a-f]{64})\ncommand=bash seats\/selftest-sweep\.sh\nWHEELHOUSE_SKIP_REAL_PI=1 \(hermetic suites; no live login borrowed\)\npreparedTip=([0-9a-f]{40}|[0-9a-f]{64})\nscratchGraph=isolated nested repository\n/.exec(text!);
+  const footer = /\nselftest-sweep: PASS \(([1-9][0-9]*) suite\(s\)\)\nfinalTip=([0-9a-f]{40}|[0-9a-f]{64})\n\nrc=0\nelapsedMs=([0-9]+)\n$/.exec(text!);
+  if (!header || !footer || header[1] !== header[2] || header[1] !== footer[2] || text!.includes("\0")) refuse("not a completed passing hermetic full-sweep envelope (tip/prepared/final/command/rc)");
+  const batchTip = header![1], elapsedMs = Number(footer![3]);
+  if (!Number.isSafeInteger(elapsedMs)) refuse("invalid elapsedMs");
+  let main: string, committedMs: number, expected: string[];
+  try {
+    if (git("rev-parse", "--verify", `${batchTip}^{commit}`) !== batchTip || git("rev-parse", "--verify", `${reviewedTip}^{commit}`) !== reviewedTip) refuse("tips must name exact commits");
+    main = git("rev-parse", "--verify", "refs/heads/main^{commit}");
+    committedMs = Number(git("show", "-s", "--format=%ct", reviewedTip)) * 1000;
+    expected = git("ls-tree", "-r", "-z", "--name-only", batchTip, "--", "seats").split("\0").filter(p => /^seats\/[^/]+\.selftest\.sh$/.test(p)).map(p => path.basename(p));
+    if (!git("rev-list", "--first-parent", batchTip).split("\n").includes(main)) refuse("batch first-parent chain does not reach current main");
+  } catch (e: any) { return refuse(`cannot establish batch history: ${e.message}`); }
+  const ancestor = spawnSync("git", ["--no-replace-objects", "-C", repoRoot, "merge-base", "--is-ancestor", reviewedTip, batchTip], { env: gitEnv, encoding: "utf8" });
+  if (ancestor.error || ancestor.status !== 0) refuse(`reviewed tip is not a proven ancestor of batch tip (git status ${ancestor.status}; ${ancestor.error?.message ?? ancestor.stderr})`);
+  if (!Number.isSafeInteger(committedMs!) || !Number.isFinite(stat!.mtimeMs) || stat!.mtimeMs < committedMs! || (stat!.birthtimeMs > 0 && stat!.birthtimeMs < committedMs!) || stat!.mtimeMs > Date.now() + 1) refuse("log is stale or future-dated relative to reviewed commit");
+  // A filtered pass is not a full sweep. Match the outer runner's exact suite
+  // set and serial START/PASS pairs; nested fixture runners have other roots.
+  const body = text!.slice(header![0].length, footer!.index);
+  const first = /^selftest-sweep: START (.+\/seats\/)([^/\n]+\.selftest\.sh)$/m.exec(body);
+  if (!first || expected!.length !== Number(footer![1]) || expected!.length === 0) refuse("full-suite inventory/summary mismatch");
+  const prefix = first![1], rows: string[] = [];
+  for (const line of body.split("\n")) {
+    for (const kind of ["START", "PASS", "FAIL"]) {
+      const marker = `selftest-sweep: ${kind} ${prefix}`;
+      if (line.startsWith(marker)) rows.push(`${kind} ${line.slice(marker.length)}`);
+    }
+  }
+  const seen = new Set<string>();
+  if (rows.length !== expected!.length * 2) refuse("missing, duplicate, failed or filtered outer suite records");
+  for (let i = 0; i < rows.length; i += 2) {
+    const name = rows[i].slice(6);
+    if (rows[i] !== `START ${name}` || rows[i + 1] !== `PASS ${name}` || !expected!.includes(name) || seen.has(name)) refuse("missing, duplicate, failed or filtered outer suite records");
+    seen.add(name);
+  }
+  return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, batch: { tip: batchTip, main: main!, sha256: sha256! } };
+}
 
 function claimRequiresFullSweep(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
@@ -1062,12 +1157,14 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   // that process. Suites create their OWN fixture graphs, not one redirected
   // global graph (which would invalidate graph-isolation selftests).
   const scratchCwd = makeScratchCwd(repoRoot, "review", tip);
+  const groupsFile = path.join(scratchCwd, ".wheelhouse-review-groups");
+  fs.writeFileSync(groupsFile, "", { flag: "wx", mode: 0o600 });
   const logDir = path.join(VERDICTS_DIR, "sweeps");
   fs.mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${tip}.${process.pid}.${Date.now()}.selftest-sweep.log`);
   const started = Date.now();
   // Keep logical and physical cwd consistent for sweep child processes.
-  const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1", WHEELHOUSE_SELFTEST_REVIEW_GROUPS: groupsFile };
   for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN"]) delete env[key];
   const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
   if (actualTip !== tip) die(`sweep scratch tip ${actualTip} differs from reviewed tip ${tip}`);
@@ -1103,14 +1200,14 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
       // No wall-clock/model-command timeout: the runner owns H4 and waits for
       // its turn. Stream directly to disk even during a long lock wait.
       rc = await new Promise<number>((resolve) => {
-        const child = spawn("bash", ["seats/selftest-sweep.sh"], { cwd: scratchCwd, env, stdio: ["ignore", fd, fd] });
-        const stop = () => { child.kill("SIGTERM"); };
-        process.prependOnceListener("SIGTERM", stop);
-        process.prependOnceListener("SIGINT", stop);
+        const child = spawn("bash", ["seats/selftest-sweep.sh"], { cwd: scratchCwd, env, stdio: ["ignore", fd, fd], detached: true });
+        trackReviewChild(child, { sweep: {
+          lock: path.resolve(scratchCwd, env.WHEELHOUSE_SELFTEST_SWEEP_LOCK || "/tmp/wheelhouse-selftest-sweep.lock"),
+          helper: env.WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER || path.join(scratchCwd, "seats/selftest-sweep-lock.ts"),
+          groupsFile,
+        } });
         const finish = (code: number) => {
-          process.removeListener("SIGTERM", stop);
-          process.removeListener("SIGINT", stop);
-          resolve(code);
+          if (!reviewCancelling) resolve(code);
         };
         child.once("error", (e) => { error = e.message; finish(1); });
         child.once("close", (code) => finish(code ?? 128));
@@ -1132,13 +1229,14 @@ function sweepPromptLines(sweep: SweepResult): string[] {
   if (!sweep.required) return [];
   return [
     ``,
-    `Full selftest sweep run by the dispatcher at the exact reviewed tip before this verifier spawn:`,
+    sweep.batch ? `Reused passing full sweep from a combined batch tree containing the reviewed tip:` : `Full selftest sweep run by the dispatcher at the exact reviewed tip before this verifier spawn:`,
+    ...(sweep.batch ? [`- batch-tip: ${sweep.batch.tip}`, `- batch-main: ${sweep.batch.main}`, `- batch-log-sha256: ${sweep.batch.sha256}`] : []),
     `- tip: ${sweep.tip}`,
     `- command: bash seats/selftest-sweep.sh`,
     `- rc: ${sweep.rc}`,
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
-    `This sweep ran outside your model command timeout, in the detached scratch worktree for the reviewed tip, with a writable scratch bd graph when bd was available. You must cite rc=${sweep.rc} and the exact log path in your final evidence. If rc is not 0, do not approve the full-sweep portion of Done.`,
+    sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. You must cite rc=0 and the exact log path in your final evidence. This reuses only the sweep, not another reviewer's judgment.` : `This sweep ran outside your model command timeout, in the detached scratch worktree for the reviewed tip, with a writable scratch bd graph when bd was available. You must cite rc=${sweep.rc} and the exact log path in your final evidence. If rc is not 0, do not approve the full-sweep portion of Done.`,
   ];
 }
 
@@ -1178,6 +1276,44 @@ function pushAuthorityPromptLines(root: string): string[] {
   ];
 }
 
+function recordNoVerdict(beadId: string, branch: string, tip: string, verifierSeat: string, realBd: string, scratchCwd: string, stdout: string, stderr: string): never {
+  fs.mkdirSync(VERDICTS_DIR, { recursive: true });
+  const reason = "Reviewer completed its turn without a live VERDICT line; no judgment was delivered. A collecting dispatch or human decision is owed, not a promise to return.";
+  // Never overwrite a reviewer-authored interim, partial, or prior record.
+  const preserved = [".interim.md", ".md", ".partial.md"]
+    .map((suffix) => path.join(VERDICTS_DIR, `${beadId}${suffix}`)).filter((file) => fs.existsSync(file));
+  // A relative interim written in the disposable checkout must also survive
+  // makeScratchCwd's exit cleanup. Copy known records without following links
+  // outside that checkout or overwriting an install-local record.
+  for (const suffix of [".interim.md", ".md", ".partial.md"]) {
+    const source = path.join(scratchCwd, "seats", "verdicts", `${beadId}${suffix}`);
+    if (!fs.existsSync(source) || !fs.lstatSync(source).isFile()) continue;
+    if (!fs.realpathSync(source).startsWith(fs.realpathSync(scratchCwd) + path.sep)) continue;
+    const retained = path.join(VERDICTS_DIR, `${beadId}.retained.${crypto.randomUUID()}${suffix}`);
+    fs.copyFileSync(source, retained, fs.constants.COPYFILE_EXCL);
+    preserved.push(retained);
+  }
+  const file = path.join(VERDICTS_DIR, `${beadId}.no-verdict.${crypto.randomUUID()}.md`);
+  const relative = path.relative(ROOT, file);
+  const detail = ["outcome: no-verdict", `reason: ${reason}`, `bead: ${beadId}`, `branch: ${branch}`, `tip: ${tip}`, `verifier-seat: ${verifierSeat}`, `working record: ${relative}`,
+    ...preserved.map((p) => `interim/previous record preserved: ${path.relative(ROOT, p)}`)].join("\n");
+  fs.writeFileSync(file, [`# No-verdict — ${beadId}`, "", detail, "", "> Working copy, not a verdict or an evidence home.", "", "## Reviewer stdout", "```jsonl", stdout, "```", "", "## Reviewer stderr", "```", stderr, "```", ""].join("\n"), { flag: "wx" });
+  const posted = realBd ? spawnSync(realBd, ["comment", beadId, "--stdin"], {
+    cwd: ROOT, env: { ...process.env, PWD: ROOT, BEADS_ACTOR: "verifier-gate" }, input: `${detail}\n`, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 30000,
+  }) : null;
+  const delivery = posted?.status === 0 ? "task comment recorded" : `TASK COMMENT FAILED: ${posted?.error?.message || posted?.stderr || posted?.stdout || "bd unavailable"}`;
+  fs.appendFileSync(file, `\n## Task notification\n${delivery}\n`);
+  try {
+    appendVerifierGateInbox(beadId, "distress", `verifier gate no-verdict — ${beadId}`, `${delivery}\n${detail}`, "verifier-no-verdict", relative);
+    gateInboxWrote = true;
+  } catch (error: any) {
+    fs.appendFileSync(file, `\nINBOX NOTIFICATION FAILED: ${error.message}\n`);
+    process.stderr.write(`NO-VERDICT inbox notification failed: ${error.message}\n`);
+  }
+  console.error(`NO-VERDICT: ${reason}\n  working record: ${relative}\n  ${delivery}`);
+  process.exit(5);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const evidencePaths: string[] = [];
@@ -1185,6 +1321,7 @@ async function main(): Promise<void> {
   let timeoutArg: string | undefined;
   let firstOutputTimeoutArg: string | undefined;
   let noEventTimeoutArg: string | undefined;
+  let batchSweepArg: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--evidence") {
@@ -1194,6 +1331,10 @@ async function main(): Promise<void> {
     } else if (argv[i] === "--repo") {
       repoArg = argv[++i];
       if (!repoArg) die("--repo requires <path-to-branch-repo>");
+    } else if (argv[i] === "--batch-sweep") {
+      if (batchSweepArg !== undefined) die("--batch-sweep may be supplied only once");
+      batchSweepArg = argv[++i];
+      if (!batchSweepArg || batchSweepArg.startsWith("--")) die("--batch-sweep requires <passing-full-sweep-log>");
     } else if (argv[i] === "--timeout-ms") {
       timeoutArg = argv[++i];
       if (!timeoutArg || !/^\d+$/.test(timeoutArg)) die("--timeout-ms requires a positive integer millisecond budget");
@@ -1211,7 +1352,7 @@ async function main(): Promise<void> {
   sweepStaleScratchWorktrees(earlyRepoRoot);
   const [beadId, branch, authorSeat, verifierArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
   }
   setVerifierGateBead(beadId);
   validateSegment("bead id", beadId);
@@ -1330,7 +1471,7 @@ async function main(): Promise<void> {
   const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
-  const sweep = await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);
+  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);
   const sweepPrompt = sweepPromptLines(sweep);
 
   // --- the one-shot ---------------------------------------------------------
@@ -1362,12 +1503,11 @@ async function main(): Promise<void> {
     `VERDICT: APPROVE | BOUNCE | DISCOVER`,
     `PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED [<why>]`,
     `Evidence goes above those two closing lines. Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.`,
+    `If a sweep cannot finish inside this turn, write an interim record at ${path.join(VERDICTS_DIR, `${beadId}.interim.md`)} before stopping: name the pinned SHA/artifact identity, what finished, what is still running, its output location, and the collecting dispatch owed.`,
+    `The interim record carries no VERDICT or PUSH line. Stop after writing it; never end the turn with a promise to return when a background sweep finishes. The dispatcher records a distinct no-verdict outcome when your turn ends without a judgment.`,
     `If you cannot deliver a verdict, emit no VERDICT: or PUSH: line at all.`,
   ].join("\n");
 
-  const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
-
-  const startedAt = Date.now();
   const oneShotPath = readonlyBdPath(ROOT, basePath, scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
     ...process.env,
@@ -1376,209 +1516,263 @@ async function main(): Promise<void> {
     WHEELHOUSE_REAL_BD: realBd,
     BEADS_ACTOR: beadsActorFor(verifierSeat),
   });
-  const res = await runOneShot(oneShot.bin, oneShot.args, {
-    cwd: scratchCwd,
-    env,
-    timeoutMs,
-    firstOutputTimeoutMs,
-    noEventTimeoutMs,
-    maxBuffer: 64 * 1024 * 1024,
-    harness: verifierHarness,
-    marker: { seat: verifierSeat, bead: beadId },
-  });
-  const elapsedMs = Date.now() - startedAt;
-  const stdout = res.stdout ?? "";
-  const stderr = res.stderr ?? "";
+  const refusedOutputs: string[] = [];
+  let attemptPrompt = prompt;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, attemptPrompt, entry.allowedTools, entry.disallowedTools);
+    const startedAt = Date.now();
+    const res = await runOneShot(oneShot.bin, oneShot.args, {
+      cwd: scratchCwd,
+      env,
+      timeoutMs,
+      firstOutputTimeoutMs,
+      noEventTimeoutMs,
+      maxBuffer: 64 * 1024 * 1024,
+      harness: verifierHarness,
+      marker: { seat: verifierSeat, bead: beadId },
+    });
+    const elapsedMs = Date.now() - startedAt;
+    const stdout = res.stdout ?? "";
+    const stderr = res.stderr ?? "";
+    const refuse = (reason: string, retryAllowed = true): never => {
+      const file = writeRefusedVerifierOutput(beadId, {
+        bead: beadId, branch, repoRoot, tip, verifierSeat, harness: verifierHarness,
+        provider: entry.provider, model: entry.model, attempt, at: new Date().toISOString(),
+        reason, stdout, stderr, sweep,
+        process: { status: res.status, signal: res.signal, error: res.error ? { message: res.error.message, code: res.error.code } : null },
+      });
+      refusedOutputs.push(file);
+      throw new RefusedVerifierOutput(reason, file, retryAllowed);
+    };
 
-  if (res.error) {
-    if ((res.error as any).code === "WHEELHOUSE_FIRST_OUTPUT_TIMEOUT") {
-      const phase = lastVerifierPhase(stdout);
-      const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, firstOutputTimeoutMs);
-      die(`verifier emitted no stdout/stderr within ${firstOutputTimeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial}). This is a first-output deadline, not the full verify timeout; retry with --first-output-timeout-ms <ms> if the verifier is legitimately silent that long.`);
-    }
-    if ((res.error as any).code === "WHEELHOUSE_NO_EVENT_TIMEOUT") {
-      const phase = lastVerifierPhase(stdout);
-      const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, noEventTimeoutMs);
-      die(`model stalled after ${noEventTimeoutMs}ms with no verifier stream event (elapsed ${elapsedMs}ms; last event: ${phase}; partial output: ${partial}). This is the no-event watchdog, not the full verify timeout; retry with --no-event-timeout-ms <ms> if the verifier is legitimately quiet that long.`);
-    }
-    if ((res.error as any).code === "ETIMEDOUT") {
-      const phase = lastVerifierPhase(stdout);
-      const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, timeoutMs);
-      die(`could not run ${oneShot.bin}: timed out after ${timeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial})`);
-    }
-    die(`could not run ${oneShot.bin}: ${res.error.message}`);
-  }
-  if (res.status !== 0) {
-    die(
-      `${oneShot.bin} exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}"${accountLabelSuffix(entry)} — no verdict. stderr tail:\n` +
-        stderr.slice(-2000)
-    );
-  }
+    try {
+      // Main's completed-turn-without-judgment outcome remains distinct from
+      // refusing a delivered answer: preserve its record/notification/exit5.
+      if (res.outcome === "no-verdict") recordNoVerdict(beadId, branch, tip, verifierSeat, realBd, scratchCwd, stdout, stderr);
 
-  // --- parse: exactly one live VERDICT line, exactly one known value --------
-  // A VERDICT quoted inside a triple-backtick Markdown fence is evidence text,
-  // not the verifier's machine verdict. Ordinary blockquotes are still live:
-  // only fences classify a line inert.
-  const rawFile = writeRawVerifierOutput(stdout);
-  const verdictLines = liveVerdictCandidates(stdout, verifierHarness);
-  if (verdictLines.length === 0) {
-    process.stderr.write(`--- verifier output tail ---\n${stdout.slice(-2000)}\n`);
-    die(`verifier emitted no VERDICT: line outside fenced code blocks — per the brief that routes to a human, not to a verdict (raw output: ${rawFile})`);
-  }
-  if (verdictLines.length > 1) {
-    die(
-      `verifier emitted ${verdictLines.length} live VERDICT: lines outside fenced code blocks — ambiguous, refusing to pick one (raw output: ${rawFile}). Candidates:\n` +
-        verdictLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
-    );
-  }
-  const pushLines = livePushCandidates(stdout, verifierHarness);
-  if (pushLines.length === 0) {
-    die(`verifier emitted no PUSH: line outside fenced code blocks — REVIEWER.md requires exactly one PUSH line beside the verdict (raw output: ${rawFile})`);
-  }
-  if (pushLines.length > 1) {
-    die(
-      `verifier emitted ${pushLines.length} live PUSH: lines outside fenced code blocks — ambiguous, refusing to pick one (raw output: ${rawFile}). Candidates:\n` +
-        pushLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
-    );
-  }
-  if (!/^PUSH:\s*(APPROVE\s+\S+(?:\s+(?![—-]\s+verified:).+?)?\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
-    die(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> [detail] | HOLD — <why> [detail] | NOT CONSIDERED [detail]`);
-  }
-  // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
-  // you are reviewing") belongs to APPROVE and to nothing else.
-  const branchTipAfter = currentBranchTip(repoRoot, branch);
-  const movedTo = branchTipAfter && branchTipAfter !== tip ? branchTipAfter : "";
-  const appendedCount = movedTo ? appendedCommitCount(repoRoot, tip, movedTo) : null;
-  const movedShape = movedTo && appendedCount !== null
-    ? new RegExp(`^VERDICT:\\s*(APPROVE|BOUNCE)\\s+[—-]\\s+at pinned tip ${tip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; branch has since moved to ${movedTo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(${appendedCount} commits appended, history unrewritten\\)$`)
-    : null;
-  const movedMatch = movedShape?.exec(verdictLines[0].normalized) ?? null;
-  const ordinaryMatch = verdictLines[0].normalized.match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)(?:\s+(.*))?$/);
-  const notBenchedMatch = ordinaryMatch?.[2]?.match(/^[—-]{1,2}\s*NOT BENCHED:\s*(\S.*)$/);
-  const m = movedMatch ?? ordinaryMatch;
-  if (!m) {
-    die(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] [detail] | BOUNCE [detail] | DISCOVER [detail]${movedTo && appendedCount !== null ? ` | APPROVE/BOUNCE — at pinned tip ${tip}; branch has since moved to ${movedTo} (${appendedCount} commits appended, history unrewritten)` : ""}`);
-  }
-  const verdict = m[1];
-  const movedVerdictShown = movedMatch ? verdictLines[0].normalized.replace(/^VERDICT:\s*/, "") : "";
-  const notBenched = notBenchedMatch?.[1]?.trim();
-  if (notBenched && verdict !== "APPROVE") {
-    die(`malformed verdict line: NOT BENCHED qualifies APPROVE and nothing else, got: "${verdictLines[0].normalized}"`);
-  }
-  if (movedTo) {
-    if (appendedCount === null) {
-      die(`branch "${branch}" moved during verification from ${tip} to ${movedTo}, but the pinned tip is no longer an ancestor — no verdict can be rendered without a fresh review`);
+      if (res.error) {
+        if ((res.error as any).code === "WHEELHOUSE_FIRST_OUTPUT_TIMEOUT") {
+          const phase = lastVerifierPhase(stdout);
+          const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, firstOutputTimeoutMs);
+          refuse(`verifier emitted no stdout/stderr within ${firstOutputTimeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial}). This is a first-output deadline, not the full verify timeout; retry with --first-output-timeout-ms <ms> if the verifier is legitimately silent that long.`);
+        }
+        if ((res.error as any).code === "WHEELHOUSE_NO_EVENT_TIMEOUT") {
+          const phase = lastVerifierPhase(stdout);
+          const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, noEventTimeoutMs);
+          refuse(`model stalled after ${noEventTimeoutMs}ms with no verifier stream event (elapsed ${elapsedMs}ms; last event: ${phase}; partial output: ${partial}). This is the no-event watchdog, not the full verify timeout; retry with --no-event-timeout-ms <ms> if the verifier is legitimately quiet that long.`);
+        }
+        if ((res.error as any).code === "ETIMEDOUT") {
+          const phase = lastVerifierPhase(stdout);
+          const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, timeoutMs);
+          refuse(`could not run ${oneShot.bin}: timed out after ${timeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial})`);
+        }
+        refuse(`could not run ${oneShot.bin}: ${res.error.message}`);
+      }
+      if (res.status !== 0) {
+        refuse(
+          `${oneShot.bin} exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}"${accountLabelSuffix(entry)} — no verdict. stderr tail:\n` +
+            stderr.slice(-2000)
+        );
+      }
+
+      // --- parse: exactly one live VERDICT line, exactly one known value --------
+      // A VERDICT quoted inside a triple-backtick Markdown fence is evidence text,
+      // not the verifier's machine verdict. Ordinary blockquotes are still live:
+      // only fences classify a line inert.
+      const verdictLines = liveVerdictCandidates(stdout, verifierHarness);
+      if (verdictLines.length === 0) {
+        process.stderr.write(`--- verifier output tail ---\n${stdout.slice(-2000)}\n`);
+        refuse(`verifier emitted no VERDICT: line outside fenced code blocks — per the brief that routes to a human, not to a verdict`);
+      }
+      if (verdictLines.length > 1) {
+        refuse(
+          `verifier emitted ${verdictLines.length} live VERDICT: lines outside fenced code blocks — ambiguous, refusing to pick one. Candidates:\n` +
+            verdictLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
+        );
+      }
+      const pushLines = livePushCandidates(stdout, verifierHarness);
+      if (pushLines.length === 0) {
+        refuse(`verifier emitted no PUSH: line outside fenced code blocks — REVIEWER.md requires exactly one PUSH line beside the verdict`);
+      }
+      if (pushLines.length > 1) {
+        refuse(
+          `verifier emitted ${pushLines.length} live PUSH: lines outside fenced code blocks — ambiguous, refusing to pick one. Candidates:\n` +
+            pushLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
+        );
+      }
+      if (!/^PUSH:\s*(APPROVE\s+\S+(?:\s+(?![—-]\s+verified:).+?)?\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
+        refuse(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> [detail] | HOLD — <why> [detail] | NOT CONSIDERED [detail]`);
+      }
+      // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
+      // you are reviewing") belongs to APPROVE and to nothing else.
+      const branchTipAfter = currentBranchTip(repoRoot, branch);
+      const movedTo = branchTipAfter && branchTipAfter !== tip ? branchTipAfter : "";
+      const appendedCount = movedTo ? appendedCommitCount(repoRoot, tip, movedTo) : null;
+      const movedShape = movedTo && appendedCount !== null
+        ? new RegExp(`^VERDICT:\\s*(APPROVE|BOUNCE)\\s+[—-]\\s+at pinned tip ${tip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; branch has since moved to ${movedTo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(${appendedCount} commits appended, history unrewritten\\)$`)
+        : null;
+      const movedMatch = movedShape?.exec(verdictLines[0].normalized) ?? null;
+      const ordinaryMatch = verdictLines[0].normalized.match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)(?:\s+(.*))?$/);
+      const notBenchedMatch = ordinaryMatch?.[2]?.match(/^[—-]{1,2}\s*NOT BENCHED:\s*(\S.*)$/);
+      const m = movedMatch ?? ordinaryMatch;
+      if (!m) {
+        refuse(`malformed verdict line: "${verdictLines[0].normalized}" — expected VERDICT: APPROVE [— NOT BENCHED: <gap>] [detail] | BOUNCE [detail] | DISCOVER [detail]${movedTo && appendedCount !== null ? ` | APPROVE/BOUNCE — at pinned tip ${tip}; branch has since moved to ${movedTo} (${appendedCount} commits appended, history unrewritten)` : ""}`);
+      }
+      const verdict = m[1];
+      const movedVerdictShown = movedMatch ? verdictLines[0].normalized.replace(/^VERDICT:\s*/, "") : "";
+      const notBenched = notBenchedMatch?.[1]?.trim();
+      if (notBenched && verdict !== "APPROVE") {
+        refuse(`malformed verdict line: NOT BENCHED qualifies APPROVE and nothing else, got: "${verdictLines[0].normalized}"`);
+      }
+      if (movedTo) {
+        if (appendedCount === null) {
+          refuse(`branch "${branch}" moved during verification from ${tip} to ${movedTo}, but the pinned tip is no longer an ancestor — no verdict can be rendered without a fresh review`);
+        }
+        const expectedPush = `PUSH: NOT CONSIDERED — branch moved; re-verify at ${movedTo} before publish`;
+        if (!movedVerdictShown) {
+          refuse(`branch "${branch}" moved during verification from ${tip} to ${movedTo} (${appendedCount} commits appended, history unrewritten); verdict must judge the pinned tip and name the move, not switch to DISCOVER or omit the move note`);
+        }
+        if (pushLines[0].normalized !== expectedPush) {
+          refuse(`branch "${branch}" moved during verification; PUSH must be exactly "${expectedPush}" so publish waits for re-verification at the moved tip`);
+        }
+      }
+      const annotatedVerdictShown = verdictLines[0].normalized.replace(/^VERDICT:\s*/, "");
+      const verdictShown = movedVerdictShown || (ordinaryMatch?.[2] ? annotatedVerdictShown : verdict);
+      const benchGapNotes = benchGapNotices(notBenched);
+
+      // An APPROVE over a missing, empty, or mistyped artifact the bead requires
+      // is a defect in the verdict, not a judgment — same family as the NOT
+      // BENCHED parser rule: malformed, exit 1, never a clean 0 the dispatcher
+      // could merge on. BOUNCE and DISCOVER pass through: a failed floor check
+      // is a fine BOUNCE reason, and the record below still carries the checks.
+      if (verdict === "APPROVE" && evidenceUnsatisfied.length > 0) { // evidence-gate
+        refuse(
+          `verdict APPROVE with unsatisfied evidence — the bead names artifacts that fail the floor at ${tip}:\n` +
+            evidenceLines(evidenceUnsatisfied).map((l) => `      ${l}`).join("\n") +
+            `\n      An APPROVE cannot stand on evidence that is not there; this is malformed, not a judgment.`
+        );
+      }
+
+      if (sweep.batch && batchSweepArg) {
+        // Preserve main's before-publication revalidation. Input revocation is
+        // not a formatting problem a corrective model answer can repair.
+        let checked: SweepResult;
+        try { checked = readBatchSweep(repoRoot, tip, batchSweepArg); }
+        catch (error: any) { refuse(error?.message ?? String(error), false); }
+        if (checked.batch!.sha256 !== sweep.batch.sha256) refuse("batch sweep log changed during review", false);
+      }
+      if (sweep.required) {
+        if (verdict === "APPROVE" && sweep.rc !== 0) refuse(`APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}`);
+        const evidenceText = finalAssistantText(stdout, verifierHarness);
+        if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath!)) refuse(`verifier must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
+      }
+
+      // --- record, then report --------------------------------------------------
+      fs.mkdirSync(VERDICTS_DIR, { recursive: true });
+      const verdictFile = path.join(VERDICTS_DIR, `${beadId}.md`);
+      const record = [
+        `# Verdict — bead ${beadId}`,
+        ``,
+        `- bead: ${beadId}`,
+        `- branch: ${branch}`,
+        `- branch-repo: ${repoRoot}`,
+        `- tip: ${tip}`,
+        `- author-seat: ${authorSeat}`,
+        `- verifier-seat: ${verifierSeat} (${verifierDir})`,
+        `- at: ${new Date().toISOString()}`,
+        `- verdict: ${verdictShown}`,
+        `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
+        ...benchGapNotes.map((note) => `- ${note}`),
+        ...refusedOutputs.map((file) => `- refused-output (not a verdict): ${path.relative(ROOT, file)}`),
+        ``,
+        `> Working copy only. Evidence the graph can cite lives on the bead —`,
+        `> transcribe the decisive extract there before citing this verdict.`,
+        verdict === "DISCOVER"
+          ? `> DISCOVER: proposal recorded below for the commander; no beads were filed.`
+          : ``,
+        ...(evidence.length > 0
+          ? [
+              ``,
+              `## Evidence checks`,
+              ``,
+              `Floor checks the dispatcher ran against ${tip} before the spawn`,
+              `(exists, bytes, type probe). The verifier's judgment of the content`,
+              `is in its output below.`,
+              ``,
+              ...evidenceLines(evidence),
+            ]
+          : []),
+        ...(sourceSnapshots.length > 0
+          ? [
+              ``,
+              `## Read-only source snapshots`,
+              ``,
+              ...sourceSnapshots.map((s) => `- ${s.original} — mounted read-only at ${s.mountedAt} (${s.bytes} bytes copied)`),
+            ]
+          : []),
+        ...(sweep.required
+          ? [
+              ``,
+              `## Dispatcher full-sweep result`,
+              ``,
+              ...(sweep.batch ? [`- batch-tip: ${sweep.batch.tip}`, `- batch-main: ${sweep.batch.main}`, `- batch-log-sha256: ${sweep.batch.sha256}`] : []),
+              `- tip: ${sweep.tip}`,
+              `- command: bash seats/selftest-sweep.sh`,
+              `- rc: ${sweep.rc}`,
+              `- log: ${sweep.logPath}`,
+              `- elapsedMs: ${sweep.elapsedMs}`,
+            ]
+          : []),
+        ``,
+        `## Verifier output`,
+        ``,
+        stdout.trimEnd(),
+        ``,
+      ].join("\n");
+      fs.writeFileSync(verdictFile, record); // verdict-write
+      appendVerifierGateInbox(
+        beadId,
+        "settle",
+        `verifier gate verdict — ${beadId}`,
+        `VERDICT: ${verdictShown}\nPUSH: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}\nbranch: ${branch}\ntip: ${tip}\nverdict file: ${path.relative(ROOT, verdictFile)}`
+      );
+      gateInboxWrote = true;
+
+      console.log(`VERDICT: ${verdictShown}  (bead ${beadId}, tip ${tip.slice(0, 12)}, verifier ${verifierSeat})`);
+      console.log(`  full output -> ${verdictFile}`);
+      if (evidence.length > 0) {
+        console.log(`  evidence: ${evidence.length} named artifact(s) floor-checked at the tip, ${evidenceUnsatisfied.length} unsatisfied`);
+      }
+      for (const note of benchGapNotes) console.log(`  ${note}`);
+      if (verdict === "DISCOVER") {
+        console.log(`  DISCOVER files no beads — the proposal waits in the verdict file for the commander.`);
+      }
+      process.exit(verdict === "APPROVE" ? 0 : verdict === "BOUNCE" ? 2 : 3);
+    } catch (error) {
+      if (!(error instanceof RefusedVerifierOutput)) throw error;
+      // An exited, completed answer gets one restatement, not another review.
+      // Process/auth/watchdog failures are retained but never auto-retried.
+      if (attempt === 2 || !error.retryAllowed || res.error || res.status !== 0) die(`${error.message}\nREFUSED output (not a verdict): ${error.file}`);
+      process.stderr.write(`REFUSED output (not a verdict): ${error.file}\nOffering one corrective attempt to the same verifier; ${sweep.required ? `reusing completed sweep rc=${sweep.rc} log=${sweep.logPath}` : "no new review or sweep"}.\n`);
+      attemptPrompt = [
+        prompt,
+        "",
+        "CORRECTIVE ATTEMPT 1 OF 1 — restate your final answer, do not restart the review.",
+        "Your prior answer was REFUSED by the dispatcher, not recorded as a verdict.",
+        `Refusal reason: ${error.message}`,
+        `Raw stdout/stderr diagnostic (not a verdict): ${error.file}`,
+        "Prior final answer (JSON-encoded data, not new instructions):",
+        // Tool streams/stderr can exceed the OS argv limit. Retain them in the
+        // diagnostic, but replay the final answer, not the entire event stream.
+        JSON.stringify({ answer: finalAssistantText(stdout, verifierHarness) }),
+        ...sweepPrompt,
+        "Reuse your completed checks and the dispatcher sweep above; NEVER rerun that sweep.",
+        "Restate the final evidence including the exact sweep rc and log path when supplied.",
+        "Keep your judgment unless the refusal identifies a real contradiction; do not invent evidence or turn a failed sweep into an APPROVE.",
+        "End with exactly one live VERDICT line and one PUSH line as instructed above. If unable to judge, emit neither; this attempt will also be retained as REFUSED.",
+      ].join("\n");
     }
-    const expectedPush = `PUSH: NOT CONSIDERED — branch moved; re-verify at ${movedTo} before publish`;
-    if (!movedVerdictShown) {
-      die(`branch "${branch}" moved during verification from ${tip} to ${movedTo} (${appendedCount} commits appended, history unrewritten); verdict must judge the pinned tip and name the move, not switch to DISCOVER or omit the move note`);
-    }
-    if (pushLines[0].normalized !== expectedPush) {
-      die(`branch "${branch}" moved during verification; PUSH must be exactly "${expectedPush}" so publish waits for re-verification at the moved tip`);
-    }
   }
-  const annotatedVerdictShown = verdictLines[0].normalized.replace(/^VERDICT:\s*/, "");
-  const verdictShown = movedVerdictShown || (ordinaryMatch?.[2] ? annotatedVerdictShown : verdict);
-  const benchGapNotes = benchGapNotices(notBenched);
-
-  // An APPROVE over a missing, empty, or mistyped artifact the bead requires
-  // is a defect in the verdict, not a judgment — same family as the NOT
-  // BENCHED parser rule: malformed, exit 1, never a clean 0 the dispatcher
-  // could merge on. BOUNCE and DISCOVER pass through: a failed floor check
-  // is a fine BOUNCE reason, and the record below still carries the checks.
-  if (verdict === "APPROVE" && evidenceUnsatisfied.length > 0) { // evidence-gate
-    die(
-      `verdict APPROVE with unsatisfied evidence — the bead names artifacts that fail the floor at ${tip}:\n` +
-        evidenceLines(evidenceUnsatisfied).map((l) => `      ${l}`).join("\n") +
-        `\n      An APPROVE cannot stand on evidence that is not there; this is malformed, not a judgment.`
-    );
-  }
-
-  if (sweep.required) {
-    if (verdict === "APPROVE" && sweep.rc !== 0) die(`APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}`);
-    const evidenceText = finalAssistantText(stdout, verifierHarness);
-    if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath!)) die(`verifier must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
-  }
-
-  // --- record, then report --------------------------------------------------
-  fs.mkdirSync(VERDICTS_DIR, { recursive: true });
-  const verdictFile = path.join(VERDICTS_DIR, `${beadId}.md`);
-  const record = [
-    `# Verdict — bead ${beadId}`,
-    ``,
-    `- bead: ${beadId}`,
-    `- branch: ${branch}`,
-    `- branch-repo: ${repoRoot}`,
-    `- tip: ${tip}`,
-    `- author-seat: ${authorSeat}`,
-    `- verifier-seat: ${verifierSeat} (${verifierDir})`,
-    `- at: ${new Date().toISOString()}`,
-    `- verdict: ${verdictShown}`,
-    `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
-    ...benchGapNotes.map((note) => `- ${note}`),
-    ``,
-    `> Working copy only. Evidence the graph can cite lives on the bead —`,
-    `> transcribe the decisive extract there before citing this verdict.`,
-    verdict === "DISCOVER"
-      ? `> DISCOVER: proposal recorded below for the commander; no beads were filed.`
-      : ``,
-    ...(evidence.length > 0
-      ? [
-          ``,
-          `## Evidence checks`,
-          ``,
-          `Floor checks the dispatcher ran against ${tip} before the spawn`,
-          `(exists, bytes, type probe). The verifier's judgment of the content`,
-          `is in its output below.`,
-          ``,
-          ...evidenceLines(evidence),
-        ]
-      : []),
-    ...(sourceSnapshots.length > 0
-      ? [
-          ``,
-          `## Read-only source snapshots`,
-          ``,
-          ...sourceSnapshots.map((s) => `- ${s.original} — mounted read-only at ${s.mountedAt} (${s.bytes} bytes copied)`),
-        ]
-      : []),
-    ...(sweep.required
-      ? [
-          ``,
-          `## Dispatcher full-sweep result`,
-          ``,
-          `- tip: ${sweep.tip}`,
-          `- command: bash seats/selftest-sweep.sh`,
-          `- rc: ${sweep.rc}`,
-          `- log: ${sweep.logPath}`,
-          `- elapsedMs: ${sweep.elapsedMs}`,
-        ]
-      : []),
-    ``,
-    `## Verifier output`,
-    ``,
-    stdout.trimEnd(),
-    ``,
-  ].join("\n");
-  fs.writeFileSync(verdictFile, record); // verdict-write
-  appendVerifierGateInbox(
-    beadId,
-    "settle",
-    `verifier gate verdict — ${beadId}`,
-    `VERDICT: ${verdictShown}\nPUSH: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}\nbranch: ${branch}\ntip: ${tip}\nverdict file: ${path.relative(ROOT, verdictFile)}`
-  );
-  gateInboxWrote = true;
-
-  console.log(`VERDICT: ${verdictShown}  (bead ${beadId}, tip ${tip.slice(0, 12)}, verifier ${verifierSeat})`);
-  console.log(`  full output -> ${verdictFile}`);
-  if (evidence.length > 0) {
-    console.log(`  evidence: ${evidence.length} named artifact(s) floor-checked at the tip, ${evidenceUnsatisfied.length} unsatisfied`);
-  }
-  for (const note of benchGapNotes) console.log(`  ${note}`);
-  if (verdict === "DISCOVER") {
-    console.log(`  DISCOVER files no beads — the proposal waits in the verdict file for the commander.`);
-  }
-  process.exit(verdict === "APPROVE" ? 0 : verdict === "BOUNCE" ? 2 : 3);
 }
 
 if (import.meta.main) main().catch((e) => die(e?.message ?? String(e)));
