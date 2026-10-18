@@ -10,7 +10,7 @@ BASH_BIN="$(type -P bash)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-project-install.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT
+selftest_install_cleanup_traps cleanup
 
 mkdir -p "$FIX/home" "$FIX/tmp" "$FIX/no-rg"
 export HOME="$FIX/home" XDG_CONFIG_HOME="$FIX/home/.config" TMPDIR="$FIX/tmp"
