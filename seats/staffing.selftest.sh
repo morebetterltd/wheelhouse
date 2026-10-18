@@ -3,11 +3,17 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PIDS=""
 cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; pkill -f "$FIX" >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
+if bash "$HERE/seat-path-safety.selftest.sh" "$HERE/.." staffing; then
+  pass 'invalid applied decisions and escaped run paths leave victim files intact'
+else
+  fail 'staffing path ownership regression'
+fi
 ROOT="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/.wheelhouse-worktrees" "$BIN" "$HOME_FIX/.pi-seats-staff"
 printf 'namespace=staff\n' > "$ROOT/wheelhouse/.template-source"
 for e in e1 e2 e3 e4 rv1 rv2; do mkdir -p "$HOME_FIX/.pi-seats-staff/$e"; done
@@ -23,18 +29,16 @@ cat > "$BIN/bd" <<'SH'
 #!/usr/bin/env bash
 ready_count="${BD_READY_COUNT:-0}"
 if [ "$1 $2" = "ready --json" ]; then
-  python3 - "$ready_count" <<'PY'
-import json,sys
-n=int(sys.argv[1]); print(json.dumps([{"id":f"ready-{i}","title":f"Synthetic ready {i}","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0} for i in range(n)]))
-PY
+  bun - "$ready_count" <<'JS'
+console.log(JSON.stringify(Array.from({length:Number(process.argv[2])},(_,i)=>({id:'ready-'+i,title:'Synthetic ready '+i,status:'open',issue_type:'task',created_at:'2026-01-01T00:00:00Z',dependency_count:0,dependent_count:0}))));
+JS
   exit 0
 fi
 if [ "$1" = list ]; then
   if [ "${BD_REVIEW:-0}" = 1 ]; then
-    python3 - <<'PY'
-import json, os
-print(json.dumps([{"id":"busy-bead","title":"Synthetic busy","status":"in_progress","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"review-bead","title":"Synthetic review","status":"open","labels":["needs-review"],"assignee":os.environ.get("BD_ASSIGNEE","worker-e1"),"issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]))
-PY
+    bun - <<'JS'
+console.log(JSON.stringify([{id:'busy-bead',title:'Synthetic busy',status:'in_progress',issue_type:'task',created_at:'2026-01-01T00:00:00Z',dependency_count:0,dependent_count:0},{id:'review-bead',title:'Synthetic review',status:'open',labels:['needs-review'],assignee:process.env.BD_ASSIGNEE??'worker-e1',issue_type:'task',created_at:'2026-01-01T00:00:00Z',dependency_count:0,dependent_count:0}]));
+JS
   else
     cat <<'JSON'
 [{"id":"busy-bead","title":"Synthetic busy","status":"in_progress","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]
@@ -72,11 +76,9 @@ EOF
 }
 # Fixture shape note: bd ready/list rows above were built after capturing real `bd ready --json` and `bd list --json`; ids/titles are synthetic.
 : > "$ROOT/seats/run/staffing.lock"
-python3 - "$ROOT/seats/run/staffing.lock" <<'PY'
-import os, sys, time
-old = time.time() - 60
-os.utime(sys.argv[1], (old, old))
-PY
+bun - "$ROOT/seats/run/staffing.lock" <<'JS'
+const old=Date.now()/1000-60; (await import('node:fs')).default.utimesSync(process.argv[2],old,old);
+JS
 run env BD_READY_COUNT=1 bun seats/staffing.ts check --dry-run --decision add-worker
 [ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && [ ! -e "$ROOT/seats/run/staffing.lock" ] && pass 'staffing recovers an old empty shared PID lock and makes a decision' || fail "incomplete staffing lock blocked check rc=$RC out=$OUT"
 run env BD_READY_COUNT=1 bun seats/staffing.ts check
@@ -85,17 +87,20 @@ run env BD_READY_COUNT=3 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && grep -q 'reason="nothing to do"' <<<"$OUT" && pass 'G4-15 free worker exists with ready work -> nothing' || fail "free-worker row failed: $OUT"
 READY_IDLE_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e 'import { decide } from "./seats/staffing.ts"; const old="2026-01-01T00:00:00.000Z"; const snap={at:new Date().toISOString(),ready:[{id:"ready-1",title:"Synthetic ready"}],readyCount:1,chainedCount:0,overlapCount:0,reviewBacklog:[],workers:{live:[{name:"worker-e1",busy:false,lastActivityAt:old,entry:"e1"},{name:"worker-e2",busy:false,lastActivityAt:old,entry:"e2"}],idle:2,busy:0},reviewers:{live:[],idle:0,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}}; const pool={root:process.cwd(),entries:{},roles:{workers:{min:1,max:4,entries:["e1","e2"],model:"m"},reviewers:{min:0,max:1,entries:[],model:"r"}},idle_drop_minutes:30}; console.log(JSON.stringify(decide(snap, pool, {version:1,seats:{},rateLimited:{}})));' 2>&1)"; READY_IDLE_RC=$?
 [ $READY_IDLE_RC -eq 0 ] && grep -q '"kind":"nothing"' <<<"$READY_IDLE_OUT" && pass 'G4-15 ready work + idle seat above min -> nothing' || fail "ready-idle drop guard failed rc=$READY_IDLE_RC out=$READY_IDLE_OUT"
-python3 - <<PY
-import json; p='$ROOT/seats/state.json'; j=json.load(open(p)); j['seats']['worker-e1']['lastBead']='busy-bead'; json.dump(j,open(p,'w'))
-PY
+bun - "$ROOT/seats/state.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.seats['worker-e1'].lastBead='busy-bead'; fs.writeFileSync(p,JSON.stringify(j));
+JS
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e2' <<<"$OUT" || fail "second add did not use e2: $OUT"
-python3 - <<PY
-import json; p='$ROOT/seats/state.json'; j=json.load(open(p)); j['seats']['worker-e2']['lastBead']='busy-bead'; json.dump(j,open(p,'w'))
-PY
+bun - "$ROOT/seats/state.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.seats['worker-e2'].lastBead='busy-bead'; fs.writeFileSync(p,JSON.stringify(j));
+JS
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e3' <<<"$OUT" || fail "third add did not use e3: $OUT"
-python3 - <<PY
-import json; p='$ROOT/seats/state.json'; j=json.load(open(p)); j['seats']['worker-e3']['lastBead']='busy-bead'; json.dump(j,open(p,'w'))
-PY
+bun - "$ROOT/seats/state.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.seats['worker-e3'].lastBead='busy-bead'; fs.writeFileSync(p,JSON.stringify(j));
+JS
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e4' <<<"$OUT" || fail "fourth add did not use e4: $OUT"
 run env BD_READY_COUNT=6 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'reason="at limit: workers 4/4"' <<<"$OUT" && pass 'G4-18/G4-23 burst grows 1→4 then G4-16 clamps at max' || fail "at max clamp failed: $OUT"
@@ -109,12 +114,11 @@ REAL="$FIX/real-adapter"; mkdir -p "$REAL/seats/logs" "$REAL/seats/run" "$REAL/c
 printf 'namespace=staff\n' > "$REAL/wheelhouse/.template-source"; printf '# Fleet: Worker\n\nfixture brief\n' > "$REAL/contracts/WORKER.md"
 selftest_copy_seat_runtime "$REAL" "$HERE"
 cp "$ROOT/seats/pool.json" "$REAL/seats/pool.json"
-python3 - <<PY
-import json
-p='$REAL/seats/pool.json'; j=json.load(open(p))
-for e in j['entries'].values(): e['harness']='pi'
-json.dump(j,open(p,'w'))
-PY
+bun - "$REAL/seats/pool.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+for(const e of Object.values(j.entries)) e.harness='pi';
+fs.writeFileSync(p,JSON.stringify(j));
+JS
 printf '{"version":1,"seats":{}}\n' > "$REAL/seats/seats.json"
 cat > "$REAL/bin/bd" <<'SH'
 #!/usr/bin/env bash
@@ -123,26 +127,27 @@ if [ "$1" = list ]; then printf '[]\n'; exit 0; fi
 exit 0
 SH
 chmod +x "$REAL/bin/bd"
-cat > "$REAL/bin/pi" <<SH
-#!/usr/bin/env python3
-import json, os, sys, time
-open('$REAL/pi-argv.log','a').write(json.dumps(sys.argv[1:])+'\n')
-agent=os.environ.get('PI_CODING_AGENT_DIR','$REAL')
-os.makedirs(os.path.join(agent,'sessions'), exist_ok=True)
-session=os.path.join(agent,'sessions','fixture.jsonl')
-open(session,'a').write(json.dumps({'type':'session-start'})+'\n')
-for line in sys.stdin:
-    if not line.strip(): continue
-    cmd=json.loads(line); cid=cmd.get('id')
-    if cmd.get('type') == 'get_state':
-        print(json.dumps({'id':cid,'type':'response','command':'get_state','success':True,'data':{'isStreaming':False,'sessionId':'fixture','sessionFile':session,'model':'fixture-model'}}), flush=True)
-    elif cmd.get('type') == 'prompt':
-        print(json.dumps({'id':cid,'type':'response','command':'prompt','success':True}), flush=True)
-        print(json.dumps({'type':'agent_end','messages':[]}), flush=True)
-    else:
-        print(json.dumps({'id':cid,'type':'response','command':cmd.get('type'),'success':False,'error':'unsupported'}), flush=True)
-while True: time.sleep(60)
-SH
+cat > "$REAL/bin/pi" <<'BUN'
+#!/usr/bin/env bun
+const fs=(await import('node:fs')).default,path=(await import('node:path')).default,readline=(await import('node:readline')).default;
+const real=path.resolve(import.meta.dir,'..');
+// Preserve the recorded argv's spaced JSON array format used below.
+fs.appendFileSync(path.join(real,'pi-argv.log'),'['+process.argv.slice(2).map(x=>JSON.stringify(x)).join(', ')+']\n');
+const agent=process.env.PI_CODING_AGENT_DIR??real;
+fs.mkdirSync(path.join(agent,'sessions'),{recursive:true});
+const session=path.join(agent,'sessions','fixture.jsonl');
+fs.appendFileSync(session,JSON.stringify({type:'session-start'})+'\n');
+for await(const line of readline.createInterface({input:process.stdin,crlfDelay:Infinity})) {
+ if(!line.trim()) continue;
+ const cmd=JSON.parse(line),id=cmd.id;
+ if(cmd.type==='get_state') console.log(JSON.stringify({id,type:'response',command:'get_state',success:true,data:{isStreaming:false,sessionId:'fixture',sessionFile:session,model:'fixture-model'}}));
+ else if(cmd.type==='prompt') {
+  console.log(JSON.stringify({id,type:'response',command:'prompt',success:true}));
+  console.log(JSON.stringify({type:'agent_end',messages:[]}));
+ } else console.log(JSON.stringify({id,type:'response',command:cmd.type,success:false,error:'unsupported'}));
+}
+setInterval(()=>{},60000);
+BUN
 chmod +x "$REAL/bin/pi"
 (cd "$REAL" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats contracts wheelhouse && git commit -q -m base)
 REAL_ENV="HOME=$HOME_FIX PATH=$REAL/bin:$BIN:$PATH WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 CODEX_LOG=$REAL/codex-argv.log CODEX_JSON_LOG=$REAL/codex-json.log"
@@ -150,23 +155,25 @@ RC=0; OUT="$(cd "$REAL" && env HOME="$HOME_FIX" PATH="$REAL/bin:$BIN:$PATH" WHEE
 RC2=0; OUT2="$(cd "$REAL" && env HOME="$HOME_FIX" PATH="$REAL/bin:$BIN:$PATH" WHEELHOUSE_CLEANUP=0 OPENAI_API_KEY=fixture-key bun seats/staffing.ts check --decision add-worker 2>&1)" || RC2=$?
 if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && grep -q -- '"--model", "m1"' "$REAL/pi-argv.log" && grep -q -- '"--model", "m2"' "$REAL/pi-argv.log"; then pass 'G4-25 real adapter passes role model per entry to fake pi'; else fail "real adapter model handoff failed rc=$RC/$RC2 out=$OUT/$OUT2 argv=$(cat "$REAL/pi-argv.log" 2>/dev/null || echo none)"; fi
 # No free subscription while under max: staffing records occupy every entry.
-python3 - <<PY
-import json, pathlib
-p=pathlib.Path('$ROOT/seats/staffing.json'); j=json.load(open(p)); j['seats']={f'worker-e{i}':{'role':'worker','entry':f'e{i}'} for i in range(1,5)}; json.dump(j,open(p,'w'))
-PY
+bun - "$ROOT/seats/staffing.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.seats=Object.fromEntries(Array.from({length:4},(_,i)=>['worker-e'+(i+1),{role:'worker',entry:'e'+(i+1)}]));
+fs.writeFileSync(p,JSON.stringify(j));
+JS
 run env BD_READY_COUNT=1 bun seats/staffing.ts check --dry-run --decision add-worker
 [ $RC -eq 0 ] && grep -q 'reason="no free subscription for workers"' <<<"$OUT" && pass 'G4-26 all entries occupied -> no free subscription' || fail "no-free-subscription failed: $OUT"
 
 # Prepare shrink: e1/e2/e3 live and old idle; min=1 means successive checks drop to min.
-python3 - <<PY
-import json, pathlib
-p=pathlib.Path('$ROOT/seats/staffing.json'); j=json.load(open(p)); j['seats']={'worker-e1':{'role':'worker','entry':'e1'},'worker-e2':{'role':'worker','entry':'e2'},'worker-e3':{'role':'worker','entry':'e3'}}; json.dump(j,open(p,'w'))
-PY
+bun - "$ROOT/seats/staffing.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.seats={'worker-e1':{role:'worker',entry:'e1'},'worker-e2':{role:'worker',entry:'e2'},'worker-e3':{role:'worker',entry:'e3'}};
+fs.writeFileSync(p,JSON.stringify(j));
+JS
 (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/adapter.ts spawn worker-e3 >/dev/null 2>&1)
 run env BD_READY_COUNT=0 bun seats/staffing.ts check
-if python3 - <<PY
-import json; assert 'worker-e1' not in json.load(open('$ROOT/seats/state.json'))['seats']
-PY
+if bun - "$ROOT/seats/state.json" <<'JS'
+(await import('node:assert/strict')).default.ok(!Object.hasOwn(JSON.parse((await import('node:fs')).default.readFileSync(process.argv[2],'utf8')).seats,'worker-e1'));
+JS
 then STATE_REMOVED=1; else STATE_REMOVED=0; fi
 [ $RC -eq 0 ] && grep -q 'decision=drop-seat' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && [ ! -d "$ROOT/.wheelhouse-worktrees/worker-e1" ] && [ "$STATE_REMOVED" = 1 ] && pass 'G4-20/G4-30 first idle shrink removes pid/state/worktree and frees entry' || fail "first drop failed: $OUT state=$(cat "$ROOT/seats/state.json" 2>/dev/null)"
 run env BD_READY_COUNT=0 bun seats/staffing.ts check
@@ -179,13 +186,11 @@ run env BD_READY_COUNT=1 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'seat=worker-e1' <<<"$OUT" && pass 'G4-30 next add reuses the freed entry' || fail "freed entry was not reused: $OUT"
 # Busy seat protected; idle extra goes.
 run env BD_READY_COUNT=1 bun seats/staffing.ts check >/dev/null
-python3 - <<PY
-import json, pathlib
-st=pathlib.Path('$ROOT/seats/state.json'); j=json.load(open(st));
-for seat,rec in j['seats'].items():
- rec['lastBead']='busy-bead' if seat=='worker-e2' else 'closed-bead'
-json.dump(j,open(st,'w'))
-PY
+bun - "$ROOT/seats/state.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+for(const [seat,rec] of Object.entries(j.seats)) rec.lastBead=seat==='worker-e2'?'busy-bead':'closed-bead';
+fs.writeFileSync(p,JSON.stringify(j));
+JS
 run env BD_READY_COUNT=0 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=drop-seat' <<<"$OUT" && ! grep -q 'seat=worker-e2' <<<"$OUT" && pass 'G4-29 busy in-progress seat is not dropped' || fail "busy drop guard failed: $OUT"
 # Concurrency: two simultaneous checks on one need add exactly one seat.
@@ -193,32 +198,27 @@ rm -f "$ROOT/seats/staffing.json" "$ROOT/seats/state.json"; rm -rf "$ROOT/.wheel
 (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" BD_READY_COUNT=1 bun seats/staffing.ts check > "$FIX/c1.out" 2>&1) & p1=$!
 (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" BD_READY_COUNT=1 bun seats/staffing.ts check > "$FIX/c2.out" 2>&1) & p2=$!
 wait $p1; r1=$?; wait $p2; r2=$?
-COUNT=$(python3 - <<PY
-import json; print(len(json.load(open('$ROOT/seats/staffing.json'))['seats']))
-PY
-)
+COUNT=$(bun -e 'console.log(Object.keys(JSON.parse((await import("node:fs")).default.readFileSync(process.argv[1],"utf8")).seats).length)' "$ROOT/seats/staffing.json")
 [ $r1 -eq 0 ] && [ $r2 -eq 0 ] && [ "$COUNT" = 1 ] && pass 'G4-37 concurrent checks add exactly one seat' || fail "concurrency failed r=$r1/$r2 count=$COUNT outs=$(cat "$FIX/c1.out" "$FIX/c2.out")"
 # min=max pins role.
-python3 - <<PY
-import json
-p='$ROOT/seats/pool.json'; j=json.load(open(p)); j['roles']['workers']['min']=j['roles']['workers']['max']=1; json.dump(j,open(p,'w'))
-PY
+bun - "$ROOT/seats/pool.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.roles.workers.min=j.roles.workers.max=1; fs.writeFileSync(p,JSON.stringify(j));
+JS
 run env BD_READY_COUNT=6 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'at limit: workers 1/1' <<<"$OUT" && pass 'G4-5 min=max pins worker scale-out' || fail "min=max failed: $OUT"
 run env BD_READY_COUNT=0 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && ! grep -q 'decision=drop-seat' <<<"$OUT" && pass 'G4-5 min=max pins empty queue against drop' || fail "min=max empty queue failed: $OUT"
 rm -f "$ROOT/seats/staffing.json" "$ROOT/seats/state.json"; rm -rf "$ROOT/.wheelhouse-worktrees"; mkdir -p "$ROOT/.wheelhouse-worktrees"
-python3 - <<PY
-import json, pathlib, time
-pathlib.Path('$ROOT/seats/staffing.json').write_text(json.dumps({'version':1,'seats':{'worker-e1':{'role':'worker','entry':'e1','addedAt':'2026-01-01T00:00:00Z'}},'rateLimited':{}}, indent=2))
-PY
+bun - "$ROOT/seats/staffing.json" <<'JS'
+(await import('node:fs')).default.writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{}},null,2));
+JS
 run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=verifier-rv1' <<<"$OUT" && ! grep -q 'decision=add-worker' <<<"$OUT" && pass 'G4-19 review backlog adds reviewer and not worker' || fail "reviewer add failed: $OUT"
-python3 - <<PY
-import json, pathlib
-pathlib.Path('$ROOT/seats/seats.json').write_text(json.dumps({'version':1,'seats':{}}, indent=2))
-pathlib.Path('$ROOT/seats/staffing.json').write_text(json.dumps({'version':1,'seats':{'worker-e1':{'role':'worker','entry':'e1','addedAt':'2026-01-01T00:00:00Z'},'verifier-rv1':{'role':'verifier','entry':'rv1','addedAt':'2026-01-01T00:00:00Z'}},'rateLimited':{'rv1':{'at':'2026-01-01T00:00:00Z','detail':'test keeps rv1 unavailable'}}}, indent=2))
-PY
+bun - "$ROOT/seats/seats.json" "$ROOT/seats/staffing.json" <<'JS'
+const fs=(await import('node:fs')).default; fs.writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{}},null,2));
+fs.writeFileSync(process.argv[3],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'},'verifier-rv1':{role:'verifier',entry:'rv1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{rv1:{at:'2026-01-01T00:00:00Z',detail:'test keeps rv1 unavailable'}}},null,2));
+JS
 MARKER="$ROOT/seats/run/verify.verifier-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID0=$!; printf '{"pid":%s,"bead":"other-bead"}\n' "$MPID0" > "$MARKER"
 run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
 kill "$MPID0" 2>/dev/null || true; rm -f "$MARKER"
@@ -259,12 +259,11 @@ OUT="$(cd "$NOPOOL" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts 
 [ $RC -eq 0 ] && grep -q 'staffing: no pool (fixed roster)' <<<"$OUT" && [ "$before" = "$after" ] && pass 'no pool exits 0 and touches nothing' || fail "no-pool failed rc=$RC out=$OUT"
 # Canary: removing clamp makes at-max leg fail.
 cp "$ROOT/seats/staffing.ts" "$ROOT/seats/staffing-broken.ts"
-python3 - <<PY
-from pathlib import Path
-p=Path('$ROOT/seats/staffing-broken.ts')
-s=p.read_text().replace('let d: Decision;','let d: Decision; const clamp = (x: any) => x;')
-p.write_text(s)
-PY
+bun - "$ROOT/seats/staffing-broken.ts" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='let d: Decision;';
+if(s.split(needle).length!==2) throw new Error('clamp canary source changed');
+fs.writeFileSync(p,s.replace(needle,'let d: Decision; const clamp = (x: any) => x;'));
+JS
 BROKEN_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" BD_READY_COUNT=6 bun -e 'import { main } from "./seats/staffing-broken.ts"; await main(["check", "--decision", "add-worker"], process.cwd());' 2>&1)"; BROKEN_RC=$?
 if [ $BROKEN_RC -eq 0 ] && ! grep -q 'at limit: workers 1/1' <<<"$BROKEN_OUT"; then pass 'canary: removing clamp makes the at-max leg fail'; else fail "canary did not prove clamp coverage rc=$BROKEN_RC out=$BROKEN_OUT"; fi
 echo 'staffing.selftest.sh works on this machine.'

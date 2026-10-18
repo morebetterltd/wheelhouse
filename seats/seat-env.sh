@@ -100,8 +100,10 @@ harness="pi"
 # the seat remains fully supported. The label is documented as NEVER a secret,
 # so it is safe to echo in this provisioning summary when present.
 json_runtime=""
+json_runtime_flag=""
 if command -v node >/dev/null 2>&1; then
   json_runtime="node"
+  json_runtime_flag="--input-type=module"
 elif command -v bun >/dev/null 2>&1; then
   json_runtime="bun"
 fi
@@ -111,8 +113,8 @@ if { [ -f "$roster_file" ] || [ -f "$pool_file" ]; } && [ -z "$json_runtime" ]; 
   exit 1
 fi
 if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
-  harness="$($json_runtime -e '
-    const fs = require("fs");
+  harness="$($json_runtime ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -122,8 +124,8 @@ if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
     } catch {}
   ' "$pool_file" "$seat")"
 elif [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
-  harness="$($json_runtime -e '
-    const fs = require("fs");
+  harness="$($json_runtime ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -163,8 +165,8 @@ if [ "$harness" = "codex" ] && ! command -v codex >/dev/null 2>&1; then
 fi
 
 if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
-  account_label="$($json_runtime -e '
-    const fs = require("fs");
+  account_label="$($json_runtime ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -173,8 +175,8 @@ if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
     } catch {}
   ' "$pool_file" "$seat")"
 elif [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
-  account_label="$($json_runtime -e '
-    const fs = require("fs");
+  account_label="$($json_runtime ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -191,8 +193,8 @@ fi
 # silently ignored.
 harness="pi"
 if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
-  harness="$($json_runtime -e '
-    const fs = require("fs");
+  harness="$($json_runtime ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -201,8 +203,8 @@ if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
       else process.stdout.write("pi");
     } catch { process.stdout.write("pi"); }
   ' "$pool_file" "$seat")"
-  auth_route="$($json_runtime -e '
-    const fs = require("fs");
+  auth_route="$($json_runtime ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -211,8 +213,8 @@ if [ -n "$pool_entry" ] && [ -f "$pool_file" ] && [ -n "$json_runtime" ]; then
     } catch {}
   ' "$pool_file" "$seat")"
 elif [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
-  harness="$($json_runtime -e '
-    const fs = require("fs");
+  harness="$($json_runtime ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -221,8 +223,8 @@ elif [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
       else process.stdout.write("pi");
     } catch { process.stdout.write("pi"); }
   ' "$roster_file" "$seat")"
-  auth_route="$($json_runtime -e '
-    const fs = require("fs");
+  auth_route="$($json_runtime ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -240,8 +242,8 @@ elif [ -f "$roster_file" ] && [ -n "$json_runtime" ]; then
       *) die "seat \"$seat\" has an invalid account.authRoute \"$auth_route\" in $roster_file — must be one of oauth, api_key, env, default (or omitted)" ;;
     esac
   fi
-  shadow_value="$($json_runtime -e '
-    const fs = require("fs");
+  shadow_value="$($json_runtime ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], seat = process.argv[2];
     try {
       const j = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -324,8 +326,8 @@ fi
 
 if [ "$harness" = "claude-code" ]; then
   claude_config_file="$seat_dir/.claude.json"
-  "$json_runtime" -e '
-    const fs = require("fs");
+  "$json_runtime" ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     const file = process.argv[1], root = process.argv[2];
     let data = {};
     if (fs.existsSync(file)) {
@@ -362,8 +364,8 @@ claude_logged_in() {
   [ -n "$json_runtime" ] || return 1
   status_json="$(CLAUDE_CONFIG_DIR="$seat_dir" claude auth status --json 2>/dev/null || true)"
   [ -n "$status_json" ] || return 1
-  printf '%s' "$status_json" | "$json_runtime" -e '
-    const fs = require("fs");
+  printf '%s' "$status_json" | "$json_runtime" ${json_runtime_flag:+"$json_runtime_flag"} -e '
+    import fs from "node:fs";
     let body = "";
     try { body = fs.readFileSync(0, "utf8"); } catch {}
     try { process.exit(JSON.parse(body).loggedIn === true ? 0 : 1); }

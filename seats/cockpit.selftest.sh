@@ -17,6 +17,7 @@ BRIDGE_GUARD="$HERE/bridge-guard.sh"
 [ -x "$BRIDGE_GUARD" ] || { echo "selftest: not executable: $BRIDGE_GUARD" >&2; exit 2; }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 . "$HERE/selftest-herald.sh"
 selftest_bind_herald_owner "$FIX" || exit 2
 SOCK="wheelhouse-cockpit-selftest.$$"

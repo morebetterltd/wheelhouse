@@ -7,6 +7,7 @@ SOURCE="${1:-$HERE}"
 [ -f "$SOURCE/channels.ts" ] || { echo 'selftest: missing runtime' >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo 'selftest: bun required' >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-channel-credentials-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 trap 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"' EXIT
 FAILED=0
 pass(){ printf '  ok    %s\n' "$*"; }
@@ -18,7 +19,7 @@ has(){ case "$OUT" in *"$1"*) return 0;; *) return 1;; esac; }
 no_value(){
   ! has "$FAKE" || return 1
   FAKE_CHECK_VALUE="$FAKE" CHECK_ROOT="$ROOT" bun -e '
-    const fs=require("fs"), path=require("path"), root=process.env.CHECK_ROOT, token=process.env.FAKE_CHECK_VALUE;
+    import fs from "node:fs"; import path from "node:path"; const  root=process.env.CHECK_ROOT, token=process.env.FAKE_CHECK_VALUE;
     const files=["seats/channels.json","seats/seats.json"].map(p=>path.join(root,p));
     if(files.some(p=>!fs.existsSync(p))) process.exit(1);
     const ledger=path.join(root,"seats/comms.jsonl"); if(fs.existsSync(ledger)) files.push(ledger);

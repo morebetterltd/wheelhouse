@@ -21,6 +21,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-seat-worktree-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 BIN="$FIX/bin"
 mkdir -p "$BIN"
@@ -39,6 +40,12 @@ fi
 printf '{}\n'
 EOF
 chmod +x "$BIN/bd"
+
+if bash "$HERE/seat-path-safety.selftest.sh" "$ROOT" worktree; then
+  pass "invalid seat names and outside worktree aliases leave data and registration intact"
+else
+  fail "worktree path ownership regression"
+fi
 
 # Occupancy and closed-legacy cwd behaviour (dead-seat fix).
 REPO="$FIX/repo"
@@ -174,7 +181,7 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "seat-worktree.selftest: PASS (5 checks)"
+  echo "seat-worktree.selftest: PASS (6 checks)"
 else
   echo "seat-worktree.selftest: FAIL ($FAILED failure(s))"
   exit 1

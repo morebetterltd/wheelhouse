@@ -72,7 +72,7 @@ recover_dead_seats() {
   fi
   trap 'rm -rf "$lock"' RETURN
   sep="$(printf '\037')"
-  bun -e 'const fs=require("fs"); const sep="\x1f"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); for (const [name,r] of Object.entries(s.seats||{})) console.log([name, r&&r.pid!=null?String(r.pid):"", r&&r.lastBead?String(r.lastBead):"", r&&r.cwd?String(r.cwd):"", r&&r.log?String(r.log):""].map(x=>x.replace(/\x1f|\n/g," ")).join(sep));' "$DAEMONS_SEATS/state.json" 2>/dev/null |
+  bun -e 'import fs from "node:fs"; const sep="\x1f"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); for (const [name,r] of Object.entries(s.seats||{})) console.log([name, r&&r.pid!=null?String(r.pid):"", r&&r.lastBead?String(r.lastBead):"", r&&r.cwd?String(r.cwd):"", r&&r.log?String(r.log):""].map(x=>x.replace(/\x1f|\n/g," ")).join(sep));' "$DAEMONS_SEATS/state.json" 2>/dev/null |
   while IFS="$sep" read -r seat pid bead cwd seat_log; do
     [ -n "$seat" ] || continue
     [ -n "$pid" ] || continue
@@ -127,7 +127,7 @@ wait_pid_file() {
 }
 
 principal_channel_declared() {
-  (cd "$DAEMONS_ROOT" && bun -e 'const fs=require("fs"); let j={}; try{j=JSON.parse(fs.readFileSync("seats/channels.json","utf8"));}catch{} process.exit(Object.values(j.channels||{}).some(c=>c&&c.audience==="principal") ? 0 : 1);' >/dev/null 2>&1)
+  (cd "$DAEMONS_ROOT" && bun -e 'import fs from "node:fs"; let j={}; try{j=JSON.parse(fs.readFileSync("seats/channels.json","utf8"));}catch{} process.exit(Object.values(j.channels||{}).some(c=>c&&c.audience==="principal") ? 0 : 1);' >/dev/null 2>&1)
 }
 
 start_herald() {

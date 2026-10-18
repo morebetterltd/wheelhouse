@@ -23,8 +23,8 @@ command -v bun >/dev/null 2>&1 || exit 0
 [ -f "$NEEDS" ] || exit 0
 
 NEEDS_PATH="$NEEDS" bun -e '
-const fs = require("fs");
-const cp = require("child_process");
+import fs from "node:fs";
+import cp from "node:child_process";
 
 async function main() {
   let raw = "";

@@ -72,6 +72,7 @@ template_root() {
 TEMPLATE=$(template_root)
 if [ "${WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY:-0}" = 1 ]; then printf '%s\n' "$TEMPLATE"; exit 0; fi
 TMP=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX") || exit 2
+selftest_isolate_git "$TMP" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${TMP:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$TMP"; }
 trap cleanup EXIT
 
@@ -83,6 +84,7 @@ copy_installed_selftest() {
   local dest="$1"
   cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$dest/upgrade-runbook.selftest.sh"
   cp "$ROOT/seats/selftest-lib.sh" "$dest/selftest-lib.sh"
+  cp "$ROOT/seats/selftest-sweep-lock.ts" "$dest/selftest-sweep-lock.ts"
 }
 
 cache_recovery_tests() {
@@ -150,6 +152,7 @@ GITSTUB
     printf KEEP > "$install/outside/1234567/KEEP"
     cp -f "$helper" "$install/seats/upgrade-runbook.selftest.sh"
     cp -f "$ROOT/seats/selftest-lib.sh" "$install/seats/selftest-lib.sh"
+    cp -f "$ROOT/seats/selftest-sweep-lock.ts" "$install/seats/selftest-sweep-lock.ts"
     value=1234567; target=main; expected=1; needle='STOP:'
     case "$name" in
       helper-*) expected=42 ;;

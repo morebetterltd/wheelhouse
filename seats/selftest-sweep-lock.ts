@@ -3,15 +3,116 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { dlopen, FFIType, read, CString, toArrayBuffer } from "bun:ffi";
 
 const MARKER = "wheelhouse-selftest-sweep";
 const FILES = ["pid", "started", MARKER].sort();
-const HOST = os.hostname();
+const QUEUE = `${MARKER}-queue`;
+const WAITER = `${MARKER}-waiter`;
+const queueMarkers = new Map<number, [string, string]>();
+const HOST = os.hostname(); // Diagnostic/legacy name only; networks may change it.
+let hostId: string | null = null;
+type IdentitySource = "darwin-ioplatformuuid" | "linux-machine-id" | "hostname";
+let identitySource: IdentitySource = "hostname";
+const identityFailures: { source: IdentitySource; reason: string }[] = [];
+const descriptorPaths = new Map<number, string>();
+const observed: object[] = [];
+let diagnosed = false;
+let hostNames = new Set([HOST]);
+const HOST_RECORD = `${MARKER}-host`;
 const C = fs.constants;
 const darwin = process.platform === "darwin";
 class Refused extends Error {}
+function stableHostId(): string {
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+  const unavailable = (source: IdentitySource, error: any) => identityFailures.push({ source,
+    reason: typeof error?.code === "string" ? error.code : typeof error?.status === "number" ? `exit:${error.status}` : "unavailable" });
+  if (darwin) {
+    try {
+      // System location, independent of a suite's deliberately minimal PATH.
+      const raw = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
+      const match = /^\s*"IOPlatformUUID" = "([0-9A-Fa-f-]+)"\s*$/m.exec(raw);
+      if (match && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(match[1]) && !/^0+$/.test(match[1].replaceAll("-", ""))) {
+        identitySource = "darwin-ioplatformuuid";
+        return digest(`darwin:${match[1].toLowerCase()}`);
+      }
+      identityFailures.push({ source: "darwin-ioplatformuuid", reason: "invalid-value" });
+    } catch (error) { unavailable("darwin-ioplatformuuid", error); }
+  } else if (process.platform === "linux") {
+    try {
+      const machine = fs.readFileSync("/etc/machine-id", "utf8").trim();
+      if (/^[0-9a-f]{32}$/i.test(machine) && !/^0+$/.test(machine)) {
+        identitySource = "linux-machine-id";
+        return digest(`linux:${machine.toLowerCase()}`);
+      }
+      identityFailures.push({ source: "linux-machine-id", reason: "invalid-value" });
+    } catch (error) { unavailable("linux-machine-id", error); }
+  }
+  // Lookup failure must not turn an otherwise valid legacy lock into STOP.
+  identitySource = "hostname";
+  return digest(`hostname:${HOST}`);
+}
+function hostMatches(marker: any): boolean {
+  // Wire records stay byte-for-byte compatible in shape with older helpers.
+  // The sibling stable-ID cache binds previously observed names to this host.
+  return hostNames.has(marker.hostname);
+}
+function markerFields(marker: any, fields: string[]): boolean {
+  return !!marker && typeof marker === "object" && !Array.isArray(marker) && typeof marker.hostname === "string" &&
+    JSON.stringify(Object.keys(marker).sort()) === JSON.stringify(fields.sort());
+}
+function evidence(fd: number, file: string, data?: Buffer): object {
+  const s = fs.fstatSync(fd, { bigint: true });
+  return { path: file, device: String(s.dev), inode: String(s.ino), mtimeNs: String(s.mtimeNs), size: String(s.size),
+    ...(data ? { contents: data.toString("utf8"), contentsBase64: data.toString("base64") } : {}) };
+}
+function diagnose(error: any, parent?: number, name?: string) {
+  diagnosed = true;
+  const snapshots: object[] = [];
+  function capture(at: number, leaf: string, depth: number) {
+    const file = path.join(descriptorPaths.get(at) ?? "[unknown descriptor]", leaf);
+    let fd = -1;
+    try {
+      fd = openAt(at, leaf);
+      const s = fs.fstatSync(fd);
+      if (s.isDirectory()) {
+        const names = entries(fd); snapshots.push({ ...evidence(fd, file), entries: names });
+        if (depth) for (const member of names) capture(fd, member, depth - 1);
+      } else if (s.isFile() && s.size <= 16384) {
+        // Same bounded, no-follow, nonblocking read as validation. Full bytes
+        // for every admissible marker; oversize/nonregular objects stay inert.
+        const data = Buffer.alloc(16385), n = fs.readSync(fd, data, 0, data.length, 0);
+        snapshots.push(n <= 16384 ? evidence(fd, file, data.subarray(0, n)) : { ...evidence(fd, file), contentsUnavailable: "grew beyond 16384 bytes" });
+      } else snapshots.push({ ...evidence(fd, file), contentsUnavailable: "not a bounded regular marker (limit 16384 bytes)" });
+    } catch (e: any) {
+      // Metadata-only lstat is supplementary when no-follow open refuses a
+      // symlink. Never read its target or use this path observation to delete.
+      let metadata: object = {};
+      try { const s = fs.lstatSync(file, { bigint: true }); metadata = { inode: String(s.ino), device: String(s.dev), mtimeNs: String(s.mtimeNs), metadataOnly: true }; } catch {}
+      snapshots.push({ path: file, ...metadata, unavailable: e.message });
+    }
+    finally { if (fd >= 0) fs.closeSync(fd); }
+  }
+  if (parent !== undefined && name) { capture(parent, name, 1); capture(parent, `${name}.queue`, 1); capture(parent, `${name}.host`, 1); }
+  console.error("SELFTEST_LOCK_REFUSAL " + JSON.stringify({ operation: process.argv[2], lock: process.argv[3], reason: error.message,
+    host: { hostname: HOST, hostId, identitySource, identityFailures, knownHostnames: [...hostNames], platform: process.platform }, observed, snapshots }));
+}
+// Async supervisor failures may occur outside a transition's pinned parent.
+// Reopen only for a diagnostic snapshot; never repair state from this path.
+function diagnoseLock(error: any, lock: string) {
+  let parent: number | undefined;
+  try {
+    if (!native) primitives();
+    const canonical = canonicalLock(lock);
+    parent = parentFd(canonical);
+    if (native.symbols.flock(parent, 2)) throw new Refused(`diagnostic flock failed (errno ${errno()})`);
+    diagnose(error, parent, path.basename(canonical));
+  } catch {
+    if (!diagnosed) diagnose(error);
+  } finally { if (parent !== undefined) fs.closeSync(parent); }
+}
 let native: ReturnType<typeof dlopen>;
 function primitives() {
   if (!darwin && process.platform !== "linux") throw new Refused("atomic directory publication unsupported on this platform");
@@ -38,10 +139,13 @@ function z(s: string) { return Buffer.from(s + "\0"); }
 function openAt(parent: number, name: string, flags = C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK): number {
   const fd = native.symbols.openat(parent, z(name), flags) as number;
   if (fd < 0) { const n = errno(); throw Object.assign(new Refused(`open ${name} failed (errno ${n})`), { errno: n }); }
+  descriptorPaths.set(fd, path.join(descriptorPaths.get(parent) ?? "[unknown descriptor]", name));
   return fd;
 }
 function unlinkAt(parent: number, name: string, directory = false) {
-  if (native.symbols.unlinkat(parent, z(name), directory ? (darwin ? 0x80 : 0x200) : 0)) throw new Refused(`remove ${name} failed (errno ${errno()})`);
+  if (native.symbols.unlinkat(parent, z(name), directory ? (darwin ? 0x80 : 0x200) : 0)) {
+    const n = errno(); throw Object.assign(new Refused(`remove ${name} failed (errno ${n})`), { errno: n });
+  }
 }
 function id(fd: number) { const s = fs.fstatSync(fd, { bigint: true }); return `${s.dev}:${s.ino}`; }
 function entries(fd: number): string[] {
@@ -80,6 +184,7 @@ function readFile(parent: number, name: string): [string, string] {
     if (!s.isFile() || s.size > 16384) throw new Refused(`${name} is not a bounded regular file`);
     const data = fs.readFileSync(fd);
     if (data.length > 16384) throw new Refused(`${name} grew while reading`);
+    observed.push(evidence(fd, descriptorPaths.get(fd)!, data));
     return [new TextDecoder("utf-8", { fatal: true }).decode(data), id(fd)];
   } finally { fs.closeSync(fd); }
 }
@@ -94,9 +199,9 @@ function inspect(parent: number, name: string): Snapshot {
       exactFiles(fd);
       const [raw, markerId] = readFile(fd, MARKER);
       const m = JSON.parse(raw);
-      if (!m || Array.isArray(m) || JSON.stringify(Object.keys(m).sort()) !== JSON.stringify(["kind", "version", "pid", "hostname", "started", "token"].sort())) throw new Refused("invalid marker fields");
+      if (!markerFields(m, ["kind", "version", "pid", "hostname", "started", "token"])) throw new Refused("invalid marker fields");
       if (m.kind !== MARKER || m.version !== 1 || !validPid(m.pid)) throw new Refused("invalid marker kind/version/pid");
-      if (m.hostname !== HOST) throw new Refused("marker hostname is not this host");
+      if (!hostMatches(m)) throw new Refused("marker host identity is not this host");
       if (typeof m.token !== "string" || !/^[0-9a-f]{32}$/.test(m.token)) throw new Refused("invalid marker token");
       timestamp(m.started);
       const [pid, pidId] = readFile(fd, "pid"), [started, startedId] = readFile(fd, "started");
@@ -140,22 +245,20 @@ function removeValidated(parent: number, name: string, snapshot: Snapshot) {
     unlinkAt(parent, name, true);
   } finally { fs.closeSync(fd); }
 }
-function renameExclusive(parent: number, source: string, dest: string) {
+function renameExclusive(parent: number, source: string, dest: string, destinationParent = parent) {
   const fn = native.symbols[darwin ? "renameatx_np" : "renameat2"];
-  if (fn(parent, z(source), parent, z(dest), darwin ? 4 : 1)) throw new Refused(`exclusive publish failed (errno ${errno()})`);
+  if (fn(parent, z(source), destinationParent, z(dest), darwin ? 4 : 1)) throw new Refused(`exclusive publish failed (errno ${errno()})`);
 }
-function publish(parent: number, name: string, pid: number, token: string) {
+function publishDirectory(parent: number, name: string, members: [string, string][]) {
   const candidate = `.${name}.${randomUUID().replace(/-/g, "")}.new`;
   if (native.symbols.mkdirat(parent, z(candidate), 0o700)) throw new Refused(`candidate mkdir failed (errno ${errno()})`);
   const fd = openAt(parent, candidate, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
   const candidateId = id(fd), written: Record<string, string> = {};
   try {
-    const started = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-    const marker = { kind: MARKER, version: 1, pid, hostname: HOST, started, token };
     // mkstemp is non-variadic and creates0600/exclusive, unlike a Darwin arm64
     // FFI call to openat(O_CREAT). CWD changes only in this private helper.
     if (native.symbols.fchdir(fd)) throw new Refused("cannot enter private candidate descriptor");
-    for (const [member, content] of [["pid", `${pid}\n`], ["started", `${started}\n`], [MARKER, JSON.stringify(marker) + "\n"]]) {
+    for (const [member, content] of members) {
       const template = z(".member.XXXXXX"), out = native.symbols.mkstemp(template) as number;
       if (out < 0) throw new Refused("cannot create private member");
       const temporary = template.toString().split("\0")[0], fileId = id(out);
@@ -167,7 +270,7 @@ function publish(parent: number, name: string, pid: number, token: string) {
       } finally { fs.closeSync(out); }
     }
     renameExclusive(parent, candidate, name);
-    console.log(candidateId);
+    return candidateId;
   } finally {
     // Only this invocation's private candidate and recorded member identities.
     let current = -1;
@@ -184,9 +287,141 @@ function publish(parent: number, name: string, pid: number, token: string) {
     } finally { if (current >= 0) fs.closeSync(current); fs.closeSync(fd); }
   }
 }
+function publish(parent: number, name: string, pid: number, token: string) {
+  const started = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const marker = { kind: MARKER, version: 1, pid, hostname: HOST, started, token };
+  return publishDirectory(parent, name, [["pid", `${pid}\n`], ["started", `${started}\n`], [MARKER, JSON.stringify(marker) + "\n"]]);
+}
+
+function hostCache(parent: number, lockName: string): Set<string> {
+  // A weaker fallback cannot authenticate hardware-bound aliases. Do not
+  // overwrite or reject a previous stable cache just because lookup failed.
+  if (identitySource === "hostname") return new Set([HOST]);
+  // Sibling, NOT a fourth lock member or queue entry. Older helpers inspect
+  // only lockName and lockName.queue and leave this cache completely alone.
+  const name = `${lockName}.host`, digest = (s: string) => createHash("sha256").update(s).digest("hex");
+  let fd: number;
+  try { fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW); }
+  catch (e: any) {
+    if (e.errno !== 2) throw e;
+    publishDirectory(parent, name, [[HOST_RECORD, JSON.stringify({ kind: HOST_RECORD, version: 1, hostId }) + "\n"], [digest(HOST), HOST + "\n"]]);
+    fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+  }
+  try {
+    const record = JSON.parse(readFile(fd, HOST_RECORD)[0]);
+    if (!record || JSON.stringify(Object.keys(record).sort()) !== JSON.stringify(["hostId", "kind", "version"]) || record.kind !== HOST_RECORD || record.version !== 1 || record.hostId !== hostId) throw new Refused("foreign or invalid stable host cache");
+    const names = new Set<string>();
+    for (const member of entries(fd)) {
+      if (member === HOST_RECORD) continue;
+      const raw = readFile(fd, member)[0], hostname = raw.slice(0, -1);
+      if (!/^[0-9a-f]{64}$/.test(member) || !hostname || raw !== hostname + "\n" || /[\r\n\0]/.test(hostname) || digest(hostname) !== member) throw new Refused("invalid cached hostname");
+      names.add(hostname);
+    }
+    if (!names.has(HOST)) {
+      // Stage an alias outside the visible cache; atomic exclusive publication
+      // under the same parent flock. Never overwrite a foreign cache member.
+      if (native.symbols.fchdir(parent)) throw new Refused("cannot enter host cache parent");
+      const template = z(".sweep-host.XXXXXX"), out = native.symbols.mkstemp(template) as number;
+      if (out < 0) throw new Refused("cannot create hostname alias");
+      const temporary = template.toString().split("\0")[0], identity = id(out);
+      try { fs.writeFileSync(out, HOST + "\n"); renameExclusive(parent, temporary, digest(HOST), fd); }
+      finally {
+        fs.closeSync(out);
+        let leftover = -1;
+        try { leftover = openAt(parent, temporary); if (id(leftover) === identity) unlinkAt(parent, temporary); }
+        catch (e: any) { if (e.errno !== 2) throw e; }
+        finally { if (leftover >= 0) fs.closeSync(leftover); }
+      }
+      names.add(HOST);
+    }
+    return names;
+  } finally { fs.closeSync(fd); }
+}
+
+type Ticket = { name: string; identity: string; raw: string; pid: number; token: string; sequence: bigint };
+function queueFd(parent: number, name: string, create: boolean): number | null {
+  let fd: number;
+  try { fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW); }
+  catch (e: any) {
+    if (e.errno !== 2) throw e;
+    if (!create) return null;
+    publishDirectory(parent, name, [[QUEUE, JSON.stringify({ kind: QUEUE, version: 1, hostname: HOST }) + "\n"]]);
+    fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+  }
+  try {
+    const anchor = readFile(fd, QUEUE), marker = JSON.parse(anchor[0]);
+    if (!markerFields(marker, ["hostname", "kind", "version"]) || marker.kind !== QUEUE || marker.version !== 1 || !hostMatches(marker)) throw new Refused("invalid queue marker");
+    queueMarkers.set(fd, anchor);
+    return fd;
+  } catch (e) { fs.closeSync(fd); throw e; }
+}
+function tickets(fd: number): Ticket[] {
+  const result: Ticket[] = [];
+  for (const name of entries(fd)) {
+    if (name === QUEUE) continue;
+    const match = /^([0-9]{20})\.([0-9a-f]{32})$/.exec(name);
+    if (!match || BigInt(match[1]) === 0n) throw new Refused("unknown queue entry");
+    const [raw, identity] = readFile(fd, name), m = JSON.parse(raw);
+    if (!markerFields(m, ["kind", "version", "pid", "hostname", "started", "token"]) || m.kind !== WAITER || m.version !== 1 || !hostMatches(m) || !validPid(m.pid) || m.token !== match[2]) throw new Refused("invalid waiter ownership record");
+    timestamp(m.started);
+    result.push({ name, identity, raw, pid: m.pid, token: m.token, sequence: BigInt(match[1]) });
+  }
+  if (new Set(result.map(t => String(t.sequence))).size !== result.length) throw new Refused("duplicate queue sequence");
+  return result; // Fixed-width sequence names from entries() are arrival order.
+}
+function removeTicket(fd: number, ticket: Ticket) {
+  const [raw, identity] = readFile(fd, ticket.name);
+  if (raw !== ticket.raw || identity !== ticket.identity) throw new Refused("waiter changed before removal");
+  unlinkAt(fd, ticket.name);
+}
+function enroll(parent: number, fd: number, current: Ticket[], pid: number, token: string): Ticket[] {
+  const own = current.find(t => t.token === token);
+  if (own) { if (own.pid !== pid) throw new Refused("waiter token belongs to another pid"); return current; }
+  const sequence = (current.at(-1)?.sequence ?? 0n) + 1n, digits = String(sequence).padStart(20, "0");
+  if (digits.length !== 20) throw new Refused("queue sequence exhausted");
+  // Stage outside the visible queue, so a killed publisher cannot leave an
+  // incomplete ticket blocking every live waiter. Publication is atomic.
+  if (native.symbols.fchdir(parent)) throw new Refused("cannot enter queue parent descriptor");
+  const template = z(`.sweep-waiter.${pid}.${token}.XXXXXX`), out = native.symbols.mkstemp(template) as number;
+  if (out < 0) throw new Refused("cannot create private waiter record");
+  const temporary = template.toString().split("\0")[0], temporaryId = id(out);
+  try {
+    fs.writeFileSync(out, JSON.stringify({ kind: WAITER, version: 1, pid, hostname: HOST, started: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), token }) + "\n");
+    renameExclusive(parent, temporary, `${digits}.${token}`, fd);
+  } finally {
+    fs.closeSync(out);
+    let leftover = -1;
+    try { leftover = openAt(parent, temporary); if (id(leftover) === temporaryId) unlinkAt(parent, temporary); }
+    catch (e: any) { if (e.errno !== 2) throw e; }
+    finally { if (leftover >= 0) fs.closeSync(leftover); }
+  }
+  return tickets(fd);
+}
+function pruneTickets(fd: number): Ticket[] {
+  // Validate the entire queue before deleting anything; malformed/foreign
+  // entries fail closed. Only a definitive dead PID authorizes stale removal.
+  const all = tickets(fd);
+  for (const ticket of all) if (!alive(ticket.pid)) {
+    removeTicket(fd, ticket);
+    console.error(`selftest-sweep: reaped dead waiter pid=${ticket.pid}`);
+  }
+  return tickets(fd);
+}
+function removeEmptyQueue(parent: number, name: string, fd: number) {
+  if (entries(fd).length !== 1 || entries(fd)[0] !== QUEUE) return;
+  const current = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+  try { if (id(current) !== id(fd)) throw new Refused("queue identity changed"); }
+  finally { fs.closeSync(current); }
+  // Marker was validated by queueFd; recheck its inode/content before unlink.
+  const again = readFile(fd, QUEUE), anchor = queueMarkers.get(fd);
+  if (!anchor || anchor[0] !== again[0] || anchor[1] !== again[1]) throw new Refused("queue marker changed");
+  unlinkAt(fd, QUEUE); unlinkAt(parent, name, true);
+}
+
 function parentFd(lock: string): number {
   // Shell resolves the physical parent once; reject subsequent ancestor links.
   let fd = fs.openSync("/", C.O_RDONLY | C.O_DIRECTORY);
+  descriptorPaths.set(fd, "/");
   try {
     for (const part of path.dirname(lock).split("/").filter(Boolean)) {
       const next = openAt(fd, part, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
@@ -204,30 +439,181 @@ function main(): number {
   const parent = parentFd(lock);
   try {
     if (native.symbols.flock(parent, 2)) throw new Refused(`parent flock failed (errno ${errno()})`);
+    hostNames = hostCache(parent, name);
+    const queueName = `${name}.queue`;
     if (op === "release") {
-      let fd = -1;
-      try { fd = openAt(parent, name); }
-      catch { return 0; } // Missing/unreadable replacement is never ours to remove.
-      try { if (id(fd) !== owned) return 0; } finally { fs.closeSync(fd); }
-      const snapshot = inspect(parent, name);
-      if (snapshot.marker.token !== token || snapshot.marker.pid !== pid) throw new Refused("owned lock marker changed");
-      removeValidated(parent, name, snapshot);
+      if (owned) {
+        let fd = -1;
+        try { fd = openAt(parent, name); } catch {} // Never delete an unreadable replacement.
+        if (fd >= 0) {
+          let ours: boolean;
+          try { ours = id(fd) === owned; } finally { fs.closeSync(fd); }
+          if (ours) {
+            const snapshot = inspect(parent, name);
+            if (snapshot.marker.token !== token || snapshot.marker.pid !== pid) throw new Refused("owned lock marker changed");
+            removeValidated(parent, name, snapshot);
+          }
+        }
+      }
+      const queue = queueFd(parent, queueName, false);
+      if (queue !== null) try {
+        for (const ticket of tickets(queue)) if (ticket.pid === pid && ticket.token === token) removeTicket(queue, ticket);
+        removeEmptyQueue(parent, queueName, queue);
+      } finally { fs.closeSync(queue); }
       return 0;
     }
     let snapshot: Snapshot | null;
     try { snapshot = inspect(parent, name); }
     catch (e: any) { if (e.errno !== 2) throw e; snapshot = null; }
-    if (snapshot) {
-      if (alive(snapshot.marker.pid)) {
-        console.log(`pid=${snapshot.marker.pid} started=${snapshot.marker.started}`);
-        return 75; // Reserved EX_TEMPFAIL: validated lock held; runtime errors are fatal.
+    if (!alive(pid)) throw new Refused("cannot enroll a dead caller pid");
+    const queue = queueFd(parent, queueName, true)!;
+    try {
+      const current = enroll(parent, queue, pruneTickets(queue), pid, token);
+      if (snapshot && !alive(snapshot.marker.pid)) {
+        console.error(`selftest-sweep: removing stale lock ${lock} held by dead pid ${snapshot.marker.pid}`);
+        removeValidated(parent, name, snapshot); snapshot = null;
       }
-      console.error(`selftest-sweep: removing stale lock ${lock} held by dead pid ${snapshot.marker.pid}`);
-      removeValidated(parent, name, snapshot);
-    }
-    publish(parent, name, pid, token);
-    return 0;
-  } finally { fs.closeSync(parent); }
+      if (snapshot?.marker.pid === pid && snapshot.marker.token === token && current[0].token === token) {
+        console.log(snapshot.identity); return 0; // Idempotent admission of this owner.
+      }
+      if (snapshot || current[0].token !== token) {
+        const waiting = current.filter(t => !(snapshot && t.pid === snapshot.marker.pid && t.token === snapshot.marker.token));
+        const position = waiting.findIndex(t => t.token === token) + 1;
+        console.log(`queue_position=${position} holder=${snapshot ? `pid=${snapshot.marker.pid} started=${snapshot.marker.started}` : "none"} head_pid=${current[0].pid}`);
+        return 75; // Validated queue wait; helper/runtime errors remain fatal.
+      }
+      console.log(publish(parent, name, pid, token));
+      return 0;
+    } finally { fs.closeSync(queue); }
+  } catch (e) { diagnose(e, parent, name); throw e; }
+  finally { fs.closeSync(parent); }
 }
-try { process.exitCode = main(); }
-catch (e: any) { console.error(`STOP: ${process.argv[3]} is not a selftest-sweep lock (${e.message})`); process.exitCode = 2; }
+function canonicalLock(input: string): string {
+  const resolved = path.resolve(input);
+  // Resolve the parent only, exactly as the sweep does. Never follow the leaf.
+  return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+}
+function ancestorOwnsLock(lock: string): boolean {
+  primitives();
+  const parent = parentFd(lock);
+  try {
+    if (native.symbols.flock(parent, 2)) throw new Refused(`parent flock failed (errno ${errno()})`);
+    hostNames = hostCache(parent, path.basename(lock));
+    let snapshot: Snapshot;
+    try { snapshot = inspect(parent, path.basename(lock)); }
+    catch (e: any) { if (e.errno === 2) return false; throw e; }
+    // A legacy pid-only claim or an exported environment flag is not proof of
+    // inherited admission. Require the current token-owned lock AND FIFO head.
+    if (!snapshot.marker.token || !alive(snapshot.marker.pid)) return false;
+    let pid = process.ppid;
+    const seen = new Set<number>();
+    while (pid !== snapshot.marker.pid) {
+      if (pid <= 1 || seen.has(pid)) return false;
+      seen.add(pid);
+      // Native ps -o ppid= -p <pid> yields a single whitespace-padded number.
+      const result = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" });
+      if (result.error || result.status !== 0 || !/^\s*\d+\s*$/.test(result.stdout)) throw new Refused(`cannot verify suite ancestry for pid ${pid}`);
+      pid = Number(result.stdout.trim());
+    }
+    const queue = queueFd(parent, `${path.basename(lock)}.queue`, false);
+    if (queue === null) throw new Refused("inherited lock has no FIFO ownership record");
+    try {
+      const first = tickets(queue)[0];
+      if (!first || first.pid !== snapshot.marker.pid || first.token !== snapshot.marker.token) throw new Refused("inherited lock does not match FIFO head");
+      if (JSON.stringify(inspect(parent, path.basename(lock))) !== JSON.stringify(snapshot)) throw new Refused("inherited lock changed during ancestry check");
+      return true;
+    } finally { fs.closeSync(queue); }
+  } catch (e) { diagnose(e, parent, path.basename(lock)); throw e; }
+  finally { fs.closeSync(parent); }
+}
+
+/** Own release outside the suite's traps, but register the gated suite PID.
+ * If this supervisor is killed, the actual live suite still owns admission. */
+async function superviseSuite(lock: string, command: string[]): Promise<number> {
+  if (!command.length) throw new Refused("missing suite command");
+  const token = randomUUID().replace(/-/g, "");
+  const pause = Number(process.env.WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS ?? 1);
+  if (!Number.isFinite(pause) || pause <= 0) throw new Refused("suite lock poll interval must be positive");
+  let owned = "", enrolled = false, interrupted: NodeJS.Signals | null = null, child: ChildProcess | undefined;
+  const forward = (signal: NodeJS.Signals) => {
+    if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
+    // This group was created by this supervisor, not borrowed from the caller.
+    try { process.kill(-child.pid, signal); }
+    catch (e: any) { if (e.code !== "ESRCH") throw e; }
+  };
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"] as const) {
+    const handler = () => { interrupted = signal; forward(signal); };
+    handlers.set(signal, handler); process.on(signal, handler);
+  }
+  let code = 2;
+  // fd3 gates exec, not the suite's stdin. Bash keeps this PID across exec.
+  child = spawn(command[0], ["-c", 'IFS= read -r admission <&3 || exit 2; [ "$admission" = admitted ] || exit 2; exec 3<&-; exec "$@"', "selftest-admission-gate", ...command], { stdio: ["inherit", "inherit", "inherit", "pipe"], detached: true });
+  const gate = child.stdio[3] as import("node:stream").Writable;
+  let closed = false, spawnError: Error | undefined;
+  const done = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
+    child!.once("error", error => { spawnError = error; });
+    child!.once("close", (code, signal) => { closed = true; resolve({ code, signal }); });
+  });
+  gate?.on("error", () => {}); // Child exit/EPIPE is checked via native close.
+  const transition = (op: string) => spawnSync("bun", [import.meta.path, op, lock, String(child!.pid), token, owned], { encoding: "utf8", detached: true });
+  try {
+    if (!child.pid || !gate) throw new Refused("cannot start gated suite process");
+    let previous = "";
+    while (!interrupted) {
+      if (closed || spawnError) throw new Refused(`gated suite exited before admission: ${spawnError ?? "native close"}`);
+      const result = transition("acquire");
+      if (result.stderr) process.stderr.write(result.stderr);
+      if (result.status === 0 || result.status === 75) {
+        enrolled = true;
+        if (result.status === 0) {
+          owned = result.stdout.trim();
+          if (!/^\d+:\d+$/.test(owned)) throw new Refused("missing suite lock identity");
+        }
+      }
+      // Deliver pending signals after the synchronous descriptor transition.
+      await Bun.sleep(0);
+      if (interrupted) break;
+      if (result.error || ![0, 75].includes(result.status!)) throw new Refused(`suite lock admission failed: ${result.error ?? `exit ${result.status} signal ${result.signal}`}`);
+      if (owned) break;
+      if (result.stdout !== previous) {
+        console.error(`selftest-suite: waiting for host-wide lock ${lock} ${result.stdout.trim()}`);
+        previous = result.stdout;
+      }
+      await Bun.sleep(pause * 1000);
+    }
+    if (!interrupted) {
+      gate.end("admitted\n");
+      const result = await done;
+      if (spawnError) throw spawnError;
+      code = result.code ?? (result.signal ? 128 + os.constants.signals[result.signal] : 2);
+    }
+  } finally {
+    gate?.destroy();
+    if (!closed) { forward(interrupted ?? "SIGTERM"); await done; }
+    // Never release before the real suite/gate has closed, including custom
+    // signal cleanup. SIGKILL of this supervisor leaves the live suite's PID
+    // protecting the lock; the existing dead-owner protocol recovers it later.
+    if (enrolled) {
+      const result = transition("release");
+      if (result.stderr) process.stderr.write(result.stderr);
+      if (result.error || result.status !== 0) {
+        diagnoseLock(new Refused(`suite lock release failed: ${result.error ?? `exit ${result.status} signal ${result.signal}`}`), lock);
+        console.error("STOP: suite lock release failed"); code = 2; interrupted = null;
+      }
+    }
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+  }
+  return interrupted ? 128 + os.constants.signals[interrupted] : code;
+}
+try {
+  const [operation, lock, ...command] = process.argv.slice(2);
+  hostId = stableHostId();
+  if (operation === "inherited") process.exitCode = ancestorOwnsLock(canonicalLock(lock)) ? 0 : 75;
+  else if (operation === "supervise") process.exitCode = await superviseSuite(canonicalLock(lock), command);
+  else process.exitCode = main();
+}
+catch (e: any) {
+  if (!diagnosed) diagnoseLock(e, process.argv[3]);
+  console.error(`STOP: ${process.argv[3]} is not a selftest-sweep lock (${e.message})`); process.exitCode = 2;
+}

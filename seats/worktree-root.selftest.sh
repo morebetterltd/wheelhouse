@@ -26,6 +26,7 @@ command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2
 command -v node >/dev/null 2>&1 || { echo "selftest: node is required" >&2; exit 2; }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-worktree-root-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"

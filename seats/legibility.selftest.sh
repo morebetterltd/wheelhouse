@@ -95,6 +95,7 @@ sweep_stale_fixtures() {
 sweep_stale_fixtures
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
@@ -293,13 +294,13 @@ render() { local f="${1:-$PROJ/seats/floor.ts}"; shift 2>/dev/null
            RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS="${COLS:-160}" LINES=70 NO_COLOR=1 bun "$f" --once "$@" 2>&1)" || RC=$?; }
 says()   { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seatline(){ printf '%s\n' "$OUT" | grep "$1"; }   # every frame line naming the seat
-state_get(){ env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"; }
+state_get(){ env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"; }
 
 # Hand-inject a seat record: the deterministic-simulation door for classes
 # that have no adapter path (a 401 in the stream; a verdict file waiting).
 inject_seat() {   # $1 = name, $2 = pid, $3 = lastBead ('' for none)
   env HOME="$HOME_FIX" INJ_STATE="$STATE" INJ_NAME="$1" INJ_PID="$2" INJ_BEAD="${3:-}" INJ_PROJ="$PROJ" bun -e '
-    const fs = require("fs");
+    import fs from "node:fs";
     const f = process.env.INJ_STATE;
     const s = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { seats: {} };
     const n = process.env.INJ_NAME, p = process.env.INJ_PROJ;
@@ -339,7 +340,7 @@ if seatline q-seat | grep >/dev/null "AMBER"; then pass "floor: quota cue is AMB
 else fail "floor: quota cue is not AMBER: $(seatline q-seat)"; fi
 cp "$PROJ/seats/seats.json" "$FIX/seats.before-roster-drop.json"
 env HOME="$HOME_FIX" ROSTER="$PROJ/seats/seats.json" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.env.ROSTER;
   const roster = JSON.parse(fs.readFileSync(f, "utf8"));
   delete roster.seats["q-seat"];

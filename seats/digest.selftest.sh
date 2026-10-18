@@ -6,6 +6,7 @@ command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "selftest: git required" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-digest-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
 trap cleanup EXIT INT TERM
@@ -147,14 +148,14 @@ DESK_JSON="$(WHEELHOUSE_NEEDS_ROOT="$PROJ" bun "$PROJ/seats/needs.ts" show "$DES
 if [ $DESK_RC -eq 0 ] && printf '%s' "$DESK_JSON" | grep >/dev/null 'Full page: http://127.0.0.1:65530/digest'; then pass "--notify appends Full page digest URL when desk.port exists"; else fail "notify desk URL missing rc=$DESK_RC id=$DESK_ID body=$DESK_JSON err=$(cat "$FIX/notify-desk.err")"; fi
 # Canary: if human rendering leaks ids, needs.ts refuses the notify and digest.last is not written.
 cp "$PROJ/seats/digest.ts" "$FIX/digest.good.ts"
-python3 - "$PROJ/seats/digest.ts" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1]); s=p.read_text()
-old='function humanText(s:string, ns:string){ return scrubLocalPaths(scrubAccountLabels(String(s||""))).replace(new RegExp(`\\\\b${escapeRegExp(ns)}-[a-z0-9_.-]+\\\\b`,"ig"),"work item").replace(/\\bbead\\b/ig,"task"); }'
-if old not in s: raise SystemExit(1)
-p.write_text(s.replace(old, 'function humanText(s:string, ns:string){ return String(s||""); }'))
-PY
+bun - "$PROJ/seats/digest.ts" <<'TS'
+import fs from "node:fs";
+import assert from "node:assert/strict";
+const file = process.argv[2], source = fs.readFileSync(file, "utf8");
+const old = 'function humanText(s:string, ns:string){ return scrubLocalPaths(scrubAccountLabels(String(s||""))).replace(new RegExp(`\\\\b${escapeRegExp(ns)}-[a-z0-9_.-]+\\\\b`,"ig"),"work item").replace(/\\bbead\\b/ig,"task"); }';
+assert.equal(source.split(old).length, 2, "humanText canary anchor must occur exactly once");
+fs.writeFileSync(file, source.replace(old, 'function humanText(s:string, ns:string){ return String(s||""); }'));
+TS
 rm -f "$PROJ/seats/run/digest.last"
 CAN_RC=0; CAN_OUT="$(run_digest --notify --since "$SINCE" --until 2026-01-06T00:00:00Z 2>"$FIX/notify-canary.err")" || CAN_RC=$?
 mv "$FIX/digest.good.ts" "$PROJ/seats/digest.ts"
