@@ -43,6 +43,28 @@ else
   fail 'fixture-owned bd metrics config does not disable detached telemetry flushers'
 fi
 
+phase 'D6/D7 automatic cleanup identity (fresh allocations only)'
+IDENTITY_SOURCE="$FIX/identity-source"
+mkdir -p "$IDENTITY_SOURCE"
+selftest_copy_seat_runtime "$IDENTITY_SOURCE" "$HERE" || exit 2
+if bun "$HERE/fixtures/prune-cleanup-identity.ts" "$FIX/identity-cases" "$IDENTITY_SOURCE" "$PRUNE" "${WHEELHOUSE_PRUNE_CLEANUP_IDENTITY_MODE:-fixed}"; then
+  pass 'automatic cleanup identity regressions'
+else
+  fail 'automatic cleanup identity regressions'
+fi
+if [ "${WHEELHOUSE_PRUNE_CLEANUP_IDENTITY_ONLY:-}" = 1 ]; then
+  [ "$FAILED" -eq 0 ] || exit 1
+  echo 'prune cleanup identity subset: PASS'
+  exit 0
+fi
+
+phase 'closed-task scratch inside seat worktrees (fresh allocations only)'
+if bun "$HERE/fixtures/prune-seat-scratch.ts" "$FIX/seat-scratch-cases" "$IDENTITY_SOURCE" "$PRUNE"; then
+  pass 'nested seat scratch cleanup regressions'
+else
+  fail 'nested seat scratch cleanup regressions'
+fi
+
 phase 'reviewed-row deletion safety (fresh allocations only)'
 REVIEWED="$FIX/reviewed"
 mkdir -p "$REVIEWED"
@@ -669,18 +691,23 @@ ext_scan(){ ( cd "$EXT" && bun seats/prune.ts scan --format jsonl > "$FIX/ext-sc
 ext_row(){ grep -F "\"path\":\"$1\"" "$FIX/ext-scan.jsonl"; }
 ext_registered(){ git -C "$EPROD" worktree list --porcelain | grep -xF >/dev/null "worktree $1"; }
 ext_cleanup(){ ( cd "$EXT" && bun seats/prune.ts cleanup "$@" 2>&1 ); }
+ext_record_run(){
+  ( cd "$EXT" && bun -e 'import {recordCleanupScratch} from "./seats/cleanup-identity.ts"; recordCleanupScratch(process.argv[1],process.argv[2],process.argv[3]);' "$EXT" "$1" "$2" ) || exit 2
+}
 
 phase 'install policy cleanup=off/report is honored by direct prune cleanup'
 mkdir -p "$EXT/wheelhouse"
 OFF_ID=$(ext_bead 'cleanup off direct')
 mkdir -p "$ERUNS/$OFF_ID-run"
 printf 'keep\n' > "$ERUNS/$OFF_ID-run/file.txt"
+ext_record_run "$ERUNS/$OFF_ID-run" "$OFF_ID"
 printf 'cleanup=off\n' > "$EXT/wheelhouse/.template-source"
 OUT=$(ext_cleanup --bead "$OFF_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -e "$ERUNS/$OFF_ID-run/file.txt" ] && printf '%s\n' "$OUT" | grep >/dev/null 'cleanup skipped cleanup=off in wheelhouse/.template-source' && ! printf '%s\n' "$OUT" | grep >/dev/null 'removed run-scratch' && pass 'cleanup=off direct cleanup exits without deleting closed-bead scratch' || fail "cleanup=off direct rc=$RC out=$OUT exists=$([ -e "$ERUNS/$OFF_ID-run/file.txt" ] && echo yes || echo no)"
 REPORT_ID=$(ext_bead 'cleanup report direct')
 mkdir -p "$ERUNS/$REPORT_ID-run"
 printf 'report\n' > "$ERUNS/$REPORT_ID-run/file.txt"
+ext_record_run "$ERUNS/$REPORT_ID-run" "$REPORT_ID"
 printf 'cleanup=report\n' > "$EXT/wheelhouse/.template-source"
 OUT=$(ext_cleanup --bead "$REPORT_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -e "$ERUNS/$REPORT_ID-run/file.txt" ] && printf '%s\n' "$OUT" | grep >/dev/null "dry-run would remove run-scratch $ERUNS/$REPORT_ID-run " && grep -q "dry-run would remove run-scratch $ERUNS/$REPORT_ID-run " "$ELOG" && pass 'cleanup=report direct cleanup writes a would-remove report and deletes nothing' || fail "cleanup=report direct rc=$RC out=$OUT log=$(grep -F "$REPORT_ID" "$ELOG" 2>/dev/null) exists=$([ -e "$ERUNS/$REPORT_ID-run/file.txt" ] && echo yes || echo no)"
@@ -721,6 +748,7 @@ OUT=$(ext_cleanup --bead "$ZERO_ID"); RC=$?
 
 phase 'ISC-45/56 run folder kept while a live process has its cwd inside'
 RUN_ID=$(ext_bead 'closed bead with occupied run folder'); mkdir -p "$ERUNS/$RUN_ID-x"; printf 'scratch\n' > "$ERUNS/$RUN_ID-x/file.txt"
+ext_record_run "$ERUNS/$RUN_ID-x" "$RUN_ID"
 ( cd "$ERUNS/$RUN_ID-x" && exec sleep 1000 ) >/dev/null 2>&1 & RUN_PID=$!; EXT_PIDS+=("$RUN_PID")
 OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -d "$ERUNS/$RUN_ID-x" ] \
@@ -735,12 +763,14 @@ OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
 RO_ID=$(ext_bead 'closed bead with read-only scratch'); mkdir -p "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources/allowed-sibling"
 printf 'readonly\n' > "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources/allowed-sibling/file.txt"
 chmod -R a-w "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources"
+ext_record_run "$ERUNS/$RO_ID-run" "$RO_ID"
 OUT=$(ext_cleanup --bead "$RO_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ ! -e "$ERUNS/$RO_ID-run" ] && printf '%s\n' "$OUT" | grep >/dev/null "removed run-scratch $ERUNS/$RO_ID-run " && pass 'cleanup removes closed-bead scratch containing a read-only source snapshot subtree' || { chmod -R u+w "$ERUNS/$RO_ID-run" 2>/dev/null || true; fail "read-only scratch cleanup rc=$RC: $OUT"; }
 
 phase 'ISC-46/138 concurrent cleanups, lock refusal, and a race with another remover'
 CA_ID=$(ext_bead 'concurrent close A'); CB_ID=$(ext_bead 'concurrent close B')
 mkdir -p "$ERUNS/$CA_ID-run" "$ERUNS/$CB_ID-run"; printf 'a\n' > "$ERUNS/$CA_ID-run/f"; printf 'b\n' > "$ERUNS/$CB_ID-run/f"
+ext_record_run "$ERUNS/$CA_ID-run" "$CA_ID"; ext_record_run "$ERUNS/$CB_ID-run" "$CB_ID"
 ext_cleanup --bead "$CA_ID" --wait 30 > "$FIX/ext-ca.out" & CA_PID=$!
 ext_cleanup --bead "$CB_ID" --wait 30 > "$FIX/ext-cb.out" & CB_PID=$!
 wait "$CA_PID"; CA_RC=$?; wait "$CB_PID"; CB_RC=$?
@@ -752,6 +782,7 @@ T0=$(date +%s); OUT=$(ext_cleanup); RC=$?; T1=$(date +%s)
 [ "$RC" -eq 0 ] && [ "$OUT" = "already running" ] && [ $((T1-T0)) -le 3 ] && pass 'a cleanup while another holds the lock prints only "already running", exits 0, within ~1 s' || fail "lock refusal rc=$RC after $((T1-T0))s: $OUT"
 rm -rf "$EXT/seats/run/cleanup.lock"
 RACE_ID=$(ext_bead 'removed by another actor between scan and act'); mkdir -p "$ERUNS/$RACE_ID-run"; printf 'r\n' > "$ERUNS/$RACE_ID-run/f"
+ext_record_run "$ERUNS/$RACE_ID-run" "$RACE_ID"
 OUT=$(ext_cleanup --dry-run --bead "$RACE_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -d "$ERUNS/$RACE_ID-run" ] && printf '%s\n' "$OUT" | grep >/dev/null "dry-run would remove run-scratch $ERUNS/$RACE_ID-run " && pass 'dry-run lists the run folder and leaves it in place' || fail "race dry-run rc=$RC: $OUT"
 # The scan's lsof pass is call 1; the per-row re-verification right before acting is call 2. Removing the
@@ -806,6 +837,7 @@ OUT=$(ext_cleanup --bead "$SEAT_ID"; ext_cleanup --bead "$ISA_ID"); RC=$?
 phase 'ISC-61 lsof unavailable removes nothing'
 LSOF_ID=$(ext_bead 'removable but unverifiable'); ext_wt "$LSOF_ID"; ext_merge "$LSOF_ID"
 mkdir -p "$ERUNS/$LSOF_ID-run"; printf 'x\n' > "$ERUNS/$LSOF_ID-run/f"
+ext_record_run "$ERUNS/$LSOF_ID-run" "$LSOF_ID"
 OUT=$(WHEELHOUSE_LSOF=/nonexistent/lsof ext_cleanup); RC=$?
 [ "$RC" -eq 0 ] && printf '%s\n' "$OUT" | grep >/dev/null "kept needs-review $EWTS/$LSOF_ID reason=cannot verify: lsof unavailable" && printf '%s\n' "$OUT" | grep >/dev/null "kept needs-review $ERUNS/$LSOF_ID-run reason=cannot verify: lsof unavailable" && pass 'otherwise-removable worktree and run folder are kept with "cannot verify: lsof unavailable"' || fail "no-lsof rc=$RC: $OUT"
 ! printf '%s\n' "$OUT" | grep >/dev/null '^[^ ]* removed ' && printf '%s\n' "$OUT" | tail -1 | grep >/dev/null 'cleanup done removed=0 ' && [ -d "$EWTS/$LSOF_ID" ] && [ -d "$ERUNS/$LSOF_ID-run" ] && pass 'nothing removed without lsof; exit 0' || fail "no-lsof removed something: $OUT"

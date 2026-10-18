@@ -1976,7 +1976,8 @@ build_proj "$REPORT_PROJ" cleanupreport
 cp "$ADAPTER_DIR/prune.ts" "$REPORT_PROJ/seats/prune.ts"
 mkdir -p "$REPORT_PROJ/wheelhouse" "$REPORT_PROJ/.beads" "$REPORT_PROJ/fakebin" "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch"
 printf 'cleanup=report\n' > "$REPORT_PROJ/wheelhouse/.template-source"
-printf 'scratch\n' > "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt"
+# Historical unmarked scratch remains a negative case, never hand-marked.
+printf 'legacy scratch\n' > "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt"
 cat > "$REPORT_PROJ/fakebin/bd" <<'EOF'
 #!/usr/bin/env bash
 if [ "$1" = "list" ] && printf '%s\n' "$@" | grep >/dev/null -- '--status=closed'; then
@@ -1989,10 +1990,19 @@ chmod +x "$REPORT_PROJ/fakebin/bd"
 RUN_PROJ="$REPORT_PROJ"; STATE="$REPORT_PROJ/seats/state.json"; LOG="$REPORT_PROJ/seats/logs/worker-1.jsonl"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$REPORT_PROJ/fakebin:$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" spawn worker-1 bead-report 2>&1)" || RC=$?
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$REPORT_PROJ/fakebin:$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-report "first cleanup report" 2>&1)" || RC=$?
+# The production dispatch creates/records the canonical task root. No test API
+# call supplies its marker; the old unmarked sibling must still be refused.
+if [ $RC -eq 0 ] && [ -f "$REPORT_PROJ/.wheelhouse-runs/bead-report/.wheelhouse-cleanup-scratch.json" ]; then
+  pass "cleanup=report: dispatch creates the marked canonical task scratch"
+else fail "cleanup=report dispatch did not create marked task scratch (rc=$RC out=$OUT)"; fi
+printf 'scratch\n' > "$REPORT_PROJ/.wheelhouse-runs/bead-report/file.txt"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$REPORT_PROJ/fakebin:$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_SYNC=1 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-after-report "cleanup report" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && [ -e "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt" ] && grep -q 'dry-run would remove run-scratch' "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null && grep -q 'dry-run cleanup done' "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null; then
+if [ $RC -eq 0 ] && [ -e "$REPORT_PROJ/.wheelhouse-runs/bead-report/file.txt" ] && grep -F "dry-run would remove run-scratch $REPORT_PROJ/.wheelhouse-runs/bead-report bytes=" "$REPORT_PROJ/seats/logs/cleanup.log" >/dev/null 2>&1 && grep -q 'dry-run cleanup done' "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null; then
   pass "cleanup=report: cross-bead cleanup writes a would-remove report and deletes nothing"
 else fail "cleanup=report did not dry-run to log or preserved scratch wrong (rc=$RC out=$OUT log=$(cat "$REPORT_PROJ/seats/logs/cleanup.log" 2>/dev/null))"; fi
+if [ -e "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/file.txt" ] && [ ! -e "$REPORT_PROJ/.wheelhouse-runs/bead-report-scratch/.wheelhouse-cleanup-scratch.json" ] && grep -F "dry-run kept run-scratch $REPORT_PROJ/.wheelhouse-runs/bead-report-scratch reason=unproven scratch ownership" "$REPORT_PROJ/seats/logs/cleanup.log" >/dev/null 2>&1; then
+  pass "cleanup=report: old unmarked scratch stays refused, not adopted"
+else fail "cleanup=report adopted or failed to refuse old unmarked scratch"; fi
 run stop worker-1 >/dev/null 2>&1
 OFF_PROJ="$FIX/cleanup-off-proj"
 build_proj "$OFF_PROJ" cleanupoff
@@ -2274,19 +2284,30 @@ if [ -n "$CLEANUP_PID" ] && wait_for_from "$CLEANUP_LOG" "$CLEANUP_MARK" 'cleanu
 else fail "cleanup trigger: detached cleanup did not finish: $(tail -n 3 "$CLEANUP_LOG" 2>/dev/null) out=$(cat "$WT_PROJ/seats/logs/cleanup.out.log" 2>/dev/null)"; fi
 
 # ISC-66: a cleanup lock held by someone else never blocks a dispatch.
-start_holder cleanup-owner "$WT_PROJ" fixture-cleanup-owner
+# Use a fresh install: `cleanup done` precedes the previous producer's lock
+# release, and older detached cleanups may still be queued in WT_PROJ. Never
+# overwrite their token-owned lock's pid to manufacture a legacy holder.
+run stop worker-1 >/dev/null 2>&1
+LOCK_PROJ="$FIX/cleanup-lock-proj"
+build_proj "$LOCK_PROJ" cleanuplock
+RUN_PROJ="$LOCK_PROJ"; STATE="$LOCK_PROJ/seats/state.json"; LOG="$LOCK_PROJ/seats/logs/worker-1.jsonl"
+run spawn worker-1 bead-c2
+LOCK_WT="$(seat_wt "$LOCK_PROJ")"
+CLEANUP_LOG="$LOCK_PROJ/seats/logs/cleanup.log"
+: > "$CLEANUP_LOG"
+start_holder cleanup-owner "$LOCK_PROJ" fixture-cleanup-owner
 CLEANUP_OWNER="$HOLDER_PID"
-mkdir -p "$WT_PROJ/seats/run/cleanup.lock"
-printf '%s\n' "$CLEANUP_OWNER" > "$WT_PROJ/seats/run/cleanup.lock/pid"
+mkdir -p "$LOCK_PROJ/seats/run/cleanup.lock"
+printf '%s\n' "$CLEANUP_OWNER" > "$LOCK_PROJ/seats/run/cleanup.lock/pid"
 # Zero is a nonblocking lock probe, not an elapsed failure budget.
-LOCK_PROBE="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 bun "$WT_PROJ/seats/prune.ts" cleanup --wait 0 --root "$WT_PROJ" 2>&1)"; LOCK_PROBE_RC=$?
+LOCK_PROBE="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 bun "$LOCK_PROJ/seats/prune.ts" cleanup --wait 0 --root "$LOCK_PROJ" 2>&1)"; LOCK_PROBE_RC=$?
 if [ $LOCK_PROBE_RC -eq 0 ] && printf '%s\n' "$LOCK_PROBE" | grep -q 'already running'; then pass 'cleanup lock: nonblocking probe observes the live owner'
 else fail "cleanup lock probe failed: $LOCK_PROBE"; fi
 CLEANUP_MARK=$(wc -c < "$CLEANUP_LOG" | tr -d ' ')
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP_WAIT_S=Infinity bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-i1 "dispatched during a cleanup" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && [ "$(wt_branch "$WT")" = "fleet/bead-i1" ] && wait_for "$LOG" 'echo: Bead bead-i1'; then
+if [ $RC -eq 0 ] && [ "$(wt_branch "$LOCK_WT")" = "fleet/bead-i1" ] && wait_for "$LOG" 'echo: Bead bead-i1'; then
   pass "dispatch during a cleanup: exits 0 and the prompt round-trips while seats/run/cleanup.lock is held (ISC-66)"
-else fail "dispatch during a cleanup failed (exit $RC branch=$(wt_branch "$WT")): $OUT"; fi
+else fail "dispatch during a cleanup failed (exit $RC branch=$(wt_branch "$LOCK_WT")): $OUT"; fi
 CLEANUP_PID="$(env TEXT="$OUT" bun -e 'const m=process.env.TEXT.match(/cleanup started for bead bead-c2 \(pid (\d+)\)/);if(m)console.log(m[1]);')"
 kill "$CLEANUP_OWNER" 2>/dev/null || true; wait "$CLEANUP_OWNER" 2>/dev/null || true
 if [ -n "$CLEANUP_PID" ] && wait_for_from "$CLEANUP_LOG" "$CLEANUP_MARK" 'cleanup done' "$CLEANUP_PID"; then pass 'cleanup resumes after its observed owner exits'

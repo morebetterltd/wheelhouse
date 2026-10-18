@@ -71,6 +71,7 @@ import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment
 import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
+import { prepareTaskScratch } from "./cleanup-identity";
 
 interface SeatDriver {
   readonly name: string;
@@ -1472,6 +1473,10 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
   }
 
+  // Prepare scratch before launching or prompting the worker. A legacy run
+  // without a creation record remains unowned: dispatch never adopts it.
+  const scratch = prepareTaskScratch(ROOT, beadId);
+  if (!scratch.owned) console.log(`scratch ${scratch.target} is unmarked; kept unowned, automatic cleanup will refuse it (legacy scratch needs human review)`);
   // Snapshot BEFORE preparing: preparing may recreate a pruned seat worktree
   // at the very path the seat last recorded, and that must still count as a
   // cwd change (fresh session, relaunch), never as "same place as before".
