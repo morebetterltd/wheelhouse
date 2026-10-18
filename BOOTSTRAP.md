@@ -128,6 +128,8 @@ mkdir -p wheelhouse
 cat wheelhouse/.template-source
 ```
 
+`product-repo=` defaults to the install root for a single-repository install. If the install is a container beside a separate product repository, set this field to that product's Git root before step 5 (an absolute path, or a path relative to the install root). The product need not contain `seats/`. The pre-push installer uses this record to protect both repositories.
+
 `namespace=` is written empty here and filled at the end of step 3's interview, because its value comes from an answer that has not been given yet. It is this project's seat namespace: the value `seats/seat-env.sh` is invoked with, and the one that names this project's seat root (`$HOME/.pi-seats-<namespace>`), which is what keeps two fleets' seat directories apart on one machine. It lives in this file rather than in a file of its own because `.template-source` is already per-install and already read by other steps.
 
 The `github-issue-*` lines are install-owned alerts configuration. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login). `seats/alerts.ts` writes the result into `seats/run/fleet-snapshot.json`; the optional fleet-gate reader only displays active alert names from that snapshot.
@@ -417,13 +419,15 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
   ```bash
   bd setup claude
   bd setup codex -o wheelhouse/AGENTS.md
-  seats/install-fleet-pre-push-guard.sh
+  seats/install-fleet-pre-push-guard.sh || { echo "STOP: fleet pre-push guard installation failed" >&2; exit 1; }
   test -f .claude/settings.json || echo "FAIL bd setup claude did not write .claude/settings.json"
   test -f CLAUDE.md || echo "FAIL bd setup claude did not create CLAUDE.md"
   test -f wheelhouse/AGENTS.md || echo "FAIL bd setup codex did not write wheelhouse/AGENTS.md"
   test -x "$(git config --get core.hooksPath)/pre-push" || echo "FAIL fleet pre-push guard is not installed in core.hooksPath"
   echo "fleet pre-push guard installed at $(git config --get core.hooksPath)/pre-push"
   ```
+
+  The single pre-push installer call protects the container and the distinct `product-repo=` recorded in `wheelhouse/.template-source`, respecting each repository's own `core.hooksPath` (including a shared `.beads/hooks`). It prints each installed hook and the existing guard script it invokes from the install's `seats/`; a product with no `seats/` is supported. Existing pre-push hooks are preserved and receive the same arguments and stdin after the fleet guard allows a push. Check that both repositories appear when they are distinct; a missing/invalid product path is a stop, not a successful container-only install. This is a bypassable tripwire, not separate write credentials.
 
   `bd setup claude` is the explicit replacement for the SessionStart hook that `bd init --skip-agents` deliberately skipped. It may create or update `CLAUDE.md`; the next steps write the commander content into that same file, keeping bd's managed block. Do not run a setup command that writes root `AGENTS.md`, and do not let `bd init` claim `.agents/` wholesale.
 
