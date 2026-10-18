@@ -275,14 +275,14 @@ else fail "namespace seat roots missing or not disjoint"; fi
 if grep -q "\"$PROJA\": true" "$SEAT_A/trust.json" 2>/dev/null; then
   pass "A's trust.json grants A's project root"
 else fail "A's trust.json does not grant $PROJA"; fi
-if ! grep -qF "$PROJB" "$SEAT_A/trust.json" 2>/dev/null; then
+if selftest_capture_lacks "$SEAT_A/trust.json" -qF -- "$PROJB"; then
   pass "A's trust.json contains no grant for B's root (B's path absent)"
 else fail "B's path appears in A's trust.json"; fi
-if ! grep -qF "$PROJA" "$SEAT_B/trust.json" 2>/dev/null; then
+if selftest_capture_lacks "$SEAT_B/trust.json" -qF -- "$PROJA"; then
   pass "B's trust.json contains no grant for A's root (symmetric)"
 else fail "A's path appears in B's trust.json"; fi
 
-if ! grep -qF "$PROJB" "$PROJA/seats/seats.json" && ! grep -q "nsB" "$PROJA/seats/seats.json"; then
+if selftest_capture_lacks "$PROJA/seats/seats.json" -qF -- "$PROJB" && selftest_capture_lacks "$PROJA/seats/seats.json" -q -- "nsB"; then
   pass "A's seats.json references no B path and no B namespace"
 else fail "a B path or namespace appears in A's roster"; fi
 
@@ -364,7 +364,7 @@ done
 [ $WS_OK -eq 1 ] && pass "write surfaces (state.json, run/, logs/) exist under A and only A (verdicts/: not exercised — verify.ts does not run here, and none appeared)"
 [ -e "$PROJB/seats/verdicts" ] && fail "verdicts/ appeared under B" || true
 
-if ! grep -qF "$PROJB" "$STATE_A" && ! grep -q "nsB" "$STATE_A"; then
+if selftest_capture_lacks "$STATE_A" -qF -- "$PROJB" && selftest_capture_lacks "$STATE_A" -q -- "nsB"; then
   pass "A's state.json references no B path and no B namespace"
 else fail "a B path or namespace appears in A's state.json"; fi
 
@@ -397,7 +397,7 @@ else fail "no bd call reached the fake bd — the graph leg measured nothing"; f
 if [ -s "$BD_LOG" ] && ! grep -v "graph=$PROJA/.beads" "$BD_LOG" | grep >/dev/null .; then
   pass "every logged bd call resolved to A's graph dir"
 else fail "a bd call resolved outside A's graph: $(grep -v "graph=$PROJA/.beads" "$BD_LOG" | sed -n '1,2p')"; fi
-if ! grep -qF "$PROJB" "$BD_LOG"; then
+if selftest_capture_lacks "$BD_LOG" -qF -- "$PROJB"; then
   pass "zero B-scoped bd calls (B's path appears in no call, cwd, or resolved graph)"
 else fail "a bd call carried B's path: $(grep -F "$PROJB" "$BD_LOG" | sed -n '1,2p')"; fi
 b_pristine "after the graph leg"

@@ -9,6 +9,7 @@ trap cleanup EXIT INT TERM
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 SCRIPT="${1:-$HERE/template-drift.sh}"
+bun "$HERE/fixtures/scratch-ownership.ts" drift "$HERE/.." "$FIX" && pass 'old pid scratch remains unrelated and intact' || fail 'scratch ownership collision'
 bun "$HERE/fixtures/template-drift-json.ts" "$SCRIPT" "$FIX/json-parity" "$HERE/fixtures/template-drift-json-reference.json" || fail 'original JSON output parity without Python'
 TEMPLATE="$FIX/template"; INSTALL="$FIX/install"
 mkdir -p "$TEMPLATE/seats/transports" "$TEMPLATE/runbooks" "$TEMPLATE/wheelhouse/crew" "$INSTALL/wheelhouse"

@@ -275,6 +275,21 @@ selftest_copy_seat_runtime() {
   [ ! -d "$src_seats/transports" ] || { selftest_recheck_fixture_path "$dest_seats/transports" || return 2; rm -rf "$dest_seats/transports"; cp -R "$src_seats/transports" "$dest_seats/transports"; }
 }
 
+# An absence assertion needs evidence to inspect, not grep's error-as-no-match.
+# Usage: selftest_capture_lacks "$capture" -q [grep options] -- "$pattern"
+selftest_capture_lacks() {
+  local capture="${1:-}" rc
+  shift || return 2
+  if [ ! -f "$capture" ] || [ ! -r "$capture" ] || [ ! -s "$capture" ]; then
+    printf 'selftest: missing, empty, or unreadable capture: %s\n' "$capture" >&2
+    return 1
+  fi
+  if grep "$@" "$capture"; then return 1; else rc=$?; fi
+  [ "$rc" -eq 1 ] && return 0
+  printf 'selftest: grep exited %s checking capture: %s\n' "$rc" "$capture" >&2
+  return 1
+}
+
 selftest_shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\''/g")"; }
 
 selftest_scratch_graph() {
@@ -342,7 +357,7 @@ selftest_fixture_processes() {
       lsof_bin="$(command -v lsof 2>/dev/null || true)"
       [ -n "$lsof_bin" ] || lsof_bin="/usr/sbin/lsof"
       if [ -x "$lsof_bin" ]; then
-        lsof_out="${TMPDIR:-/tmp}/wheelhouse-selftest-lsof.$$.out"
+        lsof_out="$(mktemp "${TMPDIR:-/tmp}/wheelhouse-selftest-lsof.XXXXXX")" || { echo 'STOP: cannot allocate selftest lsof capture' >&2; exit 2; }
         "$lsof_bin" -d cwd -Fpcn > "$lsof_out" 2>/dev/null || true
         awk -v root="$root" '
           function flush(){ if(pid && cwd && (cwd == root || index(cwd, root "/") == 1)) print pid " " cmd " [cwd " cwd "]" }
