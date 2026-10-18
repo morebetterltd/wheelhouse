@@ -68,31 +68,9 @@ selftest_install_cleanup_traps cleanup
 # fd-based identity rule recover.ts and adapter.selftest.sh use: a pid number
 # alone proves nothing after reuse.
 FIX_PREFIX="wheelhouse-reset-selftest"
-sweep_stale_fixtures() {
-  local base="${TMPDIR:-/tmp}" d stamp phys sf pid
-  while IFS= read -r d; do
-    [ -d "$d" ] || continue
-    stamp="${d##*/}"; stamp="${stamp#"$FIX_PREFIX".}"; stamp="${stamp%%.*}"
-    case "$stamp" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$stamp" 2>/dev/null && continue   # owner still running — not stale
-    phys="$(cd "$d" 2>/dev/null && pwd -P)" || phys="$d"
-    while IFS= read -r sf; do
-      [ -f "$sf" ] || continue
-      for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
-          kill "$pid" 2>/dev/null
-          echo "swept: killed leaked seat pid $pid (held open files under $d)"
-        fi
-      done
-    done < <(find "$d" -mindepth 3 -maxdepth 3 -path "*/seats/state.json" 2>/dev/null)
-    rm -rf "$d"
-    echo "swept: removed stale fixture $d"
-  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -name "$FIX_PREFIX.*" 2>/dev/null)
-  return 0
-}
-sweep_stale_fixtures
+selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 
-FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
@@ -309,15 +287,11 @@ run stop worker-1 >/dev/null 2>&1
 phase "4. canary — can the mid-turn check detect a reset with the refusal removed?"
 CAN="$FIX/can-a"
 build_proj "$CAN" can-a
-env ADAPTER="$ADAPTER" CAN_ADAPTER="$CAN/seats/adapter.ts" python3 - <<'PY'
-import os
-from pathlib import Path
-src = Path(os.environ["ADAPTER"]).read_text()
-old = "    if (st.data?.isStreaming) {\n"
-if old not in src:
-    raise SystemExit("canary: could not find exact isStreaming refusal line")
-Path(os.environ["CAN_ADAPTER"]).write_text(src.replace(old, "    if (false && st.data?.isStreaming) {\n", 1))
-PY
+env ADAPTER="$ADAPTER" CAN_ADAPTER="$CAN/seats/adapter.ts" bun - <<'JS'
+const fs=(await import('node:fs')).default,src=fs.readFileSync(process.env.ADAPTER,'utf8'),old='    if (st.data?.isStreaming) {\n      die(\n';
+if(src.split(old).length!==2) throw new Error('canary: expected exactly one reset isStreaming refusal');
+fs.writeFileSync(process.env.CAN_ADAPTER,src.replace(old,'    if (false && st.data?.isStreaming) {\n      die(\n'));
+JS
 if cmp -s "$ADAPTER" "$CAN/seats/adapter.ts"; then
   fail "canary: could not cut the isStreaming refusal — the line no longer matches, so the canary proves nothing"
 else

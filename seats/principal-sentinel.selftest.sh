@@ -22,26 +22,21 @@ printf 'namespace=sentinel\n' > "$FIX/proj/wheelhouse/.template-source"
 
 write_transcript(){
   file="$1"; uuid="$2"; text="$3"
-  python3 - <<'PY' "$file" "$uuid" "$text"
-import json, sys
-path, uuid, text = sys.argv[1:4]
-rows = [
-  {"type":"user","uuid":"user-"+uuid,"message":{"role":"user","content":"prompt"}},
-  {"type":"assistant","uuid":uuid,"sessionId":"session-1","message":{"content":[{"type":"text","text":text}]}}
-]
-with open(path, "w") as f:
-  for row in rows:
-    f.write(json.dumps(row) + "\n")
-PY
+  bun - "$file" "$uuid" "$text" <<'JS'
+const [path,uuid,text]=process.argv.slice(2),rows=[
+ {type:'user',uuid:'user-'+uuid,message:{role:'user',content:'prompt'}},
+ {type:'assistant',uuid,sessionId:'session-1',message:{content:[{type:'text',text}]}}
+];
+(await import('node:fs')).default.writeFileSync(path,rows.map(row=>JSON.stringify(row)+'\n').join(''));
+JS
 }
 
 hook_json(){
   session="$1"; transcript="$2"; last="$3"; active="$4"
-  python3 - <<'PY' "$session" "$transcript" "$last" "$active"
-import json, sys
-session, transcript, last, active = sys.argv[1:5]
-print(json.dumps({"session_id":session,"transcript_path":transcript,"stop_hook_active":active == "true","last_assistant_message":last}))
-PY
+  bun - "$session" "$transcript" "$last" "$active" <<'JS'
+const [session,transcript,last,active]=process.argv.slice(2);
+console.log(JSON.stringify({session_id:session,transcript_path:transcript,stop_hook_active:active==='true',last_assistant_message:last}));
+JS
 }
 
 count_opened(){
@@ -118,13 +113,11 @@ mkdir -p "$CAN/proj/seats" "$CAN/proj/wheelhouse"
 cp "$FIX/proj/seats/principal-sentinel.sh" "$CAN/proj/seats/principal-sentinel.sh"
 cp "$FIX/proj/seats/needs.ts" "$CAN/proj/seats/needs.ts"
 printf 'namespace=sentinel\n' > "$CAN/proj/wheelhouse/.template-source"
-python3 - <<'PY' "$CAN/proj/seats/principal-sentinel.sh"
-import sys
-p=sys.argv[1]
-s=open(p).read()
-s=s.replace('const idx = lines.findIndex((line) => /^@principal:/.test(line));', 'const idx = -1;')
-open(p,'w').write(s)
-PY
+bun - "$CAN/proj/seats/principal-sentinel.sh" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='const idx = lines.findIndex((line) => /^@principal:/.test(line));';
+if(s.split(needle).length!==2) throw new Error('sentinel canary source changed');
+fs.writeFileSync(p,s.replace(needle,'const idx = -1;'));
+JS
 if cmp -s "$FIX/proj/seats/principal-sentinel.sh" "$CAN/proj/seats/principal-sentinel.sh"; then
   fail "canary: could not disable sentinel detection; test proves nothing"
 else

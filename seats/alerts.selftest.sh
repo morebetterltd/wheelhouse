@@ -26,6 +26,15 @@ github-issue-repos=fixture/repo
 EOF
 cat > "$ROOT/seats/template-drift.sh" <<'SH'
 #!/usr/bin/env bash
+case "${DRIFT_CASE:-}" in
+  garbage) printf 'not-json\n'; exit 0 ;;
+  empty) exit 0 ;;
+  schema) printf '{}\n'; exit 0 ;;
+  crash) printf 'fixture crash\n' >&2; exit 7 ;;
+  signal) kill -TERM "$$" ;;
+  compare-error) printf '{"error":"fixture cannot compare"}\n'; exit 3 ;;
+  real) printf '{"modified":["seats/example.ts"],"localOnly":["runbooks/local.md"],"missing":["runbooks/missing.md"],"aheadBy":1,"comparedAgainst":"fixture"}\n'; exit 1 ;;
+esac
 if [ "${DRIFT_ON:-0}" = 1 ]; then printf '{"error":null,"modified":["README.md"],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; elif [ "${DRIFT_AHEAD:-0}" = 1 ]; then printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":2,"comparedAgainst":"fixture"}\n'; else printf '{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":0,"comparedAgainst":"fixture"}\n'; fi
 SH
 chmod +x "$ROOT/seats/template-drift.sh"
@@ -50,22 +59,26 @@ case "${GH_UNTRIAGED:-0}" in
 esac
 SH
 chmod +x "$BIN/gh"
-run_alert(){ OUT="$(cd "$ROOT" && env HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" "$@" 2>&1)"; RC=$?; }
+run_alert(){ OUT="$(cd "$ROOT" && env HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" "$@" 2>&1)"; RC=$?;
+  if [ "$RC" = 0 ] && [ -f "$ROOT/seats/inbox.jsonl" ]; then
+    node --input-type=module - "$ROOT" <<'JS' || fail 'every herald alert row must name its condition and retain concrete detail'
+import fs from 'node:fs';import assert from 'node:assert/strict';const root=process.argv[2],rows=fs.readFileSync(root+'/seats/inbox.jsonl','utf8').split('\n').filter(Boolean).map(l=>JSON.parse(l)).filter(r=>r.class==='alert'),snapshot=JSON.parse(fs.readFileSync(root+'/seats/run/fleet-snapshot.json','utf8'));
+for(const row of rows){assert(row.detail.startsWith('Alert '+row.source.name+': '));assert(row.detail.includes('Cost:'));assert(row.detail.includes('Next:'));}
+// A fixture may deliberately delete its snapshot while retaining old inbox rows;
+// retention across a real clear is checked separately below.
+JS
+  fi
+}
 inbox_count(){ [ -f "$ROOT/seats/inbox.jsonl" ] && wc -l < "$ROOT/seats/inbox.jsonl" | tr -d ' ' || echo 0; }
 need_open_count(){ [ -f "$ROOT/seats/needs.jsonl" ] && grep -c '"type":"opened"' "$ROOT/seats/needs.jsonl" || echo 0; }
 need_closed_count(){ [ -f "$ROOT/seats/needs.jsonl" ] && grep -c '"type":"closed"' "$ROOT/seats/needs.jsonl" || echo 0; }
 active(){ node -e 'const j=require(process.argv[1]); if(!j.alerts[process.argv[2]]?.active) process.exit(1)' "$ROOT/seats/run/fleet-snapshot.json" "$1"; }
-set_low_disk(){ python3 - "$ROOT/wheelhouse/.template-source" "$1" <<'PY'
-from pathlib import Path
-import sys,re
-p=Path(sys.argv[1]); v=sys.argv[2]; s=p.read_text(); s=re.sub(r'(?m)^alert-low-disk-gb=.*$', f'alert-low-disk-gb={v}', s); p.write_text(s)
-PY
+set_low_disk(){ bun - "$ROOT/wheelhouse/.template-source" "$1" <<'JS'
+const fs=(await import('node:fs')).default,[p,v]=process.argv.slice(2),s=fs.readFileSync(p,'utf8');
+fs.writeFileSync(p,s.replace(/^alert-low-disk-gb=.*$/gm,()=> 'alert-low-disk-gb='+v));
+JS
 }
-old_iso(){ python3 - <<'PY'
-from datetime import datetime, timedelta, timezone
-print((datetime.now(timezone.utc)-timedelta(minutes=20)).isoformat())
-PY
-}
+old_iso(){ bun -e 'console.log(new Date(Date.now()-20*60*1000).toISOString())'; }
 clear_runtime(){ rm -f "$ROOT/seats/run/fleet-snapshot.json" "$ROOT/seats/inbox.jsonl" "$ROOT/seats/needs.jsonl" "$ROOT/seats/logs/alerts.log" "$ROOT/seats/inbox.cursor" "$ROOT/seats/run/herald.target.json" "$ROOT/seats/run/alerts.lock"; printf '{"seats":{}}\n' > "$ROOT/seats/state.json"; set_low_disk 0; }
 quiet3(){ local before name; name="$1"; before="$(inbox_count)"; run_alert "$@"; run_alert bun seats/alerts.ts check --json; run_alert bun seats/alerts.ts check --json; [ "$(inbox_count)" = "$before" ]; }
 age_alert(){ node -e 'const fs=require("fs"); const f=process.argv[1], n=process.argv[2]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.alerts[n].since="2000-01-01T00:00:00.000Z"; fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n");' "$ROOT/seats/run/fleet-snapshot.json" "$1"; }
@@ -134,6 +147,50 @@ DRIFT_AHEAD=1 run_alert bun seats/alerts.ts check --json
 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared template-drift' "$ROOT/seats/logs/alerts.log" && pass 'template-drift ahead clears' || fail "drift ahead clear failed"
 
+phase 'drift failures are not drift; rows retain the concrete observation'
+for mode in garbage empty schema crash signal compare-error; do
+  clear_runtime; DRIFT_CASE="$mode" run_alert bun seats/alerts.ts check --json
+  if [ "$RC" = 0 ] && node --input-type=module - "$ROOT" "$mode" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const[root,mode]=process.argv.slice(2),j=JSON.parse(fs.readFileSync(root+'/seats/run/fleet-snapshot.json','utf8')),rows=fs.readFileSync(root+'/seats/inbox.jsonl','utf8').trim().split('\n').map(l=>JSON.parse(l));
+assert.equal(j.drift.status,'check-failed');assert(j.drift.reason);assert.equal(j.alerts['template-drift'].active,false);assert.equal(j.alerts['template-drift-check-failed'].active,true);assert.equal(rows.length,1);assert.equal(rows[0].source.name,'template-drift-check-failed');assert(rows[0].detail.includes(j.drift.reason));assert.equal(j.alerts['template-drift-check-failed'].detail,rows[0].detail);
+if(mode==='garbage')assert.equal(j.drift.stdout,'not-json\n');if(mode==='crash'){assert.equal(j.drift.exitCode,7);assert.equal(j.drift.stderr,'fixture crash\n');}if(mode==='signal')assert.equal(j.drift.signal,'SIGTERM');
+JS
+  then pass "drift $mode is check-failed with its reason, never template-drift"
+  else fail "drift $mode classification/detail failed rc=$RC out=$OUT"; fi
+ done
+cat > "$FIX/drift-spawn-error.mjs" <<'JS'
+import * as cp from 'node:child_process';import {mock} from 'bun:test';
+const original={...cp};
+const spawnSync=(cmd,args,options)=>{
+  if(cmd==='bash'&&args?.[0]?.endsWith('/template-drift.sh')){
+    if(options?.timeout!==undefined)throw new Error('drift spawn still has a fixed timeout');
+    return {status:null,signal:null,error:Object.assign(new Error('fixture spawn error ETIMEDOUT'),{code:'ETIMEDOUT'}),stdout:'',stderr:'fixture partial stderr'};
+  }
+  return original.spawnSync(cmd,args,options);
+};
+mock.module('node:child_process',()=>({...original,spawnSync,default:{...original.default,spawnSync}}));
+JS
+clear_runtime; run_alert bun --preload "$FIX/drift-spawn-error.mjs" seats/alerts.ts check --json
+if [ "$RC" = 0 ] && node --input-type=module - "$ROOT" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const j=JSON.parse(fs.readFileSync(process.argv[2]+'/seats/run/fleet-snapshot.json','utf8'));assert.equal(j.drift.status,'check-failed');assert(j.drift.reason.includes('ETIMEDOUT'));assert.equal(j.drift.stderr,'fixture partial stderr');assert.equal(j.alerts['template-drift'].active,false);
+JS
+then pass 'spawn error ETIMEDOUT is retained as check-failed without a drift deadline'; else fail "spawn error handling failed rc=$RC out=$OUT"; fi
+clear_runtime; DRIFT_CASE=real run_alert bun seats/alerts.ts check --json
+if [ "$RC" = 0 ] && node --input-type=module - "$ROOT" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const root=process.argv[2],j=JSON.parse(fs.readFileSync(root+'/seats/run/fleet-snapshot.json','utf8')),rows=fs.readFileSync(root+'/seats/inbox.jsonl','utf8').trim().split('\n').map(l=>JSON.parse(l));assert.equal(j.drift.status,'drift');assert.equal(j.drift.exitCode,1);assert.equal(j.alerts['template-drift-check-failed'].active,false);assert.equal(rows.length,1);assert.equal(rows[0].source.name,'template-drift');for(const value of['template-drift','seats/example.ts','runbooks/local.md','runbooks/missing.md','aheadBy=1'])assert(rows[0].detail.includes(value),value);assert.equal(j.alerts['template-drift'].detail,rows[0].detail);
+JS
+then pass 'real drift exit1 names modified/local-only/missing files and ahead count in the row and snapshot'
+else fail "real drift detail missing rc=$RC out=$OUT"; fi
+run_alert bun seats/alerts.ts check --json
+if node --input-type=module - "$ROOT" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const j=JSON.parse(fs.readFileSync(process.argv[2]+'/seats/run/fleet-snapshot.json','utf8'));assert.equal(j.drift.status,'clean');assert.equal(j.alerts['template-drift'].active,false);assert(j.alerts['template-drift'].detail.includes('seats/example.ts'));
+JS
+then pass 'clear retains the concrete detail that previously fired'; else fail 'clear lost fired detail'; fi
+if node --input-type=module - "$ROOT/seats/alerts.ts" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';const source=fs.readFileSync(process.argv[2],'utf8'),body=source.slice(source.indexOf('function driftInfo()'),source.indexOf('function alertRow('));assert(body.length>0);assert(!/\btimeout\s*:/.test(body));
+JS
+then pass 'drift check has no fixed wall-clock spawn budget'; else fail 'drift check still uses a wall-clock spawn budget'; fi
+
 phase 'shared PID lock recovery and ownership'
 mkdir -p "$FIX/lock-regressions"
 if bun "$HERE/fixtures/lock-regression.ts" "$ROOT/seats/lock.ts" "$FIX/lock-regressions"; then
@@ -144,11 +201,9 @@ fi
 for content in '' 'not a pid'; do
   rm -f "$ROOT/seats/run/fleet-snapshot.json"
   printf '%s' "$content" > "$ROOT/seats/run/alerts.lock"
-  python3 - "$ROOT/seats/run/alerts.lock" <<'PY'
-import os, sys, time
-old = time.time() - 60
-os.utime(sys.argv[1], (old, old))
-PY
+  bun - "$ROOT/seats/run/alerts.lock" <<'JS'
+const old=Date.now()/1000-60; (await import('node:fs')).default.utimesSync(process.argv[2],old,old);
+JS
   run_alert bun seats/alerts.ts check --json
   [ $RC -eq 0 ] && [ -s "$ROOT/seats/run/fleet-snapshot.json" ] && [ ! -e "$ROOT/seats/run/alerts.lock" ] && pass "alerts writes a fresh snapshot after an old incomplete lock (${content:-empty})" || fail "incomplete alerts lock blocked snapshot rc=$RC out=$OUT"
 done
@@ -191,24 +246,20 @@ await new Promise((resolve) => setTimeout(resolve, 2000));
 TS
 SLOW_OUT="$FIX/slow-herald.out"; (cd "$SLOW" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$SLOW" timeout 1 bun seats/herald.ts --once >"$SLOW_OUT" 2>&1); SRC=$?
 [ "$SRC" = 0 ] && pass 'scan loop does not wait for a slow alerts child' || fail "slow alerts child blocked scan rc=$SRC out=$(cat "$SLOW_OUT" 2>/dev/null)"
-BROKEN="$FIX/no-alert-clock"; cp -R "$ROOT" "$BROKEN"; python3 - "$BROKEN/seats/herald.ts" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1]); s=p.read_text(); s=s.replace('const clocked = runStaffingClock(state) || runAlertsClock(state);','const clocked = runStaffingClock(state);')
-p.write_text(s)
-PY
+BROKEN="$FIX/no-alert-clock"; cp -R "$ROOT" "$BROKEN"; bun - "$BROKEN/seats/herald.ts" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='const clocked = runStaffingClock(state) || runAlertsClock(state);';
+if(s.split(needle).length!==2) throw new Error('alerts clock canary source changed');
+fs.writeFileSync(p,s.replace(needle,'const clocked = runStaffingClock(state);'));
+JS
 rm -f "$BROKEN/seats/run/fleet-snapshot.json"; (cd "$BROKEN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$BROKEN" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 timeout 1 bun seats/herald.ts --daemon >/dev/null 2>&1) || true
 [ ! -s "$BROKEN/seats/run/fleet-snapshot.json" ] && pass 'canary: removing runAlertsClock makes the herald snapshot leg fail' || fail 'canary without runAlertsClock still produced a snapshot'
 
 phase 'canary'
-CAN="$FIX/canary"; cp -R "$ROOT" "$CAN"; python3 - "$CAN/seats/alerts.ts" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1])
-s=p.read_text()
-s=s.replace('if(next.active&&(!was?.active||was.signature!==next.signature))','if(next.active)')
-p.write_text(s)
-PY
+CAN="$FIX/canary"; cp -R "$ROOT" "$CAN"; bun - "$CAN/seats/alerts.ts" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='if(next.active&&(!was?.active||was.signature!==next.signature))';
+if(s.split(needle).length!==2) throw new Error('alert transition canary source changed');
+fs.writeFileSync(p,s.replace(needle,'if(next.active)'));
+JS
 rm -f "$CAN/seats/inbox.jsonl" "$CAN/seats/run/fleet-snapshot.json"; (cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1 && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$CAN" BD_READY=1 bun seats/alerts.ts check >/dev/null 2>&1); CCOUNT="$( [ -f "$CAN/seats/inbox.jsonl" ] && wc -l < "$CAN/seats/inbox.jsonl" | tr -d ' ' || echo 0 )"
 [ "$CCOUNT" -gt 2 ] && pass 'canary: fire-on-every-run variant fails the stays-quiet leg' || fail "canary did not produce repeated alert rows count=$CCOUNT"
 

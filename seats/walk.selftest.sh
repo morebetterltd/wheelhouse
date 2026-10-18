@@ -17,6 +17,7 @@ HOST_BUDGET_TS="$(cd "$(dirname "$WALK")" && pwd)/host-budget.ts"
 REAL_FIXTURES_DIR="$(cd "$(dirname "$WALK")" && pwd)/fixtures/verify-real"
 INCIDENT_STREAM="$(cd "$(dirname "$WALK")" && pwd -P)/fixtures/walk/walk-desk-incident.out"
 SCRUB="$HERE/evidence-scrub.sh"
+CLOCK="$HERE/fixtures/walk/readiness.ts"
 [ -f "$WALK" ] || { echo "selftest: not found: $WALK" >&2; exit 2; }
 [ -f "$VERIFY" ] || { echo "selftest: not found: $VERIFY" >&2; exit 2; }
 [ -f "$HARNESS" ] || { echo "selftest: not found: $HARNESS" >&2; exit 2; }
@@ -40,10 +41,11 @@ selftest_install_cleanup_traps cleanup
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-walk-selftest.$$.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
+RUN_PATH="$BIN:$PATH" # Preserve the installed host-budget shims.
 
 cat > "$BIN/pi" <<'STUB'
 #!/usr/bin/env node
@@ -55,12 +57,25 @@ fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.s
 fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null }));
+const clockDir = process.env.STUB_WALK_CLOCK_DIR;
+if (clockDir) {
+  fs.writeFileSync(path.join(clockDir, 'verifier.tmp'), JSON.stringify({pid:process.pid,cwd:process.cwd(),stdin:fs.fstatSync(0).isCharacterDevice()?'ignored':'open-pipe'}));
+  fs.renameSync(path.join(clockDir, 'verifier.tmp'), path.join(clockDir, 'verifier.json'));
+  while (!fs.existsSync(path.join(clockDir, 'release'))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);
+}
 if (process.env.STUB_STREAM_FILE) {
   process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, 'utf8'));
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 const reply = process.env.STUB_REPLY || '';
 const finish = () => {
+  if (clockDir && process.env.STUB_READ_STDIN_TO_EOF) fs.writeFileSync(path.join(clockDir, 'eof'), 'observed');
+  if (clockDir && ['timeout','interrupt'].includes(process.env.STUB_WALK_CLOCK_MODE)) {
+    process.stdout.write(reply);
+    fs.writeFileSync(path.join(clockDir, 'holding'), 'ready');
+    setInterval(() => {},1000);
+    return;
+  }
   process.stdout.write(reply.replaceAll('__HOME__', process.env.HOME || '').replaceAll('__TMP__', process.cwd()));
   if (process.env.STUB_SLEEP_MS) {
     setTimeout(() => process.exit(Number(process.env.STUB_EXIT || 0)), Number(process.env.STUB_SLEEP_MS));
@@ -116,6 +131,8 @@ build_proj(){
   local proj="$1" ns="$2"
   mkdir -p "$proj/seats" "$proj/contracts" "$HOME_FIX/.pi-seats-$ns/verifier"
   selftest_copy_seat_runtime "$proj" "$HERE"
+  cp -f "$WALK" "$proj/seats/walk.ts"
+  cp -f "$VERIFY" "$proj/seats/verify.ts"
   chmod +x "$proj/seats/walk.ts" "$proj/seats/evidence-scrub.sh"
   cat > "$proj/contracts/VERIFIER.md" <<'EOF'
 # Crew: Verifier
@@ -141,9 +158,40 @@ EOF
 }
 EOF
   printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
-  ( cd "$proj" && git init -q && git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base ) \
+  ( cd "$proj" && git init -q && [ "$(git rev-parse --show-toplevel)" = "$(pwd -P)" ] && git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base ) \
     || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
+
+run_clocked(){
+  local mode="$1"; shift
+  CLOCK_DIR="$(mktemp -d "$FIX/clock.XXXXXX")" || exit 2
+  rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$CLOCK" drive "$proj/seats/walk.ts" "$CLOCK_DIR" "$mode" "$@" 2>&1) || rc=$?
+}
+
+assert_clock_budget(){
+  local expected="$1"
+  if bun - "$CLOCK_DIR/armed" "$expected" <<'TS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const armed=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+assert.equal(armed.kind,'walk','armed clock belongs to the verifier spawn');
+assert.equal(armed.budget,Number(process.argv[3]),'armed verifier budget must equal WHEELHOUSE_WALK_TIMEOUT_MS');
+console.log(`armed verifier budget ${armed.budget} equals env ${process.argv[3]}`);
+TS
+  then pass "verifier spawn receives env budget $expected"
+  else fail "verifier spawn armed budget differs from env $expected"; fi
+}
+
+phase 'captured malformed GUI output: match the actual verdict line, not other text'
+if bun - "$CLOCK" "$HERE/fixtures/walk/gui-malformed-output.txt" <<'TS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const {namedFailure}=await import(process.argv[2]);const actual=fs.readFileSync(process.argv[3],'utf8'),want='window-list command malformed JSON';
+assert(namedFailure(actual,want));
+assert(namedFailure(actual+'\n'+('diagnostic padding\n'.repeat(262144)),want));
+assert(!namedFailure(actual.replace(want,'reason omitted')+'\nmetadata: '+want,want));
+assert(!namedFailure(actual.replace('VERDICT: COULD-NOT-WALK','VERDICT: WALKED-DONE'),want));
+TS
+then pass 'captured GUI name accepts complete output and rejects missing/wrong verdict names'
+else fail 'captured GUI verdict-name regression'; fi
 
 run_case(){
   local name="$1" reply="$2" expect_rc="$3" expect_text="$4"
@@ -291,9 +339,9 @@ for case in failcmd malformed wrongshape; do
     malformed) cmd='printf "not json"'; want='window-list command malformed JSON';;
     wrongshape) cmd='printf "{\\\"notWindows\\\":[]}"'; want='returned wrong shape';;
   esac
-  rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_WINDOW_LIST_COMMAND="$cmd" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:gui:Fixture --out "$outdir" 2>&1) || rc=$?
+  WHEELHOUSE_WALK_WINDOW_LIST_COMMAND="$cmd" STUB_REPLY=$'VERDICT: WALKED-DONE\n' run_clocked gui 'claim' --surface product:gui:Fixture --out "$outdir"
   [ "$rc" -eq 3 ] && pass "GUI command $case exits COULD-NOT-WALK (3)" || fail "GUI command $case rc=$rc output=$out"
-  printf '%s\n' "$out" | grep >/dev/null 'VERDICT: COULD-NOT-WALK' && printf '%s\n' "$out" | grep >/dev/null "$want" && pass "GUI command $case names the window-list failure" || fail "GUI command $case did not name failure '$want': $out"
+  printf '%s\n' "$out" | bun "$CLOCK" match "$want" && pass "GUI command $case names the window-list failure" || fail "GUI command $case did not name failure '$want': $out"
   [ -s "$outdir/walk.json" ] && grep -q "$want" "$outdir/walk.json" && pass "GUI command $case writes walk.json with reason" || fail "GUI command $case walk.json missing reason: $(cat "$outdir/walk.json" 2>/dev/null)"
   [ ! -f "$HOME_FIX/.pi-seats-$ns/verifier/cwd.txt" ] && pass "GUI command $case does not spawn the verifier seat" || fail "GUI command $case spawned stub pi before guard refusal"
 done
@@ -305,21 +353,17 @@ if grep -q '"mode": "not-gui"' "$FIX/out-nongui/walk.json"; then pass 'walk.json
 
 phase 'stdin-reading verifier receives EOF immediately'
 proj="$FIX/proj-stdin"; ns="walk-stdin"; build_proj "$proj" "$ns"
-STDIN_FIFO="$FIX/stdin-open.fifo"
-mkfifo "$STDIN_FIFO"
-exec 9<> "$STDIN_FIFO"
-start_ms=$(node -e 'console.log(Date.now())')
-rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=3000 STUB_READ_STDIN_TO_EOF=1 STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-stdin" < "$STDIN_FIFO" 2>&1) || rc=$?
-end_ms=$(node -e 'console.log(Date.now())')
-exec 9>&-
-elapsed_ms=$((end_ms - start_ms))
+# One tick of fixture time; no real deadline. The driver keeps caller stdin open.
+WHEELHOUSE_WALK_TIMEOUT_MS=1 STUB_READ_STDIN_TO_EOF=1 STUB_REPLY=$'VERDICT: WALKED-DONE\n' run_clocked eof 'claim' --surface product:fixture --out "$FIX/out-stdin"
+assert_clock_budget 1
 [ "$rc" -eq 0 ] && pass 'stdin-reading verifier exits 0' || fail "stdin-reading verifier rc=$rc output=$out"
 printf '%s\n' "$out" | grep >/dev/null 'VERDICT: WALKED-DONE' && pass 'stdin-reading verifier walk completes with a verdict' || fail "stdin-reading verifier missing verdict: $out"
-[ "$elapsed_ms" -lt 5000 ] && pass "stdin-reading verifier completed under 5s (${elapsed_ms}ms)" || fail "stdin-reading verifier exceeded 5s (${elapsed_ms}ms): $out"
+[ -f "$CLOCK_DIR/readiness-observed" ] && [ -f "$CLOCK_DIR/eof" ] && [ ! -e "$CLOCK_DIR/expired" ] && pass 'stdin EOF is observed after readiness with caller pipe still open, without expiring a clock' || fail "stdin EOF handshake missing: $out"
 
 phase 'timeout names phase and honors per-walk budget env'
 proj="$FIX/proj-timeout"; ns="walk-timeout"; build_proj "$proj" "$ns"
-rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_WALK_TIMEOUT_MS=200 STUB_SLEEP_MS=1000 STUB_REPLY=$'working before timeout\nVERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-timeout" 2>&1) || rc=$?
+WHEELHOUSE_WALK_TIMEOUT_MS=200 STUB_REPLY=$'working before timeout\nVERDICT: WALKED-DONE\n' run_clocked timeout 'claim' --surface product:fixture --out "$FIX/out-timeout"
+assert_clock_budget 200
 [ "$rc" -eq 3 ] && pass 'timeout exits as COULD-NOT-WALK (3)' || fail "timeout rc=$rc output=$out"
 printf '%s\n' "$out" | grep >/dev/null 'VERDICT: COULD-NOT-WALK — timed out after 200ms during run verifier walk' && pass 'timeout verdict names budget and phase' || fail "timeout did not name budget/phase: $out"
 if grep -q '"phase": "run verifier walk"' "$FIX/out-timeout/walk.json" && grep -q 'timed out after 200ms during run verifier walk' "$FIX/out-timeout/walk.json"; then pass 'timeout metadata records phase'; else fail "timeout metadata missing phase: $(cat "$FIX/out-timeout/walk.json" 2>/dev/null)"; fi
@@ -339,16 +383,9 @@ rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT
 
 phase 'interrupt removes scratch worktree'
 proj="$FIX/proj-int"; ns="walk-int"; build_proj "$proj" "$ns"
-( cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'working\nVERDICT: WALKED-DONE\n' STUB_SLEEP_MS=5000 bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-int" ) > "$FIX/int.out" 2>&1 &
-wpid=$!
-cwdfile="$HOME_FIX/.pi-seats-$ns/verifier/cwd.txt"
-for _ in $(seq 1 50); do [ -s "$cwdfile" ] && break; sleep 0.1; done
-scratch="$(cat "$cwdfile" 2>/dev/null || true)"
-if [ -n "$scratch" ] && [ -d "$scratch" ]; then pass 'interrupt fixture captured scratch cwd'; else fail 'interrupt fixture did not capture scratch cwd'; fi
-kill -INT "$wpid" 2>/dev/null || true
-wait "$wpid" >/dev/null 2>&1
-sleep 0.2
-if [ -n "$scratch" ] && [ ! -e "$scratch" ]; then pass 'interrupt removed scratch cwd'; else fail "interrupt left scratch cwd: $scratch"; fi
+STUB_REPLY=$'working\nVERDICT: WALKED-DONE\n' run_clocked interrupt 'claim' --surface product:fixture --out "$FIX/out-int"
+[ -f "$CLOCK_DIR/readiness-observed" ] && pass 'interrupt fixture captured scratch cwd before signalling' || fail "interrupt fixture readiness missing: $out"
+if [ -f "$CLOCK_DIR/scratch-removed" ]; then pass 'interrupt removed scratch cwd before process exit'; else fail "interrupt left scratch cwd (rc=$rc): $out"; fi
 
 if [ "$FAILED" -eq 0 ]; then
   echo "walk.selftest: PASS"

@@ -65,6 +65,8 @@ REPRO
 # Negative control: remove only the fix in a COPY of the helper. Never run an
 # unguarded suite against the install or its enclosing umbrella repository.
 cp -f "$HERE/selftest-lib.sh" "$FIX/unsafe-lib.sh"
+# This deliberately relocated library still needs its real admission helper.
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$HERE/selftest-sweep-lock.ts}"
 printf '\nselftest_isolate_git() { :; }\n' >> "$FIX/unsafe-lib.sh"
 rc=0
 env -u GIT_CEILING_DIRECTORIES LIB="$FIX/unsafe-lib.sh" FGIT_FILE="$FIX/fgit.sh" INNER="$INNER" OUTER="$OUTER" BEFORE="$BEFORE" bash "$FIX/repro.sh" > "$FIX/unsafe.out" 2> "$FIX/unsafe.err" || rc=$?

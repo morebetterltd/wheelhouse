@@ -19,9 +19,10 @@ fs.writeFileSync(p.join(dir,"wheelhouse-selftest-sweep"),JSON.stringify({kind:"w
 }
 
 FAILED=0
+CHECKED=0
 FIX=""
-pass(){ printf 'ok - %s\n' "$*"; }
-fail(){ printf 'not ok - %s\n' "$*"; FAILED=$((FAILED + 1)); }
+pass(){ CHECKED=$((CHECKED + 1)); printf 'ok - %s\n' "$*"; }
+fail(){ CHECKED=$((CHECKED + 1)); printf 'not ok - %s\n' "$*"; FAILED=$((FAILED + 1)); }
 cleanup(){
   [ -n "$FIX" ] && selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
@@ -57,6 +58,9 @@ default_tmpdir_leg(){
   local release="$FIX/default-release" pid_a pid_b rc_a rc_b order
   mkdir -p "$(dirname "$runner")" "$host" "$tmp_a" "$tmp_b"
   sed "/^LOCK=/s|/tmp|$host|g" "$SWEEP" > "$runner"
+  cp -f "$(dirname "$SWEEP")/python-invocations.ts" "$(dirname "$runner")/python-invocations.ts" || exit 2
+  git -C "$FIX/default-project" init -q -b main || exit 2
+  git -C "$FIX/default-project" add seats || exit 2
   env -u WHEELHOUSE_SELFTEST_SWEEP_LOCK TMPDIR="$tmp_a" SWEEP_RELEASE="$release" SWEEP_ID=TA SWEEP_EVENTS="$events" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$runner" > "$FIX/TA.out" 2> "$FIX/TA.err" &
   pid_a=$!
   for _ in $(seq 1 100); do grep -q '^TA start$' "$events" 2>/dev/null && break; sleep 0.05; done
@@ -91,7 +95,10 @@ source_policy_leg(){
   local project="$FIX/source-project" file kind rc ran
   mkdir -p "$project/seats/nested space" "$FIX/source-linked"
   cp -f "$SWEEP" "$project/seats/selftest-sweep.sh"
+  cp -f "$(dirname "$SWEEP")/python-invocations.ts" "$project/seats/python-invocations.ts" || exit 2
   printf '#!/usr/bin/env bash\nprintf ran > "$POLICY_RAN"\n' > "$project/seats/pass.selftest.sh"
+  git -C "$project" init -q -b main || exit 2
+  git -C "$project" add seats || exit 2
   ran="$project/ran"
   for kind in suffix direct env split quoted compact split-equals no-newline linked; do
     file="$project/seats/nested space/no-extension"
@@ -117,14 +124,36 @@ source_policy_leg(){
     fi
     rm -f "$ran" "$file"
   done
-  # Existing inline calls and embedded generated-script text are NOT files
-  # using that interpreter; 9yms owns the later invocation-level policy.
   printf '#!/usr/bin/env bash\npython3 -c "print(1)"\n' > "$project/seats/inline.sh"
-  printf 'documentation\n#!/usr/bin/env python3\n' > "$project/seats/embedded.txt"
+  git -C "$project" add seats/inline.sh || exit 2
   rc=0
   POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
-  if [ "$rc" = 0 ] && [ -f "$ran" ]; then pass 'source guard permits existing inline calls and non-first-line shebang text'
-  else fail "source guard incorrectly rejects inline/embedded text (rc=$rc)"; fi
+  if [ "$rc" = 1 ] && [ ! -e "$ran" ] && [ ! -e "$project/lock" ] && [ ! -e "$project/lock.queue" ] && ! grep -q 'selftest-sweep: START ' "$project/out" && grep -F 'forbidden Python invocation' "$project/err" >/dev/null; then
+    pass 'tracked inline call fails before lock, queue or filtered suite START'
+  else fail "tracked invocation guard missed inline call (rc=$rc)"; fi
+  # The same tracked path may contain ordinary arguments, not an interpreter call.
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "python3 is inert fixture data"\n' > "$project/seats/inline.sh"
+  printf 'documentation\n#!/usr/bin/env python3\n' > "$project/seats/embedded.txt"
+  rm -f "$ran"
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 0 ] && [ -f "$ran" ]; then pass 'source guard permits inert inline arguments and non-first-line shebang text'
+  else fail "source guard incorrectly rejects inert data (rc=$rc)"; fi
+  rm -f "$ran"
+  mv -f "$project/seats/inline.sh" "$FIX/saved-inline.sh" || exit 2
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 2 ] && [ ! -e "$ran" ] && [ ! -e "$project/lock" ] && [ ! -e "$project/lock.queue" ] && grep -F 'cannot audit tracked source' "$project/err" >/dev/null; then
+    pass 'unreadable tracked source remains incomplete exit2 before admission'
+  else fail "source audit setup failure lost incomplete status (rc=$rc)"; fi
+  mv -f "$FIX/saved-inline.sh" "$project/seats/inline.sh" || exit 2
+  mv -f "$project/seats/python-invocations.ts" "$FIX/saved-auditor.ts" || exit 2
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 2 ] && [ ! -e "$ran" ] && [ ! -e "$project/lock" ] && [ ! -e "$project/lock.queue" ] && grep -F 'auditor missing or unreadable' "$project/err" >/dev/null; then
+    pass 'missing invocation auditor fails2 before admission, never bypasses policy'
+  else fail "missing invocation auditor did not fail incomplete (rc=$rc)"; fi
+  mv -f "$FIX/saved-auditor.ts" "$project/seats/python-invocations.ts" || exit 2
 }
 default_tmpdir_leg
 if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
@@ -375,7 +404,7 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "selftest-sweep.selftest: PASS (36 checks)"
+  echo "selftest-sweep.selftest: PASS ($CHECKED checks)"
 else
   echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"
   exit 1
