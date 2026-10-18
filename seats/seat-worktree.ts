@@ -50,13 +50,28 @@ export interface StateLike { seats: Record<string, SeatRecordLike> }
 export class SeatWorktreeError extends Error {}
 function refuse(msg: string): never { throw new SeatWorktreeError(msg); }
 
+/** Shared by adapter CLI and library callers. Same segment rule as verify.ts:
+ * no empty/dot segments, separators, whitespace or shell quote characters. */
+export function validateSegment(kind: string, value: string): string {
+  const bad =
+    typeof value !== "string" ? "not a string" :
+    value.length === 0 ? "empty" :
+    value === "." || value === ".." ? "a dot segment" :
+    /[/\\]/.test(value) ? "a path separator" :
+    /\s/.test(value) ? "whitespace" :
+    /['"`]/.test(value) ? "a quote character" :
+    null;
+  if (bad !== null) refuse(`invalid ${kind} ${JSON.stringify(value)} (${bad}) — must be a single path segment: no /, no .., no whitespace, no quotes`);
+  return value;
+}
+
 export function git(root: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): { ok: boolean; out: string; err: string; code: number | null } {
   const r = spawnSync("git", args, { cwd: cwd ?? root, env: env ? { ...process.env, ...env } : process.env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
   return { ok: r.status === 0, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim(), code: r.status };
 }
 
 export function worktreesDir(root: string): string { return path.join(root, WORKTREES_DIRNAME); }
-export function seatWorktreeDir(root: string, seat: string): string { return path.join(worktreesDir(root), seat); }
+export function seatWorktreeDir(root: string, seat: string): string { return path.join(worktreesDir(root), validateSegment("seat name", seat)); }
 export function beadBranch(beadId: string): string { return `fleet/${beadId}`; }
 
 export function registeredWorktrees(root: string): RegisteredWorktree[] {
@@ -699,6 +714,12 @@ function adapterSeatPushSetting(root: string): "on" | "off" {
 export function removeSeatWorktree(root: string, seat: string): void {
   const wt = seatWorktreeDir(root, seat);
   if (!fs.existsSync(wt)) return;
+  // Only resolve directories: a final FIFO must never be opened by realpath.
+  if (!fs.statSync(wt).isDirectory() || !fs.statSync(worktreesDir(root)).isDirectory()) refuse(`worktree ${wt} is not a directory; leaving seat registered`);
+  const managed = fs.realpathSync(worktreesDir(root)), target = fs.realpathSync(wt);
+  if (path.dirname(target) !== managed || path.basename(target) !== seat || fs.lstatSync(wt).isSymbolicLink()) {
+    refuse(`worktree ${wt} is not the seat's direct child of ${managed}; leaving seat registered`);
+  }
   const st = worktreeStatus(root, wt);
   if (!st.clean) refuse(`worktree ${wt} has real changes (${st.real[0]}); leaving seat registered`);
   const head = git(root, ["rev-parse", "HEAD"], wt).out;

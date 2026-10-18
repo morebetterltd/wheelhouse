@@ -68,10 +68,11 @@ import { harnessNameForSeat, requirePiHarness } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
-import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir } from "./seat-worktree";
+import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
+import { prepareTaskScratch } from "./cleanup-identity";
 
 interface SeatDriver {
   readonly name: string;
@@ -80,7 +81,7 @@ interface SeatDriver {
   getState(rec: SeatRecord): Promise<any>;
   prompt(rec: SeatRecord, message: string, streamingBehavior: "followUp" | "steer"): Promise<any>;
   steer(rec: SeatRecord, text: string): Promise<any>;
-  stop(state: State, name: string, rec: SeatRecord): Promise<string>;
+  stop(name: string, rec: SeatRecord): Promise<string>;
 }
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -199,29 +200,7 @@ function expandTilde(p: string): string {
   return p;
 }
 
-/**
- * A seat name is used as a path segment (run/<seat>.stdin, logs/<seat>.jsonl)
- * and lands inside the quoted shell command that launches pi. A bead id is
- * used the same way at dispatch (recover.ts's printed resume-suggestion
- * quotes it back). Anything that is not one plain segment — separators,
- * dot-dirs, whitespace, quotes — would write outside seats/, break the
- * launch line, or split printed output across lines, so it is refused
- * loudly, naming the offending key. Same rules as verify.ts's validateSegment.
- */
-function validateSegment(kind: string, value: string): string {
-  const bad =
-    value.length === 0 ? "empty" :
-    value === "." || value === ".." ? "a dot segment" :
-    /[/\\]/.test(value) ? "a path separator" :
-    /\s/.test(value) ? "whitespace" :
-    /['"`]/.test(value) ? "a quote character" :
-    null;
-  if (bad !== null) {
-    die(`invalid ${kind} ${JSON.stringify(value)} (${bad}) — must be a single path segment: no /, no .., no whitespace, no quotes`);
-  }
-  return value;
-}
-
+// Segment validation is shared with library callers in seat-worktree.ts.
 function validateSeatName(name: string): string {
   return validateSegment("seat name", name);
 }
@@ -431,27 +410,39 @@ function releaseStateLock(fd: number): void {
   releasePidLock(path.join(SEATS_DIR, "state.lock"), fd);
 }
 
-function writeState(state: State): void {
+/** Mutators receive only the fresh state read during this lock hold.
+ * RPC/process waits stay outside: never commit a pre-wait State snapshot. */
+function writeState<T>(update: (state: State) => T): T {
   const testDelay = Number(process.env.WHEELHOUSE_STATE_WRITE_DELAY_MS || 0);
   const fd = acquireStateLock();
   try {
+    const state = readState();
+    const before = JSON.stringify(state);
     if (testDelay > 0) sleepMs(testDelay);
-    // Re-read-before-merge under the lock plus a per-writer tmp file: two
-    // adapter invocations updating different seats must not let the later
-    // rename erase the earlier writer's record.
-    let merged = state;
-    if (fs.existsSync(STATE_FILE)) {
+    const result = update(state);
+    if (result && typeof (result as any).then === "function") throw new Error("state mutation must be synchronous");
+    if (JSON.stringify(state) !== before) {
+      const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
       try {
-        const current = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) as State;
-        merged = { seats: { ...(current.seats ?? {}), ...(state.seats ?? {}) } };
-      } catch {}
+        fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + "\n");
+        fs.renameSync(tmp, STATE_FILE);
+      } finally { fs.rmSync(tmp, { force: true }); }
     }
-    const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + "\n");
-    fs.renameSync(tmp, STATE_FILE);
+    return result;
   } finally {
     releaseStateLock(fd);
   }
+}
+
+function recordLaunchedSeat(name: string, record: SeatRecord): void {
+  writeState((state) => {
+    const lastBead = state.seats[name]?.lastBead;
+    state.seats[name] = { ...record, ...(lastBead ? { lastBead } : {}) };
+  });
+}
+
+function sameSeatProcess(a: SeatRecord, b: SeatRecord): boolean {
+  return a.pid === b.pid && a.startedAt === b.startedAt && a.fifo === b.fifo;
 }
 
 // Same rule as seat-env.sh: pi auto-creates an empty {} auth.json on a first
@@ -553,16 +544,28 @@ function rpcProgress(rec: RpcSeat, phase: () => string): () => void {
   };
 }
 
-/** Non-blocking FIFO writes: wait for startup/drain while the owned process
- * lives, not for a guessed budget. ENXIO after readiness and EPIPE are EOF.
+/** Serialize the WHOLE JSONL command, not individual writeSync chunks: a
+ * second writer's LF must never land inside a command larger than PIPE_BUF.
+ * Release before waiting for the RPC reply. Non-blocking writes/lock admission
+ * wait for signals, not deadlines. ENXIO after readiness and EPIPE are EOF.
  * Fresh launches have no startedAt yet and may not have opened stdin. */
 async function fifoWrite(rec: RpcSeat, obj: unknown): Promise<void> {
   const line = Buffer.from(JSON.stringify(obj) + "\n");
   const kind = String((obj as any)?.type ?? "command");
   let fd: number | null = null;
   let offset = 0;
-  const progress = rpcProgress(rec, () => `writing ${kind}, ${offset}/${line.length} bytes; awaiting pipe reader/drain`);
+  const lock = `${rec.fifo}.write.lock`;
+  let writeLock: number | null = null;
+  const progress = rpcProgress(rec, () => `writing ${kind}, ${offset}/${line.length} bytes; ${writeLock === null ? "awaiting FIFO command writer lock" : "awaiting pipe reader/drain"}`);
   try {
+    for (;;) {
+      assertRpcProcess(rec, `before writing ${kind}`);
+      const acquired = acquirePidLock(lock); // fifo-command-lock
+      if (acquired !== null) { writeLock = acquired; break; }
+      if (rec.startedAt) assertRpcReader(rec, `while waiting to write ${kind}`);
+      progress();
+      await sleep(25);
+    }
     for (;;) {
       assertRpcProcess(rec, `before writing ${kind}`);
       try {
@@ -590,7 +593,8 @@ async function fifoWrite(rec: RpcSeat, obj: unknown): Promise<void> {
     const delivery = offset > 0 ? "prompt not delivered (partial FIFO write?)" : `${kind} not delivered`;
     throw new Error(`${delivery} to ${rpcSeat(rec)}: wrote ${offset}/${line.length} bytes; ${why}`);
   } finally {
-    if (fd !== null) fs.closeSync(fd);
+    try { if (fd !== null) fs.closeSync(fd); }
+    finally { releasePidLock(lock, writeLock); }
   }
 }
 
@@ -664,6 +668,12 @@ async function rpc(rec: RpcSeat, command: Record<string, unknown>): Promise<any>
         obj = JSON.parse(line);
       } catch {
         continue; // not ours to police; the log is pi's raw stream
+      }
+      // An unparsable command has no recoverable request id. Fail closed on
+      // this transport error BEFORE matching an ack; never restart the seat.
+      if (obj.type === "response" && obj.command === "parse" && obj.success === false) {
+        const name = path.basename(rec.fifo, ".stdin");
+        throw new Error(`PI_PARSE_ERROR: ${rpcSeat(rec)} rejected ${command.type}: ${String(obj.error ?? "unknown pi parse error")}. Recovery: adapter.ts stop ${name} && adapter.ts resume ${name}`);
       }
       if (obj.type === "response" && obj.id === id) return obj;
     }
@@ -741,7 +751,16 @@ function eventIsSuccessfulTurnEnd(obj: any): boolean {
   return stopReasonOf(obj) !== "error";
 }
 
-function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster: Record<string, SeatEntry>): void {
+function syncCapacityFromLog(name: string, roster: Record<string, SeatEntry>): SeatRecord | undefined {
+  return writeState((state) => {
+    const rec = state.seats[name];
+    if (rec) syncCapacityRecordFromLog(name, rec, roster);
+    return rec;
+  });
+}
+
+// Called only by the locked mutation above, using its fresh seat record.
+function syncCapacityRecordFromLog(name: string, rec: SeatRecord, roster: Record<string, SeatEntry>): void {
   const r = logLinesFrom(rec.log, 0);
   let sawCapacityInThisScan = false;
   let cursor = r.offset - Buffer.byteLength(r.lines.map((l) => `${l}\n`).join(""));
@@ -784,19 +803,18 @@ function syncCapacityFromLog(name: string, rec: SeatRecord, state: State, roster
   else delete rec.lastCapacityEvent;
   if (nextCleared) rec.lastCapacityCleared = nextCleared;
   else delete rec.lastCapacityCleared;
-  writeState(state);
 }
 
 
 /** Last few KB of the seat's stderr log — where pi complains about limits. */
 function recordLaunchFailure(name: string, existing: SeatRecord | undefined, detail: string): void {
-  const state = readState();
-  state.seats[name] = {
-    ...(existing ?? state.seats[name] ?? {}),
-    pid: null,
-    lastLaunchFailure: { at: new Date().toISOString(), detail } as any,
-  } as SeatRecord;
-  writeState(state);
+  writeState((state) => {
+    state.seats[name] = {
+      ...(state.seats[name] ?? existing ?? {}),
+      pid: null,
+      lastLaunchFailure: { at: new Date().toISOString(), detail } as any,
+    } as SeatRecord;
+  });
 }
 
 function stderrTail(rec: { log: string }, maxBytes = 8 * 1024): string {
@@ -904,8 +922,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   requirePiModelPin(name, entry);
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
-  const state = readState();
-  const existing = state.seats[name];
+  const existing = readState().seats[name];
   if (existing && pidAlive(existing.pid, existing.fifo, existing.startedAt)) {
     die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
   }
@@ -989,7 +1006,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} has live cwd ${liveCwd}, not requested cwd ${requestedCwd}. launch-only cleanup: ${cleanup}`);
   }
 
-  state.seats[name] = {
+  const record: SeatRecord = {
     pid,
     startedAt: new Date().toISOString(),
     accountDir,
@@ -1002,10 +1019,9 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     sessionId: st.data?.sessionId ?? null,
     sessionFile: st.data?.sessionFile ?? null,
     model: entry.model,
-    ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}),
   };
-  writeState(state); // spawn-record
-  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`);
+  recordLaunchedSeat(name, record); // spawn-record
+  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
 }
 
@@ -1060,8 +1076,7 @@ function claudeChildEnv(entry: SeatEntry, accountDir: string, name: string): Nod
 async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
-  const state = readState();
-  const existing = state.seats[name];
+  const existing = readState().seats[name];
   if (existing && pidAlive(existing.pid, existing.fifo, existing.startedAt)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
 
   const accountDir = claudeAccountDir(entry);
@@ -1129,7 +1144,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
 
   const requestedCwd = path.resolve(cwd);
   const liveCwd = processCwd(pid);
-  state.seats[name] = {
+  const record: SeatRecord = {
     pid,
     startedAt: new Date().toISOString(),
     accountDir,
@@ -1143,10 +1158,9 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
     sessionId: st.data?.sessionId ?? null,
     sessionFile: st.data?.sessionFile ?? null,
     model: st.data?.model ?? entry.model,
-    ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}),
   };
-  writeState(state);
-  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`);
+  recordLaunchedSeat(name, record);
+  console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
 }
 
@@ -1189,7 +1203,7 @@ function codexChildEnv(entry: SeatEntry, accountDir: string, name: string): Node
 async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string): Promise<void> {
   requireCwdDir(cwd);
   const labelSuffix = accountLabelSuffix(entry);
-  const state = readState(); const existing = state.seats[name];
+  const existing = readState().seats[name];
   if (existing && pidAlive(existing.pid, existing.fifo, existing.startedAt)) die(`seat "${name}" is already running (pid ${existing.pid}) — stop it first`);
   const accountDir = codexAccountDir(entry);
   if (!isCodexDefaultAuth(entry) && !fs.existsSync(accountDir)) die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`);
@@ -1210,8 +1224,8 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
-  state.seats[name] = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model, ...(existing?.lastBead ? { lastBead: existing.lastBead } : {}) };
-  writeState(state); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${state.seats[name].sessionId}`); console.log(`  events -> ${log}`);
+  const record: SeatRecord = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
+  recordLaunchedSeat(name, record); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`); console.log(`  events -> ${log}`);
 }
 function codexProbe(name: string, entry: SeatEntry): void {
   const labelSuffix = accountLabelSuffix(entry); const accountDir = codexAccountDir(entry);
@@ -1256,10 +1270,9 @@ async function cmdSpawn(name: string, beadId?: string, base: string | null = nul
   const entry = requireSeat(name);
   const cwd = beadId ? prepareSeatCwd(name, entry, beadId, base) : ROOT;
   await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, cwd);
-  if (beadId) {
-    const state = readState();
-    if (state.seats[name]) { state.seats[name].lastBead = beadId; writeState(state); }
-  }
+  if (beadId) writeState((state) => {
+    if (state.seats[name]) state.seats[name].lastBead = beadId;
+  });
 }
 
 function piProbe(name: string, entry: SeatEntry): void {
@@ -1298,15 +1311,16 @@ function piProbe(name: string, entry: SeatEntry): void {
 }
 
 function clearCapacityAfterProbe(name: string): void {
-  const state = readState();
-  const rec = state.seats[name];
-  if (!rec?.lastCapacityEvent) return;
-  const logOffset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
-  const at = new Date().toISOString();
-  delete rec.lastCapacityEvent;
-  rec.lastCapacityCleared = { at, logOffset };
-  writeState(state);
-  console.log(`capacity cleared at ${at} (probe OK at ${at})`);
+  const at = writeState((state) => {
+    const rec = state.seats[name];
+    if (!rec?.lastCapacityEvent) return null;
+    const logOffset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
+    const at = new Date().toISOString();
+    delete rec.lastCapacityEvent;
+    rec.lastCapacityCleared = { at, logOffset };
+    return at;
+  });
+  if (at) console.log(`capacity cleared at ${at} (probe OK at ${at})`);
 }
 
 function cmdProbe(name: string): void {
@@ -1396,14 +1410,13 @@ async function cmdReset(name: string): Promise<void> {
   // state.json must already show no session to resume into, not the stale
   // one reset was meant to drop. This also supports the documented upgrade
   // path where an operator stops an idle seat before changing its harness.
-  const state = readState();
-  if (state.seats[name]) {
+  writeState((state) => {
+    if (!state.seats[name]) return;
     state.seats[name].sessionId = null;
     state.seats[name].sessionFile = null;
     state.seats[name].pid = null;
     delete (state.seats[name] as any).cwd;
-    writeState(state); // reset-record
-  }
+  }); // reset-record
   await driverForSeat(name, entry, "adapter reset").launch(name, entry, null, cwd); // null sessionFile: cold, no --session
   console.log(`seat ${name}: reset — session discarded, respawned cold`);
 }
@@ -1469,6 +1482,10 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
   }
 
+  // Prepare scratch before launching or prompting the worker. A legacy run
+  // without a creation record remains unowned: dispatch never adopts it.
+  const scratch = prepareTaskScratch(ROOT, beadId);
+  if (!scratch.owned) console.log(`scratch ${scratch.target} is unmarked; kept unowned, automatic cleanup will refuse it (legacy scratch needs human review)`);
   // Snapshot BEFORE preparing: preparing may recreate a pruned seat worktree
   // at the very path the seat last recorded, and that must still count as a
   // cwd change (fresh session, relaunch), never as "same place as before".
@@ -1509,14 +1526,14 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
   const promptText = `Bead ${beadId}\n\n${text}`;
-  const state = readState();
-  state.seats[name].lastBead = beadId;
-  state.seats[name].lastDispatchAt = new Date().toISOString();
-  state.seats[name].lastPrompt = promptText;
-  delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
-  delete state.seats[name].lastCapacityCleared;
-  delete state.seats[name].lastStalledEvent; // a new dispatch supersedes a prior resumed-cutoff stall
-  writeState(state);
+  writeState((state) => {
+    state.seats[name].lastBead = beadId;
+    state.seats[name].lastDispatchAt = new Date().toISOString();
+    state.seats[name].lastPrompt = promptText;
+    delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
+    delete state.seats[name].lastCapacityCleared;
+    delete state.seats[name].lastStalledEvent; // a new dispatch supersedes a prior resumed-cutoff stall
+  });
   let resp: any;
   try {
     resp = await sameCwdDriver.prompt(rec, promptText, "followUp");
@@ -1529,29 +1546,30 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     // process is gone. Anything else stays a plain failure.
     const blob = `${resp.error ?? ""}\n${stderrTail(rec)}`;
     if (QUOTA_RE.test(blob)) {
-      const state = readState();
-      const label = accountLabel(undefined, rec);
-      state.seats[name].lastCapacityEvent = {
-        at: "time unknown",
-        detail: label ? `${String(resp.error ?? "quota-shaped stderr")} (account ${label})` : String(resp.error ?? "quota-shaped stderr"),
-        ...(label ? { accountLabel: label } : {}),
-      }; // capacity-record
-      delete state.seats[name].lastCapacityCleared;
-      writeState(state);
+      writeState((state) => {
+        const label = accountLabel(undefined, state.seats[name]);
+        state.seats[name].lastCapacityEvent = {
+          at: "time unknown",
+          detail: label ? `${String(resp.error ?? "quota-shaped stderr")} (account ${label})` : String(resp.error ?? "quota-shaped stderr"),
+          ...(label ? { accountLabel: label } : {}),
+        }; // capacity-record
+        delete state.seats[name].lastCapacityCleared;
+      });
     }
     die(`dispatch failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${resp.error}. stderr tail:\n${stderrTail(rec)}`);
   }
-  const landedState = readState();
-  if (resp.data?.sessionId) landedState.seats[name].sessionId = resp.data.sessionId;
-  if (resp.data?.sessionFile) landedState.seats[name].sessionFile = resp.data.sessionFile;
-  if (resp.data?.model) landedState.seats[name].model = resp.data.model;
-  landedState.seats[name].lastBead = beadId;
-  landedState.seats[name].lastDispatchAt = new Date().toISOString();
-  landedState.seats[name].lastPrompt = promptText;
-  delete landedState.seats[name].lastCapacityEvent; // a dispatch that lands clears it
-  delete landedState.seats[name].lastCapacityCleared;
-  delete landedState.seats[name].lastStalledEvent; // a dispatch that lands clears it
-  writeState(landedState);
+  writeState((state) => {
+    const landed = state.seats[name];
+    if (resp.data?.sessionId) landed.sessionId = resp.data.sessionId;
+    if (resp.data?.sessionFile) landed.sessionFile = resp.data.sessionFile;
+    if (resp.data?.model) landed.model = resp.data.model;
+    landed.lastBead = beadId;
+    landed.lastDispatchAt = new Date().toISOString();
+    landed.lastPrompt = promptText;
+    delete landed.lastCapacityEvent; // a dispatch that lands clears it
+    delete landed.lastCapacityCleared;
+    delete landed.lastStalledEvent; // a dispatch that lands clears it
+  });
   console.log(`dispatched ${beadId} to ${name}; watch ${rec.log}`);
   if (crossBead && previousBead) startBeadCleanup(previousBead);
 }
@@ -1746,13 +1764,14 @@ function appendSeatLog(log: string, obj: any): void {
 }
 
 function markSeatStalledAfterResume(name: string, bead: string | undefined): void {
-  const state = readState();
-  const rec = state.seats[name];
-  if (!rec) return;
   const at = new Date().toISOString();
   const detail = `resume detected prior turn was cut off during a tool call${bead ? ` for bead ${bead}` : ""}; commander must redispatch or reset`;
-  rec.lastStalledEvent = { at, detail };
-  writeState(state);
+  const rec = writeState((state) => {
+    const rec = state.seats[name];
+    if (rec) rec.lastStalledEvent = { at, detail };
+    return rec;
+  });
+  if (!rec) return;
   appendSeatLog(rec.log, { type: "agent_settled", state: "stalled", message: detail, bead: bead ?? null, at });
   console.log(`seat ${name}: STALLED — ${detail}`);
 }
@@ -1814,10 +1833,51 @@ function reportHostBudgetWorktreeCap(): void {
   }
 }
 
-function rotateLogIfSafe(log: string, last: string): void {
-  if (!fs.existsSync(log) || !agentSettledEvent(last)) return;
+// State is not an ownership proof by itself. Check directories component by
+// component BEFORE realpath: never resolve/open a final FIFO to compare paths.
+function ownedSeatLog(name: string, log: string): fs.Stats | null {
+  try {
+    if (typeof log !== "string" || !path.isAbsolute(log) || path.normalize(log) !== log || path.basename(log) !== `${name}.jsonl`) return null;
+    for (const dir of [LOG_DIR, path.dirname(log)]) {
+      let current = path.parse(dir).root;
+      for (const part of dir.slice(current.length).split(path.sep).filter(Boolean)) {
+        current = path.join(current, part);
+        const st = fs.lstatSync(current);
+        if (st.isSymbolicLink() || !st.isDirectory()) return null;
+      }
+    }
+    if (fs.realpathSync(path.dirname(log)) !== fs.realpathSync(LOG_DIR)) return null;
+    const st = fs.lstatSync(log);
+    // A hard link can otherwise copy-truncate an unrelated file outside logs.
+    if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1) return null;
+    const expected = fs.lstatSync(path.join(LOG_DIR, `${name}.jsonl`));
+    return expected.isFile() && expected.nlink === 1 && expected.dev === st.dev && expected.ino === st.ino ? st : null;
+  } catch { return null; }
+}
+
+function refuseLogRotation(name: string, log: string, archive?: string): void {
+  console.log(`note: seat ${name} log ${log} is outside seats/logs; not rotated`);
+  if (archive) console.log(`note: seat ${name} archive ${archive} is not an owned regular log archive; not rotated`);
+}
+
+function rotateLogIfSafe(name: string, log: string, last: string): void {
+  const st = ownedSeatLog(name, log);
+  if (!st) { refuseLogRotation(name, log); return; }
+  if (!agentSettledEvent(last)) return;
   const cap = LOG_ROTATE_BYTES;
-  if (cap <= 0 || fs.statSync(log).size < cap) return;
+  if (cap <= 0 || st.size < cap) return;
+  // Validate the WHOLE chain before the first unlink/rename/copy. In
+  // particular copyFile must not follow an existing .1 symlink/hard link.
+  if (!Number.isSafeInteger(LOG_ROTATE_KEEP) || LOG_ROTATE_KEEP < 0) { refuseLogRotation(name, log); return; }
+  for (let i = 1; i <= Math.max(1, LOG_ROTATE_KEEP); i++) {
+    const archive = `${log}.${i}`;
+    try {
+      const archived = fs.lstatSync(archive);
+      if (!archived.isFile() || archived.isSymbolicLink() || archived.nlink !== 1) { refuseLogRotation(name, log, archive); return; }
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") { refuseLogRotation(name, log, archive); return; }
+    }
+  }
   // Copy-truncate, not rename: a settled seat can still be alive with stdout
   // holding this inode open. The launch redirection is `>>`, which opens the
   // log with O_APPEND, so after truncate the live writer's next append lands in
@@ -1845,8 +1905,11 @@ async function cmdStatus(): Promise<void> {
   const rows = processRows();
   let sawSettled = false;
   for (const name of names) {
-    const rec = state.seats[name];
-    syncCapacityFromLog(name, rec, state, roster);
+    const ownedLog = ownedSeatLog(name, state.seats[name]?.log);
+    // Invalid log records are not read either: lastEvent opens its argument,
+    // so allowing a FIFO here could hang status before the rotation guard.
+    const rec = ownedLog ? syncCapacityFromLog(name, roster) : state.seats[name];
+    if (!rec) continue;
     const bareAlive = barePidAlive(rec.pid);
     const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
     // A seat nobody stopped whose pid is gone — or whose pid was reused by a
@@ -1854,8 +1917,8 @@ async function cmdStatus(): Promise<void> {
     // graceful stop earns would be a failure conflated into a normal state.
     const died = !alive && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
-    const stalled = Boolean(rec.lastStalledEvent) || logLastStalledEvent(rec.log);
-    const last = lastEvent(rec.log);
+    const stalled = Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log));
+    const last = ownedLog ? lastEvent(rec.log) : "-";
     // Status reports observed process/log facts, not a guessed get_state
     // deadline. A live, slow responder is not evidence of a wedged seat.
     const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
@@ -1866,7 +1929,7 @@ async function cmdStatus(): Promise<void> {
     const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
     if (agentSettledEvent(last)) sawSettled = true;
     console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${last}${bead}${labelText}`);
-    rotateLogIfSafe(rec.log, last);
+    rotateLogIfSafe(name, rec.log, last);
     if (died) {
       console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? "is alive but is not this seat (no FIFO/start-time proof)" : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
@@ -1888,7 +1951,7 @@ async function cmdStatus(): Promise<void> {
   if (sawSettled) reportHostBudgetWorktreeCap();
 }
 
-async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<string> {
+async function stopRecord(name: string, rec: SeatRecord): Promise<string> {
   // SIGTERM is pi's graceful path: it flushes stdout and exits 143. No
   // SIGKILL fallback here — a seat that ignores SIGTERM is worth looking at,
   // not shooting.
@@ -1899,13 +1962,14 @@ async function stopRecord(state: State, name: string, rec: SeatRecord): Promise<
   if (pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     throw new Error(`pid ${rec.pid} is still alive after SIGTERM and ${TIMEOUT_MS}ms — look at it before escalating`);
   }
-  rec.pid = null;
-  rec.stoppedAt = new Date().toISOString();
-  // Keep the recorded cwd with the session: stop/stop-all are warm-pause
-  // operations, and resume must return the seat to the same worktree. Dead
-  // seat records no longer occupy worktrees in seat-worktree.ts, so preserving
-  // this path does not resurrect the pre-#76 stale-cwd blocker.
-  writeState(state);
+  writeState((state) => {
+    const current = state.seats[name];
+    if (!current || !sameSeatProcess(current, rec)) return;
+    current.pid = null;
+    current.stoppedAt = new Date().toISOString();
+    // Keep the CURRENT cwd/session, not the pre-SIGTERM snapshot. Another
+    // stop (or a cwd refresh) may have committed while this process waited.
+  });
   return `seat ${name} stopped; session ${rec.sessionId} kept for resume`;
 }
 
@@ -1914,15 +1978,20 @@ async function cmdStop(name: string): Promise<void> {
   const rec = state.seats[name];
   if (!rec) die(`no record of seat "${name}"`);
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
-    rec.pid = null;
-    rec.stoppedAt = new Date().toISOString();
-    delete (rec as any).cwd;
-    writeState(state);
-    console.log(`seat ${name} is not running; dead record cleared; session ${rec.sessionId ?? "-"} kept for resume`);
+    const message = writeState((state) => {
+      const current = state.seats[name];
+      if (current && sameSeatProcess(current, rec)) {
+        current.pid = null;
+        current.stoppedAt = new Date().toISOString();
+        delete (current as any).cwd;
+        return `seat ${name} is not running; dead record cleared; session ${rec.sessionId ?? "-"} kept for resume`;
+      }
+    });
+    if (message) console.log(message);
     return;
   }
   const driver = driverForRunningSeat(name, "adapter stop");
-  console.log(await driver.stop(state, name, rec));
+  console.log(await driver.stop(name, rec));
 }
 
 async function cmdStopAll(): Promise<void> {
@@ -1966,7 +2035,7 @@ async function cmdStopAll(): Promise<void> {
       continue;
     }
     try {
-      console.log(await driver.stop(state, name, rec));
+      console.log(await driver.stop(name, rec));
     } catch (e: any) {
       console.log(`seat ${name}: REPORT stop failed; left for human inspection — ${e.message}`);
     }
