@@ -241,20 +241,35 @@ cat > "$BIN/tmux" <<'SH'
 exit 1
 SH
 chmod +x "$BIN/tmux"
-rm -f "$ROOT/seats/run/fleet-snapshot.json"; HERALD_OUT="$FIX/herald.out"; start=$(date +%s); (cd "$ROOT" && env HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 WHEELHOUSE_HERALD_TMUX_PANE="" timeout 3 bun seats/herald.ts --daemon >"$HERALD_OUT" 2>&1) || true; elapsed=$(( $(date +%s) - start ))
+# Exercise these legs as on stock macOS, even on hosts with coreutils. Keep
+# only the fixture mocks and explicit runtime dependencies on the child PATH;
+# neither timeout nor gtimeout can be found, including on GNU/Linux hosts.
+CLOCK_BIN="$FIX/without-coreutils-timeout"; mkdir -p "$CLOCK_BIN"
+for tool in bash bun node perl git ps df; do
+  tool_path="$(command -v "$tool")"
+  [ -x "$tool_path" ] || { fail "missing herald clock dependency: $tool"; exit 2; }
+  ln -s "$tool_path" "$CLOCK_BIN/$tool"
+done
+CLOCK_PATH="$BIN:$CLOCK_BIN"
+if (export PATH="$CLOCK_PATH"; hash -r; ! command -v timeout >/dev/null && ! command -v gtimeout >/dev/null && command -v perl >/dev/null && command -v bun >/dev/null); then
+  pass 'herald clock PATH has no timeout or gtimeout and retains helper dependencies'
+else
+  fail 'herald clock PATH still exposes timeout/gtimeout or lacks helper dependencies'; exit 2
+fi
+rm -f "$ROOT/seats/run/fleet-snapshot.json"; HERALD_OUT="$FIX/herald.out"; start=$(date +%s); (cd "$ROOT" && HOME="$HOME_FIX" PATH="$CLOCK_PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 WHEELHOUSE_HERALD_TMUX_PANE="" with_timeout 3 bun seats/herald.ts --daemon >"$HERALD_OUT" 2>&1) || true; elapsed=$(( $(date +%s) - start ))
 [ -s "$ROOT/seats/run/fleet-snapshot.json" ] && [ "$elapsed" -le 4 ] && pass 'herald launches alerts child and snapshot appears without blocking the scan loop' || fail "herald did not launch alerts child rc? elapsed=$elapsed out=$(cat "$HERALD_OUT" 2>/dev/null)"
 SLOW="$FIX/slow-herald"; cp -R "$ROOT" "$SLOW"; cat > "$SLOW/seats/alerts.ts" <<'TS'
 await new Promise((resolve) => setTimeout(resolve, 2000));
 TS
-SLOW_OUT="$FIX/slow-herald.out"; (cd "$SLOW" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$SLOW" timeout 1 bun seats/herald.ts --once >"$SLOW_OUT" 2>&1); SRC=$?
+SLOW_OUT="$FIX/slow-herald.out"; (cd "$SLOW" && HOME="$HOME_FIX" PATH="$CLOCK_PATH" WHEELHOUSE_ALERTS_ROOT="$SLOW" with_timeout 1 bun seats/herald.ts --once >"$SLOW_OUT" 2>&1); SRC=$?
 [ "$SRC" = 0 ] && pass 'scan loop does not wait for a slow alerts child' || fail "slow alerts child blocked scan rc=$SRC out=$(cat "$SLOW_OUT" 2>/dev/null)"
 BROKEN="$FIX/no-alert-clock"; cp -R "$ROOT" "$BROKEN"; bun - "$BROKEN/seats/herald.ts" <<'JS'
 const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='const clocked = runStaffingClock(state) || runAlertsClock(state);';
 if(s.split(needle).length!==2) throw new Error('alerts clock canary source changed');
-fs.writeFileSync(p,s.replace(needle,'const clocked = runStaffingClock(state);'));
+fs.writeFileSync(p,s.replace(needle,'fs.writeFileSync(path.join(ROOT, "seats/run/clock-canary-started"), "started\\n"); const clocked = runStaffingClock(state);'));
 JS
-rm -f "$BROKEN/seats/run/fleet-snapshot.json"; (cd "$BROKEN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$BROKEN" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 timeout 1 bun seats/herald.ts --daemon >/dev/null 2>&1) || true
-[ ! -s "$BROKEN/seats/run/fleet-snapshot.json" ] && pass 'canary: removing runAlertsClock makes the herald snapshot leg fail' || fail 'canary without runAlertsClock still produced a snapshot'
+rm -f "$BROKEN/seats/run/fleet-snapshot.json"; BROKEN_OUT="$FIX/no-alert-clock.out"; (cd "$BROKEN" && HOME="$HOME_FIX" PATH="$CLOCK_PATH" WHEELHOUSE_ALERTS_ROOT="$BROKEN" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 with_timeout 1 bun seats/herald.ts --daemon >"$BROKEN_OUT" 2>&1) || true
+[ -s "$BROKEN/seats/run/clock-canary-started" ] && [ ! -s "$BROKEN/seats/run/fleet-snapshot.json" ] && pass 'canary: removing runAlertsClock makes the herald snapshot leg fail after an actual scan' || fail "canary without runAlertsClock did not scan or still produced a snapshot: $(cat "$BROKEN_OUT" 2>/dev/null)"
 
 phase 'canary'
 CAN="$FIX/canary"; cp -R "$ROOT" "$CAN"; bun - "$CAN/seats/alerts.ts" <<'JS'
