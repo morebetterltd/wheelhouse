@@ -75,7 +75,7 @@ if [ "${WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY:-0}" = 1 ]; then printf '%s\n' "
 TMP=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX") || exit 2
 selftest_isolate_git "$TMP" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${TMP:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$TMP"; }
-trap cleanup EXIT
+selftest_install_cleanup_traps cleanup
 
 PASS=0
 fail() { echo "not ok $((PASS+1)) - $*"; exit 1; }
