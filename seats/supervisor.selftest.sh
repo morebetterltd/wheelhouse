@@ -4,16 +4,23 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-supervisor.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
+. "$HERE/selftest-herald.sh"
+selftest_bind_herald_owner "$FIX" || exit 2
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/wheelhouse"
 selftest_copy_seat_runtime "$PROJ" "$HERE"; chmod +x "$PROJ/seats/supervisor.sh" "$PROJ/seats/daemons.sh"
 for d in herald desk courier; do cat > "$PROJ/seats/$d.ts" <<'TS'
+import * as fs from "node:fs";
+import { fixtureOwner, fixtureOwnerAlive } from "./herald-owner";
+const owner = import.meta.path.endsWith("/herald.ts") ? fixtureOwner(`${import.meta.dir}/..`) : null;
+if (import.meta.path.endsWith("/herald.ts")) fs.writeFileSync(`${import.meta.dir}/run/herald.pid`, `${process.pid}\n`);
 if (process.env.WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY === "1") { console.error("synthetic crash"); process.exit(42); }
-setInterval(() => {}, 1000);
+setInterval(() => { if (!fixtureOwnerAlive(owner)) process.exit(0); }, 100);
 TS
 done
 cat > "$PROJ/seats/needs.ts" <<'TS'
@@ -54,22 +61,24 @@ if command -v plutil >/dev/null 2>&1; then
 else
   pass "launchd plist lint skipped: plutil absent"
 fi
-if python3 - "$PLIST" "$PROJ" <<'PY'
-import plistlib, sys
-plist, root = sys.argv[1], sys.argv[2]
-with open(plist, 'rb') as f: data = plistlib.load(f)
-assert data['Label'] == 'com.wheelhouse.launchfixture.supervisor'
-assert data['ProgramArguments'] == ['/bin/bash', root + '/seats/supervisor.sh']
-assert data['WorkingDirectory'] == root
-assert data['RunAtLoad'] is True
-assert data['KeepAlive'] is True
-assert data['ProcessType'] == 'Interactive'
-assert data['StandardOutPath'] == root + '/seats/logs/supervisor.launchd.out.log'
-assert data['StandardErrorPath'] == root + '/seats/logs/supervisor.launchd.err.log'
-PY
+if bun - "$PLIST" "$PROJ" <<'JS'
+const fs=(await import('node:fs')).default,assert=(await import('node:assert/strict')).default,[plist,root]=process.argv.slice(2);
+// Full emitted XML shape captured from install-launchd --print before porting.
+// Assert all eight original typed fields without adding a plist package or a
+// mandatory platform utility. Only inter-tag formatting whitespace is ignored.
+const fields={Label:'com.wheelhouse.launchfixture.supervisor',ProgramArguments:['/bin/bash',root+'/seats/supervisor.sh'],
+ WorkingDirectory:root,RunAtLoad:true,KeepAlive:true,ProcessType:'Interactive',
+ StandardOutPath:root+'/seats/logs/supervisor.launchd.out.log',StandardErrorPath:root+'/seats/logs/supervisor.launchd.err.log'};
+const escape=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const value=v=>v===true?'<true/>':Array.isArray(v)?'<array>'+v.map(x=>'<string>'+escape(x)+'</string>').join('')+'</array>':'<string>'+escape(v)+'</string>';
+const expected='<?xml version="1.0" encoding="UTF-8"?>'+
+ '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'+
+ '<plist version="1.0"><dict>'+Object.entries(fields).map(([k,v])=>'<key>'+k+'</key>'+value(v)).join('')+'</dict></plist>';
+assert.equal(fs.readFileSync(plist,'utf8').replace(/>\s+</g,'><').trim(),expected);
+JS
 then pass "launchd plist names fixture root, ProgramArguments, and Interactive process type"; else fail "launchd plist fields wrong: $(cat "$PLIST" 2>/dev/null)"; fi
 RC=0; OUT="$(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$PROJ/seats/supervisor.sh" print-systemd 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q '^ExecStart=/bin/bash ' && printf '%s\n' "$OUT" | grep -q 'seats/supervisor.sh' && printf '%s\n' "$OUT" | grep -q '^Restart=always'; then pass "print-systemd prints equivalent user unit"; else fail "print-systemd wrong rc=$RC out=$OUT"; fi
+if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep >/dev/null '^ExecStart=/bin/bash ' && printf '%s\n' "$OUT" | grep >/dev/null 'seats/supervisor.sh' && printf '%s\n' "$OUT" | grep >/dev/null '^Restart=always'; then pass "print-systemd prints equivalent user unit"; else fail "print-systemd wrong rc=$RC out=$OUT"; fi
 before_restarts="$(grep -c 'restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
 rm -f "$PROJ/seats/run/supervisor.pid"
 (cd "$PROJ" && exec env WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_STARTED_BY_COCKPIT=1 WHEELHOUSE_SUPERVISOR_SECONDS=0.1 "$PROJ/seats/supervisor.sh") > "$FIX/supervisor-holder.out" 2>&1 &

@@ -128,6 +128,8 @@ mkdir -p wheelhouse
 cat wheelhouse/.template-source
 ```
 
+`product-repo=` defaults to the install root for a single-repository install. If the install is a container beside a separate product repository, set this field to that product's Git root before step 5 (an absolute path, or a path relative to the install root). The product need not contain `seats/`. The pre-push installer uses this record to protect both repositories.
+
 `namespace=` is written empty here and filled at the end of step 3's interview, because its value comes from an answer that has not been given yet. It is this project's seat namespace: the value `seats/seat-env.sh` is invoked with, and the one that names this project's seat root (`$HOME/.pi-seats-<namespace>`), which is what keeps two fleets' seat directories apart on one machine. It lives in this file rather than in a file of its own because `.template-source` is already per-install and already read by other steps.
 
 The `github-issue-*` lines are install-owned alerts configuration. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login). `seats/alerts.ts` writes the result into `seats/run/fleet-snapshot.json`; the optional fleet-gate reader only displays active alert names from that snapshot.
@@ -361,7 +363,7 @@ An install upgrading over a `.template-source` that has no `namespace=` line at 
 
 **Then the host-build budget record, from question 9** — if the answer was `seats/host-budget.json = enabled`, write `seats/host-budget.json` exactly as the JSON object in question 9 and ensure `seats/bin/host-build-shim`, `seats/bin/cargo`, and `seats/bin/dotnet` are present and executable/symlinked as shipped by the template. If the answer was `absent`, remove `seats/host-budget.json` and remove `seats/bin`; the absence of the file is the adapter's switch, and the absence of `seats/bin` is the install's record that it did not opt in.
 
-**Then `seats/seats.json`, from the read-back value** — the roster's machine record, in the format `seats/README.md` documents and `seats/seats.json.example` shows: the `commander` entry marked external, then one entry per taken seat carrying exactly the six roster columns the interview collected — name and agent directory from question 7, harness, provider, pinned model, and auth route from question 8's read-back table — `account.dir` spelled under `~/.pi-seats-<namespace>/`, `harness` written as `pi`, `claude-code`, or `codex` (omitting it is allowed only for explicit Pi/default compatibility), and the auth route written as `account.authRoute` matching whichever route the seat's read-back row recorded. If every seat was declined, write the file anyway with the commander entry and an empty `seats` map — a roster that says "nobody" is a record; an absent file is a question. Read it back with `bun -e 'console.log(JSON.stringify(require("./seats/seats.json"), null, 2))'` or equivalent so a syntax error surfaces now, at the moment of writing, not at the first spawn.
+**Then `seats/seats.json`, from the read-back value** — the roster's machine record, in the format `seats/README.md` documents and `seats/seats.json.example` shows: the `commander` entry marked external, then one entry per taken seat carrying exactly the six roster columns the interview collected — name and agent directory from question 7, harness, provider, pinned model, and auth route from question 8's read-back table — `account.dir` spelled under `~/.pi-seats-<namespace>/`, `harness` written as `pi`, `claude-code`, or `codex` (omitting it is allowed only for explicit Pi/default compatibility), and the auth route written as `account.authRoute` matching whichever route the seat's read-back row recorded. If every seat was declined, write the file anyway with the commander entry and an empty `seats` map — a roster that says "nobody" is a record; an absent file is a question. Read it back with `bun -e 'import fs from "node:fs"; console.log(JSON.stringify(JSON.parse(fs.readFileSync("./seats/seats.json","utf8")), null, 2))'` or equivalent so a syntax error surfaces now, at the moment of writing, not at the first spawn.
 
 **Then `seats/channels.json`, from question 10's read-back table** — the channel machine record, in the format `seats/channels.json.example` shows. Write `{"version":1,"channels":{}}` when the answer was `No stakeholder channels` and no principal channel was declared; a file that says "nobody" is a record, while an absent file is an unanswered install question. Read it back immediately:
 
@@ -417,13 +419,15 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
   ```bash
   bd setup claude
   bd setup codex -o wheelhouse/AGENTS.md
-  seats/install-fleet-pre-push-guard.sh
+  seats/install-fleet-pre-push-guard.sh || { echo "STOP: fleet pre-push guard installation failed" >&2; exit 1; }
   test -f .claude/settings.json || echo "FAIL bd setup claude did not write .claude/settings.json"
   test -f CLAUDE.md || echo "FAIL bd setup claude did not create CLAUDE.md"
   test -f wheelhouse/AGENTS.md || echo "FAIL bd setup codex did not write wheelhouse/AGENTS.md"
   test -x "$(git config --get core.hooksPath)/pre-push" || echo "FAIL fleet pre-push guard is not installed in core.hooksPath"
   echo "fleet pre-push guard installed at $(git config --get core.hooksPath)/pre-push"
   ```
+
+  The single pre-push installer call protects the container and the distinct `product-repo=` recorded in `wheelhouse/.template-source`, respecting each repository's own `core.hooksPath` (including a shared `.beads/hooks`). It prints each installed hook and the existing guard script it invokes from the install's `seats/`; a product with no `seats/` is supported. Existing pre-push hooks are preserved and receive the same arguments and stdin after the fleet guard allows a push. Check that both repositories appear when they are distinct; a missing/invalid product path is a stop, not a successful container-only install. This is a bypassable tripwire, not separate write credentials.
 
   `bd setup claude` is the explicit replacement for the SessionStart hook that `bd init --skip-agents` deliberately skipped. It may create or update `CLAUDE.md`; the next steps write the commander content into that same file, keeping bd's managed block. Do not run a setup command that writes root `AGENTS.md`, and do not let `bd init` claim `.agents/` wholesale.
 
@@ -526,7 +530,9 @@ Run each of these and paste what it prints:
 - **Contract integrity — this one first, and stop if it fails.** (Upgrading rather than installing? `wheelhouse/runbooks/UPGRADE.md` is the procedure; it uses this same check, and step 0 there covers installs old enough to have no `.template-source` at all.) Every installed `## Contract` section must be byte-identical to the template's. Check each one:
 
   ```bash
-  ROOT="$PWD"
+  ROOT="$(pwd -P)"
+  COMMIT=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
+  [[ "$COMMIT" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$COMMIT" >&2; exit 1; }
   TEMPLATE=$(sed -n 's/^path=//p' wheelhouse/.template-source)
 
   # A missing or empty template path makes every comparison below vacuously true.
@@ -539,8 +545,16 @@ Run each of these and paste what it prints:
   if [ -z "$TEMPLATE" ] || [ ! -s "$TEMPLATE/contracts/WORKER.md" ]; then
     SOURCE=$(sed -n 's/^source=//p' wheelhouse/.template-source 2>/dev/null)
     if [ -n "$SOURCE" ]; then
-      TEMPLATE=$PWD/wheelhouse/.template-cache/source-head
-      mkdir -p wheelhouse/.template-cache
+      CACHE_ROOT="$ROOT/wheelhouse/.template-cache"
+      TEMPLATE="$CACHE_ROOT/source-head"
+      [ ! -L "$CACHE_ROOT" ] || { echo "STOP: cache root is a symlink: $CACHE_ROOT" >&2; exit 1; }
+      [ "$(cd "$ROOT/wheelhouse" && pwd -P)" = "$ROOT/wheelhouse" ] || { echo "STOP: wheelhouse is not the physical install directory" >&2; exit 1; }
+      mkdir -p "$CACHE_ROOT" || { echo "STOP: cannot create cache root: $CACHE_ROOT" >&2; exit 1; }
+      [ -d "$CACHE_ROOT" ] && [ ! -L "$CACHE_ROOT" ] || { echo "STOP: cache root is not a real directory: $CACHE_ROOT" >&2; exit 1; }
+      CACHE_REAL=$(cd "$CACHE_ROOT" && pwd -P) || { echo "STOP: cannot resolve cache root" >&2; exit 1; }
+      [ "$CACHE_REAL" = "$CACHE_ROOT" ] || { echo "STOP: cache root escapes install: $CACHE_ROOT" >&2; exit 1; }
+      CACHE_PARENT=$(cd "$(dirname "$TEMPLATE")" && pwd -P) || { echo "STOP: cannot resolve cache parent" >&2; exit 1; }
+      [ "$CACHE_PARENT" = "$CACHE_REAL" ] && [ ! -L "$TEMPLATE" ] || { echo "STOP: cache path escapes its real directory: $TEMPLATE" >&2; exit 1; }
       grep -qxF 'wheelhouse/.template-cache/' .gitignore 2>/dev/null || printf '%s\n' 'wheelhouse/.template-cache/' >> .gitignore
       echo "template path was dead; refreshing install-local cache from $SOURCE"
       if [ -d "$TEMPLATE/.git" ]; then
@@ -575,14 +589,17 @@ Run each of these and paste what it prints:
     installed="$ROOT/wheelhouse/${pair%%:*}"; template="$TEMPLATE/contracts/${pair##*:}"
     test -s "$installed" || { echo "FAIL ${pair%%:*} — installed file missing or empty"; FAILED=1; continue; }
     # the contract is everything above the FIRST exact '## This project' line
-    awk '/^## This project$/{exit} {print}' "$installed"  > /tmp/wh-a.$$
-    awk '/^## This project$/{exit} {print}' "$template"   > /tmp/wh-b.$$
-    if diff -q /tmp/wh-a.$$ /tmp/wh-b.$$ >/dev/null; then
+    # Never adopt an old pid-named file: unlink only our exclusive allocations.
+    compare_a=$(mktemp "${TMPDIR:-/tmp}/wh-a.XXXXXX") || { echo "FAIL cannot allocate contract comparison"; exit 1; }
+    compare_b=$(mktemp "${TMPDIR:-/tmp}/wh-b.XXXXXX") || { rm -f "$compare_a"; echo "FAIL cannot allocate contract comparison"; exit 1; }
+    awk '/^## This project$/{exit} {print}' "$installed"  > "$compare_a"
+    awk '/^## This project$/{exit} {print}' "$template"   > "$compare_b"
+    if diff -q "$compare_a" "$compare_b" >/dev/null; then
       echo "OK   ${pair%%:*}"
     else
-      echo "FAIL ${pair%%:*} — contract differs from the template:"; diff /tmp/wh-b.$$ /tmp/wh-a.$$; FAILED=1
+      echo "FAIL ${pair%%:*} — contract differs from the template:"; diff "$compare_b" "$compare_a"; FAILED=1
     fi
-    rm -f /tmp/wh-a.$$ /tmp/wh-b.$$
+    rm -f "$compare_a" "$compare_b"
   done
 
   # Every contract the TEMPLATE ships must appear in the list above. Derived from
@@ -703,7 +720,7 @@ Run each of these and paste what it prints:
   grep -rIn "{{" CLAUDE.md wheelhouse/ | grep -v "^wheelhouse/runbooks/"
   ```
 
-  Expect zero. `-I` makes the search text-only, so committed binary evidence such as PNG screenshots cannot report `Binary file ... matches` just because its bytes contain the brace pair. The HTML comments in the contracts' `## This project` sections are guidance, not placeholders, and do not count here. `runbooks/` is excluded deliberately: runbooks are copied verbatim, so any brace syntax one ever carries is the template's text, not an unfilled blank the installer left. Before this exclusion the check failed on every correct install, on a file the installer never authored.
+  Expect zero. `-I` makes the search text-only, so binary product assets such as PNG images cannot report `Binary file ... matches` just because its bytes contain the brace pair. The HTML comments in the contracts' `## This project` sections are guidance, not placeholders, and do not count here. `runbooks/` is excluded deliberately: runbooks are copied verbatim, so any brace syntax one ever carries is the template's text, not an unfilled blank the installer left. Before this exclusion the check failed on every correct install, on a file the installer never authored.
 
   What to do with them: **when you have content for a section, REPLACE its comment with that content. When you have nothing, leave the comment where it is.** The comment is a prompt for whoever fills the section later, so it stops being useful the moment the section is filled — and a section carrying both guidance and content reads as though the content is an example of what to write.
 - **Confirm the bench stub fails.** It is the one file whose whole job is to exit non-zero:
@@ -845,7 +862,7 @@ Five things, in this order.
 
    Trivial is the point: the bead exists to exercise dispatch, worktree, branch, report and verdict, and any failure it surfaces is an install failure, undiluted by real work's ambiguity.
 3. **Dispatch it through the adapter, and wait on the bead**: `bun seats/adapter.ts dispatch <worker-seat> <bead-id> <the dispatch text>` — composed per the runbook's stage 1: the bead id, the repo, a way to read anything it points at that changes nothing. The report arrives ON THE BEAD, not in a message; a silent seat gets the probe-then-nudge from `wheelhouse/fleet/SEATS.md`'s rules, not a guess.
-4. **Verdict, by the one-shot reviewer**: `bun seats/verify.ts <bead-id> fleet/<bead-id> <worker-seat>`. The exit code IS the verdict — 0 APPROVE, 2 BOUNCE, 3 DISCOVER, 1 no-verdict-exists — and the full output lands in `seats/verdicts/<bead-id>.md`, which git ignores because it is a working copy. **Transcribe the decisive extract onto the bead before citing it** (`wheelhouse/GRAPH.md`, "Where evidence lives"), then close the smoke bead naming the verdict. If the roster has no reviewer seat, or `verify.ts` refuses because the only reviewer shares the author's account, the verdict comes from the solo path instead — the principal, or a fresh session that authored nothing — recorded on the bead in the same shape, and say plainly that the mechanical reviewer leg went unexercised. Before the install's first ISA claim closes, run the first claim walk with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out evidence/<bead-id>/<surface-walk> --verifier <verifier-seat>` and cite the walk verdict plus transcript in the claim, or state `Not walked:` explicitly per `INTENT.md`.
+4. **Verdict, by the one-shot reviewer**: `bun seats/verify.ts <bead-id> fleet/<bead-id> <worker-seat>`. The exit code IS the verdict — 0 APPROVE, 2 BOUNCE, 3 DISCOVER, 1 no-verdict-exists — and the full output lands in `seats/verdicts/<bead-id>.md`, which git ignores because it is a working copy. **Transcribe the decisive extract onto the bead before citing it** (`wheelhouse/GRAPH.md`, "Where evidence lives"), then close the smoke bead naming the verdict. If the roster has no reviewer seat, or `verify.ts` refuses because the only reviewer shares the author's account, the verdict comes from the solo path instead — the principal, or a fresh session that authored nothing — recorded on the bead in the same shape, and say plainly that the mechanical reviewer leg went unexercised. Before the install's first ISA claim closes, run the first claim walk with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out .wheelhouse-runs/<bead-id>/<surface-walk> --verifier <verifier-seat>` and post the scrubbed walk transcript and verdict on the task before citing them in the claim (the local output is a git-excluded working copy, not something to commit), or state `Not walked:` explicitly per `INTENT.md`.
 5. **The loop closing IS the install verification.** A BOUNCE or an error is not an embarrassment to smooth over — it is the install failing loudly at the cheapest possible moment, and it stops this procedure exactly as a FAIL in step 5 would: diagnose, fix, re-run the smoke. Merging the one-line branch is not required for the verdict to count; whether it merges or is deleted is the principal's call under question 5's policy.
 
 **The one legitimate skip.** If step 4 provisioned no seat that passed its probe — every seat declined, or every provisioning attempt failed and was recorded — the smoke loop has nothing to run on. Skip it SAYING SO, with the reason, in the hand-back and on the record (the declined-seats section already carries it): the solo-install doctrine holds, the commander alone is a working install, and the first real bead below then runs the loop's solo path as its own de-facto smoke. What is not legitimate is skipping it quietly, or skipping it while a probed seat sits idle.

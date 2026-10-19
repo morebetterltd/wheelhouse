@@ -4,14 +4,14 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-comms-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0; SERVER_PID=""
 cleanup(){ [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-port(){ bun -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
+port(){ bun -e 'import net from "node:net"; const s=net.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats/transports" "$ROOT/seats/run"
 selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$ROOT/seats/seats.json" <<'JSON'
@@ -63,7 +63,7 @@ if [ $rc -eq 2 ] && grep -q 'STOP: channel C08EXAMPLE is not declared in seats/c
 
 reset_logs
 base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms.ts" request partners "need a word with Tyler" > "$FIX/request.out" 2>&1; rc=$?; RELAY_ID="$(cat "$FIX/request.out" | tr -d '\r\n')"
-if [ $rc -eq 0 ] && echo "$RELAY_ID" | grep -Eq '^relay-[0-9a-z]{4}$' && [ "$(count_rows request)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'seat relay request records one request row and makes zero network calls'; else fail "request leg rc=$rc id=$RELAY_ID ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null) req=$(count_req) out=$(cat "$FIX/request.out")"; fi
+if [ $rc -eq 0 ] && echo "$RELAY_ID" | grep -E >/dev/null '^relay-[0-9a-z]{4}$' && [ "$(count_rows request)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'seat relay request records one request row and makes zero network calls'; else fail "request leg rc=$rc id=$RELAY_ID ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null) req=$(count_req) out=$(cat "$FIX/request.out")"; fi
 base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request1.out" 2>&1; rc=$?
 base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request2.out" 2>&1; rc2=$?
 HERALD_MATCHES="$(node -e 'const fs=require("fs"); const rows=fs.existsSync(process.argv[1])?fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse):[]; console.log(rows.filter(r=>r.class==="relay-request"&&r.seat==="worker-1"&&r.state==="input-required"&&r.detail.includes("relay "+process.argv[2])).length)' "$ROOT/seats/inbox.jsonl" "$RELAY_ID")"
@@ -141,16 +141,16 @@ base_env bun "$ROOT/seats/comms.ts" read principal > "$FIX/read-telegram.out" 2>
 if [ $rc -eq 2 ] && grep -q 'STOP: channel principal is not readable' "$FIX/read-telegram.out" && [ "$(count_req)" -eq 0 ]; then pass 'telegram channel with read false is refused before network'; else fail "telegram read false leg rc=$rc out=$(cat "$FIX/read-telegram.out") req=$(count_req)"; fi
 
 reset_logs
-python3 - <<'PY' "$ROOT/seats/channels.json"
-import json,sys
-p=sys.argv[1]; j=json.load(open(p)); j['channels']['principal']['read']=True; open(p,'w').write(json.dumps(j)+"\n")
-PY
+bun - "$ROOT/seats/channels.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.channels.principal.read=true; fs.writeFileSync(p,JSON.stringify(j)+'\n');
+JS
 base_env bun "$ROOT/seats/comms.ts" read principal > "$FIX/read-telegram-courier.out" 2>&1; rc=$?
 if [ $rc -eq 0 ] && grep -q 'read principal: telegram channels are read by the courier tick' "$FIX/read-telegram-courier.out" && [ "$(count_req)" -eq 0 ]; then pass 'standalone telegram read prints courier-tick line and makes zero API calls'; else fail "telegram courier line leg rc=$rc out=$(cat "$FIX/read-telegram-courier.out") req=$(count_req)"; fi
-python3 - <<'PY' "$ROOT/seats/channels.json"
-import json,sys
-p=sys.argv[1]; j=json.load(open(p)); j['channels']['principal']['read']=False; open(p,'w').write(json.dumps(j)+"\n")
-PY
+bun - "$ROOT/seats/channels.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.channels.principal.read=false; fs.writeFileSync(p,JSON.stringify(j)+'\n');
+JS
 
 reset_logs
 printf '%s\n' '{"ts":"1790000010.000000","channel":"C08EXAMPLE","user":"U5","text":"backlog"}' > "$FIX/slack.jsonl"

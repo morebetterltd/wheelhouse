@@ -17,8 +17,9 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-fleet-gate-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 PROJ="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"
 mkdir -p "$PROJ/seats/run" "$PROJ/seats/logs" "$PROJ/wheelhouse" "$PROJ/contracts" "$BIN" "$HOME_FIX"
@@ -159,7 +160,7 @@ chmod +x "$BIN/bd" "$BIN/bun" "$BIN/gh"
 cp "$FIX/real-fleet-snapshot.json" "$PROJ/seats/run/fleet-snapshot.json"; mutate_snapshot fresh
 TIME_OUT="$(cd "$PROJ" && perl -MTime::HiRes=time -e '$t=time; system(qw(bash seats/fleet-gate.sh)); printf "ELAPSED=%.3f\n", time-$t' 2>&1)"; TIME_RC=$?
 ELAPSED="$(printf '%s\n' "$TIME_OUT" | sed -n 's/^ELAPSED=//p' | tail -1)"
-if [ $TIME_RC -eq 0 ] && printf '%s\n' "$TIME_OUT" | grep -q '🚢 FLEET: 2 seats live' && ! printf '%s\n' "$TIME_OUT" | grep -q '2/2 seats live' && ELAPSED="$ELAPSED" perl -e 'exit(($ENV{ELAPSED}//9) < 1 ? 0 : 1)'; then
+if [ $TIME_RC -eq 0 ] && printf '%s\n' "$TIME_OUT" | grep >/dev/null '🚢 FLEET: 2 seats live' && ! printf '%s\n' "$TIME_OUT" | grep >/dev/null '2/2 seats live' && ELAPSED="$ELAPSED" perl -e 'exit(($ENV{ELAPSED}//9) < 1 ? 0 : 1)'; then
   pass 'reader finishes under 1s, uses no slow tools, and does not ask for absent rostered count'
 else
   fail "subsecond/no-slow-tools/no-rostered leg failed rc=$TIME_RC elapsed=${ELAPSED:-?} out=$TIME_OUT"

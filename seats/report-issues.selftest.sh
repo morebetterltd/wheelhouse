@@ -4,11 +4,12 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-report-issues.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats" "$PROJ/wheelhouse" "$FIX/bin" "$FIX/nogh"; selftest_copy_seat_runtime "$PROJ" "$HERE"
 chmod +x "$PROJ/seats/report-issues.ts" "$PROJ/seats/evidence-scrub.sh"
 cat > "$PROJ/seats/seats.json" <<'JSON'

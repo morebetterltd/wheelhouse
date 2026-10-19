@@ -37,7 +37,7 @@ Then write the file:
 
 ```bash
 { echo "source=git@github.com:morebetterltd/wheelhouse.git"
-  echo "commit=<the commit you recovered, or 'unknown'>"
+  echo "commit=<the recovered lowercase hexadecimal commit, 7-40 characters>"
   echo "path=<disposable cache path, filled in step 1>"
   echo "product-repo=$(pwd -P)"
   echo "merge-target=<the branch reviewed work integrates into, e.g. main or staging>"
@@ -53,7 +53,7 @@ Then write the file:
 } > wheelhouse/.template-source
 ```
 
-`commit=unknown` is honest and still useful — the integrity check runs on it, you just do not get the behind-versus-damaged diagnosis in step 5 until your next upgrade sets a real one. `path=` is the one field expected to die: it is only a cache hint. Existing installs may record a stale path into some other checkout; that is now harmless as long as `source=` and `commit=` are correct.
+A historical `commit=unknown` may honestly record missing provenance, but cache recovery and integrity verification now REFUSE it. Resolve and record a lowercase hexadecimal commit (7-40 characters) before continuing; no path is removed on an invalid value. `path=` is the one field expected to die: it is only a cache hint. Existing installs may record a stale path into some other checkout; that is now harmless as long as `source=` and `commit=` are correct.
 
 The `github-issue-*` lines are optional alerts configuration; append them to older `.template-source` files if you want the defaults visible before changing them. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login). `seats/alerts.ts` writes the result into `seats/run/fleet-snapshot.json`; the optional fleet-gate reader only displays active alert names from that snapshot.
 
@@ -84,16 +84,28 @@ The install clones with `--depth 1`, which is enough to copy files and **not** e
 ```bash
 SOURCE=$(sed -n 's/^source=//p' wheelhouse/.template-source)
 BASE=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
+[[ "$BASE" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$BASE" >&2; exit 1; }
 TARGET=main     # the template ref you are upgrading TO: a branch, a tag, or a SHA
-CACHE=wheelhouse/.template-cache/${TARGET//[^A-Za-z0-9._-]/_}
-mkdir -p wheelhouse/.template-cache
+CACHE_NAME=${TARGET//[^A-Za-z0-9._-]/_}
+case "$CACHE_NAME" in ''|.*) printf "STOP: unsafe TARGET cache name='%s' from TARGET='%s'\n" "$CACHE_NAME" "$TARGET" >&2; exit 1;; esac
+ROOT="$(pwd -P)"
+CACHE_ROOT="$ROOT/wheelhouse/.template-cache"
+CACHE="$CACHE_ROOT/$CACHE_NAME"
+[ ! -L "$CACHE_ROOT" ] || { echo "STOP: cache root is a symlink: $CACHE_ROOT" >&2; exit 1; }
+[ "$(cd "$ROOT/wheelhouse" && pwd -P)" = "$ROOT/wheelhouse" ] || { echo "STOP: wheelhouse is not the physical install directory" >&2; exit 1; }
+mkdir -p "$CACHE_ROOT" || { echo "STOP: cannot create cache root: $CACHE_ROOT" >&2; exit 1; }
+[ -d "$CACHE_ROOT" ] && [ ! -L "$CACHE_ROOT" ] || { echo "STOP: cache root is not a real directory: $CACHE_ROOT" >&2; exit 1; }
+CACHE_REAL=$(cd "$CACHE_ROOT" && pwd -P) || { echo "STOP: cannot resolve cache root" >&2; exit 1; }
+[ "$CACHE_REAL" = "$CACHE_ROOT" ] || { echo "STOP: cache root escapes install: $CACHE_ROOT" >&2; exit 1; }
+CACHE_PARENT=$(cd "$(dirname "$CACHE")" && pwd -P) || { echo "STOP: cannot resolve cache parent" >&2; exit 1; }
+[ "$CACHE_PARENT" = "$CACHE_REAL" ] && [ ! -L "$CACHE" ] || { echo "STOP: cache path escapes its real directory: $CACHE" >&2; exit 1; }
 grep -qxF 'wheelhouse/.template-cache/' .gitignore 2>/dev/null || printf '%s\n' 'wheelhouse/.template-cache/' >> .gitignore
 
 if [ ! -d "$CACHE/.git" ]; then
   rm -rf "$CACHE"
   git clone "$SOURCE" "$CACHE"   # full history, local to this install
 fi
-TEMPLATE=$PWD/$CACHE
+TEMPLATE=$CACHE
 git -C "$TEMPLATE" fetch --tags origin
 git -C "$TEMPLATE" fetch origin
 git -C "$TEMPLATE" rev-parse "${TARGET:-main}" >/dev/null
@@ -102,12 +114,11 @@ if git -C "$TEMPLATE" rev-parse --verify --quiet "origin/${TARGET:-main}^{commit
   git -C "$TEMPLATE" merge --ff-only --quiet "origin/${TARGET:-main}" \
     || { echo "STOP: cache branch ${TARGET:-main} could not fast-forward to origin/${TARGET:-main}" >&2; exit 1; }
 fi
-[ "$BASE" = unknown ] || git -C "$TEMPLATE" cat-file -e "${BASE}^{commit}"
+git -C "$TEMPLATE" cat-file -e "${BASE}^{commit}"
 sed -i.bak "s|^path=.*|path=$TEMPLATE|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+# Preserve an existing separate-product record; only older installs need the default.
 grep -q '^product-repo=' wheelhouse/.template-source \
-  && sed -i.bak "s|^product-repo=.*|product-repo=$(pwd -P)|" wheelhouse/.template-source \
   || echo "product-repo=$(pwd -P)" >> wheelhouse/.template-source
-rm -f wheelhouse/.template-source.bak
 # One-time for installs older than merge-target=: replace the placeholder with the branch reviewed work integrates into.
 grep -q '^merge-target=' wheelhouse/.template-source || echo "merge-target=<the merge target branch>" >> wheelhouse/.template-source
 grep '^merge-target=' wheelhouse/.template-source
@@ -121,7 +132,8 @@ If you prefer a one-off clone, make it with `mktemp -d`; do not record a durable
 
 ```bash
 BASE=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
-git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ || true     # skip if BASE is 'unknown'; diff exits 1 when differences exist
+[[ "$BASE" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$BASE" >&2; exit 1; }
+git -C "$TEMPLATE" diff "$BASE" "${TARGET:-main}" -- contracts/ || true     # diff exits 1 when differences exist
 ```
 
 Read it. If nothing changed in `contracts/`, you are already current and there is nothing to do.
@@ -161,8 +173,10 @@ if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gi
 for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
   grep -qxF "$e" .gitignore 2>/dev/null || printf '%s\n' "$e" >> .gitignore
 done
-seats/install-fleet-pre-push-guard.sh
+seats/install-fleet-pre-push-guard.sh || { echo "STOP: fleet pre-push guard installation failed" >&2; exit 1; }
 ```
+
+The installer above protects both the container and the separate product Git root named by `product-repo=` in `wheelhouse/.template-source`. Preserve that value during upgrades; for an older install using the default, correct it before running the installer if the product is separate (absolute paths or paths relative to the install root are accepted). Each repository keeps its own hooks location, including a shared `.beads/hooks`, and its previous pre-push hook. Re-running refreshes the guard path without nesting wrappers or losing the previous hook. The product does not need a `seats/` directory: both hooks invoke the guard shipped with this install. Review the per-repository installation output; invalid/missing product roots stop the command rather than silently leaving them unguarded. The guard remains a bypassable tripwire, not credential isolation.
 
 `seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. Current template seats include optional dynamic-staffing pool support (`seats/pool.ts`, `seats/roster.ts`, `seats/pool.json.example`, and `seats/pool.selftest.sh`); copying the template files does not create `seats/pool.json`, so existing fixed-roster installs keep their current behavior unless they deliberately add a pool. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
 
@@ -193,8 +207,8 @@ If the project does not opt in, do not write `seats/host-budget.json`; keep the 
 If this project already had Pi seats, open `seats/seats.json` now and inspect every carried seat. Current rosters may record two fields older Pi rosters do not: `account.authRoute`, which is the credential route (`oauth`, `api_key`, or `env`) that gave the seat its identity, and `shadow`, which is a boolean only for intentional mirror seats. Back-fill `account.authRoute` for each carried seat from the route you actually use — OAuth `/login` for `openai-codex` subscription accounts, a file-backed provider entry in that seat's `auth.json` for `api_key`, or an exported provider env var for `env` — and do not record any credential material. Then read the JSON and probe every seat so both syntax and route are checked by the copied machinery:
 
 ```bash
-bun -e 'console.log(JSON.stringify(require("./seats/seats.json"), null, 2))'
-for seat in $(bun -e 'const j=require("./seats/seats.json"); console.log(Object.keys(j.seats||{}).join("\n"))'); do
+bun -e 'import fs from "node:fs"; console.log(JSON.stringify(JSON.parse(fs.readFileSync("./seats/seats.json","utf8")), null, 2))'
+for seat in $(bun -e 'import fs from "node:fs"; const j=JSON.parse(fs.readFileSync("./seats/seats.json","utf8")); console.log(Object.keys(j.seats||{}).join("\n"))'); do
   seats/seat-env.sh "$(sed -n 's/^namespace=//p' wheelhouse/.template-source | tail -1)" "$seat"
   bun seats/adapter.ts probe "$seat"
 done
@@ -295,7 +309,7 @@ for f in "$TEMPLATE"/runbooks/*; do
 done
 ```
 
-`cp -p`, not `cp`: it preserves the file mode, so a runbook that ships executable arrives executable. This is load-bearing: some shipped runbooks are executable pointers, and the era when this directory carried more scripts is why it is written down. If your `commit=` is `unknown`, or the baseline read fails for any other reason, the comparison cannot run — there is no trusted baseline to compare against — and the runbook is reported as `baseline unreadable` rather than `YOURS`. That is the conservative direction on purpose: the cost is re-running before a possible hand-merge, against either a silently clobbered procedure or a spurious hand-merge queue you would not have noticed.
+`cp -p`, not `cp`: it preserves the file mode, so a runbook that ships executable arrives executable. This is load-bearing: some shipped runbooks are executable pointers, and the era when this directory carried more scripts is why it is written down. If the baseline read fails (for example, an older procedure left `commit=unknown`, which step 1 now refuses), the comparison cannot run — there is no trusted baseline to compare against — and the runbook is reported as `baseline unreadable` rather than `YOURS`. That is the conservative direction on purpose: the cost is re-running before a possible hand-merge, against either a silently clobbered procedure or a spurious hand-merge queue you would not have noticed.
 
 ## 4. Splice: new contract, your project section
 
@@ -538,14 +552,16 @@ That is the shape of what step 7 catches: not damage, but the parts of your proj
 
 ## 8. Commit
 
-Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you either stage it deliberately or replace the broad directory add with explicit paths. Step 7 can also make you edit project-owned surfaces outside `wheelhouse/`, especially `.claude/settings.json`; stage those exact files when they exist, and stage any other step-7 path you deliberately changed before committing.
+Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you exclude it or replace the broad directory add with explicit paths. Never stage fleet captures or task-graph dumps: post decisive output on the task and keep local working captures git-excluded. Step 7 can also make you edit project-owned surfaces outside `wheelhouse/`, especially `.claude/settings.json`; stage those exact files when they exist, and stage any other step-7 path you deliberately changed before committing.
 
 ```bash
 git status --short
 ```
 
 ```bash
-NEW=$(sed -n 's/^commit=//p' wheelhouse/.template-source | cut -c1-12)
+NEW_COMMIT=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
+[[ "$NEW_COMMIT" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$NEW_COMMIT" >&2; exit 1; }
+NEW=$(printf '%s' "$NEW_COMMIT" | cut -c1-12)
 git add wheelhouse/ seats/ .gitignore CLAUDE.md .beads/
 for p in .claude/settings.json; do
   [ ! -e "$p" ] || git add "$p"

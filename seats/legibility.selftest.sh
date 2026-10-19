@@ -66,47 +66,35 @@ cleanup() {
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- stale-fixture sweep (same rule as the adapter selftest's) ---------------
 FIX_PREFIX="wheelhouse-legibility-selftest"
-sweep_stale_fixtures() {
-  local base="${TMPDIR:-/tmp}" d stamp phys sf pid
-  while IFS= read -r d; do
-    [ -d "$d" ] || continue
-    stamp="${d##*/}"; stamp="${stamp#"$FIX_PREFIX".}"; stamp="${stamp%%.*}"
-    case "$stamp" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$stamp" 2>/dev/null && continue
-    phys="$(cd "$d" 2>/dev/null && pwd -P)" || phys="$d"
-    while IFS= read -r sf; do
-      [ -f "$sf" ] || continue
-      for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
-          kill "$pid" 2>/dev/null
-          echo "swept: killed leaked seat pid $pid (held open files under $d)"
-        fi
-      done
-    done < <(find "$d" -mindepth 3 -maxdepth 3 -path "*/seats/state.json" 2>/dev/null)
-    rm -rf "$d"
-    echo "swept: removed stale fixture $d"
-  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -name "$FIX_PREFIX.*" 2>/dev/null)
-  return 0
-}
-sweep_stale_fixtures
+selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 
-FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+# Nested reviews run the tiny committed fixture inventory, never another host
+# sweep while this suite holds the canonical lock.
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep.lock"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin:/usr/sbin"
+RUN_PATH="$BIN:$PATH" # Fixture mocks precede inherited host-budget shims.
 
 # Stub bd: a couple of ready beads; `bd show` fails so verify.ts takes its
 # read-the-bead-yourself fallback.
 cat > "$BIN/bd" <<'EOF'
 #!/bin/sh
-[ "$1" = "ready" ] || exit 1
-echo "wh-001  P2  ready  a waiting bead"
+case "${1:-}" in
+  ready) echo "wh-001  P2  ready  a waiting bead" ;;
+  # The dispatcher's sweep owns a fresh nested graph. The reviewer still uses
+  # the production read-only wrapper; show deliberately fails as before.
+  init) mkdir -p "${BEADS_DIR:-.beads}" ;;
+  where) node -e 'console.log(JSON.stringify({path:require("fs").realpathSync(".beads")}))' ;;
+  *) exit 1 ;;
+esac
 EOF
 chmod +x "$BIN/bd"
 
@@ -276,10 +264,21 @@ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier; do
   fi
 done
 
+# Every review must run the dispatcher gate. Track the actual runner and its
+# companions plus one tiny suite; an empty fixture tip is not an exemption.
+for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts; do
+  cp -f "$SRC/$f" "$PROJ/seats/$f" || exit 2
+done
+cat > "$PROJ/seats/fixture.selftest.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+printf 'legibility fixture sweep PASS\n'
+SH
 # A git repo: verify.ts resolves branches and reads evidence at the tip.
 ( cd "$PROJ" &&
-  git init -q &&
-  git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base &&
+  git init -q -b main &&
+  git add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+  git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
   git branch fleet/bead-rev && git branch fleet/bead-ev ) \
   || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 
@@ -289,17 +288,29 @@ REPLY="$FIX/reply.txt"
 
 arun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 vrun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$PROJ/seats/verify.ts" "$@" 2>&1)" || RC=$?; }
+fixture_sweep_receipt() {
+  node - "$VDIR/$1.md" <<'JS'
+const fs=require('fs'),assert=require('assert/strict');
+const record=fs.readFileSync(process.argv[2],'utf8');
+assert(record.includes('## Dispatcher full-sweep result'));
+const tip=record.match(/^- tip: ([0-9a-f]+)$/m)?.[1],log=record.match(/^- log: (.+)$/m)?.[1];
+assert(tip&&log);const st=fs.lstatSync(log);assert(st.isFile()&&st.size>0);
+const text=fs.readFileSync(log,'utf8');
+for(const expected of [`tip=${tip}`,`preparedTip=${tip}`,`finalTip=${tip}`,'command=bash seats/selftest-sweep.sh','legibility fixture sweep PASS','selftest-sweep: PASS (1 suite(s))','\nrc=0\n'])assert(text.includes(expected),expected);
+console.log(`fixture dispatcher receipt: rc=0 tip=${tip} suites=1`);
+JS
+}
 render() { local f="${1:-$PROJ/seats/floor.ts}"; shift 2>/dev/null
            RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS="${COLS:-160}" LINES=70 NO_COLOR=1 bun "$f" --once "$@" 2>&1)" || RC=$?; }
 says()   { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seatline(){ printf '%s\n' "$OUT" | grep "$1"; }   # every frame line naming the seat
-state_get(){ env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"; }
+state_get(){ env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"; }
 
 # Hand-inject a seat record: the deterministic-simulation door for classes
 # that have no adapter path (a 401 in the stream; a verdict file waiting).
 inject_seat() {   # $1 = name, $2 = pid, $3 = lastBead ('' for none)
   env HOME="$HOME_FIX" INJ_STATE="$STATE" INJ_NAME="$1" INJ_PID="$2" INJ_BEAD="${3:-}" INJ_PROJ="$PROJ" bun -e '
-    const fs = require("fs");
+    import fs from "node:fs";
     const f = process.env.INJ_STATE;
     const s = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { seats: {} };
     const n = process.env.INJ_NAME, p = process.env.INJ_PROJ;
@@ -332,14 +343,14 @@ if says "CAPACITY: QUOTA"; then
   pass "adapter status surfaces the CAPACITY line"
 else fail "adapter status has no CAPACITY line: $OUT"; fi
 render
-if seatline q-seat | grep -q "PARKED/QUOTA" && seatline q-seat | grep -q "bun seats/adapter.ts probe q-seat"; then
+if seatline q-seat | grep >/dev/null "PARKED/QUOTA" && seatline q-seat | grep >/dev/null "bun seats/adapter.ts probe q-seat"; then
   pass "floor: amber PARKED/QUOTA names the re-probe command"
 else fail "floor: no PARKED/QUOTA line for q-seat: $(seatline q-seat)"; fi
-if seatline q-seat | grep -q "AMBER"; then pass "floor: quota cue is AMBER"
+if seatline q-seat | grep >/dev/null "AMBER"; then pass "floor: quota cue is AMBER"
 else fail "floor: quota cue is not AMBER: $(seatline q-seat)"; fi
 cp "$PROJ/seats/seats.json" "$FIX/seats.before-roster-drop.json"
 env HOME="$HOME_FIX" ROSTER="$PROJ/seats/seats.json" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.env.ROSTER;
   const roster = JSON.parse(fs.readFileSync(f, "utf8"));
   delete roster.seats["q-seat"];
@@ -367,13 +378,13 @@ inject_seat a-seat "$ME" ""
 # the rail's width budget truncates the tail of the line; render WIDE for the
 # full-command assertion (the distinctness checks below use the normal width).
 COLS=400 render
-if seatline a-seat | grep -q "AUTH DEAD" && seatline a-seat | grep -q "then /login in the REPL" && seatline a-seat | grep -q "api_key"; then
+if seatline a-seat | grep >/dev/null "AUTH DEAD" && seatline a-seat | grep >/dev/null "then /login in the REPL" && seatline a-seat | grep >/dev/null "api_key"; then
   pass "floor: red AUTH DEAD with the credential flow"
 else fail "floor: no AUTH DEAD line for a-seat: $(seatline a-seat)"; fi
 render
-if seatline a-seat | grep -q " RED"; then pass "floor: auth cue is RED"
+if seatline a-seat | grep >/dev/null " RED"; then pass "floor: auth cue is RED"
 else fail "floor: auth cue is not RED: $(seatline a-seat)"; fi
-if ! seatline a-seat | grep -q "QUOTA"; then
+if ! seatline a-seat | grep >/dev/null "QUOTA"; then
   pass "auth line is DISTINCT from the quota line"
 else fail "auth and quota render conflated: $(seatline a-seat)"; fi
 
@@ -388,23 +399,23 @@ sleep 0.3
 if ! kill -0 "$DPID" 2>/dev/null; then pass "d-seat pid $DPID SIGKILLed"
 else fail "could not kill d-seat pid $DPID"; fi
 render
-if seatline d-seat | grep -q "PROCESS GONE" && seatline d-seat | grep -q "d-seat.stderr.log"; then
+if seatline d-seat | grep >/dev/null "PROCESS GONE" && seatline d-seat | grep >/dev/null "d-seat.stderr.log"; then
   pass "floor: red PROCESS GONE names the stderr log"
 else fail "floor: no PROCESS GONE line naming the stderr log: $(seatline d-seat)"; fi
-if seatline d-seat | grep -q " RED"; then pass "floor: dead-process cue is RED"
+if seatline d-seat | grep >/dev/null " RED"; then pass "floor: dead-process cue is RED"
 else fail "floor: dead-process cue is not RED: $(seatline d-seat)"; fi
-if ! seatline d-seat | grep -q "AUTH"; then
+if ! seatline d-seat | grep >/dev/null "AUTH"; then
   pass "dead-process line is DISTINCT from the auth line"
 else fail "dead-process and auth render conflated: $(seatline d-seat)"; fi
 arun status
-if printf '%s\n' "$OUT" | grep "d-seat" | grep -q "DIED"; then
+if printf '%s\n' "$OUT" | grep "d-seat" | grep >/dev/null "DIED"; then
   pass "adapter status says DIED, not the calm STOPPED of a graceful stop"
 else fail "adapter status does not say DIED for the killed seat: $OUT"; fi
 if says "check" && says "d-seat.stderr.log"; then
   pass "adapter status points at the stderr log"
 else fail "adapter status DIED line does not name the stderr log: $OUT"; fi
 ROUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$PROJ/seats/recover.ts" 2>&1)"
-if printf '%s\n' "$ROUT" | grep "d-seat" | grep -q "DEAD"; then
+if printf '%s\n' "$ROUT" | grep "d-seat" | grep >/dev/null "DEAD"; then
   pass "recover.ts classifies the SIGKILLed seat DEAD"
 else fail "recover.ts did not classify d-seat DEAD: $ROUT"; fi
 
@@ -416,8 +427,8 @@ VERDICT: BOUNCE
 PUSH: HOLD — review blocked until the author fixes the mismatch
 EOF
 vrun bead-rev fleet/bead-rev r-seat verifier
-if [ $RC -eq 2 ] && grep -q "verdict: BOUNCE" "$VDIR/bead-rev.md" 2>/dev/null; then
-  pass "real verify.ts run recorded a BOUNCE verdict for bead-rev"
+if [ $RC -eq 2 ] && grep -q "verdict: BOUNCE" "$VDIR/bead-rev.md" 2>/dev/null && fixture_sweep_receipt bead-rev; then
+  pass "real verify.ts run recorded a BOUNCE verdict for bead-rev with a passing dispatcher receipt"
 else fail "verify.ts BOUNCE run: rc=$RC (want 2): $OUT"; fi
 cat > "$PROJ/seats/logs/r-seat.jsonl" <<'EOF'
 {"type":"agent_start"}
@@ -426,10 +437,10 @@ cat > "$PROJ/seats/logs/r-seat.jsonl" <<'EOF'
 EOF
 inject_seat r-seat "$ME" bead-rev
 render
-if seatline r-seat | grep -q "REVIEW BLOCKED" && seatline r-seat | grep -q "bead-rev"; then
+if seatline r-seat | grep >/dev/null "REVIEW BLOCKED" && seatline r-seat | grep >/dev/null "bead-rev"; then
   pass "floor: amber REVIEW BLOCKED names the bead"
 else fail "floor: no REVIEW BLOCKED line naming bead-rev: $(seatline r-seat)"; fi
-if ! seatline r-seat | grep -q "VERDICT LANDED" && ! seatline r-seat | grep -q "idle"; then
+if ! seatline r-seat | grep >/dev/null "VERDICT LANDED" && ! seatline r-seat | grep >/dev/null "idle"; then
   pass "a blocked review never renders as done or idle"
 else fail "blocked review rendered as done/idle: $(seatline r-seat)"; fi
 
@@ -457,8 +468,8 @@ VERDICT: BOUNCE
 PUSH: HOLD — proof/shot.png is absent from the branch
 EOF
 vrun bead-ev fleet/bead-ev e-seat verifier --evidence proof/shot.png
-if [ $RC -eq 2 ] && grep -q "UNSATISFIED" "$VDIR/bead-ev.md" 2>/dev/null; then
-  pass "BOUNCE with failed floor checks is recorded, checks carried in the file"
+if [ $RC -eq 2 ] && grep -q "UNSATISFIED" "$VDIR/bead-ev.md" 2>/dev/null && fixture_sweep_receipt bead-ev; then
+  pass "BOUNCE with failed floor checks is recorded, checks and passing dispatcher receipt carried in the file"
 else fail "BOUNCE-with-unsatisfied run: rc=$RC (want 2), or no UNSATISFIED in the record"; fi
 cat > "$PROJ/seats/logs/e-seat.jsonl" <<'EOF'
 {"type":"agent_start"}
@@ -466,10 +477,10 @@ cat > "$PROJ/seats/logs/e-seat.jsonl" <<'EOF'
 EOF
 inject_seat e-seat "$ME" bead-ev
 render
-if seatline e-seat | grep -q "EVIDENCE UNSATISFIED" && seatline e-seat | grep -q "bead-ev"; then
+if seatline e-seat | grep >/dev/null "EVIDENCE UNSATISFIED" && seatline e-seat | grep >/dev/null "bead-ev"; then
   pass "floor: EVIDENCE UNSATISFIED is its own state, naming the bead"
 else fail "floor: no EVIDENCE UNSATISFIED line for e-seat: $(seatline e-seat)"; fi
-if ! seatline e-seat | grep -q "APPROVE" && ! seatline e-seat | grep -q "VERDICT LANDED"; then
+if ! seatline e-seat | grep >/dev/null "APPROVE" && ! seatline e-seat | grep >/dev/null "VERDICT LANDED"; then
   pass "unsatisfied evidence never renders as APPROVE"
 else fail "unsatisfied evidence rendered as approval: $(seatline e-seat)"; fi
 # 5c: a truncated/malformed verdict file routes to a human, never to success.
@@ -481,10 +492,10 @@ cat > "$PROJ/seats/logs/u-seat.jsonl" <<'EOF'
 EOF
 inject_seat u-seat "$ME" bead-u
 render
-if seatline u-seat | grep -q "VERDICT UNREADABLE" && seatline u-seat | grep -q "routed to human"; then
+if seatline u-seat | grep >/dev/null "VERDICT UNREADABLE" && seatline u-seat | grep >/dev/null "routed to human"; then
   pass "floor: a malformed verdict file reads VERDICT UNREADABLE — routed to human"
 else fail "floor: no VERDICT UNREADABLE line for u-seat: $(seatline u-seat)"; fi
-if ! seatline u-seat | grep -q "idle" && ! seatline u-seat | grep -q "VERDICT LANDED"; then
+if ! seatline u-seat | grep >/dev/null "idle" && ! seatline u-seat | grep >/dev/null "VERDICT LANDED"; then
   pass "an unreadable verdict never renders as success"
 else fail "unreadable verdict rendered as success: $(seatline u-seat)"; fi
 
@@ -526,7 +537,7 @@ if cmp -s "$FLOOR" "$SAB1"; then
   fail "canary 1: sed no longer bites (no EVIDENCE UNSATISFIED line) — fix this test"
 else
   render "$SAB1"
-  if seatline e-seat | grep -q "EVIDENCE UNSATISFIED"; then
+  if seatline e-seat | grep >/dev/null "EVIDENCE UNSATISFIED"; then
     fail "canary 1: EVIDENCE UNSATISFIED survived its removal — these checks prove nothing"
   else pass "canary 1: cutting the EVIDENCE UNSATISFIED state is caught by phase 5's check"; fi
 fi
@@ -538,7 +549,7 @@ if cmp -s "$FLOOR" "$SAB2"; then
   fail "canary 2: sed no longer bites (no VERDICT UNREADABLE line) — fix this test"
 else
   render "$SAB2"
-  if seatline u-seat | grep -q "VERDICT UNREADABLE"; then
+  if seatline u-seat | grep >/dev/null "VERDICT UNREADABLE"; then
     fail "canary 2: VERDICT UNREADABLE survived its removal — these checks prove nothing"
   else pass "canary 2: cutting the VERDICT UNREADABLE state is caught by phase 5's check"; fi
 fi
@@ -552,8 +563,8 @@ if cmp -s "$FLOOR" "$SAB3"; then
 else
   render "$SAB3"
   CONFLATED=0
-  seatline a-seat | grep -q "AUTH DEAD" || CONFLATED=1          # auth wording gone
-  seatline a-seat | grep -q "QUOTA" && CONFLATED=1              # quota wording present
+  seatline a-seat | grep >/dev/null "AUTH DEAD" || CONFLATED=1          # auth wording gone
+  seatline a-seat | grep >/dev/null "QUOTA" && CONFLATED=1              # quota wording present
   if [ $CONFLATED -eq 1 ]; then
     pass "canary 3: forcing auth to wear quota's wording is caught by the distinctness checks"
   else
@@ -568,7 +579,7 @@ if cmp -s "$PROJ/seats/adapter.ts" "$SAB4"; then
   fail "canary 4: sed no longer bites (the died line moved) — fix this test"
 else
   SOUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$SAB4" status 2>&1)"
-  if printf '%s\n' "$SOUT" | grep "d-seat" | grep -q "DIED"; then
+  if printf '%s\n' "$SOUT" | grep "d-seat" | grep >/dev/null "DIED"; then
     fail "canary 4: DIED survived its removal — these checks prove nothing"
   else pass "canary 4: cutting DIED is caught by phase 3's adapter-status check"; fi
 fi
