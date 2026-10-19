@@ -9,7 +9,7 @@ PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats/bin" "$PROJ/scripts" "$FIX/realbin" "$FIX/home"
 cp "$HERE/bin/host-build-shim" "$PROJ/seats/bin/host-build-shim" || exit 2

@@ -80,7 +80,7 @@ cleanup() {
   fi
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- fixture -----------------------------------------------------------------
 # Canonicalized for the same reason the other seat selftests canonicalize: on
