@@ -62,7 +62,8 @@ for (const mode of modes) {
     const made = command("mkfifo", [release]); assert.equal(made.code, 0, made.stderr);
     // The outer canonical host lock is held. This tiny fixture payload is not
     // a second full product sweep: stop after the real verifier setup completes.
-    fs.writeFileSync(path.join(project, "seats/selftest-sweep.sh"), '#!/usr/bin/env bash\nset -eu\nbd list --json >/dev/null\nprintf "%s\\n" "$PWD" > "$METRICS_CASE/review-cwd"\nprintf "%s\\n" "$HOME" > "$METRICS_CASE/review-home"\nprintf "ready\\n" > "$METRICS_CASE/setup-ready"\nread -r release < "$METRICS_CASE/release.fifo"\n', { mode: 0o700 });
+    fs.writeFileSync(path.join(project, "seats/metrics-fixture.selftest.sh"), '#!/usr/bin/env bash\nset -eu\nbd list --json >/dev/null\nprintf "%s\\n" "$PWD" > "$METRICS_CASE/review-cwd"\nprintf "%s\\n" "$HOME" > "$METRICS_CASE/review-home"\nprintf "ready\\n" > "$METRICS_CASE/setup-ready"\nread -r release < "$METRICS_CASE/release.fifo"\n', { mode: 0o700 });
+    fs.writeFileSync(path.join(project, "seats/selftest-sweep.sh"), '#!/usr/bin/env bash\nset -eu\nexec bash "$(dirname "$0")/metrics-fixture.selftest.sh"\n', { mode: 0o700 });
     for (const args of [["init", "-q", "-b", "main"], ["add", "seats"], ["-c", "user.name=fixture", "-c", "user.email=fixture@local", "-c", "commit.gpgsign=false", "commit", "-qm", "review metrics fixture"]]) {
       const r = command("git", args, project); assert.equal(r.code, 0, r.stderr);
     }
@@ -137,10 +138,10 @@ for (const mode of modes) {
     for (;;) { const after = senders(); if (!after.found.length) break; await new Promise(resolve => setTimeout(resolve, 100)); }
     if (mode === "review-sweep" && fs.existsSync(ready)) fs.writeFileSync(release, "release\n");
     const native = joined ? await joined : undefined;
-    if (native) { assert.equal(native.code, 0, stderr); assert.equal(native.signal, null); assert(stdoutEOF && stderrEOF); }
     const joinedRecord = { mode, localEndpointClosed: true, remainingOwnedSenders: 0, signalsSent: false, beforeCount: beforeCleanup?.found.length, parent: { ...native, stdoutEOF, stderrEOF, stdout, stderr } };
     fs.writeFileSync(path.join(dir, "joined.json"), JSON.stringify(joinedRecord, null, 2));
     console.log("CLEANUP " + JSON.stringify(joinedRecord));
+    if (native) { assert.equal(native.code, 0, stderr + stdout); assert.equal(native.signal, null); assert(stdoutEOF && stderrEOF); }
   }
 }
 console.log(`bd metrics regression: ${modes.length} native setup legs, ${failed} failures`);
