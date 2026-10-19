@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 . "$HERE/selftest-lib.sh"
 SOURCE="${1:-$HERE/..}"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-adapter-dead-pipe.XXXXXX")" || exit 2

@@ -48,8 +48,8 @@
  * MALFORMED — exit 1, mirroring the NOT BENCHED parser rule — never exit 0.
  *
  * Why an argument rather than parsing `Evidence:` lines out of `bd show`:
- * the bead text reaching this dispatcher is a human rendering (and bd may be
- * unreachable, which beadClaim already tolerates). The commander reads the
+ * the contract gate reads bead text, but artifact selection is explicit.
+ * The commander reads the
  * bead and restates its requirement as arguments — the same relationship the
  * bead claim itself already has to the dispatch.
  *
@@ -72,11 +72,14 @@
  * --repo still wins. Evidence paths stay relative to the selected repository.
  *
  * Exit: 0 APPROVE | 2 BOUNCE | 3 DISCOVER | 4 reviewer busy/retry |
- * 5 no-verdict (reviewer ended its turn without a judgment) | 1 other errors.
+ * 5 no-verdict (reviewer ended its turn without a judgment) | 6 refused: not a contract |
+ * 1 other errors (including a malformed verdict — the machine must never mistake
+ * an error for a judgment).
  * A no-verdict outcome is recorded, never treated as an approval or timeout.
  */
 
 import * as crypto from "node:crypto";
+import { checkBeadContract, contractRemedy, parseContract, repoDeclarations } from "./contract";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -643,8 +646,7 @@ function defaultRepoArgFromTemplateSource(): string | undefined {
 }
 
 function repoDeclarationFromClaim(claim: string): string | null {
-  const m = claim.match(/^\s*Repo:\s*([^\s`'"]+)/mi);
-  return m ? m[1] : null;
+  return repoDeclarations(claim)?.[0] ?? null;
 }
 
 function repoArgFromClaim(claim: string): string | undefined {
@@ -958,15 +960,18 @@ function requireVerifierSeat(explicit: string | undefined, authorSeat: string): 
 }
 
 function beadClaim(beadId: string): string {
-  // Best effort: embed the claim so the verdict file is self-contained. If
-  // bd is not reachable from here, the verifier reads the bead itself — it
-  // has a shell; this dispatcher having one is a convenience, not a premise.
+  // Contract validation reads selected JSON fields; reviewers still need the
+  // full bd show record, including comments, labels and dependency context.
   try {
-    const out = execFileSync("bd", ["show", beadId], { encoding: "utf8", timeout: 30000 });
+    const out = execFileSync("bd", ["show", beadId], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000 });
     return `The bead, as \`bd show ${beadId}\` prints it from the dispatcher's machine:\n\n${out.trim()}`;
   } catch {
     return `The dispatcher could not run \`bd show ${beadId}\` — read the bead yourself (\`bd show ${beadId}\`) before judging anything against it.`;
   }
+}
+
+function refuseUncontractedReview(beadId: string, errors: string[]): void {
+  if (errors.length) die(contractRemedy(beadId, errors), 6);
 }
 
 interface SourceDeclaration { original: string; absolute: string }
@@ -1372,7 +1377,14 @@ async function main(): Promise<void> {
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
   if (verifierArg) validateSegment("seat name", verifierArg);
-  const claim = beadClaim(beadId);
+  const contract = checkBeadContract(ROOT, beadId);
+  refuseUncontractedReview(beadId, contract.errors); // contract-gate: before reviewer identity or harness spawn
+  const claim = [
+    beadClaim(beadId),
+    ``,
+    `Parsed work contract (validated before reviewer spawn):`,
+    JSON.stringify(parseContract(contract.text ?? ""), null, 2),
+  ].join("\n");
   const repoRoot = resolveRepoRoot(repoArg, claim);
   if (path.resolve(repoRoot) !== path.resolve(earlyRepoRoot)) sweepStaleScratchWorktrees(repoRoot);
   const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);

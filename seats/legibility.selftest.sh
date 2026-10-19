@@ -36,6 +36,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -uo pipefail   # deliberately not -e: the injected failures are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 SRC="${1:-$HERE}"
 SEED_TS="floor.ts adapter.ts verify.ts recover.ts"
 for f in $SEED_TS; do

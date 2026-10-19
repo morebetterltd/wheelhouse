@@ -50,6 +50,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -uo pipefail   # deliberately not -e: several cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 SEATS_SRC="${1:-$HERE}"
 ADAPTER="$SEATS_SRC/adapter.ts"
 BRIEFS="$SEATS_SRC/briefs.ts"

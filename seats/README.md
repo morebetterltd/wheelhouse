@@ -24,6 +24,7 @@ The main files here:
   with `seat_push=off` or `seat_worktrees=per-task`.
 - `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
+- `intake.ts` — durable signal intake: post, dispose, list, show and audit signals in `seats/intake.jsonl`.
 - `channels.ts` — reads and validates install-owned `seats/channels.json` declarations for principal/stakeholder channels.
 - `comms.ts` — the single declared-channel send gate; sends by channel name, confirms read-back, and records refs in ignored `seats/comms.jsonl`.
 - `report-issues.ts` — commander-run, opt-in publisher for `template-report` tasks: dry-runs or files routed GitHub issues with scrubbed bodies, dedupe, and `external-ref` writeback.
@@ -56,6 +57,65 @@ REPL or by an operator placing an api_key entry; it never enters git. The
 roster is safe to commit precisely because it records only names, paths,
 optional non-secret human labels, and optional auth-route names; the moment a
 credential appears in it, that stops being true.
+
+## Intake — signals reaching the producer
+
+Any script posts one signal through this one command:
+
+```bash
+bun seats/intake.ts post --kind error --source build-script --title 'Build failed' --text 'The isolated build exited nonzero'
+```
+
+`post --kind <kind> --source <who or what> --title <one line> [--text <body> | --from-stdin] [--ref <url, path or id>]`
+prints only its new `sig-xxxx` id. The five kinds are exactly `goal`,
+`isa-change`, `report`, `error`, and `finding`. The body defaults to empty;
+`--from-stdin` reads the entire body verbatim, including whitespace and newlines.
+Text is data and causes nothing: no sentinel parsing, command execution, bd
+call, transport or inbox write. This includes `@commander:` and `@principal:`
+instructions. Each successful call appends exactly one posted row; there is no
+`--dedupe-key`. Duplicate signals are a producer judgment, not a write filter.
+
+Missing kind/source/title, a multiline title, body over 64 KB (65536 UTF-8
+bytes), or a credential-shaped string in any supplied field is refused before
+appending. Credential diagnostics name only the field, never its value.
+
+Record exactly one disposition per signal:
+
+```bash
+bun seats/intake.ts dispose <sig-id> produced --work <bead-id>
+bun seats/intake.ts dispose <sig-id> parked --reason '<why wait>' --revive '<what would revive it>'
+bun seats/intake.ts dispose <sig-id> dropped --reason '<why not>'
+bun seats/intake.ts list [--open|--all] [--json]
+bun seats/intake.ts show <sig-id>
+bun seats/intake.ts audit
+```
+
+`produced` requires `--work`; `parked` requires both `--reason` and `--revive`;
+`dropped` requires `--reason`. Unknown ids and second dispositions are refused;
+the latter diagnostic names the existing disposition. `by` records
+`$BEADS_ACTOR`, else `$USER` (or `unknown` if both are absent). Writers serialize
+through a temporary PID lock so concurrent dispositions cannot both append.
+`list` defaults to open signals, newest first; `--all` includes disposed ones.
+`--json` returns folded rows `{id, posted, disposition}`; `show` returns one such
+row without writing. `audit` prints one line per open signal (id, kind, age,
+title), exits **1** if any remain, and **0** silently when all are disposed.
+Post/dispose/list/show succeed with **0**; usage, validation, unknown-id,
+already-disposed, writer-busy and ledger errors exit **2**.
+
+The gitignored `seats/intake.jsonl` ledger is append-only, one JSON event per
+line, written only by `intake.ts`:
+
+- Posted: `{type:"posted", id, at, kind, source, title, text, ref?}`.
+- Disposed: `{type:"disposed", id, at, disposition, work?, reason?, revive?, by}`.
+
+The herald consumes posted events by persisted byte offset and emits one
+`signal-posted`, `input-required` inbox row pointing to `intake.ts show`.
+Re-scans/crash recovery do not duplicate it; dispositions do not wake anyone.
+The inbox row is the poke; the ledger is the record. The commander lists open
+signals and dispatches their ids to the producer, not their embedded
+instructions as commands. Run from the install root, like `needs.ts`; tests or
+isolated callers may set `WHEELHOUSE_INTAKE_ROOT` to a fixture root. No transport
+or channel binding changes are involved.
 
 ## Needs — what the commander asks of a human
 
@@ -218,8 +278,10 @@ With no `seats/pool.json`, `seats.json` is still the full roster and all existin
 
 `bun seats/pool.ts check` validates a pool without reading credential files. It requires each entry to name a harness, provider, offered models, and an `account.dir` under this install's `$HOME/.pi-seats-<namespace>/pool/<entry>` root; `seats/seat-env.sh <namespace> --pool <entry>` provisions that directory. The pool refuses unknown harnesses, unknown keys, missing login folders, shared login directories, commander's login directories, role limits outside the listed entries, role models the entry does not offer, fixed-roster conflicts for the same role, and token-shaped strings. It records login folder paths and auth-route names, never credentials.
 
+`bun seats/roster.ts check` validates the required producer at install and after roster edits (optional `--root <install>`). It refuses fixed builder seats or a configured worker pool without a non-shadow `producer` entry. A standing producer or an explicit external commander-subagent producer satisfies the rule; the commander alone does not. Exit 0 is valid, 2 is refusal/unreadable input, 3 is usage. This is an explicit install check, not a new gate in every runtime roster reader; it reads roster/pool metadata only, not credentials, and changes nothing.
+
 `seats.json` is plain JSON with no comments, so its fields are documented
-here instead.
+here instead. The Claude Code producer in `seats/seats.json.example` carries A9's read/graph-only tool limits; for Pi and Codex producers the brief is the limit.
 
 Top level:
 
@@ -232,8 +294,11 @@ Each seat entry:
 
 | Field | What it is |
 |---|---|
-| `role` | What the seat does: `worker`, `reviewer`, `verifier`, `researcher`, or another installed brief. Free-form string; the crew briefs define what each role means. Installed fleets read `wheelhouse/fleet/WORKER.md` for workers and `wheelhouse/crew/<ROLE>.md` for other roles, with `contracts/<ROLE>.md` retained as the template-tree fallback. |
+| `role` | What the seat does: `producer` (required, judges signals and writes contracts), `worker`, `reviewer`, `verifier`, `researcher`, or another installed brief. Free-form string; the crew briefs define what each role means. Installed fleets read `wheelhouse/fleet/WORKER.md` for workers and `wheelhouse/crew/<ROLE>.md` for other roles, with `contracts/<ROLE>.md` retained as the template-tree fallback. |
 | `harness` | Optional harness driver, one of `pi`, `claude-code`, or `codex`; absent means `pi` for existing rosters. `account.dir` stays under the historical `~/.pi-seats-<namespace>/<seat>` root for every harness, but the driver reads it as `PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME` respectively. The adapter implements all three harnesses, validates the harness name before launch, and STOPs naming the seat rather than spawning the wrong harness. `claude-code` runs a resident shim around `claude -p --input-format stream-json --output-format stream-json`; `codex` runs a resident shim around `codex app-server`. Both emit the same FIFO/log protocol as a Pi seat and strip `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `OPENAI_API_KEY` from the child environment. |
+| `external` / `runtime` | A producer subagent of the commander is recorded with `"external": true, "runtime": "commander-subagent"`; it reads PRODUCER.md and is not provisioned or spawned by the adapter. The producer role remains required. |
+| `allowedTools` | Claude Code producer: `Read,Grep,Glob,Bash(bd:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*)`. These read/graph-only tools are A9's boundary in the roster example; for Pi and Codex producers the brief is the limit. |
+| `disallowedTools` | Claude Code producer: `Edit,Write,NotebookEdit`. It never edits product repos or judges built work. |
 | `shadow` | Optional boolean; absent means `false`. `"shadow": true` marks a mirror seat whose output is recorded but never gates or carries assigned work. The commander dispatches to a shadow seat only as a mirror of a gating dispatch, and its verdict or review comment is prefixed `SHADOW`; it informs the real reviewer/commander but never gates a merge. `seat-env.sh` and `adapter.ts` reject any present non-boolean value. |
 | `provider` | Whose model the seat runs (`anthropic`, `openai`, ...), narrowed by harness: `claude-code` is first-party `anthropic`, `codex` is `openai-codex` or `openai`, and `pi` uses Pi's provider list. Recorded so the roster answers "which vendor is this seat" without starting the seat. |
 | `model` | The model the seat is pinned to, in the provider's own id format. Pin reasoning effort by appending Pi's thinking-level suffix to this same string, for example `gpt-5.6-sol:high`. |
@@ -381,7 +446,7 @@ previous bead's branch to origin; a failed push is written to the seat log as
 seat worktree (deletions of once-committed build output under
 `.cargo-target-shared/` or `car-rs/.wt-target/` do not count). New worktrees
 are capped at the number of seats in `seats/seats.json` plus two. Seats in
-non-worker roles — reviewer, verifier, designer, researcher — run from the
+non-worker roles — reviewer, verifier, producer, researcher — run from the
 project root and take no slot; a roster entry may set `"worktree": true|false`
 to override its role's default. A `.pruned-placeholder` directory left by
 cleanup is recreated on the next dispatch; a placeholder holding anything else
@@ -643,7 +708,10 @@ The exit code IS the verdict, so the commander's scripts can branch on it:
 | `0` | APPROVE — the bead's done holds, evidence in the output. May carry the brief's `— NOT BENCHED: <gap>` qualifier, preserved in the verdict file: read it before merging on a partial-coverage approval. |
 | `2` | BOUNCE — defects listed; redispatch to the author |
 | `3` | DISCOVER — the bead itself needs the commander's judgment |
-| `1` | error — no verdict exists: a STOP, a dead pi, a timeout, or output with no (or an ambiguous) `VERDICT:` line. Never treat as a verdict. |
+| `1` | error — a STOP, failed reviewer process, timeout, or malformed/ambiguous output. Never treat as a verdict; a recognized completed turn without a judgment uses `5` below. |
+| `4` | reviewer busy — all eligible reviewer seats are occupied; retry later. |
+| `5` | no-verdict — the reviewer ended its turn without a judgment. This is neither APPROVE nor BOUNCE. |
+| `6` | refused: not a contract — invalid Intent/Outcomes or unreadable bead; no reviewer identity chosen and no harness spawned. Fix the contract before retrying. |
 
 The post-output stall watchdog is the smaller of `--timeout-ms` / `WHEELHOUSE_VERIFY_TIMEOUT_MS` and `--no-event-timeout-ms` / `WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS`. With defaults of 900000 ms for `--timeout-ms` and 600000 ms for `--no-event-timeout-ms`, the effective default quiet-period limit is 600000 ms (10 minutes). This is not a wall-clock cap on the whole verifier turn: after output begins, each stream event resets the watchdog. To allow a verifier to legitimately go quiet between stream events for longer, raise `--no-event-timeout-ms <ms>`; for quiet periods longer than the `--timeout-ms` value, raise `--timeout-ms <ms>` too. Explicit flags win over their environment variables. Separate knobs cover first-output silence (`--first-output-timeout-ms` / `WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS`). On timeout, `verify.ts` writes `seats/verdicts/<bead-id>.partial.md`, prints elapsed time and the last tool/phase it saw, and exits 1. A timeout is not a provider/auth failure and does not start the probe cadence.
 
@@ -808,6 +876,24 @@ never reads `sessionId` at all — author/verifier distinctness there is
 `seats/fleet-gate.sh` is optional. New installs do not wire it by default because the Dispatch Office herald and `seats/alerts.ts` now do the action detection off the prompt path and poke only when an alert changes. If an install chooses to keep a `UserPromptSubmit` status line, this script is a sub-second reader: it opens only `seats/run/fleet-snapshot.json`, prints one line with live worker seats, ready count, review backlog count, and active alert names, and exits 0. It does not call `bd`, `gh`, `adapter.ts status`, or scan herald logs.
 
 Until the herald writes the first snapshot it prints `🚢 FLEET: no snapshot yet — run seats/cockpit.sh`. If the snapshot is older than three alert intervals, it appends `snapshot <age>s old — is the herald running?`. GitHub issue, inbox, capacity, low-disk, and pane-validity checks live in `seats/alerts.ts`; active conditions appear here only by alert name from the snapshot.
+
+## Work contract shape gate
+
+`seats/contract.ts` parses the plain-text grammar in `wheelhouse/GRAPH.md`, **Every bead is a contract**. Every outcome names its consumer, surface and that consumer's check: person-on-surface → walk, person-reading → read, machine → run. Outcomes have sequential ids from O1; Intent is non-blank and precedes Outcomes. Signal is required at dispatch/review; Skills enforcement arrives separately.
+
+```bash
+bun seats/contract.ts check <bead-id>
+bun seats/contract.ts check --file <path>
+bun seats/contract.ts audit
+bun seats/contract.ts trace <bead-id|merge-sha>
+bun seats/contract.ts lint-intent --file <path>
+```
+
+`check` exits 0 for a valid contract, 2 for invalid shape (printing every error with bead/file, outcome and field), 3 for unreadable input. `audit` checks open and in_progress beads, prints one line per failing bead with its first error, and exits 0 if all pass, 1 if any are invalid, 3 if bd is unreadable. Root defaults to the script's parent directory, overridable with `WHEELHOUSE_CONTRACT_ROOT`. `readBeadText` reads `bd show <id> --json` from that root, joining title/description/notes/design/body, or accepting non-JSON stdout for plain-file stubs. With `WHEELHOUSE_SKIP_BD=1`, a readable `WHEELHOUSE_CONTRACT_FIXTURE` is required; a failed bd read may use that explicit fixture, but there is no empty-text pass. `lint-intent --file <path>` checks an intent alone: literal first-line `Intent:`, non-blank prose and no numbered build steps, outcome rows/fields or `Outcomes:` header. It exits 0 for valid shape or 2 naming the first offending line (also 2 for an unreadable file). It does not read the graph or prove the intent's meaning; the intent skill pairs it with a fresh-reader check.
+
+`Signal:` accepts `sig-<id>` (a posted row in `seats/intake.jsonl`), `isa-gap: <claim>` (shape `[A-Z]+[0-9-]+`, not ISA existence), or `install-procedure`. Missing/invalid Signal refuses naming the bead. A missing ledger prints an id-check-skipped line; an existing unreadable/malformed ledger refuses. With `WHEELHOUSE_SKIP_BD=1`, `WHEELHOUSE_INTAKE_FIXTURE=<ledger>` supplies it; an unset fixture prints the skip line. `trace` reads merge → contract → Signal → intake (and lists all matching merges when starting from a bead), exits 0 for a complete chain or 2 naming an unresolved link, and never writes Git, the graph or the ledger. Repo selection is the bead's `Repo:` paths (including `TEMPLATE (template/)`, `template/`, `TEMPLATE.`, or `UMBRELLA`), then `product-repo=`/`product-repos=`, then the root. SHA lookup also checks immediate child git roots before checking the bead's declared repos.
+
+Dispatch checks before RPC, state writes, worktree switching or launch. `WHEELHOUSE_DISPATCH_FORCE=1` cannot bypass it. `spawn <seat> <bead-id>` only prepares a worktree and sends no prompt, so it is not gated. `verify.ts` applies the same check before reviewer selection, refusing with exit 6.
 
 ## Intent gate
 

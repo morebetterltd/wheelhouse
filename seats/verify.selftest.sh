@@ -41,6 +41,7 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 VERIFY_DIR="$(cd "$(dirname "$VERIFY")" && pwd)"
 READINESS_DRIVER="${WHEELHOUSE_TEST_VERIFY_READINESS_DRIVER:-$(dirname "$SELFTEST_LIB")/fixtures/verify-readiness.ts}"
 BRIEFS="$VERIFY_DIR/briefs.ts"
@@ -464,7 +465,9 @@ verb="${1:-}"
 case "$verb" in
   show)
     [ "${STUB_BD_SHOW_FAIL:-0}" != 1 ] || { echo 'fixture bd show unavailable' >&2; exit 1; }
-    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf 'fixture bead\n'; fi
+    if [[ " $* " = *" --json "* ]] && [ -n "${STUB_BD_JSON_SHOW_FILE:-}" ]; then
+      cat "$STUB_BD_JSON_SHOW_FILE"
+    elif [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi
     exit 0 ;;
   comments)
     printf 'fixture comments\n'; exit 0 ;;
@@ -678,6 +681,14 @@ VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
 
+phase "contract gate: no-outcomes review is refused before harness spawn"
+# The gate-removed negative must reach a normally answering harness, not fail
+# because the reply fixture has not been created yet.
+printf 'VERDICT: APPROVE\n' > "$REPLY"
+run_with_bd_show "$HERE/fixtures/contracts/no-outcomes.md" bead-no-outcomes fleet/bead-1 worker-1
+[ "$RC" = 6 ] && says 'STOP:' && says 'bead-no-outcomes is not a contract' && says 'bead-no-outcomes: contract: Outcomes: missing' && pass 'contract refusal: review exits 6 naming bead and Outcomes' || fail "contract refusal: review expected exit 6, got $RC: $OUT"
+[ ! -f "$VINVOKED" ] && pass 'contract refusal: no reviewer harness spawned' || fail 'contract refusal: reviewer harness was spawned'
+if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 phase "fixture containment — exclusive H4 publication and bounded release wait"
 BOUNDS_DIR="$(mktemp -d "$FIX/holder-bounds.XXXXXX")"
 if bun "$READINESS_DRIVER" "$VERIFY" "$BOUNDS_DIR" holder-bounds; then
@@ -833,7 +844,10 @@ git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
 SWEEP_BD_SHOW="$FIX/sweep-bd-show.txt"
-cat > "$SWEEP_BD_SHOW" <<'EOF'
+# Ordinary show overrides must pass the same contract gate as the default.
+# Refusal cases opt into explicit non-contract fixtures above.
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$SWEEP_BD_SHOW"
+cat >> "$SWEEP_BD_SHOW" <<'EOF'
 ○ bead-sweep [task]
 
 DESCRIPTION
@@ -842,6 +856,11 @@ DESCRIPTION
 
   The full seats/*.selftest.sh sweep passes.
 EOF
+if bun "$VERIFY_DIR/contract.ts" check --file "$SWEEP_BD_SHOW"; then
+  pass "sweep bd-show fixture is a valid work contract"
+else
+  fail "sweep bd-show fixture is not a contract"; exit 1
+fi
 RUN_PROJ="$SWEEP_PROJ"
 VARGV="$HOME_FIX/.pi-seats-sweep/verifier/argv.json"
 SWEEP_LOCK="$FIX/review-sweep.lock"
@@ -866,7 +885,7 @@ check_dispatcher_receipts() {
       state-writes) outcome='The adapter recovers an abandoned empty state.lock and preserves live owners.' ;;
       process-isolation) outcome='The no-pi-spawned assertion counts only processes the test itself could have started.' ;;
     esac
-    printf 'Trace: %s regression\n\nIntent:\nCheck the claimed behavior independently.\n\nOutcomes:\n- O1 %s\n  consumer: machine — fixture runner\n  surface: fixture state and process records\n  check: run — inspect the claimed behavior\n' "$style" "$outcome" > "$SWEEP_GENERIC_CLAIM"
+    printf 'Trace: %s regression\nSignal: isa-gap: K1\nSkills: intent@1.0.0 outcomes@1.0.0\n\nIntent:\nCheck the claimed behavior independently.\n\nOutcomes:\n- O1 %s\n  consumer: machine — fixture runner\n  surface: fixture state and process records\n  check: run — inspect the claimed behavior\n' "$style" "$outcome" > "$SWEEP_GENERIC_CLAIM"
     WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" "bead-implicit-$style" fleet/bead-1 worker-1
     if [ "$RC" = 0 ] && [ -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" ] && grep -q '## Dispatcher full-sweep result' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" && grep -q 'sweep evidence rc=0 log=' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md"; then
       pass "$style claim without sweep keywords still gets a dispatcher receipt"
@@ -1120,7 +1139,8 @@ else fail "umbrella layout: default repo verdict did not record product repo and
 UMB_AMBIG_TIP="$(git -C "$UMB_PROJ" rev-parse fleet/bead-ambiguous)"
 PROD_AMBIG_TIP="$(git -C "$UMB_PROJ/product" rev-parse fleet/bead-ambiguous)"
 BD_UMBRELLA_REPO="$FIX/bd-umbrella-repo.txt"
-cat > "$BD_UMBRELLA_REPO" <<EOF
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$BD_UMBRELLA_REPO"
+cat >> "$BD_UMBRELLA_REPO" <<EOF
 fixture ambiguous repo bead
 
 DESCRIPTION
@@ -1147,7 +1167,8 @@ mkdir -p "$ALLOWED_SIB" "$UNLISTED_SIB"
 printf 'allowed sibling source\n' > "$ALLOWED_SIB/allowed.txt"
 printf 'unlisted sibling source\n' > "$UNLISTED_SIB/secret.txt"
 BD_SOURCE="$FIX/bd-source.txt"
-cat > "$BD_SOURCE" <<EOF
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$BD_SOURCE"
+cat >> "$BD_SOURCE" <<EOF
 wheelhouse-source [BUG]
 
 DESCRIPTION
@@ -1498,6 +1519,34 @@ run bead-1nb-expired fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && says "BENCH GAP EXPIRED" && grep -q "BENCH GAP EXPIRED" "$VDIR/bead-1nb-expired.md" 2>/dev/null; then
   pass "expired NOT BENCHED gap passes only with an explicit gate nudge"
 else fail "expired NOT BENCHED gap passed silently or failed wrong (exit $RC): $OUT verdict=$(cat "$VDIR/bead-1nb-expired.md" 2>/dev/null)"; fi
+
+phase "1a. full task context survives contract validation"
+# The real bd capture has a JSON array for validation and a rendered show
+# with COMMENTS/PARENT/BLOCKS. Those are separate views, not interchangeable.
+CONTEXT_SHOW="$FIX/review-context.txt"
+CONTEXT_JSON="$FIX/review-contract.json"
+node - "$WHEELHOUSE_CONTRACT_FIXTURE" "$CONTEXT_SHOW" "$CONTEXT_JSON" <<'NODE'
+const fs=require('fs');
+const [valid,raw,json]=process.argv.slice(2),description=fs.readFileSync(valid,'utf8');
+fs.writeFileSync(json,JSON.stringify([{id:'bead-review-context',title:'Fixture task',description}]));
+fs.writeFileSync(raw,description+'\nLABELS\n  fixture-review-label\nPARENT\n  fixture-parent-contract\nBLOCKS\n  fixture-dependent-contract\nCOMMENTS\n  fixture worker: FIXTURE_TASK_COMMENT_MUST_REACH_REVIEWER\n');
+NODE
+STUB_BD_JSON_SHOW_FILE="$CONTEXT_JSON" run_with_bd_show "$CONTEXT_SHOW" bead-review-context fleet/bead-1 worker-1
+if [ "$RC" -eq 0 ] && node - "$VARGV" "$CONTEXT_SHOW" <<'NODE'
+const fs=require('fs'),assert=require('assert');
+const argv=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),prompt=argv.at(-1);
+assert(prompt.includes('FIXTURE_TASK_COMMENT_MUST_REACH_REVIEWER'),'fixture task comment missing from assembled review prompt');
+for(const marker of ['fixture-review-label','fixture-parent-contract','fixture-dependent-contract']) assert(prompt.includes(marker));
+assert(prompt.includes(fs.readFileSync(process.argv[3],'utf8').trim()));
+const heading='Parsed work contract (validated before reviewer spawn):\n';
+assert(prompt.includes(heading));
+// JSON.stringify's complete pretty-printed block ends at the first blank line;
+// dispatcher sweep evidence may now appear before the push-authority section.
+const parsed=JSON.parse(prompt.split(heading)[1].split('\n\n')[0].trim());
+assert(parsed.intent);assert(parsed.outcomes.length);assert.equal(parsed.outcomes[0].id,'O1');assert.deepEqual(parsed.errors,[]);
+NODE
+then pass "review prompt preserves fixture task comment, labels, dependencies and parsed contract"
+else fail "review prompt lost full bd show context or parsed contract rc=$RC"; fi
 
 phase "1b. branch moves mid-pass — verdict stays pinned, publish waits"
 MOVE_PROJ="$FIX/proj-move"
