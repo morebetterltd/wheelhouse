@@ -1800,4 +1800,10 @@ async function main(): Promise<void> {
 
 // The review may invoke arbitrary project benches. Hold the same admission as
 // its dispatcher sweep for the whole review, before any model watchdog starts.
-if (import.meta.main) heavyTestEntry(import.meta.path, main).catch((e) => die(e?.message ?? String(e)));
+if (import.meta.main) {
+  // Route a pre-main admission refusal too; it must not disappear merely
+  // because no scratch/model process (and thus no main parser) could start.
+  const earlyBead = process.argv[2];
+  if (earlyBead && !earlyBead.startsWith("-")) setVerifierGateBead(earlyBead);
+  heavyTestEntry(import.meta.path, main).catch((e) => die(e?.message ?? String(e)));
+}

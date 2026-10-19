@@ -9,7 +9,7 @@ export async function heavyTestEntry(source: string, main: () => Promise<void>):
   const lock = process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK || "/tmp/wheelhouse-selftest-sweep.lock";
   const probe = spawnSync("bun", [helper, "inherited", lock], { encoding: "utf8" });
   if (probe.stderr) process.stderr.write(probe.stderr);
-  if (probe.error || ![0, 75].includes(probe.status!)) throw new Error(`heavy-test ancestry check failed: ${probe.error ?? probe.status}`);
+  if (probe.error || ![0, 75].includes(probe.status!)) throw new Error(`INCOMPLETE review: heavy-test admission check failed: ${probe.error ?? probe.status}`);
   if (probe.status === 0) { await main(); return; }
   const child = spawn("bash", [path.join(import.meta.dir, "heavy-test.sh"), "bun", source, ...process.argv.slice(2)], { stdio: "inherit", detached: true });
   const handlers = new Map<NodeJS.Signals, () => void>();

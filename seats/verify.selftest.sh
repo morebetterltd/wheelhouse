@@ -901,13 +901,19 @@ JS
   done
   SWEEP_BAD_LOCK="$FIX/refused-review-sweep-$variant.lock"
   mkdir "$SWEEP_BAD_LOCK"
-  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_BAD_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-lock-refused fleet/bead-1 worker-1
-  if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'lock helper failed (exit 2)' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-lock-refused.md" ] && [ -d "$SWEEP_BAD_LOCK" ] && bun - "$SWEEP_PROJ/seats/inbox.jsonl" <<'JS'
+  # Admission now refuses this before scratch/model/watchdog readiness. Use the
+  # ordinary CLI, not a driver that requires a ready model to prove this STOP.
+  local refusal_account
+  refusal_account="$(node -e 'console.log(require(process.argv[1]).seats.verifier.account.dir.replace(/^~/,process.argv[2]))' "$SWEEP_PROJ/seats/seats.json" "$HOME_FIX")" || exit 2
+  [ -d "$refusal_account" ] || exit 2
+  rm -f "$refusal_account/invoked"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_BAD_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_with_bd_show "$SWEEP_GENERIC_CLAIM" bead-implicit-lock-refused fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'heavy-test admission check failed: 2' && [ ! -e "$refusal_account/invoked" ] && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-lock-refused.md" ] && [ -d "$SWEEP_BAD_LOCK" ] && bun - "$SWEEP_PROJ/seats/inbox.jsonl" <<'JS'
 import fs from 'node:fs';import assert from 'node:assert/strict';
 const rows=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(s=>JSON.parse(s)).filter(r=>r.title==='verifier gate STOP — bead-implicit-lock-refused');
-assert.equal(rows.length,1);assert.equal(rows[0].class,'distress');assert.equal(rows[0].state,'failed');assert.match(rows[0].detail,/INCOMPLETE review:.*lock helper failed \(exit 2\)/);
+assert.equal(rows.length,1);assert.equal(rows[0].class,'distress');assert.equal(rows[0].state,'failed');assert.match(rows[0].detail,/INCOMPLETE review:.*heavy-test admission check failed: 2/);
 JS
-  then pass 'runner lock refusal records an incomplete review with its reason, not BOUNCE';
+  then pass 'admission lock refusal is incomplete before model spawn, not BOUNCE';
   else fail "runner lock refusal recorded a completed review (rc=$RC out=$OUT)"; fi
   NO_SUITE_PROJ="$FIX/no-suite-proj-$variant"
   build_proj "$NO_SUITE_PROJ" "nosuite-$variant" "$VERIFY"
@@ -955,14 +961,17 @@ SWEEP_PROJ="$SAVED_SWEEP_PROJ"; RUN_PROJ="$SWEEP_PROJ"; VERIFY="$SAVED_VERIFY"
 if [ "$CONTROL_RC" = 1 ] && [ ! -s "$FIX/receipt-control.err" ] && node - "$FIX/receipt-control.out" <<'JS'
 const fs=require('fs'),assert=require('assert/strict'),s=fs.readFileSync(process.argv[2],'utf8');
 const failed=s.split('\n').filter(line=>line.startsWith('  FAIL  '));
-assert.equal(failed.length,12,s);
-for(const phrase of ['lock-recovery claim bypassed','state-writes claim bypassed','process-isolation claim bypassed','unavailable bead text bypassed','failed implicit sweep approved','sweep setup error swallowed','missing dispatcher log accepted','setup failure recorded BOUNCE','setup failure recorded DISCOVER','runner lock refusal recorded a completed review','empty suite inventory recorded a completed review','missing branch runner approved']) assert(failed.some(line=>line.includes(phrase)),phrase);
+// Removing dispatcher receipt guards cannot remove the independent, earlier
+// admission refusal. It must still STOP without ever spawning the model.
+assert(s.includes('admission lock refusal is incomplete before model spawn, not BOUNCE'),s);
+assert.equal(failed.length,11,s);
+for(const phrase of ['lock-recovery claim bypassed','state-writes claim bypassed','process-isolation claim bypassed','unavailable bead text bypassed','failed implicit sweep approved','sweep setup error swallowed','missing dispatcher log accepted','setup failure recorded BOUNCE','setup failure recorded DISCOVER','empty suite inventory recorded a completed review','missing branch runner approved']) assert(failed.some(line=>line.includes(phrase)),phrase);
 JS
 then
   node - "$FIX/receipt-control.out" <<'JS'
 const fs=require('fs');for(const line of fs.readFileSync(process.argv[2],'utf8').split('\n').filter(line=>line.startsWith('  FAIL  '))) console.log('CONTROL (fix removed) '+line.trim());
 JS
-  pass "fix-removed wording skip and receipt guards fail all 12 dispatcher regressions (exit 1)";
+  pass "fix-removed receipt guards fail all 11 dispatcher regressions; admission refusal remains independent (exit 1)";
 else fail "receipt regression negative control was insensitive (exit $CONTROL_RC): $(cat "$FIX/receipt-control.out" "$FIX/receipt-control.err")"; fi
 # First reproduce the old dispatch path: no precomputed evidence, model tool
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
@@ -987,13 +996,13 @@ if [ "$RC" = 0 ] && grep -q '^- verdict: APPROVE$' "$SWEEP_PROJ/seats/verdicts/b
   pass "fix-removed final APPROVE guard exposes the bypass (unsafe fixture exit 0)"
 else fail "APPROVE receipt guard negative control was insensitive rc=$RC out=$OUT"; fi
 cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
-# Hold H4 until the dispatcher log proves it waited, before verifier readiness.
+# Hold H4 until the entry wait diagnostic proves it waited, before readiness.
 # The controller then releases the fixture holder. No elapsed-time comparison.
 # The readiness driver owns AND joins its H4 holder, including early-exit paths.
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLD_H4=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
 SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
 SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
-if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && says 'waiting for host-wide lock' && [ -f "$WATCHDOG_DIR/holder-wait-observed" ]; then
   BATCH_SEED_LOG="$SWEEP_LOG"
   pass "full-sweep done: exact tip, H4 wait outside model limit, scratch bd, reviewer cites rc/log"
 else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$SWEEP_CHECK" 2>/dev/null)"; fi
