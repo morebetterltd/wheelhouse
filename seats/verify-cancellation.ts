@@ -43,16 +43,20 @@ function signalGroup(pgid: number, signal: NodeJS.Signals): void {
 function captureReviewLock(child: ReviewChild): ReviewLock | null {
   if (!child.sweep) return null;
   try {
-    const s = fs.lstatSync(child.sweep.lock, { bigint: true });
+    // The runner canonicalizes the parent before acquisition. Capture that
+    // same physical release target now, with its inode/token, before shutdown.
+    // Do not resolve the leaf or weaken the helper's no-follow traversal.
+    const lock = path.join(fs.realpathSync(path.dirname(child.sweep.lock)), path.basename(child.sweep.lock));
+    const s = fs.lstatSync(lock, { bigint: true });
     if (!s.isDirectory() || s.isSymbolicLink()) return null;
-    const fd = fs.openSync(path.join(child.sweep.lock, "wheelhouse-selftest-sweep"), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(path.join(lock, "wheelhouse-selftest-sweep"), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     let marker: any;
     try {
       if (fs.fstatSync(fd).size > 16384) return null;
       marker = JSON.parse(fs.readFileSync(fd, "utf8"));
     } finally { fs.closeSync(fd); }
     if (marker.pid !== child.pid || marker.hostname !== os.hostname() || !/^[a-f0-9]{32}$/.test(marker.token)) return null;
-    return { ...child.sweep, pid: child.pid, token: marker.token, identity: `${s.dev}:${s.ino}` };
+    return { ...child.sweep, lock, pid: child.pid, token: marker.token, identity: `${s.dev}:${s.ino}` };
   } catch (e: any) {
     if (e.code === "ENOENT") return null;
     throw e;

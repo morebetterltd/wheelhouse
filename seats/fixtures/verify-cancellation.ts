@@ -20,12 +20,37 @@ cases.push({ phase: "reviewer-orphan", signal: "SIGTERM" });
 cases.push(...(["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase: "sweep-stubborn", signal })));
 cases.push({ phase: "sweep-stubborn-long-grace", signal: "SIGTERM" });
 cases.push({ phase: "sweep-stubborn-runner-killed", signal: "SIGTERM" });
+cases.push({ phase: "sweep-stubborn-runner-killed-aliased-parent", signal: "SIGTERM" });
+cases.push({ phase: "sweep-stubborn-runner-killed-aliased-parent-replacement", signal: "SIGTERM" });
+const selected = process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_ALIASES_ONLY === "1" ? cases.filter(c => c.phase.includes("-aliased-parent")) : cases;
+assert(selected.length > 0);
 const results: any[] = [];
-for (const { phase, signal } of cases) {
+for (const { phase, signal } of selected) {
   const name = phase + "-" + signal, ledger = path.join(root, "groups." + name), dir = path.join(root, name), project = path.join(dir, "project"), bin = path.join(dir, "bin"), tmp = path.join(dir, "tmp"), lock = path.join(dir, "target-sweep.lock");
   fs.writeFileSync(ledger, "");
   for (const d of [project, bin, tmp, path.join(project, "contracts")]) fs.mkdirSync(d, { recursive: true });
   fs.cpSync(runtime, path.join(project, "seats"), { recursive: true });
+  const alias = phase.includes("-aliased-parent"), replacement = phase.endsWith("-replacement");
+  const physicalParent = path.join(dir, "physical"), aliasRoot = path.join(dir, "alias"), aliasParent = path.join(aliasRoot, "tmp");
+  fs.mkdirSync(physicalParent); fs.mkdirSync(aliasRoot); fs.symlinkSync(physicalParent, aliasParent, "dir");
+  const targetLock = alias ? path.join(aliasParent, "target-sweep.lock") : lock;
+  const physicalLock = alias ? path.join(physicalParent, "target-sweep.lock") : lock;
+  assert(targetLock.startsWith(root + path.sep) && physicalLock.startsWith(root + path.sep));
+  if (alias) {
+    const helper = path.join(project, "seats/selftest-sweep-lock.ts"), original = fs.readFileSync(helper, "utf8");
+    const anchor = '  const [op, lock, pidText, token, owned] = process.argv.slice(2);';
+    assert.equal(original.split(anchor).length, 2);
+    fs.writeFileSync(helper, original.replace(anchor, anchor + '\n  if (op === "release") fs.appendFileSync(process.env.CANCEL_CASE! + "/release-paths", lock + "\\n");'));
+  }
+  if (replacement) {
+    // Only this copied helper's late release path swaps our private lock.
+    // A captured inode/token must never authorize deleting its replacement.
+    const helper = path.join(project, "seats/selftest-sweep-lock.ts"), original = fs.readFileSync(helper, "utf8");
+    const anchor = '  const [op, lock, pidText, token, owned] = process.argv.slice(2);';
+    assert.equal(original.split(anchor).length, 2);
+    const hook = `\n  if (op === "release" && !fs.existsSync(process.env.CANCEL_CASE! + "/replacement.json")) {\n    const saved=lock+".original", old=JSON.parse(fs.readFileSync(path.join(lock,"wheelhouse-selftest-sweep"),"utf8"));\n    fs.renameSync(lock,saved); fs.mkdirSync(lock);\n    const m={...old,pid:Number(process.env.CANCEL_CONTROLLER_PID),token:randomUUID().replaceAll("-","")};\n    fs.writeFileSync(path.join(lock,"pid"),String(m.pid)+"\\n");fs.writeFileSync(path.join(lock,"started"),m.started+"\\n");fs.writeFileSync(path.join(lock,"wheelhouse-selftest-sweep"),JSON.stringify(m)+"\\n");\n    const s=fs.statSync(lock,{bigint:true});\n    fs.writeFileSync(process.env.CANCEL_CASE!+"/replacement.json",JSON.stringify({path:lock,identity:String(s.dev)+":"+String(s.ino),members:Object.fromEntries(fs.readdirSync(lock).map(n=>[n,fs.readFileSync(path.join(lock,n),"utf8")]))}));\n  }\n`;
+    fs.writeFileSync(helper, original.replace(anchor, anchor + hook));
+  }
   const runnerFile = path.join(project, "seats/selftest-sweep.sh"), runnerText = fs.readFileSync(runnerFile, "utf8"), firstLine = runnerText.indexOf("\n") + 1;
   fs.writeFileSync(runnerFile, runnerText.slice(0, firstLine) + 'printf \'%s\\n\' "$$" > "$CANCEL_CASE/runner.pid"\nperl -e \'print getpgrp, "\\n"\' > "$CANCEL_CASE/runner.pgid"\ncat "$CANCEL_CASE/runner.pgid" >> "$CANCEL_GROUP_LEDGER"\n' + runnerText.slice(firstLine));
   // Passive callback after production signal handlers. Old synchronous exits
@@ -83,7 +108,7 @@ case "$1" in
 esac
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(project, "seats/idle.selftest.sh"), '#!/usr/bin/env bash\nset -eu\n[[ "$CANCEL_PHASE" = sweep* ]] || exit 0\nexec bash "$CANCEL_IDLE" suite\n', { mode: 0o755 });
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_CONTRACT: contract, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, WHEELHOUSE_SELFTEST_SWEEP_LOCK: lock };
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_CONTRACT: contract, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, CANCEL_CONTROLLER_PID: String(process.pid), WHEELHOUSE_SELFTEST_SWEEP_LOCK: targetLock };
   delete env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN;
   // Do not couple verifier teardown to the runner's deadline grace.
   if (phase === "sweep-stubborn-long-grace") env.WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S = "120";
@@ -111,17 +136,28 @@ esac
     const canaryGroup = Number(fs.readFileSync(path.join(dir, "foreign.pgid"), "utf8")); assert.equal(canaryGroup, canary.pid); assert.notEqual(canaryGroup, roleGroup); assert.notEqual(canaryGroup, runnerPid);
     // A vanished runner cannot forward TERM or run its watchdog. Its own
     // registry must still let the verifier reap the separate suite group.
-    const runnerKilled = phase === "sweep-stubborn-runner-killed";
+    const runnerKilled = phase.startsWith("sweep-stubborn-runner-killed");
     if (runnerKilled) signalGroup(runnerGroup, "SIGKILL");
     // Signal ONLY the direct dispatcher we started, not its entire group.
     child.kill(signal);
     await until(() => ended, () => false, "cancelled dispatcher exit"); const result = await closed;
     const survivors = [rolePid, sleepPid, runnerPid].filter((x): x is number => !!x).filter(pidAlive);
     const listing = command("git", ["worktree", "list", "--porcelain"], project, env), scratchGone = scratch.every(p => !fs.existsSync(p) && !listing.includes("worktree " + p + "\n"));
-    const absent = !fs.existsSync(lock); let admitted = false;
-    if (absent) { const token = crypto.randomUUID().replace(/-/g, ""), r = spawnSync("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "acquire", lock, String(process.pid), token, ""], { cwd: project, env, encoding: "utf8" }); admitted = r.status === 0; if (admitted) command("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "release", lock, String(process.pid), token, r.stdout.trim()], project, env); }
-    measurement = { ...result, phase, runnerKilled, requestedSignal: signal, recordedGroup: roleGroup, publishedGroups, runnerPid, runnerGroup, survivors, ownedGroupsGone: !groupAlive(roleGroup) && !groupAlive(runnerGroup), reportedClean: err.includes("owned groups stopped, locks released, scratch removed"), runnerGrace: phase === "sweep-stubborn-long-grace" ? 120 : 5, scratchGone, lockAbsent: absent, lockAdmitted: admitted, foreignAlive: groupAlive(canaryGroup), foreignSignals: fs.existsSync(path.join(dir, "foreign.signals")) ? fs.readFileSync(path.join(dir, "foreign.signals"), "utf8") : "", handlerReturned: fs.existsSync(path.join(dir, "handler-returned")), stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded, reviewerStarted: fs.existsSync(path.join(dir, "reviewer.pid")) };
-    assert.equal(result.code, signal === "SIGTERM" ? 143 : signal === "SIGINT" ? 130 : 129); assert.equal(result.signal, null); assert(measurement.stdoutEOF && measurement.stderrEOF); assert.deepEqual(survivors, []); assert(measurement.ownedGroupsGone, "all owned groups must be empty before clean stop"); if (phase.startsWith("sweep-stubborn")) assert(publishedGroups.includes(roleGroup), "real runner must publish suite group ownership before payload"); assert(scratchGone && absent && admitted); assert(measurement.foreignAlive && !measurement.foreignSignals); assert.equal(measurement.reviewerStarted, !phase.startsWith("sweep")); if (signal !== "SIGHUP") assert(measurement.handlerReturned, "production handler must return while asynchronous teardown joins children"); assert(err.includes("owned groups stopped, locks released, scratch removed"), err);
+    const releasedPaths = alias ? fs.readFileSync(path.join(dir, "release-paths"), "utf8").trim().split("\n") : [];
+    if (alias) assert(releasedPaths.length > 0 && releasedPaths.every(p => p === physicalLock), "actual release helper must receive the captured physical path");
+    const replacementFile = path.join(dir, "replacement.json");
+    let replacementUntouched = false;
+    if (replacement) {
+      assert(fs.existsSync(replacementFile), "late release must actually execute the replacement hook");
+      const r = JSON.parse(fs.readFileSync(replacementFile, "utf8")), s = fs.statSync(physicalLock, { bigint: true });
+      assert.equal(`${s.dev}:${s.ino}`, r.identity);
+      assert.deepEqual(Object.fromEntries(fs.readdirSync(physicalLock).map(n => [n, fs.readFileSync(path.join(physicalLock, n), "utf8")])), r.members);
+      replacementUntouched = true;
+    }
+    const absent = !fs.existsSync(physicalLock); let admitted = false;
+    if (absent) { const token = crypto.randomUUID().replace(/-/g, ""), r = spawnSync("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "acquire", physicalLock, String(process.pid), token, ""], { cwd: project, env, encoding: "utf8" }); admitted = r.status === 0; if (admitted) command("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "release", physicalLock, String(process.pid), token, r.stdout.trim()], project, env); }
+    measurement = { ...result, phase, runnerKilled, requestedSignal: signal, recordedGroup: roleGroup, publishedGroups, runnerPid, runnerGroup, survivors, ownedGroupsGone: !groupAlive(roleGroup) && !groupAlive(runnerGroup), reportedClean: err.includes("owned groups stopped, locks released, scratch removed"), lockRequested: targetLock, physicalLock, releasedPaths, replacementUntouched, lockRefusal: err.includes("SELFTEST_LOCK_REFUSAL"), runnerGrace: phase === "sweep-stubborn-long-grace" ? 120 : 5, scratchGone, lockAbsent: absent, lockAdmitted: admitted, foreignAlive: groupAlive(canaryGroup), foreignSignals: fs.existsSync(path.join(dir, "foreign.signals")) ? fs.readFileSync(path.join(dir, "foreign.signals"), "utf8") : "", handlerReturned: fs.existsSync(path.join(dir, "handler-returned")), stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded, reviewerStarted: fs.existsSync(path.join(dir, "reviewer.pid")) };
+    assert.equal(result.code, signal === "SIGTERM" ? 143 : signal === "SIGINT" ? 130 : 129); assert.equal(result.signal, null); assert(measurement.stdoutEOF && measurement.stderrEOF); assert.deepEqual(survivors, []); assert(measurement.ownedGroupsGone, "all owned groups must be empty before clean stop"); if (phase.startsWith("sweep-stubborn")) assert(publishedGroups.includes(roleGroup), "real runner must publish suite group ownership before payload"); assert(!measurement.lockRefusal, err); assert(scratchGone && (replacement ? replacementUntouched && !absent : absent && admitted)); assert(measurement.foreignAlive && !measurement.foreignSignals); assert.equal(measurement.reviewerStarted, !phase.startsWith("sweep")); if (signal !== "SIGHUP") assert(measurement.handlerReturned, "production handler must return while asynchronous teardown joins children"); assert(err.includes("owned groups stopped, locks released, scratch removed"), err);
     console.log("PASS " + name + " " + JSON.stringify(measurement));
   } catch (e: any) { failure = e.stack ?? String(e); console.error("FAIL " + name + ": " + e.message); }
   finally {
