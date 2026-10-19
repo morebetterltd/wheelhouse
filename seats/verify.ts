@@ -1178,7 +1178,7 @@ async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: str
     // primary repository, then expose only that graph at the sweep root.
     const graphRoot = path.join(scratchCwd, ".wheelhouse-sweep-graph");
     fs.mkdirSync(graphRoot);
-    execFileSync("git", ["init", "--quiet", graphRoot], { env, stdio: "pipe" });
+    execFileSync("git", ["init", "--quiet", "-b", "main", graphRoot], { env, stdio: "pipe" });
     const graphDir = path.join(graphRoot, ".beads");
     const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graphRoot, encoding: "utf8", env: { ...env, PWD: graphRoot, BEADS_DIR: graphDir } });
     if (init.status !== 0) throw new Error(`scratch bd init failed: ${init.stderr || init.stdout}`);

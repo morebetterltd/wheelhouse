@@ -450,7 +450,7 @@ function main(): void {
     workspaceRel = "consumer-product";
     const consumer = path.join(scratchCwd, workspaceRel);
     fs.mkdirSync(consumer, { recursive: true });
-    try { execFileSync("git", ["init", "-q"], { cwd: consumer, stdio: "ignore" }); } catch {}
+    try { execFileSync("git", ["init", "-q", "-b", "main"], { cwd: consumer, stdio: "ignore" }); } catch {}
   } else if (surface.kind === "upgrade") {
     workspaceRel = "consumer-upgrade";
     fs.mkdirSync(path.join(scratchCwd, workspaceRel), { recursive: true });
