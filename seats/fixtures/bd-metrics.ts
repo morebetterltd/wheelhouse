@@ -69,7 +69,7 @@ for (const mode of modes) {
     assert.equal(fs.realpathSync(command("git", ["rev-parse", "--show-toplevel"], project).stdout.trim()), fs.realpathSync(project));
     const tip = command("git", ["rev-parse", "HEAD"], project).stdout.trim();
     driver = path.join(dir, "review-driver.ts");
-    fs.writeFileSync(driver, `import {runFullSweepIfRequired} from ${JSON.stringify(path.join(project, "seats/verify.ts"))};\nconst r=await runFullSweepIfRequired("Full sweep passes",${JSON.stringify(project)},${JSON.stringify(tip)},${JSON.stringify(bd)},process.env.PATH!);\nconsole.log("REVIEW_SETUP_RESULT "+JSON.stringify(r));\nprocess.exitCode=r.rc===0?0:1;\n`);
+    fs.writeFileSync(driver, `import {runDispatcherFullSweep} from ${JSON.stringify(path.join(project, "seats/verify.ts"))};\nconst r=await runDispatcherFullSweep(${JSON.stringify(project)},${JSON.stringify(tip)},${JSON.stringify(bd)},process.env.PATH!);\nconsole.log("REVIEW_SETUP_RESULT "+JSON.stringify(r));\nprocess.exitCode=r.rc===0?0:1;\n`);
     env.TMPDIR = path.join(dir, "tmp"); fs.mkdirSync(env.TMPDIR);
   }
   function senders() {

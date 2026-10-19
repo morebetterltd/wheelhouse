@@ -14,7 +14,7 @@ cleanup(){
   done
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT
+selftest_install_cleanup_traps cleanup
 selftest_copy_seat_runtime "$FIX/runtime" "${WHEELHOUSE_VERIFY_CANCELLATION_RUNTIME:-$HERE}" || exit 2
 if [ -n "${WHEELHOUSE_VERIFY_CANCELLATION_SOURCE:-}" ]; then
   cp -f "$WHEELHOUSE_VERIFY_CANCELLATION_SOURCE" "$FIX/runtime/seats/verify.ts"

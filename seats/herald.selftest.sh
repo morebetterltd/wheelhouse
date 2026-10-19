@@ -27,9 +27,7 @@ cleanup() {
   if [ -n "${ROOT_GONE_PID:-}" ]; then selftest_stop_herald_child "$ROOT_GONE_PID"; fi
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+selftest_install_cleanup_traps cleanup
 
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }

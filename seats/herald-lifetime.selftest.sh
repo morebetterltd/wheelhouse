@@ -7,9 +7,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-herald-lifetime.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 selftest_bind_herald_owner "$FIX"
-trap 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+selftest_install_cleanup_traps 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"'
 # Recorded child, but NOT a herald: a stale/unrelated PID must not be signaled.
 sleep 60 & NON_HERALD=$!
 selftest_stop_herald_child "$NON_HERALD"
@@ -32,9 +30,7 @@ PROJ="$OWN/project"; mkdir -p "$PROJ/seats/run" "$PROJ/seats/logs"
 printf '%s\n' '{"logs":{},"seen":[],"alerts":{"lastCheckAt":"2999-01-01T00:00:00Z"},"staffing":{"lastCheckAt":"2999-01-01T00:00:00Z"}}' > "$PROJ/seats/herald.state.json"
 (cd "$PROJ" && WHEELHOUSE_HERALD_ROOT="$PROJ" WHEELHOUSE_HERALD_INTERVAL_MS=50 exec bun "$HERE/herald.ts") > "$OWN/herald.out" 2> "$OWN/herald.err" & CHILD=$!
 # KEEP the root in every leg: deletion must not make the SIGKILL proof pass.
-trap 'selftest_stop_herald_child "$CHILD"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+selftest_install_cleanup_traps 'selftest_stop_herald_child "$CHILD"'
 printf '%s\n%s\n' "$PROJ" "$CHILD" > "$BASE/$MODE.record"
 while [ ! -e "$BASE/$MODE.go" ]; do sleep 0.05; done
 [ "$MODE" != failure ] || exit 23
