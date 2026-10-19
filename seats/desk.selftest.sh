@@ -53,7 +53,7 @@ cat > "$PROJ/seats/needs.jsonl" <<'EOF'
 EOF
 mkdir -p "$PROJ/seats/verdicts" "$PROJ/bin"
 cat > "$PROJ/seats/state.json" <<'EOF'
-{"seats":{"builder":{"role":"worker","lastBead":"demo-progress"},"reviewer-a":{"role":"reviewer","lastBead":"demo-review"},"reviewer-finished":{"role":"reviewer","lastBead":"demo-finished"},"verifier-a":{"role":"verifier","lastBead":"demo-other"}}}
+{"seats":{"verifier-a":{"role":"verifier","lastBead":"demo-review"},"builder":{"role":"worker","lastBead":"demo-progress"},"reviewer-a":{"role":"reviewer","lastBead":"demo-review"},"reviewer-finished":{"role":"reviewer","lastBead":"demo-finished"}}}
 EOF
 cat > "$PROJ/seats/verdicts/demo-bounce.md" <<'EOF'
 VERDICT: BOUNCE

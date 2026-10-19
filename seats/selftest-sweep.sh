@@ -11,7 +11,7 @@ SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
 WATCHDOG_PID=""
 SUITE_STATE=""
-# Optional verifier-owned registry. Only our fixed launcher publishes pgids;
+# Optional reviewer-owned registry. Only our fixed launcher publishes pgids;
 # suite payloads do not inherit this capability.
 REVIEW_GROUPS="${WHEELHOUSE_SELFTEST_REVIEW_GROUPS:-}"
 SUITE_TIMED_OUT=0
@@ -145,8 +145,8 @@ start_suite(){
   exec 8<> "$SUITE_STATE/grace"
   rm -f "$SUITE_STATE/control" "$SUITE_STATE/grace"
   # Publish while still in the runner group. KILL before publication therefore
-  # kills the launcher too; after publication the verifier knows its future
-  # pgid even if the runner dies before setsid/exec. No verifier ack is needed.
+  # kills the launcher too; after publication the reviewer knows its future
+  # pgid even if the runner dies before setsid/exec. No reviewer ack is needed.
   perl -MFcntl=:DEFAULT -MPOSIX=setsid -e '
     my $registry = shift @ARGV;
     if (length $registry) {

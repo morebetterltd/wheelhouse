@@ -82,8 +82,8 @@ Choice [1]: 2
 
 How many reviewer seats should gate diffs?
   0) none; principal/fresh session reviews manually
-  1) one reviewer: reviewer
-  2) two reviewers: reviewer, reviewer-2
+  1) one reviewer: reviewer-1
+  2) two reviewers: reviewer-1, reviewer-2
 Choice [1]: 1
 
 Take verifier seat for consumer-surface walks?
@@ -108,7 +108,7 @@ Resulting provisional seat list:
 commander   external Claude Code session
 worker-1    role=worker    account.dir=~/.pi-seats-project-placeholder/worker-1
 worker-2    role=worker    account.dir=~/.pi-seats-project-placeholder/worker-2
-reviewer    role=reviewer  account.dir=~/.pi-seats-project-placeholder/reviewer
+reviewer-1  role=reviewer  account.dir=~/.pi-seats-project-placeholder/reviewer-1
 verifier    role=verifier  account.dir=~/.pi-seats-project-placeholder/verifier
 ```
 
@@ -137,7 +137,7 @@ worker-2: Which harness runs this seat?
   4) car (later; not supported by this template yet)
 Choice: 3
 
-reviewer: Which harness runs this seat?
+reviewer-1: Which harness runs this seat?
   1) pi
   2) claude-code
   3) codex
@@ -182,7 +182,7 @@ Available providers:
   2) openai        (OpenAI API key account)
 Choice [1]: 1
 
-reviewer uses harness=pi.
+reviewer-1 uses harness=pi.
 Available providers come from this seat's Pi model listing.
   1) anthropic
   2) openai
@@ -228,7 +228,7 @@ worker-2 (codex / openai-codex)
   3) existing account dir: use a directory that is already logged in
 Choice [1]: 1
 
-reviewer (pi / openrouter)
+reviewer-1 (pi / openrouter)
   1) subscription login, if this provider supports OAuth for Pi
   2) API key on stdin: read once with terminal echo disabled
   3) existing account dir: use a directory that is already logged in
@@ -244,16 +244,16 @@ Choice [2]: 3
 For API-key-on-stdin, the mock screen is explicit that nothing will be echoed:
 
 ```text
-reviewer API key setup
+reviewer-1 API key setup
 
 The next prompt reads from stdin with terminal echo disabled.
 The key will not be printed, logged, written to seats.json, or stored in git.
 It will be passed only to the selected harness/provider setup for:
-  account.dir: ~/.pi-seats-project-placeholder/reviewer
+  account.dir: ~/.pi-seats-project-placeholder/reviewer-1
   provider: openrouter
 
 Paste API key: ********
-Stored credential for reviewer account directory.
+Stored credential for reviewer-1 account directory.
 ```
 
 For an existing account directory, the flow records only the directory path after proving it is inside the namespace root unless the principal explicitly confirms an unusual path:
@@ -294,7 +294,7 @@ Listing source: codex app-server model/list under CODEX_HOME.
   3) gpt-5.6-luna
 Choice [1]: 1
 
-reviewer uses pi / openrouter / api_key.
+reviewer-1 uses pi / openrouter / api_key.
 Listing source: PI_CODING_AGENT_DIR + pi --list-models filtered to openrouter.
   1) z-ai/glm-5.3-flash
   2) anthropic/claude-sonnet-5
@@ -327,7 +327,7 @@ seat       role      harness      provider       authRoute  model               
 commander  commander external     claude-code    -          -                     -
 worker-1   worker    claude-code  anthropic      oauth      claude-sonnet-5       ~/.pi-seats-project-placeholder/worker-1
 worker-2   worker    codex        openai-codex   oauth      gpt-5.5               ~/.pi-seats-project-placeholder/worker-2
-reviewer   reviewer  pi           openrouter     api_key    z-ai/glm-5.3-flash    ~/.pi-seats-project-placeholder/reviewer
+reviewer-1 reviewer  pi           openrouter     api_key    z-ai/glm-5.3-flash    ~/.pi-seats-project-placeholder/reviewer-1
 verifier   verifier  pi           openrouter     api_key    z-ai/glm-5.3-flash    ~/.pi-seats-project-placeholder/verifier
 
 Credentials are not shown because they were never stored in this roster.
@@ -364,13 +364,13 @@ Example output:
         "authRoute": "oauth"
       }
     },
-    "reviewer": {
+    "reviewer-1": {
       "role": "reviewer",
       "harness": "pi",
       "provider": "openrouter",
       "model": "z-ai/glm-5.3-flash",
       "account": {
-        "dir": "~/.pi-seats-project-placeholder/reviewer",
+        "dir": "~/.pi-seats-project-placeholder/reviewer-1",
         "authRoute": "api_key"
       }
     },
@@ -415,8 +415,8 @@ Result: OK
 API-key-on-stdin provisioning still does not echo the key:
 
 ```text
-Provisioning reviewer
-  account.dir: ~/.pi-seats-project-placeholder/reviewer
+Provisioning reviewer-1
+  account.dir: ~/.pi-seats-project-placeholder/reviewer-1
   harness: pi
   provider: openrouter
   authRoute: api_key
@@ -459,7 +459,7 @@ Choice: 2
 Which seat?
   1) worker-1
   2) worker-2
-  3) reviewer
+  3) reviewer-1
   4) verifier
 Choice: 2
 

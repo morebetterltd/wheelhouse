@@ -1621,7 +1621,7 @@ run stop worker-1 >/dev/null 2>&1
 MIXED_PROJ="$FIX/mixed-harness-orphan-proj"
 build_proj "$MIXED_PROJ" mixed
 RUN_PROJ="$MIXED_PROJ"; STATE="$MIXED_PROJ/seats/state.json"; LOG="$MIXED_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-mixed/worker-1/argv.json"
-env HOME="$HOME_FIX" PROJ="$MIXED_PROJ" bun -e 'import fs from "node:fs"; const p=process.env.PROJ+"/seats/seats.json"; const r=JSON.parse(fs.readFileSync(p,"utf8")); r.seats["reviewer"]={role:"verifier", harness:"claude-code", provider:"anthropic", model:"sonnet", account:{dir:"~/.pi-seats-mixed/reviewer", authRoute:"oauth"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
+env HOME="$HOME_FIX" PROJ="$MIXED_PROJ" bun -e 'import fs from "node:fs"; const p=process.env.PROJ+"/seats/seats.json"; const r=JSON.parse(fs.readFileSync(p,"utf8")); r.seats["reviewer"]={role:"reviewer", harness:"claude-code", provider:"anthropic", model:"sonnet", account:{dir:"~/.pi-seats-mixed/reviewer", authRoute:"oauth"}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 mkdir -p "$HOME_FIX/.pi-seats-mixed/reviewer"
 printf '{"loggedIn":true}\n' > "$HOME_FIX/.pi-seats-mixed/reviewer/.claude.json"
 run spawn worker-1
