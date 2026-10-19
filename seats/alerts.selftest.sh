@@ -92,7 +92,7 @@ drift_set_cases(){
   local a b moved first current recent
   a='{"error":null,"modified":["b.ts","a.ts"],"localOnly":[],"missing":[],"aheadBy":0}'
   b='{"error":null,"modified":["c.ts"],"localOnly":[],"missing":[],"aheadBy":0}'
-  moved='{"error":"comparison detail changed","modified":[],"localOnly":["b.ts","b.ts"],"missing":["a.ts"],"aheadBy":7}'
+  moved='{"error":null,"modified":[],"localOnly":["b.ts","b.ts"],"missing":["a.ts"],"aheadBy":7}'
   clear_runtime
   WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$a" run_alert bun seats/alerts.ts check --json
   [ "$RC" = 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] || fail "set fixture did not start pending: $OUT"
@@ -116,7 +116,7 @@ drift_set_cases(){
     WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$a" run_alert bun seats/alerts.ts check --json
     current="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
     [ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] && [ "$current" = "$recent" ] || fail "recent already-active same set became pending: $current"
-    [ "$FAILED" = 0 ] && pass 'same drift set never re-raises or resets state: reorder, duplicates, category moves, aheadBy/error detail changes, persisted legacy signature (aged and recent)'
+    [ "$FAILED" = 0 ] && pass 'same drift set never re-raises or resets state: reorder, duplicates, category moves, aheadBy changes, persisted legacy signature (aged and recent)'
   fi
   if [ "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" != same ]; then
     WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON="$b" run_alert bun seats/alerts.ts check --json
@@ -145,12 +145,12 @@ clear_runtime
 WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_AHEAD=1 run_alert bun seats/alerts.ts check --json
 [ "$RC" = 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] || fail 'ahead-only empty set did not start pending'
 age_alert template-drift
-WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON='{"error":"first failure","modified":[],"localOnly":[],"missing":[],"aheadBy":0}' run_alert bun seats/alerts.ts check --json
-[ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] || fail 'empty set restarted its hold when ahead became an error'
+WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON='{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":3}' run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && active template-drift && [ "$(inbox_count)" = 1 ] || fail 'empty set restarted its hold when ahead count changed'
 empty_first="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
-WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON='{"error":"different detail","modified":[],"localOnly":[],"missing":[],"aheadBy":9}' run_alert bun seats/alerts.ts check --json
+WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_JSON='{"error":null,"modified":[],"localOnly":[],"missing":[],"aheadBy":9}' run_alert bun seats/alerts.ts check --json
 empty_current="$(node -e 'console.log(JSON.stringify(require(process.argv[1]).alerts["template-drift"]))' "$ROOT/seats/run/fleet-snapshot.json")"
-[ "$RC" = 0 ] && [ "$(inbox_count)" = 1 ] && [ "$empty_first" = "$empty_current" ] && pass 'ahead-only and error-only drift share one empty-set hold and never re-raise while persisting' || fail "empty set re-raised or reset state: $empty_current"
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 1 ] && [ "$empty_first" = "$empty_current" ] && pass 'ahead-only drift holds once and never re-raises for count changes' || fail "empty set re-raised or reset state: $empty_current"
 
 phase 'interval parsing'
 clear_runtime; unset WHEELHOUSE_ALERT_INTERVAL_MS; run_alert bun seats/alerts.ts check --json; unset_interval="$(node -e 'console.log(require(process.argv[1]).intervalMs)' "$ROOT/seats/run/fleet-snapshot.json")"
@@ -205,8 +205,8 @@ for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done; [ "$(inbox_
 set_low_disk 0; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared low-disk' "$ROOT/seats/logs/alerts.log" && pass 'low-disk clears' || fail "low disk clear failed"
 
-clear_runtime; WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_ON=1 run_alert bun seats/alerts.ts check --json
-[ $RC -eq 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] && pass 'template-drift under hold threshold writes no inbox row' || fail "short drift fired too early rc=$RC out=$OUT inbox=$(inbox_count)"
+clear_runtime; DRIFT_ON=1 run_alert bun seats/alerts.ts check --json
+[ $RC -eq 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] && pass 'template-drift under default hold threshold writes no inbox row' || fail "short drift fired too early rc=$RC out=$OUT inbox=$(inbox_count)"
 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] && pass 'template-drift clearing before threshold stays quiet' || fail "short drift clear produced alert rc=$RC out=$OUT inbox=$(inbox_count)"
 WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_ON=1 run_alert bun seats/alerts.ts check --json
@@ -253,6 +253,9 @@ import fs from 'node:fs';import assert from 'node:assert/strict';const j=JSON.pa
 JS
 then pass 'spawn error ETIMEDOUT is retained as check-failed without a drift deadline'; else fail "spawn error handling failed rc=$RC out=$OUT"; fi
 clear_runtime; DRIFT_CASE=real run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && ! active template-drift && [ "$(inbox_count)" = 0 ] && pass 'real drift exit1 starts pending under the default hold' || fail "real drift fired before its hold rc=$RC out=$OUT"
+age_alert template-drift
+DRIFT_CASE=real run_alert bun seats/alerts.ts check --json
 if [ "$RC" = 0 ] && node --input-type=module - "$ROOT" <<'JS'
 import fs from 'node:fs';import assert from 'node:assert/strict';const root=process.argv[2],j=JSON.parse(fs.readFileSync(root+'/seats/run/fleet-snapshot.json','utf8')),rows=fs.readFileSync(root+'/seats/inbox.jsonl','utf8').trim().split('\n').map(l=>JSON.parse(l));assert.equal(j.drift.status,'drift');assert.equal(j.drift.exitCode,1);assert.equal(j.alerts['template-drift-check-failed'].active,false);assert.equal(rows.length,1);assert.equal(rows[0].source.name,'template-drift');for(const value of['template-drift','seats/example.ts','runbooks/local.md','runbooks/missing.md','aheadBy=1'])assert(rows[0].detail.includes(value),value);assert.equal(j.alerts['template-drift'].detail,rows[0].detail);
 JS

@@ -74,9 +74,9 @@ function driftInfo(){
 function alertRow(active:boolean, prior:AlertState|undefined, signature=""):AlertState{ const n=now(); if(active){ if(prior?.active&&prior.signature===signature) return {...prior, active:true}; return {active:true,since:n,lastFiredAt:n,needId:prior?.needId??null,signature}; } return {active:false,since:null,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature}; }
 // The set is the sorted, de-duplicated union of modified, localOnly and
 // missing paths. Reordering, duplicates, category moves and aheadBy changes
-// don't re-raise. Ahead-only/error-only drift keeps its first hold as an
-// empty-path-set condition. Each changed set waits its own 10-minute hold;
-// a full clear resets the clock.
+// don't re-raise. Ahead-only drift keeps its first hold as an empty-path-set
+// condition. Each changed set waits its own 10-minute hold; a full clear
+// resets the clock. Failed checks remain a separate, immediate alert.
 function driftFileSetSignature(drift:any):string {
   const candidates=Array.isArray(drift) ? drift : [drift.modified??drift.m, drift.localOnly??drift.l, drift.missing??drift.mi].flatMap(xs=>Array.isArray(xs)?xs:[]);
   return JSON.stringify([...new Set(candidates.filter(p=>typeof p==="string"&&p.length>0))].sort());
