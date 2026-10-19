@@ -92,6 +92,8 @@ case "${1:-}" in
   # The dispatcher's sweep owns a fresh nested graph. The reviewer still uses
   # the production read-only wrapper; show deliberately fails as before.
   init) mkdir -p "${BEADS_DIR:-.beads}" ;;
+  # Accept only the scratch setup's metrics-off command, not other metrics ops.
+  metrics) [ "$#" -eq 2 ] && [ "$2" = off ] ;;
   where) node -e 'console.log(JSON.stringify({path:require("fs").realpathSync(".beads")}))' ;;
   *) exit 1 ;;
 esac
