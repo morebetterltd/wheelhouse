@@ -28,7 +28,7 @@ writeTool('bd', `import fs from 'node:fs'; import path from 'node:path'; const a
 writeTool('lsof', 'process.exit(0);');
 writeTool('xcrun', 'process.exit(1);');
 writeTool('pi', `import fs from 'node:fs'; import path from 'node:path'; const prompt=process.argv.at(-1); if(!fs.existsSync(process.env.SCRATCH_PATH_SWEEP_LEDGER)||!fs.readFileSync(process.env.SCRATCH_PATH_SWEEP_LEDGER,'utf8').trim())throw Error('reviewer reached before fixture sweep completed'); fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR,'prompt.txt'),prompt); fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR,'env-root.txt'),process.env.WHEELHOUSE_ROOT||''); console.log('VERDICT: APPROVE — NOT BENCHED: static prompt fixture only\\nPUSH: NOT CONSIDERED');`);
-const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), PATH: `${bin}:${process.env.PATH}`, WHEELHOUSE_ROOT: path.join(top, 'wrong-inherited-root'), WHEELHOUSE_SKIP_REAL_PI: '1', WHEELHOUSE_SELFTEST_SWEEP_LOCK: path.join(top, 'private-fixture-sweep.lock') };
+const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), TMPDIR: top, PATH: `${bin}:${process.env.PATH}`, WHEELHOUSE_ROOT: path.join(top, 'wrong-inherited-root'), WHEELHOUSE_SKIP_REAL_PI: '1', WHEELHOUSE_SELFTEST_SWEEP_LOCK: path.join(top, 'private-fixture-sweep.lock') };
 const run = async (name, cmd, args, cwd = root) => {
   const child = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '', err = '', stdoutEOF = false, stderrEOF = false;
