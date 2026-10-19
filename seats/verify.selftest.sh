@@ -2226,19 +2226,30 @@ else fail "the live worktree was swept even though its owner pid is still alive"
 
 CONCURRENT_OUT_A="$FIX/concurrent-verify-a.out"
 CONCURRENT_OUT_B="$FIX/concurrent-verify-b.out"
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$CONCURRENT_OUT_A" 2>&1) &
+# This is reaper coverage, not an admission bypass: the enclosing suite holds
+# the real host FIFO. Two idle fixture reviews need separate private endpoints
+# now that a whole review, not only its sweep, owns admission. Shared-endpoint
+# serialization is exercised by heavy-test.selftest.sh.
+CONCURRENT_LOCK_A="$FIX/concurrent-a.lock"
+CONCURRENT_LOCK_B="$FIX/concurrent-b.lock"
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$CONCURRENT_LOCK_A" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$CONCURRENT_OUT_A" 2>&1) &
 CONCURRENT_PID_A=$!
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$CONCURRENT_OUT_B" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$CONCURRENT_LOCK_B" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$CONCURRENT_OUT_B" 2>&1) &
 CONCURRENT_PID_B=$!
 CONCURRENT_DIRS=""
 CONCURRENT_READY_DEADLINE=$((SECONDS+300))
 while [ "$SECONDS" -lt "$CONCURRENT_READY_DEADLINE" ]; do
-  CONCURRENT_DIRS="$(git -C "$PROJ" worktree list --porcelain 2>/dev/null | awk -v a="wheelhouse-verify-${CONCURRENT_PID_A}-" -v b="wheelhouse-verify-${CONCURRENT_PID_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
+  # The token-bearing owner is the real review, not its forwarding entry PID.
+  # Legacy direct entries remain their own PID if no active lock is present.
+  CONCURRENT_OWNER_A="$CONCURRENT_PID_A"; CONCURRENT_OWNER_B="$CONCURRENT_PID_B"
+  [ ! -f "$CONCURRENT_LOCK_A/pid" ] || IFS= read -r CONCURRENT_OWNER_A < "$CONCURRENT_LOCK_A/pid"
+  [ ! -f "$CONCURRENT_LOCK_B/pid" ] || IFS= read -r CONCURRENT_OWNER_B < "$CONCURRENT_LOCK_B/pid"
+  CONCURRENT_DIRS="$(git -C "$PROJ" worktree list --porcelain 2>/dev/null | awk -v a="wheelhouse-verify-${CONCURRENT_OWNER_A}-" -v b="wheelhouse-verify-${CONCURRENT_OWNER_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
   [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ] && break
   sleep 0.05
  done
-if [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ]; then
-  pass "concurrent verify gates both reached registered scratch worktrees"
+if [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ] && kill -0 "$CONCURRENT_OWNER_A" 2>/dev/null && kill -0 "$CONCURRENT_OWNER_B" 2>/dev/null; then
+  pass "concurrent verify gates both reached registered scratch worktrees (real owner pids $CONCURRENT_OWNER_A and $CONCURRENT_OWNER_B)"
 else
   fail "concurrent verify gates did not both register scratch worktrees: a=$(cat "$CONCURRENT_OUT_A" 2>/dev/null) b=$(cat "$CONCURRENT_OUT_B" 2>/dev/null) dirs=$CONCURRENT_DIRS"
 fi
@@ -2278,7 +2289,8 @@ KILL_SHA_BRANCH="89abcdef0123456789abcdef0123456789abcdef"
 git -C "$KILL_PROJ" branch "$KILL_SHA_BRANCH" HEAD >/dev/null 2>&1
 OUT_FILE="$FIX/killed-verify.out"
 KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
+KILLED_GATE_LOCK="$FIX/killed-gate.lock"
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$KILLED_GATE_LOCK" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
 KILLED_READY_DEADLINE=$((SECONDS+300))
@@ -2289,7 +2301,17 @@ while [ "$SECONDS" -lt "$KILLED_READY_DEADLINE" ]; do
 done
 if [ -n "$KILLED_DIR" ]; then pass "killed one-shot fixture reached a registered scratch worktree"
 else fail "killed one-shot fixture never registered a scratch worktree: $(cat "$OUT_FILE" 2>/dev/null)"; fi
-kill -9 "$KILLED_DISPATCHER_PID" 2>/dev/null || true
+# Kill the real dispatcher owning this fresh private endpoint, not merely its
+# proxy (whose death intentionally leaves a live admitted run protected).
+KILLED_REAL_PID="$KILLED_DISPATCHER_PID"
+[ ! -f "$KILLED_GATE_LOCK/pid" ] || IFS= read -r KILLED_REAL_PID < "$KILLED_GATE_LOCK/pid"
+case "$KILLED_DIR" in
+  */wheelhouse-verify-"$KILLED_REAL_PID"-*)
+    kill -9 "$KILLED_REAL_PID" 2>/dev/null || true ;;
+  *)
+    fail "killed fixture's registered scratch does not match its actual owner"
+    kill -TERM "$KILLED_DISPATCHER_PID" 2>/dev/null || true ;;
+esac
 wait "$KILLED_DISPATCHER_PID" 2>/dev/null || true
 PI_PID_FILE="$HOME_FIX/.pi-seats-kill/verifier/pi-pid.txt"
 if [ -s "$PI_PID_FILE" ]; then kill "$(cat "$PI_PID_FILE")" 2>/dev/null || true; fi
