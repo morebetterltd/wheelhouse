@@ -539,8 +539,7 @@ to the real `bd` binary behind the shim. Bench code must call
 `${WHEELHOUSE_REAL_BD:-bd}` with its own scratch `BEADS_DIR`; bare `bd`
 through `PATH` remains the read-only shim inside the verifier process.
 
-When the dispatched task requires a full sweep (names `selftest-sweep.sh` or
-says the full `seats/*.selftest.sh` sweep passes), `verify.ts` runs
+For **every** review, regardless of the task's wording, `verify.ts` runs
 `bash seats/selftest-sweep.sh` **before** starting the reviewer. It uses a
 separate detached worktree at the pinned tip, waits for the runner's host-wide
 H4 lock without a model-command timeout, and streams output to a unique
@@ -552,9 +551,17 @@ the pinned HEAD is checked again after setup and after the suites. Real `bd`
 is supplied only to the sweep; suites still create their own fixture graphs. No writable graph or PATH override is
 passed to the reviewer. Live-login smoke legs are skipped explicitly with
 `WHEELHOUSE_SKIP_REAL_PI=1`; claims requiring those legs still need separate
-account-safe evidence. The reviewer receives the tip, rc and log path and must
-cite `rc=<number>` and that path in its final evidence. A failed sweep cannot
-be approved, and a verdict missing the citation is rejected. The verdict and
+account-safe evidence. The dispatcher records the tip, rc and log with the
+verdict. APPROVE requires integer rc=0, the pinned tip, and a retained regular,
+nonempty result log. NOT BENCHED cannot waive a missing or failed receipt.
+Setup/spawn/pinning errors, an absent runner, an empty suite inventory, and
+non-test runner statuses (such as lock refusal) make the review INCOMPLETE,
+even if the reviewer proposes BOUNCE or DISCOVER. Those failures are retained
+as refused diagnostics and failed inbox records, without a corrective attempt:
+restating the answer cannot repair the dispatcher result. Completed failing
+tests may support BOUNCE, never APPROVE. Explicit full-sweep claims additionally
+require `rc=<number>` and the exact log path in the final evidence; a missing
+citation retains the one corrective attempt described above. The verdict and
 log are working copies: transcribe decisive output to the task before citing
 it as durable graph evidence. A caller with its own hard per-command cap
 must launch this long-running dispatcher in the background (for example with
