@@ -31,8 +31,8 @@ for (const { phase, signal } of selected) {
   for (const d of [project, bin, tmp, path.join(project, "contracts")]) fs.mkdirSync(d, { recursive: true });
   fs.cpSync(runtime, path.join(project, "seats"), { recursive: true });
   const alias = phase.includes("-aliased-parent"), replacement = phase.endsWith("-replacement");
-  const physicalParent = path.join(dir, "physical"), aliasParent = path.join(dir, "tmp");
-  fs.mkdirSync(physicalParent); fs.symlinkSync(physicalParent, aliasParent, "dir");
+  const physicalParent = path.join(dir, "physical"), aliasRoot = path.join(dir, "alias"), aliasParent = path.join(aliasRoot, "tmp");
+  fs.mkdirSync(physicalParent); fs.mkdirSync(aliasRoot); fs.symlinkSync(physicalParent, aliasParent, "dir");
   const targetLock = alias ? path.join(aliasParent, "target-sweep.lock") : lock;
   const physicalLock = alias ? path.join(physicalParent, "target-sweep.lock") : lock;
   assert(targetLock.startsWith(root + path.sep) && physicalLock.startsWith(root + path.sep));
