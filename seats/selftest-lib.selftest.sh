@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-selftest-lib.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
@@ -90,7 +90,7 @@ if command -v bd >/dev/null 2>&1; then
   fi
   INSTALL="$FIX/install-graph"
   mkdir -p "$INSTALL"
-  git -C "$INSTALL" init -q
+  git -C "$INSTALL" init -q -b main
   if (cd "$INSTALL" && "$REAL_BD" init --non-interactive --skip-agents -p install >/dev/null 2>"$FIX/install-bd-init.err"); then
     count_install(){ (cd "$INSTALL" && "$REAL_BD" list --json) | bun -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(0,"utf8")).length)'; }
     before_count="$(count_install)"

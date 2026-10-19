@@ -71,7 +71,7 @@ cleanup() {
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- fixture -----------------------------------------------------------------
 # Canonicalized for the same reason seat-env.selftest.sh canonicalizes: on
@@ -1791,7 +1791,7 @@ setup_worktree_cap_repo() { # $1 proj, $2 max, $3 auto
   fakebin="$proj/fakebin"
   wtbase="$proj/.wheelhouse-worktrees"
   mkdir -p "$wtbase" "$fakebin" "$proj/seats/logs"
-  git -C "$proj" init -q
+  git -C "$proj" init -q -b main
   git -C "$proj" config user.email fixture@example.invalid
   git -C "$proj" config user.name Fixture
   printf base > "$proj/base.txt"; git -C "$proj" add base.txt; git -C "$proj" commit -qm base

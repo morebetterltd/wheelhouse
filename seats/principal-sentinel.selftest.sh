@@ -12,8 +12,8 @@ PASSED=0
 
 pass(){ PASSED=$((PASSED+1)); echo "ok $PASSED - $1"; }
 fail(){ FAILED=$((FAILED+1)); echo "not ok $((PASSED+FAILED)) - $1"; }
-finish(){ selftest_remove_fixture_dir "$FIX"; if [ "$FAILED" -eq 0 ]; then echo "principal-sentinel.selftest: PASS ($PASSED checks)"; exit 0; else echo "principal-sentinel.selftest: FAIL ($FAILED failure(s), $PASSED pass(es))"; exit 1; fi; }
-trap finish EXIT
+finish(){ if [ "$FAILED" -eq 0 ]; then echo "principal-sentinel.selftest: PASS ($PASSED checks)"; exit 0; else echo "principal-sentinel.selftest: FAIL ($FAILED failure(s), $PASSED pass(es))"; exit 1; fi; }
+selftest_install_cleanup_traps 'selftest_remove_fixture_dir "$FIX"'
 
 mkdir -p "$FIX/proj/seats" "$FIX/proj/wheelhouse"
 selftest_copy_seat_runtime "$FIX/proj" "$HERE"
@@ -130,3 +130,4 @@ else
     fail "canary: disabled sentinel detection still opened a need"
   fi
 fi
+finish

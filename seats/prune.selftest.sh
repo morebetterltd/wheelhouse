@@ -31,7 +31,7 @@ FIX="$(cd "$FIX" && pwd -P)"
 export GIT_CEILING_DIRECTORIES="$FIX${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}"
 TMP_SCRATCH=()
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; rm -rf ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 bun "$HERE/fixtures/scratch-ownership.ts" prune "$HERE/.." "$FIX" || exit 1
 export HOME="$FIX/home"
 mkdir -p "$HOME"
@@ -310,7 +310,7 @@ printf 'base\n' > "$PROD/app.txt"
 git -C "$PROD" add app.txt
 git -C "$PROD" commit -q -m base
 BARE="$FIX/origin.git"
-git -C "$PROD" init --bare -q "$BARE"
+git -C "$PROD" init --bare -q -b main "$BARE"
 git -C "$PROD" remote add origin "$BARE"
 git -C "$PROD" push -q -u origin main
 
@@ -385,7 +385,7 @@ CLOSED_LIVE_PID=$!
 TMP_SCRATCH+=()
 cleanup_live(){ kill "$LIVE_PID" "$OPEN_LIVE_PID" "$CLOSED_LIVE_PID" >/dev/null 2>&1 || true; }
 cleanup_prune(){ cleanup_live; cleanup; }
-trap cleanup_prune EXIT INT TERM
+selftest_install_cleanup_traps cleanup_prune
 printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"},"worker-live":{"pid":%s,"cwd":"%s"},"worker-history":{"pid":999998,"cwd":"%s","sessionFile":"%s"}}}\n' "$WTS/$OPEN_ID" "$LIVE_PID" "$WTS/$OPEN_ID" "$WTS/$OPEN_ID" "$SESSION_HISTORY" > "$ROOT/seats/state.json"
 printf '{"seats":{"worker-rostered":{}}}\n' > "$ROOT/seats/seats.json"
 mkdir -p "$WTS/worker-rostered"
@@ -655,7 +655,7 @@ set +e   # the phase above left -e on; these phases inspect exit codes themselve
 json_id(){ bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)'; }
 EXT_PIDS=()
 cleanup_ext(){ for p in ${EXT_PIDS[@]+"${EXT_PIDS[@]}"}; do kill "$p" >/dev/null 2>&1 || true; done; cleanup_prune; }
-trap cleanup_ext EXIT INT TERM
+selftest_install_cleanup_traps cleanup_ext
 mk_install(){ # $1 root: container git repo, nested product repo with a bare origin at $1.origin.git, prune.ts in place
   mkdir -p "$1/product" "$1/seats"
   selftest_copy_seat_runtime "$1" "$(dirname "$PRUNE")"
@@ -665,7 +665,7 @@ mk_install(){ # $1 root: container git repo, nested product repo with a bare ori
   git -C "$1/product" config user.name selftest
   printf 'base\n' > "$1/product/app.txt"
   git -C "$1/product" add app.txt; git -C "$1/product" commit -q -m base
-  git -C "$1/product" init --bare -q "$1.origin.git"
+  git -C "$1/product" init --bare -q -b main "$1.origin.git"
   git -C "$1/product" remote add origin "$1.origin.git"
   git -C "$1/product" push -q -u origin main
 }
@@ -716,7 +716,7 @@ rm -rf "$ERUNS/$OFF_ID-run" "$ERUNS/$REPORT_ID-run"
 printf 'cleanup=on\n' > "$EXT/wheelhouse/.template-source"
 
 phase 'ISC-42 squash-merge and ISC-117 mayline/main integration ref'
-git -C "$EPROD" init --bare -q "$FIX/ext-mayline.git"; git -C "$EPROD" remote add mayline "$FIX/ext-mayline.git"
+git -C "$EPROD" init --bare -q -b main "$FIX/ext-mayline.git"; git -C "$EPROD" remote add mayline "$FIX/ext-mayline.git"
 MAY_ID=$(ext_bead 'merged only on mayline'); ext_wt "$MAY_ID"
 git -C "$EPROD" checkout -q -b tmp-mayline main; git -C "$EPROD" merge -q --no-ff "fleet/$MAY_ID" -m "mayline merge"; git -C "$EPROD" push -q mayline tmp-mayline:main; git -C "$EPROD" checkout -q main; git -C "$EPROD" branch -q -D tmp-mayline
 SQ_ID=$(ext_bead 'squash merged, never pushed'); ext_wt "$SQ_ID"

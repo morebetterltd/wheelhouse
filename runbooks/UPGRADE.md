@@ -552,7 +552,7 @@ That is the shape of what step 7 catches: not damage, but the parts of your proj
 
 ## 8. Commit
 
-Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you either stage it deliberately or replace the broad directory add with explicit paths. Step 7 can also make you edit project-owned surfaces outside `wheelhouse/`, especially `.claude/settings.json`; stage those exact files when they exist, and stage any other step-7 path you deliberately changed before committing.
+Check that this commit contains only the upgrade and the sweep above, not pre-existing dirt. Read the `??` lines too: an untracked evidence directory under `wheelhouse/` will ride the directory add below unless you exclude it or replace the broad directory add with explicit paths. Never stage fleet captures or task-graph dumps: post decisive output on the task and keep local working captures git-excluded. Step 7 can also make you edit project-owned surfaces outside `wheelhouse/`, especially `.claude/settings.json`; stage those exact files when they exist, and stage any other step-7 path you deliberately changed before committing.
 
 ```bash
 git status --short

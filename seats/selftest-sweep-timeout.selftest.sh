@@ -21,10 +21,7 @@ cleanup(){
   fi
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
+selftest_install_cleanup_traps cleanup
 PROJECT="$FIX/project"
 selftest_copy_seat_runtime "$PROJECT" "$HERE"
 cp -f "$SWEEP" "$PROJECT/seats/selftest-sweep.sh"

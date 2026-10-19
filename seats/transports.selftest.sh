@@ -6,11 +6,21 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-transports-selftest.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
+export HOME="$FIX/home" XDG_CONFIG_HOME="$FIX/home/.config"
+mkdir -p "$HOME" || exit 2
 PASS=0; FAIL=0; SERVER_PID=""
 cleanup(){ [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
-pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
+selftest_install_cleanup_traps cleanup
+pass(){ PASS=$((PASS+1)); echo "ok $((PASS+FAIL)) - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
+# A failure followed by a success must not reuse its TAP number. Exercise the
+# real functions without affecting the suite counters, and reject the old rule.
+expected_numbers=$'not ok 1 - fixture-failure\nok 2 - fixture-success'
+numbers="$( ( PASS=0; FAIL=0; fail fixture-failure; pass fixture-success ) 2>&1 )"
+[ "$numbers" = "$expected_numbers" ] || { echo "TAP numbering regression: $numbers" >&2; exit 1; }
+legacy_numbers="$( ( PASS=0; FAIL=0; pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }; fail fixture-failure; pass fixture-success ) 2>&1 )"
+[ "$legacy_numbers" != "$expected_numbers" ] || { echo 'TAP numbering control failed to detect old rule' >&2; exit 1; }
+echo '# TAP numbering: failure1/success2; old success-only numbering rejected'
 port(){ bun -e 'import net from "node:net"; const s=net.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats/transports" "$ROOT/seats/run"
 selftest_copy_seat_runtime "$ROOT" "$HERE"
@@ -51,8 +61,24 @@ cat > "$FIX/check.ts" <<'TS'
 import * as fs from "node:fs";
 import { transportFor } from "./proj/seats/transports/index";
 import { demuxUpdates } from "./proj/seats/transports/telegram";
+async function main() {
 const root=process.env.ROOT!, stub=process.env.STUB_DIR!, kind=process.argv[2], dest=process.argv[3];
 const t=transportFor(root, kind as any);
+if(kind==="teams") {
+  // Observe real call failures before readBack's boolean API intentionally
+  // catches them. Record no arguments, headers, command text or token values.
+  const actual=t as any, call=actual.call.bind(actual);
+  actual.call=async (...args:any[])=>{
+    const started=performance.now();
+    try { return await call(...args); }
+    catch(error:any) {
+      console.error(JSON.stringify({event:"transport-check-error",code:error?.code??null,message:error?.message??String(error)}));
+      throw error;
+    } finally {
+      fs.appendFileSync(`${stub}/token-call-timings.jsonl`,JSON.stringify({method:args[0],elapsedMs:performance.now()-started})+"\n");
+    }
+  };
+}
 const r=await t.post(dest,"hello", process.argv[4]?{threadRef:process.argv[4]}:undefined);
 if(!r.ref) throw new Error("post returned no ref");
 if(!await t.readBack(dest,r.ref,"hello")) throw new Error("direct readBack returned false after stored post");
@@ -71,6 +97,11 @@ if(kind==="telegram") {
   if(got.cursor!=="2030-01-01T00:01:00Z" || !got.messages.some(m=>m.text==="planted inbound" && m.from==="U-IN")) throw new Error(`teams read assertion failed ${JSON.stringify(got)}`);
   console.log(JSON.stringify({post:r, read:got}));
 }
+}
+main().catch(error => {
+  console.error(JSON.stringify({event:"transport-check-error",code:error?.code??null,message:error?.message??String(error)}));
+  process.exitCode=1;
+});
 TS
 cat > "$FIX/readback-false.ts" <<'TS'
 import * as fs from "node:fs";
@@ -125,10 +156,15 @@ env -u WHEELHOUSE_TEAMS_TOKEN -u WHEELHOUSE_TEAMS_TOKEN_CMD ROOT="$ROOT" WHEELHO
 #!/usr/bin/env bash
 echo call >> "$FIX/token-calls"
 printf teams-cmd-token
+echo complete >> "$FIX/token-completed"
 SH
 chmod +x "$FIX/teams-token-cmd.sh"
 rm -f "$ROOT/seats/run/teams.token" "$FIX/teams.jsonl" "$FIX/fail-readback"; : > "$FIX/requests.jsonl"
-base_env WHEELHOUSE_TEAMS_TOKEN_CMD="$FIX/teams-token-cmd.sh" bun "$FIX/check.ts" teams chats/cmd >/dev/null 2>&1 && [ "$(wc -l < "$FIX/token-calls")" -ge 3 ] && pass 'teams TOKEN_CMD supplies a token per call' || fail "teams TOKEN_CMD per-call failed: calls=$(cat "$FIX/token-calls" 2>/dev/null)"
+if base_env WHEELHOUSE_TEAMS_TOKEN_CMD="$(selftest_shell_quote "$FIX/teams-token-cmd.sh")" bun "$HERE/fixtures/transports-token-command.ts" "$FIX" "$FIX/check.ts"; then
+  pass 'teams TOKEN_CMD supplies a token per call; native results and diagnostic classes retained'
+else
+  fail 'teams TOKEN_CMD completion/count diagnostics failed (retained streams above)'
+fi
 base_env WHEELHOUSE_TEAMS_TOKEN_CMD="exit 9" bun "$FIX/check.ts" teams chats/cmd > "$FIX/cmdfail.out" 2>&1; [ $? -ne 0 ] && grep -q 'teams token command failed' "$FIX/cmdfail.out" && pass 'teams failing TOKEN_CMD is a named error' || fail "teams TOKEN_CMD failure wrong: $(cat "$FIX/cmdfail.out")"
 # threaded reply read-back URL
 rm -f "$FIX/teams.jsonl" "$FIX/fail-readback"; : > "$FIX/requests.jsonl"

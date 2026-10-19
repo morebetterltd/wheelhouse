@@ -36,7 +36,7 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-walk-selftest.$$.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
@@ -158,7 +158,7 @@ EOF
 }
 EOF
   printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
-  ( cd "$proj" && git init -q && [ "$(git rev-parse --show-toplevel)" = "$(pwd -P)" ] && git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base ) \
+  ( cd "$proj" && git init -q -b main && [ "$(git rev-parse --show-toplevel)" = "$(pwd -P)" ] && git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base ) \
     || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
 

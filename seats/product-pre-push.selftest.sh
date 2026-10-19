@@ -7,7 +7,7 @@ INSTALLER="${1:-$HERE/install-fleet-pre-push-guard.sh}"
 [ -f "$INSTALLER" ] || exit 2
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-product-pre-push.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
-trap 'selftest_remove_fixture_dir "$FIX"' EXIT
+selftest_install_cleanup_traps 'selftest_remove_fixture_dir "$FIX"'
 mkdir -p "$FIX/home" "$FIX/tmp"
 export HOME="$FIX/home" XDG_CONFIG_HOME="$FIX/home/.config" TMPDIR="$FIX/tmp"
 # Explicit Git contexts/config overrides can bypass a discovery ceiling.
@@ -44,7 +44,7 @@ run_case(){
   mkdir -p "$c/seats" "$c/wheelhouse"
   git init -q -b main "$c"; git -C "$c" commit --allow-empty -qm container
   git init -q -b main "$p"; git -C "$p" commit --allow-empty -qm product
-  git init -q --bare "$r"; git -C "$p" remote add origin "$r"; git -C "$p" push -q origin main
+  git init -q --bare -b main "$r"; git -C "$p" remote add origin "$r"; git -C "$p" push -q origin main
   [ "$(git --git-dir="$r" rev-parse --is-bare-repository)" = true ]
   cp -f "$INSTALLER" "$c/seats/install-fleet-pre-push-guard.sh"
   cp -f "$HERE/fleet-pre-push-guard.sh" "$c/seats/"

@@ -539,8 +539,7 @@ to the real `bd` binary behind the shim. Bench code must call
 `${WHEELHOUSE_REAL_BD:-bd}` with its own scratch `BEADS_DIR`; bare `bd`
 through `PATH` remains the read-only shim inside the verifier process.
 
-When the dispatched task requires a full sweep (names `selftest-sweep.sh` or
-says the full `seats/*.selftest.sh` sweep passes), `verify.ts` runs
+For **every** review, regardless of the task's wording, `verify.ts` runs
 `bash seats/selftest-sweep.sh` **before** starting the reviewer. It uses a
 separate detached worktree at the pinned tip, waits for the runner's host-wide
 H4 lock without a model-command timeout, and streams output to a unique
@@ -552,9 +551,17 @@ the pinned HEAD is checked again after setup and after the suites. Real `bd`
 is supplied only to the sweep; suites still create their own fixture graphs. No writable graph or PATH override is
 passed to the reviewer. Live-login smoke legs are skipped explicitly with
 `WHEELHOUSE_SKIP_REAL_PI=1`; claims requiring those legs still need separate
-account-safe evidence. The reviewer receives the tip, rc and log path and must
-cite `rc=<number>` and that path in its final evidence. A failed sweep cannot
-be approved, and a verdict missing the citation is rejected. The verdict and
+account-safe evidence. The dispatcher records the tip, rc and log with the
+verdict. APPROVE requires integer rc=0, the pinned tip, and a retained regular,
+nonempty result log. NOT BENCHED cannot waive a missing or failed receipt.
+Setup/spawn/pinning errors, an absent runner, an empty suite inventory, and
+non-test runner statuses (such as lock refusal) make the review INCOMPLETE,
+even if the reviewer proposes BOUNCE or DISCOVER. Those failures are retained
+as refused diagnostics and failed inbox records, without a corrective attempt:
+restating the answer cannot repair the dispatcher result. Completed failing
+tests may support BOUNCE, never APPROVE. Explicit full-sweep claims additionally
+require `rc=<number>` and the exact log path in the final evidence; a missing
+citation retains the one corrective attempt described above. The verdict and
 log are working copies: transcribe decisive output to the task before citing
 it as durable graph evidence. A caller with its own hard per-command cap
 must launch this long-running dispatcher in the background (for example with
@@ -678,16 +685,22 @@ contract:
 bun seats/verify.ts <bead-id> <branch> <author-seat> --evidence <path>[,<path>...]
 ```
 
-Paths are repo-relative and read from the TIP SHA (`git cat-file blob
-<tip>:<path>`), never from a checkout: `wheelhouse/GRAPH.md` admits a
-committed path the bead names as an evidence home, and a file that exists
-only in someone's worktree is not one. The WORKER produces the evidence
-and commits it on the branch; the verifier collects and judges it —
-nothing here drives a browser or an emulator.
+Post decisive output on the task, not in source history. Fleet reports,
+graph dumps and diagnostic captures must not be committed, even scrubbed.
+Keep local working captures under git-excluded per-task scratch. For the
+local floor, name a repo-relative excluded directory with a colocated
+`cited-evidence.sha256` manifest; the dispatcher verifies the hashes and
+probes each named file. A local path alone is not durable graph evidence.
+
+Existing product artifacts can also be read from the TIP SHA (`git cat-file
+blob <tip>:<path>`). This compatibility is not an instruction to commit task
+captures. The verifier collects and judges artifacts; nothing here drives
+a browser or an emulator.
 
 Before the verifier spawns, `verify.ts` runs a FLOOR check per artifact —
-exists at the SHA, non-empty, type-probed (`.png` gets magic bytes plus
-IHDR dimensions; every other extension gets the non-empty floor) — and
+exists at the SHA or in the verified excluded directory, non-empty,
+type-probed (`.png` gets magic bytes plus IHDR dimensions; every other
+extension gets the non-empty floor) — and
 hands the results to the verifier in the prompt. The floor is not the
 judgment: a valid PNG of the wrong screen is a BOUNCE only the verifier's
 reading can produce. The checks land in the verdict file under
@@ -851,6 +864,8 @@ Reviewed scan files are install-bound: TSV starts with a `# wheelhouse-prune-sca
 
 ## Proving it still works
 
+Selftests register their teardown with `selftest_install_cleanup_traps cleanup` from `selftest-lib.sh` (a trusted shell command string is also accepted). The callback must return, not `exit`: it runs once, in the owning shell so it can reap its children, on normal EXIT and on INT/TERM. Signals exit 130/143 instead of resuming the script against a removed fixture; repeated signals are ignored during teardown. The sweep likewise drains its current suite group and releases its lock only from EXIT. `bash seats/selftest-signals.selftest.sh` checks both signal paths, normal exits, re-entrant signals, fixture removal and child reaping; `--old-trap` deliberately restores the returning trap in the fixture and must fail.
+
 For the full host sweep, run the locked runner instead of an ad-hoc loop:
 
 ```bash
@@ -899,6 +914,7 @@ bash seats/alerts.selftest.sh
 bash seats/never-lose-work.selftest.sh
 bash seats/intent-check.selftest.sh
 bash seats/specimen-leak.selftest.sh
+bash seats/no-tracked-evidence.selftest.sh
 bash seats/placeholder-grep.selftest.sh
 bash seats/push-authority-lint.selftest.sh
 bash seats/cockpit.selftest.sh
@@ -906,13 +922,29 @@ bash seats/supervisor.selftest.sh
 bash seats/herald.selftest.sh
 ```
 
+`bash seats/no-tracked-evidence.sh [repo-or-subdirectory]` rejects root
+`evidence/` paths in the Git index or HEAD, including forced adds and staged
+deletions. Git inspection failures are errors, not a clean empty inventory.
+Its selftest is part of the serial sweep and checks the ignore rule, native
+Git repositories/subdirectories/worktrees, and private fix-removed controls.
+Untracked ignored captures are allowed locally; paste decisive output on the
+bead before citing it. The audit does not rewrite or certify old history.
+
 `seats/push-authority-lint.sh [project-root] [verdict-file ...]` is the reviewer-verdict authority lint: when `wheelhouse/INTEGRATOR.md`'s project half grants push, it fails a verdict whose `PUSH:` line says pushing is principal-only. With no verdict files named it scans `seats/verdicts/*.md`; the selftest plants both the bad verdict and the no-grant case.
 
-When retaining a run as committed evidence, write it through the scrubber instead of redirecting raw output:
+Retain working output in ignored per-task scratch and post it on the task,
+never as a source commit. Set `OUT` to a capture file under the adapter-owned
+`<container>/.wheelhouse-runs/<bead>/` directory, then scrub at capture time:
 
 ```bash
-seats/evidence-scrub.sh -o evidence/<bead>/verify-selftest.txt -- bash seats/verify.selftest.sh
+WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$PWD/seats/verify.selftest.sh" \
+  seats/evidence-scrub.sh -o "$OUT" -- bash seats/selftest-sweep.sh
+bd comment <bead> --file "$OUT"
 ```
+
+Preserve the command's exit code and report it beside the pasted output.
+Scrubbing removes private strings; it does not turn fleet notes into product
+content or make a local scratch path durable.
 
 Hermetic — the seat-env, adapter, verify, and walk selftests build seats in a temp HOME with a stub `pi`, and your
 real seats are never touched. Selftests that need template history after being copied into an install read the template clone from `wheelhouse/.template-source`'s `path=`; they must not assume the install repository has template-only commits. The adapter and verify selftests have canary phases that break a copy of
@@ -966,7 +998,11 @@ Session `wh-<namespace>` (default namespace: the project dirname), window
 Re-running `cockpit.sh` attaches to the existing session — it never builds a
 duplicate. The tmux status bar carries the project name and the key hints.
 
-The herald is a standalone, non-LLM daemon. It tails every `seats/logs/*.jsonl` seat stream and appends one JSON object per wake event to `seats/inbox.jsonl`. On first sight of a log with no persisted cursor, it records the current EOF and reads only later appends; this deliberately prevents an upgraded/adopted install from replaying historical seat output into the commander's inbox. Later reads are chunked and incremental rather than whole-file loads.
+The herald is a standalone, non-LLM daemon. Startup refuses a live `seats/run/herald.pid` instead of overwriting it; a root-local PID lock also serializes concurrent daemon starts. `daemons.sh` reads the daemon-owned PID record and restarts a dead instance, including recovery of a dead owner's lock. Separate install roots have separate locks.
+
+Selftests that start a real or stub herald source `selftest-herald.sh` and call `selftest_bind_herald_owner "$FIX"` after allocating a marked fixture. The herald reads that explicit fixture-owner record (PID, start generation, UID, physical root), not a temp-path heuristic, and exits if the owning selftest disappears even with a retained fixture. Direct launches use `exec bun ...` so `$!` is the herald, and `selftest_stop_herald_child` stops/waits only a freshly verified direct herald child before fixture deletion. Signal traps exit through the EXIT cleanup; removing the project root remains a separate daemon exit condition. Native normal/failure/INT/TERM/SIGKILL and singleton regressions live in `herald-lifetime.selftest.sh`.
+
+It tails every `seats/logs/*.jsonl` seat stream and appends one JSON object per wake event to `seats/inbox.jsonl`. On first sight of a log with no persisted cursor, it records the current EOF and reads only later appends; this deliberately prevents an upgraded/adopted install from replaying historical seat output into the commander's inbox. Later reads are chunked and incremental rather than whole-file loads.
 
 
 | class | A2A-state | Trigger |

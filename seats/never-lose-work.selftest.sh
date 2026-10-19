@@ -35,7 +35,7 @@ selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 SLEEP_PID=""
 cleanup(){ [ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" >/dev/null 2>&1; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 export HOME="$FIX/home"
 mkdir -p "$HOME"
 selftest_disable_bd_metrics "$FIX" || exit 2
@@ -60,7 +60,7 @@ printf 'base\n' > "$PROD/app.txt"
 git -C "$PROD" add app.txt
 git -C "$PROD" commit -q -m base
 BARE="$FIX/origin.git"
-git -C "$PROD" init --bare -q "$BARE"
+git -C "$PROD" init --bare -q -b main "$BARE"
 git -C "$PROD" remote add origin "$BARE"
 git -C "$PROD" push -q -u origin main
 

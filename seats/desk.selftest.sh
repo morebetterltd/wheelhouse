@@ -12,7 +12,7 @@ selftest_isolate_git "$FIX" || exit 2
 export WHEELHOUSE_DESK_BD_TIMEOUT_MS="${WHEELHOUSE_DESK_BD_TIMEOUT_MS:-30000}"
 PASS=0; FAIL=0; PID=""; WATCHDOG_PID=""
 cleanup(){ [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 desk_fixture_processes(){ ps axww -o pid=,command= | awk -v root="$FIX" '$2 ~ /(^|\/)bun$/ && index($0, root) && index($0, "seats/desk.ts") {print}'; }
@@ -89,7 +89,7 @@ cat <<'JSON'
 JSON
 EOF
 chmod +x "$PROJ/bin/bd"
-PRODUCT="$PROJ/product"; mkdir -p "$PRODUCT"; git -C "$PRODUCT" init -q; git -C "$PRODUCT" config user.email selftest@example.invalid; git -C "$PRODUCT" config user.name selftest
+PRODUCT="$PROJ/product"; mkdir -p "$PRODUCT"; git -C "$PRODUCT" init -q -b main; git -C "$PRODUCT" config user.email selftest@example.invalid; git -C "$PRODUCT" config user.name selftest
 printf base > "$PRODUCT/file.txt"; git -C "$PRODUCT" add file.txt; GIT_AUTHOR_DATE=2026-09-20T00:00:00Z GIT_COMMITTER_DATE=2026-09-20T00:00:00Z git -C "$PRODUCT" commit -q -m base; git -C "$PRODUCT" checkout -q -b feat; printf feat >> "$PRODUCT/file.txt"; git -C "$PRODUCT" commit -am 'demo-merged Ship the button' -q; SECOND="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" checkout -q main; printf main > "$PRODUCT/main.txt"; git -C "$PRODUCT" add main.txt; git -C "$PRODUCT" commit -q -m main; GIT_AUTHOR_DATE=2026-09-21T12:00:00Z GIT_COMMITTER_DATE=2026-09-21T12:00:00Z git -C "$PRODUCT" merge --no-ff -q feat -m 'Merge demo-merged Ship the button'; MERGE="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" remote add origin https://github.com/example/product.git
 cat > "$PROJ/seats/inbox.jsonl" <<'EOF'
 {"at":"2026-09-21T12:10:00Z","seat":"verifier-gate","class":"settle","state":"terminal","title":"verifier gate verdict — demo-bounce","detail":"VERDICT: BOUNCE — tests failed"}

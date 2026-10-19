@@ -95,7 +95,7 @@ cleanup() {
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- stale-fixture sweep (same rules as adapter.selftest.sh) -----------------
 # SIGKILL skips the EXIT trap; pid-stamped fixture dirs let a later run tell

@@ -19,7 +19,7 @@ fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-fleet-gate-selftest.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 PROJ="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"
 mkdir -p "$PROJ/seats/run" "$PROJ/seats/logs" "$PROJ/wheelhouse" "$PROJ/contracts" "$BIN" "$HOME_FIX"

@@ -1,5 +1,6 @@
 // Terminal events come from the existing captured verify-real streams; only
-// their assistant text is replaced. No live provider, installed login, or sweep.
+// their assistant text is replaced. No live provider or installed login;
+// nested dispatcher sweeps run only the tiny tracked fixture suite.
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -87,6 +88,7 @@ async function test(): Promise<void> {
     fs.mkdirSync(dir); fs.mkdirSync(proj); fs.mkdirSync(bin); fs.mkdirSync(path.join(proj, "contracts"));
     fs.cpSync(runtime, path.join(proj, "seats"), { recursive: true });
     fs.writeFileSync(path.join(proj, "seats/verify.ts"), code);
+    fs.writeFileSync(path.join(proj, "seats/fixture.selftest.sh"), "#!/usr/bin/env bash\nset -eu\nprintf 'no-verdict fixture sweep PASS\\n'\n");
     fs.writeFileSync(path.join(proj, "contracts/REVIEWER.md"), "# Reviewer\nReview this local fixture.\n");
     const author = path.join(dir, "author"), reviewer = path.join(dir, "reviewer"); fs.mkdirSync(author); fs.mkdirSync(reviewer);
     fs.writeFileSync(path.join(reviewer, "auth.json"), JSON.stringify({ fixture: true }));

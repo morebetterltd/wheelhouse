@@ -1142,12 +1142,12 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
   return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, batch: { tip: batchTip, main: main!, sha256: sha256! } };
 }
 
-function claimRequiresFullSweep(claim: string): boolean {
+// Wording controls extra reviewer citations, never execution of the gate.
+function claimRequiresSweepCitation(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
-async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
-  if (!claimRequiresFullSweep(claim)) return { required: false, rc: null, logPath: null, elapsedMs: 0, tip };
+async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
   // Separate from the reviewer's cwd: no writable graph or bd wrapper reaches
   // that process. Suites create their OWN fixture graphs, not one redirected
   // global graph (which would invalidate graph-isolation selftests).
@@ -1167,13 +1167,18 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   let rc = 1;
   let error: string | undefined;
   try {
+    const runner = path.join(scratchCwd, "seats", "selftest-sweep.sh");
+    if (!fs.existsSync(runner) || !fs.statSync(runner).isFile()) throw new Error("reviewed tip has no seats/selftest-sweep.sh runner; review is incomplete");
+    const hasSuites = fs.readdirSync(path.join(scratchCwd, "seats")).some((name) =>
+      !name.startsWith(".") && name.endsWith(".selftest.sh") && fs.statSync(path.join(scratchCwd, "seats", name)).isFile());
+    if (!hasSuites) throw new Error("reviewed tip has no runnable seats/*.selftest.sh suites; review is incomplete");
     if (!realBd) throw new Error("bd is required for writable scratch fixture graphs");
     // bd init in a linked worktree can select its shared ancestor graph;
     // it can also commit setup files. Keep both operations in a fresh nested
     // primary repository, then expose only that graph at the sweep root.
     const graphRoot = path.join(scratchCwd, ".wheelhouse-sweep-graph");
     fs.mkdirSync(graphRoot);
-    execFileSync("git", ["init", "--quiet", graphRoot], { env, stdio: "pipe" });
+    execFileSync("git", ["init", "--quiet", "-b", "main", graphRoot], { env, stdio: "pipe" });
     const graphDir = path.join(graphRoot, ".beads");
     const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graphRoot, encoding: "utf8", env: { ...env, PWD: graphRoot, BEADS_DIR: graphDir } });
     if (init.status !== 0) throw new Error(`scratch bd init failed: ${init.stderr || init.stdout}`);
@@ -1208,6 +1213,18 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
         child.once("close", (code) => finish(code ?? 128));
       });
     } finally { fs.closeSync(fd); }
+    // 0/1 are completed pass/fail results. Lock/setup refusal, interruption,
+    // and exec failure are incomplete; retain a bounded runner diagnostic.
+    if (rc > 1 && !error) {
+      const reader = fs.openSync(logPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+      try {
+        const st = fs.fstatSync(reader);
+        if (!st.isFile()) throw new Error("dispatcher sweep log is not a regular file");
+        const bytes = Buffer.alloc(Math.min(st.size, 512));
+        const n = fs.readSync(reader, bytes, 0, bytes.length, st.size - bytes.length);
+        error = `dispatcher runner could not complete (exit ${rc}): ${bytes.subarray(0, n).toString("utf8").trim().replace(/\s+/g, " ")}`;
+      } finally { fs.closeSync(reader); }
+    }
   } catch (e: any) { error = e.message; }
   try {
     const finalTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
@@ -1220,8 +1237,8 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   return { required: true, rc, logPath, elapsedMs, tip, error };
 }
 
-function sweepPromptLines(sweep: SweepResult): string[] {
-  if (!sweep.required) return [];
+function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[] {
+  if (!sweep.logPath) return [];
   return [
     ``,
     sweep.batch ? `Reused passing full sweep from a combined batch tree containing the reviewed tip:` : `Full selftest sweep run by the dispatcher at the exact reviewed tip before this verifier spawn:`,
@@ -1231,7 +1248,9 @@ function sweepPromptLines(sweep: SweepResult): string[] {
     `- rc: ${sweep.rc}`,
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
-    sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. You must cite rc=0 and the exact log path in your final evidence. This reuses only the sweep, not another reviewer's judgment.` : `This sweep ran outside your model command timeout, in the detached scratch worktree for the reviewed tip, with a writable scratch bd graph when bd was available. You must cite rc=${sweep.rc} and the exact log path in your final evidence. If rc is not 0, do not approve the full-sweep portion of Done.`,
+    ...(sweep.error ? [`- error: ${sweep.error}`] : []),
+    sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. This reuses only the sweep, not another reviewer's judgment.` : `This dispatcher gate runs for every review, regardless of the bead's wording, outside your model command timeout in the detached scratch worktree at the reviewed tip. Its result is recorded with your verdict. If rc is not 0, you cannot approve.`,
+    ...(requireCitation ? [`You must cite rc=${sweep.rc} and the exact log path in your final evidence.`] : []),
   ];
 }
 
@@ -1459,8 +1478,9 @@ async function main(): Promise<void> {
   const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
-  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);
-  const sweepPrompt = sweepPromptLines(sweep);
+  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);
+  const requireSweepCitation = !!sweep.batch || claimRequiresSweepCitation(claim);
+  const sweepPrompt = sweepPromptLines(sweep, requireSweepCitation);
 
   // --- the one-shot ---------------------------------------------------------
   const prompt = [
@@ -1650,10 +1670,24 @@ async function main(): Promise<void> {
         catch (error: any) { refuse(error?.message ?? String(error), false); }
         if (checked.batch!.sha256 !== sweep.batch.sha256) refuse("batch sweep log changed during review", false);
       }
-      if (sweep.required) {
-        if (verdict === "APPROVE" && sweep.rc !== 0) refuse(`APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}`);
+      // Setup/spawn/pinning failures are not completed BOUNCE/DISCOVER
+      // judgments. A cosmetic retry cannot repair a missing dispatcher run.
+      if (sweep.error && verdict !== "APPROVE") {
+        refuse(`INCOMPLETE review: dispatcher full sweep could not complete; rc=${sweep.rc}; log=${sweep.logPath ?? "missing"}; ${sweep.error}`, false);
+      }
+      // Fail closed before publishing authority, even if execution is ever
+      // bypassed again. NOT BENCHED cannot waive a missing/failed receipt.
+      if (verdict === "APPROVE") {
+        let receiptExists = false;
+        try { const st = fs.lstatSync(sweep.logPath!); receiptExists = st.isFile() && st.size > 0; } catch {}
+        if (!Number.isInteger(sweep.rc) || sweep.tip !== tip || !receiptExists) {
+          refuse(`INCOMPLETE review: cannot record APPROVE without a dispatcher full-sweep result at ${tip}; rc=${sweep.rc}; log=${sweep.logPath ?? "missing"}`, false);
+        }
+        if (sweep.rc !== 0 || sweep.error) refuse(`INCOMPLETE review: APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}${sweep.error ? `; ${sweep.error}` : ""}`, false);
+      }
+      if (sweep.logPath && requireSweepCitation) {
         const evidenceText = finalAssistantText(stdout, verifierHarness);
-        if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath!)) refuse(`verifier must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
+        if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath)) refuse(`verifier must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
       }
 
       // --- record, then report --------------------------------------------------
@@ -1699,7 +1733,7 @@ async function main(): Promise<void> {
               ...sourceSnapshots.map((s) => `- ${s.original} — mounted read-only at ${s.mountedAt} (${s.bytes} bytes copied)`),
             ]
           : []),
-        ...(sweep.required
+        ...(sweep.logPath
           ? [
               ``,
               `## Dispatcher full-sweep result`,
