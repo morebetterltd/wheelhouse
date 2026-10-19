@@ -192,6 +192,8 @@ In its existing sustained-calm release branch:
 rm -f "$WHEELHOUSE_HEAVY_TEST_PAUSE"
 ```
 
+Also delete any old unconditional **“suite without a selftest-sweep ancestor”** kill loop (often labelled “suite outside the host lock” and implemented with `pgrep`, an ancestry walk and `kill_tree`). Do not merely exempt reviews from the pressure-pause action: that separate loop will still kill a direct suite legitimately admitted by `selftest-lib.sh` or `heavy-test.sh`. Sweep ancestry is no longer the ownership proof; the installed admission helpers validate the actual host token and FIFO head. Do not replace the old loop with another argv/cwd/process-name heuristic. Keep the pressure sampler and marker publication/release branches, not the obsolete enforcement loop.
+
 Leave the install's load/memory/swap thresholds configurable and its hysteresis intact. Other guards may observe the shared marker, but only the designated writer clears it. Remove pressure-triggered `adapter stop`, review/sweep/bench TERM/KILL, or an overnight-pause call that stops their worker process trees; marker admission replaces those actions, not the operator's explicit cancel command. Exporting a variable inside the guard does **not** configure already-running seat/verify launchers: put the same export in their launch environment and restart/reload them only through the install's normal safe upgrade procedure. A separate account needs an agreed shared path and permissions, not a private `$TMPDIR` marker.
 
 #### Check two real installs on one Mac
