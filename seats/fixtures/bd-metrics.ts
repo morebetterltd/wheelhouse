@@ -5,7 +5,7 @@ import path from "node:path";
 import http from "node:http";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-const [root, library, bd, lockHelper] = process.argv.slice(2);
+const [root, library, bd, lockHelper, runtime] = process.argv.slice(2);
 assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());
 for (const file of [library, bd, lockHelper]) assert(fs.statSync(file).isFile());
 let failed = 0;
@@ -28,7 +28,8 @@ else
 fi
 printf 'METRICS_INSTALL_DONE %s\\n' "$METRICS_MODE"
 `);
-for (const mode of ["fixture", "scratch-graph"]) {
+const modes = process.env.WHEELHOUSE_TEST_METRICS_REVIEW_ONLY === "1" ? ["review-sweep"] : ["fixture", "scratch-graph", "review-sweep"];
+for (const mode of modes) {
   const dir = path.join(root, mode); fs.mkdirSync(dir);
   const raw = path.join(dir, "raw"); fs.mkdirSync(raw); let sequence = 0;
   function command(bin: string, args: string[], cwd = dir) {
@@ -52,6 +53,25 @@ for (const mode of ["fixture", "scratch-graph"]) {
   for (const key of Object.keys(env)) if (/^(BD_|BEADS_|DOLT_|GIT_)/.test(key) || key === "DO_NOT_TRACK") delete env[key];
   Object.assign(env, { HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(dir, "gitconfig"), GIT_CEILING_DIRECTORIES: root + ":" + path.dirname(root), BEADS_ACTOR: "wheelhouse-selftest", BEADS_METRICS_ENDPOINT: endpoint, METRICS_LIB: library, METRICS_CASE: dir, METRICS_MODE: mode, WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER: lockHelper });
   fs.writeFileSync(env.GIT_CONFIG_GLOBAL!, "[user]\n name = fixture\n email = fixture@local\n[init]\n defaultBranch = main\n[commit]\n gpgsign = false\n");
+  let driver = script;
+  const ready = path.join(dir, "setup-ready"), release = path.join(dir, "release.fifo");
+  if (mode === "review-sweep") {
+    assert(runtime && fs.statSync(path.join(runtime, "verify.ts")).isFile());
+    const project = path.join(dir, "project"); fs.mkdirSync(project);
+    fs.cpSync(runtime, path.join(project, "seats"), { recursive: true });
+    const made = command("mkfifo", [release]); assert.equal(made.code, 0, made.stderr);
+    // The outer canonical host lock is held. This tiny fixture payload is not
+    // a second full product sweep: stop after the real verifier setup completes.
+    fs.writeFileSync(path.join(project, "seats/selftest-sweep.sh"), '#!/usr/bin/env bash\nset -eu\nbd list --json >/dev/null\nprintf "%s\\n" "$PWD" > "$METRICS_CASE/review-cwd"\nprintf "%s\\n" "$HOME" > "$METRICS_CASE/review-home"\nprintf "ready\\n" > "$METRICS_CASE/setup-ready"\nread -r release < "$METRICS_CASE/release.fifo"\n', { mode: 0o700 });
+    for (const args of [["init", "-q", "-b", "main"], ["add", "seats"], ["-c", "user.name=fixture", "-c", "user.email=fixture@local", "-c", "commit.gpgsign=false", "commit", "-qm", "review metrics fixture"]]) {
+      const r = command("git", args, project); assert.equal(r.code, 0, r.stderr);
+    }
+    assert.equal(fs.realpathSync(command("git", ["rev-parse", "--show-toplevel"], project).stdout.trim()), fs.realpathSync(project));
+    const tip = command("git", ["rev-parse", "HEAD"], project).stdout.trim();
+    driver = path.join(dir, "review-driver.ts");
+    fs.writeFileSync(driver, `import {runFullSweepIfRequired} from ${JSON.stringify(path.join(project, "seats/verify.ts"))};\nconst r=await runFullSweepIfRequired("Full sweep passes",${JSON.stringify(project)},${JSON.stringify(tip)},${JSON.stringify(bd)},process.env.PATH!);\nconsole.log("REVIEW_SETUP_RESULT "+JSON.stringify(r));\nprocess.exitCode=r.rc===0?0:1;\n`);
+    env.TMPDIR = path.join(dir, "tmp"); fs.mkdirSync(env.TMPDIR);
+  }
   function senders() {
     const ps = command("ps", ["axww", "-o", "pid=,ppid=,uid=,command="]); assert.equal(ps.code, 0, ps.stderr);
     // p/c/n and whitespace-padded ps fields come from the native capture on
@@ -76,20 +96,35 @@ for (const mode of ["fixture", "scratch-graph"]) {
     }
     return { found, sockets };
   }
-  let beforeCleanup: ReturnType<typeof senders> | undefined;
+  let beforeCleanup: ReturnType<typeof senders> | undefined, ended = false;
+  let stdout = "", stderr = "", stdoutEOF = false, stderrEOF = false;
+  let joined: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
   try {
     assert.equal(senders().found.length, 0, "fresh fixture subject has no existing sender");
-    const child = spawn("bash", [script], { cwd: dir, env, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "", stdoutEOF = false, stderrEOF = false;
+    const child = spawn(mode === "review-sweep" ? "bun" : "bash", [driver], { cwd: dir, env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", b => stdout += b); child.stderr.on("data", b => stderr += b);
     child.stdout.on("end", () => stdoutEOF = true); child.stderr.on("end", () => stderrEOF = true);
-    const native = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => { child.once("error", reject); child.once("close", (code, signal) => resolve({ code, signal })); });
-    assert.equal(native.code, 0, stderr); assert.equal(native.signal, null); assert(stdoutEOF && stderrEOF); assert(stdout.includes("METRICS_INSTALL_DONE " + mode));
-    const install = path.join(dir, mode === "fixture" ? "install" : "graph");
+    joined = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", (code, signal) => { ended = true; resolve({ code, signal }); }); });
+    let native: Awaited<typeof joined> | undefined;
+    if (mode === "review-sweep") {
+      const limit = performance.now() + 60000; // incomplete setup guard, not absence proof
+      while (!fs.existsSync(ready)) {
+        if (ended) throw new Error("review exited before setup barrier: " + stderr + stdout);
+        if (performance.now() > limit) throw new Error("INCOMPLETE review setup barrier");
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      assert(!ended, "review setup must still exist when measured, before teardown");
+      assert.equal(fs.readFileSync(path.join(dir, "review-home"), "utf8").trim(), path.join(fs.readFileSync(path.join(dir, "review-cwd"), "utf8").trim(), ".wheelhouse-sweep-graph/home"));
+      assert.deepEqual(fs.readdirSync(home), [], "do not alter inherited HOME metrics configuration");
+    } else {
+      native = await joined;
+      assert.equal(native.code, 0, stderr); assert.equal(native.signal, null); assert(stdoutEOF && stderrEOF); assert(stdout.includes("METRICS_INSTALL_DONE " + mode));
+    }
+    const install = mode === "review-sweep" ? fs.readFileSync(path.join(dir, "review-cwd"), "utf8").trim() : path.join(dir, mode === "fixture" ? "install" : "graph");
     assert(fs.statSync(path.join(install, ".beads")).isDirectory(), "actual fixture graph was created before measuring survivors");
     assert.equal(fs.realpathSync(command("git", ["rev-parse", "--show-toplevel"], install).stdout.trim()), fs.realpathSync(install));
     beforeCleanup = senders();
-    const record = { mode, install, endpoint, parent: { ...native, stdout, stderr, stdoutEOF, stderrEOF }, survivors: beforeCleanup.found, sockets: beforeCleanup.sockets, requests: [...requests], measuredBeforeCleanup: true };
+    const record = { mode, install, endpoint, setupBarrierReached: mode === "review-sweep", parent: { ...native, stillRunning: !ended, stdout, stderr, stdoutEOF, stderrEOF }, survivors: beforeCleanup.found, sockets: beforeCleanup.sockets, requests: [...requests], measuredBeforeCleanup: true };
     fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(record, null, 2));
     console.log("MEASUREMENT " + JSON.stringify(record));
     const ok = beforeCleanup.found.length === 0 && requests.length === 0;
@@ -100,8 +135,13 @@ for (const mode of ["fixture", "scratch-graph"]) {
     released = true; for (const res of pending) respond(res);
     server.closeIdleConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
     for (;;) { const after = senders(); if (!after.found.length) break; await new Promise(resolve => setTimeout(resolve, 100)); }
-    console.log("CLEANUP " + JSON.stringify({ mode, localEndpointClosed: true, remainingOwnedSenders: 0, signalsSent: false, beforeCount: beforeCleanup?.found.length }));
+    if (mode === "review-sweep" && fs.existsSync(ready)) fs.writeFileSync(release, "release\n");
+    const native = joined ? await joined : undefined;
+    if (native) { assert.equal(native.code, 0, stderr); assert.equal(native.signal, null); assert(stdoutEOF && stderrEOF); }
+    const joinedRecord = { mode, localEndpointClosed: true, remainingOwnedSenders: 0, signalsSent: false, beforeCount: beforeCleanup?.found.length, parent: { ...native, stdoutEOF, stderrEOF, stdout, stderr } };
+    fs.writeFileSync(path.join(dir, "joined.json"), JSON.stringify(joinedRecord, null, 2));
+    console.log("CLEANUP " + JSON.stringify(joinedRecord));
   }
 }
-console.log(`bd metrics regression: 2 native install legs, ${failed} failures`);
+console.log(`bd metrics regression: ${modes.length} native setup legs, ${failed} failures`);
 process.exitCode = failed ? 1 : 0;
