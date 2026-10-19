@@ -26,7 +26,7 @@ A bench must satisfy all eight of these. They are stack-agnostic on purpose — 
 
 6. **It always tears down.** On success, on failure, and on interrupt. A leaked environment costs the next run silently, and silent costs are the expensive kind. If the bench needs to exercise every shipped seat selftest, it runs `bash seats/selftest-sweep.sh` rather than its own `for seats/*.selftest.sh` loop, so the host-wide sweep lock serializes it with other seats and installs.
 
-   Every ad-hoc build, derived-data directory, review-output directory, simulator artifact, or other scratch artifact the bench or its caller creates for a bead lives under `<container>/.wheelhouse-runs/<bead-id>/...`, not a bare `/tmp` path. Any simulator created for the run is named `<bead-id>-*` so the closed-bead scratch pruner can identify it later.
+   Every ad-hoc build, derived-data directory, review-output directory, simulator artifact, or other scratch artifact the bench or its caller creates for a bead lives under `$WHEELHOUSE_ROOT/.wheelhouse-runs/<bead-id>/...`, using the absolute install root and exact per-bead scratch path printed by the dispatcher; do not infer that root from the install's parent, a selected product repository or the worktree. Do not use a bare `/tmp` path. Any simulator created for the run is named `<bead-id>-*` so the closed-bead scratch pruner can identify it later.
 
 7. **Measurements are not verdicts.** Any number the bench emits — a threshold, a heuristic, a similarity score — is reported as a measurement, and the doc states what it CANNOT distinguish. A check that prints a conclusion it did not establish is worse than no check, because it replaces a reviewer's judgment with a sentence.
 

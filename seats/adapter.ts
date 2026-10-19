@@ -62,7 +62,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { resolveRoleBrief } from "./briefs";
+import { resolveRoleBrief, workerDispatchPrompt } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
 import { effectiveRoster } from "./roster";
@@ -1519,7 +1519,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   }
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
-  const promptText = `Bead ${beadId}\n\n${text}`;
+  const promptText = workerDispatchPrompt(ROOT, beadId, text);
   await writeState((state) => {
     state.seats[name].lastBead = beadId;
     state.seats[name].lastDispatchAt = new Date().toISOString();

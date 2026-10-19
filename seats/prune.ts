@@ -493,6 +493,22 @@ function scanBeadRuns(root: string, beads: Map<string, string>, seats: Map<strin
   return rows;
 }
 
+// An older ambiguous "<container>" brief sent reviewers one level above the
+// install. Match only this graph's bead IDs; observe names, never traverse,
+// chmod, size or remove those foreign directories.
+const MISPLACED_SCRATCH = "misplaced scratch outside install";
+function scanMisplacedBeadRuns(root: string, beads: Map<string, string>): Row[] {
+  const parent = path.dirname(root);
+  if (parent === root || beads.size === 0) return [];
+  const rows: Row[] = [];
+  for (const d of subdirs(path.join(parent, RUNS_DIRNAME))) {
+    const name = path.basename(d), b = beadPrefix(name, beads);
+    if (b && (name === b[0] || name.startsWith(`${b[0]}-`) || name.startsWith(`${b[0]}_`))) rows.push(row("needs-review", false, root, d, "", "none",
+      `${MISPLACED_SCRATCH}: matches bead ${b[0]} in this install; reporting only, never deleted`, 0));
+  }
+  return rows;
+}
+
 function scanPrivateTmp(root: string, beads: Map<string, string>): Row[] {
   // Record the physical parent, not TMPDIR's alias spelling. Reviewed rows
   // must stay canonical; do not relax their symlink/identity checks instead.
@@ -605,6 +621,7 @@ function scan(roots: string[], includeOptional: boolean): Row[] {
     const activeBench = benchInProgress(root);
     rows.push(...scanOrphans(root, registeredPaths, seats, live));
     rows.push(...scanBeadRuns(root, beads, seats, live));
+    rows.push(...scanMisplacedBeadRuns(root, beads));
     rows.push(...scanPrivateTmp(root, beads));
     rows.push(...scanSimulators(root, beads));
     rows.push(...scanXCTestDevices(root));
@@ -994,8 +1011,8 @@ function cleanup(o: CleanupOptions): number {
     const inContainer = (p: string) => underAllowed(root, p) || DEFAULT_CONTAINERS.some((d) => insideOf(path.resolve(p), path.join(root, d)));
     rowsLoop: for (const r of rows) {
       if (NEVER.has(r.category)) {
-        // kept lines only for what cleanup could otherwise have touched: worktrees and bead scratch
-        if (inContainer(r.path)) { emit(`${dry}kept ${r.category} ${r.path} reason=${r.category === "seat-anchor" ? `seat-anchor: ${r.reason}` : r.reason}`); kept++; }
+        // Also surface misplaced parent scratch, but never authorize touching it.
+        if (inContainer(r.path) || r.reason.startsWith(MISPLACED_SCRATCH)) { emit(`${dry}kept ${r.category} ${r.path} reason=${r.category === "seat-anchor" ? `seat-anchor: ${r.reason}` : r.reason}`); kept++; }
         continue;
       }
       if (!underAllowed(root, r.path)) { emit(`${dry}kept ${r.category} ${r.path} reason=outside ${FLEET_CONTAINER}/ and ${RUNS_DIRNAME}/; never touched by cleanup`); kept++; continue; }
