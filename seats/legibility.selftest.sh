@@ -266,7 +266,7 @@ done
 
 # Every review must run the dispatcher gate. Track the actual runner and its
 # companions plus one tiny suite; an empty fixture tip is not an exemption.
-for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts; do
+for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts heavy-test.sh; do
   cp -f "$SRC/$f" "$PROJ/seats/$f" || exit 2
 done
 cat > "$PROJ/seats/fixture.selftest.sh" <<'SH'
