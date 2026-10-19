@@ -33,7 +33,12 @@ export function channelToken(root: string, kind: ChannelKind): string {
       token = execFileSync("bash", ["-lc", process.env.WHEELHOUSE_TEAMS_TOKEN_CMD], {
         encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"],
       }).trim();
-    } catch { throw new Error(`teams token command failed; ${fix}`); }
+    } catch (error: any) {
+      // Preserve the native timeout class, never its credential-bearing
+      // stdout/stderr/command. Ten seconds remains the existing budget.
+      if (error?.code === "ETIMEDOUT") throw Object.assign(new Error(`teams token command timed out after 10000ms; ${fix}`), { code: "ETIMEDOUT" });
+      throw new Error(`teams token command failed; ${fix}`);
+    }
     if (token) return token;
     throw new NoChannelCredential(`teams token command returned no token; ${fix}`);
   }

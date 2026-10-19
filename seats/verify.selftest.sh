@@ -137,7 +137,7 @@ if (process.env.STUB_GIT_INIT_REPO) {
   const before = readWorktree();
   const fixture = path.join(agentDir, "git-init-fixture");
   fs.mkdirSync(fixture, { recursive: true });
-  const init = cp.spawnSync("git", ["init", "-q"], { cwd: fixture, encoding: "utf8", env: process.env });
+  const init = cp.spawnSync("git", ["init", "-q", "-b", "main"], { cwd: fixture, encoding: "utf8", env: process.env });
   const after = readWorktree();
   fs.writeFileSync(path.join(agentDir, "git-init-check.json"), JSON.stringify({ before, after, initStatus: init.status, initStderr: init.stderr ?? "", gitDir: process.env.GIT_DIR ?? null, gitWorkTree: process.env.GIT_WORK_TREE ?? null }, null, 2));
 }
@@ -520,7 +520,7 @@ EOF
     printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-$ns/$d/auth.json"
   done
   ( cd "$proj" &&
-    git init -q &&
+    git init -q -b main &&
     git add seats/README.md &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
@@ -585,10 +585,10 @@ EOF
     printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-$ns/$d/auth.json"
   done
   ( cd "$umb" &&
-    git init -q &&
+    git init -q -b main &&
     git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
   ( cd "$product" &&
-    git init -q &&
+    git init -q -b main &&
     mkdir -p evidence && printf 'product branch evidence\n' > evidence/bench.log &&
     git add evidence/bench.log &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
@@ -670,7 +670,7 @@ if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exi
 phase "fixture containment — exclusive H4 publication and bounded release wait"
 BOUNDS_DIR="$(mktemp -d "$FIX/holder-bounds.XXXXXX")"
 if bun "$READINESS_DRIVER" "$VERIFY" "$BOUNDS_DIR" holder-bounds; then
-  pass "H4 fixture refuses occupied locks and fails a missing-release waiter (native exits 73/124)"
+  pass "H4 real-helper fixture refuses occupied locks and fails a missing-release waiter (native exits 1/124)"
 else fail "H4 fixture publication/bounded waiter regression"; fi
 
 phase "verifier gate STOP reaches the dispatch inbox"

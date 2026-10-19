@@ -137,10 +137,11 @@ start_herald() {
   pid_file="$DAEMONS_RUN/herald.pid"
   if daemon_alive herald; then echo "herald already running: pid $(cat "$pid_file")"; return 0; fi
   old="$(cat "$pid_file" 2>/dev/null || true)"; [ -n "$old" ] && echo "herald dead: pid $old; restarting"
-  rm -f "$pid_file"; tmp="$pid_file.$$"; rm -f "$tmp"
-  ( cd "$DAEMONS_ROOT" || exit 1; exec </dev/null >> "$DAEMONS_LOGS/herald.out.log" 2>> "$DAEMONS_LOGS/herald.stderr.log"; WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" WHEELHOUSE_HERALD_ROOT="$DAEMONS_ROOT" nohup bun "$DAEMONS_SEATS/herald.ts" & echo $! > "$tmp"; disown $! 2>/dev/null || true ) </dev/null >/dev/null 2>/dev/null &
-  disown $! 2>/dev/null || true; wait_pid_file "$tmp"; [ -s "$tmp" ] && mv -f "$tmp" "$pid_file"
-  new="$(cat "$pid_file" 2>/dev/null || true)"; for _ in $(seq 1 50); do pid_alive "$new" && break; sleep 0.1; done
+  # The daemon owns herald.pid. A launcher must never replace a live winner's
+  # record with the PID of a concurrently refused child.
+  ( cd "$DAEMONS_ROOT" || exit 1; exec </dev/null >> "$DAEMONS_LOGS/herald.out.log" 2>> "$DAEMONS_LOGS/herald.stderr.log"; WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" WHEELHOUSE_HERALD_ROOT="$DAEMONS_ROOT" nohup bun "$DAEMONS_SEATS/herald.ts" & disown $! 2>/dev/null || true ) </dev/null >/dev/null 2>/dev/null &
+  disown $! 2>/dev/null || true
+  new=""; for _ in $(seq 1 50); do new="$(cat "$pid_file" 2>/dev/null || true)"; pid_alive "$new" && break; sleep 0.1; done
   if pid_alive "$new"; then echo "herald started: pid $new"; return 0; fi
   echo "STOP: herald failed to start; see $DAEMONS_LOGS/herald.stderr.log" >&2; return 1
 }
