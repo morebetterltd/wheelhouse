@@ -510,7 +510,9 @@ function ancestorOwnsLock(lock: string): boolean {
     catch (e: any) { if (e.errno === 2) return false; throw e; }
     // A legacy pid-only claim or an exported environment flag is not proof of
     // inherited admission. Require the current token-owned lock AND FIFO head.
-    if (!snapshot.marker.token || !alive(snapshot.marker.pid)) return false;
+    // PID 1 is the system root, not proof of a harness ancestor. In particular,
+    // a live/EPERM PID-1 fixture must queue normally, not inherit init's claim.
+    if (!snapshot.marker.token || snapshot.marker.pid === 1 || !alive(snapshot.marker.pid)) return false;
     let pid = process.ppid;
     const seen = new Set<number>();
     while (pid !== snapshot.marker.pid) {
