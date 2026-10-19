@@ -24,7 +24,7 @@ FIX="$(cd "$FIX" && pwd -P)" || exit 2
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats" "$ROOT/wheelhouse"
 printf 'namespace=wheelhouse-project\n' > "$ROOT/wheelhouse/.template-source"
 cat > "$ROOT/seats/seats.json" <<'JSON'
-{ "seats": { "worker-1": { "role": "worker" }, "reviewer": { "role": "verifier" }, "commander": { "role": "commander" } } }
+{ "seats": { "worker-1": { "role": "worker" }, "reviewer": { "role": "reviewer" }, "commander": { "role": "commander" } } }
 JSON
 RUN_SCRIPT="$SCRIPT"
 run(){ RC=0; OUT="$(WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" "$@" 2>&1)" || RC=$?; }

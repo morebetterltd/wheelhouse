@@ -95,7 +95,7 @@ async function test(): Promise<void> {
     fs.writeFileSync(path.join(reviewer, ".claude.json"), JSON.stringify({ oauthAccount: { email: "fixture@example.invalid", accessToken: "fixture-token" } }));
     fs.writeFileSync(path.join(proj, "seats/seats.json"), JSON.stringify({ seats: {
       author: { role: "worker", account: { dir: author } },
-      reviewer: { role: "verifier", harness, provider: harness === "claude-code" ? "anthropic" : "openai", model: "fixture", account: { dir: reviewer } },
+      reviewer: { role: "reviewer", harness, provider: harness === "claude-code" ? "anthropic" : "openai", model: "fixture", account: { dir: reviewer } },
     } }));
     const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
     for (const cli of ["pi", "claude", "codex"]) fs.writeFileSync(path.join(bin, cli), `#!/usr/bin/env bash\nexec bun ${quote(import.meta.path)} --reviewer "$@"\n`, { mode: 0o755 });

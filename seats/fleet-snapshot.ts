@@ -103,7 +103,7 @@ export function fleetSnapshot(root: string = ROOT, opts: { since?: { isaHead?: s
   }
   const reviewersLive: LiveReviewer[] = [];
   for (const [name, entry] of Object.entries<any>(roster)) {
-    if (entry.external || entry.role !== "verifier") continue;
+    if (entry.external || entry.role !== "reviewer") continue;
     reviewersLive.push({ name, entry: entryForSeat(staffing, name), accountDir: authorDirs.get(name) ?? null, busy: verifyMarkerLive(root, name) });
   }
   const head = isaHead(root);

@@ -35,7 +35,7 @@ The main files here:
 - `courier.ts` — optional human transport daemon: pushes needs to Telegram and records replies back into `seats/needs.jsonl`.
 - `transports/` — transport interface and adapters, including Telegram, Slack, and Teams.
 - `transports/teams.ts` — Microsoft Graph Teams channel transport used by stakeholder channels.
-- `verify.ts` — dispatches the EPHEMERAL verifier pass on a finished branch
+- `verify.ts` — dispatches the EPHEMERAL reviewer pass on a finished branch
   and maps its verdict to an exit code. Its timeout knobs are liveness
   watchdogs rather than a wall-clock cap: `--first-output-timeout-ms` bounds
   silence before any output; once output is flowing, the stall limit is the
@@ -46,7 +46,7 @@ The main files here:
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
-- `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and verifier markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
+- `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and review markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
 - `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, alerts}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work and invalid commander panes open/close human needs through `seats/needs.ts` only.
 - `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
 
@@ -172,7 +172,7 @@ Credentials are per-machine: `WHEELHOUSE_TELEGRAM_TOKEN`, `WHEELHOUSE_SLACK_TOKE
 A fleet that has expensive builds may opt in by creating `seats/host-budget.json`
 (any JSON object; the file's existence is the switch). When present, the adapter
 prepends `seats/bin` to `PATH` for every seat process, and `verify.ts`/`walk.ts`
-do the same for their one-shot Pi verifier spawns. When absent, PATH is left as
+do the same for their one-shot Pi reviewer/walker spawns. When absent, PATH is left as
 it was, so the template does not throttle light projects by default. The same
 file may carry `max_worktrees` (default `24`) and `auto_prune` (default `false`):
 when a settled seat is observed and the fleet is over the cap, `adapter.ts
@@ -214,7 +214,7 @@ the `--contract` command exits non-zero.
 
 ## The roster and pool formats
 
-With no `seats/pool.json`, `seats.json` is still the full roster and all existing commands behave as before. When `seats/pool.json` exists, its `roles.workers` and/or `roles.reviewers` entries replace fixed `worker` / `verifier` rows from `seats.json`; the adapter, verifier, walker, and worktree cap read the effective roster assembled from the fixed rows plus staffed names like `worker-codex-a` and `verifier-claude-b`.
+With no `seats/pool.json`, `seats.json` is still the full roster and all existing commands behave as before. When `seats/pool.json` exists, its `roles.workers` and/or `roles.reviewers` entries replace fixed `worker` / `reviewer` rows from `seats.json`; the adapter, reviewer, walker, and worktree cap read the effective roster assembled from the fixed rows plus staffed names like `worker-codex-a` and `reviewer-claude-b`; fixed `verifier` walker rows stay separate.
 
 `bun seats/pool.ts check` validates a pool without reading credential files. It requires each entry to name a harness, provider, offered models, and an `account.dir` under this install's `$HOME/.pi-seats-<namespace>/pool/<entry>` root; `seats/seat-env.sh <namespace> --pool <entry>` provisions that directory. The pool refuses unknown harnesses, unknown keys, missing login folders, shared login directories, commander's login directories, role limits outside the listed entries, role models the entry does not offer, fixed-roster conflicts for the same role, and token-shaped strings. It records login folder paths and auth-route names, never credentials.
 
@@ -242,7 +242,7 @@ Each seat entry:
 | `account.label` | Optional free-form, human-meaningful account label (`kk-personal-anthropic`, `work-chatgpt-2`) printed in status/provisioning/error output so an operator can tell which real account backs the seat. It is NEVER a secret: do not put tokens, keys, passwords, emails you would not commit, or other credentials here. Omit it freely; existing rosters without labels stay valid. |
 | `account.authRoute` | Optional durable record of which credential route this seat's identity was given. For `pi`: `oauth`, `api_key`, or `env`. For `claude-code`: `oauth` by default through `claude auth login --claudeai`, explicit metered `api_key` through `claude auth login --console`, or the Claude-only smoke-test escape `default`; no `env` route. For `codex`: `oauth` through `codex login` / `--device-auth`, `api_key` through `codex login --with-api-key`, or the Codex-only smoke-test escape `default`; no `env` route. `default` is only for evidence/smoke runs on the operator's already-logged-in default harness account: it leaves the harness config dir unset, must not be committed for a rostered production seat, and exists because the login step is interactive and principal-owned. It records the route, never the credential itself. Omit it freely on old Pi rosters; new bootstrap writes it from the read-back table. |
 
-Claude Code seats launch in measured-safe unattended mode: `--permission-mode acceptEdits --permission-prompts none` plus the roster's `allowedTools` list and optional `disallowedTools` list. The same lists are passed to claude-code one-shot verifier/walk gates, so a reviewer with a bench allowlist can actually run that bench. A project section may deliberately opt a seat up to a broader Claude Code permission mode, but this fleet did not probe broader modes for production use, and the template default does not ship one. Verify any narrow `allowedTools` allowlist against the exact redirected/write forms the seat will use: Claude Code 2.1.273 denies `Bash(printf *)` for `printf x > file` without explaining that the redirect defeated the prefix rule.
+Claude Code seats launch in measured-safe unattended mode: `--permission-mode acceptEdits --permission-prompts none` plus the roster's `allowedTools` list and optional `disallowedTools` list. The same lists are passed to claude-code one-shot reviewer/walk gates, so a reviewer with a bench allowlist can actually run that bench. A project section may deliberately opt a seat up to a broader Claude Code permission mode, but this fleet did not probe broader modes for production use, and the template default does not ship one. Verify any narrow `allowedTools` allowlist against the exact redirected/write forms the seat will use: Claude Code 2.1.273 denies `Bash(printf *)` for `printf x > file` without explaining that the redirect defeated the prefix rule.
 
 Codex harness notes: the driver runs a resident `codex app-server` shim under `CODEX_HOME=<account.dir>` (unless `authRoute=default` is explicitly used for evidence), strips provider API keys from the child environment, injects the role brief via `developerInstructions`, and normalizes app-server events to the same Pi-shaped seat log. Measured Codex issues: current starts may print a harmless stale-model-cache line (`ERROR codex_models_manager::cache ... missing field base_instructions`) to stderr, and an unauthenticated `CODEX_HOME` can spend about 45 seconds retrying 401s before failing; `codexProbe` runs `codex login status` first for exactly this reason, so a dead login fails fast with a named cause before real work.
 
@@ -260,6 +260,8 @@ and prints pi's stderr tail. And always pin provider and model together: a
 `--provider` given to pi WITHOUT a `--model` does not pick that provider's
 default — it silently falls back to the default provider entirely, and the seat
 runs on a different vendor than the roster says.
+
+The example names review seats `reviewer-1` and `reviewer-2` (role `reviewer`, the second a shadow mirror) and the walk seat `verifier` (role `verifier`). `verify.ts` refuses every non-reviewer role, including a walker; `walk.ts` refuses a reviewer. Pre-split review seats using role `verifier` must change their role to `reviewer`, not move their credentials; see the upgrade runbook. Legacy fixed-roster diagnostics name the seat and one-line fix when no reviewer is available; legacy staffed roles STOP at roster validation.
 
 The reviewer's `account.dir` must differ from every worker's. Same directory
 means same `auth.json` means same account, and a review from the author's own
@@ -452,19 +454,19 @@ quota, or retries. It runs seats; noticing them is the commander's job.
 ## Verifying a branch
 
 ```bash
-bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
+bun seats/verify.ts <bead-id> <branch> <author-seat> [reviewer-seat]
 ```
 
-One invocation delivers a verdict or a named `no-verdict` outcome. Unlike the seats above, the verifier is
-EPHEMERAL: `verify.ts` spawns one `pi -p --no-session` on the verifier
+One invocation delivers a verdict or a named `no-verdict` outcome. Unlike the seats above, the reviewer is
+EPHEMERAL: `verify.ts` spawns one `pi -p --no-session` on the reviewer
 seat's account — no session saved, nothing to resume — with
 the resolved REVIEWER brief appended to the system prompt, hands it the bead
-claim (via `bd show` when `bd` is reachable, otherwise the verifier reads
+claim (via `bd show` when `bd` is reachable, otherwise the reviewer reads
 the bead itself) and the branch's tip SHA, and parses the single
-`VERDICT:` line out of the reply. With a pool and no explicit verifier,
-`verify.ts` picks the first free non-external verifier identity whose
+`VERDICT:` line out of the reply. With a pool and no explicit reviewer,
+`verify.ts` picks the first free non-external reviewer identity whose
 canonical `account.dir` differs from the author; staffed reviewer identities
-are named `verifier-<entry>` and are never spawned by staffing.
+are named `reviewer-<entry>` and are never spawned by staffing.
 
 For Pi, `agent_end` with `willRetry: true` is not a terminal result: a provider
 retry may still deliver the verdict. It neither triggers no-verdict nor starts
@@ -479,7 +481,7 @@ are copied out before cleanup. Notification failures are explicit in the output/
 not silently treated as delivered. A sweep that will outlive the turn needs
 an interim record and a collecting dispatch, never a promise to return.
 
-Unlike a worker seat, the verifier's process cwd is never a bead's
+Unlike a worker seat, the reviewer's process cwd is never a bead's
 worktree — but as of this bead it is not the project root either. The
 one-shot `pi` spawn gets a THROWAWAY scratch worktree (`makeScratchCwd()`
 in verify.ts): a real `git worktree add --detach <tmp-path> HEAD` against
@@ -493,13 +495,13 @@ harmless to land, not the live checkout every other seat and the commander
 depend on.
 
 It has to be a real worktree of THIS repository, not an arbitrary empty
-directory, because the verifier's own default reading mechanism
+directory, because the reviewer's own default reading mechanism
 (`REVIEWER.md`, "Reading a branch without disturbing it") is bare
 `git diff <base> <sha>` and `git show <sha>:<path>` with no `-C`
 flag — those read the object database directly and do not care which
 directory they run in, as long as it is a clone that has the branch's
 ref, but an unrelated directory with no `.git` in its ancestry fails
-every one of them before the verifier reads a single line. Detached at
+every one of them before the reviewer reads a single line. Detached at
 `ROOT`'s own `HEAD` (an arbitrary, always-resolvable commit): the
 checked-out content is never read by anyone, it exists purely so the
 directory both IS a valid git working directory and is disposable.
@@ -513,31 +515,31 @@ run from verify.ts's own Node process via `execFileSync(..., { cwd: ROOT
 })`, which has nothing to do with the separate child process cwd the
 spawned `pi` binary gets. GRAPH.md names the bead and a committed path as
 the only two evidence homes, and neither a worker's worktree nor the
-verifier's own scratch worktree is either. On the rare turn where the
-verifier genuinely needs a real working tree beyond its scratch cwd — to
+reviewer's own scratch worktree is either. On the rare turn where the
+reviewer genuinely needs a real working tree beyond its scratch cwd — to
 build, to run the thing — its own brief still tells it to create one of
 its own (`git worktree add <its-own-path> <sha>`) rather than reuse
 anyone else's, because "never run `git checkout` in a directory you did
 not create" rules out standing in a worker's worktree even for that.
 
-So a worker's cwd needs to BE the bead; the verifier's cwd only needs to
+So a worker's cwd needs to BE the bead; the reviewer's cwd only needs to
 be A repository the bead's ref resolves from, which any worktree of this
 repository is — the scratch one included, and disposable specifically
 because nothing about it matters except that it exists and is not the
 live checkout.
 
-The one-shot verifier's `PATH` also starts with a private `bd` shim that
+The one-shot reviewer's `PATH` also starts with a private `bd` shim that
 execs the real `bd` with `--readonly`. `bd show` and `bd comments` still
 work for reading the graph, but graph-writing verbs such as `bd comment`,
-`bd update`, and `bd --actor ... close` fail inside the verifier process
+`bd update`, and `bd --actor ... close` fail inside the reviewer process
 before they can mutate the bead store. Roster-level Claude Code
 `disallowedTools` entries for `bd` remain useful belt-and-braces, but graph
 read-only enforcement does not depend on enumerating every write verb.
 When a machine-local bench needs to create a fixture Beads graph, the
-verifier environment also exports `WHEELHOUSE_REAL_BD` as the absolute path
+reviewer environment also exports `WHEELHOUSE_REAL_BD` as the absolute path
 to the real `bd` binary behind the shim. Bench code must call
 `${WHEELHOUSE_REAL_BD:-bd}` with its own scratch `BEADS_DIR`; bare `bd`
-through `PATH` remains the read-only shim inside the verifier process.
+through `PATH` remains the read-only shim inside the reviewer process.
 
 For **every** review, regardless of the task's wording, `verify.ts` runs
 `bash seats/selftest-sweep.sh` **before** starting the reviewer. It uses a
@@ -571,10 +573,10 @@ dispatch under that caller's command timeout.
 On TERM, INT or HUP, `verify.ts` stops its detached sweep/reviewer groups,
 gives TERM a 1.5-second grace, then independently KILLs remaining owned groups.
 The runner records each suite's future pgid in `.wheelhouse-review-groups`
-inside the verifier-owned review scratch **before** its fixed launcher calls
+inside the reviewer-owned review scratch **before** its fixed launcher calls
 `setsid` or starts suite code. Before publication the launcher is still in the
 runner group, so killing the runner cannot leave an unrecorded escaped suite.
-No acknowledgement round trip or suite wait on the verifier is required. Only
+No acknowledgement round trip or suite wait on the reviewer is required. Only
 a wholly absent suite group is retired from the registry (atomic replacement);
 suite payloads do not inherit the registry capability.
 
@@ -589,7 +591,7 @@ inode lock record is released through the normal helper; replacement locks
 are untouched. Incomplete shutdown retains scratch and reports failure.
 
 Spawned groups and the fixed launcher's registry are the ownership proof;
-verifier teardown does not search process tables, environment, cwd or argv.
+reviewer teardown does not search process tables, environment, cwd or argv.
 Tools that deliberately leave these groups without publishing ownership remain
 outside this guarantee. The regression uses idle sleeping stubs, TERM-ignoring
 suites at 5-second and 120-second runner grace, a KILLed runner, a TERM-ignoring
@@ -627,11 +629,11 @@ this one only ever removes a directory and a worktree registration, and a
 dead pid means the run that made it has already exited — full stop,
 whatever the OS later did with that pid number.
 
-The verifier seat comes from the roster: the one entry with
-`"role": "verifier"`, or the optional fourth argument when there are
-several. Before ANYTHING spawns, `verify.ts` compares the author seat's
+The reviewer seat comes from the roster: only entries with
+`"role": "reviewer"` qualify, including when the optional fourth argument
+names a seat explicitly. Role `verifier` is reserved for `walk.ts`. Before ANYTHING spawns, `verify.ts` compares the author seat's
 `account.dir` (roster first, `seats/state.json` as fallback for a retired
-seat) against the verifier's, both canonicalized — the same directory
+seat) against the reviewer's, both canonicalized — the same directory
 means the same `auth.json` means the same account, and that is a loud
 STOP, not a warning. "Never verify what you authored" is enforced on disk
 here, before the model ever runs.
@@ -645,7 +647,7 @@ The exit code IS the verdict, so the commander's scripts can branch on it:
 | `3` | DISCOVER — the bead itself needs the commander's judgment |
 | `1` | error — no verdict exists: a STOP, a dead pi, a timeout, or output with no (or an ambiguous) `VERDICT:` line. Never treat as a verdict. |
 
-The post-output stall watchdog is the smaller of `--timeout-ms` / `WHEELHOUSE_VERIFY_TIMEOUT_MS` and `--no-event-timeout-ms` / `WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS`. With defaults of 900000 ms for `--timeout-ms` and 600000 ms for `--no-event-timeout-ms`, the effective default quiet-period limit is 600000 ms (10 minutes). This is not a wall-clock cap on the whole verifier turn: after output begins, each stream event resets the watchdog. To allow a verifier to legitimately go quiet between stream events for longer, raise `--no-event-timeout-ms <ms>`; for quiet periods longer than the `--timeout-ms` value, raise `--timeout-ms <ms>` too. Explicit flags win over their environment variables. Separate knobs cover first-output silence (`--first-output-timeout-ms` / `WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS`). On timeout, `verify.ts` writes `seats/verdicts/<bead-id>.partial.md`, prints elapsed time and the last tool/phase it saw, and exits 1. A timeout is not a provider/auth failure and does not start the probe cadence.
+The post-output stall watchdog is the smaller of `--timeout-ms` / `WHEELHOUSE_VERIFY_TIMEOUT_MS` and `--no-event-timeout-ms` / `WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS`. With defaults of 900000 ms for `--timeout-ms` and 600000 ms for `--no-event-timeout-ms`, the effective default quiet-period limit is 600000 ms (10 minutes). This is not a wall-clock cap on the whole reviewer turn: after output begins, each stream event resets the watchdog. To allow a reviewer to legitimately go quiet between stream events for longer, raise `--no-event-timeout-ms <ms>`; for quiet periods longer than the `--timeout-ms` value, raise `--timeout-ms <ms>` too. Explicit flags win over their environment variables. Separate knobs cover first-output silence (`--first-output-timeout-ms` / `WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS`). On timeout, `verify.ts` writes `seats/verdicts/<bead-id>.partial.md`, prints elapsed time and the last tool/phase it saw, and exits 1. A timeout is not a provider/auth failure and does not start the probe cadence.
 
 A refused answer is retained, with its complete captured stdout/stderr and
 refusal reason, in a unique private `seats/verdicts/refused/<bead>.<id>.json`
@@ -662,11 +664,11 @@ both diagnostics remain and no new verdict file or verdict settle event is
 written (exit 1). Process/auth/watchdog failures are retained but not retried.
 Existing verdict records from earlier invocations are not deleted.
 
-DISCOVER files no beads. The verifier's proposal is recorded for the
-commander, who decides what the graph should say about it — a verifier
+DISCOVER files no beads. The reviewer's proposal is recorded for the
+commander, who decides what the graph should say about it — a reviewer
 that wrote to the graph would be deciding, not reporting.
 
-The full verifier output lands in `seats/verdicts/<bead-id>.md`. That file
+The full reviewer output lands in `seats/verdicts/<bead-id>.md`. That file
 is a WORKING COPY for the commander, and git ignores it deliberately:
 `wheelhouse/GRAPH.md` ("Where evidence lives") admits exactly two evidence
 homes — the bead itself, or a committed path the bead names — and a
@@ -694,15 +696,15 @@ probes each named file. A local path alone is not durable graph evidence.
 
 Existing product artifacts can also be read from the TIP SHA (`git cat-file
 blob <tip>:<path>`). This compatibility is not an instruction to commit task
-captures. The verifier collects and judges artifacts; nothing here drives
+captures. The reviewer collects and judges artifacts; nothing here drives
 a browser or an emulator.
 
-Before the verifier spawns, `verify.ts` runs a FLOOR check per artifact —
+Before the reviewer spawns, `verify.ts` runs a FLOOR check per artifact —
 exists at the SHA or in the verified excluded directory, non-empty,
 type-probed (`.png` gets magic bytes plus IHDR dimensions; every other
 extension gets the non-empty floor) — and
-hands the results to the verifier in the prompt. The floor is not the
-judgment: a valid PNG of the wrong screen is a BOUNCE only the verifier's
+hands the results to the reviewer in the prompt. The floor is not the
+judgment: a valid PNG of the wrong screen is a BOUNCE only the reviewer's
 reading can produce. The checks land in the verdict file under
 `## Evidence checks`.
 
@@ -731,7 +733,7 @@ Read-only source paths:
 
 `verify.ts` parses that block from `bd show`, resolves relative paths from
 the branch repository, and copies each named file or directory into
-`.wheelhouse-verify-sources/` inside the verifier's scratch worktree. The
+`.wheelhouse-verify-sources/` inside the reviewer's scratch worktree. The
 copy is chmod-read-only and its mounted path is printed in the one-shot
 prompt and verdict record. This is deliberately a portable read-only
 snapshot instead of a harness-specific flag: Claude Code has an `--add-dir`
@@ -800,7 +802,7 @@ Continuity is asserted and enforced entirely through `sessionFile`:
 `sessionFile` to `--session`, and `recover.ts`'s printed resume suggestions
 key off `sessionFile` (existence, and a same-file RUNNING match for the
 double-resume refusal) and `lastBead`, never `sessionId`. `verify.ts`
-never reads `sessionId` at all — author/verifier distinctness there is
+never reads `sessionId` at all — author/reviewer distinctness there is
 `account.dir`, not the session.
 
 ## Fleet gate reader
@@ -980,7 +982,7 @@ run; to clean it by hand, those pid-stamped dirs are the whole footprint.
 The bridge is how a human looks at the fleet: ONE tmux window per project,
 built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. `cockpit.sh` builds or attaches the tmux session, records the commander pane in `seats/run/commander-pane.json`, and starts or verifies `seats/supervisor.sh`. The supervisor is the single loop that keeps the Dispatch Office herald, local needs desk, and declared courier alive, runs the same dead-seat recovery pass cockpit runs every `WHEELHOUSE_SEAT_RECOVERY_SECONDS` (default `60`), schedules the nightly cleanup reaper, and replaces the old per-daemon watchdog scripts. A daemon that crashes three times in five minutes is marked in `seats/run/supervisor.state.json`; the supervisor stops restarting it, appends one `daemon-down` inbox row, opens one human notification need, and waits for `seats/supervisor.sh reset <daemon>`. For opt-in reboot/logout keep-alive, `seats/supervisor.sh install-launchd` writes a macOS LaunchAgent plist and prints the `launchctl bootstrap`/`bootout` commands for a human to run; it never loads or unloads the agent itself. Linux users can run `seats/supervisor.sh print-systemd` and install the printed user unit by hand.
 
-The desk is the human-facing page for `seats/needs.ts` and the read-only work board: open `seats/run/desk.port` or run `seats/cockpit.sh --desk` and visit the printed URL. It binds `127.0.0.1` by default; `WHEELHOUSE_DESK_BIND` overrides the bind address and `WHEELHOUSE_DESK_PORT` overrides the port. Without an override, the port is `42000 + fnv1a(namespace) % 1000`, where `namespace=` comes from `wheelhouse/.template-source` and falls back to the install directory name. `/needs` lists open needs first, keeps answered/closed needs as history, and posts answers/messages only through the needs ledger API. `/board` is read-only: it has no form, button, input, or POST route, polls `/api/board.json` every 5 seconds, and hides graph ids in the HTML. Its columns are Ready (`bd ready` ids joined to `bd list --json` titles), In progress (`bd list --status in_progress`, seat from a worker in `seats/state.json` whose `lastBead` matches, else assignee), In review (`bd list --label needs-review`, reviewer/verifier `lastBead`, `sent back` when `seats/verdicts/<id>.md` records BOUNCE, else `waiting for a reviewer`), Blocked on you (open needs whose `machine.bead` names work, linking back to `/needs`), and Merged recently (`bd list --status closed` rows closed in the last 48 hours). Dependency-blocked work is omitted. The commander never needs the page — the CLI, graph, and floor remain canonical for command — but the desk is the standing surface for a human who has been asked for an answer or wants the read-only board.
+The desk is the human-facing page for `seats/needs.ts` and the read-only work board: open `seats/run/desk.port` or run `seats/cockpit.sh --desk` and visit the printed URL. It binds `127.0.0.1` by default; `WHEELHOUSE_DESK_BIND` overrides the bind address and `WHEELHOUSE_DESK_PORT` overrides the port. Without an override, the port is `42000 + fnv1a(namespace) % 1000`, where `namespace=` comes from `wheelhouse/.template-source` and falls back to the install directory name. `/needs` lists open needs first, keeps answered/closed needs as history, and posts answers/messages only through the needs ledger API. `/board` is read-only: it has no form, button, input, or POST route, polls `/api/board.json` every 5 seconds, and hides graph ids in the HTML. Its columns are Ready (`bd ready` ids joined to `bd list --json` titles), In progress (`bd list --status in_progress`, seat from a worker in `seats/state.json` whose `lastBead` matches, else assignee), In review (`bd list --label needs-review`, reviewer `lastBead`, `sent back` when `seats/verdicts/<id>.md` records BOUNCE, else `waiting for a reviewer`), Blocked on you (open needs whose `machine.bead` names work, linking back to `/needs`), and Merged recently (`bd list --status closed` rows closed in the last 48 hours). Dependency-blocked work is omitted. The commander never needs the page — the CLI, graph, and floor remain canonical for command — but the desk is the standing surface for a human who has been asked for an answer or wants the read-only board.
 
 ```bash
 seats/cockpit.sh [namespace]     # builds (or re-attaches to) session wh-<ns>
