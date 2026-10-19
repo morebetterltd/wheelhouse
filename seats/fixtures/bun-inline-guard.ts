@@ -104,7 +104,7 @@ assert(plantRoot && fs.statSync(plantRoot).isDirectory(), 'owned shell fixture a
 const auditRoot = path.join(plantRoot, 'tracked-programmatic');
 fs.mkdirSync(path.join(auditRoot, 'seats'), {recursive:true});
 const git = (...args: string[]) => { const r = spawnSync('git', ['-C', auditRoot, ...args], {encoding:'utf8'}); assert.equal(r.status,0,r.stderr); };
-git('init', '-q');
+git('init', '-q', '-b', 'main');
 fs.writeFileSync(path.join(auditRoot,'seats/bun-inline.ts'), '// required audit root marker\n');
 git('add', '.');
 for (const ext of ['ts','js','mjs','cjs']) test(`tracked ${ext} plant fails with file:line and Node remains exempt`, () => {

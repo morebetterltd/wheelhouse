@@ -19,7 +19,7 @@ selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 REMOTE="$FIX/remote.git"
 REPO="$FIX/repo"
-git init -q --bare "$REMOTE"
+git init -q --bare -b main "$REMOTE"
 git init -q -b main "$REPO"
 git -C "$REPO" config user.email fleet-pre-push@example.invalid
 git -C "$REPO" config user.name 'Fleet Pre Push Selftest'

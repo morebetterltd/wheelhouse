@@ -257,7 +257,7 @@ done
 
 # A git repo: verify.ts resolves branches and reads evidence at the tip.
 ( cd "$PROJ" &&
-  git init -q &&
+  git init -q -b main &&
   git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base &&
   git branch fleet/bead-rev && git branch fleet/bead-ev ) \
   || { echo "selftest: could not build fixture git repo" >&2; exit 2; }

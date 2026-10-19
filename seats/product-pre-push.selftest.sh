@@ -44,7 +44,7 @@ run_case(){
   mkdir -p "$c/seats" "$c/wheelhouse"
   git init -q -b main "$c"; git -C "$c" commit --allow-empty -qm container
   git init -q -b main "$p"; git -C "$p" commit --allow-empty -qm product
-  git init -q --bare "$r"; git -C "$p" remote add origin "$r"; git -C "$p" push -q origin main
+  git init -q --bare -b main "$r"; git -C "$p" remote add origin "$r"; git -C "$p" push -q origin main
   [ "$(git --git-dir="$r" rev-parse --is-bare-repository)" = true ]
   cp -f "$INSTALLER" "$c/seats/install-fleet-pre-push-guard.sh"
   cp -f "$HERE/fleet-pre-push-guard.sh" "$c/seats/"
