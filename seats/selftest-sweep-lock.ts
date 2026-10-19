@@ -510,9 +510,7 @@ function ancestorOwnsLock(lock: string): boolean {
     catch (e: any) { if (e.errno === 2) return false; throw e; }
     // A legacy pid-only claim or an exported environment flag is not proof of
     // inherited admission. Require the current token-owned lock AND FIFO head.
-    // PID 1 is the system root, not proof of a harness ancestor. In particular,
-    // a live/EPERM PID-1 fixture must queue normally, not inherit init's claim.
-    if (!snapshot.marker.token || snapshot.marker.pid === 1 || !alive(snapshot.marker.pid)) return false;
+    if (!snapshot.marker.token || !alive(snapshot.marker.pid)) return false;
     let pid = process.ppid;
     const seen = new Set<number>();
     while (pid !== snapshot.marker.pid) {
@@ -524,7 +522,13 @@ function ancestorOwnsLock(lock: string): boolean {
       pid = Number(result.stdout.trim());
     }
     const queue = queueFd(parent, `${path.basename(lock)}.queue`, false);
-    if (queue === null) throw new Refused("inherited lock has no FIFO ownership record");
+    if (queue === null) {
+      // Every process reaches init, so a bare PID-1 claim is not inherited
+      // admission. Queue behind it as a live holder. A genuine PID-1 runner
+      // (e.g. a container entrypoint) can still prove its token/FIFO head.
+      if (snapshot.marker.pid === 1) return false;
+      throw new Refused("inherited lock has no FIFO ownership record");
+    }
     try {
       const first = tickets(queue)[0];
       if (!first || first.pid !== snapshot.marker.pid || first.token !== snapshot.marker.token) throw new Refused("inherited lock does not match FIFO head");
