@@ -235,7 +235,7 @@ done
 copy_fixture_ts
 printf '# Fleet: Worker\n\nfixture brief.\n'   > "$PROJ/contracts/WORKER.md"
 printf '# Crew: Reviewer\n\nfixture brief.\n' > "$PROJ/contracts/REVIEWER.md"
-printf '# Crew: Reviewer\n\nfixture brief.\n'  > "$PROJ/contracts/VERIFIER.md"
+printf '# Crew: Verifier\n\nfixture brief.\n'  > "$PROJ/contracts/VERIFIER.md"
 
 # Six afflicted-to-be seats plus a reviewer. Every account dir is namespaced
 # under the fixture HOME; a-seat gets the empty {} auth.json its class needs,
