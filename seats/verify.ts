@@ -83,6 +83,7 @@ import * as path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
+import { heavyTestEntry } from "./heavy-test-entry";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool } from "./pool";
@@ -1797,4 +1798,6 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.main) main().catch((e) => die(e?.message ?? String(e)));
+// The review may invoke arbitrary project benches. Hold the same admission as
+// its dispatcher sweep for the whole review, before any model watchdog starts.
+if (import.meta.main) heavyTestEntry(import.meta.path, main).catch((e) => die(e?.message ?? String(e)));

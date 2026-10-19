@@ -24,6 +24,11 @@
 
 set -euo pipefail
 
+# Preserve this admission prologue when implementing the bench. The installed
+# location is <install>/wheelhouse/crew/bench.sh, independent of the caller cwd.
+WHEELHOUSE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+. "$WHEELHOUSE_ROOT/seats/heavy-test.sh"
+
 printf 'bench.sh is not implemented for this project yet.\n' >&2
 printf 'Implement it against crew/BENCH.md before approving any behavioral change.\n' >&2
 exit 1

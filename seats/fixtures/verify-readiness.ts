@@ -107,6 +107,8 @@ type Exit = { code: number | null; signal: NodeJS.Signals | null; error?: string
 function own(name: string, label: string, bin: string, args: string[], env: NodeJS.ProcessEnv) {
   const child = spawn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout!.pipe(process.stdout, { end: false }); child.stderr!.pipe(process.stderr, { end: false });
+  let stderr = "";
+  child.stderr!.on("data", chunk => { stderr += chunk; });
   let exit: Exit | undefined;
   ledger({ event: "spawn", name, fixture: label, pid: child.pid });
   const closed = new Promise<Exit>(resolve => {
@@ -115,7 +117,7 @@ function own(name: string, label: string, bin: string, args: string[], env: Node
     child.once("error", error => { exit = { code: 1, signal: null, error: error.message }; });
     child.once("close", (code, signal) => { exit ??= { code, signal }; resolve(exit); });
   });
-  return { child, closed, exited: () => exit !== undefined, status: () => exit };
+  return { child, closed, exited: () => exit !== undefined, status: () => exit, stderr: () => stderr };
 }
 function status(exit: Exit): number { return exit.code ?? (exit.signal ? 128 + constants.signals[exit.signal] : 1); }
 
@@ -241,7 +243,9 @@ async function drive(): Promise<void> {
     const result = fixture.closed.then(status);
     if (holder) {
       const logs = path.join(path.dirname(sourceFile), "verdicts", "sweeps");
-      await until(() => exists(dir, "ready") || (fs.existsSync(logs) && fs.readdirSync(logs).filter(name => name.includes(`.${child.pid}.`)).some(name => fs.readFileSync(path.join(logs, name), "utf8").includes("waiting for host-wide lock"))), () => ended() || holder!.exited(), "dispatcher H4 wait");
+      // New reviews queue before main/scratch/watchdogs; old dispatchers wait
+      // inside the sweep log. Observe either real admission checkpoint.
+      await until(() => exists(dir, "ready") || /waiting for host-wide lock[^\n]*queue_position=/.test(fixture!.stderr()) || (fs.existsSync(logs) && fs.readdirSync(logs).filter(name => name.includes(`.${child.pid}.`)).some(name => fs.readFileSync(path.join(logs, name), "utf8").includes("waiting for host-wide lock"))), () => ended() || holder!.exited(), "dispatcher H4 wait");
       if (exists(dir, "ready")) throw new Error("verifier started before held sweep was released");
       record(dir, "holder-wait-observed");
       fs.writeFileSync(holderRelease, "release\n");

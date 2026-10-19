@@ -155,6 +155,91 @@ cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 
 **Nine `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade. `RESEARCHER.md` is new in template upgrades that carry researcher seats; copy it whole, then fill only its `## This project` half if this install takes a researcher. Existing `seats/seats.json` rosters do not need a `skills` field; when present it is an optional array of skill directories that the adapter tilde-expands and passes as Pi `--skill`, stopping on a missing path. This list matches `BOOTSTRAP.md` step 2's — nine briefs plus the stub it alone copies — and step 5's integrity check is what catches the two drifting apart.
 
+### Adopt the host-wide heavy-test admission without replacing your bench
+
+After copying `seats/` below, preserve your implemented bench and add this prologue before any build, fixture or test work in `wheelhouse/crew/bench.sh` (Bash):
+
+```bash
+WHEELHOUSE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+. "$WHEELHOUSE_ROOT/seats/heavy-test.sh"
+```
+
+Do not copy the stub over an implemented bench. For a non-Bash bench, keep its public Bash entry point and delegate to the implementation via `bash "$WHEELHOUSE_ROOT/seats/heavy-test.sh" <command> [args...]`. Until adoption, workers must wrap direct bench/build/test commands that way. Updated `verify.ts` admits its entire review, so even a legacy bench called from it shares the FIFO. Nested sweeps reuse verified ancestor admission. Upgrade all contenders while the host lock is idle; every install uses the same default `/tmp/wheelhouse-selftest-sweep.lock`, not a project-specific override.
+
+If the install has a pressure guard, audit its brake action separately: it may block **new** heavy work, but must leave admitted reviews, sweeps, benches and their owning worker process trees running (or suspend/resume them). Do not signal a running review to implement a load brake. The template does not replace local guard scripts or thresholds. `WHEELHOUSE_HEAVY_TEST_PAUSE` defaults to the install's `seats/run/host-guard-pause`. For a Mac-wide brake, choose **one guard as the marker's writer**; two independent guards must not clear one another's brake. On the same Mac/account, add this to that guard, each bench **before** its source line above, and every fleet/verification launcher environment:
+
+```bash
+export WHEELHOUSE_HEAVY_TEST_PAUSE=/tmp/wheelhouse-heavy-test.pause
+# Keep the canonical FIFO; remove old per-install lock overrides everywhere.
+unset WHEELHOUSE_SELFTEST_SWEEP_LOCK WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER
+```
+
+In that guard, replace the old install-local pressure-marker assignment (often `BRAKE=...`) so its existing marker-presence tests and calm/release conditions inspect the shared marker too:
+
+```bash
+BRAKE="$WHEELHOUSE_HEAVY_TEST_PAUSE"
+```
+
+Do not leave a later assignment resetting `BRAKE` to the old path. In the designated guard's existing sustained-pressure branch, replace the pressure-pause/cancellation action with:
+
+```bash
+: > "$WHEELHOUSE_HEAVY_TEST_PAUSE"  # block admission, NOT a signal to a process
+```
+
+In its existing sustained-calm release branch:
+
+```bash
+rm -f "$WHEELHOUSE_HEAVY_TEST_PAUSE"
+```
+
+Leave the install's load/memory/swap thresholds configurable and its hysteresis intact. Other guards may observe the shared marker, but only the designated writer clears it. Remove pressure-triggered `adapter stop`, review/sweep/bench TERM/KILL, or an overnight-pause call that stops their worker process trees; marker admission replaces those actions, not the operator's explicit cancel command. Exporting a variable inside the guard does **not** configure already-running seat/verify launchers: put the same export in their launch environment and restart/reload them only through the install's normal safe upgrade procedure. A separate account needs an agreed shared path and permissions, not a private `$TMPDIR` marker.
+
+#### Check two real installs on one Mac
+
+First run `bash seats/heavy-test.selftest.sh` in each upgraded install. It proves two-install FIFO contention and mid-run brake completion with isolated idle fixtures; it does not fire a production guard. Then check the two **installed** entry points on the actual canonical FIFO. Use two terminals under the same Mac account. Set absolute `INSTALL_A`, `INSTALL_B`, `CONTAINER`, and an existing maintenance `CHECK_BEAD` whose owned scratch directory was allocated normally. In both terminals:
+
+```bash
+test -r "$INSTALL_A/seats/heavy-test.sh" && test -r "$INSTALL_B/seats/heavy-test.sh" || exit 1
+test -d "$CONTAINER/.wheelhouse-runs/$CHECK_BEAD" || exit 1
+CHECK="$CONTAINER/.wheelhouse-runs/$CHECK_BEAD/admission-check"
+mkdir -p "$CHECK"
+export WHEELHOUSE_HEAVY_TEST_PAUSE=/tmp/wheelhouse-heavy-test.pause
+unset WHEELHOUSE_SELFTEST_SWEEP_LOCK WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER
+```
+
+Use a fresh `CHECK` subdirectory for each repetition; stale ready files are not readiness. Terminal A:
+
+```bash
+cd "$INSTALL_A" || exit 1
+bash seats/heavy-test.sh bash -c '
+  printf "A admitted\\n"; : > "$1/A.admitted"
+  while [ ! -e "$1/release-A" ]; do sleep 1; done
+  printf "A finished\\n"
+' check "$CHECK" > "$CHECK/A.out" 2> "$CHECK/A.err"
+printf 'A exit=%s\\n' "$?"
+```
+
+Wait for `$CHECK/A.admitted` to exist (A may itself be behind another fleet), then terminal B:
+
+```bash
+cd "$INSTALL_B" || exit 1
+bash seats/heavy-test.sh bash -c '
+  printf "B admitted\\n"; : > "$1/B.admitted"
+' check "$CHECK" > "$CHECK/B.out" 2> "$CHECK/B.err"
+printf 'B exit=%s\\n' "$?"
+```
+
+From an observer terminal with the same `CHECK`, expect A's ready file, a B wait diagnostic naming `/private/tmp/wheelhouse-selftest-sweep.lock` (or `/tmp/...`), and **no** B ready file:
+
+```bash
+test -f "$CHECK/A.admitted" && test -s "$CHECK/B.err" || exit 1
+grep 'waiting for host-wide lock.*wheelhouse-selftest-sweep.lock.*queue_position=' "$CHECK/B.err" || exit 1
+test ! -e "$CHECK/B.admitted" || { echo 'FAIL: installs overlapped'; exit 1; }
+: > "$CHECK/release-A"
+```
+
+Both terminals must then exit 0; `A.out` contains `A finished`, and `B.out` contains `B admitted` with its ready file present. Repeat with A/B roles reversed and a fresh check directory. A wait that ends in an error or timeout is not a pass. To test an installed sweep against the held command, use `WHEELHOUSE_SELFTEST_SWEEP_PATTERN=<absolute-idle-probe.selftest.sh> bash seats/selftest-sweep.sh` in B with an idle probe under the same owned scratch; the automatic selftest already checks this direction and its reverse. Do not set or clear the production brake marker, stop a service, or launch a real application build just to perform this check. A production brake already set means wait for its designated guard to release it.
+
 ### The seats machinery comes too
 
 The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `seat-worktree.ts`, `verify.ts`, `walk.ts`, `needs.ts`, `desk.ts`, `principal-sentinel.sh`, `courier.ts`, `channels.ts`, `comms.ts`, `transports/` (including `transports/teams.ts`), `prune.ts`, `floor.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, their selftests, `seats.json.example`, `channels.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. Some copied selftests need template history as their fixture; they first use `wheelhouse/.template-source`'s `path=` if it is a live repository carrying `commit=`, otherwise they fetch `commit=` from `source=` into `wheelhouse/.template-cache/` under this install. What the copy can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/channels.json`, `seats/integration-refs.txt`, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/`, `seats/comms.jsonl` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:

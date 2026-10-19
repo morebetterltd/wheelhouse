@@ -183,6 +183,10 @@ finish_current_suite(){
 
 acquire_lock(){
   local previous="" result rc
+  # A project bench or verify.ts may already own admission. Reuse only a
+  # validated ancestor's token/FIFO head, never a caller-supplied bypass flag.
+  if bun "$LOCK_HELPER" inherited "$LOCK"; then return 0; else rc=$?; fi
+  [ "$rc" = 75 ] || { info "STOP: selftest-sweep ancestry check failed (exit $rc)"; exit 2; }
   while :; do
     result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in

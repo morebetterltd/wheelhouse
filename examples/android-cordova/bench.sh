@@ -27,6 +27,10 @@
 
 set -euo pipefail
 
+# When installed at wheelhouse/crew/bench.sh; do this before any heavy work.
+WHEELHOUSE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+. "$WHEELHOUSE_ROOT/seats/heavy-test.sh"
+
 ANDROID_HOME="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
 AVD_NAME="${AVD_NAME:-app-review}"
