@@ -312,7 +312,7 @@ selftest_scratch_graph() {
   rm -rf "$graph_root"
   mkdir -p "$graph_root"
   selftest_disable_bd_metrics "$graph_root" || return 2
-  GIT_CEILING_DIRECTORIES="$parent:$(dirname "$parent")${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}" git -C "$graph_root" init -q
+  GIT_CEILING_DIRECTORIES="$parent:$(dirname "$parent")${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}" git -C "$graph_root" init -q -b main
   init_log="$graph_root/bd-init.log"
   if ! (cd "$graph_root" && "$bd_bin" init --non-interactive --skip-agents -p scratch) >"$init_log" 2>&1; then
     echo "STOP: bd init failed for scratch graph $graph_root:" >&2

@@ -23,6 +23,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { acquirePidLock, releasePidLock } from "./lock";
+import { fixtureOwner, fixtureOwnerAlive } from "./herald-owner";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import.meta.dir, ".."));
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -1102,9 +1104,22 @@ function status(): void {
 }
 
 async function daemon(): Promise<void> {
+  const owner = fixtureOwner(ROOT);
+  if (!fixtureOwnerAlive(owner)) die("fixture selftest owner is gone; refusing herald start");
   fs.mkdirSync(path.dirname(PID_FILE), { recursive: true });
+  const prior = Number(fs.existsSync(PID_FILE) ? fs.readFileSync(PID_FILE, "utf8").trim() : 0);
+  if (prior > 0 && prior !== process.pid) {
+    try { process.kill(prior, 0); die(`herald already running pid ${prior} for ${ROOT}`); } catch (e: any) { if (e?.code !== "ESRCH") throw e; }
+  }
+  const lockFile = `${PID_FILE}.lock`;
+  const lock = acquirePidLock(lockFile);
+  if (lock === null) die(`herald already running or starting for ${ROOT}`);
   fs.writeFileSync(PID_FILE, `${process.pid}\n`);
   const cleanup = () => {
+    try {
+      if (fs.readFileSync(lockFile, "utf8").trim() === String(process.pid)) releasePidLock(lockFile, lock);
+      else fs.closeSync(lock);
+    } catch { /* missing root or already released */ }
     try {
       if (fs.existsSync(PID_FILE) && fs.readFileSync(PID_FILE, "utf8").trim() === String(process.pid)) fs.unlinkSync(PID_FILE);
     } catch { /* ignore */ }
@@ -1113,6 +1128,10 @@ async function daemon(): Promise<void> {
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
   process.on("SIGINT", () => { cleanup(); process.exit(130); });
   for (;;) {
+    if (!fixtureOwnerAlive(owner)) {
+      console.error(`herald: fixture selftest owner disappeared (${ROOT}); exiting`);
+      return;
+    }
     if (!projectRootExists()) {
       console.error(`herald: project root disappeared (${ROOT}); exiting`);
       return;

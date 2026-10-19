@@ -18,6 +18,8 @@ BRIDGE_GUARD="$HERE/bridge-guard.sh"
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
+. "$HERE/selftest-herald.sh"
+selftest_bind_herald_owner "$FIX" || exit 2
 SOCK="wheelhouse-cockpit-selftest.$$"
 PASS=0
 FAIL=0
@@ -42,7 +44,9 @@ cleanup() {
   pkill -9 -f "$FIX/project/seats/desk.ts" >/dev/null 2>&1 || true
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 
@@ -54,7 +58,11 @@ cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
 cat > "$PROJ/seats/herald.ts" <<'EOF'
-setInterval(() => {}, 1000);
+import * as fs from "node:fs";
+import { fixtureOwner, fixtureOwnerAlive } from "./herald-owner";
+const owner = fixtureOwner(`${import.meta.dir}/..`);
+fs.writeFileSync(`${import.meta.dir}/run/herald.pid`, `${process.pid}\n`);
+setInterval(() => { if (!fixtureOwnerAlive(owner)) process.exit(0); }, 100);
 EOF
 cat > "$PROJ/seats/desk.ts" <<'EOF'
 import * as fs from "node:fs";
@@ -281,8 +289,8 @@ else
 fi
 EOF
 chmod +x "$RECOVERY_BIN/bd"
-( cd "$PROJ/open-work" && git init -q && git config user.email a@example.invalid && git config user.name A && printf tracked > tracked.txt && git add tracked.txt && git commit -q -m base && printf dirty > dirty.txt )
-( cd "$PROJ/clean-work" && git init -q && git config user.email a@example.invalid && git config user.name A && printf clean > clean.txt && git add clean.txt && git commit -q -m base && git init -q --bare "$PROJ/clean-remote.git" && git remote add origin "$PROJ/clean-remote.git" && git push -q -u origin HEAD )
+( cd "$PROJ/open-work" && git init -q -b main && git config user.email a@example.invalid && git config user.name A && printf tracked > tracked.txt && git add tracked.txt && git commit -q -m base && printf dirty > dirty.txt )
+( cd "$PROJ/clean-work" && git init -q -b main && git config user.email a@example.invalid && git config user.name A && printf clean > clean.txt && git add clean.txt && git commit -q -m base && git init -q --bare -b main "$PROJ/clean-remote.git" && git remote add origin "$PROJ/clean-remote.git" && git push -q -u origin HEAD )
 cat > "$PROJ/seats/adapter.ts" <<'EOF'
 import * as fs from "node:fs";
 import * as path from "node:path";
