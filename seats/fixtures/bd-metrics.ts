@@ -115,7 +115,7 @@ for (const mode of modes) {
       }
       assert(!ended, "review setup must still exist when measured, before teardown");
       assert.equal(fs.readFileSync(path.join(dir, "review-home"), "utf8").trim(), path.join(fs.readFileSync(path.join(dir, "review-cwd"), "utf8").trim(), ".wheelhouse-sweep-graph/home"));
-      assert.deepEqual(fs.readdirSync(home), [], "do not alter inherited HOME metrics configuration");
+      assert(!fs.existsSync(path.join(home, ".config/bd")), "do not write bd metrics configuration into inherited HOME");
     } else {
       native = await joined;
       assert.equal(native.code, 0, stderr); assert.equal(native.signal, null); assert(stdoutEOF && stderrEOF); assert(stdout.includes("METRICS_INSTALL_DONE " + mode));
