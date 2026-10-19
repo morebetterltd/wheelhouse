@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 
 const root = process.argv[2];
+assert.equal(process.env.HOME, path.join(path.dirname(root), "home"), "account folders must stay in fixture HOME");
 assert(fs.existsSync(path.join(root, ".git")), "fixture repository must exist");
 const file = (name: string) => path.join(root, "seats", name);
 const put = (name: string, value: unknown) => fs.writeFileSync(file(name), JSON.stringify(value));
@@ -30,9 +31,11 @@ const cases: Record<string, () => void> = {
   "legacy fixed review seat gets named one-line fix": () => { roster(true); cli("verify.ts", review, 1, 'no seat with role "reviewer"', 'seat "reviewer-1"', 'seats["reviewer-1"].role to "reviewer"', 'keep "verifier" only for walk.ts'); },
   "pool reviewers coexist with fixed walker": () => {
     roster(); const fixed = JSON.parse(fs.readFileSync(file("seats.json"), "utf8")); delete fixed.seats["reviewer-1"]; put("seats.json", fixed);
-    put("pool.json", { version: 1, entries: { r: { harness: "pi", provider: "openai", models: ["fixture"], account: { dir: path.join(root, "pool-account"), authRoute: "env" } } }, roles: { reviewers: { min: 0, max: 1, entries: ["r"], model: "fixture" } } });
+    const poolDir = path.join(process.env.HOME!, ".pi-seats-project", "r");
+    fs.mkdirSync(poolDir, { recursive: true }); // Valid namespaced pool folder; deliberately no credentials.
+    put("pool.json", { version: 1, entries: { r: { harness: "pi", provider: "openai", models: ["fixture"], account: { dir: poolDir, authRoute: "oauth" } } }, roles: { reviewers: { min: 0, max: 1, entries: ["r"], model: "fixture" } } });
     put("staffing.json", { version: 1, seats: { "reviewer-r": { role: "reviewer", entry: "r" } } });
-    cli("verify.ts", review, 1, "reviewer seat directory does not exist:", "pool-account");
+    cli("verify.ts", review, 1, 'reviewer seat "reviewer-r" has no identity');
     cli("walk.ts", walk, 5, "verifier seat directory does not exist:", "missing-walker");
   },
   "legacy staffed review seat gets named one-line fix": () => {
