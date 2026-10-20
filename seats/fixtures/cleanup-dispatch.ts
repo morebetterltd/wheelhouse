@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { recordCleanupScratch } from "../cleanup-identity";
 
 const root = fs.realpathSync(process.argv[2]), project = path.join(root, "project");
 assert(fs.existsSync(path.join(root, ".wheelhouse-selftest-fixture")));
@@ -64,6 +65,14 @@ try {
   fs.writeFileSync(path.join(scratch(owned), "evidence/KEEP"), "owned payload\n");
   await cli("dispatch", "verifier-1", owned, "same task again");
   check("same-task redispatch preserves the existing creation record", before !== null && markerBytes(owned) === before);
+  const renamed = JSON.parse(before!);
+  assert.equal(renamed.version, 2); assert.match(renamed.hostId, /^[0-9a-f]{64}$/);
+  // Restart-after-rename condition: only the stored diagnostic name differs.
+  renamed.hostname = "previous-network-name";
+  fs.writeFileSync(marker(owned), JSON.stringify(renamed) + "\n");
+  const renamedBytes = markerBytes(owned);
+  const redispatched = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "verifier-1", owned, "same machine after hostname change"]);
+  check("same-task redispatch after hostname change preserves its record", redispatched.code === 0 && markerBytes(owned) === renamedBytes);
   await prune(owned);
   check("marked open task is retained", before !== null && fs.existsSync(path.join(scratch(owned), "evidence/KEEP")));
   await close(owned);
@@ -84,6 +93,13 @@ try {
   fs.writeFileSync(marker("foreign-marker"), foreign);
   const mismatched = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "verifier-1", "foreign-marker", "refuse foreign marker"]);
   check("dispatch refuses foreign marker without overwriting it", mismatched.code !== 0 && markerBytes("foreign-marker") === foreign);
+  fs.mkdirSync(scratch("foreign-host")); recordCleanupScratch(project, scratch("foreign-host"), "foreign-host");
+  const foreignHost = JSON.parse(markerBytes("foreign-host")!);
+  foreignHost.hostId = (foreignHost.hostId[0] === "a" ? "b" : "a") + foreignHost.hostId.slice(1);
+  fs.writeFileSync(marker("foreign-host"), JSON.stringify(foreignHost) + "\n");
+  const foreignHostBytes = markerBytes("foreign-host");
+  const foreignMachine = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "verifier-1", "foreign-host", "refuse foreign stable ID"]);
+  check("foreign stable machine ID refuses dispatch without replacing its record", foreignMachine.code !== 0 && markerBytes("foreign-host") === foreignHostBytes);
   const runs = path.dirname(scratch(next)); fs.renameSync(runs, runs + ".original"); fs.symlinkSync(outside, runs);
   try {
     const parent = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "verifier-1", "unsafe-parent", "refuse parent symlink"]);
