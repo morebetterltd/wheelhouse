@@ -10,7 +10,7 @@ for (const dir of [account, bin, outside, path.join(project, "contracts"), path.
 fs.writeFileSync(path.join(project, "contracts/REVIEWER.md"), "Isolated cleanup integration reviewer.\n");
 fs.writeFileSync(path.join(account, "auth.json"), '{"fixture":"not-a-credential"}\n');
 fs.writeFileSync(path.join(project, "seats/seats.json"), JSON.stringify({ seats: {
-  "verifier-1": { role: "reviewer", harness: "pi", worktree: false, provider: "anthropic", model: "fixture", account: { dir: account } },
+  "reviewer-1": { role: "reviewer", harness: "pi", worktree: false, provider: "anthropic", model: "fixture", account: { dir: account } },
 } }));
 // JSONL protocol stub only. Graph status and cleanup are the real executables.
 const peer = path.join(root, "peer.mjs");
@@ -67,8 +67,8 @@ try {
   fs.writeFileSync(path.join(project, ".gitignore"), "seats/\n.wheelhouse-runs/\n.beads/\n");
   await ok(["git", "add", ".gitignore", "contracts"]); await ok(["git", "commit", "-qm", "isolated cleanup install"]);
   const owned = await create("dispatch-owned scratch"), next = await create("next task"), legacy = await create("legacy unmarked scratch");
-  await cli("spawn", "verifier-1");
-  await cli("dispatch", "verifier-1", owned, "prepare owned scratch");
+  await cli("spawn", "reviewer-1");
+  await cli("dispatch", "reviewer-1", owned, "prepare owned scratch");
   const before = markerBytes(owned);
   let correctMarker = false;
   if (before) { const m = JSON.parse(before), st = fs.statSync(scratch(owned), { bigint: true }); correctMarker = m.root === project && m.target === scratch(owned) && m.bead === owned && m.identity === `${st.dev}:${st.ino}`; }
@@ -77,36 +77,36 @@ try {
   // writer-removed control reach the removal assertion instead of setup-aborting.
   fs.mkdirSync(path.join(scratch(owned), "evidence"), { recursive: true });
   fs.writeFileSync(path.join(scratch(owned), "evidence/KEEP"), "owned payload\n");
-  await cli("dispatch", "verifier-1", owned, "same task again");
+  await cli("dispatch", "reviewer-1", owned, "same task again");
   check("same-task redispatch preserves the existing creation record", before !== null && markerBytes(owned) === before);
   await prune(owned);
   check("marked open task is retained", before !== null && fs.existsSync(path.join(scratch(owned), "evidence/KEEP")));
   await close(owned);
-  const removed = await cli("dispatch", "verifier-1", next, "leave the now-closed task");
+  const removed = await cli("dispatch", "reviewer-1", next, "leave the now-closed task");
   check("real dispatch -> real close -> cross-bead cleanup removes scratch", !fs.existsSync(scratch(owned)) && removed.stdout.includes(`removed run-scratch ${scratch(owned)} `));
   fs.mkdirSync(scratch(legacy)); fs.writeFileSync(path.join(scratch(legacy), "KEEP"), "legacy payload\n");
-  const old = await cli("dispatch", "verifier-1", legacy, "do not adopt legacy scratch");
+  const old = await cli("dispatch", "reviewer-1", legacy, "do not adopt legacy scratch");
   check("dispatch leaves preexisting unmarked task scratch unmarked", markerBytes(legacy) === null && old.stdout.includes("kept unowned"));
   await close(legacy);
-  const kept = await cli("dispatch", "verifier-1", next, "leave legacy task");
+  const kept = await cli("dispatch", "reviewer-1", next, "leave legacy task");
   check("closed legacy unmarked scratch is still refused", fs.readFileSync(path.join(scratch(legacy), "KEEP"), "utf8") === "legacy payload\n" && markerBytes(legacy) === null && kept.stdout.includes(`kept run-scratch ${scratch(legacy)} reason=unproven scratch ownership`));
-  const seatBefore = JSON.parse(fs.readFileSync(path.join(project, "seats/state.json"), "utf8")).seats["verifier-1"].lastBead;
+  const seatBefore = JSON.parse(fs.readFileSync(path.join(project, "seats/state.json"), "utf8")).seats["reviewer-1"].lastBead;
   fs.writeFileSync(path.join(outside, "KEEP"), "outside payload\n");
   fs.symlinkSync(outside, scratch("unsafe-link"));
-  const linked = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "verifier-1", "unsafe-link", "refuse symlink"]);
+  const linked = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "reviewer-1", "unsafe-link", "refuse symlink"]);
   check("dispatch refuses symlink task root without marking outside", linked.code !== 0 && fs.readFileSync(path.join(outside, "KEEP"), "utf8") === "outside payload\n" && !fs.existsSync(path.join(outside, ".wheelhouse-cleanup-scratch.json")));
   fs.mkdirSync(scratch("foreign-marker")); const foreign = markerBytes(next) ?? "{}\n";
   fs.writeFileSync(marker("foreign-marker"), foreign);
-  const mismatched = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "verifier-1", "foreign-marker", "refuse foreign marker"]);
+  const mismatched = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "reviewer-1", "foreign-marker", "refuse foreign marker"]);
   check("dispatch refuses foreign marker without overwriting it", mismatched.code !== 0 && markerBytes("foreign-marker") === foreign);
   const runs = path.dirname(scratch(next)); fs.renameSync(runs, runs + ".original"); fs.symlinkSync(outside, runs);
   try {
-    const parent = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "verifier-1", "unsafe-parent", "refuse parent symlink"]);
+    const parent = await command(["bun", path.join(project, "seats/adapter.ts"), "dispatch", "reviewer-1", "unsafe-parent", "refuse parent symlink"]);
     check("dispatch refuses symlink scratch parent without creating outside", parent.code !== 0 && !fs.existsSync(path.join(outside, "unsafe-parent")));
   } finally { fs.unlinkSync(runs); fs.renameSync(runs + ".original", runs); }
-  check("unsafe-root refusals leave recorded task unchanged", JSON.parse(fs.readFileSync(path.join(project, "seats/state.json"), "utf8")).seats["verifier-1"].lastBead === seatBefore);
+  check("unsafe-root refusals leave recorded task unchanged", JSON.parse(fs.readFileSync(path.join(project, "seats/state.json"), "utf8")).seats["reviewer-1"].lastBead === seatBefore);
 } finally {
-  await cli("stop", "verifier-1");
+  await cli("stop", "reviewer-1");
   console.log("MEASUREMENTS " + JSON.stringify(invocations));
 }
 console.log(`cleanup dispatch fixtures: ${failures.length ? "FAIL" : "PASS"} failures=${failures.length}`);

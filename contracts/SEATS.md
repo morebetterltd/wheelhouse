@@ -14,7 +14,7 @@ A `producer` role runs from the project root, reads the graph and writes work co
 
 The commander is on the roster but is not a Pi seat: it runs on its own harness and is marked `"external": true` there, so the roster stays the complete crew list without pretending the adapter manages it.
 
-Two commands use a rostered identity without creating or resuming a persistent seat process. `seats/verify.ts` is a one-shot REVIEWER pass for a bead and branch: it uses the verifier seat's account directory through that seat's harness driver (`PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME`), injects `REVIEWER.md`, writes a verdict, and exits with no warm session. `seats/walk.ts` is a one-shot VERIFIER walk on a consumer surface: it uses the verifier identity through that seat's harness driver, injects `VERIFIER.md`, prompts only with the claim and named surface, writes the walk verdict, and exits with no bead-review context.
+Two commands use a rostered identity without creating or resuming a persistent seat process. `seats/verify.ts` is a one-shot REVIEWER pass for a bead and branch: it selects only role `reviewer` (`reviewer-1`, `reviewer-2`) and uses the selected reviewer's account directory through that seat's harness driver (`PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME`), injects `REVIEWER.md`, writes a verdict, and exits with no warm session. `seats/walk.ts` is a one-shot VERIFIER walk on a consumer surface: it selects only role `verifier` (seat `verifier`, never a reviewer) and uses that identity through its harness driver, injects `VERIFIER.md`, prompts only with the claim and named surface, writes the walk verdict, and exits with no bead-review context.
 
 ### Lifecycle
 
@@ -42,7 +42,7 @@ This has a collision consequence worth stating plainly: two seats — or two PRO
 
 How the subscriptions you hold get divided across several fleets on one machine is the operator's call, not this template's. The rule above says a seat is not shared; it says nothing about which wheelhouse a given seat belongs to, and that allocation is a decision about your own licences that no template is in a position to make for you.
 
-One consequence is enforced rather than trusted: **the verifier's account must be distinct from the author's.** A review from the author's own account is not a review, so `seats/verify.ts` compares the author seat's `account.dir` against the verifier's — canonicalized, on disk, before any model runs — and a match is a loud STOP. With a pool, the reviewer identities are the registered `verifier-<entry>` seats and the distinctness rule applies to whichever reviewer identity is picked. Keep the reviewer's and verifier's directories different from every worker's, or the fleet has no reviewer it can use.
+One consequence is enforced rather than trusted: **the reviewer's account must be distinct from the author's.** A review from the author's own account is not a review, so `seats/verify.ts` compares the author seat's `account.dir` against the reviewer's — canonicalized, on disk, before any model runs — and a match is a loud STOP. With a pool, the reviewer identities are the registered `reviewer-<entry>` seats and the distinctness rule applies to whichever reviewer identity is picked. Keep the reviewer's and verifier's directories different from every worker's, or the fleet has no reviewer it can use.
 
 ### Rules
 
@@ -52,7 +52,7 @@ One consequence is enforced rather than trusted: **the verifier's account must b
 - **Seats inherit the project's permissions.** Provisioning pre-grants trust for the project root and nothing else; per-seat escalations go to the principal.
 - **A seat does only briefed work.** It never self-assigns from the graph without a dispatch.
 - **A seat never speaks to stakeholders.** The owning commander is the one voice on every declared channel; a seat that needs a message passed on files a relay request (`bun seats/comms.ts request <channel> ...`) and reports that it did. The send gate refuses a seat identity by construction.
-- **A reviewer seat never reviews what it authored.** If the only available reviewer wrote the diff, the work waits. For the verifier this is enforced on disk, per Seat accounting above.
+- **A reviewer seat never reviews what it authored.** If the only available reviewer wrote the diff, the work waits. For the reviewer this is enforced on disk, per Seat accounting above.
 
 ### Running a seat
 
@@ -64,7 +64,7 @@ Commander + producer + one worker + one reviewer. That is the smallest working f
 
 ### Reviewer seats cost more than you think
 
-Reviewer seats run on every bead that reaches the gate, and again on every rework. A reviewer model chosen as if it runs only occasionally can become the fleet's largest metered bill. Worked example, measured 2026-09-02 over one 24-hour shadow-reviewer day: 16 beads produced 22 review rounds including re-reviews; a frontier gating reviewer metered at about $120 total, about $5.70 per round, on 40.9M tokens mostly from cache reads; GLM 5.3 flash via OpenRouter cost $0.79 total, about $0.04 per round, for the same window; a flat-subscription reviewer had $0 marginal cost. The shipped default proposal is therefore a mid-tier or cheap strong model for the gate — for example an Opus-class or GLM-class reviewer/verifier, with GLM-class commonly reached through OpenRouter — and a frontier model reserved for explicit second looks when a hard review needs it.
+Reviewer seats run on every bead that reaches the gate, and again on every rework. A reviewer model chosen as if it runs only occasionally can become the fleet's largest metered bill. Worked example, measured 2026-09-02 over one 24-hour shadow-reviewer day: 16 beads produced 22 review rounds including re-reviews; a frontier gating reviewer metered at about $120 total, about $5.70 per round, on 40.9M tokens mostly from cache reads; GLM 5.3 flash via OpenRouter cost $0.79 total, about $0.04 per round, for the same window; a flat-subscription reviewer had $0 marginal cost. The shipped default proposal is therefore a mid-tier or cheap strong model for the gate — for example an Opus-class or GLM-class reviewer, with GLM-class commonly reached through OpenRouter — and a frontier model reserved for explicit second looks when a hard review needs it.
 
 Choose the gate by measurement rather than taste. The method that produced the example above was a one-day shadow run: dispatch the candidate model as a shadow reviewer for the same beads, put its verdicts on the beads, and compare caught gates, missed gates, hallucinated defects, evidence quality and cost against the current gate before changing the roster.
 

@@ -25,7 +25,7 @@ Six are worth checking before the interview; harness-specific seat binaries are 
 
 Deliberately NOT on the list: `gh`. The grep now hits this sentence, the opt-in publishing question, and the `.template-source` paragraph below; the runbook/contract prose documents the same optional path without invoking `gh`. `seats/report-issues.ts` and `seats/alerts.ts`'s issue watch are the two optional users of `gh`, both off or no-op when `gh` is absent, so `gh` is still not a prerequisite. If you add a tool to the list, measure the same way: the list is only worth what it was checked against.
 
-`bun` is still unconditional because it runs the adapter, verifier/walker dispatchers, prune tool and floor for every local seat harness. `claude` is unconditional for the commander: the commander seat is a Claude Code session in the install root, and it is the one seat every install has. `pi`, `claude`, and `codex` as seat harness binaries are checked again after question 8, once the roster says which harnesses any non-external seats actually use; a no-worker install should not fail because a seat harness it never chose is absent.
+`bun` is still unconditional because it runs the adapter, reviewer/walker dispatchers, prune tool and floor for every local seat harness. `claude` is unconditional for the commander: the commander seat is a Claude Code session in the install root, and it is the one seat every install has. `pi`, `claude`, and `codex` as seat harness binaries are checked again after question 8, once the roster says which harnesses any non-external seats actually use; a no-worker install should not fail because a seat harness it never chose is absent.
 
 ```bash
 # Positional parameters, not a whitespace-split string: zsh does not word-split an
@@ -246,7 +246,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    **For each managed seat taken, collect the two facts this round owns — `seats/seats.json`'s other two columns are question 8's:**
 
-   - **Name**: the `seats.json` key the seat answers to (`producer`, `worker-1`, `reviewer`, `verifier`, `researcher`). Short, role-shaped, no namespace prefix.
+   - **Name**: the `seats.json` key the seat answers to (`producer`, `worker-1`, `reviewer-1`, `reviewer-2`, `verifier`, `researcher`). Number review seats from 1 even when there is only one. Write role `reviewer` for every review seat and role `verifier` only for the consumer-surface walker; `verify.ts` and `walk.ts` refuse each other's roles. Short, role-shaped, no namespace prefix.
    - **Account directory**: `~/.pi-seats-<namespace>/<seat-name>` — derived, not asked; offer it for correction only if the principal keeps accounts somewhere unusual. The reviewer's and verifier's directories must differ from every worker's, per the seat-accounting rule.
 
    **Write down the no's as well as the yes's.** A refused optional standing seat goes into `wheelhouse/fleet/SEATS.md` under `### Declined seats` with the principal's reason and the date. An absence on the page is the same absence whether it was refused or never raised. Choosing the subagent form is not declining the producer role: record that producer in the roster.

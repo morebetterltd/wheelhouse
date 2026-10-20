@@ -54,7 +54,7 @@ If the bench intentionally does not cover a shipped surface yet, record the gap 
 - `VERDICT: APPROVE — NOT BENCHED: <gap>; expires=YYYY-MM-DD`
 - `VERDICT: APPROVE — NOT BENCHED: <gap>; target=<coverage target>`
 
-An expired gap is not an automatic BOUNCE: it is a gate-visible nudge to fund or write the missing bench, never a silent pass. The one-shot verifier records and prints `BENCH GAP EXPIRED` when `expires=YYYY-MM-DD` is before the verification date. A `NOT BENCHED` approval with neither `expires=` nor `target=` is still accepted for backward compatibility, but the gate records it as `BENCH GAP STANDING` so repeated unbenched approvals are visible instead of becoming the project's quiet default.
+An expired gap is not an automatic BOUNCE: it is a gate-visible nudge to fund or write the missing bench, never a silent pass. The one-shot reviewer records and prints `BENCH GAP EXPIRED` when `expires=YYYY-MM-DD` is before the verification date. A `NOT BENCHED` approval with neither `expires=` nor `target=` is still accepted for backward compatibility, but the gate records it as `BENCH GAP STANDING` so repeated unbenched approvals are visible instead of becoming the project's quiet default.
 
 ## This project
 
@@ -146,11 +146,11 @@ is a funding/scope nudge, not an automatic failure, but it must be visible at
 the gate.
 -->
 
-### Verifier wire shapes covered
+### Reviewer wire shapes covered
 
-For verifier parser coverage, list each real captured stream fixture the bench
+For reviewer parser coverage, list each real captured stream fixture the bench
 covers. Each entry names the harness, fixture file, binary version captured from,
-and capture date. A verifier wire shape not listed here is NOT BENCHED by
+and capture date. A reviewer wire shape not listed here is NOT BENCHED by
 definition; reviewer verdicts say that on the `VERDICT:` line when approving a
 change that relies on an unlisted shape.
 

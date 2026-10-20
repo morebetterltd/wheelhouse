@@ -1328,7 +1328,7 @@ function cmdProbeEntry(entryName: string): void {
   const role = pool.roles.workers?.entries.includes(entryName) ? "workers" : pool.roles.reviewers?.entries.includes(entryName) ? "reviewers" : null;
   if (!role) die(`pool entry ${entryName} is not listed by a role`);
   const entry = seatEntryFor(pool, role, entryName);
-  const seat = `${role === "workers" ? "worker" : "verifier"}-${entryName}`;
+  const seat = `${role === "workers" ? "worker" : "reviewer"}-${entryName}`;
   driverForSeat(seat, entry, "adapter probe --entry").probe(seat, entry);
 }
 

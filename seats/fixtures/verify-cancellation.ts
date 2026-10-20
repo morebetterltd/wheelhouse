@@ -66,7 +66,7 @@ for (const { phase, signal } of selected) {
   fs.writeFileSync(verify, observed.replace('  const res = await runOneShot(', '  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "before-reviewer\\n");\n  const res = await runOneShot('));
   fs.writeFileSync(path.join(project, "contracts/REVIEWER.md"), "Inert cancellation reviewer.\n");
   const author = path.join(dir, "author"), reviewer = path.join(dir, "reviewer"); fs.mkdirSync(author); fs.mkdirSync(reviewer); fs.writeFileSync(path.join(reviewer, "auth.json"), '{"fixture":true}\n');
-  fs.writeFileSync(path.join(project, "seats/seats.json"), JSON.stringify({ seats: { author: { role: "worker", account: { dir: author } }, reviewer: { role: "verifier", harness: "pi", provider: "openai", model: "fixture", account: { dir: reviewer } } } }));
+  fs.writeFileSync(path.join(project, "seats/seats.json"), JSON.stringify({ seats: { author: { role: "worker", account: { dir: author } }, reviewer: { role: "reviewer", harness: "pi", provider: "openai", model: "fixture", account: { dir: reviewer } } } }));
   const idle = path.join(dir, "idle.sh");
   fs.writeFileSync(idle, `#!/usr/bin/env bash
 set -eu
@@ -110,7 +110,7 @@ esac
   fs.writeFileSync(path.join(project, "seats/idle.selftest.sh"), '#!/usr/bin/env bash\nset -eu\n[[ "$CANCEL_PHASE" = sweep* ]] || exit 0\nexec bash "$CANCEL_IDLE" suite\n', { mode: 0o755 });
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_CONTRACT: contract, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, CANCEL_CONTROLLER_PID: String(process.pid), WHEELHOUSE_SELFTEST_SWEEP_LOCK: targetLock };
   delete env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN;
-  // Do not couple verifier teardown to the runner's deadline grace.
+  // Do not couple reviewer teardown to the runner's deadline grace.
   if (phase === "sweep-stubborn-long-grace") env.WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S = "120";
   command("git", ["init", "-q", "-b", "main"], project, env); command("git", ["add", "seats", "contracts"], project, env); command("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], project, env);
   const child = spawn("bun", [verify, "cancel-fixture", "main", "author", "reviewer"], { cwd: project, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
@@ -135,7 +135,7 @@ esac
     await until(() => fs.existsSync(path.join(dir, "foreign.pid")), () => false, "foreign group canary");
     const canaryGroup = Number(fs.readFileSync(path.join(dir, "foreign.pgid"), "utf8")); assert.equal(canaryGroup, canary.pid); assert.notEqual(canaryGroup, roleGroup); assert.notEqual(canaryGroup, runnerPid);
     // A vanished runner cannot forward TERM or run its watchdog. Its own
-    // registry must still let the verifier reap the separate suite group.
+    // registry must still let the reviewer reap the separate suite group.
     const runnerKilled = phase.startsWith("sweep-stubborn-runner-killed");
     if (runnerKilled) signalGroup(runnerGroup, "SIGKILL");
     // Signal ONLY the direct dispatcher we started, not its entire group.

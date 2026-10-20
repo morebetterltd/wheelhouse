@@ -106,7 +106,7 @@ function lineFor(decision: Decision, snap: Snapshot, pool: Pool): string {
 }
 function logDecision(line: string) { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, line + "\n"); console.log(line); }
 function runAdapter(args: string[]): { status: number; text: string } { const r = spawnSync("bun", ["seats/adapter.ts", ...args], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); return { status: r.status ?? 1, text: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() }; }
-function registerSeat(root: string, staffing: StaffingFile, role: Role, seat: string, entry: string) { staffing.seats[seat] = { role: role === "workers" ? "worker" : "verifier", entry, addedAt: new Date().toISOString() }; writeStaffing(root, staffing); }
+function registerSeat(root: string, staffing: StaffingFile, role: Role, seat: string, entry: string) { staffing.seats[seat] = { role: role === "workers" ? "worker" : "reviewer", entry, addedAt: new Date().toISOString() }; writeStaffing(root, staffing); }
 function unregisterSeat(root: string, staffing: StaffingFile, seat: string) { delete staffing.seats[seat]; writeStaffing(root, staffing); }
 function invalidSeatDecision(d: Decision): Decision | null {
   try { validateSegment("seat name", d.seat as string); return null; }
@@ -180,7 +180,7 @@ export async function main(argv = process.argv.slice(2), root = ROOT): Promise<v
     const snap = fleetSnapshot(root);
     let d: Decision;
     if (cmd === "add") { const role = argv[1] as Role; d = clamp({ kind: role === "reviewers" ? "add-reviewer" : "add-worker", role, reason: "manual add", decider: "rule" }, snap, pool, staffing); }
-    else if (cmd === "drop") { const role = (staffing.seats?.[argv[1]]?.role === "verifier" ? "reviewers" : "workers") as Role; d = clamp({ kind: "drop-seat", role, seat: argv[1], reason: "manual drop", decider: "rule" }, snap, pool, staffing); }
+    else if (cmd === "drop") { const role = (staffing.seats?.[argv[1]]?.role === "reviewer" ? "reviewers" : "workers") as Role; d = clamp({ kind: "drop-seat", role, seat: argv[1], reason: "manual drop", decider: "rule" }, snap, pool, staffing); }
     else if (cmd === "check") d = clamp(decide(snap, pool, staffing, argv.includes("--decision") ? argv[argv.indexOf("--decision") + 1] as DecisionKind : undefined), snap, pool, staffing);
     else usage();
     if (!dry) {

@@ -2,7 +2,7 @@
 
 A standing agent fleet, over a shared work graph, installable on any project.
 
-The shape: a **commander** session where you argue direction, a required **producer** that judges every signal and writes the work's intent and outcomes (it may be a commander subagent), **workers** that implement one unit at a time on isolated branches, a **reviewer** that gates every diff with evidence and never reviews what it wrote, and an ephemeral **verifier** that turns a finished branch into a single verdict — never on the author's account. Work lives in a graph, not in chat. Nothing merges on a claim.
+The shape: a **commander** session where you argue direction, a required **producer** that judges every signal and writes the work's intent and outcomes (it may be a commander subagent), **workers** that implement one unit at a time on isolated branches, a **reviewer** that gates every diff with evidence and never reviews what it wrote, and an ephemeral **verifier** that walks consumer surfaces with zero bead-review context. Review seats (`reviewer-1`, `reviewer-2`, role `reviewer`) turn finished branches into verdicts via `seats/verify.ts` — never on the author's account. The walk seat (`verifier`, role `verifier`) gates claims via `seats/walk.ts`, not diffs. Work lives in a graph, not in chat. Nothing merges on a claim.
 
 The commander is a Claude Code session — yours. The producer may be its subagent; other standing seats are persistent harness processes the commander owns: each pinned to one account of its own and rostered to run on Pi, Claude Code, or Codex. That means subscription seats can sit beside API-key seats in the same fleet — for example a Claude Code worker, a Codex reviewer, and a Pi verifier — with the same adapter, graph, cockpit, review, and walk contracts. The roster recording who runs on what is a JSON file; the roles are briefs injected at spawn.
 
@@ -99,7 +99,7 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
     ├── crew/
     │   ├── PRODUCER.md          contract + your project's territory
     │   ├── REVIEWER.md          contract + your branch conventions
-    │   ├── VERIFIER.md          contract — the one-shot verdict pass, never on the author's account
+    │   ├── VERIFIER.md          contract — the zero-context consumer-surface walk for ISA claims
     │   ├── RESEARCHER.md        contract — sourced decision-grade research reports, no product edits
     │   ├── BENCH.md             contract + what proves YOUR build works
     │   └── bench.sh             stub — exits non-zero until you implement it

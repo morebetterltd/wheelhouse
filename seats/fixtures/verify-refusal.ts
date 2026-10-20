@@ -1,4 +1,4 @@
-// Owned fake-verifier regression. No provider, service, deadline or real sweep.
+// Owned fake-reviewer regression. No provider, service, deadline or real sweep.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -87,8 +87,8 @@ async function checkCase(source: string, project: string, dir: string, bdShow: s
     const firstBytes = read(files[0]), first = JSON.parse(firstBytes);
     assert.equal(first.status, "REFUSED"); assert.equal(first.notAVerdict, true);
     assert.equal(first.stdout, wire(harness, refusedText(1))); assert.equal(first.stderr, errText(1));
-    assert.match(first.reason, /^verifier must cite full-sweep rc=0 and log=/);
-    assert.equal(first.attempt, 1); assert.equal(first.verifierSeat, "verifier");
+    assert.match(first.reason, /^reviewer must cite full-sweep rc=0 and log=/);
+    assert.equal(first.attempt, 1); assert.equal(first.verifierSeat, "reviewer");
     assert.equal(first.harness, harness);
     assert.equal(fs.statSync(files[0]).mode & 0o777, 0o600);
     assert(!/^\s*(?:- verdict:|VERDICT:|PUSH:)/m.test(firstBytes), "diagnostic must not have live Markdown verdict lines");
@@ -96,7 +96,7 @@ async function checkCase(source: string, project: string, dir: string, bdShow: s
     const calls = rows(callsFile);
     assert.equal(calls.length, 2);
     for (const field of ["cwd", "account", "actor"]) assert.equal(calls[0][field], calls[1][field], `retry changed ${field}`);
-    assert.equal(calls[0].actor, "verifier");
+    assert.equal(calls[0].actor, "reviewer");
     assert.deepEqual(calls[0].argv, calls[1].argv, "retry changed harness/model/provider/tool arguments");
     assert(calls[1].prompt.includes(first.reason), "retry lacks refusal reason");
     assert(calls[1].prompt.includes(JSON.stringify({ answer: refusedText(1) })), "retry lacks complete prior-answer context");
@@ -113,7 +113,7 @@ async function checkCase(source: string, project: string, dir: string, bdShow: s
     const status = await result;
     assert.deepEqual(status, { code: mode === "recover" ? 0 : 1, signal: null }, `unexpected dispatcher result: ${stderr}`);
     assert(stdoutEOF && stderrEOF, "must join both output EOFs");
-    assert.equal(rows(callsFile).length, 2, "dispatcher made more than two verifier attempts");
+    assert.equal(rows(callsFile).length, 2, "dispatcher made more than two reviewer attempts");
     assert.equal(read(files[0]), firstBytes, "retry overwrote first refused output");
     assert.deepEqual(read(sweepLedger).trim().split("\n"), [first.tip], "sweep reran after the retry barrier");
     if (mode === "recover") {
@@ -153,12 +153,12 @@ async function main(): Promise<void> {
   let failed = 0;
   try {
     for (const harness of ["pi", "claude-code", "codex"] as const) {
-      const roster = JSON.parse(original), entry = roster.seats.verifier;
+      const roster = JSON.parse(original), entry = roster.seats.reviewer;
       entry.harness = harness;
       if (harness === "claude-code") {
         entry.provider = "anthropic"; entry.account.authRoute = "oauth";
         const account = entry.account.dir.replace(/^~/, process.env.HOME!);
-        fs.writeFileSync(path.join(account, ".claude.json"), JSON.stringify({ oauthAccount: { email: "verifier@example.test", accessToken: "fixture-token" } }));
+        fs.writeFileSync(path.join(account, ".claude.json"), JSON.stringify({ oauthAccount: { email: "reviewer@example.test", accessToken: "fixture-token" } }));
       }
       fs.writeFileSync(rosterFile, JSON.stringify(roster));
       for (const mode of ["recover", "exhaust"] as const) {
