@@ -8,6 +8,15 @@ DOC=${1:-$ROOT/runbooks/UPGRADE.md}
 CASE=${WHEELHOUSE_UPGRADE_CONTRACT_CASE:-all}
 case "$CASE" in all|bash-legacy|zsh-legacy|bash-valid|zsh-valid|bash-unreadable|zsh-unreadable) ;; *) echo "unknown test case: $CASE" >&2; exit 2;; esac
 selected(){ [ "$CASE" = all ] || [ "$CASE" = "$1" ]; }
+# Public old-contract stand-in: c23ae6b (2026-10-19), the closest public
+# first-parent main at this branch's refresh. GRAPH predates the work-contract
+# grammar, DESIGNER exists and PRODUCER does not. This is NOT proven to be
+# ad61b15's rewrite; that object disappeared in the history purge.
+BASELINE=c23ae6b41cb6b996987822dd331fe6e09da94467
+if ! git -C "$ROOT" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then
+  printf 'STOP: upgrade contract audit baseline "%s" is missing from template history; fetch complete public history before running this selftest\n' "$BASELINE" >&2
+  exit 2
+fi
 FIX=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-contract.XXXXXX") || exit 2
 selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
@@ -16,6 +25,7 @@ fail(){ echo "FAIL $*"; exit 1; }
 pass(){ echo "PASS $*"; }
 command -v zsh >/dev/null || fail 'zsh required'
 [ -s "$DOC" ] || fail "missing runbook: $DOC"
+bun "$HERE/fixtures/upgrade-contract-baseline.ts" "$ROOT" "$FIX"
 # Keep this extraction identical to wheelhouse/crew/bench.sh's extract_step.
 awk -v n=7 '
   $0 ~ ("^## " n "\\.") { insec = 1; next }
@@ -40,9 +50,8 @@ OPEN=$(node -e 'console.log(require(process.argv[1]).id)' "$FIX/open.json")
 CLAIMED=$(node -e 'console.log(require(process.argv[1]).id)' "$FIX/claimed.json")
 [ -n "$OPEN" ] && [ -n "$CLAIMED" ] || fail 'fixture beads absent'
 bd update "$CLAIMED" --status in_progress >/dev/null
-export TEMPLATE="$ROOT" BASE=ad61b15 TARGET=HEAD
+export TEMPLATE="$ROOT" BASE="$BASELINE" TARGET=HEAD
 # Contract diff is real; the same backticked-path sweep ran in the bench.
-git -C "$TEMPLATE" cat-file -e "$BASE^{commit}" || fail 'baseline absent'
 run_step7(){
   RC=0
   env -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE \
