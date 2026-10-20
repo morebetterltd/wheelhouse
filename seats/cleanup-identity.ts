@@ -414,7 +414,7 @@ function adoptLegacyScratch(root: string, target: string, bead: string) {
     if (native.symbols.flock(r.fd, 2) !== 0) throw error("lock adoption transition");
     // Do not race a cleanup scan, even one with a dead or unprovable lease.
     let lease = -1;
-    try { lease = openAt(r.fd, LOCK, true); }
+    try { lease = openAt(r.fd, "cleanup.lock", true); }
     catch (e: any) { if (e.errno !== 2) throw e; }
     if (lease >= 0) { fs.closeSync(lease); throw new CleanupRefused("adoption requires cleanup idle and no cleanup.lock; resolve its owner separately"); }
     if (!cleanupPathUnchanged(root, target, proof) || !cleanupPathUnchanged(root, r.dir, r.proof)) throw new CleanupRefused("adoption path changed");

@@ -136,7 +136,7 @@ for (const [i, control] of controls.entries()) {
       // The hardlink guard intentionally occurs at open and before append.
       assert.equal(count, control.old === "st.nlink !== 1" ? 2 : 1, `control must target the measured source: ${control.old}`);
       modified = source.replaceAll(control.old, control.replacement);
-      if (control.cases.includes("legacy-symlink-cache")) modified = modified.replace("const current = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);", "const current = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY);");
+      if (control.cases.includes("legacy-symlink-cache")) modified = modified.replace("const current = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);\n    try { if (id(current) !== id(fd)) throw new Refused(\"stable host cache directory changed", "const current = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY);\n    try { if (id(current) !== id(fd)) throw new Refused(\"stable host cache directory changed");
     }
     fs.writeFileSync(path.join(runtime, file), modified);
   }
