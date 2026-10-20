@@ -904,7 +904,7 @@ JS
   # Admission now refuses this before scratch/model/watchdog readiness. Use the
   # ordinary CLI, not a driver that requires a ready model to prove this STOP.
   local refusal_account
-  refusal_account="$(node -e 'console.log(require(process.argv[1]).seats.verifier.account.dir.replace(/^~/,process.argv[2]))' "$SWEEP_PROJ/seats/seats.json" "$HOME_FIX")" || exit 2
+  refusal_account="$(node -e 'console.log(require(process.argv[1]).seats.reviewer.account.dir.replace(/^~/,process.argv[2]))' "$SWEEP_PROJ/seats/seats.json" "$HOME_FIX")" || exit 2
   [ -d "$refusal_account" ] || exit 2
   rm -f "$refusal_account/invoked"
   WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_BAD_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_with_bd_show "$SWEEP_GENERIC_CLAIM" bead-implicit-lock-refused fleet/bead-1 worker-1
