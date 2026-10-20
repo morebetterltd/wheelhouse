@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-codex-selftest.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+. "$ROOT/seats/selftest-lib.sh"
+TMP="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-codex-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$TMP" || exit 2
+selftest_install_cleanup_traps 'selftest_cleanup_fixture_processes "$TMP"; selftest_remove_fixture_dir "$TMP"'
 mkdir -p "$TMP/bin" "$TMP/home" "$TMP/proj/contracts" "$TMP/proj/.wheelhouse-worktrees/bead-a"
 cat > "$TMP/bin/codex" <<'CODEX'
 #!/usr/bin/env node
@@ -54,7 +56,7 @@ grep -q '"type":"turn_end"' "$TMP/log.jsonl"; grep -q '"type":"agent_end"' "$TMP
 grep -q '"id":"mid".*"isStreaming":true' "$TMP/log.jsonl"
 grep -q '"id":"idle".*"isStreaming":false' "$TMP/log.jsonl"
 [ "$(grep -c '"type":"agent_end"' "$TMP/log.jsonl")" -eq 1 ]
-! grep -q leak "$TMP/home/codex/env.json"
+selftest_capture_lacks "$TMP/home/codex/env.json" -q -- leak
 PATH="$TMP/bin:$PATH" HOME="$TMP/home" bun "$ROOT/seats/drivers/codex/shim.ts" --log "$TMP/auth-log.jsonl" --raw-log "$TMP/auth-raw.jsonl" --err-log "$TMP/auth-err.log" --account-dir "$TMP/home/codex" --brief "$TMP/proj/contracts/WORKER.md" --model gpt-5.5 --cwd "$TMP/proj" --actor worker-1 < <(printf '{"id":"a","type":"prompt","message":"AUTH failure"}
 ') & apid=$!
 for i in {1..100}; do [ -f "$TMP/auth-log.jsonl" ] && grep -q '"authDead":true' "$TMP/auth-log.jsonl" && break; sleep .1; done

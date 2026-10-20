@@ -57,7 +57,7 @@ cleanup() {
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- fixture -----------------------------------------------------------------
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-floor-selftest.$$.XXXXXX")" || exit 2
@@ -353,10 +353,10 @@ wait "$FLOOR_PID" 2>/dev/null
 CAPTURE="$(cat "$CAPTURE_FILE")"
 if [ -s "$CAPTURE_FILE" ]; then pass "multi-frame capture produced output before the scripted stop"
 else fail "multi-frame capture produced no output"; fi
-HOME_CLEAR_COUNT="$(printf '%s' "$CAPTURE" | python3 -c 'import sys; s=sys.stdin.read(); print(s.count("\x1b[H\x1b[J"))')"
+HOME_CLEAR_COUNT="$(printf '%s' "$CAPTURE" | bun -e 'console.log((await import("node:fs")).default.readFileSync(0,"utf8").split("\x1b[H\x1b[J").length-1)')"
 if [ "$HOME_CLEAR_COUNT" -ge 2 ]; then pass "multi-frame capture contains repeated cursor-home + clear-to-end repaint sequences"
 else fail "multi-frame capture did not show repeated in-place repaint sequences (count=$HOME_CLEAR_COUNT)"; fi
-if printf '%s' "$CAPTURE" | python3 -c 'import sys; frames=[f for f in sys.stdin.read().split("\x1b[H\x1b[J") if f]; raise SystemExit(0 if frames and max(x.count("\n") for x in frames) <= 24 else 1)'; then
+if printf '%s' "$CAPTURE" | bun -e 'const frames=(await import("node:fs")).default.readFileSync(0,"utf8").replace(/\r\n?/g,"\n").split("\x1b[H\x1b[J").filter(Boolean); process.exit(frames.length&&Math.max(...frames.map(f=>f.split("\n").length-1))<=24?0:1);'; then
   pass "multi-frame capture stays within the terminal height per frame — no scroll drift"
 else
   fail "multi-frame capture grew past the terminal height, indicating scroll drift"

@@ -72,7 +72,7 @@ recover_dead_seats() {
   fi
   trap 'rm -rf "$lock"' RETURN
   sep="$(printf '\037')"
-  bun -e 'const fs=require("fs"); const sep="\x1f"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); for (const [name,r] of Object.entries(s.seats||{})) console.log([name, r&&r.pid!=null?String(r.pid):"", r&&r.lastBead?String(r.lastBead):"", r&&r.cwd?String(r.cwd):"", r&&r.log?String(r.log):""].map(x=>x.replace(/\x1f|\n/g," ")).join(sep));' "$DAEMONS_SEATS/state.json" 2>/dev/null |
+  bun -e 'import fs from "node:fs"; const sep="\x1f"; const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); for (const [name,r] of Object.entries(s.seats||{})) console.log([name, r&&r.pid!=null?String(r.pid):"", r&&r.lastBead?String(r.lastBead):"", r&&r.cwd?String(r.cwd):"", r&&r.log?String(r.log):""].map(x=>x.replace(/\x1f|\n/g," ")).join(sep));' "$DAEMONS_SEATS/state.json" 2>/dev/null |
   while IFS="$sep" read -r seat pid bead cwd seat_log; do
     [ -n "$seat" ] || continue
     [ -n "$pid" ] || continue
@@ -127,7 +127,7 @@ wait_pid_file() {
 }
 
 principal_channel_declared() {
-  (cd "$DAEMONS_ROOT" && bun -e 'const fs=require("fs"); let j={}; try{j=JSON.parse(fs.readFileSync("seats/channels.json","utf8"));}catch{} process.exit(Object.values(j.channels||{}).some(c=>c&&c.audience==="principal") ? 0 : 1);' >/dev/null 2>&1)
+  (cd "$DAEMONS_ROOT" && bun -e 'import fs from "node:fs"; let j={}; try{j=JSON.parse(fs.readFileSync("seats/channels.json","utf8"));}catch{} process.exit(Object.values(j.channels||{}).some(c=>c&&c.audience==="principal") ? 0 : 1);' >/dev/null 2>&1)
 }
 
 start_herald() {
@@ -137,10 +137,11 @@ start_herald() {
   pid_file="$DAEMONS_RUN/herald.pid"
   if daemon_alive herald; then echo "herald already running: pid $(cat "$pid_file")"; return 0; fi
   old="$(cat "$pid_file" 2>/dev/null || true)"; [ -n "$old" ] && echo "herald dead: pid $old; restarting"
-  rm -f "$pid_file"; tmp="$pid_file.$$"; rm -f "$tmp"
-  ( cd "$DAEMONS_ROOT" || exit 1; exec </dev/null >> "$DAEMONS_LOGS/herald.out.log" 2>> "$DAEMONS_LOGS/herald.stderr.log"; WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" WHEELHOUSE_HERALD_ROOT="$DAEMONS_ROOT" nohup bun "$DAEMONS_SEATS/herald.ts" & echo $! > "$tmp"; disown $! 2>/dev/null || true ) </dev/null >/dev/null 2>/dev/null &
-  disown $! 2>/dev/null || true; wait_pid_file "$tmp"; [ -s "$tmp" ] && mv -f "$tmp" "$pid_file"
-  new="$(cat "$pid_file" 2>/dev/null || true)"; for _ in $(seq 1 50); do pid_alive "$new" && break; sleep 0.1; done
+  # The daemon owns herald.pid. A launcher must never replace a live winner's
+  # record with the PID of a concurrently refused child.
+  ( cd "$DAEMONS_ROOT" || exit 1; exec </dev/null >> "$DAEMONS_LOGS/herald.out.log" 2>> "$DAEMONS_LOGS/herald.stderr.log"; WHEELHOUSE_TMUX_SOCKET="${WHEELHOUSE_TMUX_SOCKET:-}" WHEELHOUSE_HERALD_ROOT="$DAEMONS_ROOT" nohup bun "$DAEMONS_SEATS/herald.ts" & disown $! 2>/dev/null || true ) </dev/null >/dev/null 2>/dev/null &
+  disown $! 2>/dev/null || true
+  new=""; for _ in $(seq 1 50); do new="$(cat "$pid_file" 2>/dev/null || true)"; pid_alive "$new" && break; sleep 0.1; done
   if pid_alive "$new"; then echo "herald started: pid $new"; return 0; fi
   echo "STOP: herald failed to start; see $DAEMONS_LOGS/herald.stderr.log" >&2; return 1
 }

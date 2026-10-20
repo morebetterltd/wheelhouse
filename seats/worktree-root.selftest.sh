@@ -33,7 +33,7 @@ BIN="$FIX/bin"
 PROJ="$FIX/project"
 RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$(command -v node)"):/usr/bin:/bin"
 cleanup() { pkill -f "$FIX" 2>/dev/null || true; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 mkdir -p "$HOME_FIX" "$BIN" "$PROJ/seats" "$PROJ/contracts"
 
 cat > "$BIN/pi" <<'STUB'
@@ -106,7 +106,7 @@ cat > "$PROJ/seats/seats.json" <<EOF
 EOF
 
 # prune.ts discovers repositories from --root, so make the fixture root a real repo.
-git -C "$PROJ" init -q
+git -C "$PROJ" init -q -b main
 printf 'fixture\n' > "$PROJ/README.md"
 git -C "$PROJ" add README.md
 git -C "$PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m init
@@ -174,12 +174,12 @@ namespace=umbrella
 EOF
 # This is the regression shape: the container root is itself a git repo, but
 # the worker branch belongs to the product repo recorded in .template-source.
-git -C "$UMB" init -q
+git -C "$UMB" init -q -b main
 printf 'umbrella machinery\n' > "$UMB/README.md"
 git -C "$UMB" add README.md wheelhouse/.template-source
 git -C "$UMB" -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella
 
-git -C "$PRODUCT" init -q
+git -C "$PRODUCT" init -q -b main
 printf 'product\n' > "$PRODUCT/README.md"
 git -C "$PRODUCT" add README.md
 git -C "$PRODUCT" -c user.email=selftest@local -c user.name=selftest commit -q -m product

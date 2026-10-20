@@ -13,11 +13,13 @@ LINT="$SCRIPT_DIR/push-authority-lint.sh"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-push-authority-lint-selftest.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
+
+if bun "$SCRIPT_DIR/fixtures/scratch-ownership.ts" push "$SCRIPT_DIR/.." "$FIX"; then pass 'push-authority capture leaves old pid file intact'; else fail 'push-authority scratch ownership collision'; fi
 
 mkproj() {
   local dir="$1" grant="$2"

@@ -9,7 +9,7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-digest-selftest.XXX
 selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 run_digest(){ HOME="$FAKE_HOME" WHEELHOUSE_DIGEST_ROOT="$PROJ" PATH="$PROJ/bin:$PATH" bun "$PROJ/seats/digest.ts" "$@"; }
@@ -28,7 +28,7 @@ EOF
 cat > "$PROJ/seats/pool.json" <<'EOF'
 {"version":1,"entries":{"pool-a":{"account":{"label":"pool-oauth-demo-own"}}},"roles":{}}
 EOF
-PRODUCT="$PROJ/product"; mkdir -p "$PRODUCT"; git -C "$PRODUCT" init -q; git -C "$PRODUCT" config user.email selftest@example.invalid; git -C "$PRODUCT" config user.name selftest
+PRODUCT="$PROJ/product"; mkdir -p "$PRODUCT"; git -C "$PRODUCT" init -q -b main; git -C "$PRODUCT" config user.email selftest@example.invalid; git -C "$PRODUCT" config user.name selftest
 printf base > "$PRODUCT/file.txt"; git -C "$PRODUCT" add file.txt; GIT_AUTHOR_DATE=2026-01-01T10:00:00Z GIT_COMMITTER_DATE=2026-01-01T10:00:00Z git -C "$PRODUCT" commit -q -m base; git -C "$PRODUCT" checkout -q -b feat; printf feat >> "$PRODUCT/file.txt"; GIT_AUTHOR_DATE=2026-01-01T11:00:00Z GIT_COMMITTER_DATE=2026-01-01T11:00:00Z git -C "$PRODUCT" commit -am 'demo-ship feature' -q; SECOND="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" checkout -q main; printf main >> "$PRODUCT/main.txt"; git -C "$PRODUCT" add main.txt; GIT_AUTHOR_DATE=2026-01-01T11:30:00Z GIT_COMMITTER_DATE=2026-01-01T11:30:00Z git -C "$PRODUCT" commit -q -m main; GIT_AUTHOR_DATE=2026-01-01T12:30:00Z GIT_COMMITTER_DATE=2026-01-01T12:30:00Z git -C "$PRODUCT" merge --no-ff -q feat -m 'Merge demo-ship Build the package'; MERGE="$(git -C "$PRODUCT" rev-parse HEAD)"; git -C "$PRODUCT" remote add origin https://github.com/example/product.git
 SINCE=2026-01-01T00:00:00Z; UNTIL=2026-01-02T00:00:00Z
 cat > "$PROJ/bin/bd" <<'EOF'
@@ -87,7 +87,7 @@ cat > "$PROJ/seats/needs.jsonl" <<'EOF'
 EOF
 OUT="$(run_digest --since "$SINCE" --until "$UNTIL")"
 # 1 order + empties on empty records
-EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats" "$EMPTY/wheelhouse" "$EMPTY/bin"; selftest_copy_seat_runtime "$EMPTY" "$ROOT/seats"; printf 'namespace=empty\nproduct-repo=.\n' > "$EMPTY/wheelhouse/.template-source"; (cd "$EMPTY" && git init -q && git config user.email a@b && git config user.name a && touch x && git add x && git commit -q -m x); cp "$PROJ/bin/bd" "$EMPTY/bin/bd"; printf '[]\n' > "$EMPTY/closed.json"; printf '[]\n' > "$EMPTY/review.json"; EO="$(WHEELHOUSE_DIGEST_ROOT="$EMPTY" WHEELHOUSE_FIXTURE_CLOSED="$EMPTY/closed.json" WHEELHOUSE_FIXTURE_REVIEW="$EMPTY/review.json" PATH="$EMPTY/bin:$PATH" bun "$EMPTY/seats/digest.ts" --since "$SINCE" --until "$UNTIL")"
+EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats" "$EMPTY/wheelhouse" "$EMPTY/bin"; selftest_copy_seat_runtime "$EMPTY" "$ROOT/seats"; printf 'namespace=empty\nproduct-repo=.\n' > "$EMPTY/wheelhouse/.template-source"; (cd "$EMPTY" && git init -q -b main && git config user.email a@b && git config user.name a && touch x && git add x && git commit -q -m x); cp "$PROJ/bin/bd" "$EMPTY/bin/bd"; printf '[]\n' > "$EMPTY/closed.json"; printf '[]\n' > "$EMPTY/review.json"; EO="$(WHEELHOUSE_DIGEST_ROOT="$EMPTY" WHEELHOUSE_FIXTURE_CLOSED="$EMPTY/closed.json" WHEELHOUSE_FIXTURE_REVIEW="$EMPTY/review.json" PATH="$EMPTY/bin:$PATH" bun "$EMPTY/seats/digest.ts" --since "$SINCE" --until "$UNTIL")"
 if printf '%s' "$EO" | awk '/## Shipped/{a=1}/## Blocked/{b=a}/## In review/{c=b}/## Sent back/{d=c}/## Failed and why/{e=d}/## Alerts/{f=e}END{exit f?0:1}' && assert_contains "$EO" '\[Nothing merged\.\]' && assert_contains "$EO" '\[Nothing open\.\]' && assert_contains "$EO" '\[Nothing waiting\.\]' && assert_contains "$EO" '\[Nothing sent back\.\]' && assert_contains "$EO" '\[Nothing failed\.\]' && assert_contains "$EO" '\[None\.\]'; then pass "empty digest prints sections in order with bracketed text"; else fail "empty output wrong: $EO"; fi
 # 2 shipped
 if assert_contains "$OUT" 'Build the package' && assert_contains "$OUT" 'On goal branch fleet/goal: Goal branch task' && assert_contains "$OUT" 'On goal branch fleet/dynamic-staffing: Goal branch without id' && ! assert_contains "$OUT" 'Unrelated close' && assert_contains "$OUT" "$(echo "$MERGE"|cut -c1-7)" && assert_contains "$OUT" "$(echo "$SECOND"|cut -c1-7)" && assert_contains "$OUT" 'APPROVE — NOT BENCHED' && assert_contains "$OUT" 'push: NOT CONSIDERED' && assert_contains "$OUT" 'rounds=2' && assert_contains "$OUT" 'seats/verdicts/demo-ship.md'; then pass "shipped rows carry main merge details and goal-branch closes, including branch-only reasons"; else fail "shipped line missing: $OUT"; fi
@@ -148,14 +148,14 @@ DESK_JSON="$(WHEELHOUSE_NEEDS_ROOT="$PROJ" bun "$PROJ/seats/needs.ts" show "$DES
 if [ $DESK_RC -eq 0 ] && printf '%s' "$DESK_JSON" | grep >/dev/null 'Full page: http://127.0.0.1:65530/digest'; then pass "--notify appends Full page digest URL when desk.port exists"; else fail "notify desk URL missing rc=$DESK_RC id=$DESK_ID body=$DESK_JSON err=$(cat "$FIX/notify-desk.err")"; fi
 # Canary: if human rendering leaks ids, needs.ts refuses the notify and digest.last is not written.
 cp "$PROJ/seats/digest.ts" "$FIX/digest.good.ts"
-python3 - "$PROJ/seats/digest.ts" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1]); s=p.read_text()
-old='function humanText(s:string, ns:string){ return scrubLocalPaths(scrubAccountLabels(String(s||""))).replace(new RegExp(`\\\\b${escapeRegExp(ns)}-[a-z0-9_.-]+\\\\b`,"ig"),"work item").replace(/\\bbead\\b/ig,"task"); }'
-if old not in s: raise SystemExit(1)
-p.write_text(s.replace(old, 'function humanText(s:string, ns:string){ return String(s||""); }'))
-PY
+bun - "$PROJ/seats/digest.ts" <<'TS'
+import fs from "node:fs";
+import assert from "node:assert/strict";
+const file = process.argv[2], source = fs.readFileSync(file, "utf8");
+const old = 'function humanText(s:string, ns:string){ return scrubLocalPaths(scrubAccountLabels(String(s||""))).replace(new RegExp(`\\\\b${escapeRegExp(ns)}-[a-z0-9_.-]+\\\\b`,"ig"),"work item").replace(/\\bbead\\b/ig,"task"); }';
+assert.equal(source.split(old).length, 2, "humanText canary anchor must occur exactly once");
+fs.writeFileSync(file, source.replace(old, 'function humanText(s:string, ns:string){ return String(s||""); }'));
+TS
 rm -f "$PROJ/seats/run/digest.last"
 CAN_RC=0; CAN_OUT="$(run_digest --notify --since "$SINCE" --until 2026-01-06T00:00:00Z 2>"$FIX/notify-canary.err")" || CAN_RC=$?
 mv "$FIX/digest.good.ts" "$PROJ/seats/digest.ts"

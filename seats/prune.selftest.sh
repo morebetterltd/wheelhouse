@@ -31,7 +31,8 @@ FIX="$(cd "$FIX" && pwd -P)"
 export GIT_CEILING_DIRECTORIES="$FIX${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}"
 TMP_SCRATCH=()
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; rm -rf ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
+bun "$HERE/fixtures/scratch-ownership.ts" prune "$HERE/.." "$FIX" || exit 1
 export HOME="$FIX/home"
 mkdir -p "$HOME"
 # bd init's hooks must not detach telemetry flushers into these worktrees.
@@ -41,6 +42,28 @@ if [ -f "$METRICS_CONFIG" ] && grep -Eq '^[[:space:]]+disabled: true$' "$METRICS
   pass 'fixture-owned bd metrics config disables detached telemetry flushers'
 else
   fail 'fixture-owned bd metrics config does not disable detached telemetry flushers'
+fi
+
+phase 'D6/D7 automatic cleanup identity (fresh allocations only)'
+IDENTITY_SOURCE="$FIX/identity-source"
+mkdir -p "$IDENTITY_SOURCE"
+selftest_copy_seat_runtime "$IDENTITY_SOURCE" "$HERE" || exit 2
+if bun "$HERE/fixtures/prune-cleanup-identity.ts" "$FIX/identity-cases" "$IDENTITY_SOURCE" "$PRUNE" "${WHEELHOUSE_PRUNE_CLEANUP_IDENTITY_MODE:-fixed}"; then
+  pass 'automatic cleanup identity regressions'
+else
+  fail 'automatic cleanup identity regressions'
+fi
+if [ "${WHEELHOUSE_PRUNE_CLEANUP_IDENTITY_ONLY:-}" = 1 ]; then
+  [ "$FAILED" -eq 0 ] || exit 1
+  echo 'prune cleanup identity subset: PASS'
+  exit 0
+fi
+
+phase 'closed-task scratch inside seat worktrees (fresh allocations only)'
+if bun "$HERE/fixtures/prune-seat-scratch.ts" "$FIX/seat-scratch-cases" "$IDENTITY_SOURCE" "$PRUNE"; then
+  pass 'nested seat scratch cleanup regressions'
+else
+  fail 'nested seat scratch cleanup regressions'
 fi
 
 phase 'reviewed-row deletion safety (fresh allocations only)'
@@ -287,7 +310,7 @@ printf 'base\n' > "$PROD/app.txt"
 git -C "$PROD" add app.txt
 git -C "$PROD" commit -q -m base
 BARE="$FIX/origin.git"
-git -C "$PROD" init --bare -q "$BARE"
+git -C "$PROD" init --bare -q -b main "$BARE"
 git -C "$PROD" remote add origin "$BARE"
 git -C "$PROD" push -q -u origin main
 
@@ -362,7 +385,7 @@ CLOSED_LIVE_PID=$!
 TMP_SCRATCH+=()
 cleanup_live(){ kill "$LIVE_PID" "$OPEN_LIVE_PID" "$CLOSED_LIVE_PID" >/dev/null 2>&1 || true; }
 cleanup_prune(){ cleanup_live; cleanup; }
-trap cleanup_prune EXIT INT TERM
+selftest_install_cleanup_traps cleanup_prune
 printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"},"worker-live":{"pid":%s,"cwd":"%s"},"worker-history":{"pid":999998,"cwd":"%s","sessionFile":"%s"}}}\n' "$WTS/$OPEN_ID" "$LIVE_PID" "$WTS/$OPEN_ID" "$WTS/$OPEN_ID" "$SESSION_HISTORY" > "$ROOT/seats/state.json"
 printf '{"seats":{"worker-rostered":{}}}\n' > "$ROOT/seats/seats.json"
 mkdir -p "$WTS/worker-rostered"
@@ -379,17 +402,17 @@ printf 'stale-lock\n' > "$ROOT/.wheelhouse-bench.lock.stale.12345/pid"
 mkdir -p "$ROOT/.wheelhouse-runs/$CLOSED_ID-build" "$ROOT/.wheelhouse-runs/$OPEN_ID-build"
 printf 'closed runs scratch\n' > "$ROOT/.wheelhouse-runs/$CLOSED_ID-build/file.txt"
 printf 'open runs scratch\n' > "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt"
-TMP_ROOT="${TMPDIR:-/private/tmp}"
-TMP_ROOT="${TMP_ROOT%/}"
-mkdir -p "$TMP_ROOT"
+# Own the parent, not merely a bead-derived name in somebody else's TMPDIR.
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-prune-tmp.XXXXXX")" || exit 2
+TMP_SCRATCH+=("$TMP_ROOT")
 # The scanner records physical paths, even if inherited TMPDIR is an alias.
-TMP_ROOT="$(cd "$TMP_ROOT" && pwd -P)"
+TMP_ROOT="$(cd "$TMP_ROOT" && pwd -P)" || exit 2
+export TMPDIR="$TMP_ROOT"
 CLOSED_TMP="$TMP_ROOT/$CLOSED_ID-derivedData"
 OPEN_TMP="$TMP_ROOT/$OPEN_ID-derivedData"
 mkdir -p "$CLOSED_TMP" "$OPEN_TMP"
 printf 'closed tmp scratch\n' > "$CLOSED_TMP/file.txt"
 printf 'open tmp scratch\n' > "$OPEN_TMP/file.txt"
-TMP_SCRATCH+=("$CLOSED_TMP" "$OPEN_TMP")
 OPEN_RUNS_BEFORE=$(shasum -a 256 "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt" | awk '{print $1}')
 OPEN_TMP_BEFORE=$(shasum -a 256 "$OPEN_TMP/file.txt" | awk '{print $1}')
 
@@ -552,8 +575,8 @@ if [ $SESSION_STALE_RC -eq 0 ] && printf '%s\n' "$SESSION_STALE_OUT" | grep >/de
 phase 'prune acts only on safe selected rows'
 ( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune.out" )
 if [ ! -e "$WTS/$CLOSED_ID" ] && ! git -C "$PROD" worktree list --porcelain | grep -F >/dev/null "$WTS/$CLOSED_ID"; then pass 'safe merged worktree removed by git worktree remove'; else fail 'safe merged worktree still exists or is registered'; fi
-if git -C "$PROD" branch --list "fleet/$CLOSED_ID" | grep >/dev/null . && git -C "$PROD" log -1 --format=%s "fleet/$CLOSED_ID" >/dev/null && ! grep -q 'PRUNED branch' "$FIX/prune.out"; then pass 'safe merged worktree prune keeps its merged branch ref'; else fail "merged worktree branch was deleted or PRUNED branch was logged: branch=$(git -C "$PROD" branch --list "fleet/$CLOSED_ID") output=$(cat "$FIX/prune.out")"; fi
-if [ ! -e "$WTS/$GOAL_CHILD_ID" ] && git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID" | grep >/dev/null . && git -C "$PROD" log -1 --format=%s "fleet/$GOAL_CHILD_ID" >/dev/null && ! grep -q 'PRUNED branch' "$FIX/prune.out" && git -C "$PROD" branch --list fleet/goal-x | grep >/dev/null .; then pass 'goal-branch merged worktree prunes worktree while child and listed goal branches survive'; else fail "goal-branch prune outcome wrong: child_dir=$([ -e "$WTS/$GOAL_CHILD_ID" ] && echo present || echo gone) child_branch=$(git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID") goal_branch=$(git -C "$PROD" branch --list fleet/goal-x) output=$(cat "$FIX/prune.out")"; fi
+if git -C "$PROD" branch --list "fleet/$CLOSED_ID" | grep >/dev/null . && git -C "$PROD" log -1 --format=%s "fleet/$CLOSED_ID" >/dev/null && selftest_capture_lacks "$FIX/prune.out" -q -- 'PRUNED branch'; then pass 'safe merged worktree prune keeps its merged branch ref'; else fail "merged worktree branch was deleted or PRUNED branch was logged: branch=$(git -C "$PROD" branch --list "fleet/$CLOSED_ID") output=$(cat "$FIX/prune.out")"; fi
+if [ ! -e "$WTS/$GOAL_CHILD_ID" ] && git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID" | grep >/dev/null . && git -C "$PROD" log -1 --format=%s "fleet/$GOAL_CHILD_ID" >/dev/null && selftest_capture_lacks "$FIX/prune.out" -q -- 'PRUNED branch' && git -C "$PROD" branch --list fleet/goal-x | grep >/dev/null .; then pass 'goal-branch merged worktree prunes worktree while child and listed goal branches survive'; else fail "goal-branch prune outcome wrong: child_dir=$([ -e "$WTS/$GOAL_CHILD_ID" ] && echo present || echo gone) child_branch=$(git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID") goal_branch=$(git -C "$PROD" branch --list fleet/goal-x) output=$(cat "$FIX/prune.out")"; fi
 if git -C "$PROD" branch --list "fleet/$UNMERGED_ID" | grep >/dev/null .; then pass 'unmerged fleet branch is not deleted by merged-worktree prune path'; else fail 'unmerged fleet branch was deleted'; fi
 ( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories stale-branch > "$FIX/stale-branch-prune.out" )
 if ! git -C "$PROD" branch --list "fleet/$STALE_ID" | grep >/dev/null . \
@@ -582,7 +605,7 @@ OPEN_RUNS_AFTER=$(shasum -a 256 "$ROOT/.wheelhouse-runs/$OPEN_ID-build/file.txt"
 OPEN_TMP_AFTER=$(shasum -a 256 "$OPEN_TMP/file.txt" | awk '{print $1}')
 [ "$OPEN_RUNS_BEFORE" = "$OPEN_RUNS_AFTER" ] && pass 'open bead runs scratch remains byte-identical' || fail 'open bead runs scratch changed'
 [ "$OPEN_TMP_BEFORE" = "$OPEN_TMP_AFTER" ] && pass 'open bead tmp scratch remains byte-identical' || fail 'open bead tmp scratch changed'
-if ! grep -q 'delete 22222222-2222-2222-2222-222222222222' "$FIX/xcrun.log"; then pass 'open bead simulator is not deleted'; else fail "open bead simulator was deleted: $(cat "$FIX/xcrun.log")"; fi
+if selftest_capture_lacks "$FIX/xcrun.log" -q -- 'delete 22222222-2222-2222-2222-222222222222'; then pass 'open bead simulator is not deleted'; else fail "open bead simulator was deleted: $(cat "$FIX/xcrun.log")"; fi
 if grep -q 'prune summary: touched=11' "$FIX/prune.out" && grep -q 'reclaimed_bytes=' "$FIX/prune.out" && grep -q "SKIPPED merged-worktree $WTS/$HIST_ID reason=path no longer exists" "$FIX/prune.out"; then pass 'prune summary reports eleven touched rows; already-removed history row counts as skipped'; else fail "unexpected prune summary: $(cat "$FIX/prune.out")"; fi
 
 phase 'host-budget auto_prune uses the real scanner and reviewed prune parser'
@@ -632,7 +655,7 @@ set +e   # the phase above left -e on; these phases inspect exit codes themselve
 json_id(){ bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)'; }
 EXT_PIDS=()
 cleanup_ext(){ for p in ${EXT_PIDS[@]+"${EXT_PIDS[@]}"}; do kill "$p" >/dev/null 2>&1 || true; done; cleanup_prune; }
-trap cleanup_ext EXIT INT TERM
+selftest_install_cleanup_traps cleanup_ext
 mk_install(){ # $1 root: container git repo, nested product repo with a bare origin at $1.origin.git, prune.ts in place
   mkdir -p "$1/product" "$1/seats"
   selftest_copy_seat_runtime "$1" "$(dirname "$PRUNE")"
@@ -642,7 +665,7 @@ mk_install(){ # $1 root: container git repo, nested product repo with a bare ori
   git -C "$1/product" config user.name selftest
   printf 'base\n' > "$1/product/app.txt"
   git -C "$1/product" add app.txt; git -C "$1/product" commit -q -m base
-  git -C "$1/product" init --bare -q "$1.origin.git"
+  git -C "$1/product" init --bare -q -b main "$1.origin.git"
   git -C "$1/product" remote add origin "$1.origin.git"
   git -C "$1/product" push -q -u origin main
 }
@@ -669,18 +692,23 @@ ext_scan(){ ( cd "$EXT" && bun seats/prune.ts scan --format jsonl > "$FIX/ext-sc
 ext_row(){ grep -F "\"path\":\"$1\"" "$FIX/ext-scan.jsonl"; }
 ext_registered(){ git -C "$EPROD" worktree list --porcelain | grep -xF >/dev/null "worktree $1"; }
 ext_cleanup(){ ( cd "$EXT" && bun seats/prune.ts cleanup "$@" 2>&1 ); }
+ext_record_run(){
+  ( cd "$EXT" && bun -e 'import {recordCleanupScratch} from "./seats/cleanup-identity.ts"; recordCleanupScratch(process.argv[1],process.argv[2],process.argv[3]);' "$EXT" "$1" "$2" ) || exit 2
+}
 
 phase 'install policy cleanup=off/report is honored by direct prune cleanup'
 mkdir -p "$EXT/wheelhouse"
 OFF_ID=$(ext_bead 'cleanup off direct')
 mkdir -p "$ERUNS/$OFF_ID-run"
 printf 'keep\n' > "$ERUNS/$OFF_ID-run/file.txt"
+ext_record_run "$ERUNS/$OFF_ID-run" "$OFF_ID"
 printf 'cleanup=off\n' > "$EXT/wheelhouse/.template-source"
 OUT=$(ext_cleanup --bead "$OFF_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -e "$ERUNS/$OFF_ID-run/file.txt" ] && printf '%s\n' "$OUT" | grep >/dev/null 'cleanup skipped cleanup=off in wheelhouse/.template-source' && ! printf '%s\n' "$OUT" | grep >/dev/null 'removed run-scratch' && pass 'cleanup=off direct cleanup exits without deleting closed-bead scratch' || fail "cleanup=off direct rc=$RC out=$OUT exists=$([ -e "$ERUNS/$OFF_ID-run/file.txt" ] && echo yes || echo no)"
 REPORT_ID=$(ext_bead 'cleanup report direct')
 mkdir -p "$ERUNS/$REPORT_ID-run"
 printf 'report\n' > "$ERUNS/$REPORT_ID-run/file.txt"
+ext_record_run "$ERUNS/$REPORT_ID-run" "$REPORT_ID"
 printf 'cleanup=report\n' > "$EXT/wheelhouse/.template-source"
 OUT=$(ext_cleanup --bead "$REPORT_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -e "$ERUNS/$REPORT_ID-run/file.txt" ] && printf '%s\n' "$OUT" | grep >/dev/null "dry-run would remove run-scratch $ERUNS/$REPORT_ID-run " && grep -q "dry-run would remove run-scratch $ERUNS/$REPORT_ID-run " "$ELOG" && pass 'cleanup=report direct cleanup writes a would-remove report and deletes nothing' || fail "cleanup=report direct rc=$RC out=$OUT log=$(grep -F "$REPORT_ID" "$ELOG" 2>/dev/null) exists=$([ -e "$ERUNS/$REPORT_ID-run/file.txt" ] && echo yes || echo no)"
@@ -688,7 +716,7 @@ rm -rf "$ERUNS/$OFF_ID-run" "$ERUNS/$REPORT_ID-run"
 printf 'cleanup=on\n' > "$EXT/wheelhouse/.template-source"
 
 phase 'ISC-42 squash-merge and ISC-117 mayline/main integration ref'
-git -C "$EPROD" init --bare -q "$FIX/ext-mayline.git"; git -C "$EPROD" remote add mayline "$FIX/ext-mayline.git"
+git -C "$EPROD" init --bare -q -b main "$FIX/ext-mayline.git"; git -C "$EPROD" remote add mayline "$FIX/ext-mayline.git"
 MAY_ID=$(ext_bead 'merged only on mayline'); ext_wt "$MAY_ID"
 git -C "$EPROD" checkout -q -b tmp-mayline main; git -C "$EPROD" merge -q --no-ff "fleet/$MAY_ID" -m "mayline merge"; git -C "$EPROD" push -q mayline tmp-mayline:main; git -C "$EPROD" checkout -q main; git -C "$EPROD" branch -q -D tmp-mayline
 SQ_ID=$(ext_bead 'squash merged, never pushed'); ext_wt "$SQ_ID"
@@ -721,6 +749,7 @@ OUT=$(ext_cleanup --bead "$ZERO_ID"); RC=$?
 
 phase 'ISC-45/56 run folder kept while a live process has its cwd inside'
 RUN_ID=$(ext_bead 'closed bead with occupied run folder'); mkdir -p "$ERUNS/$RUN_ID-x"; printf 'scratch\n' > "$ERUNS/$RUN_ID-x/file.txt"
+ext_record_run "$ERUNS/$RUN_ID-x" "$RUN_ID"
 ( cd "$ERUNS/$RUN_ID-x" && exec sleep 1000 ) >/dev/null 2>&1 & RUN_PID=$!; EXT_PIDS+=("$RUN_PID")
 OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -d "$ERUNS/$RUN_ID-x" ] \
@@ -735,23 +764,26 @@ OUT=$(ext_cleanup --bead "$RUN_ID"); RC=$?
 RO_ID=$(ext_bead 'closed bead with read-only scratch'); mkdir -p "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources/allowed-sibling"
 printf 'readonly\n' > "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources/allowed-sibling/file.txt"
 chmod -R a-w "$ERUNS/$RO_ID-run/.wheelhouse-verify-sources"
+ext_record_run "$ERUNS/$RO_ID-run" "$RO_ID"
 OUT=$(ext_cleanup --bead "$RO_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ ! -e "$ERUNS/$RO_ID-run" ] && printf '%s\n' "$OUT" | grep >/dev/null "removed run-scratch $ERUNS/$RO_ID-run " && pass 'cleanup removes closed-bead scratch containing a read-only source snapshot subtree' || { chmod -R u+w "$ERUNS/$RO_ID-run" 2>/dev/null || true; fail "read-only scratch cleanup rc=$RC: $OUT"; }
 
 phase 'ISC-46/138 concurrent cleanups, lock refusal, and a race with another remover'
 CA_ID=$(ext_bead 'concurrent close A'); CB_ID=$(ext_bead 'concurrent close B')
 mkdir -p "$ERUNS/$CA_ID-run" "$ERUNS/$CB_ID-run"; printf 'a\n' > "$ERUNS/$CA_ID-run/f"; printf 'b\n' > "$ERUNS/$CB_ID-run/f"
+ext_record_run "$ERUNS/$CA_ID-run" "$CA_ID"; ext_record_run "$ERUNS/$CB_ID-run" "$CB_ID"
 ext_cleanup --bead "$CA_ID" --wait 30 > "$FIX/ext-ca.out" & CA_PID=$!
 ext_cleanup --bead "$CB_ID" --wait 30 > "$FIX/ext-cb.out" & CB_PID=$!
 wait "$CA_PID"; CA_RC=$?; wait "$CB_PID"; CB_RC=$?
 [ "$CA_RC" -eq 0 ] && [ "$CB_RC" -eq 0 ] && [ ! -e "$ERUNS/$CA_ID-run" ] && [ ! -e "$ERUNS/$CB_ID-run" ] && pass 'two parallel bead-scoped cleanups both exit 0 and both run folders are gone' || fail "parallel cleanups rc=$CA_RC/$CB_RC: $(cat "$FIX/ext-ca.out" "$FIX/ext-cb.out")"
 [ "$(grep -c "removed run-scratch $ERUNS/$CA_ID-run " "$ELOG")" -eq 1 ] && [ "$(grep -c "removed run-scratch $ERUNS/$CB_ID-run " "$ELOG")" -eq 1 ] && pass 'cleanup log has exactly one removed line per bead (ISC-46)' || fail "log lines for A/B: $(grep -E "$CA_ID-run|$CB_ID-run" "$ELOG")"
-grep -q 'already running' "$FIX/ext-ca.out" "$FIX/ext-cb.out" && fail 'a --wait cleanup gave up with "already running"' || pass 'neither waiting cleanup gave up on the lock'
+if selftest_capture_lacks "$FIX/ext-ca.out" -q -- 'already running' && selftest_capture_lacks "$FIX/ext-cb.out" -q -- 'already running'; then pass 'neither waiting cleanup gave up on the lock'; else fail 'a --wait cleanup gave up or its capture is unavailable'; fi
 mkdir -p "$EXT/seats/run/cleanup.lock"; printf '%s\n' "$$" > "$EXT/seats/run/cleanup.lock/pid"
 T0=$(date +%s); OUT=$(ext_cleanup); RC=$?; T1=$(date +%s)
 [ "$RC" -eq 0 ] && [ "$OUT" = "already running" ] && [ $((T1-T0)) -le 3 ] && pass 'a cleanup while another holds the lock prints only "already running", exits 0, within ~1 s' || fail "lock refusal rc=$RC after $((T1-T0))s: $OUT"
 rm -rf "$EXT/seats/run/cleanup.lock"
 RACE_ID=$(ext_bead 'removed by another actor between scan and act'); mkdir -p "$ERUNS/$RACE_ID-run"; printf 'r\n' > "$ERUNS/$RACE_ID-run/f"
+ext_record_run "$ERUNS/$RACE_ID-run" "$RACE_ID"
 OUT=$(ext_cleanup --dry-run --bead "$RACE_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -d "$ERUNS/$RACE_ID-run" ] && printf '%s\n' "$OUT" | grep >/dev/null "dry-run would remove run-scratch $ERUNS/$RACE_ID-run " && pass 'dry-run lists the run folder and leaves it in place' || fail "race dry-run rc=$RC: $OUT"
 # The scan's lsof pass is call 1; the per-row re-verification right before acting is call 2. Removing the
@@ -806,6 +838,7 @@ OUT=$(ext_cleanup --bead "$SEAT_ID"; ext_cleanup --bead "$ISA_ID"); RC=$?
 phase 'ISC-61 lsof unavailable removes nothing'
 LSOF_ID=$(ext_bead 'removable but unverifiable'); ext_wt "$LSOF_ID"; ext_merge "$LSOF_ID"
 mkdir -p "$ERUNS/$LSOF_ID-run"; printf 'x\n' > "$ERUNS/$LSOF_ID-run/f"
+ext_record_run "$ERUNS/$LSOF_ID-run" "$LSOF_ID"
 OUT=$(WHEELHOUSE_LSOF=/nonexistent/lsof ext_cleanup); RC=$?
 [ "$RC" -eq 0 ] && printf '%s\n' "$OUT" | grep >/dev/null "kept needs-review $EWTS/$LSOF_ID reason=cannot verify: lsof unavailable" && printf '%s\n' "$OUT" | grep >/dev/null "kept needs-review $ERUNS/$LSOF_ID-run reason=cannot verify: lsof unavailable" && pass 'otherwise-removable worktree and run folder are kept with "cannot verify: lsof unavailable"' || fail "no-lsof rc=$RC: $OUT"
 ! printf '%s\n' "$OUT" | grep >/dev/null '^[^ ]* removed ' && printf '%s\n' "$OUT" | tail -1 | grep >/dev/null 'cleanup done removed=0 ' && [ -d "$EWTS/$LSOF_ID" ] && [ -d "$ERUNS/$LSOF_ID-run" ] && pass 'nothing removed without lsof; exit 0' || fail "no-lsof removed something: $OUT"
@@ -824,7 +857,7 @@ OUT=$(ext_cleanup --bead "$LINK_ID"; ext_cleanup --bead "$SPACE_ID"; ext_cleanup
 [ "$RC" -eq 0 ] && pass 'cleanup over symlinked entries exits 0' || fail "symlink cleanup rc=$RC: $OUT"
 printf '%s\n' "$OUT" | grep >/dev/null "path mismatch" && pass 'cleanup logs "path mismatch" for a symlinked entry' || fail "no \"path mismatch\" line for a symlinked entry under .wheelhouse-worktrees/: $OUT"
 [ -L "$EWTS/$LINK_ID" ] && [ -L "$EWTS/linked-orphan" ] && [ -f "$FIX/elsewhere/orphan-target/file.txt" ] && [ -f "$FIX/elsewhere/$LINK_ID/.git" ] && ext_registered "$FIX/elsewhere/$LINK_ID" && pass 'symlinks, their targets and the out-of-container worktree are untouched' || fail 'a symlink, its target, or the out-of-container worktree was touched'
-! grep -E "^[^ ]+ removed [^ ]+ ($EWTS/$LINK_ID|$EWTS/linked-orphan|$FIX/elsewhere)" "$ELOG" | grep >/dev/null . && pass 'no removed line names a symlinked or out-of-container path' || fail "removed line for a symlinked path: $(grep -F elsewhere "$ELOG")"
+selftest_capture_lacks "$ELOG" -Eq -- "^[^ ]+ removed [^ ]+ ($EWTS/$LINK_ID|$EWTS/linked-orphan|$FIX/elsewhere)" && pass 'no removed line names a symlinked or out-of-container path' || fail "removed line for a symlinked path: $(grep -F elsewhere "$ELOG")"
 [ ! -e "$EWTS/$SPACE_ID with space" ] && ! ext_registered "$EWTS/$SPACE_ID with space" && grep -q "removed merged-worktree $EWTS/$SPACE_ID with space bytes=" "$ELOG" && pass 'merged worktree whose path has a space is resolved and removed' || fail "space path cleanup: $(grep -F "$SPACE_ID" "$ELOG")"
 
 phase 'ISC-62 interactive .worktrees/ checkouts are never touched'

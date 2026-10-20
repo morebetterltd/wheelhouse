@@ -15,16 +15,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-herald-selftest.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
+. "$SCRIPT_DIR/selftest-herald.sh"
+selftest_bind_herald_owner "$FIX" || exit 2
 PASS=0
 FAIL=0
 
 cleanup() {
   selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
-  if [ -n "${DAEMON_PID:-}" ]; then kill "$DAEMON_PID" 2>/dev/null || true; fi
-  if [ -n "${REVIVED_PID:-}" ]; then kill "$REVIVED_PID" 2>/dev/null || true; fi
+  # daemons.sh's detached heralds are bound to this fixture owner; deleting
+  # the root also terminates them even if the script is interrupted.
+  if [ -n "${ROOT_GONE_PID:-}" ]; then selftest_stop_herald_child "$ROOT_GONE_PID"; fi
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
@@ -60,7 +63,7 @@ run_herald_status_fixture() {
   WHEELHOUSE_HERALD_ROOT="$PROJ" PATH="$FIX/bin:$PATH" bun "$ROOT/seats/herald.ts" --status
 }
 
-private_port() { bun -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
+private_port() { bun -e 'import net from "node:net"; const s=net.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
 HERALD_SELFTEST_DESK_PORT="${WHEELHOUSE_HERALD_SELFTEST_DESK_PORT:-$(private_port)}"
 
 line_count() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
@@ -277,6 +280,22 @@ else
   fail "unposted reviewer verdict was not relayed/heralded (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true) comment=$(cat "$FIX/bd-comments/bead-review.comment" 2>/dev/null || true))"
 fi
 
+# A walk verdict is not a bead review, even if the walker has a lastBead.
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/logs"/*.jsonl "$FIX/bd-comments/bead-review.comment"
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"verifier":{"role":"verifier","lastBead":"bead-review","lastPrompt":"Walk a surface."}}}
+JSON
+cat > "$PROJ/seats/logs/verifier.jsonl" <<'JSONL'
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"VERDICT: WALKED-DONE"}]}]}
+JSONL
+seed_log_cursor verifier.jsonl 0
+RC=0; OUT="$(BD_SHOW_DIR="$FIX/bd-show" BD_COMMENT_DIR="$FIX/bd-comments" PATH="$FIX/bin:$PATH" run_herald --once 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ ! -e "$FIX/bd-comments/bead-review.comment" ] && [ "$(json_count 'r.class==="verdict-not-posted" && r.seat==="verifier"')" = 0 ]; then
+  pass "walk verifier verdict is never relayed as a bead review"
+else
+  fail "walk verifier verdict was relayed as a bead review (rc=$RC out=$OUT)"
+fi
+
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/state.json" "$PROJ/seats/logs"/*.jsonl "$PROJ/seats/logs"/*.jsonl.1 2>/dev/null || true
 {
 cat <<'JSONL'
@@ -450,7 +469,7 @@ else
 fi
 if grep -q 'poke sent .*pane=wh-demo:bridge.0' "$POKE_LOG" 2>/dev/null; then pass "sent poke attempt is logged with timestamp and pane"
 else fail "sent poke attempt was not logged: $(cat "$POKE_LOG" 2>/dev/null || echo none)"; fi
-if ! grep -q 'malicious\|rm -rf\|please type' "$SEND_LOG" 2>/dev/null; then pass "seat-authored text never enters send-keys"
+if selftest_capture_lacks "$SEND_LOG" -q -- 'malicious\|rm -rf\|please type'; then pass "seat-authored text never enters send-keys"
 else fail "seat text leaked into send-keys: $(cat "$SEND_LOG")"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
@@ -702,7 +721,22 @@ fi
 # the bridge. The fake records a session so the second run takes the idempotent
 # existing-session path.
 selftest_copy_seat_runtime "$PROJ" "$ROOT/seats"
-chmod +x "$PROJ/seats/cockpit.sh" "$PROJ/seats/daemons.sh" "$PROJ/seats/supervisor.sh"
+chmod +x "$PROJ/seats/cockpit.sh" "$PROJ/seats/daemons.sh"
+# This leg judges cockpit's restart, not supervisor recovery. Disabling the
+# copied supervisor BEFORE the first cockpit prevents any competing reviver.
+# Stopping supervisor.pid afterwards is insufficient: cockpit can publish an
+# intermediate launcher PID while the actual supervisor survives its TERM.
+restart_fixture_is_exclusive() {
+  [ ! -x "$PROJ/seats/supervisor.sh" ] && [ ! -e "$PROJ/seats/run/supervisor.pid" ]
+}
+# Fix-removed control: the old executable-supervisor setup must fail exactly
+# the same precondition, without starting a competing daemon just for a test.
+chmod +x "$PROJ/seats/supervisor.sh"
+CONTROL_RC=0; restart_fixture_is_exclusive || CONTROL_RC=$?
+if [ "$CONTROL_RC" != 1 ]; then fail "restart isolation control accepted an enabled supervisor (rc=$CONTROL_RC)"; exit 1; fi
+chmod -x "$PROJ/seats/supervisor.sh"
+if ! restart_fixture_is_exclusive; then fail "restart fixture is not supervisor-free before cockpit startup"; exit 1; fi
+printf 'herald restart isolation: enabled-supervisor precondition rc=%s; disabled-supervisor rc=0\n' "$CONTROL_RC"
 cat > "$PROJ/seats/floor.ts" <<'EOF'
 setInterval(() => {}, 1000);
 EOF
@@ -710,24 +744,24 @@ EOF
 WHEELHOUSE_DESK_PORT="$HERALD_SELFTEST_DESK_PORT" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 FAKE_TMUX_STATE="$FIX/tmux" FAKE_TMUX_SEND_LOG="$SEND_LOG" PATH="$FIX/bin:$PATH" WHEELHOUSE_TMUX_SOCKET=herald-test "$PROJ/seats/cockpit.sh" demo > "$FIX/cockpit1.out" 2>&1
 RC=$?
 DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
-if [ $RC -eq 0 ] && [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null && grep -Eq 'herald (started|already running)' "$FIX/cockpit1.out"; then
+if [ $RC -eq 0 ] && restart_fixture_is_exclusive && [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null && grep -Eq 'herald (started|already running)' "$FIX/cockpit1.out"; then
   pass "cockpit starts or verifies the herald daemon"
 else
   fail "cockpit did not start/verify herald (rc=$RC pid=${DAEMON_PID:-none} out=$(cat "$FIX/cockpit1.out" 2>/dev/null))"
 fi
 
-SUPERVISOR_PID="$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)"
-[ -n "$SUPERVISOR_PID" ] && kill "$SUPERVISOR_PID" 2>/dev/null || true
-for _ in $(seq 1 20); do [ -z "$SUPERVISOR_PID" ] || ! kill -0 "$SUPERVISOR_PID" 2>/dev/null && break; sleep 0.1; done
-rm -f "$PROJ/seats/run/supervisor.pid"
+if ! restart_fixture_is_exclusive; then fail "competing supervisor exists before herald stop"; exit 1; fi
 CURRENT_DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 [ -n "$CURRENT_DAEMON_PID" ] && DAEMON_PID="$CURRENT_DAEMON_PID"
 kill -9 "$DAEMON_PID" 2>/dev/null || true
-sleep 0.4
+# Wait for the actual stopped process, not an arbitrary scheduling delay.
+for _ in $(seq 1 50); do kill -0 "$DAEMON_PID" 2>/dev/null || break; sleep 0.05; done
+if kill -0 "$DAEMON_PID" 2>/dev/null; then fail "herald stop deadline: PID $DAEMON_PID still exists before cockpit restart"; exit 1; fi
+if ! restart_fixture_is_exclusive; then fail "competing supervisor appeared before cockpit restart"; exit 1; fi
 WHEELHOUSE_DESK_PORT="$HERALD_SELFTEST_DESK_PORT" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 PATH="$FIX/bin:$PATH" "$PROJ/seats/cockpit.sh" --herald demo > "$FIX/cockpit2.out" 2>&1
 RC=$?
 REVIVED_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
-if [ $RC -eq 0 ] && [ -n "$REVIVED_PID" ] && [ "$REVIVED_PID" != "$DAEMON_PID" ] && kill -0 "$REVIVED_PID" 2>/dev/null && grep -q 'herald dead:' "$FIX/cockpit2.out" && grep -q 'herald started' "$FIX/cockpit2.out"; then
+if [ $RC -eq 0 ] && restart_fixture_is_exclusive && [ -n "$REVIVED_PID" ] && [ "$REVIVED_PID" != "$DAEMON_PID" ] && kill -0 "$REVIVED_PID" 2>/dev/null && grep -q 'herald dead:' "$FIX/cockpit2.out" && grep -q 'herald started' "$FIX/cockpit2.out"; then
   pass "cockpit --herald verifies and restarts a dead herald without supervisor racing the assertion"
 else
   fail "cockpit --herald did not revive herald (rc=$RC old=${DAEMON_PID:-none} new=${REVIVED_PID:-none} out=$(cat "$FIX/cockpit2.out" 2>/dev/null))"

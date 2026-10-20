@@ -3,7 +3,7 @@
  * walk.ts — consumer-surface walk dispatcher for ISA claims.
  *
  * One invocation = one verifier walk of one claim against one named surface.
- * It uses the roster's verifier identity, but unlike verify.ts it does NOT
+ * It uses only the roster's verifier role (never verify.ts's reviewer role), and does NOT
  * compare that account to an author: a walker judges a consumer surface, not a
  * diff. The zero-context boundary is the prompt: claim text, surface spec, and
  * the VERIFIER.md walker brief only. No bead, ISA, contract bundle, logs, or
@@ -450,7 +450,7 @@ function main(): void {
     workspaceRel = "consumer-product";
     const consumer = path.join(scratchCwd, workspaceRel);
     fs.mkdirSync(consumer, { recursive: true });
-    try { execFileSync("git", ["init", "-q"], { cwd: consumer, stdio: "ignore" }); } catch {}
+    try { execFileSync("git", ["init", "-q", "-b", "main"], { cwd: consumer, stdio: "ignore" }); } catch {}
   } else if (surface.kind === "upgrade") {
     workspaceRel = "consumer-upgrade";
     fs.mkdirSync(path.join(scratchCwd, workspaceRel), { recursive: true });

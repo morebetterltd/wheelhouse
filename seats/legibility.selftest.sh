@@ -66,48 +66,35 @@ cleanup() {
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- stale-fixture sweep (same rule as the adapter selftest's) ---------------
 FIX_PREFIX="wheelhouse-legibility-selftest"
-sweep_stale_fixtures() {
-  local base="${TMPDIR:-/tmp}" d stamp phys sf pid
-  while IFS= read -r d; do
-    [ -d "$d" ] || continue
-    stamp="${d##*/}"; stamp="${stamp#"$FIX_PREFIX".}"; stamp="${stamp%%.*}"
-    case "$stamp" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$stamp" 2>/dev/null && continue
-    phys="$(cd "$d" 2>/dev/null && pwd -P)" || phys="$d"
-    while IFS= read -r sf; do
-      [ -f "$sf" ] || continue
-      for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$phys"; then
-          kill "$pid" 2>/dev/null
-          echo "swept: killed leaked seat pid $pid (held open files under $d)"
-        fi
-      done
-    done < <(find "$d" -mindepth 3 -maxdepth 3 -path "*/seats/state.json" 2>/dev/null)
-    rm -rf "$d"
-    echo "swept: removed stale fixture $d"
-  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -name "$FIX_PREFIX.*" 2>/dev/null)
-  return 0
-}
-sweep_stale_fixtures
+selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 
-FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+# Nested reviews run the tiny committed fixture inventory, never another host
+# sweep while this suite holds the canonical lock.
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep.lock"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin:/usr/sbin"
+RUN_PATH="$BIN:$PATH" # Fixture mocks precede inherited host-budget shims.
 
 # Stub bd: a couple of ready beads; `bd show` fails so verify.ts takes its
 # read-the-bead-yourself fallback.
 cat > "$BIN/bd" <<'EOF'
 #!/bin/sh
-[ "$1" = "ready" ] || exit 1
-echo "wh-001  P2  ready  a waiting bead"
+case "${1:-}" in
+  ready) echo "wh-001  P2  ready  a waiting bead" ;;
+  # The dispatcher's sweep owns a fresh nested graph. The reviewer still uses
+  # the production read-only wrapper; show deliberately fails as before.
+  init) mkdir -p "${BEADS_DIR:-.beads}" ;;
+  where) node -e 'console.log(JSON.stringify({path:require("fs").realpathSync(".beads")}))' ;;
+  *) exit 1 ;;
+esac
 EOF
 chmod +x "$BIN/bd"
 
@@ -250,7 +237,7 @@ printf '# Fleet: Worker\n\nfixture brief.\n'   > "$PROJ/contracts/WORKER.md"
 printf '# Crew: Reviewer\n\nfixture brief.\n' > "$PROJ/contracts/REVIEWER.md"
 printf '# Crew: Verifier\n\nfixture brief.\n'  > "$PROJ/contracts/VERIFIER.md"
 
-# Six afflicted-to-be seats plus a verifier. Every account dir is namespaced
+# Six afflicted-to-be seats plus a reviewer. Every account dir is namespaced
 # under the fixture HOME; a-seat gets the empty {} auth.json its class needs,
 # everyone else gets a stub identity.
 cat > "$PROJ/seats/seats.json" <<EOF
@@ -263,11 +250,11 @@ cat > "$PROJ/seats/seats.json" <<EOF
     "r-seat": { "role": "worker",   "account": { "dir": "~/.pi-seats-leg/r-seat" } },
     "e-seat": { "role": "worker",   "account": { "dir": "~/.pi-seats-leg/e-seat" } },
     "u-seat": { "role": "worker",   "account": { "dir": "~/.pi-seats-leg/u-seat" } },
-    "verifier": { "role": "verifier", "account": { "dir": "~/.pi-seats-leg/verifier" } }
+    "reviewer": { "role": "reviewer", "account": { "dir": "~/.pi-seats-leg/reviewer" } }
   }
 }
 EOF
-for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier; do
+for s in q-seat a-seat d-seat r-seat e-seat u-seat reviewer; do
   mkdir -p "$HOME_FIX/.pi-seats-leg/$s"
   printf '{\n  "%s": true\n}\n' "$PROJ" > "$HOME_FIX/.pi-seats-leg/$s/trust.json"
   if [ "$s" = "a-seat" ]; then
@@ -277,10 +264,21 @@ for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier; do
   fi
 done
 
+# Every review must run the dispatcher gate. Track the actual runner and its
+# companions plus one tiny suite; an empty fixture tip is not an exemption.
+for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts; do
+  cp -f "$SRC/$f" "$PROJ/seats/$f" || exit 2
+done
+cat > "$PROJ/seats/fixture.selftest.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+printf 'legibility fixture sweep PASS\n'
+SH
 # A git repo: verify.ts resolves branches and reads evidence at the tip.
 ( cd "$PROJ" &&
-  git init -q &&
-  git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base &&
+  git init -q -b main &&
+  git add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+  git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
   git branch fleet/bead-rev && git branch fleet/bead-ev ) \
   || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 
@@ -290,17 +288,29 @@ REPLY="$FIX/reply.txt"
 
 arun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 vrun()   { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$PROJ/seats/verify.ts" "$@" 2>&1)" || RC=$?; }
+fixture_sweep_receipt() {
+  node - "$VDIR/$1.md" <<'JS'
+const fs=require('fs'),assert=require('assert/strict');
+const record=fs.readFileSync(process.argv[2],'utf8');
+assert(record.includes('## Dispatcher full-sweep result'));
+const tip=record.match(/^- tip: ([0-9a-f]+)$/m)?.[1],log=record.match(/^- log: (.+)$/m)?.[1];
+assert(tip&&log);const st=fs.lstatSync(log);assert(st.isFile()&&st.size>0);
+const text=fs.readFileSync(log,'utf8');
+for(const expected of [`tip=${tip}`,`preparedTip=${tip}`,`finalTip=${tip}`,'command=bash seats/selftest-sweep.sh','legibility fixture sweep PASS','selftest-sweep: PASS (1 suite(s))','\nrc=0\n'])assert(text.includes(expected),expected);
+console.log(`fixture dispatcher receipt: rc=0 tip=${tip} suites=1`);
+JS
+}
 render() { local f="${1:-$PROJ/seats/floor.ts}"; shift 2>/dev/null
            RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS="${COLS:-160}" LINES=70 NO_COLOR=1 bun "$f" --once "$@" 2>&1)" || RC=$?; }
 says()   { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 seatline(){ printf '%s\n' "$OUT" | grep "$1"; }   # every frame line naming the seat
-state_get(){ env HOME="$HOME_FIX" bun -e "const s=require('$STATE');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"; }
+state_get(){ env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"; }
 
 # Hand-inject a seat record: the deterministic-simulation door for classes
 # that have no adapter path (a 401 in the stream; a verdict file waiting).
 inject_seat() {   # $1 = name, $2 = pid, $3 = lastBead ('' for none)
   env HOME="$HOME_FIX" INJ_STATE="$STATE" INJ_NAME="$1" INJ_PID="$2" INJ_BEAD="${3:-}" INJ_PROJ="$PROJ" bun -e '
-    const fs = require("fs");
+    import fs from "node:fs";
     const f = process.env.INJ_STATE;
     const s = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { seats: {} };
     const n = process.env.INJ_NAME, p = process.env.INJ_PROJ;
@@ -340,7 +350,7 @@ if seatline q-seat | grep >/dev/null "AMBER"; then pass "floor: quota cue is AMB
 else fail "floor: quota cue is not AMBER: $(seatline q-seat)"; fi
 cp "$PROJ/seats/seats.json" "$FIX/seats.before-roster-drop.json"
 env HOME="$HOME_FIX" ROSTER="$PROJ/seats/seats.json" bun -e '
-  const fs = require("fs");
+  import fs from "node:fs";
   const f = process.env.ROSTER;
   const roster = JSON.parse(fs.readFileSync(f, "utf8"));
   delete roster.seats["q-seat"];
@@ -416,9 +426,9 @@ The done requires X; the diff does Y.
 VERDICT: BOUNCE
 PUSH: HOLD — review blocked until the author fixes the mismatch
 EOF
-vrun bead-rev fleet/bead-rev r-seat verifier
-if [ $RC -eq 2 ] && grep -q "verdict: BOUNCE" "$VDIR/bead-rev.md" 2>/dev/null; then
-  pass "real verify.ts run recorded a BOUNCE verdict for bead-rev"
+vrun bead-rev fleet/bead-rev r-seat reviewer
+if [ $RC -eq 2 ] && grep -q "verdict: BOUNCE" "$VDIR/bead-rev.md" 2>/dev/null && fixture_sweep_receipt bead-rev; then
+  pass "real verify.ts run recorded a BOUNCE verdict for bead-rev with a passing dispatcher receipt"
 else fail "verify.ts BOUNCE run: rc=$RC (want 2): $OUT"; fi
 cat > "$PROJ/seats/logs/r-seat.jsonl" <<'EOF'
 {"type":"agent_start"}
@@ -443,7 +453,7 @@ Looks fine to me.
 VERDICT: APPROVE
 PUSH: HOLD — evidence floor failed, so nothing is pushable
 EOF
-vrun bead-ev fleet/bead-ev e-seat verifier --evidence proof/shot.png
+vrun bead-ev fleet/bead-ev e-seat reviewer --evidence proof/shot.png
 if [ $RC -eq 1 ] && says "unsatisfied evidence"; then
   pass "verify.ts refuses APPROVE-over-failed-floor: exit 1, named as malformed"
 else fail "APPROVE over missing evidence was not refused (rc=$RC, want 1): $OUT"; fi
@@ -457,9 +467,9 @@ The bead names proof/shot.png; it is not on the branch.
 VERDICT: BOUNCE
 PUSH: HOLD — proof/shot.png is absent from the branch
 EOF
-vrun bead-ev fleet/bead-ev e-seat verifier --evidence proof/shot.png
-if [ $RC -eq 2 ] && grep -q "UNSATISFIED" "$VDIR/bead-ev.md" 2>/dev/null; then
-  pass "BOUNCE with failed floor checks is recorded, checks carried in the file"
+vrun bead-ev fleet/bead-ev e-seat reviewer --evidence proof/shot.png
+if [ $RC -eq 2 ] && grep -q "UNSATISFIED" "$VDIR/bead-ev.md" 2>/dev/null && fixture_sweep_receipt bead-ev; then
+  pass "BOUNCE with failed floor checks is recorded, checks and passing dispatcher receipt carried in the file"
 else fail "BOUNCE-with-unsatisfied run: rc=$RC (want 2), or no UNSATISFIED in the record"; fi
 cat > "$PROJ/seats/logs/e-seat.jsonl" <<'EOF'
 {"type":"agent_start"}
@@ -574,13 +584,13 @@ else
   else pass "canary 4: cutting DIED is caught by phase 3's adapter-status check"; fi
 fi
 
-# canary 5: a stub verifier that emits VERDICT without PUSH is still refused
+# canary 5: a stub reviewer that emits VERDICT without PUSH is still refused
 cat > "$REPLY" <<'EOF'
 The old fixture shape must stay invalid.
 VERDICT: BOUNCE
 EOF
-vrun bead-no-push fleet/bead-rev r-seat verifier
-if [ $RC -eq 1 ] && says "verifier emitted no PUSH: line"; then
+vrun bead-no-push fleet/bead-rev r-seat reviewer
+if [ $RC -eq 1 ] && says "reviewer emitted no PUSH: line"; then
   pass "canary 5: verify.ts still refuses a stub verdict without PUSH"
 else fail "canary 5: PUSH-less verdict was not refused (rc=$RC): $OUT"; fi
 

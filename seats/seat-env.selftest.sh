@@ -54,7 +54,7 @@ cleanup() {
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- fixture -----------------------------------------------------------------
 # The fixture path is canonicalized because the script canonicalizes the root
@@ -69,7 +69,7 @@ HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 PROJECT="$FIX/project"
 mkdir -p "$HOME_FIX" "$BIN" "$PROJECT/seats" "$FIX/emptybin" "$FIX/node-only-bin"
-git -C "$PROJECT" init -q -b main >/dev/null 2>&1 || git -C "$PROJECT" init -q >/dev/null 2>&1
+git -C "$PROJECT" init -q -b main >/dev/null 2>&1 || exit 2
 printf '#!/bin/sh\nexit 0\n' > "$BIN/pi"
 cat > "$BIN/claude" <<'STUB'
 #!/usr/bin/env bash

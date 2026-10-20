@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise the actual verifier watchdog with readiness and a manual clock.
+# Exercise the actual reviewer watchdog with readiness and a manual clock.
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 set -uo pipefail
@@ -7,9 +7,9 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-verify-readiness.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 selftest_copy_seat_runtime "$FIX" "$HERE"
-bun - "$HERE" "$FIX" <<'TS'
+bun - "$HERE" "$FIX" <<'TS' || exit $?
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -48,7 +48,7 @@ async function check(name:string,mutant=false){
   else{assert.equal(res.status,0);assert.equal(res.error,undefined);assert(res.stdout.includes("VERDICT: APPROVE"));assert(fs.existsSync(path.join(dir,"output")));assert(!fs.existsSync(path.join(dir,"expired-first")));}
   console.log("PASS "+name+": readiness observed; "+(silent?"explicit expiry STOPs true silence":"output accepted without advancing wall time"));
  }catch(e:any){
-  if(mutant && e.message==='fixture silent expiry did not STOP the verifier')console.log("PASS disabled-watchdog mutation: missing silence STOP caught deterministically");
+  if(mutant && e.message==='fixture silent expiry did not STOP the reviewer')console.log("PASS disabled-watchdog mutation: missing silence STOP caught deterministically");
   else{console.log("FAIL "+name+": "+e.message);failures++;}
  }finally{
   if(!ended){const {pid}=JSON.parse(fs.readFileSync(path.join(dir,"ready"),"utf8"));assert(Number.isInteger(pid)&&pid>1);try{process.kill(-pid,"SIGTERM");}catch{}await result;}
@@ -65,3 +65,5 @@ if(!selected || selected==="disabled-watchdog")await check("disabled-watchdog",t
 assert.equal(failures,0,"readiness regressions");
 console.log(`verify-readiness.selftest: PASS (${checks} deterministic checks)`);
 TS
+bun "$HERE/fixtures/verify-h4-publication.ts" "$HERE" "$FIX" || exit $?
+bun "$HERE/fixtures/verify-exit-regression.ts" "$HERE" "$FIX"
