@@ -12,8 +12,10 @@ selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
 selftest_install_cleanup_traps cleanup
 
-mkdir -p "$FIX/home" "$FIX/tmp" "$FIX/no-rg"
-export HOME="$FIX/home" XDG_CONFIG_HOME="$FIX/home/.config" TMPDIR="$FIX/tmp"
+# A distinct basename avoids colliding with the scrubber's literal [home]
+# placeholder; testing that basename collision belongs to the scrubber suite.
+mkdir -p "$FIX/fixture-home" "$FIX/tmp" "$FIX/no-rg"
+export HOME="$FIX/fixture-home" XDG_CONFIG_HOME="$FIX/fixture-home/.config" TMPDIR="$FIX/tmp"
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$FIX/gitconfig"
 printf '[user]\n name = selftest\n email = selftest@example.invalid\n[commit]\n gpgsign = false\n[init]\n defaultBranch = main\n' > "$GIT_CONFIG_GLOBAL"
 # Keep the cheap scrubber subject's PATH minimal and rg-free, including its

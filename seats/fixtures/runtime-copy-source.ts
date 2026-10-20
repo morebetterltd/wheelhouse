@@ -15,7 +15,8 @@ set -eu
 cd "$2"
 [ ! -e seats ]
 rc=0; git rev-parse --show-toplevel > "$3/discovery.out" 2> "$3/discovery.err" || rc=$?
-[ "$rc" = 128 ] && [ ! -s "$3/discovery.out" ]
+[ "$rc" = 128 ] || exit 2
+[ ! -s "$3/discovery.out" ] || exit 2
 selftest_copy_seat_runtime "$3/empty-cwd-copy"
 mkdir seats
 printf 'caller-owned sentinel\n' > seats/caller-only.ts
