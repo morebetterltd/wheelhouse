@@ -33,8 +33,9 @@ function run(w: World, expected: number, selected?: string, error?: string) {
   for (const d of [authorDir, gateDir, mirrorDir]) for (const f of ["invoked", "argv.json"]) fs.rmSync(path.join(d, f), { force: true });
   fs.writeFileSync(path.join(w.root, "seats/seats.json"), JSON.stringify({ ...w.raw, seats: w.seats }));
   const comments = path.join(w.root, "comments.json"), reply = path.join(w.root, "reply.txt"); fs.writeFileSync(comments, JSON.stringify(w.comments)); fs.writeFileSync(reply, w.reply);
-  const env = { ...process.env, HOME: home, STUB_REPLY_FILE: reply, STUB_BD_COMMENTS_FILE: comments, ...w.env };
+  const env = { ...process.env, HOME: home, STUB_REPLY_FILE: reply, STUB_BD_COMMENTS_FILE: comments };
   delete env.BEADS_ACTOR; delete env.WHEELHOUSE_BEADS_ACTOR_COMMANDER;
+  Object.assign(env, w.env);
   const args = [path.join(w.root, "seats/verify.ts"), bead, "fleet/bead-1", "worker-1", ...(w.explicit ? ["mirror"] : []), ...w.args];
   const r = spawnSync("bun", args, { cwd: w.root, env, encoding: "utf8", timeout: 120000 });
   fs.writeFileSync(path.join(w.root, "invocation.json"), JSON.stringify({ args, status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr }, null, 2));
@@ -55,10 +56,11 @@ const tests: Record<string, (w: World) => void> = {
   "auto-busy-gate": w => { fs.mkdirSync(path.join(w.root, "seats/run"), { recursive: true }); fs.writeFileSync(path.join(w.root, "seats/run/verify.gate.json"), JSON.stringify({ pid: process.pid })); run(w, 4); assert.equal(invoked().length, 0); },
   "auto-shared-gate": w => { w.gate.account = { dir: authorDir }; refused(w, "SAME account directory"); },
   "auto-all-shadow": w => { w.gate.shadow = true; refused(w, "no non-shadow reviewer"); },
-  "pool-shadow": w => { delete w.seats.gate; fs.writeFileSync(path.join(w.root, "seats/pool.json"), JSON.stringify({ version: 1, entries: { spare: { harness: "pi", provider: "openai", models: ["stub-model-v"], account: { dir: gateDir } } }, roles: { reviewers: { min: 0, max: 1, entries: ["spare"], model: "stub-model-v" } } })); fs.writeFileSync(path.join(w.root, "seats/staffing.json"), JSON.stringify({ version: 1, seats: { "reviewer-spare": { role: "reviewer", entry: "spare" } }, rateLimited: {} })); run(w, 0, "reviewer-spare"); },
+  "pool-shadow": w => { delete w.seats.gate; fs.writeFileSync(path.join(w.root, "seats/pool.json"), JSON.stringify({ version: 1, entries: { spare: { harness: "pi", provider: "openai", models: ["stub-model-v"], account: { dir: gateDir, authRoute: "oauth" } } }, roles: { reviewers: { min: 0, max: 1, entries: ["spare"], model: "stub-model-v" } } })); fs.writeFileSync(path.join(w.root, "seats/staffing.json"), JSON.stringify({ version: 1, seats: { "reviewer-spare": { role: "reviewer", entry: "spare" } }, rateLimited: {} })); run(w, 0, "reviewer-spare"); },
   "explicit-shadow": w => { w.explicit = true; refused(w, "shadow: true and never gates by default"); },
   "invalid-shadow": w => { (w.mirror as any).shadow = "true"; refused(w, "invalid shadow"); },
   "promoted": w => { promote(w); run(w, 0, "mirror"); },
+  "promoted-actor-override": w => { promote(w); w.env.WHEELHOUSE_BEADS_ACTOR_COMMANDER = "fixture-commander"; w.comments[0].author = "fixture-commander"; run(w, 0, "mirror"); },
   "wrong-bead": w => { promote(w); w.comments[0].issue_id = "another-bead"; refused(w, "different bead"); },
   "wrong-seat": w => { promote(w); payload(w, { seat: "gate" }); refused(w, "different reviewer seat"); },
   "wrong-tip": w => { promote(w); payload(w, { tip: "0".repeat(40) }); refused(w, "different tip"); },
@@ -83,6 +85,7 @@ const controls: { old: string; replacement: string; cases: string[] }[] = [
   { old: 'value.seat !== seat', replacement: 'false', cases: ["wrong-seat"] },
   { old: 'value.tip !== tip', replacement: 'false', cases: ["wrong-tip"] },
   { old: 'comment.author !== beadsActorFor("commander")', replacement: 'false', cases: ["wrong-actor"] },
+  { old: 'comment.author !== beadsActorFor("commander")', replacement: 'comment.author !== "commander"', cases: ["promoted-actor-override"] },
   { old: earlyPromotion, replacement: earlyPromotion + ` return {commentId, author:"commander", seat, tip, outage:${JSON.stringify(outage)}, distinctAccountBasis:${JSON.stringify(basis)}};`, cases: ["missing-comment", "comments-unavailable"] },
   { old: '!value[k].trim()', replacement: 'false', cases: ["missing-basis"] },
   { old: 'if (promotionArg && !reviewerArg)', replacement: 'if (false)', cases: ["no-explicit-seat"] },
