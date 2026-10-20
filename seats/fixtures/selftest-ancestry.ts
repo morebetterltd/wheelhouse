@@ -12,7 +12,7 @@ const target = process.env.WHEELHOUSE_ANCESTRY_HELPER || helper;
 const ps = Bun.which("ps"); assert(ps);
 const bun = process.execPath;
 const selected = process.env.WHEELHOUSE_ANCESTRY_CASE || "all";
-const names = ["single-snapshot", "transient-observation", "unavailable-observation", "malformed-observation", "real-outsider"];
+const names = ["direct-parent-no-ps", "single-snapshot", "transient-observation", "unavailable-observation", "malformed-observation", "real-outsider"];
 assert(selected === "all" || names.includes(selected));
 function run(bin: string, args: string[], env = process.env) {
   const result = spawnSync(bin, args, { env, encoding: "utf8" });
@@ -40,7 +40,7 @@ const n=fs.existsSync(calls)?fs.readFileSync(calls,'utf8').trim().split('\\n').f
 const snapshot=JSON.stringify(args)===JSON.stringify(['-axo','pid=,ppid=']);
 const mode=process.env.ANCESTRY_MODE;
 let r, fault=false;
-if((mode==='single-snapshot'&&!snapshot)||(mode==='transient-observation'&&n===0)||mode==='unavailable-observation'){
+if((mode==='single-snapshot'&&!snapshot)||(mode==='transient-observation'&&n===0)||mode==='unavailable-observation'||mode==='direct-parent-no-ps'){
  r=JSON.parse(fs.readFileSync(p.join(dir,'native-gone.json'),'utf8'));fault=true;
 }else{
  const actual=cp.spawnSync(process.env.ANCESTRY_NATIVE_PS,args,{encoding:'utf8'});
@@ -99,15 +99,19 @@ process.stdin.once('data',finish);process.stdin.once('end',finish);
     }
     const before = bytes(lock);
     // Keep an intermediate shell alive; the positive proof must traverse it.
-    const result = run("bash", ["-c", '"$1" "$2" inherited "$3"; rc=$?; exit "$rc"', "ancestry-proof", bun, target, lock], env);
+    const result = name === "direct-parent-no-ps" ? run(bun, [target, "inherited", lock], env)
+      : run("bash", ["-c", '"$1" "$2" inherited "$3"; rc=$?; exit "$rc"', "ancestry-proof", bun, target, lock], env);
     fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(result, null, 2));
     assert.deepEqual(bytes(lock), before, "inherited inspection never mutates lock/FIFO ownership");
     const expected = name === "real-outsider" ? 75 : ["unavailable-observation", "malformed-observation"].includes(name) ? 2 : 0;
     assert.equal(result.status, expected, `${name}: native exit=${result.status}, expected=${expected}\n${result.stderr}`);
     const callsFile = path.join(dir, "ps-calls.jsonl");
     const calls = fs.existsSync(callsFile) ? fs.readFileSync(callsFile, "utf8").trim().split("\n").map(x => JSON.parse(x)) : [];
-    assert(calls.length >= 1 && calls.length <= 3, "native process observations remain bounded");
-    if (expected === 0) {
+    assert(calls.length <= 3, "native process observations remain bounded");
+    if (name !== "direct-parent-no-ps") assert(calls.length >= 1, "indirect proof actually observed the process table");
+    if (name === "direct-parent-no-ps") {
+      assert.equal(calls.length, 0, "direct kernel proof needs no ps subprocess");
+    } else if (expected === 0) {
       assert(calls.every(c => c.snapshot), "no per-PID subprocess walk");
       assert.equal(calls.length, name === "transient-observation" ? 2 : 1);
       assert.equal(calls.at(-1).status, 0);

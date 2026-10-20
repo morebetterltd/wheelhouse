@@ -131,6 +131,7 @@ function primitives() {
     // openat is variadic on Darwin arm64: use only its fixed read-only args.
     openat: { args: [FFIType.i32, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
     dup: { args: [FFIType.i32], returns: FFIType.i32 },
+    getppid: { args: [], returns: FFIType.i32 },
     fdopendir: { args: [FFIType.i32], returns: FFIType.ptr },
     readdir: { args: [FFIType.ptr], returns: FFIType.ptr },
     rewinddir: { args: [FFIType.ptr], returns: FFIType.void },
@@ -537,6 +538,9 @@ function canonicalLock(input: string): string {
   return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
 }
 function snapshotAncestorOwns(owner: number): boolean {
+  // Preserve direct-child admission without requiring ps at all. Use the live
+  // kernel parent, not a runtime-cached PPID; FIFO/token checks still follow.
+  if (native.symbols.getppid() === owner) return alive(owner);
   const observations: object[] = [];
   // One table per attempt: an ancestor must not vanish between separate ps
   // queries. Start at our own kernel row, not a previously cached PPID. A
