@@ -56,7 +56,18 @@ const tests: Record<string, (w: World) => void> = {
   "auto-busy-gate": w => { fs.mkdirSync(path.join(w.root, "seats/run"), { recursive: true }); fs.writeFileSync(path.join(w.root, "seats/run/verify.gate.json"), JSON.stringify({ pid: process.pid })); run(w, 4); assert.equal(invoked().length, 0); },
   "auto-shared-gate": w => { w.gate.account = { dir: authorDir }; refused(w, "SAME account directory"); },
   "auto-all-shadow": w => { w.gate.shadow = true; refused(w, "no non-shadow reviewer"); },
-  "pool-shadow": w => { delete w.seats.gate; fs.mkdirSync(path.join(w.root, "wheelhouse"), { recursive: true }); fs.writeFileSync(path.join(w.root, "wheelhouse/.template-source"), "namespace=shadow\n"); fs.writeFileSync(path.join(w.root, "seats/pool.json"), JSON.stringify({ version: 1, entries: { spare: { harness: "pi", provider: "openai", models: ["stub-model-v"], account: { dir: gateDir, authRoute: "oauth" } } }, roles: { reviewers: { min: 0, max: 1, entries: ["spare"], model: "stub-model-v" } } })); fs.writeFileSync(path.join(w.root, "seats/staffing.json"), JSON.stringify({ version: 1, seats: { "reviewer-spare": { role: "reviewer", entry: "spare" } }, rateLimited: {} })); run(w, 0, "reviewer-spare"); },
+  "pool-shadow": w => {
+    // Pools replace fixed seats for the roles they own. A workers-only pool
+    // can coexist with this fixed gating/shadow review pair; a reviewer pool
+    // cannot. Keep the retired author's identity in the supported state fallback.
+    delete w.seats["worker-1"];
+    fs.mkdirSync(path.join(w.root, "wheelhouse"), { recursive: true });
+    fs.writeFileSync(path.join(w.root, "wheelhouse/.template-source"), "namespace=shadow\n");
+    fs.writeFileSync(path.join(w.root, "seats/pool.json"), JSON.stringify({ version: 1, entries: { spare: { harness: "pi", provider: "openai", models: ["stub-model-v"], account: { dir: authorDir, authRoute: "oauth" } } }, roles: { workers: { min: 0, max: 1, entries: ["spare"], model: "stub-model-v" } } }));
+    fs.writeFileSync(path.join(w.root, "seats/staffing.json"), JSON.stringify({ version: 1, seats: { "worker-spare": { role: "worker", entry: "spare" } }, rateLimited: {} }));
+    fs.writeFileSync(path.join(w.root, "seats/state.json"), JSON.stringify({ seats: { "worker-1": { accountDir: authorDir } } }));
+    run(w, 0, "gate");
+  },
   "explicit-shadow": w => { w.explicit = true; refused(w, "shadow: true and never gates by default"); },
   "invalid-shadow": w => { (w.mirror as any).shadow = "true"; refused(w, "invalid shadow"); },
   "promoted": w => { promote(w); run(w, 0, "mirror"); },
