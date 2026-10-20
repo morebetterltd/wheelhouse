@@ -24,6 +24,8 @@ if (role === "--probe") {
   if (prior !== null) native.writeFileSync(target, prior);
   let tick: (() => void) | undefined, intervals = 0, pauses = 0, fired = 0;
   let midWrite: object | undefined;
+  const readerErrors: string[] = [];
+  const poll = () => { try { tick!(); } catch (error: any) { readerErrors.push(error.message); } };
   const read = (file: string) => native.existsSync(file) ? native.readFileSync(file, "utf8") : null;
   const splitWrite = (file: any, data: any, options?: any) => {
     const base = typeof file === "string" ? path.basename(file) : "";
@@ -39,7 +41,7 @@ if (role === "--probe") {
       assert.equal(native.fstatSync(fd).size, 0, "writer pause must precede data");
       assert(tick, "actual driver's polling callback must be captured");
       const visible = read(target);
-      tick();
+      poll();
       midWrite = { file: base, openBytes: 0, visible, consumed: read(path.join(dir, "advanced")), targetAfterPoll: read(target) };
       native.writeSync(fd, data);
     } finally { native.closeSync(fd); }
@@ -59,14 +61,15 @@ if (role === "--probe") {
   process.env.WHEELHOUSE_TEST_WATCHDOG_DIR = dir;
   driverModule.arm("event", () => { fired++; }, 100);
   driverModule.record(dir, "advance", "100");
-  tick!();
-  const observed = { name, pauses, midWrite, advanced: read(path.join(dir, "advanced")), fired, requestRemaining: native.existsSync(target), stages: native.readdirSync(dir).filter(n => n.endsWith(".new")) };
+  poll();
+  const observed = { name, pauses, midWrite, readerErrors, advanced: read(path.join(dir, "advanced")), fired, requestRemaining: native.existsSync(target), stages: native.readdirSync(dir).filter(n => n.endsWith(".new")) };
   native.writeFileSync(path.join(dir, "observed.json"), JSON.stringify(observed, null, 2) + "\n");
   console.log(JSON.stringify(observed));
   assert.equal(pauses, 1, "one calibrated incomplete write");
-  assert.equal(observed.advanced, "100", "partial advance consumed as zero instead of complete virtual time 100");
+  assert.equal((midWrite as any).visible, prior, "partial advance visible before atomic publication");
+  assert.deepEqual(readerErrors, [], "actual clock reader must accept every published value");
+  assert.equal(observed.advanced, "100", "clock must acknowledge complete virtual time 100");
   assert.equal(fired, 1, "real 100ms virtual deadline must fire exactly once");
-  assert.equal((midWrite as any).visible, prior, "only absent or previous complete value visible before publication");
   assert.equal((midWrite as any).consumed, prior, "reader cannot consume the incomplete staged value");
   assert.equal(observed.requestRemaining, false);
   assert.deepEqual(observed.stages, []);
@@ -92,13 +95,12 @@ if (role === "--probe") {
       assert.equal(result.error, undefined);
       if (control) {
         assert.equal(result.status, 1);
-        assert.match(result.stderr, /AssertionError: partial advance consumed as zero/);
+        assert.match(result.stderr, /AssertionError: partial advance visible before atomic publication/);
         const observed = JSON.parse(fs.readFileSync(path.join(dir, "observed.json"), "utf8"));
         assert.equal(observed.pauses, 1); assert.equal(observed.midWrite.openBytes, 0);
-        assert.equal(observed.midWrite.visible, ""); assert.equal(observed.advanced, "0");
-        assert.equal(observed.fired, 0); assert.equal(observed.requestRemaining, false);
+        assert.equal(observed.midWrite.file, "advance"); assert.equal(observed.midWrite.visible, "");
         process.stdout.write(result.stdout);
-        console.log(`PASS ${name} removed fix: actual reader consumed empty request as 0, unlinked it and lost 100; own assertion exit=1`);
+        console.log(`PASS ${name} removed fix: incomplete public request detected; own assertion exit=1`);
       } else {
         if (result.stdout) process.stdout.write(result.stdout);
         if (result.stderr) process.stderr.write(result.stderr);
