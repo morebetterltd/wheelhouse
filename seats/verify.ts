@@ -1152,7 +1152,7 @@ function claimRequiresSweepCitation(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
-async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
+export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
   // Separate from the reviewer's cwd: no writable graph or bd wrapper reaches
   // that process. Suites create their OWN fixture graphs, not one redirected
   // global graph (which would invalidate graph-isolation selftests).
@@ -1183,6 +1183,14 @@ async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: str
     // primary repository, then expose only that graph at the sweep root.
     const graphRoot = path.join(scratchCwd, ".wheelhouse-sweep-graph");
     fs.mkdirSync(graphRoot);
+    // Same switch/isolation as selftest_disable_bd_metrics: bd 1.2.2 uses
+    // HOME/.config/bd even when XDG_CONFIG_HOME differs. Never edit the
+    // operator's metrics preference or let an uploader inherit review cwd.
+    env.HOME = path.join(graphRoot, "home");
+    env.XDG_CONFIG_HOME = path.join(env.HOME, ".config");
+    fs.mkdirSync(env.HOME);
+    const metrics = spawnSync(realBd, ["metrics", "off"], { cwd: graphRoot, encoding: "utf8", env });
+    if (metrics.error || metrics.signal || metrics.status !== 0) throw new Error(`could not disable scratch bd metrics: ${metrics.error?.message || metrics.stderr || metrics.stdout}`);
     execFileSync("git", ["init", "--quiet", "-b", "main", graphRoot], { env, stdio: "pipe" });
     const graphDir = path.join(graphRoot, ".beads");
     const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graphRoot, encoding: "utf8", env: { ...env, PWD: graphRoot, BEADS_DIR: graphDir } });

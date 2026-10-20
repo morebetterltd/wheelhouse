@@ -462,6 +462,9 @@ while true; do
 done
 verb="${1:-}"
 case "$verb" in
+  metrics)
+    [ "${2:-}" = off ] || exit 1
+    exit 0 ;;
   show)
     [ "${STUB_BD_SHOW_FAIL:-0}" != 1 ] || { echo 'fixture bd show unavailable' >&2; exit 1; }
     if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf 'fixture bead\n'; fi
