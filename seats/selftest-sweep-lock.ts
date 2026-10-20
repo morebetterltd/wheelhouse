@@ -55,11 +55,11 @@ function stableHostId(): string {
   return digest(`hostname:${HOST}`);
 }
 /** Shared hardware identity for cleanup records. CLI fallback policy stays below. */
-let sharedIdentity: { hostId: string; source: IdentitySource } | undefined;
+let sharedIdentity: Readonly<{ hostId: string; source: IdentitySource }> | undefined;
 export function stableHostIdentity() {
   if (!sharedIdentity || sharedIdentity.source === "hostname") {
     const value = stableHostId();
-    sharedIdentity = { hostId: value, source: identitySource };
+    sharedIdentity = Object.freeze({ hostId: value, source: identitySource });
   }
   return sharedIdentity;
 }

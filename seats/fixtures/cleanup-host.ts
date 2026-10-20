@@ -72,7 +72,7 @@ const tests: Record<string, (w: World) => void> = {
   "legacy-missing-cache": w => { legacy(w); refusedLegacy(w); },
   "legacy-foreign-cache": w => { legacy(w); cache(w, "b"); const before = snapshot(w.lock + ".host"); refusedLegacy(w); assert.deepEqual(snapshot(w.lock + ".host"), before); },
   "legacy-symlink-cache": w => { legacy(w); cache(w); const alias = path.join(w.dir, "alias.lock"); fs.symlinkSync(w.lock + ".host", alias + ".host"); refusedLegacy(w, alias); },
-  "unavailable-create": w => { call(w, "prepare", 2, "network-after", "unavailable"); assert(!fs.existsSync(w.target)); },
+  "unavailable-create": w => { call(w, "prepare", 2, "network-after", "unavailable"); assert(!fs.existsSync(w.target)); call(w, "lock", 2, "network-after", "unavailable"); assert(!fs.existsSync(path.join(w.root, "seats/run/cleanup.lock"))); },
   "unavailable-read": w => { const m = create(w); m.hostId = sha("hostname:network-after"); fs.writeFileSync(w.file, JSON.stringify(m) + "\n"); call(w, "read", 2, "network-after", "unavailable"); },
   "adopt-v1": w => {
     const old = legacy(w), before = fs.readFileSync(w.file, "utf8"), st = fs.statSync(w.target, { bigint: true });
