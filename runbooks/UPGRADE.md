@@ -155,8 +155,14 @@ if [ -e wheelhouse/crew/DESIGNER.md ]; then
   [ ! -e wheelhouse/crew/PRODUCER.md ] || { echo "STOP: both planning briefs exist; reconcile their territory before renaming" >&2; exit 1; }
   git mv wheelhouse/crew/DESIGNER.md wheelhouse/crew/PRODUCER.md
 fi
-bun -e 'import fs from "node:fs"; const p="seats/seats.json", r=JSON.parse(fs.readFileSync(p,"utf8")); for(const [name,s] of Object.entries(r.seats ?? {})) if(s.role === "designer") { s.role="producer"; console.log("producer role changed: " + name); } fs.writeFileSync(p,JSON.stringify(r,null,2)+"\n");'
+if [ -e seats/seats.json ] || [ -L seats/seats.json ]; then
+  bun -e 'import fs from "node:fs"; const p="seats/seats.json", r=JSON.parse(fs.readFileSync(p,"utf8")); for(const [name,s] of Object.entries(r.seats ?? {})) if(s.role === "designer") { s.role="producer"; console.log("producer role changed: " + name); } fs.writeFileSync(p,JSON.stringify(r,null,2)+"\n");'
+else
+  echo "producer roster rewrite skipped: seats/seats.json absent (pre-seats install)"
+fi
 ```
+
+A pre-seats install with no `seats/seats.json` skips only the roster rewrite, reporting that once; it does not invent a roster. Choose and record the required producer after copying the seats machinery and before step 5's roster check. An existing but unreadable or malformed roster still fails rather than being treated as absent.
 
 The roster rewrite changes roles, not seat keys or account directories. Update your `wheelhouse/fleet/SEATS.md` roster and declined-standing-session rows and your install's `CLAUDE.md` to say producer. The producer is required: if the install never took a designer, choose a standing producer or record `"producer": {"role": "producer", "external": true, "runtime": "commander-subagent"}` under `seats`, per BOOTSTRAP question 7. A subagent reads PRODUCER.md; the commander never writes intent or outcomes. For a Claude Code standing producer, adopt the read/graph-only tool limits in `seats/seats.json.example`; for Pi and Codex the brief is the limit. After copying the seats machinery, run `bun seats/roster.ts check` and repair any refusal before dispatch.
 

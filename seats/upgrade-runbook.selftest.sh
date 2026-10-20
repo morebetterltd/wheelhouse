@@ -264,39 +264,59 @@ producer_migration_tests() (
   { printf 'set -e\nTEMPLATE=$1\n'; cat "$TMP/rename.sh" "$TMP/copy.sh" "$TMP/splice.sh"; } > "$TMP/migrate.sh"
   { awk '/^check_producer_rename\(\)/ {f=1} f {print} f && /^}$/ {exit}' "$TMP/rename.sh"; cat "$TMP/reverify.sh"; } > "$TMP/check-rename.sh"
   local selected=${WHEELHOUSE_UPGRADE_PRODUCER_CASE:-all}
-  case "$selected" in all|bash-existing|bash-absent|zsh-existing|zsh-absent|bash-existing-guard|bash-absent-guard|zsh-existing-guard|zsh-absent-guard) ;; *) fail "unknown producer migration case: $selected";; esac
+  case "$selected" in all|bash-existing|bash-absent|zsh-existing|zsh-absent|bash-no-roster|zsh-no-roster|bash-existing-guard|bash-absent-guard|zsh-existing-guard|zsh-absent-guard) ;; *) fail "unknown producer migration case: $selected";; esac
   for shell in bash zsh; do
-    for mode in existing absent; do
+    for mode in existing absent no-roster; do
       [ "$selected" = all ] || [ "$selected" = "$shell-$mode" ] || [ "$selected" = "$shell-$mode-guard" ] || continue
       local project="$TMP/producer-$shell-$mode"
-      mkdir -p "$project/wheelhouse/crew" "$project/wheelhouse/fleet" "$project/seats"
+      mkdir -p "$project/wheelhouse/crew" "$project/wheelhouse/fleet"
       git -C "$project" init -q -b main
       [ -d "$project/.git" ] && [ "$(git -C "$project" rev-parse --show-toplevel)" = "$(cd "$project" && pwd -P)" ] || fail "migration fixture git root escaped: $project"
-      # Step 5's printed CLI reads only this fixture's metadata.
-      for source in roster.ts pool.ts harness.ts credential-shapes.ts; do cp -f "$ROOT/seats/$source" "$project/seats/$source"; done
-      if [ "$mode" = existing ]; then
+      # A pre-seats install has neither a roster nor a seats directory. Other
+      # cases carry Step 5's CLI, reading only this fixture's metadata.
+      if [ "$mode" != no-roster ]; then
+        mkdir -p "$project/seats"
+        for source in roster.ts pool.ts harness.ts credential-shapes.ts; do cp -f "$ROOT/seats/$source" "$project/seats/$source"; done
+      fi
+      if [ "$mode" != absent ]; then
         printf '# Old planning contract\n\n## This project\n\n### The territory\n\nTerritory sentinel — local boundaries, not template prose.\nKeep these trailing spaces.  \n\n' > "$project/$old_path"
         awk 'f{print} /^## This project$/{f=1}' "$project/$old_path" > "$project/before-half"
-        printf '{"seats":{"planner":{"role":"%s","account":{"dir":"fixture-account-unchanged"}}}}\n' "$old_role" > "$project/seats/seats.json"
+        if [ "$mode" = existing ]; then
+          printf '{"seats":{"planner":{"role":"%s","account":{"dir":"fixture-account-unchanged"}}}}\n' "$old_role" > "$project/seats/seats.json"
+        fi
       else
         printf '%s\n' '{"seats":{"producer":{"role":"producer","external":true,"runtime":"commander-subagent"}}}' > "$project/seats/seats.json"
       fi
       git -C "$project" add .
       git -C "$project" -c user.name=selftest -c user.email=selftest@local -c commit.gpgsign=false commit -q -m fixture
       [ "$(git -C "$project" rev-parse --show-toplevel)" = "$(cd "$project" && pwd -P)" ] || fail "migration fixture moved before commands"
+      if [ "$mode" = no-roster ]; then
+        [ ! -e "$project/seats" ] || fail "pre-seats fixture already has seats before migration ($shell)"
+      fi
       (cd "$project" && "$shell" "$TMP/migrate.sh" "$TEMPLATE") > "$project/migration.out" 2> "$project/migration.err" || { cat "$project/migration.err"; fail "printed producer migration failed ($shell/$mode)"; }
       [ -f "$project/wheelhouse/crew/PRODUCER.md" ] || fail "producer brief absent ($shell/$mode)"
-      if [ "$mode" = existing ]; then
+      if [ "$mode" != absent ]; then
         awk 'f{print} /^## This project$/{f=1}' "$project/wheelhouse/crew/PRODUCER.md" > "$project/after-half"
         cmp "$project/before-half" "$project/after-half" || fail "producer migration lost byte-identical installed territory ($shell)"
         awk '/^## This project$/{exit} {print}' "$project/wheelhouse/crew/PRODUCER.md" > "$project/contract"
         awk '/^## This project$/{exit} {print}' "$TEMPLATE/contracts/PRODUCER.md" > "$project/expected-contract"
         cmp "$project/contract" "$project/expected-contract" || fail "producer migration contract differs ($shell)"
-        bun -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(r.seats.planner.role!=="producer" || r.seats.planner.account.dir!=="fixture-account-unchanged") process.exit(1)' "$project/seats/seats.json" || fail "producer role rewrite failed or account changed ($shell)"
-        grep -qx 'producer role changed: planner' "$project/migration.out" || fail "producer role rewrite did not name changed seat ($shell)"
+        if [ "$mode" = existing ]; then
+          bun -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(r.seats.planner.role!=="producer" || r.seats.planner.account.dir!=="fixture-account-unchanged") process.exit(1)' "$project/seats/seats.json" || fail "producer role rewrite failed or account changed ($shell)"
+          grep -qx 'producer role changed: planner' "$project/migration.out" || fail "producer role rewrite did not name changed seat ($shell)"
+        fi
         [ ! -e "$project/$old_path" ] || fail "old brief remains ($shell)"
       else
         cmp "$TEMPLATE/contracts/PRODUCER.md" "$project/wheelhouse/crew/PRODUCER.md" || fail "absent producer was not copied whole ($shell)"
+      fi
+      if [ "$mode" = no-roster ]; then
+        [ ! -e "$project/seats" ] || fail "migration invented seats metadata ($shell)"
+        [ ! -s "$project/migration.err" ] || { cat "$project/migration.err"; fail "pre-seats migration emitted stderr ($shell)"; }
+        [ "$(grep -Fxc 'producer roster rewrite skipped: seats/seats.json absent (pre-seats install)' "$project/migration.out")" = 1 ] || fail "pre-seats migration did not report exactly one roster skip ($shell)"
+        pass "PASS producer migration no-roster ($shell): skip reported once, territory preserved, no seats metadata invented"
+        # Provisioning the required producer belongs to the operator before
+        # Step 5. This case tests the printed rename/copy/splice, not that CLI.
+        continue
       fi
       (cd "$project" && "$shell" "$TMP/check-rename.sh") > "$project/check.out" 2> "$project/check.err" || fail "printed step 5 producer guard failed ($shell/$mode)"
       if [ "$selected" != "$shell-$mode-guard" ]; then pass "PASS producer migration $mode ($shell): contract and territory checked"; fi
@@ -321,7 +341,7 @@ if [ "$TEMPLATE" = "$ROOT" ]; then
   pass "default baseline is public old-install shape; missing baseline refuses before fixture setup (negative controls detected)"
   cache_recovery_tests
   producer_migration_tests
-  PASS=$((PASS+8))
+  PASS=$((PASS+10))
 
   if grep -q 'remove `seats/bin`' "$TEMPLATE/runbooks/UPGRADE.md"; then
     fail "UPGRADE.md still tells non-opt-in installs to remove seats/bin"
