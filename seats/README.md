@@ -910,6 +910,8 @@ Individual suites are still run directly when only a touched surface needs proof
 
 ```bash
 bash seats/evidence-scrub.selftest.sh
+bash seats/selftest-lib.selftest.sh
+bash seats/project-install.selftest.sh
 bash seats/seat-env.selftest.sh
 bash seats/needs.selftest.sh
 bash seats/channels.selftest.sh
