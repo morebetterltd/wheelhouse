@@ -2,8 +2,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { dlopen, FFIType, read, CString, toArrayBuffer } from "bun:ffi";
+import { stableHostIdentity, legacyHostnameMatches } from "./selftest-sweep-lock";
 
 export class CleanupRefused extends Error {}
 const C = fs.constants, darwin = process.platform === "darwin";
@@ -80,15 +81,32 @@ function alive(pid: number) {
   try { process.kill(pid, 0); return true; }
   catch (e: any) { if (e.code === "EPERM") return true; if (e.code === "ESRCH") return false; throw new CleanupRefused(`cannot verify pid ${pid}: ${e.message}`); }
 }
-function validRecord(m: any, kind: string) {
-  return m && !Array.isArray(m) && m.kind === kind && m.version === 1 && validPid(m.pid) && m.hostname === HOST
+function requireStableHost() {
+  const identity = stableHostIdentity();
+  if (identity.source === "hostname") throw new CleanupRefused("stable cleanup host identity unavailable; hardware/machine ID is required to record ownership");
+  return identity;
+}
+function markerHostMatches(m: any): boolean {
+  try {
+    if (m.version === 2) {
+      const identity = stableHostIdentity();
+      return identity.source !== "hostname" && typeof m.hostId === "string" && /^[0-9a-f]{64}$/.test(m.hostId) && m.hostId === identity.hostId;
+    }
+    return legacyHostnameMatches(m.hostname);
+  } catch (e: any) { throw new CleanupRefused(`cannot prove cleanup marker host identity: ${e.message}`); }
+}
+function validRecordFields(m: any, kind: string) {
+  return m && !Array.isArray(m) && m.kind === kind && [1, 2].includes(m.version) && validPid(m.pid)
+    && typeof m.hostname === "string" && m.hostname.length > 0 && !/[\r\n\0]/.test(m.hostname)
     && typeof m.token === "string" && /^[0-9a-f]{32}$/.test(m.token)
     && typeof m.started === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(m.started) && Number.isFinite(Date.parse(m.started))
     && new Date(m.started).toISOString().replace(".000Z", "Z") === m.started
-    && JSON.stringify(Object.keys(m).sort()) === JSON.stringify(["kind", "version", "root", "identity", "pid", "hostname", "token", "started", ...(kind === "wheelhouse-cleanup-scratch" ? ["target", "bead"] : [])].sort());
+    && JSON.stringify(Object.keys(m).sort()) === JSON.stringify(["kind", "version", "root", "identity", "pid", "hostname", "token", "started", ...(m.version === 2 ? ["hostId"] : []), ...(kind === "wheelhouse-cleanup-scratch" ? ["target", "bead"] : [])].sort());
 }
+function validRecord(m: any, kind: string) { return validRecordFields(m, kind) && markerHostMatches(m); }
 function record(kind: string, root: string, identity: string) {
-  return { kind, version: 1, root, identity, pid: process.pid, hostname: HOST, token: randomUUID().replaceAll("-", ""), started: new Date().toISOString().replace(/\.\d{3}Z$/, "Z") };
+  const host = requireStableHost();
+  return { kind, version: 2, root, identity, pid: process.pid, hostname: HOST, hostId: host.hostId, token: randomUUID().replaceAll("-", ""), started: new Date().toISOString().replace(/\.\d{3}Z$/, "Z") };
 }
 export function cleanupPathIdentity(root: string, target: string) {
   const relative = path.relative(root, target);
@@ -295,6 +313,7 @@ export function prepareTaskScratch(root: string, bead: string) {
     try { present = openAt(parent, bead, true); }
     catch (e: any) { if (e.errno !== 2) throw e; }
     if (present >= 0) { fs.closeSync(present); return existing(); }
+    requireStableHost(); // Do not publish an unmarked task if identity lookup failed.
     temporary = `.scratch-create-${randomUUID()}`;
     if (native.symbols.mkdirat(parent, z(temporary), 0o700)) fail("mkdir scratch candidate");
     candidate = openAt(parent, temporary, true);
@@ -321,6 +340,15 @@ export function prepareTaskScratch(root: string, bead: string) {
     }
   }
 }
+function scratchContextMatches(m: any, root: string, target: string, identity: string, bead?: string) {
+  return m.root === root && m.target === target && m.identity === identity
+    && typeof m.bead === "string" && m.bead.length > 0 && (bead === undefined || m.bead === bead)
+    && (path.basename(target) === m.bead || path.basename(target).startsWith(m.bead + "-") || path.basename(target).startsWith(m.bead + "_"));
+}
+const shellQuote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+function legacyAdoptionHint(root: string, target: string, bead: string) {
+  return `legacy v1 scratch host cannot be proven: ${target}; explicit operator recovery: bun seats/cleanup-identity.ts adopt-v1 --root ${shellQuote(root)} --target ${shellQuote(target)} --bead ${shellQuote(bead)}; see seats/README.md: Explicit legacy scratch host adoption`;
+}
 export function scratchOwnership(root: string, target: string, bead?: string) {
   const proof = cleanupPathIdentity(root, target);
   const fd = fs.openSync(target, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
@@ -328,9 +356,112 @@ export function scratchOwnership(root: string, target: string, bead?: string) {
     primitives();
     if (id(fd) !== proof.chain.at(-1)!.identity) throw new CleanupRefused(`scratch identity changed: ${target}`);
     const member = readMember(fd, SCRATCH_MARKER), m = JSON.parse(member.raw);
-    if (!validRecord(m, "wheelhouse-cleanup-scratch") || m.root !== root || m.target !== target || m.identity !== id(fd)
-      || typeof m.bead !== "string" || !m.bead || (bead !== undefined && m.bead !== bead)
-      || !(path.basename(target) === m.bead || path.basename(target).startsWith(m.bead + "-") || path.basename(target).startsWith(m.bead + "_"))) throw new CleanupRefused(`scratch ownership marker does not match root/path/inode/bead: ${target}`);
+    if (!validRecordFields(m, "wheelhouse-cleanup-scratch") || !scratchContextMatches(m, root, target, id(fd), bead)) throw new CleanupRefused(`scratch ownership marker does not match root/path/inode/bead: ${target}`);
+    let ours: boolean;
+    try { ours = markerHostMatches(m); }
+    catch (e) { if (m.version === 1) throw new CleanupRefused(legacyAdoptionHint(root, target, m.bead)); throw e; }
+    if (!ours) throw new CleanupRefused(m.version === 1 ? legacyAdoptionHint(root, target, m.bead) : `scratch ownership marker does not match root/path/inode/bead: ${target}`);
     return member;
   } finally { fs.closeSync(fd); }
+}
+
+const ADOPTION_LOG = "cleanup-adoptions.jsonl";
+function adoptionAudit(root: string, rootIdentity: string) {
+  const rootFd = fs.openSync(root, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+  let seats = -1, logs = -1, out = -1, cwd = -1;
+  try {
+    if (id(rootFd) !== rootIdentity) throw new CleanupRefused("adoption root changed");
+    seats = openAt(rootFd, "seats", true);
+    if (native.symbols.mkdirat(seats, z("logs"), 0o700) !== 0 && errno() !== 17) fail("mkdir adoption logs");
+    logs = openAt(seats, "logs", true);
+    const directory = path.join(root, "seats", "logs"), proof = cleanupPathIdentity(root, directory);
+    if (id(logs) !== proof.chain.at(-1)!.identity || proof.chain[0].identity !== rootIdentity) throw new CleanupRefused("adoption log directory changed");
+    cwd = fs.openSync(".", C.O_RDONLY | C.O_DIRECTORY);
+    if (native.symbols.fchdir(logs) !== 0) fail("enter adoption logs");
+    out = fs.openSync(ADOPTION_LOG, C.O_WRONLY | C.O_APPEND | C.O_CREAT | C.O_NOFOLLOW | C.O_NONBLOCK, 0o600);
+    const output = out, directoryFd = logs;
+    const append = (event: object) => {
+      if (!cleanupPathUnchanged(root, directory, proof)) throw new CleanupRefused("adoption log path changed");
+      const current = openAt(directoryFd, ADOPTION_LOG);
+      try {
+        const st = fs.fstatSync(output);
+        if (!st.isFile() || st.nlink !== 1 || st.uid !== process.getuid!() || id(current) !== id(output)) throw new CleanupRefused("unsafe adoption audit file");
+      } finally { fs.closeSync(current); }
+      fs.writeFileSync(output, JSON.stringify(event) + "\n"); fs.fsyncSync(output);
+    };
+    // Validate before any marker change (also refuses preexisting hardlinks).
+    const st = fs.fstatSync(output);
+    if (!st.isFile() || st.nlink !== 1 || st.uid !== process.getuid!()) throw new CleanupRefused("unsafe adoption audit file");
+    out = -1; logs = -1;
+    return { append, close() { fs.closeSync(output); fs.closeSync(directoryFd); }, file: path.join(directory, ADOPTION_LOG) };
+  } finally {
+    if (cwd >= 0) { native.symbols.fchdir(cwd); fs.closeSync(cwd); }
+    if (out >= 0) fs.closeSync(out);
+    if (logs >= 0) fs.closeSync(logs);
+    if (seats >= 0) fs.closeSync(seats);
+    fs.closeSync(rootFd);
+  }
+}
+
+// Explicit operator authority only. Dispatch and cleanup must never call this.
+function adoptLegacyScratch(root: string, target: string, bead: string) {
+  if (!bead || bead === "." || bead === ".." || /[/\\\s'"`]/.test(bead)) throw new CleanupRefused("invalid adoption bead");
+  const parent = path.dirname(target), allowed = [".wheelhouse-runs", ".wheelhouse-builds", ".wheelhouse-worktrees"];
+  if (path.dirname(parent) !== root || !allowed.includes(path.basename(parent))) throw new CleanupRefused("adoption target must be a direct scratch child of this root");
+  const proof = cleanupPathIdentity(root, target), r = runtime(root);
+  let fd = -1, temporary = "", audit: ReturnType<typeof adoptionAudit> | undefined, committed = false;
+  try {
+    if (native.symbols.flock(r.fd, 2) !== 0) fail("lock adoption transition");
+    // Do not race a cleanup scan, even one with a dead or unprovable lease.
+    let lease = -1;
+    try { lease = openAt(r.fd, "cleanup.lock", true); }
+    catch (e: any) { if (e.errno !== 2) throw e; }
+    if (lease >= 0) { fs.closeSync(lease); throw new CleanupRefused("adoption requires cleanup idle and no cleanup.lock; resolve its owner separately"); }
+    if (!cleanupPathUnchanged(root, target, proof) || !cleanupPathUnchanged(root, r.proof.real, r.proof)) throw new CleanupRefused("adoption path changed");
+    fd = fs.openSync(target, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+    const before = readMember(fd, SCRATCH_MARKER), m = JSON.parse(before.raw);
+    if (m.version !== 1 || !validRecordFields(m, "wheelhouse-cleanup-scratch") || !scratchContextMatches(m, root, target, id(fd), bead)) throw new CleanupRefused("adoption requires a valid v1 marker matching root, target path, inode and bead; unmarked folders and v2 markers cannot be adopted");
+    const next = { ...record("wheelhouse-cleanup-scratch", root, id(fd)), target, bead }, raw = JSON.stringify(next) + "\n";
+    const digest = (s: string) => createHash("sha256").update(s).digest("hex");
+    const event = { adoptionId: randomUUID(), at: new Date().toISOString(), root, target, bead, identity: id(fd), previousHostname: m.hostname, previousMarkerSha256: digest(before.raw), newMarkerSha256: digest(raw), hostId: next.hostId };
+    audit = adoptionAudit(root, proof.chain[0].identity);
+    audit.append({ event: "adopt-v1-intent", ...event });
+    const cwd = fs.openSync(".", C.O_RDONLY | C.O_DIRECTORY);
+    try {
+      if (native.symbols.fchdir(fd) !== 0) fail("enter adoption target");
+      const template = Buffer.from(".adopt-member.XXXXXX\0"), out = native.symbols.mkstemp(template);
+      if (out < 0) fail("create adopted marker");
+      temporary = template.toString().replace(/\0.*$/, "");
+      try { fs.writeFileSync(out, raw); fs.fsyncSync(out); }
+      finally { fs.closeSync(out); }
+      if (!cleanupPathUnchanged(root, target, proof) || JSON.stringify(readMember(fd, SCRATCH_MARKER)) !== JSON.stringify(before)) throw new CleanupRefused("legacy marker changed during adoption");
+      const replace = darwin ? native.symbols.renameatx_np : native.symbols.renameat2;
+      if (replace(fd, z(temporary), fd, z(SCRATCH_MARKER), 0) !== 0) fail("publish adopted marker");
+      temporary = ""; committed = true;
+      fs.fsyncSync(fd);
+      if (!cleanupPathUnchanged(root, target, proof) || readMember(fd, SCRATCH_MARKER).raw !== raw) throw new CleanupRefused("adopted marker/path changed during commit");
+      audit.append({ event: "adopted-v1", ...event });
+      return { event: "adopted-v1", root, target, bead, hostId: next.hostId, audit: audit.file };
+    } finally { native.symbols.fchdir(cwd); fs.closeSync(cwd); }
+  } catch (e: any) {
+    if (committed) throw new CleanupRefused(`v2 marker was committed but adoption verification/audit failed: ${e.message}; inspect cleanup-adoptions.jsonl and the marker before retrying`);
+    throw e;
+  } finally {
+    if (temporary && fd >= 0) native.symbols.unlinkat(fd, z(temporary), 0);
+    if (fd >= 0) fs.closeSync(fd);
+    audit?.close();
+    fs.closeSync(r.fd);
+  }
+}
+
+if (import.meta.main) {
+  try {
+    const [command, ...args] = process.argv.slice(2), options = new Map<string, string>();
+    if (command !== "adopt-v1" || args.length !== 6) throw new CleanupRefused("usage: bun seats/cleanup-identity.ts adopt-v1 --root <install-root> --target <scratch-path> --bead <bead>");
+    for (let i = 0; i < args.length; i += 2) {
+      if (!["--root", "--target", "--bead"].includes(args[i]) || !args[i + 1] || options.has(args[i])) throw new CleanupRefused("adopt-v1 requires exactly --root, --target and --bead");
+      options.set(args[i], args[i + 1]);
+    }
+    console.log(JSON.stringify(adoptLegacyScratch(path.resolve(options.get("--root")!), path.resolve(options.get("--target")!), options.get("--bead")!)));
+  } catch (e: any) { console.error(`STOP: ${e.message}; see seats/README.md: Explicit legacy scratch host adoption`); process.exitCode = 2; }
 }

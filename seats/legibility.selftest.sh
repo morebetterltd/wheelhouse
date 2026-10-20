@@ -237,7 +237,7 @@ printf '# Fleet: Worker\n\nfixture brief.\n'   > "$PROJ/contracts/WORKER.md"
 printf '# Crew: Reviewer\n\nfixture brief.\n' > "$PROJ/contracts/REVIEWER.md"
 printf '# Crew: Verifier\n\nfixture brief.\n'  > "$PROJ/contracts/VERIFIER.md"
 
-# Six afflicted-to-be seats plus a verifier. Every account dir is namespaced
+# Six afflicted-to-be seats plus a reviewer. Every account dir is namespaced
 # under the fixture HOME; a-seat gets the empty {} auth.json its class needs,
 # everyone else gets a stub identity.
 cat > "$PROJ/seats/seats.json" <<EOF
@@ -250,11 +250,11 @@ cat > "$PROJ/seats/seats.json" <<EOF
     "r-seat": { "role": "worker",   "account": { "dir": "~/.pi-seats-leg/r-seat" } },
     "e-seat": { "role": "worker",   "account": { "dir": "~/.pi-seats-leg/e-seat" } },
     "u-seat": { "role": "worker",   "account": { "dir": "~/.pi-seats-leg/u-seat" } },
-    "verifier": { "role": "verifier", "account": { "dir": "~/.pi-seats-leg/verifier" } }
+    "reviewer": { "role": "reviewer", "account": { "dir": "~/.pi-seats-leg/reviewer" } }
   }
 }
 EOF
-for s in q-seat a-seat d-seat r-seat e-seat u-seat verifier; do
+for s in q-seat a-seat d-seat r-seat e-seat u-seat reviewer; do
   mkdir -p "$HOME_FIX/.pi-seats-leg/$s"
   printf '{\n  "%s": true\n}\n' "$PROJ" > "$HOME_FIX/.pi-seats-leg/$s/trust.json"
   if [ "$s" = "a-seat" ]; then
@@ -426,7 +426,7 @@ The done requires X; the diff does Y.
 VERDICT: BOUNCE
 PUSH: HOLD — review blocked until the author fixes the mismatch
 EOF
-vrun bead-rev fleet/bead-rev r-seat verifier
+vrun bead-rev fleet/bead-rev r-seat reviewer
 if [ $RC -eq 2 ] && grep -q "verdict: BOUNCE" "$VDIR/bead-rev.md" 2>/dev/null && fixture_sweep_receipt bead-rev; then
   pass "real verify.ts run recorded a BOUNCE verdict for bead-rev with a passing dispatcher receipt"
 else fail "verify.ts BOUNCE run: rc=$RC (want 2): $OUT"; fi
@@ -453,7 +453,7 @@ Looks fine to me.
 VERDICT: APPROVE
 PUSH: HOLD — evidence floor failed, so nothing is pushable
 EOF
-vrun bead-ev fleet/bead-ev e-seat verifier --evidence proof/shot.png
+vrun bead-ev fleet/bead-ev e-seat reviewer --evidence proof/shot.png
 if [ $RC -eq 1 ] && says "unsatisfied evidence"; then
   pass "verify.ts refuses APPROVE-over-failed-floor: exit 1, named as malformed"
 else fail "APPROVE over missing evidence was not refused (rc=$RC, want 1): $OUT"; fi
@@ -467,7 +467,7 @@ The bead names proof/shot.png; it is not on the branch.
 VERDICT: BOUNCE
 PUSH: HOLD — proof/shot.png is absent from the branch
 EOF
-vrun bead-ev fleet/bead-ev e-seat verifier --evidence proof/shot.png
+vrun bead-ev fleet/bead-ev e-seat reviewer --evidence proof/shot.png
 if [ $RC -eq 2 ] && grep -q "UNSATISFIED" "$VDIR/bead-ev.md" 2>/dev/null && fixture_sweep_receipt bead-ev; then
   pass "BOUNCE with failed floor checks is recorded, checks and passing dispatcher receipt carried in the file"
 else fail "BOUNCE-with-unsatisfied run: rc=$RC (want 2), or no UNSATISFIED in the record"; fi
@@ -584,13 +584,13 @@ else
   else pass "canary 4: cutting DIED is caught by phase 3's adapter-status check"; fi
 fi
 
-# canary 5: a stub verifier that emits VERDICT without PUSH is still refused
+# canary 5: a stub reviewer that emits VERDICT without PUSH is still refused
 cat > "$REPLY" <<'EOF'
 The old fixture shape must stay invalid.
 VERDICT: BOUNCE
 EOF
-vrun bead-no-push fleet/bead-rev r-seat verifier
-if [ $RC -eq 1 ] && says "verifier emitted no PUSH: line"; then
+vrun bead-no-push fleet/bead-rev r-seat reviewer
+if [ $RC -eq 1 ] && says "reviewer emitted no PUSH: line"; then
   pass "canary 5: verify.ts still refuses a stub verdict without PUSH"
 else fail "canary 5: PUSH-less verdict was not refused (rc=$RC): $OUT"; fi
 

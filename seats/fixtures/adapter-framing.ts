@@ -47,7 +47,7 @@ async function main(){
   for(const d of[project,account,bin,td,path.join(project,'contracts')])fs.mkdirSync(d,{recursive:true});
   fs.cpSync(runtime,path.join(project,'seats'),{recursive:true});fs.writeFileSync(path.join(project,'seats/adapter.ts'),source);
   fs.writeFileSync(path.join(project,'contracts/REVIEWER.md'),'Inert framing reviewer fixture.\n');fs.writeFileSync(path.join(account,'auth.json'),'{"fixture":true}\n');
-  fs.writeFileSync(path.join(project,'seats/seats.json'),JSON.stringify({seats:{'verifier-1':{role:'reviewer',harness:'pi',worktree:false,model:'fixture',account:{dir:account}}}}));
+  fs.writeFileSync(path.join(project,'seats/seats.json'),JSON.stringify({seats:{'reviewer-1':{role:'reviewer',harness:'pi',worktree:false,model:'fixture',account:{dir:account}}}}));
   fs.writeFileSync(path.join(bin,'pi'),'#!/usr/bin/env bash\nexec node "$WHEELHOUSE_FRAMING_PEER" "$@"\n',{mode:0o755});
   fs.writeFileSync(path.join(td,'events.jsonl'),'');fs.writeFileSync(path.join(dir,'input.bytes'),'');process.chdir(dir);
   const events:any[]=[],invocations:any[]=[];let peer:any,closed=false;
@@ -61,20 +61,20 @@ async function main(){
   async function control(type:string,ack:string,extra:object={}){const count=eventCount(ack);send(type,extra);await until(()=>eventCount(ack)>count,()=>closed);}
   const frames=()=>events.filter(x=>x.type==='frame');let failure:any,measurement:any={};
   try{
-   const start=await cli(['spawn','verifier-1'],'spawn').finished;assert.equal(start.rc,0,start.err);assert(peer);
-   const sf=path.join(project,'seats/state.json'),state=JSON.parse(fs.readFileSync(sf,'utf8')),pid=state.seats['verifier-1'].pid;assert.equal(pid,peer.pid);
-   const fifo=state.seats['verifier-1'].fifo,st=fs.statSync(fifo);assert(peer.fd0.fifo&&peer.fd0.dev===st.dev&&peer.fd0.ino===st.ino,'real 0<> holder fd0 must be this FIFO');
+   const start=await cli(['spawn','reviewer-1'],'spawn').finished;assert.equal(start.rc,0,start.err);assert(peer);
+   const sf=path.join(project,'seats/state.json'),state=JSON.parse(fs.readFileSync(sf,'utf8')),pid=state.seats['reviewer-1'].pid;assert.equal(pid,peer.pid);
+   const fifo=state.seats['reviewer-1'].fifo,st=fs.statSync(fifo);assert(peer.fd0.fifo&&peer.fd0.dev===st.dev&&peer.fd0.ino===st.ino,'real 0<> holder fd0 must be this FIFO');
    const pc=spawnSync('getconf',['PIPE_BUF',fifo],{encoding:'utf8'});fs.writeFileSync(path.join(dir,'pipe-buf.json'),JSON.stringify({command:['getconf','PIPE_BUF',fifo],status:pc.status,stdout:pc.stdout,stderr:pc.stderr}));assert.equal(pc.status,0,pc.stderr);const pipeBuf=Number(pc.stdout.trim());assert(pipeBuf>0);
    if(kind==='framing'){
     const large='meridian-frame '+ 'M'.repeat(128*1024)+'\u2028line-separator\u2029paragraph-separator\nJSON newline stays escaped';assert(Buffer.byteLength(large)>pipeBuf);
-    await control('pause-after-state','armed');let fc=frames().length;const single=cli(['steer','verifier-1',large],'single');
+    await control('pause-after-state','armed');let fc=frames().length;const single=cli(['steer','reviewer-1',large],'single');
     await until(()=>traces().some(x=>x.role==='single'&&x.event==='write'&&x.command==='prompt'&&x.n>0),single.ended);await control('drain','draining');const sr=await single.finished;assert.equal(sr.rc,0,sr.err);
     const sw=traces().filter(x=>x.role==='single'&&x.event==='write'&&x.command==='prompt'&&x.n>0),singleFrames=frames().slice(fc).filter(x=>x.command==='prompt');assert(sw.length>1,'native long write must actually be chunked');assert.equal(singleFrames.length,1);assert(singleFrames[0].valid);assert.equal(singleFrames[0].sha256,sw[0].sha256);
     measurement.single={pipeBuf,commandBytes:sw[0].bytes,nativeWriteSizes:sw.map(x=>x.n),readerFrames:singleFrames.length,valid:true,exactHash:true};
-    const previous=JSON.parse(fs.readFileSync(sf,'utf8'));previous.seats['verifier-1'].lastBead='old-bead';fs.writeFileSync(sf,JSON.stringify(previous));
+    const previous=JSON.parse(fs.readFileSync(sf,'utf8'));previous.seats['reviewer-1'].lastBead='old-bead';fs.writeFileSync(sf,JSON.stringify(previous));
     await control('pause-after-state','armed');fc=frames().length;const rawOffset=fs.statSync(path.join(dir,'input.bytes')).size;
-    const a=cli(['dispatch','verifier-1','fixture-bead',large],'A');await until(()=>fs.existsSync(path.join(td,'A.paused')),a.ended);
-    const b=cli(['steer','verifier-1','concurrent short command'],'B');await until(()=>traces().some(x=>x.role==='B'&&(x.event==='lock-contended'||x.event==='write-error'||(x.event==='write'&&x.n>0))),b.ended);
+    const a=cli(['dispatch','reviewer-1','fixture-bead',large],'A');await until(()=>fs.existsSync(path.join(td,'A.paused')),a.ended);
+    const b=cli(['steer','reviewer-1','concurrent short command'],'B');await until(()=>traces().some(x=>x.role==='B'&&(x.event==='lock-contended'||x.event==='write-error'||(x.event==='write'&&x.n>0))),b.ended);
     const mutex=traces().some(x=>x.role==='B'&&x.event==='lock-contended');
     await control('drain','draining');
     if(!mutex)await until(()=>traces().some(x=>x.role==='B'&&x.event==='write'&&x.n>0),b.ended);
@@ -85,21 +85,21 @@ async function main(){
     assert(actual.equals(native),'holder/framer raw input must equal ordered real native-write bytes');
     const rf=frames().slice(fc),expected=new Set(tx.map(x=>x.sha256));
     const ai=tx.findIndex(x=>x.role==='A'&&x.command==='prompt'),ae=tx.findLastIndex(x=>x.role==='A'&&x.command==='prompt');const interleaved=tx.some((x,i)=>x.role==='B'&&i>ai&&i<ae);
-    measurement.concurrent={pipeBuf,mutexObserved:mutex,nativeWrites:tx.map(({role,command,offset,n,bytes})=>({role,command,offset,n,bytes})),interleaved,rawBytesEqualNativeWrites:true,expectedCommands:expected.size,frames:rf,adapterExits:[ar.rc,br.rc],holder:'piLaunch exec with fd0 0<> FIFO; no relay',samePid:JSON.parse(fs.readFileSync(sf,'utf8')).seats['verifier-1'].pid===pid};
+    measurement.concurrent={pipeBuf,mutexObserved:mutex,nativeWrites:tx.map(({role,command,offset,n,bytes})=>({role,command,offset,n,bytes})),interleaved,rawBytesEqualNativeWrites:true,expectedCommands:expected.size,frames:rf,adapterExits:[ar.rc,br.rc],holder:'piLaunch exec with fd0 0<> FIFO; no relay',samePid:JSON.parse(fs.readFileSync(sf,'utf8')).seats['reviewer-1'].pid===pid};
     assert(!interleaved,'adapter command writes interleaved before pi framing');assert(rf.every(x=>x.valid&&expected.has(x.sha256)));assert.equal(rf.length,expected.size);assert.equal(ar.rc,0,ar.err);assert.equal(br.rc,0,br.err);assert(measurement.concurrent.samePid);
    }else{
     await control('streaming','streaming',{value:kind==='parse-steer-streaming'});await control('reject','reject-armed');
-    const args=kind==='parse-dispatch'?['dispatch','verifier-1','fixture-bead','reject this dispatch']:['steer','verifier-1','reject this steer'];const request=cli(args,'reject');
+    const args=kind==='parse-dispatch'?['dispatch','reviewer-1','fixture-bead','reject this dispatch']:['steer','reviewer-1','reject this steer'];const request=cli(args,'reject');
     await until(()=>eventCount('rejected')===1,request.ended);
     let ignored=false;await until(()=>request.ended()||(ignored=traces().some(x=>x.event==='parse-ignored')));
     const rejected=events.find(x=>x.type==='rejected').response;
     if(ignored)send('exit'); // Fix-removed cleanup only; not a timeout verdict.
-    const result=await request.finished;const after=JSON.parse(fs.readFileSync(sf,'utf8')).seats['verifier-1'];
+    const result=await request.finished;const after=JSON.parse(fs.readFileSync(sf,'utf8')).seats['reviewer-1'];
     const target=frames().find(x=>x.command==='prompt'||x.command==='steer');assert(target);
     const acknowledged=events.some(x=>x.type==='out'&&x.response.id===target.id);
-    measurement={response:rejected,ignored,acknowledged,rc:result.rc,err:result.err,peerStillLive:!closed,pidUnchanged:after.pid===pid,sessionUnchanged:after.sessionFile===state.seats['verifier-1'].sessionFile,launches:eventCount('ready')};
-    assert(!ignored,'parse failure was consumed then ignored while waiting for an ack');assert(!acknowledged);assert.doesNotThrow(()=>process.kill(pid,0));assert.notEqual(result.rc,0);assert(result.err.includes('PI_PARSE_ERROR')&&result.err.includes(`seat "verifier-1" (pid ${pid})`)&&result.err.includes(rejected.error),result.err);
-    assert(result.err.includes('adapter.ts stop verifier-1 && adapter.ts resume verifier-1'));assert(!/timed out|process died|pipe closed/.test(result.err));assert(measurement.peerStillLive&&measurement.pidUnchanged&&measurement.sessionUnchanged&&measurement.launches===1,'parse STOP must not restart/stop the seat');
+    measurement={response:rejected,ignored,acknowledged,rc:result.rc,err:result.err,peerStillLive:!closed,pidUnchanged:after.pid===pid,sessionUnchanged:after.sessionFile===state.seats['reviewer-1'].sessionFile,launches:eventCount('ready')};
+    assert(!ignored,'parse failure was consumed then ignored while waiting for an ack');assert(!acknowledged);assert.doesNotThrow(()=>process.kill(pid,0));assert.notEqual(result.rc,0);assert(result.err.includes('PI_PARSE_ERROR')&&result.err.includes(`seat "reviewer-1" (pid ${pid})`)&&result.err.includes(rejected.error),result.err);
+    assert(result.err.includes('adapter.ts stop reviewer-1 && adapter.ts resume reviewer-1'));assert(!/timed out|process died|pipe closed/.test(result.err));assert(measurement.peerStillLive&&measurement.pidUnchanged&&measurement.sessionUnchanged&&measurement.launches===1,'parse STOP must not restart/stop the seat');
    }
    console.log('MEASUREMENT '+kind+' '+JSON.stringify(measurement));console.log('PASS '+kind);
   }catch(e:any){failure=e.stack??String(e);console.log('MEASUREMENT '+kind+' '+JSON.stringify(measurement));console.error('FAIL '+kind+': '+e.message);}

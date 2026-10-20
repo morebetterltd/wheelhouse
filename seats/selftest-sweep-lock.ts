@@ -54,6 +54,15 @@ function stableHostId(): string {
   identitySource = "hostname";
   return digest(`hostname:${HOST}`);
 }
+/** Shared hardware identity for cleanup records. CLI fallback policy stays below. */
+let sharedIdentity: Readonly<{ hostId: string; source: IdentitySource }> | undefined;
+export function stableHostIdentity() {
+  if (!sharedIdentity || sharedIdentity.source === "hostname") {
+    const value = stableHostId();
+    sharedIdentity = Object.freeze({ hostId: value, source: identitySource });
+  }
+  return sharedIdentity;
+}
 function hostMatches(marker: any): boolean {
   // Wire records stay byte-for-byte compatible in shape with older helpers.
   // The sibling stable-ID cache binds previously observed names to this host.
@@ -115,6 +124,7 @@ function diagnoseLock(error: any, lock: string) {
 }
 let native: ReturnType<typeof dlopen>;
 function primitives() {
+  if (native) return;
   if (!darwin && process.platform !== "linux") throw new Refused("atomic directory publication unsupported on this platform");
   native = dlopen(darwin ? "/usr/lib/libSystem.B.dylib" : "libc.so.6", {
     // openat is variadic on Darwin arm64: use only its fixed read-only args.
@@ -293,6 +303,18 @@ function publish(parent: number, name: string, pid: number, token: string) {
   return publishDirectory(parent, name, [["pid", `${pid}\n`], ["started", `${started}\n`], [MARKER, JSON.stringify(marker) + "\n"]]);
 }
 
+function cachedHostNames(fd: number, expectedId: string): Set<string> {
+  const record = JSON.parse(readFile(fd, HOST_RECORD)[0]);
+  if (!record || JSON.stringify(Object.keys(record).sort()) !== JSON.stringify(["hostId", "kind", "version"]) || record.kind !== HOST_RECORD || record.version !== 1 || record.hostId !== expectedId) throw new Refused("foreign or invalid stable host cache");
+  const names = new Set<string>(), digest = (s: string) => createHash("sha256").update(s).digest("hex");
+  for (const member of entries(fd)) {
+    if (member === HOST_RECORD) continue;
+    const raw = readFile(fd, member)[0], hostname = raw.slice(0, -1);
+    if (!/^[0-9a-f]{64}$/.test(member) || !hostname || raw !== hostname + "\n" || /[\r\n\0]/.test(hostname) || digest(hostname) !== member) throw new Refused("invalid cached hostname");
+    names.add(hostname);
+  }
+  return names;
+}
 function hostCache(parent: number, lockName: string): Set<string> {
   // A weaker fallback cannot authenticate hardware-bound aliases. Do not
   // overwrite or reject a previous stable cache just because lookup failed.
@@ -308,15 +330,7 @@ function hostCache(parent: number, lockName: string): Set<string> {
     fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
   }
   try {
-    const record = JSON.parse(readFile(fd, HOST_RECORD)[0]);
-    if (!record || JSON.stringify(Object.keys(record).sort()) !== JSON.stringify(["hostId", "kind", "version"]) || record.kind !== HOST_RECORD || record.version !== 1 || record.hostId !== hostId) throw new Refused("foreign or invalid stable host cache");
-    const names = new Set<string>();
-    for (const member of entries(fd)) {
-      if (member === HOST_RECORD) continue;
-      const raw = readFile(fd, member)[0], hostname = raw.slice(0, -1);
-      if (!/^[0-9a-f]{64}$/.test(member) || !hostname || raw !== hostname + "\n" || /[\r\n\0]/.test(hostname) || digest(hostname) !== member) throw new Refused("invalid cached hostname");
-      names.add(hostname);
-    }
+    const names = cachedHostNames(fd, hostId!);
     if (!names.has(HOST)) {
       // Stage an alias outside the visible cache; atomic exclusive publication
       // under the same parent flock. Never overwrite a foreign cache member.
@@ -336,6 +350,34 @@ function hostCache(parent: number, lockName: string): Set<string> {
     }
     return names;
   } finally { fs.closeSync(fd); }
+}
+
+/** Read-only legacy proof. Never creates, repairs or adds to a host cache. */
+export function legacyHostnameMatches(hostname: string): boolean {
+  if (hostname === HOST) return true; // Preserve the original v1 current-name proof.
+  const identity = stableHostIdentity();
+  if (identity.source === "hostname") return false;
+  primitives();
+  const lock = canonicalLock(process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK || "/tmp/wheelhouse-selftest-sweep.lock");
+  let parent = -1, fd = -1;
+  try {
+    parent = parentFd(lock);
+    const name = path.basename(lock) + ".host";
+    fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+    const anchor = readFile(fd, HOST_RECORD);
+    const names = cachedHostNames(fd, identity.hostId);
+    if (JSON.stringify(readFile(fd, HOST_RECORD)) !== JSON.stringify(anchor)) throw new Refused("stable host cache changed during inspection");
+    const current = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+    try { if (id(current) !== id(fd)) throw new Refused("stable host cache directory changed during inspection"); }
+    finally { fs.closeSync(current); }
+    return names.has(hostname);
+  } catch (e: any) {
+    if (e.errno === 2) return false; // Missing cache is not proof of an old name.
+    throw e;
+  } finally {
+    if (fd >= 0) fs.closeSync(fd);
+    if (parent >= 0) fs.closeSync(parent);
+  }
 }
 
 type Ticket = { name: string; identity: string; raw: string; pid: number; token: string; sequence: bigint };
@@ -618,14 +660,16 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
   }
   return interrupted ? 128 + os.constants.signals[interrupted] : code;
 }
-try {
-  const [operation, lock, ...command] = process.argv.slice(2);
-  hostId = stableHostId();
-  if (operation === "inherited") process.exitCode = ancestorOwnsLock(canonicalLock(lock)) ? 0 : 75;
-  else if (operation === "supervise") process.exitCode = await superviseSuite(canonicalLock(lock), command);
-  else process.exitCode = main();
-}
-catch (e: any) {
-  if (!diagnosed) diagnoseLock(e, process.argv[3]);
-  console.error(`STOP: ${process.argv[3]} is not a selftest-sweep lock (${e.message})`); process.exitCode = 2;
+if (import.meta.main) {
+  try {
+    const [operation, lock, ...command] = process.argv.slice(2);
+    hostId = stableHostId();
+    if (operation === "inherited") process.exitCode = ancestorOwnsLock(canonicalLock(lock)) ? 0 : 75;
+    else if (operation === "supervise") process.exitCode = await superviseSuite(canonicalLock(lock), command);
+    else process.exitCode = main();
+  }
+  catch (e: any) {
+    if (!diagnosed) diagnoseLock(e, process.argv[3]);
+    console.error(`STOP: ${process.argv[3]} is not a selftest-sweep lock (${e.message})`); process.exitCode = 2;
+  }
 }

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { hasPool, loadPool, seatEntryFor, PoolError, type SeatEntry } from "./pool";
 
-export interface StaffingSeat { role: "worker" | "verifier"; entry: string; addedAt?: string }
+export interface StaffingSeat { role: "worker" | "reviewer"; entry: string; addedAt?: string }
 export interface StaffingFile { version: 1; seats: Record<string, StaffingSeat>; rateLimited?: Record<string, { at: string; detail: string }>; lastCheck?: any }
 
 export function staffingPath(root: string): string { return path.join(root, "seats", "staffing.json"); }
@@ -19,8 +19,8 @@ function readStaffing(root: string): StaffingFile | null {
 
 function poolRoleForStaffedSeat(seatName: string, seat: StaffingSeat): "workers" | "reviewers" {
   if (seat.role === "worker") return "workers";
-  if (seat.role === "verifier") return "reviewers";
-  throw new PoolError(`STOP: seats/staffing.json: seat ${seatName} has invalid role ${JSON.stringify((seat as any).role)} — fix: use worker or verifier`);
+  if (seat.role === "reviewer") return "reviewers";
+  throw new PoolError(`STOP: seats/staffing.json: seat ${seatName} has invalid or legacy role ${JSON.stringify((seat as any).role)} — fix: set seats/staffing.json seats[${JSON.stringify(seatName)}].role to "reviewer" for a review seat (or "worker" for a worker); walkers belong in seats/seats.json`);
 }
 
 export function effectiveRoster(root: string): Record<string, SeatEntry> {

@@ -19,7 +19,7 @@ const prelude = `
 set -eu
 . "$1/selftest-lib.sh"
 FIX="$2"; TMP="$FIX"; PROJ="$FIX/project"; proj="$PROJ"; HOME_FIX="$FIX/home"
-CODEX_TMP="$FIX/codex"; ARGV="$FIX/argv.json"; VARGV="$FIX/verifier/argv.json"
+CODEX_TMP="$FIX/codex"; ARGV="$FIX/argv.json"; VARGV="$FIX/reviewer/argv.json"
 VDIR="$FIX/verdicts"; SEND_LOG="$FIX/send.log"; BD_LOG="$FIX/bd.log"
 PROJA="$FIX/A"; PROJB="$FIX/B"; SEAT_A="$FIX/seat-a"; SEAT_B="$FIX/seat-b"
 STATE_A="$FIX/state-A.json"; STATE="$FIX/state.json"; SENTINEL=forbidden; ELOG="$FIX/cleanup.log"; la="$FIX/a.log"; lb="$FIX/b.log"

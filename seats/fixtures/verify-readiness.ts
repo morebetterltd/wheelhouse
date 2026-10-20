@@ -94,11 +94,11 @@ export async function ready(dir: string, exited: () => boolean): Promise<void> {
   release(dir);
 }
 export async function expireSilent(dir: string, exited: () => boolean): Promise<void> {
-  await until(() => exists(dir, "silent"), exited, "silent verifier entered");
+  await until(() => exists(dir, "silent"), exited, "silent reviewer entered");
   record(dir, "expire-first");
   await until(() => exists(dir, "expired-first"), exited, "explicit watchdog expiry");
   if (!exists(dir, "stop") || fs.readFileSync(path.join(dir, "stop"), "utf8") !== "WHEELHOUSE_FIRST_OUTPUT_TIMEOUT") {
-    throw new Error("fixture silent expiry did not STOP the verifier");
+    throw new Error("fixture silent expiry did not STOP the reviewer");
   }
 }
 
@@ -129,7 +129,7 @@ function status(exit: Exit): number { return exit.code ?? (exit.signal ? 128 + c
 // Use the runner's real lock protocol: shell mv can instead put a PID file
 // INSIDE a leftover directory lock, corrupting it before the dispatcher waits.
 // The actual holder (not a separate shell surrogate) retains main's bounded
-// admission/release wait and parent-liveness containment. Neither is a verifier
+// admission/release wait and parent-liveness containment. Neither is a reviewer
 // readiness verdict: only real admission publishes the ready file.
 async function holdH4(lock: string, releaseFile: string, readyFile: string, helper: string): Promise<void> {
   const seconds = Number(process.env.WHEELHOUSE_VERIFY_FIXTURE_HOLDER_SECONDS ?? 300);
@@ -234,7 +234,7 @@ async function drive(): Promise<void> {
   process.once("SIGTERM", terminate); process.once("SIGINT", terminate);
   try {
     // A held sweep is released only after the dispatcher has actually waited,
-    // while the verifier still cannot have signalled ready. No sleep duration.
+    // while the reviewer still cannot have signalled ready. No sleep duration.
     if (process.env.STUB_TEST_HOLD_H4 === "1") {
       const lock = process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK;
       if (!lock) throw new Error("fixture H4 holder needs its private lock path");
@@ -251,7 +251,7 @@ async function drive(): Promise<void> {
       // New reviews queue before main/scratch/watchdogs; old dispatchers wait
       // inside the sweep log. Observe either real admission checkpoint.
       await until(() => exists(dir, "ready") || /waiting for host-wide lock[^\n]*queue_position=/.test(fixture!.stderr()) || (fs.existsSync(logs) && fs.readdirSync(logs).filter(name => name.includes(`.${child.pid}.`)).some(name => fs.readFileSync(path.join(logs, name), "utf8").includes("waiting for host-wide lock"))), () => ended() || holder!.exited(), "dispatcher H4 wait");
-      if (exists(dir, "ready")) throw new Error("verifier started before held sweep was released");
+      if (exists(dir, "ready")) throw new Error("reviewer started before held sweep was released");
       record(dir, "holder-wait-observed");
       fs.writeFileSync(holderRelease, "release\n");
     }

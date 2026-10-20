@@ -15,8 +15,9 @@ One line per seat, mirroring `seats/seats.json` — the machine record, which de
 | Seat | Role brief | Harness | Provider | Model | Auth route | Agent directory |
 |---|---|---|---|---|---|---|
 | `worker-1` | `wheelhouse/fleet/WORKER.md` | `claude-code` | `anthropic` | `claude-sonnet-5` | `oauth` | `~/.pi-seats-ebb/worker-1` |
-| `reviewer` | `wheelhouse/crew/REVIEWER.md` | `codex` | `openai-codex` | `gpt-5.6-sol` | `oauth` | `~/.pi-seats-ebb/reviewer` — never authors what it reviews, so its directory differs from every worker's |
-| `verifier` | `wheelhouse/crew/VERIFIER.md` consumer-surface walker | `pi` | `openrouter` | `z-ai/glm-5.3-flash` | `api_key` | `~/.pi-seats-ebb/verifier` — walks ISA claim surfaces via `seats/walk.ts`; gates claims, not beads |
+| `reviewer-1` | `wheelhouse/crew/REVIEWER.md` (role `reviewer`) | `codex` | `openai-codex` | `gpt-5.6-sol` | `oauth` | `~/.pi-seats-ebb/reviewer-1` — never authors what it reviews, so its directory differs from every worker's |
+| `reviewer-2` (optional shadow) | `wheelhouse/crew/REVIEWER.md` (role `reviewer`) | `claude-code` | `anthropic` | `sonnet` | `oauth` | `~/.pi-seats-ebb/reviewer-2` — mirror only, never gates by default |
+| `verifier` | `wheelhouse/crew/VERIFIER.md` consumer-surface walker (role `verifier`) | `pi` | `openrouter` | `z-ai/glm-5.3-flash` | `api_key` | `~/.pi-seats-ebb/verifier` — walks ISA claim surfaces via `seats/walk.ts`; gates claims, not beads |
 | (commander) | this folder's `CLAUDE.md` | external | — | — | — | none: the principal's own session, `"external": true` in the roster |
 
 ### Declined seats

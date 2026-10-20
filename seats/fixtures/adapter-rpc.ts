@@ -27,7 +27,7 @@ for (const kind of cases) {
   fs.writeFileSync(path.join(project, "contracts/REVIEWER.md"), "Owned RPC fixture reviewer.\n");
   fs.writeFileSync(path.join(account, "auth.json"), '{"fixture":"not-a-credential"}\n');
   fs.writeFileSync(path.join(project, "seats/seats.json"), JSON.stringify({ seats: {
-    "verifier-1": { role: "reviewer", harness: "pi", worktree: false, model: "fixture", account: { dir: account } },
+    "reviewer-1": { role: "reviewer", harness: "pi", worktree: false, model: "fixture", account: { dir: account } },
   } }));
   fs.writeFileSync(path.join(bin, "pi"), '#!/usr/bin/env bash\nexec node "$WHEELHOUSE_RPC_FIXTURE_PEER" "$@"\n', { mode: 0o755 });
   // Relative Unix socket names avoid Darwin's sockaddr_un pathname limit;
@@ -93,13 +93,13 @@ for (const kind of cases) {
   let signal: ReturnType<typeof fileSignal> | undefined;
   let failure: string | undefined;
   try {
-    const spawned = await cli(["spawn", "verifier-1"]).finished;
+    const spawned = await cli(["spawn", "reviewer-1"]).finished;
     assert.equal(spawned.rc, 0, spawned.err);
     const stateFile = path.join(project, "seats/state.json");
     const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-    const pid = state.seats["verifier-1"].pid, peer = peers.get(pid);
+    const pid = state.seats["reviewer-1"].pid, peer = peers.get(pid);
     assert.ok(peer, "recorded pid must be the nonce-authenticated peer");
-    state.seats["verifier-1"].lastBead = "old-bead";
+    state.seats["reviewer-1"].lastBead = "old-bead";
     fs.writeFileSync(stateFile, JSON.stringify(state));
     const send = (type: string) => peer.socket.write(JSON.stringify({ type }) + "\n");
     const waitingForDrain = kind === "backpressure" || kind === "partial-eof";
@@ -107,7 +107,7 @@ for (const kind of cases) {
     send(waitingForDrain ? "pause-after-state" : "hold");
     await barrier;
     barrier = next(waitingForDrain ? "input-paused" : "held");
-    const request = cli(["dispatch", "verifier-1", "new-bead", waitingForDrain ? "H".repeat(128 * 1024) : kind], true);
+    const request = cli(["dispatch", "reviewer-1", "new-bead", waitingForDrain ? "H".repeat(128 * 1024) : kind], true);
     const expectBeforeExit = async (event: Promise<any>) => Promise.race([
       event,
       request.finished.then(result => { throw new Error(`adapter exited before barrier: ${JSON.stringify({ rc: result.rc, out: result.out, err: result.err })}`); }),
@@ -121,7 +121,7 @@ for (const kind of cases) {
       if (kind === "held-reply") fs.writeFileSync(path.join(clock, "advance"), "60001 logical ms\n");
       await expectBeforeExit(signal.promise);
       const progress = JSON.parse(fs.readFileSync(path.join(clock, "progress"), "utf8"));
-      assert.match(progress.message, /WAIT: seat "verifier-1" \(pid \d+\)/);
+      assert.match(progress.message, /WAIT: seat "reviewer-1" \(pid \d+\)/);
       assert.match(progress.message, /process alive/);
       if (kind === "held-reply") {
         assert.equal(progress.virtualAdvanceMs, 60001);
@@ -140,15 +140,15 @@ for (const kind of cases) {
     const result = await request.finished;
     if (kind === "held-reply" || kind === "backpressure") {
       assert.equal(result.rc, 0, result.err);
-      assert.match(result.out, /dispatched new-bead to verifier-1/);
-      const after = JSON.parse(fs.readFileSync(stateFile, "utf8")).seats["verifier-1"];
+      assert.match(result.out, /dispatched new-bead to reviewer-1/);
+      const after = JSON.parse(fs.readFileSync(stateFile, "utf8")).seats["reviewer-1"];
       assert.equal(after.pid, pid, "slow response/drain must not restart a live seat");
-      assert.equal(after.sessionFile, state.seats["verifier-1"].sessionFile);
+      assert.equal(after.sessionFile, state.seats["reviewer-1"].sessionFile);
       assert.equal(after.lastBead, "new-bead");
       assert.doesNotMatch(result.out + result.err, /timed out|WEDGED/);
     } else {
       assert.notEqual(result.rc, 0);
-      assert.ok(result.err.includes(`seat "verifier-1" (pid ${pid})`), result.err);
+      assert.ok(result.err.includes(`seat "reviewer-1" (pid ${pid})`), result.err);
       assert.match(result.err, /process died|pipe closed \(EOF\)/);
       assert.doesNotMatch(result.err, /timed out/);
       if (kind !== "dead-peer") {
