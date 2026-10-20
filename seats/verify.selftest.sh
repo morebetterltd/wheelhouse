@@ -467,7 +467,9 @@ case "$verb" in
     if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf 'fixture bead\n'; fi
     exit 0 ;;
   comments)
-    printf 'fixture comments\n'; exit 0 ;;
+    [ "${STUB_BD_COMMENTS_FAIL:-0}" != 1 ] || { echo 'fixture bd comments unavailable' >&2; exit 1; }
+    if [ -n "${STUB_BD_COMMENTS_FILE:-}" ]; then cat "$STUB_BD_COMMENTS_FILE"; else printf 'fixture comments\n'; fi
+    exit 0 ;;
   where)
     node -e 'console.log(JSON.stringify({path:require("fs").realpathSync(".beads")}))'; exit $? ;;
   init)
@@ -749,6 +751,17 @@ kill "$BUSY_RV2" 2>/dev/null || true
 if [ $RC -eq 4 ] && says "all eligible reviewer seats busy"; then pass "pool reviewer routing retry-exits when all distinct reviewers are busy"; else fail "all-busy reviewer retry failed rc=$RC out=$OUT"; fi
 rm -f "$PROJ/seats/run/verify.reviewer-rv2.json"
 mv "$FIX/seats-json.before-pool" "$PROJ/seats/seats.json"; rm -f "$PROJ/seats/pool.json" "$PROJ/seats/staffing.json" "$PROJ/seats/state.json"
+
+phase "shadow reviewers — selection and scoped per-outage promotion"
+SHADOW_PROJ="$FIX/shadow-proj"
+build_proj "$SHADOW_PROJ" shadow "$VERIFY"
+if HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/reviewer-shadow.ts" "$SHADOW_PROJ" "$HOME_FIX"; then
+  pass "shadow reviewer cases and pinned fix-removal controls"
+else fail "shadow reviewer regression"; fi
+if [ "${WHEELHOUSE_TEST_VERIFY_SHADOW_ONLY:-0}" = 1 ]; then
+  printf 'verify shadow-focused selftest: failures=%s\n' "$FAILED"
+  [ "$FAILED" -eq 0 ]; exit $?
+fi
 
 phase "installed layout — wheelhouse/crew brief is preferred without contracts/"
 INST_PROJ="$FIX/installed-proj"
