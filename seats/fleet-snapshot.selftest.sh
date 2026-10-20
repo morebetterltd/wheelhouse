@@ -10,7 +10,7 @@ selftest_install_cleanup_traps cleanup
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 export WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS="${WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS:-120000}"
-ROOT="$FIX/proj"; BIN="$FIX/bin"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/contracts" "$BIN" "$FIX/home/.pi-seats-snap/worker" "$FIX/home/.pi-seats-snap/verifier"
+ROOT="$FIX/proj"; BIN="$FIX/bin"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/contracts" "$BIN" "$FIX/home/.pi-seats-snap/worker" "$FIX/home/.pi-seats-snap/reviewer"
 printf 'namespace=snap\n' > "$ROOT/wheelhouse/.template-source"
 printf '# Synthetic ISA\n' > "$ROOT/wheelhouse/ISA.md"
 git -C "$ROOT" init -q -b main
@@ -18,7 +18,7 @@ git -C "$ROOT" add wheelhouse/ISA.md wheelhouse/.template-source
 git -C "$ROOT" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture-isa
 selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$ROOT/seats/seats.json" <<'JSON'
-{"version":1,"seats":{"worker-1":{"role":"worker","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/worker","authRoute":"oauth"}},"verifier":{"role":"verifier","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/verifier","authRoute":"oauth"}}}}
+{"version":1,"seats":{"worker-1":{"role":"worker","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/worker","authRoute":"oauth"}},"verifier":{"role":"verifier","harness":"pi","provider":"openai","model":"walk","account":{"dir":"~/.pi-seats-snap/walker","authRoute":"env"}},"reviewer":{"role":"reviewer","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/reviewer","authRoute":"oauth"}}}}
 JSON
 cat > "$BIN/bd" <<'SH'
 #!/usr/bin/env bash
@@ -60,7 +60,7 @@ j.seats['worker-1'].lastBead='closed-bead'; fs.writeFileSync(p,JSON.stringify(j)
 rows.push({id:'closed-bead',status:'closed'}); fs.writeFileSync(q,JSON.stringify(rows));
 JS
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.workers.idle!==1||s.workers.busy!==0) process.exit(1)' && pass 'table row 3: settled live worker with closed bead is idle' || fail "idle worker wrong rc=$RC out=$OUT"
-printf '%s\n' '{"pid":'$$',"bead":"rev1","startedAt":"2026-01-01T00:00:00Z"}' > "$ROOT/seats/run/verify.verifier.json"
+printf '%s\n' '{"pid":'$$',"bead":"rev1","startedAt":"2026-01-01T00:00:00Z"}' > "$ROOT/seats/run/verify.reviewer.json"
 printf '%s\n' '{"pid":999999,"bead":"rev2","startedAt":"2026-01-01T00:00:00Z"}' > "$ROOT/seats/run/verify.stale.json"
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.reviewBacklog.length!==1||s.reviewBacklog[0].id!=="rev2"||s.reviewers.busy!==1) process.exit(1)' && pass 'table rows 4-5: live verify marker removes backlog; stale marker does not' || fail "verify marker table wrong rc=$RC out=$OUT"
 (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot, freeWorkers, freeReviewers } from "./seats/fleet-snapshot.ts"; const s=fleetSnapshot(process.cwd()); if(freeWorkers(s).length!==1||freeReviewers(s).length!==0) process.exit(1);') && pass 'freeWorkers/freeReviewers helpers return idle live seats only' || fail 'freeWorkers/freeReviewers helper coverage failed'

@@ -44,9 +44,9 @@ run_check
 ( cd "$ROOT" && HOME="$HOME_FIX" bun -e 'import { loadPool, seatEntryFor } from "./seats/pool.ts"; const p=loadPool(process.cwd()); if(seatEntryFor(p,"workers","a").model!=="worker-model") throw new Error("worker model wrong"); if(seatEntryFor(p,"reviewers","a").model!=="reviewer-model") throw new Error("reviewer model wrong");' ) > "$FIX/role-model.out" 2>&1
 [ $? -eq 0 ] && pass 'seatEntryFor assigns the role-specific model' || fail "role model failed: $(cat "$FIX/role-model.out")"
 cat > "$ROOT/seats/staffing.json" <<'JSON'
-{"version":1,"seats":{"worker-a":{"role":"worker","entry":"a","addedAt":"2026-01-01T00:00:00Z"},"verifier-a":{"role":"verifier","entry":"a","addedAt":"2026-01-01T00:00:00Z"}}}
+{"version":1,"seats":{"worker-a":{"role":"worker","entry":"a","addedAt":"2026-01-01T00:00:00Z"},"reviewer-a":{"role":"reviewer","entry":"a","addedAt":"2026-01-01T00:00:00Z"}}}
 JSON
-( cd "$ROOT" && HOME="$HOME_FIX" bun -e 'import { effectiveRoster } from "./seats/roster.ts"; const r=effectiveRoster(process.cwd()); if(r["worker-a"]?.model!=="worker-model"||r["verifier-a"]?.model!=="reviewer-model") throw new Error(JSON.stringify(r));' ) > "$FIX/staffing-roster.out" 2>&1
+( cd "$ROOT" && HOME="$HOME_FIX" bun -e 'import { effectiveRoster } from "./seats/roster.ts"; const r=effectiveRoster(process.cwd()); if(r["worker-a"]?.model!=="worker-model"||r["reviewer-a"]?.model!=="reviewer-model") throw new Error(JSON.stringify(r));' ) > "$FIX/staffing-roster.out" 2>&1
 [ $? -eq 0 ] && pass 'effectiveRoster expands only seats registered in staffing.json' || fail "staffing roster failed: $(cat "$FIX/staffing-roster.out")"
 ( cd "$ROOT" && HOME="$HOME_FIX" bun -e 'import { worktreeCap } from "./seats/seat-worktree.ts"; const c=worktreeCap(process.cwd()); if(c.seats!==3 || c.cap!==5) throw new Error(JSON.stringify(c));' ) > "$FIX/worktree-cap.out" 2>&1
 [ $? -eq 0 ] && pass 'worktreeCap counts the effective roster, including staffed seats' || fail "worktree cap failed: $(cat "$FIX/worktree-cap.out")"

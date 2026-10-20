@@ -33,7 +33,7 @@ Provision each roster seat once (safe to re-run; it changes nothing for a seat t
 ```bash
 cd ~/code/ebb
 seats/seat-env.sh ebb worker-1
-seats/seat-env.sh ebb reviewer
+seats/seat-env.sh ebb reviewer-1
 seats/seat-env.sh ebb verifier
 ```
 

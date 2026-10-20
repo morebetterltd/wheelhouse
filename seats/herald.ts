@@ -431,7 +431,7 @@ function verdictLine(text: string): string {
 function relayUnpostedVerdict(candidate: Candidate, seat: string): boolean {
   if (candidate.eventClass !== "verdict-not-posted") return true;
   const rec = adapterSeatState(seat);
-  if (rec?.role !== "reviewer" && rec?.role !== "verifier") return false;
+  if (rec?.role !== "reviewer") return false;
   const bead = typeof rec?.lastBead === "string" && rec.lastBead.trim() ? rec.lastBead.trim() : "";
   if (!bead) return false;
   const verdict = verdictLine(candidate.detail);
