@@ -2104,9 +2104,11 @@ phase "9. canary — can these checks detect a broken verify.ts?"
 # 9a: a verify.ts whose account-distinctness gate never fires
 CAN_A="$FIX/can-a"
 cp "$VERIFY" "$FIX/can-a-verify.ts"
-perl -0pi -e 's/const distinct = reviewers\.filter\(\(\[, e\]\) => e\.account\?\.dir && canonicalDir\(e\.account\.dir\) !== authorDir\);/const distinct = reviewers;\/\/ canary disables picker distinctness/; s/if \(authorDir === reviewerDir\) \{ \/\/ distinctness-gate/if (false) { \/\/ distinctness-gate/' "$FIX/can-a-verify.ts"
-if cmp -s "$VERIFY" "$FIX/can-a-verify.ts"; then
-  fail "canary: could not disarm the distinctness gate — the line no longer matches, so the canary proves nothing"
+perl -0pi -e 's/const distinct = gating\.filter\(\(\[, e\]\) => e\.account\?\.dir && canonicalDir\(e\.account\.dir\) !== authorDir\);/const distinct = gating;\/\/ canary disables picker distinctness/; s/if \(authorDir === reviewerDir\) \{ \/\/ distinctness-gate/if (false) { \/\/ distinctness-gate/' "$FIX/can-a-verify.ts"
+if cmp -s "$VERIFY" "$FIX/can-a-verify.ts" \
+  || ! grep -Fq 'const distinct = gating;// canary disables picker distinctness' "$FIX/can-a-verify.ts" \
+  || ! grep -Fq 'if (false) { // distinctness-gate' "$FIX/can-a-verify.ts"; then
+  fail "canary: could not disarm BOTH distinctness gates — a source site no longer matches, so the canary proves nothing"
 else
   build_proj "$CAN_A" can-a "$FIX/can-a-verify.ts"
   env HOME="$HOME_FIX" bun -e '
