@@ -405,8 +405,11 @@ each live seat's **own** event log. A mid-turn model stream with no progress for
 the seat, assigned task, last own event and its time. RPC responses do not
 advance that clock, even `isStreaming=false`: an unfinished turn still needs
 its completion event. A settled `agent_end`/`agent_settled` is exempt; a retrying
-`agent_end` (`willRetry=true`) is not settlement. Assigned-but-settled seats
-waiting on background work are a separate condition, not this watchdog.
+`agent_end` (`willRetry=true`) is not settlement. An assignment alone is not
+proof that a model turn started. After copy-truncation, the detector recovers
+completion from the owned `.jsonl.1` archive when no new turn lifecycle is
+present; an old archive cannot override a newer own turn. Assigned-but-settled
+seats waiting on background work are a separate condition, not this watchdog.
 
 A condition still present after `seat-stall-need-after-minutes=15` additional
 minutes opens one notify need with seat/task machine fields. Repeated checks

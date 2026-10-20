@@ -27,8 +27,8 @@ function millis(v: unknown): number | null {
   const n = typeof v === "number" ? (v < 1e10 ? v * 1000 : v) : typeof v === "string" ? Date.parse(v) : NaN;
   return Number.isFinite(n) ? n : null;
 }
-function ownedLog(root: string, seat: string, log: string): fs.Stats | null {
-  if (!/^[A-Za-z0-9_-]+$/.test(seat) || log !== path.join(root, "seats/logs", seat + ".jsonl")) return null;
+function ownedLog(root: string, seat: string, log: string, archive = false): fs.Stats | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(seat) || log !== path.join(root, "seats/logs", seat + ".jsonl" + (archive ? ".1" : ""))) return null;
   try {
     let current = path.parse(log).root;
     for (const part of path.dirname(log).slice(current.length).split(path.sep).filter(Boolean)) {
@@ -38,28 +38,29 @@ function ownedLog(root: string, seat: string, log: string): fs.Stats | null {
     const st = fs.lstatSync(log); return st.isFile() && st.nlink === 1 ? st : null;
   } catch { return null; }
 }
-export function seatStreamHealth(root: string, seat: string, rec: StreamSeat, prior?: StreamHealth, now = Date.now()): StreamHealth | null {
-  if (!rec.log || rec.stoppedAt || rec.lastCapacityEvent || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) return null;
-  const st = ownedLog(root, seat, rec.log); if (!st) return null;
-  const processKey = `${rec.pid}:${rec.startedAt ?? ""}`;
-  const same = prior?.processKey === processKey;
-  // Ignore a partial first record in a bounded tail. Tool updates reconstruct an
-  // open tool even when its original start is older than the retained tail.
+type Scan = { active: boolean; sawLifecycle: boolean; last: string; key: string; received: number | null; tools: Map<string, string> };
+function scanStreamLog(log: string, st: fs.Stats, prior?: StreamHealth): Scan | null {
+  // Ignore only a partial first record in a bounded tail. Tool updates
+  // reconstruct an open tool whose start is older than the retained tail.
   const start = Math.max(0, st.size - 1024 * 1024), buf = Buffer.alloc(st.size - start);
-  let fd: number | undefined, bytesRead = 0;
+  let fd: number | undefined, bytesRead = 0, boundary = start === 0;
   try {
-    fd = fs.openSync(rec.log, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+    fd = fs.openSync(log, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
     const opened = fs.fstatSync(fd);
     if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== st.dev || opened.ino !== st.ino) return null;
+    if (start > 0) {
+      const previous = Buffer.alloc(1);
+      if (fs.readSync(fd, previous, 0, 1, start - 1) === 1) boundary = previous[0] === 10;
+    }
     bytesRead = fs.readSync(fd, buf, 0, buf.length, start);
   } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
   const data = buf.subarray(0, bytesRead);
-  let active = !!(same && start > 0 && prior!.phase !== "idle"), sawLifecycle = false, last = "dispatch", key = "", received: number | null = null;
-  const tools = new Map<string, string>(same && start > 0 ? Object.entries(prior!.pendingToolIds ?? {}) : []);
+  let active = !!prior && prior.phase !== "idle", sawLifecycle = false, last = "dispatch", key = "", received: number | null = null;
+  const tools = new Map<string, string>(prior ? Object.entries(prior.pendingToolIds ?? {}) : []);
   // Cursor keys are byte offsets, not re-encoded lengths of a tail that may
   // begin halfway through a UTF-8 character.
-  let begin = start > 0 ? data.indexOf(10) + 1 : 0;
-  if (start > 0 && begin === 0) begin = data.length;
+  let begin = boundary ? 0 : data.indexOf(10) + 1;
+  if (!boundary && begin === 0) begin = data.length;
   for (let end = data.indexOf(10, begin); end >= 0; end = data.indexOf(10, begin)) {
     const line = data.subarray(begin, end).toString("utf8"), offset = start + end + 1; begin = end + 1;
     let ev: any; try { ev = JSON.parse(line); } catch { continue; }
@@ -76,23 +77,40 @@ export function seatStreamHealth(root: string, seat: string, rec: StreamSeat, pr
     if (type === "agent_start" || type === "turn_start") tools.clear();
     if (type === "agent_end" || type === "agent_settled") {
       active = type === "agent_end" && ev.willRetry === true; tools.clear(); sawLifecycle = true;
-    } else {
-      if (!/compaction_/.test(type)) active = true;
-      sawLifecycle = true;
+    } else if (!/compaction_/.test(type)) {
+      active = true; sawLifecycle = true;
     }
     const id = String(ev.toolCallId ?? ev.toolName ?? "unknown");
     if (type === "tool_execution_start" || type === "tool_execution_update") tools.set(id, String(ev.toolName ?? "tool"));
     if (type === "tool_execution_end") tools.delete(id);
     if (type === "message_end" && ev.message?.role === "toolResult") tools.delete(String(ev.message.toolCallId));
   }
-  if (!sawLifecycle) active = same ? prior!.phase !== "idle" : !!(rec.lastBead && rec.lastDispatchAt);
-  if (!key && same) { key = prior!.progressKey; last = prior!.lastEvent; }
-  // Legacy un-stamped logs start at their file mtime on first observation.
-  // A persisted matching progress key then survives RPC-only appends/restarts.
-  const at = received ?? (same && prior!.progressKey === key ? Date.parse(prior!.lastEventAt) : key ? st.mtimeMs : millis(rec.lastDispatchAt) ?? millis(rec.startedAt) ?? now);
+  return { active, sawLifecycle, last, key, received, tools };
+}
+export function seatStreamHealth(root: string, seat: string, rec: StreamSeat, prior?: StreamHealth, now = Date.now()): StreamHealth | null {
+  if (!rec.log || rec.stoppedAt || rec.lastCapacityEvent || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) return null;
+  let st = ownedLog(root, seat, rec.log); if (!st) return null;
+  const processKey = `${rec.pid}:${rec.startedAt ?? ""}`;
+  if (prior?.processKey !== processKey) prior = undefined;
+  let scan = scanStreamLog(rec.log, st, prior); if (!scan) return null;
+  // Status copy-truncates completed logs. With no new turn lifecycle in the
+  // current file, recover its actual terminal event from the owned archive instead of
+  // mistaking a cached unfinished turn/assignment for a newly silent model.
+  if (!scan.sawLifecycle) {
+    const archive = ownedLog(root, seat, rec.log + ".1", true);
+    if (archive) {
+      const archived = scanStreamLog(rec.log + ".1", archive, prior);
+      const archiveAt = archived?.received ?? archive.mtimeMs;
+      if (archived?.sawLifecycle && archiveAt >= (prior ? Date.parse(prior.lastEventAt) : -Infinity)) { scan = archived; st = archive; }
+    }
+  }
+  if (!scan.key && prior) { scan.key = prior.progressKey; scan.last = prior.lastEvent; }
+  // An assignment alone is not proof of an unfinished turn. Legacy un-stamped
+  // logs start at mtime, then a persisted matching key survives RPC appends.
+  const at = scan.received ?? (prior && prior.progressKey === scan.key ? Date.parse(prior.lastEventAt) : scan.key ? st.mtimeMs : millis(rec.lastDispatchAt) ?? millis(rec.startedAt) ?? now);
   const lastAt = Math.min(now, at), quietMs = seatQuietMs(root), quietForMs = Math.max(0, now - lastAt);
-  const phase = !active ? "idle" : tools.size ? "tool" : "model";
-  return { seat, bead: rec.lastBead ?? null, processKey, progressKey: key, phase, pendingTools: [...tools.values()], pendingToolIds: Object.fromEntries(tools), lastEvent: last, lastEventAt: new Date(lastAt).toISOString(), quietMs, quietForMs, stalled: phase === "model" && quietForMs >= quietMs };
+  const phase = !scan.active ? "idle" : scan.tools.size ? "tool" : "model";
+  return { seat, bead: rec.lastBead ?? null, processKey, progressKey: scan.key, phase, pendingTools: [...scan.tools.values()], pendingToolIds: Object.fromEntries(scan.tools), lastEvent: scan.last, lastEventAt: new Date(lastAt).toISOString(), quietMs, quietForMs, stalled: phase === "model" && quietForMs >= quietMs };
 }
 export function readStreamObservations(root: string): Record<string, StreamHealth> {
   try { return JSON.parse(fs.readFileSync(path.join(root, "seats/run/fleet-snapshot.json"), "utf8")).seatStreams ?? {}; } catch { return {}; }

@@ -26,9 +26,9 @@ function rows(file: string): any[] { return fs.existsSync(file) ? fs.readFileSyn
 function inbox() { return rows(inboxFile).filter(r => r.source?.name === source); }
 function state() { fs.writeFileSync(path.join(seats, "state.json"), JSON.stringify({ seats: { "worker-a": record } })); }
 function reset() {
-  for (const file of [snapshotFile, inboxFile, needsFile]) fs.rmSync(file, { force: true });
+  for (const file of [snapshotFile, inboxFile, needsFile, log + ".1"]) fs.rmSync(file, { force: true });
   fs.writeFileSync(config, baseConfig); fs.writeFileSync(log, "");
-  delete process.env.WHEELHOUSE_SEAT_QUIET_MS; delete process.env.WHEELHOUSE_SEAT_STALL_NEED_MS;
+  delete process.env.WHEELHOUSE_SEAT_QUIET_MS; delete process.env.WHEELHOUSE_SEAT_STALL_NEED_MS; delete process.env.WHEELHOUSE_LOG_ROTATE_BYTES;
   delete record.stoppedAt; delete record.lastCapacityEvent; record.pid = process.pid; record.lastBead = "fixture-abcd"; state();
 }
 function event(type: string, at: number, extra: any = {}) { fs.appendFileSync(log, JSON.stringify({ type, wheelhouse_received_at: new Date(at).toISOString(), ...extra }) + "\n"); }
@@ -134,6 +134,23 @@ const cases: Record<string, () => void | Promise<void>> = {
     // must retire remembered tools even when the preceding result was huge.
     fs.appendFileSync(log, JSON.stringify({ type: "tool_execution_end", toolCallId: "long", result: "x".repeat(1200000) }) + "\n");
     event("turn_start", stamp); const model = health(stamp + quiet, next); assert.equal(model.phase, "model"); assert.equal(model.stalled, true);
+    // If the retained tail begins exactly after LF, its first row is complete.
+    // Dropping that one settlement marker would misreport an idle seat.
+    const settled = JSON.stringify({ type: "agent_settled", wheelhouse_received_at: new Date(stamp).toISOString() }) + "\n";
+    const pollBytes = Buffer.byteLength(JSON.stringify({ type: "response", padding: "" }) + "\n");
+    const tail = settled + JSON.stringify({ type: "response", padding: "x".repeat(1024 * 1024 - Buffer.byteLength(settled) - pollBytes) }) + "\n";
+    assert.equal(Buffer.byteLength(tail), 1024 * 1024);
+    fs.writeFileSync(log, JSON.stringify({ type: "agent_start" }) + "\n" + tail);
+    const boundary = health(stamp + 10 * quiet, model); assert.equal(boundary.phase, "idle", "complete first tail row must survive an exact byte boundary"); assert.equal(boundary.lastEvent, "agent_settled");
+  },
+  rotation() {
+    assert.equal(health(stamp + 10 * quiet).phase, "idle", "an assignment without a turn event is not streaming");
+    silent(); check(); event("agent_settled", stamp); process.env.WHEELHOUSE_LOG_ROTATE_BYTES = "100";
+    cli("adapter.ts", ["status"]); assert.equal(fs.statSync(log).size, 0); assert(fs.statSync(log + ".1").size > 100);
+    event("auto_compaction_end", stamp); // maintenance is progress, not a new model turn
+    const cleared = check(); assert.equal(cleared.seatStreams["worker-a"].phase, "idle"); assert.equal(cleared.alerts[source].active, false);
+    event("response", Date.now(), { command: "get_state", data: { isStreaming: false } }); const afterPoll = check(); assert.equal(afterPoll.seatStreams["worker-a"].phase, "idle"); assert.equal(inbox().length, 1);
+    event("agent_start", stamp + quiet); const next = health(stamp + 2 * quiet, afterPoll.seatStreams["worker-a"]); assert.equal(next.phase, "model", "an older archive must never hide a new own turn"); assert.equal(next.stalled, true);
   },
   alert() {
     silent(); const j = check(); assert.equal(j.alerts[source].active, true); assert.equal(j.seatStreams["worker-a"].phase, "model"); assertRow();
