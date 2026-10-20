@@ -154,7 +154,7 @@ const cases: Record<string, () => void | Promise<void>> = {
   },
   alert() {
     silent(); const j = check(); assert.equal(j.alerts[source].active, true); assert.equal(j.seatStreams["worker-a"].phase, "model"); assertRow();
-    const status = cli("adapter.ts", ["status"]).stdout; assert.match(status, /worker-a\s+STALLED/); assert(status.includes(new Date(stamp - 2 * quiet).toISOString()));
+    const status = cli("adapter.ts", ["status"]).stdout; assert.match(status, /^worker-a\s+worker\s+STALLED\b/m); assert(status.includes(new Date(stamp - 2 * quiet).toISOString()));
   },
   dedupe() {
     silent(); check(); const first = inbox()[0]; assert(first); check(); check(); assert.equal(inbox().length, 1); assert.equal(inbox()[0].id, first.id);
