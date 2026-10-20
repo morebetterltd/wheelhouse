@@ -106,7 +106,8 @@ function diagnose(error: any, parent?: number, name?: string) {
   }
   if (parent !== undefined && name) { capture(parent, name, 1); capture(parent, `${name}.queue`, 1); capture(parent, `${name}.host`, 1); }
   console.error("SELFTEST_LOCK_REFUSAL " + JSON.stringify({ operation: process.argv[2], lock: process.argv[3], reason: error.message,
-    host: { hostname: HOST, hostId, identitySource, identityFailures, knownHostnames: [...hostNames], platform: process.platform }, observed, snapshots }));
+    host: { hostname: HOST, hostId, identitySource, identityFailures, knownHostnames: [...hostNames], platform: process.platform },
+    ...(error.ancestryObservations ? { ancestryObservations: error.ancestryObservations } : {}), observed, snapshots }));
 }
 // Async supervisor failures may occur outside a transition's pinned parent.
 // Reopen only for a diagnostic snapshot; never repair state from this path.
@@ -535,6 +536,46 @@ function canonicalLock(input: string): string {
   // Resolve the parent only, exactly as the sweep does. Never follow the leaf.
   return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
 }
+function snapshotAncestorOwns(owner: number): boolean {
+  const observations: object[] = [];
+  // One table per attempt: an ancestor must not vanish between separate ps
+  // queries. Start at our own kernel row, not a previously cached PPID. A
+  // transient/incomplete observation gets a fresh bounded attempt; neither an
+  // environment flag nor an unreadable process table is inherited admission.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const args = ["-axo", "pid=,ppid="];
+    const result = spawnSync("ps", args, { encoding: "utf8", timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
+    try {
+      if (result.error || result.signal || result.status !== 0 || result.stderr || !result.stdout.trim()) throw new Error("process table command incomplete");
+      const parents = new Map<number, number>();
+      for (const line of result.stdout.trim().split("\n")) {
+        const row = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+        if (!row) throw new Error("malformed process table row");
+        const pid = Number(row[1]), ppid = Number(row[2]);
+        if (!validPid(pid) || !(ppid === 0 || validPid(ppid)) || parents.has(pid)) throw new Error("invalid or duplicate process table pid");
+        parents.set(pid, ppid);
+      }
+      if (!parents.has(process.pid) || !parents.has(owner)) throw new Error("process table lacks helper or owner");
+      let pid = parents.get(process.pid)!;
+      const seen = new Set<number>();
+      while (pid !== owner) {
+        if (pid <= 1) return false; // A complete outsider chain is not a retry.
+        if (seen.has(pid)) throw new Error("cyclic process ancestry");
+        seen.add(pid);
+        const next = parents.get(pid);
+        if (next === undefined) throw new Error(`process table lacks ancestor ${pid}`);
+        pid = next;
+      }
+      return alive(owner);
+    } catch (error: any) {
+      observations.push({ attempt, command: ["ps", ...args], helperPid: process.pid, ownerPid: owner,
+        status: result.status, signal: result.signal, error: result.error?.message, reason: error.message,
+        stdout: result.stdout?.slice(0, 4096), stderr: result.stderr?.slice(0, 4096),
+        stdoutBytes: Buffer.byteLength(result.stdout ?? ""), stderrBytes: Buffer.byteLength(result.stderr ?? "") });
+    }
+  }
+  throw Object.assign(new Refused("cannot verify suite ancestry after 3 process snapshots"), { ancestryObservations: observations });
+}
 function ancestorOwnsLock(lock: string): boolean {
   primitives();
   const parent = parentFd(lock);
@@ -547,16 +588,7 @@ function ancestorOwnsLock(lock: string): boolean {
     // A legacy pid-only claim or an exported environment flag is not proof of
     // inherited admission. Require the current token-owned lock AND FIFO head.
     if (!snapshot.marker.token || !alive(snapshot.marker.pid)) return false;
-    let pid = process.ppid;
-    const seen = new Set<number>();
-    while (pid !== snapshot.marker.pid) {
-      if (pid <= 1 || seen.has(pid)) return false;
-      seen.add(pid);
-      // Native ps -o ppid= -p <pid> yields a single whitespace-padded number.
-      const result = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" });
-      if (result.error || result.status !== 0 || !/^\s*\d+\s*$/.test(result.stdout)) throw new Refused(`cannot verify suite ancestry for pid ${pid}`);
-      pid = Number(result.stdout.trim());
-    }
+    if (!snapshotAncestorOwns(snapshot.marker.pid)) return false;
     const queue = queueFd(parent, `${path.basename(lock)}.queue`, false);
     if (queue === null) throw new Refused("inherited lock has no FIFO ownership record");
     try {
