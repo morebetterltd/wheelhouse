@@ -44,6 +44,16 @@ else
   fail 'fixture-owned bd metrics config does not disable detached telemetry flushers'
 fi
 
+prune_wait_regression(){
+  local source="$FIX/prune-wait-source"
+  mkdir -p "$source"
+  selftest_copy_seat_runtime "$source" "$(dirname "$PRUNE")" || return 2
+  bun "$HERE/fixtures/prune-wait.ts" "$FIX/prune-wait" "$source" "$PRUNE" "$HERE/fixtures/prune-wait-clock.ts" "${WHEELHOUSE_PRUNE_WAIT_MODE:-fixed}"
+}
+if [ "${WHEELHOUSE_PRUNE_WAIT_ONLY:-0}" = 1 ]; then
+  prune_wait_regression; exit $?
+fi
+
 phase 'D6/D7 automatic cleanup identity (fresh allocations only)'
 IDENTITY_SOURCE="$FIX/identity-source"
 mkdir -p "$IDENTITY_SOURCE"
@@ -692,6 +702,10 @@ ext_scan(){ ( cd "$EXT" && bun seats/prune.ts scan --format jsonl > "$FIX/ext-sc
 ext_row(){ grep -F "\"path\":\"$1\"" "$FIX/ext-scan.jsonl"; }
 ext_registered(){ git -C "$EPROD" worktree list --porcelain | grep -xF >/dev/null "worktree $1"; }
 ext_cleanup(){ ( cd "$EXT" && bun seats/prune.ts cleanup "$@" 2>&1 ); }
+# This case asserts eventual progress, not expiry at a host-speed-dependent 30s.
+# Keep only these progress clients' budget clock stationary; ordinary cleanup
+# and the separate immediate lock-refusal case retain the native clock.
+ext_wait_cleanup(){ ( cd "$EXT" && bun --preload "$HERE/fixtures/prune-wait-clock.ts" seats/prune.ts cleanup "$@" 2>&1 ); }
 ext_record_run(){
   ( cd "$EXT" && bun -e 'import {recordCleanupScratch} from "./seats/cleanup-identity.ts"; recordCleanupScratch(process.argv[1],process.argv[2],process.argv[3]);' "$EXT" "$1" "$2" ) || exit 2
 }
@@ -769,11 +783,12 @@ OUT=$(ext_cleanup --bead "$RO_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ ! -e "$ERUNS/$RO_ID-run" ] && printf '%s\n' "$OUT" | grep >/dev/null "removed run-scratch $ERUNS/$RO_ID-run " && pass 'cleanup removes closed-bead scratch containing a read-only source snapshot subtree' || { chmod -R u+w "$ERUNS/$RO_ID-run" 2>/dev/null || true; fail "read-only scratch cleanup rc=$RC: $OUT"; }
 
 phase 'ISC-46/138 concurrent cleanups, lock refusal, and a race with another remover'
+if prune_wait_regression; then pass 'parallel cleanup progress is independent of elapsed host scan time'; else fail 'parallel cleanup lock-clock regression'; fi
 CA_ID=$(ext_bead 'concurrent close A'); CB_ID=$(ext_bead 'concurrent close B')
 mkdir -p "$ERUNS/$CA_ID-run" "$ERUNS/$CB_ID-run"; printf 'a\n' > "$ERUNS/$CA_ID-run/f"; printf 'b\n' > "$ERUNS/$CB_ID-run/f"
 ext_record_run "$ERUNS/$CA_ID-run" "$CA_ID"; ext_record_run "$ERUNS/$CB_ID-run" "$CB_ID"
-ext_cleanup --bead "$CA_ID" --wait 30 > "$FIX/ext-ca.out" & CA_PID=$!
-ext_cleanup --bead "$CB_ID" --wait 30 > "$FIX/ext-cb.out" & CB_PID=$!
+ext_wait_cleanup --bead "$CA_ID" --wait 30 > "$FIX/ext-ca.out" & CA_PID=$!
+ext_wait_cleanup --bead "$CB_ID" --wait 30 > "$FIX/ext-cb.out" & CB_PID=$!
 wait "$CA_PID"; CA_RC=$?; wait "$CB_PID"; CB_RC=$?
 [ "$CA_RC" -eq 0 ] && [ "$CB_RC" -eq 0 ] && [ ! -e "$ERUNS/$CA_ID-run" ] && [ ! -e "$ERUNS/$CB_ID-run" ] && pass 'two parallel bead-scoped cleanups both exit 0 and both run folders are gone' || fail "parallel cleanups rc=$CA_RC/$CB_RC: $(cat "$FIX/ext-ca.out" "$FIX/ext-cb.out")"
 [ "$(grep -c "removed run-scratch $ERUNS/$CA_ID-run " "$ELOG")" -eq 1 ] && [ "$(grep -c "removed run-scratch $ERUNS/$CB_ID-run " "$ELOG")" -eq 1 ] && pass 'cleanup log has exactly one removed line per bead (ISC-46)' || fail "log lines for A/B: $(grep -E "$CA_ID-run|$CB_ID-run" "$ELOG")"
