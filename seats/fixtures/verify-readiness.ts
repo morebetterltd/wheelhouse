@@ -8,7 +8,12 @@ import { randomUUID } from "node:crypto";
 type Timer = { dir: string; kind: string; callback: () => void; active: boolean; deadline: number };
 const clocks = new Map<string, number>();
 const timers = new Set<Timer>();
-const record = (dir: string, name: string, value = "yes") => fs.writeFileSync(path.join(dir, name), value);
+// Cross-process clock requests must never expose a truncated/partial value.
+const record = (dir: string, name: string, value = "yes") => {
+  const file = path.join(dir, name), stage = `${file}.${process.pid}.${randomUUID()}.new`;
+  try { fs.writeFileSync(stage, value, { flag: "wx", mode: 0o600 }); fs.renameSync(stage, file); }
+  finally { fs.rmSync(stage, { force: true }); }
+};
 const exists = (dir: string, name: string) => fs.existsSync(path.join(dir, name));
 // Poll cadence only schedules work. It never decides success, failure or expiry.
 setInterval(() => {
