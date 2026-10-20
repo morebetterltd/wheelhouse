@@ -1670,7 +1670,7 @@ async function main(): Promise<void> {
       if (promotion) {
         const badges = liveLineCandidates(stdout, reviewerHarness, "FALLBACK GATE");
         if (badges.length !== 1 || badges[0].normalized !== fallbackLeadIn(promotion)) refuse(`fallback review must include the exact live lead-in: ${fallbackLeadIn(promotion)}`);
-        if (/\bSHADOW\b/i.test(verdictLines[0].normalized)) refuse("fallback verdict must be gating, not a SHADOW verdict");
+        if (/^VERDICT:\s*(?:APPROVE|BOUNCE|DISCOVER)\s+[—-]\s+SHADOW(?:\s*$|\s*[-:—(]|\s+ONLY\b)/i.test(verdictLines[0].normalized)) refuse("fallback verdict must be gating, not a SHADOW verdict");
       }
       // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
       // you are reviewing") belongs to APPROVE and to nothing else.

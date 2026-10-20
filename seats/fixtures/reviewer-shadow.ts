@@ -42,9 +42,10 @@ function run(w: World, expected: number, selected?: string, error?: string) {
   assert(!r.error, String(r.error)); assert.equal(r.signal, null); assert.equal(r.status, expected, r.stdout + r.stderr);
   if (error) assert((r.stdout + r.stderr).includes(error), r.stdout + r.stderr);
   const verdict = path.join(w.root, "seats/verdicts", bead + ".md");
-  if (expected === 0) {
+  if ([0, 2, 3].includes(expected)) {
     assert(fs.statSync(verdict).isFile(), "review verdict actually exists"); assert(invoked().length, "model actually ran");
     const text = fs.readFileSync(verdict, "utf8"); assert(text.includes(`- verifier-seat: ${selected} (`), text);
+    assert(text.includes(`- verdict: ${{ 0: "APPROVE", 2: "BOUNCE", 3: "DISCOVER" }[expected]}`), "fresh verdict must match the native exit");
     if (w.args.includes("--fallback-promotion")) { assert(text.includes(badge)); assert(text.includes(`- fallback-promotion-comment: ${commentId}`)); const argv = JSON.parse(fs.readFileSync(path.join(mirrorDir, "argv.json"), "utf8")); assert(argv.at(-1).includes("full REVIEWER.md contract")); assert(argv.at(-1).includes(badge)); }
   } else { assert(!fs.existsSync(verdict), "refusal must not publish a verdict"); }
   return r;
@@ -84,6 +85,7 @@ const tests: Record<string, (w: World) => void> = {
   "missing-lead-in": w => { promote(w); w.reply = "VERDICT: APPROVE\nPUSH: NOT CONSIDERED\n"; run(w, 1, undefined, "exact live lead-in"); assert(invoked().length); },
   "fenced-lead-in": w => { promote(w); w.reply = "```\n" + badge + "\n```\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n"; run(w, 1, undefined, "exact live lead-in"); },
   "shadow-verdict": w => { promote(w); w.reply = badge + "\nVERDICT: APPROVE — SHADOW\nPUSH: NOT CONSIDERED\n"; run(w, 1, undefined, "not a SHADOW verdict"); },
+  "reason-mentions-shadow": w => { promote(w); for (const [code, label] of [[0, "APPROVE"], [2, "BOUNCE"], [3, "DISCOVER"]] as const) { w.reply = badge + `\nVERDICT: ${label} — shadow selection inspected\nPUSH: NOT CONSIDERED\n`; run(w, code, "mirror"); } },
   "promoted-same-account": w => { promote(w); w.mirror.account = { dir: authorDir }; refused(w, "SAME account directory"); },
 };
 const earlyPromotion = 'function readFallbackPromotion(beadId: string, seat: string, tip: string, commentId: string): FallbackPromotion {';
@@ -103,7 +105,8 @@ const controls: { old: string; replacement: string; cases: string[] }[] = [
   { old: 'if (promotionArg !== undefined)', replacement: 'if (false)', cases: ["duplicate-promotion"] },
   { old: 'if (badges.length !== 1 || badges[0].normalized !== fallbackLeadIn(promotion))', replacement: 'if (false)', cases: ["missing-lead-in"] },
   { old: 'const badges = liveLineCandidates(stdout, reviewerHarness, "FALLBACK GATE");', replacement: 'const badges = finalAssistantText(stdout, reviewerHarness).split("\\n").filter(line => line === fallbackLeadIn(promotion)).map(normalized => ({normalized}));', cases: ["fenced-lead-in"] },
-  { old: 'if (/\\bSHADOW\\b/i.test(verdictLines[0].normalized))', replacement: 'if (false)', cases: ["shadow-verdict"] },
+  { old: 'if (/^VERDICT:\\s*(?:APPROVE|BOUNCE|DISCOVER)\\s+[—-]\\s+SHADOW(?:\\s*$|\\s*[-:—(]|\\s+ONLY\\b)/i.test(verdictLines[0].normalized))', replacement: 'if (false)', cases: ["shadow-verdict"] },
+  { old: 'if (/^VERDICT:\\s*(?:APPROVE|BOUNCE|DISCOVER)\\s+[—-]\\s+SHADOW(?:\\s*$|\\s*[-:—(]|\\s+ONLY\\b)/i.test(verdictLines[0].normalized))', replacement: 'if (/\\bSHADOW\\b/i.test(verdictLines[0].normalized))', cases: ["reason-mentions-shadow"] },
   { old: 'if (authorDir === reviewerDir) { // distinctness-gate', replacement: 'if (false) { // distinctness-gate', cases: ["promoted-same-account"] },
 ];
 let failures = 0;
