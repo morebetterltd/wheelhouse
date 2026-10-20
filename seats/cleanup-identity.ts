@@ -417,7 +417,7 @@ function adoptLegacyScratch(root: string, target: string, bead: string) {
     try { lease = openAt(r.fd, "cleanup.lock", true); }
     catch (e: any) { if (e.errno !== 2) throw e; }
     if (lease >= 0) { fs.closeSync(lease); throw new CleanupRefused("adoption requires cleanup idle and no cleanup.lock; resolve its owner separately"); }
-    if (!cleanupPathUnchanged(root, target, proof) || !cleanupPathUnchanged(root, r.dir, r.proof)) throw new CleanupRefused("adoption path changed");
+    if (!cleanupPathUnchanged(root, target, proof) || !cleanupPathUnchanged(root, r.proof.real, r.proof)) throw new CleanupRefused("adoption path changed");
     fd = fs.openSync(target, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
     const before = readMember(fd, SCRATCH_MARKER), m = JSON.parse(before.raw);
     if (m.version !== 1 || !validRecordFields(m, "wheelhouse-cleanup-scratch") || !scratchContextMatches(m, root, target, id(fd), bead)) throw new CleanupRefused("adoption requires a valid v1 marker matching root, target path, inode and bead; unmarked folders and v2 markers cannot be adopted");
