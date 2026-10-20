@@ -1049,7 +1049,24 @@ if [ -n "${BATCH_SEED_LOG:-}" ] && [ -s "$BATCH_SEED_LOG" ]; then
   if [ "$RC" = 0 ] && says 'VERDICT: APPROVE' && grep -q -- "- batch-tip: $SWEEP_TIP" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" && grep -q -- "- tip: $BATCH_REVIEWED" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" && grep -Fq -- "- log: $BATCH_SEED_LOG" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md"; then
     pass "batch CLI reuses one real passing descendant sweep and records batch/reviewed tip and log"
   else fail "batch CLI acceptance/record failed rc=$RC out=$OUT"; fi
+  if bun - "$BATCH_SEED_LOG" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" "$VARGV" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const [log,record,argv]=process.argv.slice(2),text=fs.readFileSync(log,'utf8'),receipt=fs.readFileSync(record,'utf8'),prompt=JSON.stringify(JSON.parse(fs.readFileSync(argv,'utf8')));
+const seconds=/selftest-sweep: PASS .*\/slowed.selftest.sh elapsed=([0-9]+)s/.exec(text);assert(seconds);
+const footer=/^selftest-sweep: PASS \(1 suite\(s\), [0-9]+s\)$/m.exec(text);assert(footer);
+for(const output of [receipt,prompt])for(const expected of ['selftest-sweep: tier=full suites=1',footer[0],`slowed.selftest.sh: ${seconds[1]}s`])assert(output.includes(expected),expected);
+JS
+  then pass 'timed batch prompt and verdict receipt include tier, total and slowest-suite seconds'
+  else fail 'batch prompt/receipt lost timing metadata'; fi
   rm -f "$BATCH_INVOKED"
+  BATCH_OLD="$FIX/batch-old-shape.log"
+  bun - "$BATCH_SEED_LOG" "$BATCH_OLD" <<'JS'
+import fs from 'node:fs';
+const text=fs.readFileSync(process.argv[2],'utf8').replace(/^selftest-sweep: tier=full suites=[0-9]+\n/m,'').replace(/ elapsed=[0-9]+s$/gm,'').replace(/(suite\(s\)), [0-9]+s\)/g,'$1)');fs.writeFileSync(process.argv[3],text);
+JS
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-old fleet/batch-reviewed worker-1 reviewer --batch-sweep "$BATCH_OLD"
+  if [ "$RC" = 1 ] && says 'batch sweep refused' && [ ! -e "$BATCH_INVOKED" ]; then pass 'old timing-free batch envelope STOPs before reviewer spawn'
+  else fail "old batch shape accepted or spawned reviewer rc=$RC out=$OUT"; fi
   WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-missing fleet/batch-reviewed worker-1 reviewer --batch-sweep "$FIX/no-batch-log"
   if [ "$RC" = 1 ] && says 'batch sweep refused' && [ ! -e "$BATCH_INVOKED" ]; then pass "invalid batch flag STOPs before reviewer spawn, never falls back to a sweep"
   else fail "invalid batch flag spawned or fell back rc=$RC out=$OUT"; fi

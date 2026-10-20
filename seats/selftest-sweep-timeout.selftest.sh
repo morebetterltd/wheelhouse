@@ -110,7 +110,7 @@ SH
   if [ "$rc" = 1 ] && [ "$rescue_rc" = 0 ] && [ ! -e "$dir/rescued" ] && grep -F "selftest-sweep: FAIL $dir/00-hang.selftest.sh timed out after ${limit}s" "$dir/out" >/dev/null && grep -F "selftest-sweep: timeout summary: $dir/00-hang.selftest.sh timed out after ${limit}s" "$dir/out" >/dev/null; then
     pass "$name: deadline reports FAIL and timed out after ${limit}s (without independent rescue)"
   else fail "$name: deadline outcome rc=$rc rescue=$([ -e "$dir/rescued" ] && echo yes || echo no)"; fi
-  if [ -f "$dir/after" ] && grep -Fx "selftest-sweep: PASS $dir/01-after.selftest.sh" "$dir/out" >/dev/null && [ ! -e "$lock" ] && [ ! -e "$lock.queue" ]; then
+  if [ -f "$dir/after" ] && grep -F "selftest-sweep: PASS $dir/01-after.selftest.sh elapsed=" "$dir/out" >/dev/null && [ ! -e "$lock" ] && [ ! -e "$lock.queue" ]; then
     pass "$name: following suite runs and lock/queue are released normally"
   else fail "$name: following suite or lock release missing"; fi
   if [ "$ignore" = 1 ]; then

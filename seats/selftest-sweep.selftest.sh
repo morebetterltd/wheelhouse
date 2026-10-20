@@ -155,6 +155,40 @@ source_policy_leg(){
   else fail "missing invocation auditor did not fail incomplete (rc=$rc)"; fi
   mv -f "$FIX/saved-auditor.ts" "$project/seats/python-invocations.ts" || exit 2
 }
+timing_leg(){
+  local project="$FIX/timing-project" rc
+  mkdir -p "$project/seats"
+  printf 'sleep 1\n' > "$project/seats/one.selftest.sh"
+  printf 'sleep 1\nexit "${TIMING_EXIT:-0}"\n' > "$project/seats/two.selftest.sh"
+  for rc in 0 7; do
+    TIMING_EXIT="$rc" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/timing.lock" bash "$SWEEP" > "$FIX/timing-$rc.out" 2> "$FIX/timing-$rc.err"
+    local actual=$?
+    if bun - "$FIX/timing-$rc.out" "$project/seats" "$rc" "$actual" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const [file,seats,code,actual]=process.argv.slice(2),text=fs.readFileSync(file,'utf8');
+assert.equal(Number(actual),code==='0'?0:1);
+const lines=text.split('\n').filter(s=>s.startsWith('selftest-sweep: '));
+assert.equal(lines[0],'selftest-sweep: tier=full suites=2');
+assert.deepEqual(lines.filter(s=>s.startsWith('selftest-sweep: START ')),['one','two'].map(n=>`selftest-sweep: START ${seats}/${n}.selftest.sh`));
+const ends=lines.filter(s=>/^selftest-sweep: (PASS|FAIL) .*\.selftest\.sh /.test(s));assert.equal(ends.length,2);
+let sum=0;
+for(let i=0;i<ends.length;i++){
+ const name=['one','two'][i],prefix=i===1&&code!=='0'?`FAIL ${seats}/${name}.selftest.sh rc=${code}`:`PASS ${seats}/${name}.selftest.sh`;
+ assert(ends[i].startsWith('selftest-sweep: '+prefix+' elapsed='),ends[i]);
+ const elapsed=/ elapsed=(0|[1-9][0-9]*)s$/.exec(ends[i]);assert(elapsed,ends[i]);assert(Number(elapsed[1])>=1);sum+=Number(elapsed[1]);
+}
+const footer=code==='0'?/^selftest-sweep: PASS \(2 suite\(s\), ([0-9]+)s\)$/m:/^selftest-sweep: FAIL \(1 failure\(s\) of 2 suite\(s\), ([0-9]+)s\)$/m;
+const total=footer.exec(text);assert(total,text);assert(Number(total[1])>=sum);console.log(`timing fixture rc=${code}: per-suite whole seconds, total=${total[1]}s >= sum=${sum}s`);
+JS
+    then pass "two-suite timing envelope and total for rc=$rc"
+    else fail "two-suite timing envelope for rc=$rc (actual=$actual)"; fi
+  done
+}
+timing_leg
+if [ "${WHEELHOUSE_SELFTEST_SWEEP_TIMING_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || exit 1
+  echo 'selftest-sweep.selftest: PASS (timing checks)'; exit 0
+fi
 default_tmpdir_leg
 if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
   [ "$FAILED" -eq 0 ] || { echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1; }
