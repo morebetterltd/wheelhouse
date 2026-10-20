@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -21,8 +22,8 @@ function world(name: string, runtime = seats) {
 function env(host = "network-after", machine = "a", lock: string) {
   return { ...process.env, CLEANUP_FIXTURE_HOST: host, CLEANUP_FIXTURE_MACHINE: machine, WHEELHOUSE_SELFTEST_SWEEP_LOCK: lock };
 }
-function command(w: World, args: string[], host = "network-after", machine = "a", lock = w.lock) {
-  const r = spawnSync("bun", ["--preload", preload, ...args], { cwd: w.root, env: env(host, machine, lock), encoding: "utf8" });
+function command(w: World, args: string[], host = "network-after", machine = "a", lock = w.lock, extra: Record<string, string> = {}) {
+  const r = spawnSync("bun", ["--preload", preload, ...args], { cwd: w.root, env: { ...env(host, machine, lock), ...extra }, encoding: "utf8" });
   assert(!r.error, String(r.error)); assert.equal(r.signal, null);
   fs.appendFileSync(path.join(w.dir, "calls.jsonl"), JSON.stringify({ args, host, machine, status: r.status, stdout: r.stdout, stderr: r.stderr }) + "\n");
   return r;
@@ -54,8 +55,8 @@ function snapshot(directory: string): any {
     return [name, { ino: String(st.ino), dev: String(st.dev), mtime: String(st.mtimeNs), sha: st.isFile() ? sha(fs.readFileSync(f)) : st.isSymbolicLink() ? fs.readlinkSync(f) : snapshot(f) }];
   }));
 }
-function adoption(w: World, status = 0, selectedBead = bead) {
-  return expect(command(w, [path.join(w.runtime, "cleanup-identity.ts"), "adopt-v1", "--root", w.root, "--target", w.target, "--bead", selectedBead]), status);
+function adoption(w: World, status = 0, selectedBead = bead, extra: Record<string, string> = {}) {
+  return expect(command(w, [path.join(w.runtime, "cleanup-identity.ts"), "adopt-v1", "--root", w.root, "--target", w.target, "--bead", selectedBead], "network-after", "a", w.lock, extra), status);
 }
 function refusedLegacy(w: World, lock = w.lock) {
   const before = fs.readFileSync(w.file, "utf8"), r = call(w, "prepare", 2, "network-after", "a", lock);
@@ -85,6 +86,16 @@ const tests: Record<string, (w: World) => void> = {
     assert.deepEqual(events.map(e => e.event), ["adopt-v1-intent", "adopted-v1"]); assert.equal(events[0].adoptionId, events[1].adoptionId);
     assert.equal(events[1].previousMarkerSha256, sha(before)); assert.equal(events[1].newMarkerSha256, sha(fs.readFileSync(w.file))); assert.equal(events[1].hostId, id("a"));
     assert.equal(JSON.parse(r.stdout).event, "adopted-v1");
+  },
+  "adopt-ffi-error": w => {
+    legacy(w); const before = snapshot(w.target);
+    const r = adoption(w, 2, bead, { CLEANUP_FIXTURE_FAIL_ADOPTION_LOGS: "1" }), after = snapshot(w.target);
+    console.log("MEASUREMENT adopt-ffi-error " + JSON.stringify({ status: r.status, stderr: r.stderr.trim(), markerUnchanged: JSON.stringify(after) === JSON.stringify(before) }));
+    assert.deepEqual(after, before, "failed adoption must not change the marker");
+    assert(!fs.existsSync(w.audit), "failed log-directory creation cannot produce an adoption audit");
+    assert.equal(r.stdout, "");
+    assert(r.stderr.includes(`STOP: mkdir adoption logs failed (errno ${os.constants.errno.EBADF})`), r.stderr);
+    assert.doesNotMatch(r.stderr, /ReferenceError|error is not defined/);
   },
 };
 for (const field of ["root", "target", "identity", "bead"]) tests["adopt-mismatch-" + field] = w => {
@@ -120,6 +131,7 @@ const controls: Control[] = [
   { file: "cleanup-identity.ts", old: "C.O_WRONLY | C.O_APPEND | C.O_CREAT | C.O_NOFOLLOW | C.O_NONBLOCK", replacement: "C.O_WRONLY | C.O_APPEND | C.O_CREAT | C.O_NONBLOCK", cases: ["adopt-audit-symlink"] },
   { file: "cleanup-identity.ts", old: "st.nlink !== 1", replacement: "false", cases: ["adopt-audit-hardlink"] },
   { file: "cleanup-identity.ts", old: "if (lease >= 0) {", replacement: "if (false) {", cases: ["adopt-busy"] },
+  { file: "cleanup-identity.ts", old: 'fail("mkdir adoption logs")', replacement: 'throw error("mkdir adoption logs")', cases: ["adopt-ffi-error"] },
 ];
 let failures = 0;
 for (const [name, test] of Object.entries(tests)) {

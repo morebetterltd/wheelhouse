@@ -372,12 +372,12 @@ function adoptionAudit(root: string, rootIdentity: string) {
   try {
     if (id(rootFd) !== rootIdentity) throw new CleanupRefused("adoption root changed");
     seats = openAt(rootFd, "seats", true);
-    if (native.symbols.mkdirat(seats, z("logs"), 0o700) !== 0 && errno() !== 17) throw error("mkdir adoption logs");
+    if (native.symbols.mkdirat(seats, z("logs"), 0o700) !== 0 && errno() !== 17) fail("mkdir adoption logs");
     logs = openAt(seats, "logs", true);
     const directory = path.join(root, "seats", "logs"), proof = cleanupPathIdentity(root, directory);
     if (id(logs) !== proof.chain.at(-1)!.identity || proof.chain[0].identity !== rootIdentity) throw new CleanupRefused("adoption log directory changed");
     cwd = fs.openSync(".", C.O_RDONLY | C.O_DIRECTORY);
-    if (native.symbols.fchdir(logs) !== 0) throw error("enter adoption logs");
+    if (native.symbols.fchdir(logs) !== 0) fail("enter adoption logs");
     out = fs.openSync(ADOPTION_LOG, C.O_WRONLY | C.O_APPEND | C.O_CREAT | C.O_NOFOLLOW | C.O_NONBLOCK, 0o600);
     const output = out, directoryFd = logs;
     const append = (event: object) => {
@@ -411,7 +411,7 @@ function adoptLegacyScratch(root: string, target: string, bead: string) {
   const proof = cleanupPathIdentity(root, target), r = runtime(root);
   let fd = -1, temporary = "", audit: ReturnType<typeof adoptionAudit> | undefined, committed = false;
   try {
-    if (native.symbols.flock(r.fd, 2) !== 0) throw error("lock adoption transition");
+    if (native.symbols.flock(r.fd, 2) !== 0) fail("lock adoption transition");
     // Do not race a cleanup scan, even one with a dead or unprovable lease.
     let lease = -1;
     try { lease = openAt(r.fd, "cleanup.lock", true); }
@@ -428,15 +428,15 @@ function adoptLegacyScratch(root: string, target: string, bead: string) {
     audit.append({ event: "adopt-v1-intent", ...event });
     const cwd = fs.openSync(".", C.O_RDONLY | C.O_DIRECTORY);
     try {
-      if (native.symbols.fchdir(fd) !== 0) throw error("enter adoption target");
+      if (native.symbols.fchdir(fd) !== 0) fail("enter adoption target");
       const template = Buffer.from(".adopt-member.XXXXXX\0"), out = native.symbols.mkstemp(template);
-      if (out < 0) throw error("create adopted marker");
+      if (out < 0) fail("create adopted marker");
       temporary = template.toString().replace(/\0.*$/, "");
       try { fs.writeFileSync(out, raw); fs.fsyncSync(out); }
       finally { fs.closeSync(out); }
       if (!cleanupPathUnchanged(root, target, proof) || JSON.stringify(readMember(fd, SCRATCH_MARKER)) !== JSON.stringify(before)) throw new CleanupRefused("legacy marker changed during adoption");
       const replace = darwin ? native.symbols.renameatx_np : native.symbols.renameat2;
-      if (replace(fd, z(temporary), fd, z(SCRATCH_MARKER), 0) !== 0) throw error("publish adopted marker");
+      if (replace(fd, z(temporary), fd, z(SCRATCH_MARKER), 0) !== 0) fail("publish adopted marker");
       temporary = ""; committed = true;
       fs.fsyncSync(fd);
       if (!cleanupPathUnchanged(root, target, proof) || readMember(fd, SCRATCH_MARKER).raw !== raw) throw new CleanupRefused("adopted marker/path changed during commit");

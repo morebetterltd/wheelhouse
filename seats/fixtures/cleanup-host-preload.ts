@@ -4,8 +4,9 @@
 import * as fs from "node:fs";
 import * as cp from "node:child_process";
 import * as os from "node:os";
+import * as ffi from "bun:ffi";
 import { mock } from "bun:test";
-const nativeFs = { ...fs }, nativeCp = { ...cp }, nativeOs = { ...os };
+const nativeFs = { ...fs }, nativeCp = { ...cp }, nativeOs = { ...os }, nativeFfi = { ...ffi };
 const capture = fs.readFileSync(new URL("./cleanup-host-ioreg.txt", import.meta.url), "utf8");
 const machine = process.env.CLEANUP_FIXTURE_MACHINE ?? "a";
 const uuid = machine === "b" ? "20000000-0000-0000-0000-000000000002" : "10000000-0000-0000-0000-000000000001";
@@ -28,3 +29,15 @@ const hostname = () => process.env.CLEANUP_FIXTURE_HOST ?? "network-after";
 mock.module("node:child_process", () => ({ ...nativeCp, execFileSync, default: { ...nativeCp.default, execFileSync } }));
 mock.module("node:fs", () => ({ ...nativeFs, readFileSync, default: { ...nativeFs.default, readFileSync } }));
 mock.module("node:os", () => ({ ...nativeOs, hostname, default: { ...nativeOs.default, hostname } }));
+if (process.env.CLEANUP_FIXTURE_FAIL_ADOPTION_LOGS === "1") {
+  // Exercise a real FFI error/errno, not a fabricated CLI refusal. An invalid
+  // directory descriptor makes only adoption's mkdirat("logs") fail EBADF.
+  const dlopen = ((file: any, symbols: any) => {
+    const library = nativeFfi.dlopen(file, symbols), mkdirat = library.symbols.mkdirat;
+    if (!mkdirat) return library;
+    return { ...library, symbols: { ...library.symbols, mkdirat(fd: number, name: Buffer, mode: number) {
+      return (mkdirat as any)(name.toString() === "logs\0" ? -1 : fd, name, mode);
+    } } };
+  }) as typeof ffi.dlopen;
+  mock.module("bun:ffi", () => ({ ...nativeFfi, dlopen }));
+}
