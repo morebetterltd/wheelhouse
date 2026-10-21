@@ -35,7 +35,7 @@ for (const name of ["fixture", "digest", "adapter", "verify", "adapter-rpc", "ho
 write(policy, "seats/selftest-core.list", "adapter.selftest.sh\ndigest.selftest.sh\nfixture.selftest.sh\nverify.selftest.sh\n");
 commit(policy);
 const rules = [
-  ...["selftest-sweep.sh", "selftest-lib.sh", "selftest-sweep-lock.ts", "selftest-herald.sh", "python-invocations.ts", "adapter.ts", "seat-worktree.ts", "verify.ts"].map(name => ({ file: "seats/" + name, tier: "full", reason: "seats/" + name })),
+  ...["selftest-sweep.sh", "selftest-lib.sh", "selftest-sweep-lock.ts", "selftest-herald.sh", "python-invocations.ts", "adapter.ts", "seat-worktree.ts", "verify.ts", "heavy-test.sh", "heavy-test-entry.ts"].map(name => ({ file: "seats/" + name, tier: "full", reason: "seats/" + name })),
   { file: "seats/selftest-core.list", tier: "full", reason: "seats/selftest-core.list", content: "# changed policy\nadapter.selftest.sh\ndigest.selftest.sh\nfixture.selftest.sh\nverify.selftest.sh\n" },
   { file: "seats/digest.ts", tier: "core", reason: "default" },
   { file: "seats/digest.selftest.sh", tier: "core", reason: "default" },
