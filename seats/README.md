@@ -836,8 +836,9 @@ retained dispatch clock (or first observation if dispatch time is unavailable).
 Bounded owned regular-log reads and the
 owned rotation archive preserve known settlement without inventing one from
 an assignment or an empty/unreadable log. Repeated checks and log rotation do
-not re-raise an unchanged episode; entering review can raise the distinct
-free-for-work message after an earlier background-work reminder.
+not re-raise an unchanged episode. Review-ready reminders deduplicate by
+dispatch context, not by the count of terminal records; entering review can
+raise the distinct free-for-work message after an earlier background-work reminder.
 
 This is separate from an unfinished-model-stream alarm (`seat-stalled:<seat>`
 when that feature is installed): that alarm watches a mid-turn model stream

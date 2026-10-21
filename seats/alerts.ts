@@ -115,7 +115,7 @@ function settledTaskAlerts(observations:Record<string,SettledSeat>, prior:Record
   const names=new Set([...Object.keys(observations).map(seat=>prefix+seat),...Object.keys(prior).filter(name=>name.startsWith(prefix))]);
   for(const name of names){
     const observation=observations[name.slice(prefix.length)], was=prior[name];
-    const signature=observation?JSON.stringify([observation.contextKey,observation.eventKey,observation.mode]):was?.signature??"";
+    const signature=observation?JSON.stringify([observation.contextKey,observation.mode==="review"?null:observation.eventKey,observation.mode]):was?.signature??"";
     const next=alertRow(!!observation?.due,was,signature); next.detail=was?.detail;
     const raiseSettled=next.active&&(!was?.active||was.signature!==next.signature);
     if(raiseSettled){

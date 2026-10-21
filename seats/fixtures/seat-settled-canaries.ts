@@ -13,6 +13,7 @@ const mutations = [
   { id: "config", test: "config", file: helper, old: "return 30 * 60_000;", next: "return 31 * 60_000;" },
   { id: "threshold", test: "threshold", file: helper, old: due, next: "due: false" },
   { id: "review", test: "review", file: helper, old: 'worker.taskNeedsReview ? "review"', next: 'false ? "review"' },
+  { id: "review-dedupe", test: "review", file: alerts, old: 'observation.mode==="review"?null:observation.eventKey', next: "observation.eventKey" },
   { id: "review-clock", test: "review", file: helper, old: 'mode === "review" ? Date.parse(contextSince) :', next: 'mode === "review" ? at :' },
   { id: "dispatch", test: "dispatch", file: helper, old: "Math.max(at, Date.parse(contextSince))", next: "at" },
   { id: "dispatch-review", test: "dispatch", file: helper, old: 'mode === "review" ? Date.parse(contextSince) :', next: 'mode === "review" ? at :' },

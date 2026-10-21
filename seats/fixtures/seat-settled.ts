@@ -76,6 +76,9 @@ async function run(which: string) {
     assert.equal(observation(snap).quietSince, rec.lastDispatchAt); assert.equal(snap.snapshot.workers.live[0].taskNeedsReview, true);
     assert.equal(observation(snap).eventTimeSource, "observed");
     console.log(JSON.stringify({ case: which, row: rows[0], eventAgeMs: 0, dispatchAgeMs: 31 * minute, legacyTypeOnly: true }));
+    // Native Pi can expose both terminal records without another dispatch.
+    f.append({ type: "agent_end", willRetry: false }, { type: "agent_settled" });
+    f.check(t0 + minute); assert.equal(f.inbox().length, 1, "review-ready reminders dedupe by dispatch, not terminal record count");
   } else if (which === "dispatch") {
     for (const review of [false, true]) {
       const base = t0 + (review ? 120 * minute : 0);
