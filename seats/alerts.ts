@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { readQuarantine } from "./quarantine";
 import { fleetSnapshot, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
+import { observeSettledSeats, type SettledSeat } from "./seat-settled";
 import { acquirePidLock, releasePidLock } from "./lock";
 import { observeSeatStreams, seatStallNeedMs, type StreamHealth } from "./seat-stream-health";
 
@@ -20,7 +21,7 @@ export const TEMPLATE_DRIFT_ALERT_HOLD_MS = Number(process.env.WHEELHOUSE_TEMPLA
 
 type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|`seat-stalled:${string}`;
 type AlertState = { active:boolean; since:string|null; lastFiredAt:string|null; needId?:string|null; signature?:string; detail?:string };
-type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; github:any; drift:any; quarantined:{count:number;names:string[]}; seatStreams:Record<string,StreamHealth>; alerts:Record<string,AlertState> };
+type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; github:any; drift:any; quarantined:{count:number;names:string[]}; seatStreams:Record<string,StreamHealth>; alerts:Record<string,AlertState>; settledSeats:Record<string,SettledSeat> };
 
 function now(){ return new Date().toISOString(); }
 function readJson(file:string):any{ try { return JSON.parse(fs.readFileSync(file,"utf8")); } catch { return null; } }
@@ -109,9 +110,31 @@ function bodyFor(name:AlertName, detail:string){ return `Alert ${name}: ${detail
 function remedyFor(name:AlertName){ if(name.startsWith("seat-stalled:")) return "Cost: delivery is waiting, even though the process is alive. Next: inspect the seat's own stream and redispatch after diagnosis; never interrupt a legitimate tool wait. No automatic abort or restart was performed."; if(name==="template-drift-check-failed") return "Cost: $0 directly; template drift is unknown. Next: inspect the retained drift failure in seats/run/fleet-snapshot.json and repair/retry the check."; if(name==="commander-pane-invalid") return "The commander pane target is invalid. Cost: $0 while noticed, but alerts and wakes may not reach the commander. Next: run seats/cockpit.sh to re-aim the commander pane and restart the herald."; if(name==="inbox-lag") return "The fleet inbox has undrained rows for longer than the alert threshold. Cost: $0 directly, but workers may wait for attention. Next: run bun seats/herald.ts --drain in the commander pane."; if(name==="idle-fleet-ready-work") return "Ready work exists while nobody is on it. Cost: $0 directly, but delivery is stalled. Next: spawn or resume seats and dispatch work; this clears itself once a worker is busy."; return "A fleet alert became active. Cost: $0. Next: inspect seats/run/fleet-snapshot.json; no action needed when the condition clears itself."; }
 function maybeHuman(name:AlertName, st:AlertState, stream?:StreamHealth){ const age=Date.now()-Date.parse(st.since||now()); const humanAfter=minutesValue("alert-human-after-minutes",15)*60_000; if(stream && age>=seatStallNeedMs(ROOT)){ if(!st.needId) st.needId=needOpen(name,"A model stream needs attention",`An assigned worker's model stream remains silent. Its last own event was at ${stream.lastEventAt}. Cost: delivery is waiting while its process remains alive. Next: ask the commander to inspect the stream and recover or redispatch the work after diagnosis. No automatic restart was performed.`,stream); } else if(name==="commander-pane-invalid" || ((name==="inbox-lag"||name==="idle-fleet-ready-work") && age>=humanAfter)){ if(!st.needId) st.needId=needOpen(name,title(name),st.detail??bodyFor(name,"condition remains active")); } }
 
+// Independent namespace/state from the unfinished-model-stream watchdog.
+// No automatic dispatch, abort, capacity change or human need is created here.
+function settledTaskAlerts(observations:Record<string,SettledSeat>, prior:Record<string,AlertState>, alerts:Record<string,AlertState>){
+  const prefix="seat-settled-task:";
+  const names=new Set([...Object.keys(observations).map(seat=>prefix+seat),...Object.keys(prior).filter(name=>name.startsWith(prefix))]);
+  for(const name of names){
+    const observation=observations[name.slice(prefix.length)], was=prior[name];
+    const signature=observation?JSON.stringify([observation.contextKey,observation.mode==="review"?null:observation.eventKey,observation.mode]):was?.signature??"";
+    const next=alertRow(!!observation?.due,was,signature); next.detail=was?.detail;
+    const raiseSettled=next.active&&(!was?.active||was.signature!==next.signature);
+    if(raiseSettled){
+      const o=observation, remedy=o.mode==="review"?"seat free for new work; redispatch when appropriate":"check the background work or redispatch";
+      const detail=`Alert ${name}: seat=${o.seat}; task=${o.bead}; last event=${o.lastEvent} at ${o.lastEventAt} (${o.eventTimeSource}); quiet since=${o.quietSince}; thresholdMs=${o.quietMs}. Cost: $0 directly; a settled seat may be waiting unnecessarily. Next: ${remedy}.`;
+      next.detail=detail; appendLog(`alert fired ${name}: ${detail}`);
+      fs.mkdirSync(SEATS,{recursive:true});
+      fs.appendFileSync(path.join(SEATS,"inbox.jsonl"),JSON.stringify({id:`alert-${name}-${crypto.randomUUID()}`,at:now(),seat:"herald",class:"alert",state:"input-required",title:o.mode==="review"?`seat free for new work — ${o.seat}`:`settled task needs attention — ${o.seat}`,detail,source:{type:"alerts",name},workerSeat:o.seat,bead:o.bead,lastEvent:o.lastEvent,lastEventAt:o.lastEventAt,mode:o.mode,quietSince:o.quietSince})+"\n");
+    }
+    if(!next.active&&was?.active) appendLog(`alert cleared ${name}`);
+    alerts[name]=next;
+  }
+}
+
 export function buildSnapshot(root=ROOT):SnapshotFile{
   const entries=readQuarantine(root); const quarantined={count:entries.length,names:entries.map(e=>e.suite)};
-  const prior=readJson(SNAP) as SnapshotFile|null; const priorAlerts=prior?.alerts??{}; const snap=fleetSnapshot(root); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const github=githubInfo(); const drift=driftInfo();
+  const prior=readJson(SNAP) as SnapshotFile|null; const priorAlerts=prior?.alerts??{}; const snap=fleetSnapshot(root); const settledSeats=observeSettledSeats(root,snap.workers.live,prior?.settledSeats); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const github=githubInfo(); const drift=driftInfo();
   const seatStreams=observeSeatStreams(root,prior?.seatStreams??{});
   const active:Record<AlertName,{on:boolean; sig:string; detail:string}>={
     "idle-fleet-ready-work":{on:readyWorkNobodyOnIt(snap),sig:"",detail:`ready=${snap.readyCount}; busy workers=${snap.workers.busy}; ready beads=${snap.ready.map(r=>r.id).join(", ")}`},
@@ -142,7 +165,8 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
     alerts[name]=next;
   }
   if(quarantined.count!==(prior?.quarantined?.count??0)) appendInboxAlert("quarantine",`Alert quarantine: count=${quarantined.count}; suites=${quarantined.names.join(", ")||"none"}. Cost: these suites keep running but their failures do not block review. Next: inspect each owner task and deadline in seats/selftest-quarantine.list.`);
-  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,github,drift,quarantined,seatStreams,alerts};
+  settledTaskAlerts(settledSeats,priorAlerts,alerts);
+  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,github,drift,quarantined,seatStreams,alerts,settledSeats};
 }
 export function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }
 if(import.meta.main){ const [cmd,...rest]=process.argv.slice(2); if(cmd==="check") check(rest.includes("--json")); else { console.error("usage: alerts.ts check [--json]"); process.exit(2); } }
