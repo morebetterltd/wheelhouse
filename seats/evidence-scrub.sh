@@ -48,17 +48,20 @@ scrub_evidence() {
       for my $name ($ENV{USER_RAW} // "", $ENV{HOME_BASE} // "") {
         $replacement{$name} //= "[user]" if length($name);
       }
-      # One pass: emitted text is never rescanned. Already-redacted tokens
-      # are opaque too, even if HOME ends in home, user, tmpdir, or a letter.
-      $replacement{$_} = $_ for ("[tmpdir]", "[home]", "[user]");
-      my @parts = (map { quotemeta($_) } ("[tmpdir]", "[home]", "[user]"));
-      push @parts, map { quotemeta($_) }
+      # One replacement pass per plaintext span: emitted text is not rescanned.
+      my @parts = map { quotemeta($_) }
         sort { length($b) <=> length($a) || $a cmp $b } keys %replacement;
       push @parts, q{/(?:private/)?var/folders/[^[:space:]"'"'"'`)>,;]+};
       our $pattern = join("|", @parts);
     }
     our (%replacement, $pattern);
-    s{($pattern)}{exists($replacement{$1}) ? $replacement{$1} : "[tmpdir]"}ge;
+    # Split first so even a basename such as x[ho cannot match ACROSS an
+    # existing token boundary in x[home]. Retain every token byte-for-byte.
+    my @spans = split(/(\[(?:tmpdir|home|user)\])/, $_, -1);
+    for (my $i = 0; $i < @spans; $i += 2) {
+      $spans[$i] =~ s{($pattern)}{exists($replacement{$1}) ? $replacement{$1} : "[tmpdir]"}ge;
+    }
+    $_ = join("", @spans);
   '
 }
 
