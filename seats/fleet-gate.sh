@@ -20,7 +20,7 @@ fi
 if command -v node >/dev/null 2>&1; then
   PARSER=(node - "$SNAP")
 elif command -v bun >/dev/null 2>&1; then
-  PARSER=(bun -e 'import fs from "node:fs"; const file=process.argv[2]||process.argv[1]; const src=fs.readFileSync(file,"utf8"); const j=JSON.parse(src); const live=Array.isArray(j?.snapshot?.workers?.live)?j.snapshot.workers.live.length:Number(j?.snapshot?.workers?.live??0); const ready=Number(j?.snapshot?.readyCount??0); const review=Array.isArray(j?.snapshot?.reviewBacklog)?j.snapshot.reviewBacklog.length:Number(j?.snapshot?.reviewBacklog??0); const alerts=Object.entries(j?.alerts??{}).filter(([,v])=>v&&v.active).map(([k])=>k).sort(); const at=Date.parse(j?.at||""); const age=Number.isFinite(at)?Math.max(0,Math.floor((Date.now()-at)/1000)):null; const interval=Number(j?.intervalMs); let line=`🚢 FLEET: ${Number.isFinite(live)?live:0} seats live · ${Number.isFinite(ready)?ready:0} ready · ${Number.isFinite(review)?review:0} in review · alerts: ${alerts.length?alerts.join(", "):"none"}`; if(age!==null&&Number.isFinite(interval)&&interval>=0&&Date.now()-at>3*interval) line+=` · snapshot ${age}s old — is the herald running?`; console.log(line);' "$SNAP")
+  PARSER=(bun -e 'import fs from "node:fs"; const file=process.argv[2]||process.argv[1]; const src=fs.readFileSync(file,"utf8"); const j=JSON.parse(src); const live=Array.isArray(j?.snapshot?.workers?.live)?j.snapshot.workers.live.length:Number(j?.snapshot?.workers?.live??0); const ready=Number(j?.snapshot?.readyCount??0); const review=Array.isArray(j?.snapshot?.reviewBacklog)?j.snapshot.reviewBacklog.length:Number(j?.snapshot?.reviewBacklog??0); const alerts=Object.entries(j?.alerts??{}).filter(([,v])=>v&&v.active).map(([k])=>k).sort(); const at=Date.parse(j?.at||""); const age=Number.isFinite(at)?Math.max(0,Math.floor((Date.now()-at)/1000)):null; const interval=Number(j?.intervalMs); let line=`🚢 FLEET: ${Number.isFinite(live)?live:0} seats live · ${Number.isFinite(ready)?ready:0} ready · ${Number.isFinite(review)?review:0} in review · alerts: ${alerts.length?alerts.join(", "):"none"}`; if(Number.isSafeInteger(j?.quarantined?.count)&&j.quarantined.count>0) line+=` · quarantine: ${j.quarantined.count}`; if(age!==null&&Number.isFinite(interval)&&interval>=0&&Date.now()-at>3*interval) line+=` · snapshot ${age}s old — is the herald running?`; console.log(line);' "$SNAP")
 else
   exit 0
 fi
@@ -43,6 +43,7 @@ const at = Date.parse(j?.at || '');
 const age = Number.isFinite(at) ? Math.max(0, Math.floor((Date.now() - at) / 1000)) : null;
 const interval = Number(j?.intervalMs);
 let line = `🚢 FLEET: ${Number.isFinite(live) ? live : 0} seats live · ${Number.isFinite(ready) ? ready : 0} ready · ${Number.isFinite(review) ? review : 0} in review · alerts: ${alerts.length ? alerts.join(', ') : 'none'}`;
+if (Number.isSafeInteger(j?.quarantined?.count) && j.quarantined.count > 0) line += ` · quarantine: ${j.quarantined.count}`;
 if (age !== null && Number.isFinite(interval) && interval >= 0 && Date.now() - at > 3 * interval) line += ` · snapshot ${age}s old — is the herald running?`;
 console.log(line);
 NODE

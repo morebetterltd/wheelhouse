@@ -809,6 +809,9 @@ phase "0a1. required core/full tier selection and receipt gates"
 if bun "$HERE/fixtures/verify-tiers.ts" "$VERIFY_DIR" "$FIX" "$PROJ" "$HOME_FIX" "$RUN_PATH"; then
   pass "tier selection, CLI receipts, core/full batch coverage and sensitive removal controls"
 else fail "core/full review tier regression"; fi
+if bun "$HERE/fixtures/verify-quarantine.ts" "$VERIFY_DIR" "$FIX" "$PROJ" "$HOME_FIX" "$RUN_PATH"; then
+  pass "quarantined failure approval, receipt, policy binding and sensitive controls"
+else fail "quarantine review regression"; fi
 
 phase "0a2. dispatcher-owned full sweep evidence for reviewer"
 SWEEP_PROJ="$FIX/sweep-proj"

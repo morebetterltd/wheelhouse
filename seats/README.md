@@ -1079,6 +1079,16 @@ Every maintained suite loads `selftest-lib.sh` before fixture work (including th
 
 The library observes the real pressure marker during admission, then replaces the inherited marker path with a nonce-scoped fixture-only path. Otherwise a brake fired during an admitted full sweep could stall its synthetic private-endpoint children until their test liveness guards failed. This does not bypass real admission: a fresh suite waits before reaching the isolation step. Brake-specific fixtures assign their own marker after library load. `fixture-brake.selftest.sh` proves that an admitted family finishes its private fixture while the outer marker stays set, while a fresh private-domain suite still waits.
 
+### Quarantine
+
+`seats/selftest-quarantine.list` ships empty. A suite qualifies only when the owner task records evidence of the same failure on main, or a passing lone rerun **through the sweep runner**. Failures consistently caused by the change stay in the gate. Adding or renewing an exemption is a reviewed change, never an automatic retry policy.
+
+Each non-comment line is `<suite>.selftest.sh <owner-task-id> <deadline YYYY-MM-DD>`; `#` comments are allowed. Names must identify an existing root suite, owners match `[A-Za-z0-9][A-Za-z0-9._-]*`, and deadlines are valid calendar dates **strictly after today in local time**. Duplicate, malformed, missing-suite, unreadable or expired entries STOP with exit2 before admission, naming the line. Today is expired too: remove or renew the row by review to resume sweeps. Older installs without a list have no exemptions.
+
+Quarantine never skips a suite. In its selected tier it records normal PASS or `selftest-sweep: QUARANTINED-FAIL <path> rc=<rc> elapsed=<N>s`, including a nonzero timeout result. Only that suite's failure is exempted; other failures still fail the sweep. Before the footer, the summary prints `selftest-sweep: quarantine: none`, or one `quarantine: <suite> owner=<id> until=<date> result=PASS|FAIL` row per selected entry. Valid entries outside the selected tier are ignored; all configured rows are still validated before admission. The review prompt and verdict retain quarantined failures with owner/deadline. A quarantined failure does not block APPROVE; read it and BOUNCE if it looks caused by this change. Batch reuse checks that coverage against the committed batch-tip list and current expiry, not a caller's uncommitted exemptions.
+
+The alerts snapshot carries `quarantined: {count, names}` for the valid configured list. The snapshot-only fleet-gate line shows `quarantine: <n>` when nonzero, and the herald receives one inbox row whenever the count changes (including clearing it), not a row per polling tick. No provider retry, nightly brake or idle-alert input is changed by quarantine.
+
 Individual suites are still run directly when only a touched surface needs proof:
 
 ```bash

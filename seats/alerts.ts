@@ -2,6 +2,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { readQuarantine } from "./quarantine";
 import { fleetSnapshot, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
 import { acquirePidLock, releasePidLock } from "./lock";
@@ -19,7 +20,7 @@ export const TEMPLATE_DRIFT_ALERT_HOLD_MS = Number(process.env.WHEELHOUSE_TEMPLA
 
 type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|`seat-stalled:${string}`;
 type AlertState = { active:boolean; since:string|null; lastFiredAt:string|null; needId?:string|null; signature?:string; detail?:string };
-type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; github:any; drift:any; seatStreams:Record<string,StreamHealth>; alerts:Record<string,AlertState> };
+type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; github:any; drift:any; quarantined:{count:number;names:string[]}; seatStreams:Record<string,StreamHealth>; alerts:Record<string,AlertState> };
 
 function now(){ return new Date().toISOString(); }
 function readJson(file:string):any{ try { return JSON.parse(fs.readFileSync(file,"utf8")); } catch { return null; } }
@@ -96,7 +97,7 @@ function heldAlertRow(active:boolean, prior:AlertState|undefined, signature:stri
   if(Date.now()-Date.parse(firstSeen)<holdMs) return {active:false,since:firstSeen,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature};
   return {active:true,since:firstSeen,lastFiredAt:n,needId:prior?.needId??null,signature};
 }
-function appendInboxAlert(name:AlertName, detail:string, stream?:StreamHealth){
+function appendInboxAlert(name:AlertName|"quarantine", detail:string, stream?:StreamHealth){
   fs.mkdirSync(SEATS,{recursive:true});
   const row={id:`alert-${name}-${Date.now()}`,at:now(),seat:"herald",class:"alert",state:"input-required",title:title(name),detail,source:{type:"alerts",name,...(stream?{seat:stream.seat,bead:stream.bead,lastEventAt:stream.lastEventAt,lastEvent:stream.lastEvent}:{})}};
   fs.appendFileSync(path.join(SEATS,"inbox.jsonl"),JSON.stringify(row)+"\n");
@@ -109,6 +110,7 @@ function remedyFor(name:AlertName){ if(name.startsWith("seat-stalled:")) return 
 function maybeHuman(name:AlertName, st:AlertState, stream?:StreamHealth){ const age=Date.now()-Date.parse(st.since||now()); const humanAfter=minutesValue("alert-human-after-minutes",15)*60_000; if(stream && age>=seatStallNeedMs(ROOT)){ if(!st.needId) st.needId=needOpen(name,"A model stream needs attention",`An assigned worker's model stream remains silent. Its last own event was at ${stream.lastEventAt}. Cost: delivery is waiting while its process remains alive. Next: ask the commander to inspect the stream and recover or redispatch the work after diagnosis. No automatic restart was performed.`,stream); } else if(name==="commander-pane-invalid" || ((name==="inbox-lag"||name==="idle-fleet-ready-work") && age>=humanAfter)){ if(!st.needId) st.needId=needOpen(name,title(name),st.detail??bodyFor(name,"condition remains active")); } }
 
 export function buildSnapshot(root=ROOT):SnapshotFile{
+  const entries=readQuarantine(root); const quarantined={count:entries.length,names:entries.map(e=>e.suite)};
   const prior=readJson(SNAP) as SnapshotFile|null; const priorAlerts=prior?.alerts??{}; const snap=fleetSnapshot(root); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const github=githubInfo(); const drift=driftInfo();
   const seatStreams=observeSeatStreams(root,prior?.seatStreams??{});
   const active:Record<AlertName,{on:boolean; sig:string; detail:string}>={
@@ -139,7 +141,8 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
     if(next.active) maybeHuman(name,next,stream);
     alerts[name]=next;
   }
-  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,github,drift,seatStreams,alerts};
+  if(quarantined.count!==(prior?.quarantined?.count??0)) appendInboxAlert("quarantine",`Alert quarantine: count=${quarantined.count}; suites=${quarantined.names.join(", ")||"none"}. Cost: these suites keep running but their failures do not block review. Next: inspect each owner task and deadline in seats/selftest-quarantine.list.`);
+  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,github,drift,quarantined,seatStreams,alerts};
 }
 export function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }
 if(import.meta.main){ const [cmd,...rest]=process.argv.slice(2); if(cmd==="check") check(rest.includes("--json")); else { console.error("usage: alerts.ts check [--json]"); process.exit(2); } }
