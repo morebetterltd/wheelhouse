@@ -16,7 +16,7 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}"; [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"; return 0; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 mkdir -p "${TMPDIR:-/tmp}"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-needs-selftest.$$.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
@@ -24,7 +24,7 @@ FIX="$(cd "$FIX" && pwd -P)" || exit 2
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats" "$ROOT/wheelhouse"
 printf 'namespace=wheelhouse-project\n' > "$ROOT/wheelhouse/.template-source"
 cat > "$ROOT/seats/seats.json" <<'JSON'
-{ "seats": { "worker-1": { "role": "worker" }, "reviewer": { "role": "verifier" }, "commander": { "role": "commander" } } }
+{ "seats": { "worker-1": { "role": "worker" }, "reviewer": { "role": "reviewer" }, "commander": { "role": "commander" } } }
 JSON
 RUN_SCRIPT="$SCRIPT"
 run(){ RC=0; OUT="$(WHEELHOUSE_NEEDS_ROOT="$ROOT" bun "$RUN_SCRIPT" "$@" 2>&1)" || RC=$?; }

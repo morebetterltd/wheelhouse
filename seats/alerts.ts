@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { fleetSnapshot, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
 import { acquirePidLock, releasePidLock } from "./lock";
+import { observeSeatStreams, seatStallNeedMs, type StreamHealth } from "./seat-stream-health";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_ALERTS_ROOT || path.join(import.meta.dir, ".."));
 const SEATS = path.join(ROOT, "seats");
@@ -14,10 +15,11 @@ const SNAP = path.join(RUN, "fleet-snapshot.json");
 const LOCK = path.join(RUN, "alerts.lock");
 const ALERT_LOG = path.join(LOGS, "alerts.log");
 const DEFAULT_INTERVAL_MS = 60_000;
+export const TEMPLATE_DRIFT_ALERT_HOLD_MS = Number(process.env.WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS ?? 10 * 60_000);
 
-type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed";
+type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|`seat-stalled:${string}`;
 type AlertState = { active:boolean; since:string|null; lastFiredAt:string|null; needId?:string|null; signature?:string; detail?:string };
-type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; github:any; drift:any; alerts:Record<string,AlertState> };
+type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; github:any; drift:any; seatStreams:Record<string,StreamHealth>; alerts:Record<string,AlertState> };
 
 function now(){ return new Date().toISOString(); }
 function readJson(file:string):any{ try { return JSON.parse(fs.readFileSync(file,"utf8")); } catch { return null; } }
@@ -71,20 +73,44 @@ function driftInfo(){
   return {...data,...result,status:hasDrift?"drift":"clean",reason:null};
 }
 function alertRow(active:boolean, prior:AlertState|undefined, signature=""):AlertState{ const n=now(); if(active){ if(prior?.active&&prior.signature===signature) return {...prior, active:true}; return {active:true,since:n,lastFiredAt:n,needId:prior?.needId??null,signature}; } return {active:false,since:null,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature}; }
-function appendInboxAlert(name:AlertName, detail:string){
+// The set is the sorted, de-duplicated union of modified, localOnly and
+// missing paths. Reordering, duplicates, category moves and aheadBy changes
+// don't re-raise. Ahead-only drift keeps its first hold as an empty-path-set
+// condition. Each changed set waits its own 10-minute hold; a full clear
+// resets the clock. Failed checks remain a separate, immediate alert.
+function driftFileSetSignature(drift:any):string {
+  const candidates=Array.isArray(drift) ? drift : [drift.modified??drift.m, drift.localOnly??drift.l, drift.missing??drift.mi].flatMap(xs=>Array.isArray(xs)?xs:[]);
+  return JSON.stringify([...new Set(candidates.filter(p=>typeof p==="string"&&p.length>0))].sort());
+}
+function priorDriftSignature(signature:string|undefined):string {
+  if(!signature) return "";
+  try { const parsed=JSON.parse(signature); if(parsed && typeof parsed==="object") return driftFileSetSignature(parsed); } catch {}
+  return signature;
+}
+function heldAlertRow(active:boolean, prior:AlertState|undefined, signature:string, holdMs:number):AlertState {
+  const n=now();
+  if(!active) return {active:false,since:null,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature};
+  const sameSet=prior?.signature===signature;
+  if(sameSet&&prior?.active) return {...prior,active:true,signature};
+  const firstSeen=sameSet ? prior?.since??n : n;
+  if(Date.now()-Date.parse(firstSeen)<holdMs) return {active:false,since:firstSeen,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature};
+  return {active:true,since:firstSeen,lastFiredAt:n,needId:prior?.needId??null,signature};
+}
+function appendInboxAlert(name:AlertName, detail:string, stream?:StreamHealth){
   fs.mkdirSync(SEATS,{recursive:true});
-  const row={id:`alert-${name}-${Date.now()}`,at:now(),seat:"herald",class:"alert",state:"input-required",title:title(name),detail,source:{type:"alerts",name}};
+  const row={id:`alert-${name}-${Date.now()}`,at:now(),seat:"herald",class:"alert",state:"input-required",title:title(name),detail,source:{type:"alerts",name,...(stream?{seat:stream.seat,bead:stream.bead,lastEventAt:stream.lastEventAt,lastEvent:stream.lastEvent}:{})}};
   fs.appendFileSync(path.join(SEATS,"inbox.jsonl"),JSON.stringify(row)+"\n");
 }
-function needOpen(name:AlertName, title:string, body:string):string|null{ const r=spawnSync("bun",["seats/needs.ts","open","--kind","notify","--source",`alerts:${name}`,"--title",title,"--body",body],{cwd:ROOT,encoding:"utf8"}); if(r.status!==0){ appendLog(`alert need open failed ${name}: ${(r.stderr||r.stdout).trim()}`); return null; } return r.stdout.trim().split(/\s+/)[0]||null; }
-function needClose(id:string){ spawnSync("bun",["seats/needs.ts","close",id,"--reason","cleared"],{cwd:ROOT,encoding:"utf8"}); }
+function needOpen(name:AlertName, title:string, body:string, stream?:StreamHealth):string|null{ const machine=stream?["--seat",stream.seat,...(stream.bead?["--bead",stream.bead]:[])]:[]; const source=`alerts:${name}${stream?`:${stream.processKey}:${stream.bead??""}:${stream.progressKey}`:""}`; const r=spawnSync("bun",["seats/needs.ts","open","--kind","notify","--source",source,"--title",title,"--body",body,...machine],{cwd:ROOT,encoding:"utf8",env:{...process.env,BEADS_ACTOR:"alerts"}}); if(r.status!==0){ appendLog(`alert need open failed ${name}: ${(r.stderr||r.stdout).trim()}`); return null; } return r.stdout.trim().split(/\s+/)[0]||null; }
+function needClose(id:string){ spawnSync("bun",["seats/needs.ts","close",id,"--reason","cleared"],{cwd:ROOT,encoding:"utf8",env:{...process.env,BEADS_ACTOR:"alerts"}}); }
 function title(name:string){ return `alert — ${name.replace(/-/g," ")}`; }
 function bodyFor(name:AlertName, detail:string){ return `Alert ${name}: ${detail}. ${remedyFor(name)}`; }
-function remedyFor(name:AlertName){ if(name==="template-drift-check-failed") return "Cost: $0 directly; template drift is unknown. Next: inspect the retained drift failure in seats/run/fleet-snapshot.json and repair/retry the check."; if(name==="commander-pane-invalid") return "The commander pane target is invalid. Cost: $0 while noticed, but alerts and wakes may not reach the commander. Next: run seats/cockpit.sh to re-aim the commander pane and restart the herald."; if(name==="inbox-lag") return "The fleet inbox has undrained rows for longer than the alert threshold. Cost: $0 directly, but workers may wait for attention. Next: run bun seats/herald.ts --drain in the commander pane."; if(name==="idle-fleet-ready-work") return "Ready work exists while nobody is on it. Cost: $0 directly, but delivery is stalled. Next: spawn or resume seats and dispatch work; this clears itself once a worker is busy."; return "A fleet alert became active. Cost: $0. Next: inspect seats/run/fleet-snapshot.json; no action needed when the condition clears itself."; }
-function maybeHuman(name:AlertName, st:AlertState){ const age=Date.now()-Date.parse(st.since||now()); const humanAfter=minutesValue("alert-human-after-minutes",15)*60_000; if(name==="commander-pane-invalid" || ((name==="inbox-lag"||name==="idle-fleet-ready-work") && age>=humanAfter)){ if(!st.needId) st.needId=needOpen(name,title(name),st.detail??bodyFor(name,"condition remains active")); } }
+function remedyFor(name:AlertName){ if(name.startsWith("seat-stalled:")) return "Cost: delivery is waiting, even though the process is alive. Next: inspect the seat's own stream and redispatch after diagnosis; never interrupt a legitimate tool wait. No automatic abort or restart was performed."; if(name==="template-drift-check-failed") return "Cost: $0 directly; template drift is unknown. Next: inspect the retained drift failure in seats/run/fleet-snapshot.json and repair/retry the check."; if(name==="commander-pane-invalid") return "The commander pane target is invalid. Cost: $0 while noticed, but alerts and wakes may not reach the commander. Next: run seats/cockpit.sh to re-aim the commander pane and restart the herald."; if(name==="inbox-lag") return "The fleet inbox has undrained rows for longer than the alert threshold. Cost: $0 directly, but workers may wait for attention. Next: run bun seats/herald.ts --drain in the commander pane."; if(name==="idle-fleet-ready-work") return "Ready work exists while nobody is on it. Cost: $0 directly, but delivery is stalled. Next: spawn or resume seats and dispatch work; this clears itself once a worker is busy."; return "A fleet alert became active. Cost: $0. Next: inspect seats/run/fleet-snapshot.json; no action needed when the condition clears itself."; }
+function maybeHuman(name:AlertName, st:AlertState, stream?:StreamHealth){ const age=Date.now()-Date.parse(st.since||now()); const humanAfter=minutesValue("alert-human-after-minutes",15)*60_000; if(stream && age>=seatStallNeedMs(ROOT)){ if(!st.needId) st.needId=needOpen(name,"A model stream needs attention",`An assigned worker's model stream remains silent. Its last own event was at ${stream.lastEventAt}. Cost: delivery is waiting while its process remains alive. Next: ask the commander to inspect the stream and recover or redispatch the work after diagnosis. No automatic restart was performed.`,stream); } else if(name==="commander-pane-invalid" || ((name==="inbox-lag"||name==="idle-fleet-ready-work") && age>=humanAfter)){ if(!st.needId) st.needId=needOpen(name,title(name),st.detail??bodyFor(name,"condition remains active")); } }
 
 export function buildSnapshot(root=ROOT):SnapshotFile{
   const prior=readJson(SNAP) as SnapshotFile|null; const priorAlerts=prior?.alerts??{}; const snap=fleetSnapshot(root); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const github=githubInfo(); const drift=driftInfo();
+  const seatStreams=observeSeatStreams(root,prior?.seatStreams??{});
   const active:Record<AlertName,{on:boolean; sig:string; detail:string}>={
     "idle-fleet-ready-work":{on:readyWorkNobodyOnIt(snap),sig:"",detail:`ready=${snap.readyCount}; busy workers=${snap.workers.busy}; ready beads=${snap.ready.map(r=>r.id).join(", ")}`},
     "cold-seats-ready-work":{on:snap.readyCount>0&&snap.workers.live.length===0,sig:"",detail:`ready=${snap.readyCount}; live workers=${snap.workers.live.length}; ready beads=${snap.ready.map(r=>r.id).join(", ")}`},
@@ -93,12 +119,27 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
     "capacity-events":{on:capacity.seats.length>0,sig:capacity.seats.join("\n"),detail:`capacity seats=${capacity.seats.join(", ")}`},
     "low-disk":{on:disk.freeBytes!==null&&disk.freeBytes<disk.thresholdBytes,sig:"",detail:`free bytes=${disk.freeBytes}; threshold bytes=${disk.thresholdBytes}`},
     "commander-pane-invalid":{on:herald.target?.status?herald.target.status!=="ok":false,sig:String(herald.target?.status??""),detail:`commander target status=${herald.target?.status??"unknown"}`},
-    "template-drift":{on:drift.status==="drift",sig:JSON.stringify({m:drift.modified,l:drift.localOnly,mi:drift.missing,a:drift.aheadBy}),detail:`modified=${JSON.stringify(drift.modified)}; localOnly=${JSON.stringify(drift.localOnly)}; missing=${JSON.stringify(drift.missing)}; aheadBy=${drift.aheadBy??"unknown"}`},
+    "template-drift":{on:drift.status==="drift",sig:driftFileSetSignature(drift),detail:`modified=${JSON.stringify(drift.modified)}; localOnly=${JSON.stringify(drift.localOnly)}; missing=${JSON.stringify(drift.missing)}; aheadBy=${drift.aheadBy??"unknown"}`},
     "template-drift-check-failed":{on:drift.status==="check-failed",sig:drift.reason??"",detail:drift.reason??"drift check failed without a reason"},
   };
+  // Keep old keys long enough to clear their persistent condition/need when a
+  // seat settles, stops, resumes progress, parks on capacity, or is removed.
+  for(const name of Object.keys(priorAlerts)) if(name.startsWith("seat-stalled:")) active[name as AlertName]={on:false,sig:"",detail:""};
+  for(const stream of Object.values(seatStreams)) active[`seat-stalled:${stream.seat}`]={on:stream.stalled,sig:`${stream.processKey}:${stream.bead??""}:${stream.progressKey}`,detail:`seat=${stream.seat}; task=${stream.bead??"unassigned"}; last own event=${stream.lastEvent} at ${stream.lastEventAt}; quietMs=${stream.quietForMs}; phase=${stream.phase}`};
   const alerts:Record<string,AlertState>={};
-  for(const name of Object.keys(active) as AlertName[]){ const was=priorAlerts[name]; const next=alertRow(active[name].on,was,active[name].sig); next.detail=was?.detail; if(next.active&&(!was?.active||was.signature!==next.signature)){ next.detail=bodyFor(name,active[name].detail); appendLog(`alert fired ${name}: ${next.detail}`); appendInboxAlert(name, next.detail); } if(!next.active&&was?.active){ appendLog(`alert cleared ${name}`); if(was.needId) needClose(was.needId); next.needId=null; } if(next.active) maybeHuman(name,next); alerts[name]=next; }
-  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,github,drift,alerts};
+  for(const name of Object.keys(active) as AlertName[]){
+    const stored=priorAlerts[name], stream=name.startsWith("seat-stalled:")?seatStreams[name.slice("seat-stalled:".length)]:undefined;
+    let was=name==="template-drift"&&stored ? {...stored,signature:priorDriftSignature(stored.signature)} : stored;
+    if(stream?.stalled && was?.active && was.signature!==active[name].sig){ if(was.needId) needClose(was.needId); was=undefined; }
+    const next=name==="template-drift" ? heldAlertRow(active[name].on,was,active[name].sig,TEMPLATE_DRIFT_ALERT_HOLD_MS) : alertRow(active[name].on,was,active[name].sig);
+    next.detail=was?.detail;
+    const shouldFire = next.active&&(!was?.active||was.signature!==next.signature);
+    if(shouldFire){ next.detail=bodyFor(name,active[name].detail); appendLog(`alert fired ${name}: ${next.detail}`); appendInboxAlert(name,next.detail,stream); }
+    if(!next.active&&was?.active){ appendLog(`alert cleared ${name}`); if(was.needId) needClose(was.needId); next.needId=null; }
+    if(next.active) maybeHuman(name,next,stream);
+    alerts[name]=next;
+  }
+  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,github,drift,seatStreams,alerts};
 }
 export function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }
 if(import.meta.main){ const [cmd,...rest]=process.argv.slice(2); if(cmd==="check") check(rest.includes("--json")); else { console.error("usage: alerts.ts check [--json]"); process.exit(2); } }

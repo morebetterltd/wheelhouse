@@ -6,7 +6,7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing.XXXXXX")" 
 selftest_isolate_git "$FIX" || exit 2
 PIDS=""
 cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; pkill -f "$FIX" >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 if bash "$HERE/seat-path-safety.selftest.sh" "$HERE/.." staffing; then
@@ -56,7 +56,7 @@ const root=path.resolve(import.meta.dir,".."); const [cmd,...args]=process.argv.
 function read(file:string){try{return JSON.parse(fs.readFileSync(file,"utf8"))}catch{return {seats:{}}}}
 function write(file:string,j:any){fs.mkdirSync(path.dirname(file),{recursive:true}); fs.writeFileSync(file,JSON.stringify(j,null,2)+"\n")}
 function pool(){return JSON.parse(fs.readFileSync(path.join(root,"seats/pool.json"),"utf8"))}
-function modelFor(seat:string){const p=pool(); const ent=seat.replace(/^worker-/,'').replace(/^verifier-/,''); const r=p.roles.workers.entries.includes(ent)?p.roles.workers:p.roles.reviewers; return typeof r.model==='string'?r.model:r.model[ent]}
+function modelFor(seat:string){const p=pool(); const ent=seat.replace(/^worker-/,'').replace(/^reviewer-/,''); const r=p.roles.workers.entries.includes(ent)?p.roles.workers:p.roles.reviewers; return typeof r.model==='string'?r.model:r.model[ent]}
 if(cmd==='spawn'){
  const seat=args[0]; const fifo=path.join(root,"seats/run",`${seat}.stdin`); try{fs.mkfifoSync(fifo)}catch{spawnSync("mkfifo",[fifo])}
  const child=spawn("bash",["-c",`exec 3<>${JSON.stringify(fifo)}; sleep 1000`],{detached:true,stdio:"ignore"}); child.unref();
@@ -214,33 +214,33 @@ bun - "$ROOT/seats/staffing.json" <<'JS'
 (await import('node:fs')).default.writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{}},null,2));
 JS
 run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
-[ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=verifier-rv1' <<<"$OUT" && ! grep -q 'decision=add-worker' <<<"$OUT" && pass 'G4-19 review backlog adds reviewer and not worker' || fail "reviewer add failed: $OUT"
+[ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=reviewer-rv1' <<<"$OUT" && ! grep -q 'decision=add-worker' <<<"$OUT" && pass 'G4-19 review backlog adds reviewer and not worker' || fail "reviewer add failed: $OUT"
 bun - "$ROOT/seats/seats.json" "$ROOT/seats/staffing.json" <<'JS'
 const fs=(await import('node:fs')).default; fs.writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{}},null,2));
-fs.writeFileSync(process.argv[3],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'},'verifier-rv1':{role:'verifier',entry:'rv1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{rv1:{at:'2026-01-01T00:00:00Z',detail:'test keeps rv1 unavailable'}}},null,2));
+fs.writeFileSync(process.argv[3],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'},'reviewer-rv1':{role:'reviewer',entry:'rv1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{rv1:{at:'2026-01-01T00:00:00Z',detail:'test keeps rv1 unavailable'}}},null,2));
 JS
-MARKER="$ROOT/seats/run/verify.verifier-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID0=$!; printf '{"pid":%s,"bead":"other-bead"}\n' "$MPID0" > "$MARKER"
+MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID0=$!; printf '{"pid":%s,"bead":"other-bead"}\n' "$MPID0" > "$MARKER"
 run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
 kill "$MPID0" 2>/dev/null || true; rm -f "$MARKER"
-[ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=verifier-rv2' <<<"$OUT" && pass 'G4-19 review backlog with no eligible free reviewer adds next reviewer' || fail "no eligible reviewer backlog failed: $OUT"
+[ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=reviewer-rv2' <<<"$OUT" && pass 'G4-19 review backlog with no eligible free reviewer adds next reviewer' || fail "no eligible reviewer backlog failed: $OUT"
 UNIT_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e '
 import { decide } from "./seats/staffing.ts";
-const snap={at:"now",ready:[],readyCount:0,chainedCount:0,overlapCount:0,reviewBacklog:[{id:"review-bead",title:"Review",authorSeat:"worker-fixed",authorAccountDir:"/same"}],workers:{live:[],idle:0,busy:0},reviewers:{live:[{name:"verifier-fixed",entry:null,accountDir:"/same",busy:false}],idle:1,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}};
+const snap={at:"now",ready:[],readyCount:0,chainedCount:0,overlapCount:0,reviewBacklog:[{id:"review-bead",title:"Review",authorSeat:"worker-fixed",authorAccountDir:"/same"}],workers:{live:[],idle:0,busy:0},reviewers:{live:[{name:"reviewer-fixed",entry:null,accountDir:"/same",busy:false}],idle:1,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}};
 const pool={version:1,idle_drop_minutes:30,entries:{rv2:{harness:"codex",provider:"openai",models:["vr2"],account:{dir:"/other",authRoute:"env"}}},roles:{reviewers:{min:0,max:2,entries:["rv2"],model:"vr2"},workers:{min:0,max:1,entries:[],model:"m"}}};
 const staffing={version:1,seats:{}};
 console.log(JSON.stringify(decide(snap, pool, staffing)));
 ')" && grep -q '"kind":"add-reviewer"' <<<"$UNIT_OUT" && pass 'G4-35 decide counts backlog when only free reviewer shares author subscription' || fail "G4-35 decide path failed: $UNIT_OUT"
 UNIT_DROP="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e '
 import { decide } from "./seats/staffing.ts";
-const snap={at:"now",ready:[],readyCount:0,chainedCount:0,overlapCount:0,reviewBacklog:[],workers:{live:[],idle:0,busy:0},reviewers:{live:[{name:"verifier-rv1",entry:"rv1",accountDir:"/rv1",busy:false}],idle:1,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}};
+const snap={at:"now",ready:[],readyCount:0,chainedCount:0,overlapCount:0,reviewBacklog:[],workers:{live:[],idle:0,busy:0},reviewers:{live:[{name:"reviewer-rv1",entry:"rv1",accountDir:"/rv1",busy:false}],idle:1,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}};
 const pool={version:1,idle_drop_minutes:0,entries:{rv1:{harness:"codex",provider:"openai",models:["vr"],account:{dir:"/rv1",authRoute:"env"}}},roles:{reviewers:{min:0,max:2,entries:["rv1"],model:"vr"},workers:{min:0,max:1,entries:[],model:"m"}}};
-const staffing={version:1,seats:{"verifier-rv1":{role:"verifier",entry:"rv1",addedAt:"2026-01-01T00:00:00Z"}}};
+const staffing={version:1,seats:{"reviewer-rv1":{role:"reviewer",entry:"rv1",addedAt:"2026-01-01T00:00:00Z"}}};
 console.log(JSON.stringify(decide(snap, pool, staffing)));
 ')" && grep -q '"kind":"drop-seat"' <<<"$UNIT_DROP" && grep -q '"role":"reviewers"' <<<"$UNIT_DROP" && pass 'G4-19 decide path drops idle reviewer above minimum' || fail "idle reviewer decide path failed: $UNIT_DROP"
-MARKER="$ROOT/seats/run/verify.verifier-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID=$!; printf '{"pid":%s,"bead":"review-bead"}\n' "$MPID" > "$MARKER"
-run env BD_READY_COUNT=0 bun seats/staffing.ts drop verifier-rv1
-[ $RC -eq 0 ] && grep -q 'drop refused: verifier-rv1 is busy' <<<"$OUT" && kill "$MPID" 2>/dev/null && rm -f "$MARKER" && pass 'G4-19 reviewer with live verify marker is not dropped' || { kill "$MPID" 2>/dev/null || true; fail "busy reviewer drop failed: $OUT"; }
-run env BD_READY_COUNT=0 bun seats/staffing.ts drop verifier-rv1
+MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID=$!; printf '{"pid":%s,"bead":"review-bead"}\n' "$MPID" > "$MARKER"
+run env BD_READY_COUNT=0 bun seats/staffing.ts drop reviewer-rv1
+[ $RC -eq 0 ] && grep -q 'drop refused: reviewer-rv1 is busy' <<<"$OUT" && kill "$MPID" 2>/dev/null && rm -f "$MARKER" && pass 'G4-19 reviewer with live verify marker is not dropped' || { kill "$MPID" 2>/dev/null || true; fail "busy reviewer drop failed: $OUT"; }
+run env BD_READY_COUNT=0 bun seats/staffing.ts drop reviewer-rv1
 [ $RC -eq 0 ] && grep -q 'decision=drop-seat' <<<"$OUT" && pass 'G4-19 idle reviewer unregisters on drop' || fail "idle reviewer drop failed: $OUT"
 # Safe worktree removal refusals used by drop.
 git -C "$ROOT" worktree add --detach "$ROOT/.wheelhouse-worktrees/worker-dirty" HEAD >/dev/null 2>&1

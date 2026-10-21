@@ -18,13 +18,12 @@ cleanup(){
   if declare -F kill_recorded_tree >/dev/null; then
     kill_recorded_tree "$FIX/ordinary" CLEANUP
     kill_recorded_tree "$FIX/term-ignored" CLEANUP
+    kill_recorded_tree "$FIX/fork-frozen" CLEANUP
+    kill_recorded_tree "$FIX/fork-unfrozen" CLEANUP
   fi
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
+selftest_install_cleanup_traps cleanup
 PROJECT="$FIX/project"
 selftest_copy_seat_runtime "$PROJECT" "$HERE"
 cp -f "$SWEEP" "$PROJECT/seats/selftest-sweep.sh"
@@ -60,19 +59,23 @@ rescue_tree(){ (
 TEST_PGID="$(ps -p "$$" -o pgid=)"; TEST_PGID="${TEST_PGID//[[:space:]]/}"
 
 check_gone(){
-  local dir="$1" p g born fresh fp fg fb rc=0 count=0
+  local dir="$1" minimum="${2:-3}" p g born fresh fp parent fg state weekday month day clock year cmd
+  local bd bm bn bt by rc=0 count=0
   [ -s "$dir/identities" ] || return 1
   while read -r p g born; do
     [[ "$p" =~ ^[1-9][0-9]*$ ]] && [[ "$g" =~ ^[1-9][0-9]*$ ]] || { rc=1; continue; }
     count=$((count+1))
-    if fresh="$(ps -p "$p" -o pid=,pgid=,lstart= 2>/dev/null)"; then
-      read -r fp fg fb <<< "$fresh"
-      if [ "$fp" = "$p" ] && [ "$fg" = "$g" ] && [ "$fb" = "$born" ]; then
-        printf 'SURVIVOR pid=%s pgid=%s birth=%s\n' "$p" "$g" "$born" >&2; rc=1
+    # One wide native snapshot supplies identity AND diagnostics at detection,
+    # before teardown can kill/reparent it. Keep state so zombies are nameable.
+    if fresh="$(ps -ww -p "$p" -o pid=,ppid=,pgid=,stat=,lstart=,command= 2>/dev/null)"; then
+      read -r fp parent fg state weekday month day clock year cmd <<< "$fresh"
+      read -r bd bm bn bt by <<< "$born"
+      if [ "$fp" = "$p" ] && [ "$fg" = "$g" ] && [ "$weekday $month $day $clock $year" = "$bd $bm $bn $bt $by" ]; then
+        printf 'SURVIVOR pid=%s ppid=%s pgid=%s state=%s birth=%s command=%q\n' "$p" "$parent" "$g" "$state" "$born" "$cmd" >&2; rc=1
       fi
     fi
   done < "$dir/identities"
-  [ "$count" -ge 3 ] && [ "$rc" = 0 ]
+  [ "$count" -ge "$minimum" ] && [ "$rc" = 0 ]
 }
 
 run_timeout_case(){
@@ -124,6 +127,7 @@ SH
 }
 run_timeout_case ordinary 0 2
 run_timeout_case term-ignored 1 3
+. "$HERE/fixtures/sweep-timeout-fork.sh"
 
 # Defaults are observed on a completed fast suite, never by waiting an hour.
 DEFAULT_DIR="$FIX/default"; mkdir -p "$DEFAULT_DIR"

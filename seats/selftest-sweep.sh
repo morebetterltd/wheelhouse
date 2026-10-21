@@ -11,7 +11,7 @@ SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
 WATCHDOG_PID=""
 SUITE_STATE=""
-# Optional verifier-owned registry. Only our fixed launcher publishes pgids;
+# Optional reviewer-owned registry. Only our fixed launcher publishes pgids;
 # suite payloads do not inherit this capability.
 REVIEW_GROUPS="${WHEELHOUSE_SELFTEST_REVIEW_GROUPS:-}"
 SUITE_TIMED_OUT=0
@@ -50,7 +50,9 @@ RUNNER_PGID="${RUNNER_PGID//[[:space:]]/}"
 # an orphaned child is still owned after its parent exits during the grace.
 signal_suite_tree(){
   local signal="$1" root="$2" dir="$3" owner group born p parent g birth i j ancestor changed groups_seen=" " oldp oldg oldbirth
-  local pids=() parents=() pgids=() births=() owned=() active=()
+  local pids=() parents=() pgids=() states=() births=() owned=() active=()
+  local state
+  SUITE_TREE_QUIESCENT=1
   local previous_pids=() previous_groups=() previous_births=()
   read -r owner group born < "$dir/owner" || return 2
   [ "$owner" = "$root" ] && [ "$group" = "$root" ] || return 2
@@ -60,10 +62,10 @@ signal_suite_tree(){
       previous_pids[i]="$oldp"; previous_groups[i]="$oldg"; previous_births[i]="$oldbirth"
     done < "$dir/targets"
   fi
-  ps -axo pid=,ppid=,pgid=,lstart= > "$dir/processes" || return 2
+  ps -axo pid=,ppid=,pgid=,stat=,lstart= > "$dir/processes" || return 2
   i=0
-  while read -r p parent g birth; do
-    pids[i]="$p"; parents[i]="$parent"; pgids[i]="$g"; births[i]="$birth"; owned[i]=0
+  while read -r p parent g state birth; do
+    pids[i]="$p"; parents[i]="$parent"; pgids[i]="$g"; states[i]="$state"; births[i]="$birth"; owned[i]=0
     if [ "$p" = "$root" ] && [ "$g" = "$group" ] && [ "$birth" = "$born" ]; then owned[i]=1; fi
     for ((j=0;j<${#previous_pids[@]};j++)); do
       if [ "$p" = "${previous_pids[j]}" ] && [ "$g" = "${previous_groups[j]}" ] && [ "$birth" = "${previous_births[j]}" ]; then owned[i]=1; break; fi
@@ -90,6 +92,7 @@ signal_suite_tree(){
   : > "$dir/targets.next"
   for ((i=0;i<${#pids[@]};i++)); do
     [ "${owned[i]}" = 1 ] || continue
+    case "${states[i]}" in T*|t*|Z*) ;; *) SUITE_TREE_QUIESCENT=0 ;; esac
     printf '%s %s %s\n' "${pids[i]}" "${pgids[i]}" "${births[i]}" >> "$dir/targets.next"
     g="${pgids[i]}"
     if [ "$g" != "$RUNNER_PGID" ] && [ "$g" -gt 1 ]; then
@@ -103,6 +106,24 @@ signal_suite_tree(){
     fi
   done
   mv -f "$dir/targets.next" "$dir/targets"
+}
+
+# A TERM-ignoring job-control shell can fork a new PGID after the KILL
+# census. Killing its parent then orphans an unrecorded group. Stop and rescan
+# until every attributable process is stopped/zombie before the final census;
+# no running owned parent can create another group in that snapshot window.
+# This does not contain earlier daemonization or an outside SIGCONT actor.
+quiesce_suite_tree(){
+  local root="$1" dir="$2" until=$((SECONDS+5))
+  while :; do
+    signal_suite_tree STOP "$root" "$dir" || return 2
+    [ "$SUITE_TREE_QUIESCENT" = 0 ] || return 0
+    if [ "$SECONDS" -ge "$until" ]; then
+      info 'STOP: suite tree did not quiesce before KILL within 5s'
+      return 2
+    fi
+    sleep 0.05
+  done
 }
 
 suite_watchdog(){ (
@@ -119,6 +140,12 @@ suite_watchdog(){ (
   # Separate unwritten FIFO: a parent's normal completion cannot cancel the
   # grace/escalation after TERM has already caused the suite leader to exit.
   read -r -t "$SUITE_GRACE_S" -u 8 message || true
+  if ! quiesce_suite_tree "$root" "$dir"; then
+    # Do not strand a stopped cohort on an observation failure. Still fail the
+    # sweep: a best-effort KILL is not a successful containment observation.
+    signal_suite_tree KILL "$root" "$dir" || true
+    exit 2
+  fi
   signal_suite_tree KILL "$root" "$dir" || { info 'STOP: cannot identify suite tree for KILL'; exit 2; }
 ); }
 
@@ -145,8 +172,8 @@ start_suite(){
   exec 8<> "$SUITE_STATE/grace"
   rm -f "$SUITE_STATE/control" "$SUITE_STATE/grace"
   # Publish while still in the runner group. KILL before publication therefore
-  # kills the launcher too; after publication the verifier knows its future
-  # pgid even if the runner dies before setsid/exec. No verifier ack is needed.
+  # kills the launcher too; after publication the reviewer knows its future
+  # pgid even if the runner dies before setsid/exec. No reviewer ack is needed.
   perl -MFcntl=:DEFAULT -MPOSIX=setsid -e '
     my $registry = shift @ARGV;
     if (length $registry) {

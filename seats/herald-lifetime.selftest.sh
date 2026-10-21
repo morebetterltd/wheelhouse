@@ -7,9 +7,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-herald-lifetime.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 selftest_bind_herald_owner "$FIX"
-trap 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+selftest_install_cleanup_traps 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"'
 # Recorded child, but NOT a herald: a stale/unrelated PID must not be signaled.
 sleep 60 & NON_HERALD=$!
 selftest_stop_herald_child "$NON_HERALD"
@@ -32,24 +30,33 @@ PROJ="$OWN/project"; mkdir -p "$PROJ/seats/run" "$PROJ/seats/logs"
 printf '%s\n' '{"logs":{},"seen":[],"alerts":{"lastCheckAt":"2999-01-01T00:00:00Z"},"staffing":{"lastCheckAt":"2999-01-01T00:00:00Z"}}' > "$PROJ/seats/herald.state.json"
 (cd "$PROJ" && WHEELHOUSE_HERALD_ROOT="$PROJ" WHEELHOUSE_HERALD_INTERVAL_MS=50 exec bun "$HERE/herald.ts") > "$OWN/herald.out" 2> "$OWN/herald.err" & CHILD=$!
 # KEEP the root in every leg: deletion must not make the SIGKILL proof pass.
-trap 'selftest_stop_herald_child "$CHILD"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-printf '%s\n%s\n' "$PROJ" "$CHILD" > "$BASE/$MODE.record"
+selftest_install_cleanup_traps 'selftest_stop_herald_child "$CHILD"'
+RECORD_TMP="$BASE/$MODE.record.tmp.$$"
+printf '%s\n' "$PROJ" > "$RECORD_TMP"
+if [ "$MODE" = delayed ]; then
+  : > "$BASE/$MODE.partial"
+  while [ ! -e "$BASE/$MODE.publish" ]; do sleep 0.01; done
+fi
+printf '%s\n' "$CHILD" >> "$RECORD_TMP"
+mv -f "$RECORD_TMP" "$BASE/$MODE.record"
 while [ ! -e "$BASE/$MODE.go" ]; do sleep 0.05; done
 [ "$MODE" != failure ] || exit 23
 SH
-bun - "$HERE" "$FIX" <<'JS'
+# Optional reader implementation is a test-only removed-fix control.
+bun - "$HERE" "$FIX" "${1:-$HERE/fixtures/herald-allocation-record.ts}" <<'JS'
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-const [here,rawBase]=process.argv.slice(2),base=fs.realpathSync(rawBase);
+const [here,rawBase,recordReader]=process.argv.slice(2),base=fs.realpathSync(rawBase);
+const {waitForOwnerAllocationRecord}=await import(recordReader);
 const failures=[],children=[],detached=[];
+let checks=1; // The unrelated-child refusal above is also a check.
 const read=p=>fs.readFileSync(p,'utf8');
 const pidFile=p=>path.join(p,'seats/run/herald.pid');
 function check(ok,text) {
+  checks++;
   console.log((ok?'ok - ':'not ok - ')+text);
   if(!ok) failures.push(text);
 }
@@ -140,6 +147,26 @@ async function launch(p) {
   return rec;
 }
 try {
+  // Model a legacy/non-atomic producer: publication of the path is not enough.
+  // Start the reader while only the project line exists, then release the PID
+  // after a turn of the event loop. No success depends on a host-speed sleep.
+  const delayed=path.join(base,'delayed-reader.record'),proj=path.join(base,'reader-project');
+  fs.writeFileSync(delayed,proj+'\n');
+  let settled=false;
+  const pending=waitForOwnerAllocationRecord(delayed).then(value=>({value}),error=>({error}));
+  pending.then(()=>{ settled=true; });
+  await Bun.sleep(0);
+  const waitedForPid=!settled;
+  fs.appendFileSync(delayed,String(process.pid)+'\n');
+  const received=await pending;
+  check(waitedForPid && received.value?.proj===proj && received.value?.pid===process.pid,'allocation reader waits for a delayed PID line');
+  for(const [name,text] of [['missing-pid',proj+'\n'],['zero-pid',proj+'\n0\n'],['fractional-pid',proj+'\n1.5\n'],['partial-pid',proj+'\n12']]) {
+    const file=path.join(base,name+'.record'); fs.writeFileSync(file,text);
+    let reason='';
+    try { await waitForOwnerAllocationRecord(file,150); } catch(error) { reason=String(error.message); }
+    console.log(name+' refusal: '+reason);
+    check(reason.includes('owner allocation record incomplete after 150ms:') && reason.includes('positive integer PID'),'allocation reader bounds/refuses '+name+' with a clear error');
+  }
   const p=root('singleton'),first=await launch(p);
   const second=await spawn(['bun',path.join(here,'herald.ts')],{cwd:p,env:env(p),stdout:'pipe',stderr:'pipe'},path.join(here,'herald.ts'));
   let refused=false,secondCode;
@@ -166,15 +193,18 @@ try {
   console.log('dead restart: rc='+status(restart.child,restarted)+' '+restart.output().trim());
   check(restarted===0 && next!==first.pid && alive(next),'daemons.sh restarts a dead herald with a stale singleton lock');
   signal(replacement,'SIGTERM'); assert.ok(await until(()=>!alive(next)),'restarted herald stopped');
-  for(const [mode,sig,expected] of [['normal',null,0],['failure',null,23],['term','SIGTERM',143],['int','SIGINT',130],['kill','SIGKILL',-9]]) {
+  for(const [mode,sig,expected] of [['delayed',null,0],['normal',null,0],['failure',null,23],['term','SIGTERM',143],['int','SIGINT',130],['kill','SIGKILL',-9]]) {
     // Native Bun.spawn resets SIGINT for this fresh child even when the sweep's
     // async Bash launch inherited SIG_IGN (verified with child trap -p INT).
     const ownerScript=path.join(base,'owner.sh');
     const owner=await spawn(['bash',ownerScript,here,base,mode],{cwd:base,stdout:'ignore',stderr:'pipe'},ownerScript);
     const record=path.join(base,mode+'.record');
-    assert.ok(await until(()=>fs.existsSync(record)),'owner allocation record missing');
-    const [proj,pidText]=read(record).trimEnd().split('\n'),pid=Number(pidText);
-    assert.ok(Number.isSafeInteger(pid) && pid>0,'valid allocated owner child PID');
+    if(mode==='delayed') {
+      assert.ok(await until(()=>fs.existsSync(path.join(base,mode+'.partial'))),'owner did not reach partial allocation publication');
+      check(!fs.existsSync(record),'owner publishes no allocation record before its PID line is ready');
+      fs.closeSync(fs.openSync(path.join(base,mode+'.publish'),'a'));
+    }
+    const {proj,pid}=await waitForOwnerAllocationRecord(record);
     assert.ok(await until(()=>fs.existsSync(pidFile(proj))),'owned herald never started');
     detached.push(remember(pid,proj,path.join(here,'herald.ts'),false));
     if(sig) signal(owner,sig); else fs.closeSync(fs.openSync(path.join(base,mode+'.go'),'a'));
@@ -190,5 +220,5 @@ try {
   for(const rec of detached) if(alive(rec.pid)) { signal(rec,'SIGTERM'); await until(()=>!alive(rec.pid)); }
 }
 if(failures.length) { console.log('herald-lifetime.selftest: FAIL ('+failures.length+' checks)'); process.exit(1); }
-console.log('herald-lifetime.selftest: PASS (9 checks)');
+console.log('herald-lifetime.selftest: PASS ('+checks+' checks)');
 JS

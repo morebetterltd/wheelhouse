@@ -16,7 +16,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 # an APPROVE over a missing/empty/mistyped artifact must be exit 1.
 #
 # The self-approval case is the one this tool exists for: an author seat and
-# a verifier seat resolving to the SAME account directory must be a STOP
+# a reviewer seat resolving to the SAME account directory must be a STOP
 # BEFORE anything spawns — asserted by checking the stub was never invoked.
 #
 # The canary phase sabotages COPIES of verify.ts — once with the account-
@@ -81,7 +81,7 @@ cleanup() {
   fi
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- fixture -----------------------------------------------------------------
 # Canonicalized for the same reason the other seat selftests canonicalize: on
@@ -102,10 +102,12 @@ selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+# Nested reviews run only tiny tracked fixture suites, not the host inventory.
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/fixture-sweep.lock"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
-RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
+RUN_PATH="$BIN:$PATH" # Keep fixture mocks before inherited host-budget shims.
 
 # The stub pi: one shot. Records argv and PI_CODING_AGENT_DIR into the agent
 # dir, touches an "invoked" marker, prints the scripted reply named by
@@ -122,7 +124,7 @@ fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
 if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) fs.appendFileSync(process.env.WHEELHOUSE_TEST_CHILD_LEDGER, JSON.stringify({event:"model",pid:process.pid}) + "\n");
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
-// beadsActorFor mirrored here for the verifier), not rely on an operator
+// beadsActorFor mirrored here for the reviewer), not rely on an operator
 // export reaching this one-shot process.
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, WHEELHOUSE_REAL_BD: process.env.WHEELHOUSE_REAL_BD ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
 if (process.env.STUB_GIT_INIT_REPO) {
@@ -152,7 +154,7 @@ if (process.env.STUB_CLOBBER_CORE_WORKTREE_REPO) {
 // telling us in a prompt to stay off the live checkout. Recording it here
 // lets the selftest see what the OS-level cwd actually was.
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
-// Readiness is out-of-band: it must not count as verifier stdout/stderr.
+// Readiness is out-of-band: it must not count as reviewer stdout/stderr.
 const watchdogDir = process.env.WHEELHOUSE_TEST_WATCHDOG_DIR;
 if (watchdogDir) {
   fs.writeFileSync(path.join(watchdogDir, "ready"), JSON.stringify({pid:process.pid}));
@@ -249,12 +251,13 @@ if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
   const readonly = cp.spawnSync("bd", ["create", "reviewer must not write"], { encoding: "utf8" });
   if (!log) {
     const attempted = cp.spawnSync("bash", ["seats/selftest-sweep.sh"], { timeout: 150, encoding: "utf8" });
-    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\n`}})+"\n");
+    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : "BOUNCE"}\nPUSH: NOT CONSIDERED\n`}})+"\n");
     process.exit(0);
   }
   const verdict = ok && readonly.status !== 0 ? "APPROVE" : "BOUNCE";
+  if (process.env.STUB_SWEEP_DELETE_LOG === "1" && log) fs.unlinkSync(log);
   const citation = process.env.STUB_SWEEP_OMIT_CITATION === "1" ? "sweep omitted" : `sweep evidence rc=${rc} log=${log}`;
-  process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`${citation}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : verdict}\nPUSH: NOT CONSIDERED\n`}})+"\n");
+  process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`${citation}\nVERDICT: ${process.env.STUB_SWEEP_VERDICT || (process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : verdict)}\nPUSH: NOT CONSIDERED\n`}})+"\n");
   process.exit(0);
 }
 if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
@@ -460,13 +463,21 @@ while true; do
 done
 verb="${1:-}"
 case "$verb" in
+  metrics)
+    [ "${2:-}" = off ] || exit 1
+    exit 0 ;;
   show)
+    [ "${STUB_BD_SHOW_FAIL:-0}" != 1 ] || { echo 'fixture bd show unavailable' >&2; exit 1; }
     if [[ " $* " = *" --json "* ]] && [ -n "${STUB_BD_JSON_SHOW_FILE:-}" ]; then
       cat "$STUB_BD_JSON_SHOW_FILE"
     elif [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi
     exit 0 ;;
   comments)
-    printf 'fixture comments\n'; exit 0 ;;
+    [ "${STUB_BD_COMMENTS_FAIL:-0}" != 1 ] || { echo 'fixture bd comments unavailable' >&2; exit 1; }
+    if [ -n "${STUB_BD_COMMENTS_FILE:-}" ]; then cat "$STUB_BD_COMMENTS_FILE"; else printf 'fixture comments\n'; fi
+    exit 0 ;;
+  where)
+    node -e 'console.log(JSON.stringify({path:require("fs").realpathSync(".beads")}))'; exit $? ;;
   init)
     if [ "$readonly" = 1 ]; then printf "operation '%s' is not allowed in read-only mode\n" "$verb" >&2; exit 1; fi
     mkdir -p .beads; printf 'fixture graph\n' > .beads/fixture; exit 0 ;;
@@ -487,6 +498,16 @@ chmod +x "$BIN/bd"
 # the brief at <root>/contracts/REVIEWER.md, and the root to be a git repo
 # holding the branch under review.
 SENTINEL='SENTINEL-TOKEN-9c2e'
+build_sweep_fixture() {   # real runner, one tiny tracked fixture suite
+  local proj="$1"
+  cp -f "$VERIFY_DIR/selftest-sweep.sh" "$proj/seats/selftest-sweep.sh" || exit 2
+  cat > "$proj/seats/fixture.selftest.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+bd create 'sweep scratch bead' --json >/dev/null
+printf 'scratch bd create ok\nfixture sweep PASS\n'
+SH
+}
 build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
   local proj="$1" ns="$2" src="$3" d
   mkdir -p "$proj/seats" "$proj/contracts"
@@ -505,23 +526,24 @@ build_proj() {   # $1 = project dir, $2 = seat namespace, $3 = verify.ts source
       "model": "stub-model-1",
       "account": { "dir": "~/.pi-seats-$ns/worker-1" }
     },
-    "verifier": {
-      "role": "verifier",
+    "reviewer": {
+      "role": "reviewer",
       "provider": "openai",
       "model": "stub-model-v",
-      "account": { "dir": "~/.pi-seats-$ns/verifier" }
+      "account": { "dir": "~/.pi-seats-$ns/reviewer" }
     }
   }
 }
 EOF
-  for d in worker-1 verifier; do
+  for d in worker-1 reviewer; do
     mkdir -p "$HOME_FIX/.pi-seats-$ns/$d"
     printf '{\n  "%s": true\n}\n' "$proj" > "$HOME_FIX/.pi-seats-$ns/$d/trust.json"
     printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-$ns/$d/auth.json"
   done
+  build_sweep_fixture "$proj"
   ( cd "$proj" &&
     git init -q -b main &&
-    git add seats/README.md &&
+    git add seats/README.md seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
@@ -570,27 +592,32 @@ build_umbrella_proj() {   # $1 = umbrella dir, $2 = seat namespace, $3 = verify.
       "model": "stub-model-1",
       "account": { "dir": "~/.pi-seats-$ns/worker-1" }
     },
-    "verifier": {
-      "role": "verifier",
+    "reviewer": {
+      "role": "reviewer",
       "provider": "openai",
       "model": "stub-model-v",
-      "account": { "dir": "~/.pi-seats-$ns/verifier" }
+      "account": { "dir": "~/.pi-seats-$ns/reviewer" }
     }
   }
 }
 EOF
-  for d in worker-1 verifier; do
+  for d in worker-1 reviewer; do
     mkdir -p "$HOME_FIX/.pi-seats-$ns/$d"
     printf '{\n  "%s": true\n}\n' "$umb" > "$HOME_FIX/.pi-seats-$ns/$d/trust.json"
     printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-$ns/$d/auth.json"
   done
+  build_sweep_fixture "$umb"
   ( cd "$umb" &&
     git init -q -b main &&
-    git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
+    git add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
+  mkdir -p "$product/seats"
+  selftest_copy_seat_runtime "$product" "$VERIFY_DIR"
+  build_sweep_fixture "$product"
   ( cd "$product" &&
     git init -q -b main &&
     mkdir -p evidence && printf 'product branch evidence\n' > evidence/bench.log &&
-    git add evidence/bench.log &&
+    git add evidence/bench.log seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build umbrella product git repo" >&2; exit 2; }
 }
@@ -603,7 +630,7 @@ REPLY="$FIX/reply.txt"
 core_worktree_snapshot() { local out rc; out="$(git -C "$1" config --local --get core.worktree 2>&1)"; rc=$?; printf 'rc=%s\n%s\n' "$rc" "$out"; }
 run() {   # runs verify.ts in the fixture; args pass through
   # BEADS_ACTOR unset on purpose: the dispatcher must set it in the spawned
-  # verifier's own env by construction, not forward whatever this shell has.
+  # reviewer's own env by construction, not forward whatever this shell has.
   OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" \
     bun "$RUN_PROJ/seats/verify.ts" "$@" 2>&1)"
   RC=$?
@@ -655,9 +682,9 @@ run_sweep_prompt_check() {  # $1 = bd-show file, remaining args pass through
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 VDIR="$PROJ/seats/verdicts"
-VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
-VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
-VCWD="$HOME_FIX/.pi-seats-alpha/verifier/cwd.txt"
+VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
+VINVOKED="$HOME_FIX/.pi-seats-alpha/reviewer/invoked"
+VCWD="$HOME_FIX/.pi-seats-alpha/reviewer/cwd.txt"
 
 phase "contract gate: no-outcomes review is refused before harness spawn"
 # The gate-removed negative must reach a normally answering harness, not fail
@@ -694,7 +721,7 @@ cp "$PROJ/seats/seats.json" "$FIX/seats-json.before-pool"
 bun - "$PROJ/seats/seats.json" <<'TS'
 import fs from "node:fs";
 const p=process.argv[2],j=JSON.parse(fs.readFileSync(p,"utf8"));
-delete j.seats.verifier; fs.writeFileSync(p,JSON.stringify(j,null,2));
+delete j.seats.reviewer; fs.writeFileSync(p,JSON.stringify(j,null,2));
 TS
 mkdir -p "$HOME_FIX/.pi-seats-proj/pool/rv1" "$HOME_FIX/.pi-seats-proj/pool/rv2"
 printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-proj/pool/rv1/auth.json"
@@ -703,7 +730,7 @@ cat > "$PROJ/seats/pool.json" <<'JSON'
 {"version":1,"entries":{"rv1":{"harness":"pi","provider":"openai","models":["stub-model-rv1"],"account":{"dir":"~/.pi-seats-proj/pool/rv1","authRoute":"oauth"}},"rv2":{"harness":"pi","provider":"openai","models":["stub-model-rv2"],"account":{"dir":"~/.pi-seats-proj/pool/rv2","authRoute":"oauth"}}},"roles":{"reviewers":{"min":0,"max":2,"entries":["rv1","rv2"],"model":{"rv1":"stub-model-rv1","rv2":"stub-model-rv2"}}}}
 JSON
 cat > "$PROJ/seats/staffing.json" <<'JSON'
-{"version":1,"seats":{"verifier-rv1":{"role":"verifier","entry":"rv1","addedAt":"2026-01-01T00:00:00Z"},"verifier-rv2":{"role":"verifier","entry":"rv2","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}
+{"version":1,"seats":{"reviewer-rv1":{"role":"reviewer","entry":"rv1","addedAt":"2026-01-01T00:00:00Z"},"reviewer-rv2":{"role":"reviewer","entry":"rv2","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}
 JSON
 cat > "$PROJ/seats/state.json" <<'JSON'
 {"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv1"}}}
@@ -714,36 +741,47 @@ VERDICT: APPROVE
 EOF
 RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-proj/pool/rv2/argv.json"
 run bead-pool-route fleet/bead-1 author-state
-if [ $RC -eq 0 ] && [ -f "$VARGV" ] && grep -q 'stub-model-rv2' "$VARGV" && [ ! -f "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json" ]; then pass "pool verifier routing skips staffed reviewer sharing author subscription and picks the other"; else fail "pool verifier route failed rc=$RC out=$OUT rv1=$(cat "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json" 2>/dev/null) rv2=$(cat "$VARGV" 2>/dev/null)"; fi
+if [ $RC -eq 0 ] && [ -f "$VARGV" ] && grep -q 'stub-model-rv2' "$VARGV" && [ ! -f "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json" ]; then pass "pool reviewer routing skips staffed reviewer sharing author subscription and picks the other"; else fail "pool reviewer route failed rc=$RC out=$OUT rv1=$(cat "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json" 2>/dev/null) rv2=$(cat "$VARGV" 2>/dev/null)"; fi
 rm -f "$VARGV" "$HOME_FIX/.pi-seats-proj/pool/rv1/argv.json"
 cat > "$PROJ/seats/pool.json" <<'JSON'
 {"version":1,"entries":{"rv2":{"harness":"pi","provider":"openai","models":["stub-model-rv2"],"account":{"dir":"~/.pi-seats-proj/pool/rv2","authRoute":"oauth"}}},"roles":{"reviewers":{"min":0,"max":1,"entries":["rv2"],"model":"stub-model-rv2"}}}
 JSON
 cat > "$PROJ/seats/staffing.json" <<'JSON'
-{"version":1,"seats":{"verifier-rv2":{"role":"verifier","entry":"rv2","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}
+{"version":1,"seats":{"reviewer-rv2":{"role":"reviewer","entry":"rv2","addedAt":"2026-01-01T00:00:00Z"}},"rateLimited":{}}
 JSON
 cat > "$PROJ/seats/state.json" <<'JSON'
 {"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv2"}}}
 JSON
 run bead-pool-all-share fleet/bead-1 author-state
-if [ $RC -ne 0 ] && says "SAME account directory" && says "waiting for a reviewer"; then pass "pool verifier routing STOPs with waiting wording when every reviewer shares author subscription"; else fail "all-shared reviewer STOP failed rc=$RC out=$OUT"; fi
-run bead-pool-explicit-same fleet/bead-1 author-state verifier-rv2
-if [ $RC -eq 1 ] && says "SAME account directory"; then pass "pool-present explicit verifier still runs the disk distinctness STOP before spawn"; else fail "pool explicit distinctness STOP failed rc=$RC out=$OUT"; fi
-mkdir -p "$PROJ/seats/run"; (cd "$FIX"; "$NODE_BIN" -e 'setInterval(()=>{},1000)') & BUSY_RV2=$!; printf '{"pid":%s,"bead":"other"}\n' "$BUSY_RV2" > "$PROJ/seats/run/verify.verifier-rv2.json"
+if [ $RC -ne 0 ] && says "SAME account directory" && says "waiting for a reviewer"; then pass "pool reviewer routing STOPs with waiting wording when every reviewer shares author subscription"; else fail "all-shared reviewer STOP failed rc=$RC out=$OUT"; fi
+run bead-pool-explicit-same fleet/bead-1 author-state reviewer-rv2
+if [ $RC -eq 1 ] && says "SAME account directory"; then pass "pool-present explicit reviewer still runs the disk distinctness STOP before spawn"; else fail "pool explicit distinctness STOP failed rc=$RC out=$OUT"; fi
+mkdir -p "$PROJ/seats/run"; (cd "$FIX"; "$NODE_BIN" -e 'setInterval(()=>{},1000)') & BUSY_RV2=$!; printf '{"pid":%s,"bead":"other"}\n' "$BUSY_RV2" > "$PROJ/seats/run/verify.reviewer-rv2.json"
 cat > "$PROJ/seats/state.json" <<'JSON'
 {"seats":{"author-state":{"accountDir":"~/.pi-seats-proj/pool/rv1"}}}
 JSON
 run bead-pool-all-busy fleet/bead-1 author-state
 kill "$BUSY_RV2" 2>/dev/null || true
-if [ $RC -eq 4 ] && says "all eligible verifier seats busy"; then pass "pool verifier routing retry-exits when all distinct reviewers are busy"; else fail "all-busy reviewer retry failed rc=$RC out=$OUT"; fi
-rm -f "$PROJ/seats/run/verify.verifier-rv2.json"
+if [ $RC -eq 4 ] && says "all eligible reviewer seats busy"; then pass "pool reviewer routing retry-exits when all distinct reviewers are busy"; else fail "all-busy reviewer retry failed rc=$RC out=$OUT"; fi
+rm -f "$PROJ/seats/run/verify.reviewer-rv2.json"
 mv "$FIX/seats-json.before-pool" "$PROJ/seats/seats.json"; rm -f "$PROJ/seats/pool.json" "$PROJ/seats/staffing.json" "$PROJ/seats/state.json"
+
+phase "shadow reviewers — selection and scoped per-outage promotion"
+SHADOW_PROJ="$FIX/shadow-proj"
+build_proj "$SHADOW_PROJ" shadow "$VERIFY"
+if HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/reviewer-shadow.ts" "$SHADOW_PROJ" "$HOME_FIX"; then
+  pass "shadow reviewer cases and pinned fix-removal controls"
+else fail "shadow reviewer regression"; fi
+if [ "${WHEELHOUSE_TEST_VERIFY_SHADOW_ONLY:-0}" = 1 ]; then
+  printf 'verify shadow-focused selftest: failures=%s\n' "$FAILED"
+  [ "$FAILED" -eq 0 ]; exit $?
+fi
 
 phase "installed layout — wheelhouse/crew brief is preferred without contracts/"
 INST_PROJ="$FIX/installed-proj"
 build_installed_proj "$INST_PROJ" installed "$VERIFY"
 RUN_PROJ="$INST_PROJ"
-VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
+VARGV="$HOME_FIX/.pi-seats-installed/reviewer/argv.json"
 INST_TIP="$(git -C "$INST_PROJ" rev-parse fleet/bead-1)"
 cat > "$REPLY" <<EOF
 Checked installed-layout fixture at $INST_TIP.
@@ -753,22 +791,24 @@ run bead-installed fleet/bead-1 worker-1
 if [ $RC -eq 0 ]; then pass "installed layout: APPROVE exits 0 with no contracts/ directory"
 else fail "installed layout: verify exited ${RC}: $OUT"; fi
 if grep -q "\"--append-system-prompt\",\"$INST_PROJ/wheelhouse/crew/REVIEWER.md\"" "$VARGV" 2>/dev/null; then
-  pass "installed layout: verifier brief resolves to wheelhouse/crew/REVIEWER.md"
-else fail "installed layout: verifier brief was not the installed path"; fi
+  pass "installed layout: reviewer brief resolves to wheelhouse/crew/REVIEWER.md"
+else fail "installed layout: reviewer brief was not the installed path"; fi
 if git -C "$INST_PROJ" check-ignore -q wheelhouse/crew/bench.sh; then
   pass "installed layout: wheelhouse/ is machine-local and excluded from the branch worktree"
 else fail "installed layout: wheelhouse/crew/bench.sh was not excluded by .git/info/exclude"; fi
 run_bench_check bead-installed-bench fleet/bead-1 worker-1
-BENCH_RUN="$HOME_FIX/.pi-seats-installed/verifier/bench-run.json"
-if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null \
+BENCH_RUN="$HOME_FIX/.pi-seats-installed/reviewer/bench-run.json"
+if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-seats-installed/reviewer/env.json" 2>/dev/null \
   && grep -q '"rc": 42' "$BENCH_RUN" 2>/dev/null \
   && ! grep -q '"rc": 127' "$BENCH_RUN" 2>/dev/null; then
   pass "installed-layout stub bench receives WHEELHOUSE_REAL_BD and writes only its scratch BEADS_DIR graph"
-else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/verifier/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
+else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/reviewer/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
 
 phase "0a2. dispatcher-owned full sweep evidence for reviewer"
 SWEEP_PROJ="$FIX/sweep-proj"
 build_proj "$SWEEP_PROJ" sweep "$VERIFY"
+# Keep the slowed-only inventory used by the batch-validation repository.
+git -C "$SWEEP_PROJ" rm -q seats/fixture.selftest.sh || exit 2
 # Real bd 1.2.2 may redirect a linked-worktree init to its shared ancestor;
 # keep graph setup in an independent primary repo with consistent cwd/PWD.
 SWEEP_BIN="$FIX/sweep-bin"; mkdir -p "$SWEEP_BIN"
@@ -780,6 +820,7 @@ if(process.argv[2]==='where') {
   console.log(JSON.stringify({path:fs.realpathSync(require('path').join(process.cwd(),'.beads'))})); process.exit(0);
 }
 if(process.argv[2]==='init') {
+  if(process.env.STUB_SWEEP_INIT_FAIL==='1') { console.error('fixture sweep graph init failure'); process.exit(73); }
   const cwd=fs.realpathSync(process.cwd()),pwd=process.env.PWD ? fs.realpathSync(process.env.PWD) : '';
   const primary=fs.statSync(require('path').join(cwd,'.git')).isDirectory();
   if(pwd!==cwd || !primary) { console.error('scratch bd init requires an isolated primary repo and consistent PWD'); process.exit(73); }
@@ -837,7 +878,7 @@ else
   fail "sweep bd-show fixture is not a contract"; exit 1
 fi
 RUN_PROJ="$SWEEP_PROJ"
-VARGV="$HOME_FIX/.pi-seats-sweep/verifier/argv.json"
+VARGV="$HOME_FIX/.pi-seats-sweep/reviewer/argv.json"
 SWEEP_LOCK="$FIX/review-sweep.lock"
 phase "0a3. refused output and one in-invocation corrective attempt"
 if env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR \
@@ -850,19 +891,142 @@ if [ "${WHEELHOUSE_VERIFY_REFUSAL_ONLY:-0}" = 1 ]; then
   printf 'verify.selftest: PASS (refusal subset)\n'
   exit 0
 fi
+phase "0a2b. every review needs a dispatcher receipt"
+check_dispatcher_receipts() {
+  local variant="$1" before="$FAILED" style outcome proposed incomplete_bead
+  SWEEP_GENERIC_CLAIM="$FIX/implicit-sweep-claim.txt"
+  for style in lock-recovery state-writes process-isolation; do
+    case "$style" in
+      lock-recovery) outcome='The lock selftest passes and never steals a live owner.' ;;
+      state-writes) outcome='The adapter recovers an abandoned empty state.lock and preserves live owners.' ;;
+      process-isolation) outcome='The no-pi-spawned assertion counts only processes the test itself could have started.' ;;
+    esac
+    printf 'Trace: %s regression\n\nIntent:\nCheck the claimed behavior independently.\n\nOutcomes:\n- O1 %s\n  consumer: machine — fixture runner\n  surface: fixture state and process records\n  check: run — inspect the claimed behavior\n' "$style" "$outcome" > "$SWEEP_GENERIC_CLAIM"
+    WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" "bead-implicit-$style" fleet/bead-1 worker-1
+    if [ "$RC" = 0 ] && [ -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" ] && grep -q '## Dispatcher full-sweep result' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" && grep -q 'sweep evidence rc=0 log=' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md"; then
+      pass "$style claim without sweep keywords still gets a dispatcher receipt"
+    else fail "$style claim bypassed dispatcher sweep rc=$RC out=$OUT"; fi
+  done
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_BD_SHOW_FAIL=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-show-failed fleet/bead-1 worker-1
+  if [ "$RC" = 0 ] && [ -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-show-failed.md" ] && grep -q '## Dispatcher full-sweep result' "$SWEEP_PROJ/seats/verdicts/bead-implicit-show-failed.md"; then
+    pass "unavailable bead text does not skip the dispatcher sweep"
+  else fail "unavailable bead text bypassed sweep rc=$RC out=$OUT"; fi
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" SWEEP_FIXTURE_RC=7 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-failed fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'APPROVE with failed full sweep' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-failed.md" ]; then
+    pass "failed dispatcher sweep blocks APPROVE even without sweep keywords"
+  else fail "failed implicit sweep approved rc=$RC out=$OUT"; fi
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_INIT_FAIL=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-init-failed fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'fixture sweep graph init failure' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-init-failed.md" ]; then
+    pass "dispatcher setup error is named and blocks APPROVE for an implicit claim"
+  else fail "sweep setup error swallowed rc=$RC out=$OUT"; fi
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_DELETE_LOG=1 STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-log-missing fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'cannot record APPROVE without a dispatcher full-sweep result' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-log-missing.md" ]; then
+    pass "missing retained dispatcher receipt blocks APPROVE"
+  else fail "missing dispatcher log accepted rc=$RC out=$OUT"; fi
+  for proposed in BOUNCE DISCOVER; do
+    incomplete_bead="bead-implicit-init-$proposed"
+    WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_INIT_FAIL=1 STUB_SWEEP_VERDICT="$proposed" run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" "$incomplete_bead" fleet/bead-1 worker-1
+    if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'fixture sweep graph init failure' && [ ! -f "$SWEEP_PROJ/seats/verdicts/$incomplete_bead.md" ] && bun - "$SWEEP_PROJ/seats/inbox.jsonl" "$incomplete_bead" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const rows=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(s=>JSON.parse(s)).filter(r=>r.title===`verifier gate STOP — ${process.argv[3]}`);
+assert.equal(rows.length,1);assert.equal(rows[0].class,'distress');assert.equal(rows[0].state,'failed');assert.match(rows[0].detail,/INCOMPLETE review:.*fixture sweep graph init failure/);
+JS
+    then pass "setup failure records an incomplete review even when reviewer proposes $proposed";
+    else fail "setup failure recorded $proposed instead of incomplete (rc=$RC out=$OUT)"; fi
+  done
+  SWEEP_BAD_LOCK="$FIX/refused-review-sweep-$variant.lock"
+  mkdir "$SWEEP_BAD_LOCK"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_BAD_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-lock-refused fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'lock helper failed (exit 2)' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-lock-refused.md" ] && [ -d "$SWEEP_BAD_LOCK" ] && bun - "$SWEEP_PROJ/seats/inbox.jsonl" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const rows=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(s=>JSON.parse(s)).filter(r=>r.title==='verifier gate STOP — bead-implicit-lock-refused');
+assert.equal(rows.length,1);assert.equal(rows[0].class,'distress');assert.equal(rows[0].state,'failed');assert.match(rows[0].detail,/INCOMPLETE review:.*lock helper failed \(exit 2\)/);
+JS
+  then pass 'runner lock refusal records an incomplete review with its reason, not BOUNCE';
+  else fail "runner lock refusal recorded a completed review (rc=$RC out=$OUT)"; fi
+  NO_SUITE_PROJ="$FIX/no-suite-proj-$variant"
+  build_proj "$NO_SUITE_PROJ" "nosuite-$variant" "$VERIFY"
+  ( cd "$NO_SUITE_PROJ" && git rm -q seats/fixture.selftest.sh && git -c user.email=selftest@local -c user.name=selftest commit -q -m no-suite && git branch -f fleet/bead-1 HEAD ) || exit 2
+  RUN_PROJ="$NO_SUITE_PROJ"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-no-suite fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'no runnable seats/*.selftest.sh suites' && [ ! -f "$NO_SUITE_PROJ/seats/verdicts/bead-no-suite.md" ]; then
+    pass 'branch without runnable suites is incomplete, not a completed BOUNCE';
+  else fail "empty suite inventory recorded a completed review (rc=$RC out=$OUT)"; fi
+  NO_RUNNER_PROJ="$FIX/no-runner-proj-$variant"
+  build_proj "$NO_RUNNER_PROJ" "no-runner-$variant" "$VERIFY"
+  git -C "$NO_RUNNER_PROJ" rm -q seats/selftest-sweep.sh seats/fixture.selftest.sh
+  git -C "$NO_RUNNER_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m no-runner
+  git -C "$NO_RUNNER_PROJ" branch -f fleet/bead-1 HEAD
+  RUN_PROJ="$NO_RUNNER_PROJ"
+  run_with_bd_show "$SWEEP_GENERIC_CLAIM" bead-no-runner fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'reviewed tip has no seats/selftest-sweep.sh runner' && [ ! -f "$NO_RUNNER_PROJ/seats/verdicts/bead-no-runner.md" ]; then
+    pass "branch without a sweep runner is explicitly incomplete, never APPROVE"
+  else fail "missing branch runner approved rc=$RC out=$OUT"; fi
+  RUN_PROJ="$SWEEP_PROJ"
+  [ "$FAILED" = "$before" ]
+}
+check_dispatcher_receipts fixed || true
+# Same assertions against an owned fix-removed copy, in this one suite run.
+# Restore the wording skip and remove only the new receipt/incomplete guards.
+RECEIPT_CONTROL="$FIX/receipt-control.ts"
+bun - "$VERIFY" "$RECEIPT_CONTROL" <<'JS' || exit 2
+import fs from 'node:fs';import assert from 'node:assert/strict';
+let s=fs.readFileSync(process.argv[2],'utf8');
+const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);';
+assert.equal(s.split(call).length,2);
+s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
+const start=s.indexOf('      // Setup/spawn/pinning failures are not completed BOUNCE/DISCOVER');
+const end=s.indexOf('      if (sweep.logPath && requireSweepCitation)',start);
+assert(start>0 && end>start);s=s.slice(0,start)+s.slice(end);
+fs.writeFileSync(process.argv[3],s);
+JS
+SAVED_SWEEP_PROJ="$SWEEP_PROJ"; SAVED_VERIFY="$VERIFY"
+SWEEP_PROJ="$FIX/sweep-control-proj"
+build_proj "$SWEEP_PROJ" sweep-control "$RECEIPT_CONTROL"
+RUN_PROJ="$SWEEP_PROJ"; VERIFY="$RECEIPT_CONTROL"
+( check_dispatcher_receipts removed ) > "$FIX/receipt-control.out" 2> "$FIX/receipt-control.err"
+CONTROL_RC=$?
+SWEEP_PROJ="$SAVED_SWEEP_PROJ"; RUN_PROJ="$SWEEP_PROJ"; VERIFY="$SAVED_VERIFY"
+if [ "$CONTROL_RC" = 1 ] && [ ! -s "$FIX/receipt-control.err" ] && node - "$FIX/receipt-control.out" <<'JS'
+const fs=require('fs'),assert=require('assert/strict'),s=fs.readFileSync(process.argv[2],'utf8');
+const failed=s.split('\n').filter(line=>line.startsWith('  FAIL  '));
+assert.equal(failed.length,12,s);
+for(const phrase of ['lock-recovery claim bypassed','state-writes claim bypassed','process-isolation claim bypassed','unavailable bead text bypassed','failed implicit sweep approved','sweep setup error swallowed','missing dispatcher log accepted','setup failure recorded BOUNCE','setup failure recorded DISCOVER','runner lock refusal recorded a completed review','empty suite inventory recorded a completed review','missing branch runner approved']) assert(failed.some(line=>line.includes(phrase)),phrase);
+JS
+then
+  node - "$FIX/receipt-control.out" <<'JS'
+const fs=require('fs');for(const line of fs.readFileSync(process.argv[2],'utf8').split('\n').filter(line=>line.startsWith('  FAIL  '))) console.log('CONTROL (fix removed) '+line.trim());
+JS
+  pass "fix-removed wording skip and receipt guards fail all 12 dispatcher regressions (exit 1)";
+else fail "receipt regression negative control was insensitive (exit $CONTROL_RC): $(cat "$FIX/receipt-control.out" "$FIX/receipt-control.err")"; fi
 # First reproduce the old dispatch path: no precomputed evidence, model tool
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
 cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
-bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep-old.lock" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-sweep-bypassed fleet/bead-1 worker-1
+if [ "$RC" = 1 ] && says 'cannot record APPROVE without a dispatcher full-sweep result' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-sweep-bypassed.md" ]; then
+  pass "a bypassed dispatcher call cannot record APPROVE"
+else fail "bypassed dispatcher result approved rc=$RC out=$OUT"; fi
+# The same bypass with only the final APPROVE guard removed must accept it:
+# this proves the independent finalization guard, not merely execution policy.
+bun - "$SWEEP_PROJ/seats/verify.ts" <<'JS' || exit 2
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const p=process.argv[2],s=fs.readFileSync(p,'utf8'),start=s.indexOf('      // Fail closed before publishing authority'),end=s.indexOf('      if (sweep.logPath && requireSweepCitation)',start);
+assert(start>0 && end>start);fs.writeFileSync(p,s.slice(0,start)+s.slice(end));
+JS
+WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-sweep-bypass-control fleet/bead-1 worker-1
+if [ "$RC" = 0 ] && grep -q '^- verdict: APPROVE$' "$SWEEP_PROJ/seats/verdicts/bead-sweep-bypass-control.md"; then
+  pass "fix-removed final APPROVE guard exposes the bypass (unsafe fixture exit 0)"
+else fail "APPROVE receipt guard negative control was insensitive rc=$RC out=$OUT"; fi
 cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
-# Hold H4 until the dispatcher log proves it waited, before verifier readiness.
+# Hold H4 until the dispatcher log proves it waited, before reviewer readiness.
 # The controller then releases the fixture holder. No elapsed-time comparison.
 # The readiness driver owns AND joins its H4 holder, including early-exit paths.
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLD_H4=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
-SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/verifier/sweep-prompt-check.json"
+SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/reviewer/sweep-prompt-check.json"
 SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
   BATCH_SEED_LOG="$SWEEP_LOG"
@@ -878,9 +1042,9 @@ if [ "${WHEELHOUSE_VERIFY_EXIT_BEFORE_READY_ONLY:-0}" = 1 ]; then
 fi
 for NO_OUTPUT_MODE in eof silent; do
   WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_EMIT_NOTHING="$NO_OUTPUT_MODE" run_sweep_prompt_check "$SWEEP_BD_SHOW" "bead-sweep-no-output-$NO_OUTPUT_MODE" fleet/bead-1 worker-1
-  if [ "$RC" = 1 ] && { says 'verifier emitted no VERDICT:' || says 'first-output deadline'; } && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ ! -e "$WATCHDOG_DIR/output" ]; then
-    pass "sweep evidence still refuses a ready verifier that emits nothing ($NO_OUTPUT_MODE)"
-  else fail "empty ready verifier was accepted ($NO_OUTPUT_MODE rc=$RC out=$OUT)"; fi
+  if [ "$RC" = 1 ] && { says 'reviewer emitted no VERDICT:' || says 'first-output deadline'; } && [ -f "$WATCHDOG_DIR/readiness-observed" ] && [ ! -e "$WATCHDOG_DIR/output" ]; then
+    pass "sweep evidence still refuses a ready reviewer that emits nothing ($NO_OUTPUT_MODE)"
+  else fail "empty ready reviewer was accepted ($NO_OUTPUT_MODE rc=$RC out=$OUT)"; fi
 done
 if [ -f "$STUB_SWEEP_PWD_MARKER" ] && node -e 'const r=require(process.argv[1]); if(!r.primary || r.cwd!==r.pwd || require("path").basename(r.cwd)!==".wheelhouse-sweep-graph") process.exit(1)' "$STUB_SWEEP_PWD_MARKER"; then
   pass "sweep graph init uses an independent primary repo and bound logical PWD"
@@ -913,40 +1077,40 @@ if [ -n "${BATCH_SEED_LOG:-}" ] && [ -s "$BATCH_SEED_LOG" ]; then
   git -C "$SWEEP_PROJ" update-ref refs/heads/main "$SWEEP_TIP" || exit 2
   git -C "$SWEEP_PROJ" branch fleet/batch-reviewed "$SWEEP_TIP^" || exit 2
   BATCH_REVIEWED="$(git -C "$SWEEP_PROJ" rev-parse fleet/batch-reviewed)"
-  BATCH_INVOKED="$HOME_FIX/.pi-seats-sweep/verifier/invoked"
+  BATCH_INVOKED="$HOME_FIX/.pi-seats-sweep/reviewer/invoked"
   RUN_PROJ="$SWEEP_PROJ"
   printf 'Batch evidence rc=0 log=%s\nVERDICT: APPROVE\n' "$BATCH_SEED_LOG" > "$REPLY"
-  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-accept fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-accept fleet/batch-reviewed worker-1 reviewer --batch-sweep "$BATCH_SEED_LOG"
   if [ "$RC" = 0 ] && says 'VERDICT: APPROVE' && grep -q -- "- batch-tip: $SWEEP_TIP" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" && grep -q -- "- tip: $BATCH_REVIEWED" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" && grep -Fq -- "- log: $BATCH_SEED_LOG" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md"; then
     pass "batch CLI reuses one real passing descendant sweep and records batch/reviewed tip and log"
   else fail "batch CLI acceptance/record failed rc=$RC out=$OUT"; fi
   rm -f "$BATCH_INVOKED"
-  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-missing fleet/batch-reviewed worker-1 verifier --batch-sweep "$FIX/no-batch-log"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-missing fleet/batch-reviewed worker-1 reviewer --batch-sweep "$FIX/no-batch-log"
   if [ "$RC" = 1 ] && says 'batch sweep refused' && [ ! -e "$BATCH_INVOKED" ]; then pass "invalid batch flag STOPs before reviewer spawn, never falls back to a sweep"
   else fail "invalid batch flag spawned or fell back rc=$RC out=$OUT"; fi
-  run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-noarg fleet/batch-reviewed worker-1 verifier --batch-sweep
+  run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-noarg fleet/batch-reviewed worker-1 reviewer --batch-sweep
   if [ "$RC" = 1 ] && says '--batch-sweep requires'; then pass "batch flag without a log argument is refused"
   else fail "batch flag accepted no argument rc=$RC out=$OUT"; fi
-  run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-duplicate fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG" --batch-sweep "$BATCH_SEED_LOG"
+  run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-duplicate fleet/batch-reviewed worker-1 reviewer --batch-sweep "$BATCH_SEED_LOG" --batch-sweep "$BATCH_SEED_LOG"
   if [ "$RC" = 1 ] && says 'may be supplied only once'; then pass "duplicate batch flag is refused"
   else fail "duplicate batch flag accepted rc=$RC out=$OUT"; fi
   BATCH_MUTATING="$FIX/batch-mutating.log"; cp -f "$BATCH_SEED_LOG" "$BATCH_MUTATING"
   printf 'Batch evidence rc=0 log=%s\nVERDICT: APPROVE\n' "$BATCH_MUTATING" > "$REPLY"
-  STUB_MUTATE_BATCH_LOG="$BATCH_MUTATING" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-mutated fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_MUTATING"
+  STUB_MUTATE_BATCH_LOG="$BATCH_MUTATING" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-mutated fleet/batch-reviewed worker-1 reviewer --batch-sweep "$BATCH_MUTATING"
   if [ "$RC" = 1 ] && says 'batch sweep log changed during review'; then pass "batch log is revalidated and byte-fingerprinted after reviewer exit"
   else fail "changed batch log accepted rc=$RC out=$OUT"; fi
   printf 'Batch evidence rc=0 log=%s\nVERDICT: APPROVE\n' "$BATCH_SEED_LOG" > "$REPLY"
-  STUB_MOVE_BRANCH_REPO="$SWEEP_PROJ" STUB_MOVE_BRANCH=main WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-main-moved fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG"
+  STUB_MOVE_BRANCH_REPO="$SWEEP_PROJ" STUB_MOVE_BRANCH=main WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-main-moved fleet/batch-reviewed worker-1 reviewer --batch-sweep "$BATCH_SEED_LOG"
   if [ "$RC" = 1 ] && says 'first-parent chain does not reach current main'; then pass "batch cannot outlive a main move outside its first-parent chain"
   else fail "main moved outside batch but reuse accepted rc=$RC out=$OUT"; fi
   git -C "$SWEEP_PROJ" reset --hard "$SWEEP_TIP" >/dev/null || exit 2
   printf 'Missing batch citation.\nVERDICT: APPROVE\n' > "$REPLY"
-  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-citation fleet/batch-reviewed worker-1 verifier --batch-sweep "$BATCH_SEED_LOG"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/batch-never-run.lock" run_with_bd_show "$SWEEP_BD_SHOW" bead-batch-citation fleet/batch-reviewed worker-1 reviewer --batch-sweep "$BATCH_SEED_LOG"
   if [ "$RC" = 1 ] && says 'must cite full-sweep'; then pass "batch reuse retains the final evidence rc/log citation gate"
   else fail "batch citation omitted but accepted rc=$RC out=$OUT"; fi
 else fail "no actual passing fixture sweep capture for batch tests"; fi
 RUN_PROJ="$INST_PROJ"
-VARGV="$HOME_FIX/.pi-seats-installed/verifier/argv.json"
+VARGV="$HOME_FIX/.pi-seats-installed/reviewer/argv.json"
 MISS_PROJ="$FIX/missing-brief-proj"
 build_proj "$MISS_PROJ" missing "$VERIFY"
 rm -rf "$MISS_PROJ/contracts" "$MISS_PROJ/wheelhouse"
@@ -956,13 +1120,13 @@ if [ $RC -ne 0 ] && says "$MISS_PROJ/wheelhouse/crew/REVIEWER.md" && says "$MISS
   pass "missing brief: STOP names both installed and template paths tried"
 else fail "missing brief: STOP did not name both paths (exit $RC): $OUT"; fi
 RUN_PROJ="$PROJ"
-VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
+VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 
 phase "multi-repo umbrella layout — --repo selects the product repository"
 UMB_PROJ="$FIX/umbrella"
 build_umbrella_proj "$UMB_PROJ" umbrella "$VERIFY"
 RUN_PROJ="$UMB_PROJ"
-VARGV="$HOME_FIX/.pi-seats-umbrella/verifier/argv.json"
+VARGV="$HOME_FIX/.pi-seats-umbrella/reviewer/argv.json"
 UMB_TIP="$(git -C "$UMB_PROJ/product" rev-parse fleet/bead-1)"
 cat > "$REPLY" <<EOF
 Checked product repo tip $UMB_TIP and its committed evidence.
@@ -1010,7 +1174,7 @@ if [ $RC -eq 0 ] && grep -q "branch-repo: $UMB_PROJ" "$UMB_PROJ/seats/verdicts/b
   pass "umbrella layout: Repo: UMBRELLA pins the umbrella branch when the same branch exists in product"
 else fail "umbrella layout: Repo: UMBRELLA did not pin umbrella branch (exit $RC): $OUT verdict=$(cat "$UMB_PROJ/seats/verdicts/bead-umbrella-ambiguous.md" 2>/dev/null)"; fi
 RUN_PROJ="$PROJ"
-VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
+VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 
 phase "0b. bead-declared read-only source snapshots expose only named sibling source"
 ALLOWED_SIB="$FIX/allowed-sibling"
@@ -1035,10 +1199,10 @@ Read the mounted source snapshot and confirmed writes fail.
 VERDICT: APPROVE
 EOF
 VERIFY_RO_TMP="$FIX/verify-ro-tmp"; mkdir -p "$VERIFY_RO_TMP"
-TMPDIR="$VERIFY_RO_TMP" run_source_check "$BD_SOURCE" bead-source fleet/bead-1 worker-1 verifier
-SOURCE_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/source-check.txt"
+TMPDIR="$VERIFY_RO_TMP" run_source_check "$BD_SOURCE" bead-source fleet/bead-1 worker-1 reviewer
+SOURCE_CHECK="$HOME_FIX/.pi-seats-alpha/reviewer/source-check.txt"
 if [ $RC -eq 0 ] && grep -q '"readable": true' "$SOURCE_CHECK" 2>/dev/null && grep -q '"writeFailed": true' "$SOURCE_CHECK" 2>/dev/null; then
-  pass "source snapshots: verifier can read the bead-declared sibling and writes to the mounted copy fail"
+  pass "source snapshots: reviewer can read the bead-declared sibling and writes to the mounted copy fail"
 else fail "source snapshots: read/write assertion failed (exit $RC): $OUT check=$(cat "$SOURCE_CHECK" 2>/dev/null)"; fi
 if ! find "$VERIFY_RO_TMP" -path '*/.wheelhouse-verify-sources*' -exec test ! -w '{}' \; -print -quit | grep >/dev/null .; then
   pass "source snapshots: cleanup restores/removes read-only snapshot trees"
@@ -1053,8 +1217,8 @@ if grep -q 'Read-only source snapshots' "$PROJ/seats/verdicts/bead-source.md" 2>
   pass "source snapshots: verdict record names the mounted read-only source snapshot"
 else fail "source snapshots: verdict record did not name source snapshot"; fi
 
-phase "0c. timeout — last phase and partial verifier output are retained"
-RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)" || RC=$?
+phase "0c. timeout — last phase and partial reviewer output are retained"
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 reviewer --timeout-ms 1500 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && says "timed out after 1500ms" && says "elapsed" && says "last phase: tool bash started" && says "partial output:"; then
   pass "timeout STOP names elapsed time, last tool/phase, and partial output path"
 else fail "timeout STOP missing phase/elapsed/partial detail (exit $RC): $OUT"; fi
@@ -1062,18 +1226,18 @@ PARTIAL="$VDIR/bead-1.partial.md"
 if [ -s "$PARTIAL" ] && grep -q '## seat tool-call/event log tail' "$PARTIAL" && grep -q 'tool_execution_start' "$PARTIAL" && grep -q 'cargo test' "$PARTIAL"; then
   pass "timeout keeps partial pi output and event-log tail at seats/verdicts/<bead>.partial.md"
 else fail "timeout partial file missing event-log tail or streamed tool output: $(cat "$PARTIAL" 2>/dev/null)"; fi
-if [ ! -e "$RUN_PROJ/seats/run/verify.verifier.json" ]; then
-  pass "timeout path removes verifier live marker"
-else fail "timeout path left verifier live marker: $(cat "$RUN_PROJ/seats/run/verify.verifier.json" 2>/dev/null)"; fi
+if [ ! -e "$RUN_PROJ/seats/run/verify.reviewer.json" ]; then
+  pass "timeout path removes reviewer live marker"
+else fail "timeout path left reviewer live marker: $(cat "$RUN_PROJ/seats/run/verify.reviewer.json" 2>/dev/null)"; fi
 rm -f "$PARTIAL"
-RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR WHEELHOUSE_VERIFY_TIMEOUT_MS=1800000 HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-timeout-env fleet/bead-1 worker-1 verifier --timeout-ms 1500 2>&1)" || RC=$?
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR WHEELHOUSE_VERIFY_TIMEOUT_MS=1800000 HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-timeout-env fleet/bead-1 worker-1 reviewer --timeout-ms 1500 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && says "timed out after 1500ms" && says "last phase: tool bash started"; then
   pass "explicit --timeout-ms beats WHEELHOUSE_VERIFY_TIMEOUT_MS for phase 0c"
 else fail "explicit timeout did not beat WHEELHOUSE_VERIFY_TIMEOUT_MS (exit $RC): $OUT"; fi
 rm -f "$VDIR/bead-timeout-env.partial.md"
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL_AFTER_TOOL_END=1 bun "$RUN_PROJ/seats/verify.ts" bead-stalled fleet/bead-1 worker-1 verifier --timeout-ms 5000 --no-event-timeout-ms 300 2>&1)"; RC=$?
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL_AFTER_TOOL_END=1 bun "$RUN_PROJ/seats/verify.ts" bead-stalled fleet/bead-1 worker-1 reviewer --timeout-ms 5000 --no-event-timeout-ms 300 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && says "model stalled after 300ms" && says "last event: tool_execution_end" && says "no-event watchdog" && says "partial output:"; then
-  pass "no-event watchdog STOPs a verifier that goes silent after a tool event"
+  pass "no-event watchdog STOPs a reviewer that goes silent after a tool event"
 else fail "no-event watchdog did not stop the post-tool stall with last event detail (exit $RC): $OUT"; fi
 STALL_PARTIAL="$VDIR/bead-stalled.partial.md"
 if [ -s "$STALL_PARTIAL" ] && grep -q 'tool_execution_end' "$STALL_PARTIAL" && grep -q 'last_phase: tool_execution_end' "$STALL_PARTIAL"; then
@@ -1087,7 +1251,7 @@ EOF
 # Ten-minute quiet budgets on integration legs that must NOT trip. The small
 # 150/300ms progress semantics are proved below with acknowledged virtual time,
 # while native 1500/300ms silence legs above must still actually fire.
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SLOW_TOOL_OUTPUT=1 bun "$RUN_PROJ/seats/verify.ts" bead-slow-tool fleet/bead-1 worker-1 verifier --timeout-ms 600000 --no-event-timeout-ms 600000 2>&1)"; RC=$?
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_SLOW_TOOL_OUTPUT=1 bun "$RUN_PROJ/seats/verify.ts" bead-slow-tool fleet/bead-1 worker-1 reviewer --timeout-ms 600000 --no-event-timeout-ms 600000 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
   pass "no-event watchdog does not trip while a long-running tool keeps streaming output"
 else fail "no-event watchdog tripped on a still-streaming tool (exit $RC): $OUT"; fi
@@ -1096,8 +1260,8 @@ Reviewer wrote the final machine lines before a background child inherited stdou
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED
 EOF
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_HANG_CHILD_AFTER_RESULT=1 bun "$RUN_PROJ/seats/verify.ts" bead-post-result-hang fleet/bead-1 worker-1 verifier --timeout-ms 600000 --no-event-timeout-ms 600000 2>&1)"; RC=$?
-HANG_CHILD_PID="$(cat "$HOME_FIX/.pi-seats-alpha/verifier/hanging-child-pid.txt" 2>/dev/null || true)"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_HANG_CHILD_AFTER_RESULT=1 bun "$RUN_PROJ/seats/verify.ts" bead-post-result-hang fleet/bead-1 worker-1 reviewer --timeout-ms 600000 --no-event-timeout-ms 600000 2>&1)"; RC=$?
+HANG_CHILD_PID="$(cat "$HOME_FIX/.pi-seats-alpha/reviewer/hanging-child-pid.txt" 2>/dev/null || true)"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q 'VERDICT: APPROVE' "$VDIR/bead-post-result-hang.md" 2>/dev/null; then
   pass "post-result background child cannot keep verify open after final VERDICT/PUSH lines"
 else fail "post-result background child kept verify open or verdict was not recorded (exit $RC child=$HANG_CHILD_PID): $OUT"; fi
@@ -1108,31 +1272,31 @@ if [ -z "$HANG_CHILD_PID" ] || ! kill -0 "$HANG_CHILD_PID" 2>/dev/null; then
   pass "post-result background child process group is reaped"
 else
   kill "$HANG_CHILD_PID" 2>/dev/null || true
-  fail "post-result background child survived verifier cleanup (pid=$HANG_CHILD_PID)"
+  fail "post-result background child survived reviewer cleanup (pid=$HANG_CHILD_PID)"
 fi
 cat > "$REPLY" <<'EOF'
 Finished after quoting the previous review without being reaped mid-run.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED
 EOF
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_PI_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-pi-quoted-verdict fleet/bead-1 worker-1 verifier --no-event-timeout-ms 600000 2>&1)"; RC=$?
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_PI_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-pi-quoted-verdict fleet/bead-1 worker-1 reviewer --no-event-timeout-ms 600000 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143" && grep -q 'VERDICT: APPROVE' "$VDIR/bead-pi-quoted-verdict.md" 2>/dev/null; then
   pass "pi quoted mid-run verdict is not reaped before agent_end"
 else fail "pi quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
 WATCHDOG_DIR="$(mktemp -d "$FIX/progress-clock.XXXXXX")"
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" progress bead-progress-past-total fleet/bead-1 worker-1 verifier --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" progress bead-progress-past-total fleet/bead-1 worker-1 reviewer --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && [ -s "$WATCHDOG_DIR/progress-proof" ]; then
   pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
 else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
 WATCHDOG_DIR="$(mktemp -d "$FIX/silent-readiness.XXXXXX")"
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" silent bead-silent fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
-if [ $RC -eq 1 ] && [ -f "$WATCHDOG_DIR/expired-first" ] && says "verifier emitted no stdout/stderr within" && says "first-output deadline" && says "--first-output-timeout-ms"; then
-  pass "silent verifier stops on the first-output deadline with an actionable reason"
-else fail "silent verifier did not stop on first-output deadline (exit $RC): $OUT"; fi
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" silent bead-silent fleet/bead-1 worker-1 reviewer 2>&1)"; RC=$?
+if [ $RC -eq 1 ] && [ -f "$WATCHDOG_DIR/expired-first" ] && says "reviewer emitted no stdout/stderr within" && says "first-output deadline" && says "--first-output-timeout-ms"; then
+  pass "silent reviewer stops on the first-output deadline with an actionable reason"
+else fail "silent reviewer did not stop on first-output deadline (exit $RC): $OUT"; fi
 SILENT_PARTIAL="$VDIR/bead-silent.partial.md"
-if [ -s "$SILENT_PARTIAL" ] && grep -q 'last_phase: spawned verifier; waiting for output' "$SILENT_PARTIAL"; then
-  pass "silent verifier first-output STOP retains a partial output record"
-else fail "silent verifier partial output missing: $(cat "$SILENT_PARTIAL" 2>/dev/null)"; fi
+if [ -s "$SILENT_PARTIAL" ] && grep -q 'last_phase: spawned reviewer; waiting for output' "$SILENT_PARTIAL"; then
+  pass "silent reviewer first-output STOP retains a partial output record"
+else fail "silent reviewer partial output missing: $(cat "$SILENT_PARTIAL" 2>/dev/null)"; fi
 rm -f "$SILENT_PARTIAL"
 
 phase "1. APPROVE — verdict parsed, recorded, exit 0, and what was launched"
@@ -1175,10 +1339,10 @@ if [ -f "$VARGV" ] && grep -q '"-p","--mode","json","--no-session"' "$VARGV"; th
 else fail "argv.json missing or pi not launched with -p --mode json --no-session: $(cat "$VARGV" 2>/dev/null)"; fi
 if grep -q "\"--append-system-prompt\",\"$PROJ/contracts/REVIEWER.md\"" "$VARGV" 2>/dev/null; then
   pass "role brief injected: --append-system-prompt names contracts/REVIEWER.md"
-else fail "verifier brief not passed"; fi
+else fail "reviewer brief not passed"; fi
 if grep -q '"--provider","openai","--model","stub-model-v"' "$VARGV" 2>/dev/null; then
-  pass "the VERIFIER seat's provider and model pin the launch (not the author's)"
-else fail "verifier provider/model from seats.json did not reach pi's argv"; fi
+  pass "the REVIEWER seat's provider and model pin the launch (not the author's)"
+else fail "reviewer provider/model from seats.json did not reach pi's argv"; fi
 if grep -q "bead-1" "$VARGV" && grep -q "$TIP" "$VARGV" && grep -q "bd show bead-1" "$VARGV"; then
   pass "prompt carries the bead id, the tip SHA, and the bead-claim reference"
 else fail "prompt is missing bead id, tip SHA, or bead claim"; fi
@@ -1197,7 +1361,7 @@ if node - "$VARGV" <<'NODE'
 const fs = require('fs');
 const argv = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const prompt = argv[argv.length - 1] || '';
-if (!prompt.includes('Install push authority for this verifier run')) process.exit(1);
+if (!prompt.includes('Install push authority for this reviewer run')) process.exit(1);
 if (!prompt.includes('### Push authority and its scope')) process.exit(1);
 if (!prompt.includes('Fixture standing authority: reviewers may approve pushing origin')) process.exit(1);
 if (!prompt.includes('### Reserved list (principal-only, per action)')) process.exit(1);
@@ -1208,18 +1372,18 @@ if node - "$VARGV" <<'NODE'
 const fs = require('fs');
 const argv = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const prompt = argv[argv.length - 1] || '';
-if (!prompt.includes('Interview-mode bench is unavailable inside this verifier sandbox')) process.exit(1);
+if (!prompt.includes('Interview-mode bench is unavailable inside this reviewer sandbox')) process.exit(1);
 if (!prompt.includes('do not run bench.sh --mode interview')) process.exit(1);
-if (!prompt.includes('route those claims to named non-author seat verifier')) process.exit(1);
+if (!prompt.includes('route those claims to named non-author seat reviewer')) process.exit(1);
 if (!prompt.includes('distinct from author seat worker-1')) process.exit(1);
 NODE
 then pass "prompt routes unavailable interview-mode claims to a named non-author seat"; else fail "prompt is missing interview-mode routing instructions: $(cat "$VARGV" 2>/dev/null)"; fi
-if grep -q '"BEADS_ACTOR":"verifier"' "${VARGV%argv.json}env.json" 2>/dev/null; then
-  pass "the ephemeral verifier's own env carries BEADS_ACTOR=verifier, with no operator export"
-else fail "verifier env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:verifier set by verify.ts itself"; fi
+if grep -q '"BEADS_ACTOR":"reviewer"' "${VARGV%argv.json}env.json" 2>/dev/null; then
+  pass "the ephemeral reviewer's own env carries BEADS_ACTOR=reviewer, with no operator export"
+else fail "reviewer env.json was $(cat "${VARGV%argv.json}env.json" 2>/dev/null) — expected BEADS_ACTOR:reviewer set by verify.ts itself"; fi
 if selftest_capture_lacks "${VARGV%argv.json}env.json" -q -- "$PROJ/seats/bin"; then
-  pass "host budget absent: verifier PATH is not rewritten to seats/bin"
-else fail "host budget absent: verifier PATH unexpectedly included seats/bin: $(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
+  pass "host budget absent: reviewer PATH is not rewritten to seats/bin"
+else fail "host budget absent: reviewer PATH unexpectedly included seats/bin: $(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
 cat > "$REPLY" <<EOF
 Checked readonly bd shim.
 VERDICT: APPROVE
@@ -1236,8 +1400,8 @@ for (const k of ['comment', 'update', 'actor-close']) {
   if (!/not allowed in read-only mode/.test(`${by[k].stdout}\n${by[k].stderr}`)) process.exit(1);
 }
 NODE
-then pass "verifier one-shot bd is read-only: show/comments work, comment/update/--actor close fail"
-else fail "verifier bd readonly shim failed (rc=$RC out=$OUT check=$(cat "$BD_RO_CHECK" 2>/dev/null))"; fi
+then pass "reviewer one-shot bd is read-only: show/comments work, comment/update/--actor close fail"
+else fail "reviewer bd readonly shim failed (rc=$RC out=$OUT check=$(cat "$BD_RO_CHECK" 2>/dev/null))"; fi
 cat > "$REPLY" <<EOF
 Checked readonly bd shim scope.
 VERDICT: APPROVE
@@ -1254,11 +1418,11 @@ for (const k of ['scratch-create', 'scratch-c-redirect', 'scratch-directory-redi
   if (!/not allowed in read-only mode/.test(`${by[k].stdout}\n${by[k].stderr}`)) process.exit(1);
 }
 NODE
-then pass "verifier bd shim is read-only for scratch cwd, -C/--directory, --global, --db/--database, BEADS_DIR, and arbitrary cwd"
-else fail "verifier bd readonly scope failed (rc=$RC out=$OUT check=$(cat "$BD_SCOPE_CHECK" 2>/dev/null))"; fi
+then pass "reviewer bd shim is read-only for scratch cwd, -C/--directory, --global, --db/--database, BEADS_DIR, and arbitrary cwd"
+else fail "reviewer bd readonly scope failed (rc=$RC out=$OUT check=$(cat "$BD_SCOPE_CHECK" 2>/dev/null))"; fi
 
 # --- scratch cwd: construction, not contract discipline ---------------------
-# The verifier's process cwd must be A repository the branch's ref resolves
+# The reviewer's process cwd must be A repository the branch's ref resolves
 # from (so its own bare `git diff`/`git show` still work — proven by phase 1
 # itself already succeeding, and by phase 8's evidence reads below, both
 # unchanged from before this bead), but it must NOT be ${PROJ}: a confused or
@@ -1266,12 +1430,12 @@ else fail "verifier bd readonly scope failed (rc=$RC out=$OUT check=$(cat "$BD_S
 # dies with the process, not in the live checkout.
 SCRATCH_CWD="$(cat "$VCWD" 2>/dev/null)"
 if [ -n "$SCRATCH_CWD" ] && [ "$SCRATCH_CWD" != "$PROJ" ]; then
-  pass "the verifier's cwd is NOT the project root"
-else fail "the verifier's cwd was \"$SCRATCH_CWD\" — expected anything but $PROJ"; fi
+  pass "the reviewer's cwd is NOT the project root"
+else fail "the reviewer's cwd was \"$SCRATCH_CWD\" — expected anything but $PROJ"; fi
 case "$SCRATCH_CWD" in
   */wheelhouse-verify-*)
-    pass "the verifier's cwd is the scratch worktree makeScratchCwd() creates" ;;
-  *) fail "the verifier's cwd \"$SCRATCH_CWD\" does not look like a wheelhouse-verify-* scratch dir" ;;
+    pass "the reviewer's cwd is the scratch worktree makeScratchCwd() creates" ;;
+  *) fail "the reviewer's cwd \"$SCRATCH_CWD\" does not look like a wheelhouse-verify-* scratch dir" ;;
 esac
 if git -C "$PROJ" worktree list | grep -F >/dev/null "$SCRATCH_CWD"; then
   fail "the scratch worktree $SCRATCH_CWD is still registered after verify.ts exited — cleanup did not run"
@@ -1291,9 +1455,9 @@ VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
 run_runtime_grep_check bead-runtime-grep fleet/bead-1 worker-1
-RUNTIME_GREP_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/runtime-grep-check.txt"
+RUNTIME_GREP_CHECK="$HOME_FIX/.pi-seats-alpha/reviewer/runtime-grep-check.txt"
 if [ $RC -eq 0 ] && grep -q '"status": 1' "$RUNTIME_GREP_CHECK" 2>/dev/null && grep -q '"promptNamesRuntimeExcludes": true' "$RUNTIME_GREP_CHECK" 2>/dev/null; then
-  pass "large live seats/logs is outside the verifier grep path and the prompt names runtime grep exclusions"
+  pass "large live seats/logs is outside the reviewer grep path and the prompt names runtime grep exclusions"
 else fail "runtime grep path check failed (exit $RC): out=$OUT check=$(cat "$RUNTIME_GREP_CHECK" 2>/dev/null)"; fi
 
 cat > "$REPLY" <<EOF
@@ -1327,8 +1491,8 @@ VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CANONICAL_WRITE_REPO="$PROJ" \
-  bun "$RUN_PROJ/seats/verify.ts" bead-canonical fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
-ATTEMPT="$HOME_FIX/.pi-seats-alpha/verifier/canonical-write-attempt.txt"
+  bun "$RUN_PROJ/seats/verify.ts" bead-canonical fleet/bead-1 worker-1 reviewer 2>&1)"; RC=$?
+ATTEMPT="$HOME_FIX/.pi-seats-alpha/reviewer/canonical-write-attempt.txt"
 if [ $RC -eq 0 ] && grep -q 'canonical dirty' "$PROJ/canonical-guard.txt" && grep -q "cwd=.*wheelhouse-verify" "$ATTEMPT" 2>/dev/null && grep -q "GIT_WORK_TREE=$" "$ATTEMPT" 2>/dev/null; then
   pass "bare checkout git write runs from scratch cwd without exported GIT_WORK_TREE and leaves canonical checkout unchanged"
 else fail "canonical checkout changed or attempt was not reported (exit $RC): guard=$(cat "$PROJ/canonical-guard.txt" 2>/dev/null) attempt=$(cat "$ATTEMPT" 2>/dev/null) out=$OUT"; fi
@@ -1341,8 +1505,8 @@ VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_GIT_INIT_REPO="$PROJ" \
-  bun "$RUN_PROJ/seats/verify.ts" bead-git-init fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
-GIT_INIT_CHECK="$HOME_FIX/.pi-seats-alpha/verifier/git-init-check.json"
+  bun "$RUN_PROJ/seats/verify.ts" bead-git-init fleet/bead-1 worker-1 reviewer 2>&1)"; RC=$?
+GIT_INIT_CHECK="$HOME_FIX/.pi-seats-alpha/reviewer/git-init-check.json"
 if [ $RC -eq 0 ] && grep -q '"before": ""' "$GIT_INIT_CHECK" 2>/dev/null \
   && grep -q '"after": ""' "$GIT_INIT_CHECK" 2>/dev/null \
   && grep -q '"gitDir": null' "$GIT_INIT_CHECK" 2>/dev/null \
@@ -1403,7 +1567,7 @@ MOVE_PROJ="$FIX/proj-move"
 build_proj "$MOVE_PROJ" move "$VERIFY"
 RUN_PROJ="$MOVE_PROJ"
 VDIR="$MOVE_PROJ/seats/verdicts"
-VARGV="$HOME_FIX/.pi-seats-move/verifier/argv.json"
+VARGV="$HOME_FIX/.pi-seats-move/reviewer/argv.json"
 MOVE_PIN="$(git -C "$MOVE_PROJ" rev-parse fleet/bead-1)"
 cat > "$REPLY" <<'EOF'
 Checked the pinned tip before considering the branch move.
@@ -1411,7 +1575,7 @@ VERDICT: APPROVE — at pinned tip __PINNED__; branch has since moved to __MOVED
 PUSH: NOT CONSIDERED — branch moved; re-verify at __MOVED__ before publish
 EOF
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_MOVE_BRANCH_REPO="$MOVE_PROJ" STUB_MOVE_BRANCH=fleet/bead-1 \
-  bun "$RUN_PROJ/seats/verify.ts" bead-move fleet/bead-1 worker-1 verifier 2>&1)"; RC=$?
+  bun "$RUN_PROJ/seats/verify.ts" bead-move fleet/bead-1 worker-1 reviewer 2>&1)"; RC=$?
 MOVE_TIP="$(git -C "$MOVE_PROJ" rev-parse fleet/bead-1)"
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && says "at pinned tip $MOVE_PIN" && says "branch has since moved to $MOVE_TIP"; then
   pass "mid-pass branch move exits as the underlying APPROVE and names pinned/moved tips"
@@ -1424,36 +1588,36 @@ if selftest_capture_lacks "$VDIR/bead-move.md" -q -- "DISCOVER" && ! says "DISCO
 else fail "mid-pass branch move leaked DISCOVER: $OUT $(cat "$VDIR/bead-move.md" 2>/dev/null)"; fi
 RUN_PROJ="$PROJ"
 VDIR="$PROJ/seats/verdicts"
-VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
+VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 
-phase "1c. verifier account.authRoute=env — exported provider key is identity"
+phase "1c. reviewer account.authRoute=env — exported provider key is identity"
 ENV_PROJ="$FIX/env-proj"
 build_proj "$ENV_PROJ" env "$VERIFY"
-bun -e "import fs from 'node:fs'; const p='$ENV_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.account.authRoute='env'; fs.rmSync('$HOME_FIX/.pi-seats-env/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
-RUN_PROJ="$ENV_PROJ"; VARGV="$HOME_FIX/.pi-seats-env/verifier/argv.json"; VDIR="$ENV_PROJ/seats/verdicts"
+bun -e "import fs from 'node:fs'; const p='$ENV_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.reviewer.account.authRoute='env'; fs.rmSync('$HOME_FIX/.pi-seats-env/reviewer/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
+RUN_PROJ="$ENV_PROJ"; VARGV="$HOME_FIX/.pi-seats-env/reviewer/argv.json"; VDIR="$ENV_PROJ/seats/verdicts"
 cat > "$REPLY" <<'EOF'
-Env-route verifier checked.
+Env-route reviewer checked.
 VERDICT: APPROVE
 EOF
-RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" OPENAI_API_KEY=fixture-key bun "$RUN_PROJ/seats/verify.ts" bead-env fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then pass "account.authRoute=env verifier runs with exported provider env var and no auth.json"
-else fail "account.authRoute=env verifier was refused (exit $RC): $OUT"; fi
-RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" OPENAI_API_KEY=fixture-key bun "$RUN_PROJ/seats/verify.ts" bead-env fleet/bead-1 worker-1 reviewer 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then pass "account.authRoute=env reviewer runs with exported provider env var and no auth.json"
+else fail "account.authRoute=env reviewer was refused (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"; VDIR="$PROJ/seats/verdicts"
 
-phase "1d. host budget — verifier one-shot prepends seats/bin only when opted in"
+phase "1d. host budget — reviewer one-shot prepends seats/bin only when opted in"
 BUDGET_PROJ="$FIX/verify-budget-proj"
 build_proj "$BUDGET_PROJ" verify-budget "$VERIFY"
 mkdir -p "$BUDGET_PROJ/seats/bin"
 printf '{"enabled":true}\n' > "$BUDGET_PROJ/seats/host-budget.json"
-RUN_PROJ="$BUDGET_PROJ"; VARGV="$HOME_FIX/.pi-seats-verify-budget/verifier/argv.json"; VDIR="$BUDGET_PROJ/seats/verdicts"
+RUN_PROJ="$BUDGET_PROJ"; VARGV="$HOME_FIX/.pi-seats-verify-budget/reviewer/argv.json"; VDIR="$BUDGET_PROJ/seats/verdicts"
 cat > "$REPLY" <<'EOF'
-Host-budget verifier checked.
+Host-budget reviewer checked.
 VERDICT: APPROVE
 EOF
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && grep -q "$BUDGET_PROJ/seats/bin" "${VARGV%argv.json}env.json" 2>/dev/null; then
-  pass "host budget enabled: verifier PATH includes this project's seats/bin"
-else fail "host budget enabled: verifier PATH missing seats/bin (exit $RC): $OUT env=$(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
+  pass "host budget enabled: reviewer PATH includes this project's seats/bin"
+else fail "host budget enabled: reviewer PATH missing seats/bin (exit $RC): $OUT env=$(cat "${VARGV%argv.json}env.json" 2>/dev/null)"; fi
 LOCK="$FIX/verify-budget.lock"
 LOCK_READY="$FIX/verify-budget.ready"
 LOCK_RELEASE="$FIX/verify-budget.release"
@@ -1470,50 +1634,50 @@ exec 7>&-
 wait "$LOCK_PID" 2>/dev/null || true
 if [ $RC -eq 1 ] && says "host build lock is held by another bead" && says "timeout-ms is not spent queued"; then
   pass "host budget enabled: verify refuses to start while another bead holds the build lock"
-else fail "host budget lock contention was not refused before verifier spawn (exit $RC): $OUT"; fi
-RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
+else fail "host budget lock contention was not refused before reviewer spawn (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"; VDIR="$PROJ/seats/verdicts"
 
-phase "1e. mixed harness verifier one-shots — claude-code and codex use their drivers"
+phase "1e. mixed harness reviewer one-shots — claude-code and codex use their drivers"
 MIX_PROJ="$FIX/mixed-harness-verify"
 build_proj "$MIX_PROJ" mixedv "$VERIFY"
 cat > "$REPLY" <<'EOF'
-Mixed harness verifier checked.
+Mixed harness reviewer checked.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
-bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.model='sonnet'; j.seats.verifier.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
-printf '{"oauthAccount":{"email":"verifier@example.test","accessToken":"fixture-token"}}\n' > "$HOME_FIX/.pi-seats-mixedv/verifier/.claude.json"
-RUN_PROJ="$MIX_PROJ"; VDIR="$MIX_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
+bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.reviewer.harness='claude-code'; j.seats.reviewer.provider='anthropic'; j.seats.reviewer.model='sonnet'; j.seats.reviewer.account.authRoute='oauth'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+printf '{"oauthAccount":{"email":"reviewer@example.test","accessToken":"fixture-token"}}\n' > "$HOME_FIX/.pi-seats-mixedv/reviewer/.claude.json"
+RUN_PROJ="$MIX_PROJ"; VDIR="$MIX_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"
 run bead-1 fleet/bead-1 worker-1
-if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
-  pass "claude-code verifier one-shot uses the claude driver environment, not pi"
-else fail "claude-code verifier one-shot did not use claude driver (rc=$RC out=$OUT env=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" 2>/dev/null))"; fi
-if grep -q '"--output-format","stream-json"' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q '"--verbose"' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
-  pass "claude-code verifier one-shot requests stream-json output with --verbose"
-else fail "claude-code verifier one-shot did not request stream-json with --verbose: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
-if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && ! grep -q 'contracts/REVIEWER.md' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
-  pass "claude-code verifier one-shot carries reviewer brief text, not the path"
-else fail "claude-code verifier one-shot carried path or missed brief text: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
-if selftest_capture_lacks "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" -q -- 'permission-mode\|allowed-tools\|disallowed-tools'; then
-  pass "claude-code verifier one-shot omits tool permission flags when the seat has no tool lists"
-else fail "claude-code verifier one-shot unexpectedly carried tool permission flags: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
+if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/reviewer/invoked" ] && grep -q 'CLAUDE_CONFIG_DIR' "$HOME_FIX/.pi-seats-mixedv/reviewer/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/reviewer/env.json"; then
+  pass "claude-code reviewer one-shot uses the claude driver environment, not pi"
+else fail "claude-code reviewer one-shot did not use claude driver (rc=$RC out=$OUT env=$(cat "$HOME_FIX/.pi-seats-mixedv/reviewer/env.json" 2>/dev/null))"; fi
+if grep -q '"--output-format","stream-json"' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" && grep -q '"--verbose"' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"; then
+  pass "claude-code reviewer one-shot requests stream-json output with --verbose"
+else fail "claude-code reviewer one-shot did not request stream-json with --verbose: $(cat "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" 2>/dev/null)"; fi
+if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" && ! grep -q 'contracts/REVIEWER.md' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"; then
+  pass "claude-code reviewer one-shot carries reviewer brief text, not the path"
+else fail "claude-code reviewer one-shot carried path or missed brief text: $(cat "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" 2>/dev/null)"; fi
+if selftest_capture_lacks "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" -q -- 'permission-mode\|allowed-tools\|disallowed-tools'; then
+  pass "claude-code reviewer one-shot omits tool permission flags when the seat has no tool lists"
+else fail "claude-code reviewer one-shot unexpectedly carried tool permission flags: $(cat "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" 2>/dev/null)"; fi
 cat > "$REPLY" <<'EOF'
 Finished after quoting the previous review without being reaped mid-run.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
-rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLAUDE_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-quoted-verdict fleet/bead-1 worker-1 verifier --no-event-timeout-ms 600000 2>&1)"; RC=$?
+rm -f "$HOME_FIX/.pi-seats-mixedv/reviewer/invoked" "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLAUDE_QUOTED_VERDICT_MIDRUN=1 bun "$RUN_PROJ/seats/verify.ts" bead-quoted-verdict fleet/bead-1 worker-1 reviewer --no-event-timeout-ms 600000 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143"; then
   pass "claude-code quoted mid-run verdict is not reaped before the final result event"
 else fail "claude-code quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
 cat > "$REPLY" <<'EOF'
-Mixed harness verifier checked.
+Mixed harness reviewer checked.
 VERDICT: APPROVE
 PUSH: NOT CONSIDERED — fixture
 EOF
-bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.verifier.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
-rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"
+bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.reviewer.allowedTools='Bash(git status:*),Bash(bun test:*)'; j.seats.reviewer.disallowedTools='Bash(rm -rf:*)'; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+rm -f "$HOME_FIX/.pi-seats-mixedv/reviewer/invoked" "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && bun -e '
   import fs from "node:fs";
@@ -1523,22 +1687,22 @@ if [ $RC -eq 0 ] && bun -e '
   if (!args.includes("--permission-mode") || args[args.indexOf("--permission-mode")+1] !== "acceptEdits") process.exit(2);
   if (!flagAfter("--allowed-tools") || !flagAfter("--disallowed-tools")) process.exit(3);
   if (args.indexOf("--allowed-tools") > args.indexOf("--model") || args.indexOf("--disallowed-tools") > args.indexOf("--model")) process.exit(4);
-' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
-  pass "claude-code verifier one-shot passes tool lists before --model with a following flag and prompt last"
-else fail "claude-code verifier one-shot tool-list argv order wrong (rc=$RC argv=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null))"; fi
-bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
-rm -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"
+' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"; then
+  pass "claude-code reviewer one-shot passes tool lists before --model with a following flag and prompt last"
+else fail "claude-code reviewer one-shot tool-list argv order wrong (rc=$RC argv=$(cat "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" 2>/dev/null))"; fi
+bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.reviewer.harness='codex'; j.seats.reviewer.provider='openai-codex'; j.seats.reviewer.model='gpt-5.5'; delete j.seats.reviewer.allowedTools; delete j.seats.reviewer.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
+rm -f "$HOME_FIX/.pi-seats-mixedv/reviewer/invoked" "$HOME_FIX/.pi-seats-mixedv/reviewer/env.json"
 run bead-1 fleet/bead-1 worker-1
-if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/verifier/invoked" ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/verifier/env.json"; then
-  pass "codex verifier one-shot uses the codex driver environment, not pi"
-else fail "codex verifier one-shot did not use codex driver (rc=$RC out=$OUT env=$(cat "$HOME_FIX/.pi-seats-mixedv/verifier/env.json" 2>/dev/null))"; fi
-if grep -q '"--json"' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
-  pass "codex verifier one-shot requests json streaming"
-else fail "codex verifier one-shot did not request --json: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
-if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json"; then
-  pass "codex verifier one-shot carries reviewer brief and measured-safe exec flags"
-else fail "codex verifier one-shot missing brief or safe flags: $(cat "$HOME_FIX/.pi-seats-mixedv/verifier/argv.json" 2>/dev/null)"; fi
-RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
+if [ $RC -eq 0 ] && [ -f "$HOME_FIX/.pi-seats-mixedv/reviewer/invoked" ] && grep -q 'CODEX_HOME' "$HOME_FIX/.pi-seats-mixedv/reviewer/env.json" && ! grep -q 'PI_CODING_AGENT_DIR.*pi-seats' "$HOME_FIX/.pi-seats-mixedv/reviewer/env.json"; then
+  pass "codex reviewer one-shot uses the codex driver environment, not pi"
+else fail "codex reviewer one-shot did not use codex driver (rc=$RC out=$OUT env=$(cat "$HOME_FIX/.pi-seats-mixedv/reviewer/env.json" 2>/dev/null))"; fi
+if grep -q '"--json"' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"; then
+  pass "codex reviewer one-shot requests json streaming"
+else fail "codex reviewer one-shot did not request --json: $(cat "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" 2>/dev/null)"; fi
+if grep -q 'fixture brief' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" && grep -q -- '--skip-git-repo-check' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" && grep -q 'approval_policy=never' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"; then
+  pass "codex reviewer one-shot carries reviewer brief and measured-safe exec flags"
+else fail "codex reviewer one-shot missing brief or safe flags: $(cat "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" 2>/dev/null)"; fi
+RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"; VDIR="$PROJ/seats/verdicts"
 
 phase "2. BOUNCE — exit 2"
 rm -f "$VDIR/bead-2.md"
@@ -1576,13 +1740,13 @@ else fail "verdict file missing the proposal or the no-beads note"; fi
 
 phase "4. self-approval — same account dir is a STOP before any spawn"
 rm -f "$VINVOKED"
-# A roster whose verifier points at the AUTHOR's directory:
+# A roster whose reviewer points at the AUTHOR's directory:
 cp "$PROJ/seats/seats.json" "$FIX/seats.json.good"
 env HOME="$HOME_FIX" bun -e '
   import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
-  j.seats.verifier.account.dir = j.seats["worker-1"].account.dir;
+  j.seats.reviewer.account.dir = j.seats["worker-1"].account.dir;
   fs.writeFileSync(f, JSON.stringify(j, null, 2));
 ' "$PROJ/seats/seats.json"
 check_self_approval() {   # $1 = label
@@ -1684,30 +1848,30 @@ run_stream "$FIX/final-conflict.jsonl" bead-5-final-conflict fleet/bead-1 worker
 if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
   pass "two genuinely different verdicts in the final assistant message still STOP"
 else fail "final-message conflicting verdicts did not STOP (exit $RC): $OUT"; fi
-set_verifier_harness() {
+set_reviewer_harness() {
   env HOME="$HOME_FIX" bun -e '
     import fs from "node:fs";
     const file = process.argv[1], harness = process.argv[2], dir = process.argv[3];
     const j = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (harness === "pi") delete j.seats.verifier.harness;
-    else j.seats.verifier.harness = harness;
+    if (harness === "pi") delete j.seats.reviewer.harness;
+    else j.seats.reviewer.harness = harness;
     if (harness === "claude-code") {
-      fs.writeFileSync(`${dir}/.claude.json`, JSON.stringify({ oauthAccount: { email: "verifier@example.test", accessToken: "fixture-token" } }));
+      fs.writeFileSync(`${dir}/.claude.json`, JSON.stringify({ oauthAccount: { email: "reviewer@example.test", accessToken: "fixture-token" } }));
     } else {
       fs.rmSync(`${dir}/.claude.json`, { force: true });
     }
     fs.writeFileSync(file, JSON.stringify(j, null, 2));
-  ' "$PROJ/seats/seats.json" "$1" "$HOME_FIX/.pi-seats-alpha/verifier"
+  ' "$PROJ/seats/seats.json" "$1" "$HOME_FIX/.pi-seats-alpha/reviewer"
 }
 for fixture in $EXPECTED_REAL_FIXTURES; do
-  [ -f "$REAL_FIXTURES_DIR/$fixture" ] || { echo "selftest: missing real verifier fixture: $REAL_FIXTURES_DIR/$fixture" >&2; exit 2; }
+  [ -f "$REAL_FIXTURES_DIR/$fixture" ] || { echo "selftest: missing real reviewer fixture: $REAL_FIXTURES_DIR/$fixture" >&2; exit 2; }
 done
-check_verifier_fixture_manifest() {
+check_reviewer_fixture_manifest() {
   local root bench
   root="$(cd "$VERIFY_DIR/.." && pwd -P)"
   if [ -f "$root/contracts/BENCH.md" ]; then bench="$root/contracts/BENCH.md";
   elif [ -f "$root/wheelhouse/crew/BENCH.md" ]; then bench="$root/wheelhouse/crew/BENCH.md";
-  else fail "verifier fixture manifest check could not find BENCH.md"; return; fi
+  else fail "reviewer fixture manifest check could not find BENCH.md"; return; fi
   if bun - "$root" "$bench" <<'TS'
 import fs from "node:fs";
 import path from "node:path";
@@ -1720,12 +1884,12 @@ if(missing_from_bench.length || missing_from_disk.length){
  console.log("missing_from_bench="+missing_from_bench.join(",")); console.log("missing_from_disk="+missing_from_disk.join(",")); process.exitCode=1;
 }
 TS
-  then pass "BENCH.md verifier wire-shape list matches real fixture files"; else fail "BENCH.md verifier wire-shape list and fixture files diverge"; fi
+  then pass "BENCH.md reviewer wire-shape list matches real fixture files"; else fail "BENCH.md reviewer wire-shape list and fixture files diverge"; fi
 }
-check_verifier_fixture_manifest
+check_reviewer_fixture_manifest
 COMMENTED_BENCH="$FIX/commented-BENCH.md"
 {
-  printf '### Verifier wire shapes covered\n\n<!--\n'
+  printf '### Reviewer wire shapes covered\n\n<!--\n'
   for fixture in $EXPECTED_REAL_FIXTURES; do
     printf -- '- harness: canary; fixture: seats/fixtures/verify-real/%s; binary version: canary; capture date: 2099-01-01\n' "$fixture"
   done
@@ -1740,23 +1904,23 @@ const text=fs.readFileSync(bench,"utf8").replace(/<!--[\s\S]*?-->/g,"");
 const listed=new Set([...text.matchAll(/fixture:\s*(seats\/fixtures\/verify-real\/[^;\s]+\.jsonl)/g)].map(m=>m[1]));
 if(actual.some(p=>!listed.has(p)))process.exitCode=1;
 TS
-then fail "BENCH.md verifier wire-shape manifest check accepted a commented-out fixture list"; else pass "BENCH.md verifier wire-shape manifest check rejects commented-out fixture lists"; fi
-set_verifier_harness pi
+then fail "BENCH.md reviewer wire-shape manifest check accepted a commented-out fixture list"; else pass "BENCH.md reviewer wire-shape manifest check rejects commented-out fixture lists"; fi
+set_reviewer_harness pi
 run_stream "$REAL_FIXTURES_DIR/pi-v3-message-end.jsonl" bead-5-recorded-pi fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-pi.md" 2>/dev/null; then
   pass "real pi message_end fixture yields one BOUNCE; result/turn events are not double-counted"
 else fail "real pi fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-pi.md" 2>/dev/null)"; fi
-set_verifier_harness claude-code
+set_reviewer_harness claude-code
 run_stream "$REAL_FIXTURES_DIR/claude-code-2.1.278-assistant.jsonl" bead-5-recorded-claude fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-claude.md" 2>/dev/null; then
   pass "real claude-code assistant fixture yields one BOUNCE; result event is not double-counted"
 else fail "real claude-code fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-claude.md" 2>/dev/null)"; fi
-set_verifier_harness codex
+set_reviewer_harness codex
 run_stream "$REAL_FIXTURES_DIR/codex-0.144.0-item-completed-agent-message.jsonl" bead-5-recorded-codex fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && says "VERDICT: BOUNCE" && grep -q "verdict: BOUNCE" "$VDIR/bead-5-recorded-codex.md" 2>/dev/null; then
   pass "real codex item.completed agent_message fixture yields one BOUNCE; turn.completed is not double-counted"
 else fail "real codex fixture did not yield a single BOUNCE (exit $RC): $OUT file=$(cat "$VDIR/bead-5-recorded-codex.md" 2>/dev/null)"; fi
-set_verifier_harness pi
+set_reviewer_harness pi
 cat > "$REPLY" <<'EOF'
 VERDICT: APPROVE
 wait, actually:
@@ -1768,7 +1932,7 @@ if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPRO
 else fail "ambiguous double verdict not refused with candidates (exit $RC): $OUT"; fi
 if bun -e 'import fs from "node:fs"; import a from "node:assert/strict";
   const dir=process.argv[1]; a.ok(fs.statSync(dir).isDirectory());
-  const rows=fs.readdirSync(dir).filter(n=>n.startsWith("bead-5.")).map(n=>JSON.parse(fs.readFileSync(`${dir}/${n}`,"utf8"))).filter(r=>r.reason.startsWith("verifier emitted 2 live VERDICT:"));
+  const rows=fs.readdirSync(dir).filter(n=>n.startsWith("bead-5.")).map(n=>JSON.parse(fs.readFileSync(`${dir}/${n}`,"utf8"))).filter(r=>r.reason.startsWith("reviewer emitted 2 live VERDICT:"));
   a.equal(rows.length,2); for(const r of rows){a.equal(r.status,"REFUSED");a.equal(r.notAVerdict,true);a.match(r.stdout, /"type":"message_end"/);a.ok(r.stdout.includes("VERDICT: APPROVE") && r.stdout.includes("VERDICT: BOUNCE"));}
 ' "$VDIR/refused"; then
   pass "ambiguous double verdict retains both raw json answers marked REFUSED, never verdict Markdown"
@@ -1798,25 +1962,25 @@ if [ $RC -eq 1 ] && says "pi exited 3"; then
   pass "a failing pi exits 1 even when a VERDICT line is present"
 else fail "pi failure not treated as error (exit $RC): $OUT"; fi
 if ! says "account label:"; then
-  pass "a verifier roster without account.label still reaches the provider-error path"
-else fail "unlabeled verifier unexpectedly printed an account.label: $OUT"; fi
+  pass "a reviewer roster without account.label still reaches the provider-error path"
+else fail "unlabeled reviewer unexpectedly printed an account.label: $OUT"; fi
 env HOME="$HOME_FIX" bun -e '
   import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
-  j.seats.verifier.account.label = "fixture-verifier-account";
+  j.seats.reviewer.account.label = "fixture-reviewer-account";
   fs.writeFileSync(f, JSON.stringify(j, null, 2));
 ' "$PROJ/seats/seats.json"
 OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_EXIT=3 \
   bun "$PROJ/seats/verify.ts" bead-5-label fleet/bead-1 worker-1 2>&1)"; RC=$?
-if [ $RC -eq 1 ] && says "pi exited 3" && says "account label: fixture-verifier-account"; then
-  pass "provider-error stderr path includes verifier account.label when present"
-else fail "provider-error path did not include verifier account.label (exit $RC): $OUT"; fi
+if [ $RC -eq 1 ] && says "pi exited 3" && says "account label: fixture-reviewer-account"; then
+  pass "provider-error stderr path includes reviewer account.label when present"
+else fail "provider-error path did not include reviewer account.label (exit $RC): $OUT"; fi
 env HOME="$HOME_FIX" bun -e '
   import fs from "node:fs";
   const f = process.argv[1];
   const j = JSON.parse(fs.readFileSync(f, "utf8"));
-  delete j.seats.verifier.account.label;
+  delete j.seats.reviewer.account.label;
   fs.writeFileSync(f, JSON.stringify(j, null, 2));
 ' "$PROJ/seats/seats.json"
 
@@ -1830,24 +1994,24 @@ if [ $RC -eq 1 ] && says "no seat named"; then
   pass "an unknown author seat is a STOP — distinctness needs a named account"
 else fail "unknown author seat not refused (exit $RC): $OUT"; fi
 run bead-6 fleet/bead-1 worker-1 worker-1
-if [ $RC -eq 1 ] && says 'not "verifier"'; then
-  pass "naming a non-verifier seat as the verifier is a STOP"
-else fail "non-verifier verifier seat not refused (exit $RC): $OUT"; fi
-: > "$HOME_FIX/.pi-seats-alpha/verifier/auth.json"
+if [ $RC -eq 1 ] && says 'not "reviewer"'; then
+  pass "naming a non-reviewer seat as the reviewer is a STOP"
+else fail "non-reviewer reviewer seat not refused (exit $RC): $OUT"; fi
+: > "$HOME_FIX/.pi-seats-alpha/reviewer/auth.json"
 run bead-6 fleet/bead-1 worker-1
 if [ $RC -eq 1 ] && says "no identity"; then
-  pass "a verifier seat that was never logged in is a STOP"
-else fail "identity-less verifier not refused (exit $RC): $OUT"; fi
-printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-alpha/verifier/auth.json"
+  pass "a reviewer seat that was never logged in is a STOP"
+else fail "identity-less reviewer not refused (exit $RC): $OUT"; fi
+printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-alpha/reviewer/auth.json"
 CLAUDE_ID_PROJ="$FIX/claude-identity-stop"
 build_proj "$CLAUDE_ID_PROJ" claudeid "$VERIFY"
-bun -e "import fs from 'node:fs'; const p='$CLAUDE_ID_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='claude-code'; j.seats.verifier.provider='anthropic'; j.seats.verifier.account.authRoute='oauth'; fs.rmSync('$HOME_FIX/.pi-seats-claudeid/verifier/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
+bun -e "import fs from 'node:fs'; const p='$CLAUDE_ID_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.reviewer.harness='claude-code'; j.seats.reviewer.provider='anthropic'; j.seats.reviewer.account.authRoute='oauth'; fs.rmSync('$HOME_FIX/.pi-seats-claudeid/reviewer/auth.json',{force:true}); fs.writeFileSync(p, JSON.stringify(j,null,2));"
 RUN_PROJ="$CLAUDE_ID_PROJ"; VDIR="$CLAUDE_ID_PROJ/seats/verdicts"
-RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-claude-id fleet/bead-1 worker-1 verifier 2>&1)" || RC=$?
+RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" bun "$RUN_PROJ/seats/verify.ts" bead-claude-id fleet/bead-1 worker-1 reviewer 2>&1)" || RC=$?
 if [ $RC -eq 1 ] && says "no identity" && says "CLAUDE_CONFIG_DIR" && says "claude" && ! says "PI_CODING_AGENT_DIR"; then
-  pass "empty claude-code verifier dir STOPs with Claude Code login wording"
-else fail "identity-less claude-code verifier not refused with Claude wording (exit $RC): $OUT"; fi
-RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"; VDIR="$PROJ/seats/verdicts"
+  pass "empty claude-code reviewer dir STOPs with Claude Code login wording"
+else fail "identity-less claude-code reviewer not refused with Claude wording (exit $RC): $OUT"; fi
+RUN_PROJ="$PROJ"; VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"; VDIR="$PROJ/seats/verdicts"
 check_bad_segment() {   # $1 = label, $2 = bead, $3 = author, $4 = expected phrase
   run "$2" fleet/bead-1 "$3"
   if [ $RC -eq 1 ] && says "$4"; then
@@ -1862,8 +2026,8 @@ check_bad_segment "an empty author seat" bead-6 "" "usage:"
 check_bad_segment "a bead id with a path separator (it names the verdict file)" "bead/6" worker-1 "invalid bead id"
 run bead-6 fleet/bead-1 worker-1 "veri/fier"
 if [ $RC -eq 1 ] && says "invalid seat name"; then
-  pass "an explicit verifier seat with a path separator is a STOP"
-else fail "bad explicit verifier seat not refused (exit $RC): $OUT"; fi
+  pass "an explicit reviewer seat with a path separator is a STOP"
+else fail "bad explicit reviewer seat not refused (exit $RC): $OUT"; fi
 
 phase "7. no tokens — identity never leaks into the verdict record"
 if ! grep -rq "$SENTINEL" "$VDIR" 2>/dev/null; then
@@ -1913,7 +2077,7 @@ if grep -q "## Evidence checks" "$VDIR/bead-8a.md" 2>/dev/null \
   pass "verdict file records per-artifact checks: exists, bytes, type probe"
 else fail "evidence checks missing from the verdict record"; fi
 if grep -q "evidence/screen.png" "$VARGV" 2>/dev/null && grep -q "floor" "$VARGV" 2>/dev/null; then
-  pass "the floor-check results reach the verifier's prompt"
+  pass "the floor-check results reach the reviewer's prompt"
 else fail "evidence floor results not in the prompt argv"; fi
 
 printf 'wheelhouse/evidence/\n' >> "$PROJ/.git/info/exclude"
@@ -1990,20 +2154,22 @@ phase "9. canary — can these checks detect a broken verify.ts?"
 # 9a: a verify.ts whose account-distinctness gate never fires
 CAN_A="$FIX/can-a"
 cp "$VERIFY" "$FIX/can-a-verify.ts"
-perl -0pi -e 's/const distinct = verifiers\.filter\(\(\[, e\]\) => e\.account\?\.dir && canonicalDir\(e\.account\.dir\) !== authorDir\);/const distinct = verifiers;\/\/ canary disables picker distinctness/; s/if \(authorDir === verifierDir\) \{ \/\/ distinctness-gate/if (false) { \/\/ distinctness-gate/' "$FIX/can-a-verify.ts"
-if cmp -s "$VERIFY" "$FIX/can-a-verify.ts"; then
-  fail "canary: could not disarm the distinctness gate — the line no longer matches, so the canary proves nothing"
+perl -0pi -e 's/const distinct = gating\.filter\(\(\[, e\]\) => e\.account\?\.dir && canonicalDir\(e\.account\.dir\) !== authorDir\);/const distinct = gating;\/\/ canary disables picker distinctness/; s/if \(authorDir === reviewerDir\) \{ \/\/ distinctness-gate/if (false) { \/\/ distinctness-gate/' "$FIX/can-a-verify.ts"
+if cmp -s "$VERIFY" "$FIX/can-a-verify.ts" \
+  || ! grep -Fq 'const distinct = gating;// canary disables picker distinctness' "$FIX/can-a-verify.ts" \
+  || ! grep -Fq 'if (false) { // distinctness-gate' "$FIX/can-a-verify.ts"; then
+  fail "canary: could not disarm BOTH distinctness gates — a source site no longer matches, so the canary proves nothing"
 else
   build_proj "$CAN_A" can-a "$FIX/can-a-verify.ts"
   env HOME="$HOME_FIX" bun -e '
     import fs from "node:fs";
     const f = process.argv[1];
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
-    j.seats.verifier.account.dir = j.seats["worker-1"].account.dir;
+    j.seats.reviewer.account.dir = j.seats["worker-1"].account.dir;
     fs.writeFileSync(f, JSON.stringify(j, null, 2));
   ' "$CAN_A/seats/seats.json"
   RUN_PROJ="$CAN_A"
-  VINVOKED="$HOME_FIX/.pi-seats-can-a/verifier/invoked"
+  VINVOKED="$HOME_FIX/.pi-seats-can-a/reviewer/invoked"
   cat > "$REPLY" <<'EOF'
 VERDICT: APPROVE
 EOF
@@ -2059,7 +2225,7 @@ EOF
   fi
 fi
 RUN_PROJ="$PROJ"
-VINVOKED="$HOME_FIX/.pi-seats-alpha/verifier/invoked"
+VINVOKED="$HOME_FIX/.pi-seats-alpha/reviewer/invoked"
 
 phase "9b. core.worktree restore guard covers mid-run clobber"
 CORE_GUARD_PROJ="$FIX/proj-core-guard"
@@ -2067,11 +2233,11 @@ build_proj "$CORE_GUARD_PROJ" coreguard "$VERIFY"
 printf 'Core worktree restore guard checked.\nVERDICT: APPROVE\n' > "$REPLY"
 git -C "$CORE_GUARD_PROJ" config --local core.worktree "$CORE_GUARD_PROJ"
 CORE_GUARD_BEFORE="$(core_worktree_snapshot "$CORE_GUARD_PROJ")"
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLOBBER_CORE_WORKTREE_REPO="$CORE_GUARD_PROJ" bun "$CORE_GUARD_PROJ/seats/verify.ts" bead-core-guard fleet/bead-1 worker-1 verifier 2>&1)"
+OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_CLOBBER_CORE_WORKTREE_REPO="$CORE_GUARD_PROJ" bun "$CORE_GUARD_PROJ/seats/verify.ts" bead-core-guard fleet/bead-1 worker-1 reviewer 2>&1)"
 RC=$?
-CORE_GUARD_CLOBBER="$HOME_FIX/.pi-seats-coreguard/verifier/core-worktree-clobber.txt"
+CORE_GUARD_CLOBBER="$HOME_FIX/.pi-seats-coreguard/reviewer/core-worktree-clobber.txt"
 if [ $RC -eq 0 ] && [ "$(core_worktree_snapshot "$CORE_GUARD_PROJ")" = "$CORE_GUARD_BEFORE" ]; then
-  pass "pre-set core.worktree is byte-identical after verifier clobbers it mid-run"
+  pass "pre-set core.worktree is byte-identical after reviewer clobbers it mid-run"
 else fail "pre-set core.worktree was not restored (exit $RC): before=$CORE_GUARD_BEFORE after=$(core_worktree_snapshot "$CORE_GUARD_PROJ") out=$OUT"; fi
 if grep -q '/wheelhouse-verify-' "$CORE_GUARD_CLOBBER" 2>/dev/null && ! grep -qF "$CORE_GUARD_PROJ" "$CORE_GUARD_CLOBBER" 2>/dev/null; then
   pass "restore-path fixture wrote the scratch wheelhouse-verify path into core.worktree"
@@ -2125,9 +2291,9 @@ else fail "the live worktree was swept even though its owner pid is still alive"
 
 CONCURRENT_OUT_A="$FIX/concurrent-verify-a.out"
 CONCURRENT_OUT_B="$FIX/concurrent-verify-b.out"
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$CONCURRENT_OUT_A" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$CONCURRENT_OUT_A" 2>&1) &
 CONCURRENT_PID_A=$!
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$CONCURRENT_OUT_B" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$CONCURRENT_OUT_B" 2>&1) &
 CONCURRENT_PID_B=$!
 CONCURRENT_DIRS=""
 CONCURRENT_READY_DEADLINE=$((SECONDS+300))
@@ -2172,12 +2338,12 @@ else fail "the formerly-live worktree was not reclaimed after its owner pid died
 phase "10b. killed one-shot — reaper leaves no scratch worktree or SHA branch"
 KILL_PROJ="$FIX/proj-kill"
 build_proj "$KILL_PROJ" kill "$VERIFY"
-RUN_PROJ="$KILL_PROJ"; VDIR="$KILL_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-kill/verifier/argv.json"
+RUN_PROJ="$KILL_PROJ"; VDIR="$KILL_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-kill/reviewer/argv.json"
 KILL_SHA_BRANCH="89abcdef0123456789abcdef0123456789abcdef"
 git -C "$KILL_PROJ" branch "$KILL_SHA_BRANCH" HEAD >/dev/null 2>&1
 OUT_FILE="$FIX/killed-verify.out"
 KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
 KILLED_READY_DEADLINE=$((SECONDS+300))
@@ -2190,7 +2356,7 @@ if [ -n "$KILLED_DIR" ]; then pass "killed one-shot fixture reached a registered
 else fail "killed one-shot fixture never registered a scratch worktree: $(cat "$OUT_FILE" 2>/dev/null)"; fi
 kill -9 "$KILLED_DISPATCHER_PID" 2>/dev/null || true
 wait "$KILLED_DISPATCHER_PID" 2>/dev/null || true
-PI_PID_FILE="$HOME_FIX/.pi-seats-kill/verifier/pi-pid.txt"
+PI_PID_FILE="$HOME_FIX/.pi-seats-kill/reviewer/pi-pid.txt"
 if [ -s "$PI_PID_FILE" ]; then kill "$(cat "$PI_PID_FILE")" 2>/dev/null || true; fi
 run   # sweep the killed run's scratch worktree and stale SHA branch
 if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -F >/dev/null "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
@@ -2210,20 +2376,20 @@ signal_cleanup_case() {
   build_proj "$sig_proj" "$ns" "$VERIFY"
   git -C "$sig_proj" config --local core.worktree "$sig_proj"
   before="$(core_worktree_snapshot "$sig_proj")"
-  (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 STUB_CLOBBER_CORE_WORKTREE_REPO="$sig_proj" bun "$sig_proj/seats/verify.ts" "bead-$ns" fleet/bead-1 worker-1 verifier --timeout-ms 1800000 >"$out_file" 2>&1) &
+  (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 STUB_CLOBBER_CORE_WORKTREE_REPO="$sig_proj" bun "$sig_proj/seats/verify.ts" "bead-$ns" fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$out_file" 2>&1) &
   local dispatcher_pid=$!
   dir=""
   local ready_deadline=$((SECONDS+300))
   while [ "$SECONDS" -lt "$ready_deadline" ]; do
     dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
-    [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/verifier/core-worktree-clobber.txt" ] && break
+    [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/reviewer/core-worktree-clobber.txt" ] && break
     sleep 0.05
   done
   if [ -n "$dir" ]; then pass "$label fixture reached a registered scratch worktree"
   else fail "$label fixture never registered a scratch worktree: $(cat "$out_file" 2>/dev/null)"; fi
   kill -"$sig" "$dispatcher_pid" 2>/dev/null || true
   wait "$dispatcher_pid" 2>/dev/null; wait_rc=$?
-  pid_file="$HOME_FIX/.pi-seats-$ns/verifier/pi-pid.txt"
+  pid_file="$HOME_FIX/.pi-seats-$ns/reviewer/pi-pid.txt"
   if [ -s "$pid_file" ]; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi
   if [ "$wait_rc" = "$expect" ]; then pass "$label exits with signal-shaped status $expect"
   else fail "$label exit status was $wait_rc, expected $expect; out=$(cat "$out_file" 2>/dev/null)"; fi
@@ -2235,7 +2401,7 @@ signal_cleanup_case() {
 }
 signal_cleanup_case TERM 143 sigterm SIGTERM
 signal_cleanup_case INT 130 sigint SIGINT
-RUN_PROJ="$PROJ"; VDIR="$PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-alpha/verifier/argv.json"
+RUN_PROJ="$PROJ"; VDIR="$PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 
 phase "11. real pi — one smoke leg through the actual binary (SKIP-able)"
 REAL_AUTH="$HOME/.pi/agent/auth.json"
@@ -2263,8 +2429,8 @@ lines and nothing else, using no tools:
 VERDICT: APPROVE
 PUSH:    NOT CONSIDERED
 EOF
-  # Borrow the real login into the verifier seat only; it dies with the fixture.
-  RSEAT="$RHOME/.pi-seats-real/verifier"
+  # Borrow the real login into the reviewer seat only; it dies with the fixture.
+  RSEAT="$RHOME/.pi-seats-real/reviewer"
   cp "$REAL_AUTH" "$RSEAT/auth.json" && chmod 600 "$RSEAT/auth.json"
   [ -f "$HOME/.pi/agent/settings.json" ] && cp "$HOME/.pi/agent/settings.json" "$RSEAT/settings.json"
   # No --provider/--model pin by default: whatever your login can actually
@@ -2276,8 +2442,8 @@ EOF
     const f = process.argv[1];
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
     const p = process.env.WHEELHOUSE_REAL_PI_PROVIDER, m = process.env.WHEELHOUSE_REAL_PI_MODEL;
-    if (p && m) { j.seats.verifier.provider = p; j.seats.verifier.model = m; }
-    else { delete j.seats.verifier.provider; delete j.seats.verifier.model; }
+    if (p && m) { j.seats.reviewer.provider = p; j.seats.reviewer.model = m; }
+    else { delete j.seats.reviewer.provider; delete j.seats.reviewer.model; }
     fs.writeFileSync(f, JSON.stringify(j, null, 2));
   ' "$RPROJ/seats/seats.json"
   REAL_PATH="$(dirname "$REAL_PI"):$(dirname "$(command -v bun)"):$(dirname "$GIT_BIN"):/usr/bin:/bin"

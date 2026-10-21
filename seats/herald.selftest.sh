@@ -27,9 +27,7 @@ cleanup() {
   if [ -n "${ROOT_GONE_PID:-}" ]; then selftest_stop_herald_child "$ROOT_GONE_PID"; fi
   selftest_remove_fixture_dir "$FIX"
 }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+selftest_install_cleanup_traps cleanup
 
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
@@ -316,6 +314,22 @@ if [ $RC -eq 0 ] && [ "$(json_count 'r.class==="verdict-not-posted" && r.seat===
   pass "unposted reviewer verdict is relayed to the bead and heralded"
 else
   fail "unposted reviewer verdict was not relayed/heralded (rc=$RC out=$OUT inbox=$(cat "$PROJ/seats/inbox.jsonl" 2>/dev/null || true) comment=$(cat "$FIX/bd-comments/bead-review.comment" 2>/dev/null || true))"
+fi
+
+# A walk verdict is not a bead review, even if the walker has a lastBead.
+rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/logs"/*.jsonl "$FIX/bd-comments/bead-review.comment"
+cat > "$PROJ/seats/state.json" <<'JSON'
+{"seats":{"verifier":{"role":"verifier","lastBead":"bead-review","lastPrompt":"Walk a surface."}}}
+JSON
+cat > "$PROJ/seats/logs/verifier.jsonl" <<'JSONL'
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"VERDICT: WALKED-DONE"}]}]}
+JSONL
+seed_log_cursor verifier.jsonl 0
+RC=0; OUT="$(BD_SHOW_DIR="$FIX/bd-show" BD_COMMENT_DIR="$FIX/bd-comments" PATH="$FIX/bin:$PATH" run_herald --once 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && [ ! -e "$FIX/bd-comments/bead-review.comment" ] && [ "$(json_count 'r.class==="verdict-not-posted" && r.seat==="verifier"')" = 0 ]; then
+  pass "walk verifier verdict is never relayed as a bead review"
+else
+  fail "walk verifier verdict was relayed as a bead review (rc=$RC out=$OUT)"
 fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$PROJ/seats/state.json" "$PROJ/seats/logs"/*.jsonl "$PROJ/seats/logs"/*.jsonl.1 2>/dev/null || true

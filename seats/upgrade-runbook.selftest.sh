@@ -6,7 +6,14 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
 export WHEELHOUSE_CONTRACT_FIXTURE="$ROOT/seats/fixtures/contracts/valid.md"
-BASELINE=${WHEELHOUSE_UPGRADE_SELFTEST_BASELINE:-d8128d4}
+# Public old-install fixture: 7fcbaeb (2026-09-02, "Add seat provider probe cadence").
+# The former d8128d4 disappeared in the 2026-10-18 history purge; its rewrite
+# map was unavailable when this fallback was chosen, so this is NOT claimed
+# to be its rewritten equivalent. This is the latest public first-parent
+# commit before the PROMOTION.md autonomy update (4469ec4). It has all four
+# baseline files, predates the zsh brace fix, and both runbooks tested as
+# "updated" still differ from today's template. Pin the full public object ID.
+BASELINE=${WHEELHOUSE_UPGRADE_SELFTEST_BASELINE:-7fcbaeb470e9d24ff546512ae24011acb1e5deb9}
 TEMPLATE_SOURCE="$ROOT/wheelhouse/.template-source"
 
 source_refusal() {
@@ -72,10 +79,16 @@ template_root() {
 }
 TEMPLATE=$(template_root)
 if [ "${WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY:-0}" = 1 ]; then printf '%s\n' "$TEMPLATE"; exit 0; fi
+# Source/cache-only probes use tiny repositories and do not consume BASELINE.
+# Refuse a missing baseline before allocating fixtures or running any cases.
+if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then
+  printf 'STOP: upgrade selftest baseline "%s" is missing from template history; fetch complete public history or set WHEELHOUSE_UPGRADE_SELFTEST_BASELINE to an available old-install commit\n' "$BASELINE" >&2
+  exit 2
+fi
 TMP=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX") || exit 2
 selftest_isolate_git "$TMP" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${TMP:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$TMP"; }
-trap cleanup EXIT
+selftest_install_cleanup_traps cleanup
 
 PASS=0
 fail() { echo "not ok $((PASS+1)) - $*"; exit 1; }
@@ -304,6 +317,8 @@ if [ "${WHEELHOUSE_UPGRADE_PRODUCER_ONLY:-0}" = 1 ]; then
 fi
 # Installed history fixtures may resolve a source predating this migration.
 if [ "$TEMPLATE" = "$ROOT" ]; then
+  bun "$ROOT/seats/fixtures/upgrade-baseline.ts" "$ROOT" "$TMP"
+  pass "default baseline is public old-install shape; missing baseline refuses before fixture setup (negative controls detected)"
   cache_recovery_tests
   producer_migration_tests
   PASS=$((PASS+8))

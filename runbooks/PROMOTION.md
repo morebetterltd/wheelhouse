@@ -8,7 +8,7 @@ The shipped default is now all the way: reviewed work is merged, pushed, PR-open
 
 Earlier versions of this template made this section's first rung — ephemeral dispatches that do the work, report, and end — the shipped default, and persistent seats a graduation with real chores attached: per-seat config directories, operator-run registry wiring after every relaunch, a roll call every session generation, a standing prompt pasted by hand. Those chores were the cost of building standing seats out of interactive terminal sessions, and they are gone because the seat is no longer a terminal: it is a commander-owned `pi --mode rpc` process the adapter spawns with the role injected, addressable by roster name from the moment it starts (`wheelhouse/fleet/SEATS.md`; commands in `seats/README.md`).
 
-So there is nothing to graduate to here. A persistent seat costs no wiring, no roll call, no reset ritual — the session is a warm cache that survives stop and resume, and spawning fresh is one command. What this section still owes you is the judgment the old graduation encoded: a persistent seat idling is a subscription doing nothing, so take seats for the roles you actually dispatch to, and note that the verifier stays deliberately ephemeral — one shot, no session — because for a review gate, independence is worth more than a warm cache.
+So there is nothing to graduate to here. A persistent seat costs no wiring, no roll call, no reset ritual — the session is a warm cache that survives stop and resume, and spawning fresh is one command. What this section still owes you is the judgment the old graduation encoded: a persistent seat idling is a subscription doing nothing, so take seats for the roles you actually dispatch to, and note that the reviewer pass stays deliberately ephemeral — one shot, no session — because for a review gate, independence is worth more than a warm cache.
 
 ## All-the-way default to principal-confirmed local merges
 
@@ -19,10 +19,10 @@ So there is nothing to graduate to here. A persistent seat costs no wiring, no r
 **Choose the narrowing only when** at least one of these is true:
 
 - the bench is still the shipped stub, so no behavioral APPROVE can claim the software runs;
-- the reviewer seat or verifier path has not yet been proven on real merges;
+- the reviewer seat or review dispatcher path has not yet been proven on real merges;
 - local main is unusually expensive to repair in this project, and the project section names why.
 
-**Graduate back to the shipped default when** the bench is implemented for behavioral claims, the reviewer/verifier path has caught at least one real defect or passed enough ordinary changes to be trusted, and reverting a bad local merge is understood. The precondition is in `wheelhouse/crew/REVIEWER.md`: an APPROVE without bench evidence on a behavioral diff is a defect in the review. That sentence is load-bearing for any merge authority and travels with it.
+**Graduate back to the shipped default when** the bench is implemented for behavioral claims, the reviewer path has caught at least one real defect or passed enough ordinary changes to be trusted, and reverting a bad local merge is understood. The precondition is in `wheelhouse/crew/REVIEWER.md`: an APPROVE without bench evidence on a behavioral diff is a defect in the review. That sentence is load-bearing for any merge authority and travels with it.
 
 ## Recorded push authority to narrower push gates
 

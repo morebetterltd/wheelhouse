@@ -31,10 +31,94 @@ FIX="$(cd "$FIX" && pwd -P)"
 export GIT_CEILING_DIRECTORIES="$FIX${GIT_CEILING_DIRECTORIES:+:$GIT_CEILING_DIRECTORIES}"
 TMP_SCRATCH=()
 cleanup(){ selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; rm -rf ${TMP_SCRATCH[@]+"${TMP_SCRATCH[@]}"}; }
-trap cleanup EXIT INT TERM
-bun "$HERE/fixtures/scratch-ownership.ts" prune "$HERE/.." "$FIX" || exit 1
+selftest_install_cleanup_traps cleanup
 export HOME="$FIX/home"
 mkdir -p "$HOME"
+
+# Shared with the normal suite below: exercise the actual init/add/commit
+# setup under nested TMPDIR without recursively repeating every prune case.
+prune_init_git_fixture(){
+  ROOT="$FIX/container"; PROD="$ROOT/product"; WTS="$ROOT/.wheelhouse-worktrees"
+  mkdir -p "$PROD" "$WTS" "$ROOT/seats" || return 2
+  selftest_copy_seat_runtime "$ROOT" "$(dirname "$PRUNE")" || return 2
+  chmod +x "$ROOT/seats/prune.ts" || return 2
+  git -C "$ROOT" init -q -b main || return 2
+  git -C "$ROOT" config user.email selftest@example.invalid || return 2
+  git -C "$ROOT" config user.name selftest || return 2
+  git -C "$PROD" init -q -b main || return 2
+  git -C "$PROD" config user.email selftest@example.invalid || return 2
+  git -C "$PROD" config user.name selftest || return 2
+  printf 'base\n' > "$PROD/app.txt"
+  git -C "$PROD" add app.txt || return 2
+  git -C "$PROD" commit -q -m base || return 2
+}
+
+if [ "${WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK:-0}" = 1 ]; then
+  # No bd database, lsof inventory, cleanup corpus or second nested run here.
+  mkdir -p "$FIX/uninitialized" || exit 2
+  git -C "$FIX/uninitialized" rev-parse --show-toplevel > "$FIX/discovery.out" 2> "$FIX/discovery.err"
+  DISCOVERY_RC=$?
+  if [ "$DISCOVERY_RC" != 128 ] || [ -s "$FIX/discovery.out" ]; then
+    fail "nested Git discovery escaped fixture boundary (rc=$DISCOVERY_RC)"; exit 1
+  fi
+  prune_init_git_fixture || exit 2
+  [ -d "$ROOT/.git" ] && [ -d "$PROD/.git" ] || exit 2
+  [ "$(git -C "$ROOT" rev-parse --show-toplevel)" = "$ROOT" ] || exit 2
+  [ "$(git -C "$PROD" rev-parse --show-toplevel)" = "$PROD" ] || exit 2
+  git -C "$PROD" rev-parse --verify HEAD >/dev/null || exit 2
+  printf 'prune nested git leak subset: PASS\n'
+  exit 0
+fi
+
+phase 'preflight: TMPDIR inside another git repo is not touched'
+OUTER="$FIX/enclosing-tmp-repo"
+mkdir -p "$OUTER/tmp"
+git -C "$OUTER" init -q -b main
+git -C "$OUTER" config user.email selftest@example.invalid
+git -C "$OUTER" config user.name selftest
+printf '/tmp/\n' > "$OUTER/.git/info/exclude"
+printf 'outer\n' > "$OUTER/outer.txt"
+git -C "$OUTER" add outer.txt
+git -C "$OUTER" commit -q -m outer
+# Preserve a nonempty index and dirty/untracked sentinels, not merely a clean
+# checkout that an accidental reset could make appear unchanged.
+printf 'staged\n' > "$OUTER/staged.txt"; git -C "$OUTER" add staged.txt
+printf 'unstaged\n' >> "$OUTER/outer.txt"
+printf 'untracked\n' > "$OUTER/untracked.txt"
+OUTER_HEAD_BEFORE="$(git -C "$OUTER" rev-parse HEAD)" || exit 2
+OUTER_STATUS_BEFORE="$(GIT_OPTIONAL_LOCKS=0 git -C "$OUTER" status --porcelain --untracked-files=all)" || exit 2
+cp -f "$OUTER/.git/index" "$FIX/outer-index.before" || exit 2
+NESTED_GIT_LEAK_TIMEOUT_S=60
+NESTED_STARTED=$SECONDS
+NESTED_RC=0
+TMPDIR="$OUTER/tmp" WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK=1 with_timeout "$NESTED_GIT_LEAK_TIMEOUT_S" bash "$0" "$PRUNE" > "$FIX/nested-prune.out" 2>&1 || NESTED_RC=$?
+NESTED_ELAPSED=$((SECONDS-NESTED_STARTED))
+if [ "$NESTED_RC" = 0 ] && grep -Fqx 'prune nested git leak subset: PASS' "$FIX/nested-prune.out"; then
+  OUTER_HEAD_AFTER="$(git -C "$OUTER" rev-parse HEAD)" || exit 2
+  OUTER_INDEX_UNCHANGED=0
+  cmp -s "$FIX/outer-index.before" "$OUTER/.git/index" && OUTER_INDEX_UNCHANGED=1
+  OUTER_STATUS_AFTER="$(GIT_OPTIONAL_LOCKS=0 git -C "$OUTER" status --porcelain --untracked-files=all)" || exit 2
+  if [ "$OUTER_HEAD_AFTER" = "$OUTER_HEAD_BEFORE" ] && [ "$OUTER_INDEX_UNCHANGED" = 1 ] && [ "$OUTER_STATUS_AFTER" = "$OUTER_STATUS_BEFORE" ]; then
+    pass "nested TMPDIR bounded Git subset leaves enclosing HEAD and index bytes unchanged (elapsed=${NESTED_ELAPSED}s limit=${NESTED_GIT_LEAK_TIMEOUT_S}s)"
+  else
+    fail "nested TMPDIR repo changed: head_before=$OUTER_HEAD_BEFORE head_after=$OUTER_HEAD_AFTER index_unchanged=$OUTER_INDEX_UNCHANGED status_before=$OUTER_STATUS_BEFORE status_after=$OUTER_STATUS_AFTER"
+  fi
+else
+  case "$NESTED_RC" in
+    124|142) fail "nested TMPDIR Git leak check timed out after ${NESTED_GIT_LEAK_TIMEOUT_S}s (rc=$NESTED_RC elapsed=${NESTED_ELAPSED}s): $(tail -20 "$FIX/nested-prune.out")" ;;
+    *) fail "nested TMPDIR Git leak subset failed (rc=$NESTED_RC elapsed=${NESTED_ELAPSED}s): $(tail -20 "$FIX/nested-prune.out")" ;;
+  esac
+fi
+if [ "${WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" -eq 0 ]; exit $?
+fi
+if bun "$HERE/fixtures/prune-nested-git.ts" "$HERE" "$FIX/nested-controls" "$PRUNE"; then
+  pass 'nested Git leak check detects HEAD/index corruption, child failure and timeout'
+else
+  fail 'nested Git leak check regression controls'
+fi
+
+bun "$HERE/fixtures/scratch-ownership.ts" prune "$HERE/.." "$FIX" || exit 1
 # bd init's hooks must not detach telemetry flushers into these worktrees.
 selftest_disable_bd_metrics "$FIX" || exit 2
 METRICS_CONFIG="$XDG_CONFIG_HOME/bd/config.yaml"
@@ -268,47 +352,7 @@ fi
 
 reviewed_tsv_header(){ printf '# wheelhouse-prune-scan-v1\t["%s"]\ncategory\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\n' "$1"; }
 
-if [ "${WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK:-0}" != 1 ]; then
-  phase 'preflight: TMPDIR inside another git repo is not touched'
-  OUTER="$FIX/enclosing-tmp-repo"
-  mkdir -p "$OUTER/tmp"
-  git -C "$OUTER" init -q -b main
-  git -C "$OUTER" config user.email selftest@example.invalid
-  git -C "$OUTER" config user.name selftest
-  printf 'outer\n' > "$OUTER/outer.txt"
-  git -C "$OUTER" add outer.txt
-  git -C "$OUTER" commit -q -m outer
-  OUTER_HEAD_BEFORE="$(git -C "$OUTER" rev-parse HEAD)"
-  if TMPDIR="$OUTER/tmp" WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK=1 with_timeout 900 bash "$0" "$PRUNE" > "$FIX/nested-prune.out" 2>&1; then
-    OUTER_HEAD_AFTER="$(git -C "$OUTER" rev-parse HEAD)"
-    OUTER_STATUS="$(git -C "$OUTER" status --porcelain --untracked-files=all)"
-    if [ "$OUTER_HEAD_AFTER" = "$OUTER_HEAD_BEFORE" ] && [ -z "$OUTER_STATUS" ]; then
-      pass 'prune.selftest with TMPDIR inside a scratch git repo leaves that repo HEAD and index unchanged'
-    else
-      fail "nested TMPDIR repo changed: before=$OUTER_HEAD_BEFORE after=$OUTER_HEAD_AFTER status=$OUTER_STATUS"
-    fi
-  else
-    fail "nested TMPDIR prune.selftest failed: $(tail -80 "$FIX/nested-prune.out" 2>/dev/null)"
-  fi
-fi
-
-ROOT="$FIX/container"
-PROD="$ROOT/product"
-WTS="$ROOT/.wheelhouse-worktrees"
-mkdir -p "$PROD" "$WTS" "$ROOT/seats"
-selftest_copy_seat_runtime "$ROOT" "$(dirname "$PRUNE")"
-chmod +x "$ROOT/seats/prune.ts"
-
-git -C "$ROOT" init -q -b main
-git -C "$ROOT" config user.email selftest@example.invalid
-git -C "$ROOT" config user.name selftest
-
-git -C "$PROD" init -q -b main
-git -C "$PROD" config user.email selftest@example.invalid
-git -C "$PROD" config user.name selftest
-printf 'base\n' > "$PROD/app.txt"
-git -C "$PROD" add app.txt
-git -C "$PROD" commit -q -m base
+prune_init_git_fixture || exit 2
 BARE="$FIX/origin.git"
 git -C "$PROD" init --bare -q -b main "$BARE"
 git -C "$PROD" remote add origin "$BARE"
@@ -385,7 +429,7 @@ CLOSED_LIVE_PID=$!
 TMP_SCRATCH+=()
 cleanup_live(){ kill "$LIVE_PID" "$OPEN_LIVE_PID" "$CLOSED_LIVE_PID" >/dev/null 2>&1 || true; }
 cleanup_prune(){ cleanup_live; cleanup; }
-trap cleanup_prune EXIT INT TERM
+selftest_install_cleanup_traps cleanup_prune
 printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"},"worker-live":{"pid":%s,"cwd":"%s"},"worker-history":{"pid":999998,"cwd":"%s","sessionFile":"%s"}}}\n' "$WTS/$OPEN_ID" "$LIVE_PID" "$WTS/$OPEN_ID" "$WTS/$OPEN_ID" "$SESSION_HISTORY" > "$ROOT/seats/state.json"
 printf '{"seats":{"worker-rostered":{}}}\n' > "$ROOT/seats/seats.json"
 mkdir -p "$WTS/worker-rostered"
@@ -655,7 +699,7 @@ set +e   # the phase above left -e on; these phases inspect exit codes themselve
 json_id(){ bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)'; }
 EXT_PIDS=()
 cleanup_ext(){ for p in ${EXT_PIDS[@]+"${EXT_PIDS[@]}"}; do kill "$p" >/dev/null 2>&1 || true; done; cleanup_prune; }
-trap cleanup_ext EXIT INT TERM
+selftest_install_cleanup_traps cleanup_ext
 mk_install(){ # $1 root: container git repo, nested product repo with a bare origin at $1.origin.git, prune.ts in place
   mkdir -p "$1/product" "$1/seats"
   selftest_copy_seat_runtime "$1" "$(dirname "$PRUNE")"

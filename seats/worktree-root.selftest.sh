@@ -34,7 +34,7 @@ BIN="$FIX/bin"
 PROJ="$FIX/project"
 RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$(command -v node)"):/usr/bin:/bin"
 cleanup() { pkill -f "$FIX" 2>/dev/null || true; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 mkdir -p "$HOME_FIX" "$BIN" "$PROJ/seats" "$PROJ/contracts"
 
 cat > "$BIN/pi" <<'STUB'

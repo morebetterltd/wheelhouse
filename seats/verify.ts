@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 /**
- * verify.ts — commander-facing dispatch of the EPHEMERAL verifier pass.
+ * verify.ts — commander-facing dispatch of the EPHEMERAL reviewer pass.
  *
  * One invocation = one verdict. It spawns a one-shot `pi -p --no-session`
- * on the VERIFIER seat's own agent directory, with the REVIEWER crew brief
+ * on the REVIEWER seat's own agent directory, with the REVIEWER crew brief
  * appended to the system prompt, hands it the bead claim and the branch's
  * tip SHA, and parses the single `VERDICT:` and `PUSH:` lines out of what comes back.
  * A refused answer is kept as diagnostic JSON, never as a verdict. One
@@ -11,19 +11,19 @@
  * invocation, on the same identity/scratch and without rerunning the sweep.
  * No persisted harness session or cross-invocation memory is introduced.
  *
- * The precondition this file exists to enforce: the verifier's account is
+ * The precondition this file exists to enforce: the reviewer's account is
  * not the author's. Same account.dir means same auth.json means same
  * account, and a verdict from the author's own account is not a verdict.
  * The comparison happens BEFORE anything is spawned, against canonicalized
  * paths, and an identical pair is a loud STOP, not a warning.
  *
- * The verifier process sees a read-only `bd` shim first on PATH so it cannot
+ * The reviewer process sees a read-only `bd` shim first on PATH so it cannot
  * write any host graph by accident. For machine-local benches that need their
  * own fixture graph, verify.ts also exports `WHEELHOUSE_REAL_BD` as the absolute
  * path to the real bd binary the shim delegates to; benches must pair it with
  * their own scratch BEADS_DIR rather than calling bare `bd` through PATH.
  *
- * The verdict and the verifier's full output land in
+ * The verdict and the reviewer's full output land in
  * seats/verdicts/<bead-id>.md — a WORKING COPY for the commander, not an
  * evidence home. wheelhouse/GRAPH.md names the two homes evidence may live
  * in (the bead, or a committed path the bead names); this file is neither,
@@ -43,7 +43,7 @@
  * a FLOOR check runs before the spawn — exists at the SHA, non-empty, and
  * type-probed (.png: magic bytes + IHDR dimensions; anything else: non-empty)
  * — and the results go into the prompt and the verdict record. The floor is
- * not the judgment: the verifier still opens each artifact and judges its
+ * not the judgment: the reviewer still opens each artifact and judges its
  * content against the claim. But an APPROVE while any floor check fails is
  * MALFORMED — exit 1, mirroring the NOT BENCHED parser rule — never exit 0.
  *
@@ -53,13 +53,13 @@
  * bead and restates its requirement as arguments — the same relationship the
  * bead claim itself already has to the dispatch.
  *
- * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [verifier-seat]
+ * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [reviewer-seat] [--fallback-promotion <comment-id>]
  *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]
  *          [--timeout-ms <ms>] [--first-output-timeout-ms <ms>]
  *          [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]
  *
  * Timeout knobs are liveness watchdogs, not a wall-clock cap on the whole
- * verifier turn. --first-output-timeout-ms bounds silence before the first
+ * reviewer turn. --first-output-timeout-ms bounds silence before the first
  * output. After output begins, each stream event resets the stall watchdog;
  * the effective quiet-period limit is the smaller of --timeout-ms (default
  * 900000 ms) and --no-event-timeout-ms (default 600000 ms), so the default
@@ -113,26 +113,26 @@ function assertHostBuildLockAvailable(): void {
   fs.mkdirSync(path.dirname(lock), { recursive: true });
   const probe = spawnSync("perl", ["-MFcntl=:flock,LOCK_EX,LOCK_NB", "-e", "open(my $fh, '>>', $ARGV[0]) or die $!; exit(flock($fh, LOCK_EX|LOCK_NB) ? 0 : 75)", lock], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   if (probe.error) die(`host build budget is enabled but verify cannot probe ${lock}: ${probe.error.message}`);
-  if (probe.status === 75) die(`host build lock is held by another bead (${lock}); refusing to start verifier until the build lock is free so --timeout-ms is not spent queued on the host build lock`);
+  if (probe.status === 75) die(`host build lock is held by another bead (${lock}); refusing to start reviewer until the build lock is free so --timeout-ms is not spent queued on the host build lock`);
   if (probe.status !== 0) die(`host build budget is enabled but verify cannot probe ${lock}: ${(probe.stderr || probe.stdout || "unknown error").trim()}`);
 }
 
 /**
- * A throwaway git worktree, used ONLY as the one-shot verifier spawn's
+ * A throwaway git worktree, used ONLY as the one-shot reviewer spawn's
  * process cwd — construction, not contract discipline. REVIEWER.md already
  * says "read-only on the work," but that is a rule the model can ignore;
  * the same hazard class adapter.ts's per-bead cwd (see seats/README.md,
  * "Running a seat") closes for a confused WORKER applies to a confused or
- * adversarial verifier turn that runs a bare `write`/`edit` against a
+ * adversarial reviewer turn that runs a bare `write`/`edit` against a
  * relative path — with cwd: ROOT that lands in the live checkout, exactly
  * the checkout every other seat and the commander depend on.
  *
  * It has to be a real worktree of THIS repository, not an arbitrary empty
- * directory: the verifier's own default reading mechanism (REVIEWER.md,
+ * directory: the reviewer's own default reading mechanism (REVIEWER.md,
  * "Reading a branch without disturbing it") is bare `git diff`/`git show`
  * with no `-C` flag, so its cwd must already be a valid working directory
  * sharing this repository's object database and refs, or every git command
- * the verifier runs fails before it reads a single line of the branch.
+ * the reviewer runs fails before it reads a single line of the branch.
  * verify.ts's OWN git calls (branch resolution, checkEvidence) are
  * unaffected either way — they pass an explicit cwd for the branch's git
  * repository (`--repo` when an umbrella install needs one), which has nothing
@@ -315,6 +315,7 @@ let gateBeadId: string | null = null;
 let gateSourceLog = "seats/verify.ts";
 let gateInboxWrote = false;
 
+// Legacy gate identifiers stay stable for walk.ts and installed inbox consumers.
 export function setVerifierGateBead(beadId: string, sourceLog = "seats/verify.ts"): void {
   gateBeadId = beadId;
   gateSourceLog = sourceLog;
@@ -375,11 +376,11 @@ function sawFinalReviewerResult(stdout: string, harness: HarnessName): boolean {
   return false;
 }
 
-class RefusedVerifierOutput extends Error {
+class RefusedReviewerOutput extends Error {
   constructor(reason: string, readonly file: string, readonly retryAllowed = true) { super(reason); }
 }
 
-function writeRefusedVerifierOutput(beadId: string, detail: Record<string, unknown>): string {
+function writeRefusedReviewerOutput(beadId: string, detail: Record<string, unknown>): string {
   // Diagnostics are NOT verdict Markdown: neither canonical <bead>.md readers
   // nor recursive *.md inventories may count a refused APPROVE as a verdict.
   const dir = path.join(VERDICTS_DIR, "refused");
@@ -422,8 +423,8 @@ function appendedCommitCount(repoRoot: string, fromTip: string, toTip: string): 
   }
 }
 
-function lastVerifierPhase(stdout: string): string {
-  let phase = "spawned verifier; waiting for output";
+function lastReviewerPhase(stdout: string): string {
+  let phase = "spawned reviewer; waiting for output";
   for (const line of stdout.split(/\r?\n/)) {
     let obj: any;
     try { obj = JSON.parse(line); } catch { continue; }
@@ -433,7 +434,7 @@ function lastVerifierPhase(stdout: string): string {
   return phase;
 }
 
-function verifierEventLogTail(stdout: string, stderr: string): string {
+function reviewerEventLogTail(stdout: string, stderr: string): string {
   const events: string[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -448,11 +449,11 @@ function verifierEventLogTail(stdout: string, stderr: string): string {
   return stderrTail ? `no JSON event lines on stdout; stderr tail:\n${stderrTail}` : "no JSON event lines reached stdout or stderr before timeout";
 }
 
-function writePartialVerifierOutput(beadId: string, stdout: string, stderr: string, phase: string, elapsedMs: number, timeoutMs: number): string {
+function writePartialReviewerOutput(beadId: string, stdout: string, stderr: string, phase: string, elapsedMs: number, timeoutMs: number): string {
   fs.mkdirSync(VERDICTS_DIR, { recursive: true });
   const partialFile = path.join(VERDICTS_DIR, `${beadId}.partial.md`);
   fs.writeFileSync(partialFile, [
-    `# Partial verifier output — ${beadId}`,
+    `# Partial reviewer output — ${beadId}`,
     ``,
     `- elapsed_ms: ${elapsedMs}`,
     `- timeout_ms: ${timeoutMs}`,
@@ -460,7 +461,7 @@ function writePartialVerifierOutput(beadId: string, stdout: string, stderr: stri
     ``,
     `## seat tool-call/event log tail`,
     "```jsonl",
-    verifierEventLogTail(stdout, stderr),
+    reviewerEventLogTail(stdout, stderr),
     "```",
     ``,
     `## stdout`,
@@ -552,14 +553,14 @@ function runOneShot(
       finalKillTimer.unref?.();
     };
     const firstOutputTimer = setTimeout(() => {
-      if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT", `no verifier output within ${opts.firstOutputTimeoutMs}ms`);
+      if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT", `no reviewer output within ${opts.firstOutputTimeoutMs}ms`);
     }, opts.firstOutputTimeoutMs);
     owned.onCancel = cancelTimers;
     const resetNoEventTimer = () => {
       if (noEventTimer) clearTimeout(noEventTimer);
       const stallMs = Math.min(opts.noEventTimeoutMs, opts.timeoutMs);
       const code = opts.timeoutMs <= opts.noEventTimeoutMs ? "ETIMEDOUT" : "WHEELHOUSE_NO_EVENT_TIMEOUT";
-      const message = code === "ETIMEDOUT" ? `timed out after ${opts.timeoutMs}ms with no verifier stream event` : `model stalled after ${opts.noEventTimeoutMs}ms with no verifier stream event`;
+      const message = code === "ETIMEDOUT" ? `timed out after ${opts.timeoutMs}ms with no reviewer stream event` : `model stalled after ${opts.noEventTimeoutMs}ms with no reviewer stream event`;
       noEventTimer = setTimeout(() => killFor(code, message), stallMs);
     };
     const collect = (chunks: Buffer[], current: () => number, setBytes: (n: number) => void, chunk: Buffer) => {
@@ -569,7 +570,7 @@ function runOneShot(
       resetNoEventTimer();
       const next = current() + chunk.length;
       if (next > opts.maxBuffer) {
-        killFor("ERR_CHILD_PROCESS_STDIO_MAXBUFFER", `verifier output exceeded ${opts.maxBuffer} bytes`);
+        killFor("ERR_CHILD_PROCESS_STDIO_MAXBUFFER", `reviewer output exceeded ${opts.maxBuffer} bytes`);
         return;
       }
       chunks.push(chunk);
@@ -591,8 +592,8 @@ export function expandTilde(p: string): string {
 
 /**
  * Same mechanism as adapter.ts's beadsActorFor, and for the same reason: the
- * ephemeral verifier's own pi process must carry BEADS_ACTOR=<verifier seat>
- * so its bd comment lands authored as the verifier, regardless of whether
+ * ephemeral reviewer's own pi process must carry BEADS_ACTOR=<reviewer seat>
+ * so its bd comment lands authored as the reviewer, regardless of whether
  * the operator or commander shell that invoked this dispatcher happened to
  * export it. WHEELHOUSE_BEADS_ACTOR_<SEAT> (seat name upper-cased, non
  * [A-Z0-9] turned into "_") overrides it; unset, the seat name is used as-is.
@@ -826,6 +827,7 @@ interface SeatEntry {
   provider?: string;
   model?: string;
   external?: boolean;
+  shadow?: boolean;
   account?: { dir: string; label?: string; authRoute?: string };
   allowedTools?: string;
   disallowedTools?: string;
@@ -923,9 +925,9 @@ function claudeOauthIsIdentity(configDir: string): boolean {
 function authRouteIdentity(name: string, entry: SeatEntry, authFile: string, harness: HarnessName, accountDir: string): boolean {
   const route = entry.account?.authRoute;
   if (route === "env") {
-    if (!entry.provider) die(`verifier seat "${name}" uses account.authRoute=env but has no provider in seats/seats.json`);
+    if (!entry.provider) die(`reviewer seat "${name}" uses account.authRoute=env but has no provider in seats/seats.json`);
     const envVar = providerEnvVar(entry.provider);
-    if (!envVar) die(`verifier seat "${name}" uses account.authRoute=env for provider ${JSON.stringify(entry.provider)}, but this verifier does not know that provider's env var`);
+    if (!envVar) die(`reviewer seat "${name}" uses account.authRoute=env for provider ${JSON.stringify(entry.provider)}, but this reviewer does not know that provider's env var`);
     return !!process.env[envVar];
   }
   if (harness === "claude-code") return claudeOauthIsIdentity(accountDir);
@@ -939,27 +941,68 @@ function verifyMarkerLive(seat: string): boolean {
   } catch { return false; }
 }
 
-function requireVerifierSeat(explicit: string | undefined, authorSeat: string): { name: string; entry: SeatEntry } {
+function requireReviewerSeat(explicit: string | undefined, authorSeat: string, promotionId?: string): { name: string; entry: SeatEntry } {
   const roster = readRoster();
+  for (const [name, entry] of Object.entries(roster)) {
+    if (entry.role === "reviewer" && entry.shadow !== undefined && typeof entry.shadow !== "boolean") die(`reviewer seat "${name}" has invalid shadow ${JSON.stringify(entry.shadow)} — use a boolean; absent means false`);
+  }
   if (explicit) {
     const entry = roster[explicit];
     if (!entry) die(`no seat named "${explicit}" in seats/seats.json`);
-    if (entry.role !== "verifier") {
-      die(`seat "${explicit}" has role "${entry.role}", not "verifier" — a verdict from a non-verifier seat is not what the graph will read it as`);
+    if (entry.role !== "reviewer") {
+      die(`seat "${explicit}" has role "${entry.role}", not "reviewer" — verify.ts reviews diffs; walk.ts uses verifier seats. If this is a legacy review seat, fix: set seats/seats.json seats[${JSON.stringify(explicit)}].role to "reviewer"`);
     }
+    if (entry.shadow === true && !promotionId) die(`reviewer seat "${explicit}" is shadow: true and never gates by default — the commander must record a per-outage promotion on this bead and supply --fallback-promotion <comment-id>; see runbooks/RUNNING_THE_LOOP.md: Gating reviewer down`);
     return { name: explicit, entry };
   }
-  const verifiers = Object.entries(roster).filter(([, e]) => e.role === "verifier" && !e.external);
-  if (verifiers.length === 0) die(`no seat with role "verifier" in seats/seats.json — add one (its account.dir must differ from every author's)`);
+  const reviewers = Object.entries(roster).filter(([, e]) => e.role === "reviewer" && !e.external);
+  if (reviewers.length === 0) {
+    const legacy = Object.entries(roster).filter(([, e]) => e.role === "verifier" && !e.external)
+      .map(([name]) => `seat "${name}": if it reviews diffs, fix: set seats/seats.json seats[${JSON.stringify(name)}].role to "reviewer"; keep "verifier" only for walk.ts`).join("\n");
+    die(`no seat with role "reviewer" in seats/seats.json — add one (its account.dir must differ from every author's)${legacy ? `\n${legacy}` : ""}`);
+  }
+  const gating = reviewers.filter(([, entry]) => entry.shadow !== true);
+  if (gating.length === 0) die(`no non-shadow reviewer eligible for automatic selection — shadow seats never gate by default; name a reviewer explicitly with a per-outage --fallback-promotion <comment-id> recorded by the commander on this bead`);
   const authorDir = canonicalDir(accountDirFor(authorSeat));
-  const distinct = verifiers.filter(([, e]) => e.account?.dir && canonicalDir(e.account.dir) !== authorDir);
-  if (distinct.length === 0) die(`verifier seat and author seat "${authorSeat}" resolve to the SAME account directory; waiting for a reviewer on a different subscription. Same directory means same auth.json means same account, and a verdict from the author's own account is not a verdict. Nothing was spawned.`);
+  const distinct = gating.filter(([, e]) => e.account?.dir && canonicalDir(e.account.dir) !== authorDir);
+  if (distinct.length === 0) die(`reviewer seat and author seat "${authorSeat}" resolve to the SAME account directory; waiting for a reviewer on a different subscription. Same directory means same auth.json means same account, and a verdict from the author's own account is not a verdict. Nothing was spawned.`);
   const free = distinct.find(([n]) => !verifyMarkerLive(n));
-  if (!free) { console.error(`all eligible verifier seats busy (${distinct.map(([n]) => n).join(", ")}) — retry later`); process.exit(4); }
+  if (!free) { console.error(`all eligible reviewer seats busy (${distinct.map(([n]) => n).join(", ")}) — retry later`); process.exit(4); }
   return { name: free[0], entry: free[1] };
 }
 
+interface FallbackPromotion { commentId: string; author: string; seat: string; tip: string; outage: string; distinctAccountBasis: string }
+function readFallbackPromotion(beadId: string, seat: string, tip: string, commentId: string): FallbackPromotion {
+  // Schema captured with bd comments <bead> --json. Actor attribution is a
+  // procedural check, not authentication: this remains a commander-facing CLI.
+  let rows: any;
+  try { rows = JSON.parse(execFileSync("bd", ["comments", beadId, "--json"], { cwd: ROOT, encoding: "utf8", timeout: 30000 })); }
+  catch (e: any) { die(`cannot read fallback promotion ${commentId} on bead ${beadId}: ${e.message}`); }
+  if (!Array.isArray(rows)) die("fallback promotion requires a JSON comment array from bd comments");
+  const matches = rows.filter((row: any) => row && String(row.id) === commentId);
+  if (matches.length !== 1) die(`fallback promotion comment ${commentId} not uniquely found on bead ${beadId}`);
+  const comment = matches[0];
+  if (comment.issue_id !== beadId) die("fallback promotion comment belongs to a different bead");
+  if (comment.author !== beadsActorFor("commander")) die(`fallback promotion must be recorded by commander actor ${JSON.stringify(beadsActorFor("commander"))}, not ${JSON.stringify(comment.author)}`);
+  const text = typeof comment.text === "string" ? comment.text.trim() : "";
+  if (!text.startsWith("FALLBACK GATE: ")) die("fallback promotion comment must be one FALLBACK GATE: <JSON> record; see runbooks/RUNNING_THE_LOOP.md: Gating reviewer down");
+  let value: any;
+  try { value = JSON.parse(text.slice("FALLBACK GATE: ".length)); }
+  catch { die("fallback promotion comment has invalid JSON"); }
+  const keys = ["seat", "tip", "outage", "distinctAccountBasis"];
+  if (!value || Array.isArray(value) || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify([...keys].sort()) || keys.some(k => typeof value[k] !== "string" || !value[k].trim() || value[k].length > 2000 || /[\u0000-\u001f\u007f\u2028\u2029]/.test(value[k]))) die("fallback promotion requires exactly nonempty single-line seat, tip, outage and distinctAccountBasis strings");
+  if (value.seat !== seat) die("fallback promotion names a different reviewer seat");
+  if (value.tip !== tip) die("fallback promotion is for a different tip; record a fresh promotion for this diff");
+  return { commentId, author: comment.author, ...value, outage: value.outage.trim(), distinctAccountBasis: value.distinctAccountBasis.trim() };
+}
+function fallbackLeadIn(promotion: FallbackPromotion): string {
+  return `FALLBACK GATE: promotion comment ${promotion.commentId}; outage: ${promotion.outage}; distinct-account basis: ${promotion.distinctAccountBasis}`;
+}
+
 function beadClaim(beadId: string): string {
+  // Best effort: embed the claim so the verdict file is self-contained. If
+  // bd is not reachable from here, the reviewer reads the bead itself — it
+  // has a shell; this dispatcher having one is a convenience, not a premise.
   // Contract validation reads selected JSON fields; reviewers still need the
   // full bd show record, including comments, labels and dependency context.
   try {
@@ -1147,12 +1190,12 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
   return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, batch: { tip: batchTip, main: main!, sha256: sha256! } };
 }
 
-function claimRequiresFullSweep(claim: string): boolean {
+// Wording controls extra reviewer citations, never execution of the gate.
+function claimRequiresSweepCitation(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
-async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
-  if (!claimRequiresFullSweep(claim)) return { required: false, rc: null, logPath: null, elapsedMs: 0, tip };
+export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
   // Separate from the reviewer's cwd: no writable graph or bd wrapper reaches
   // that process. Suites create their OWN fixture graphs, not one redirected
   // global graph (which would invalidate graph-isolation selftests).
@@ -1172,12 +1215,25 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   let rc = 1;
   let error: string | undefined;
   try {
+    const runner = path.join(scratchCwd, "seats", "selftest-sweep.sh");
+    if (!fs.existsSync(runner) || !fs.statSync(runner).isFile()) throw new Error("reviewed tip has no seats/selftest-sweep.sh runner; review is incomplete");
+    const hasSuites = fs.readdirSync(path.join(scratchCwd, "seats")).some((name) =>
+      !name.startsWith(".") && name.endsWith(".selftest.sh") && fs.statSync(path.join(scratchCwd, "seats", name)).isFile());
+    if (!hasSuites) throw new Error("reviewed tip has no runnable seats/*.selftest.sh suites; review is incomplete");
     if (!realBd) throw new Error("bd is required for writable scratch fixture graphs");
     // bd init in a linked worktree can select its shared ancestor graph;
     // it can also commit setup files. Keep both operations in a fresh nested
     // primary repository, then expose only that graph at the sweep root.
     const graphRoot = path.join(scratchCwd, ".wheelhouse-sweep-graph");
     fs.mkdirSync(graphRoot);
+    // Same switch/isolation as selftest_disable_bd_metrics: bd 1.2.2 uses
+    // HOME/.config/bd even when XDG_CONFIG_HOME differs. Never edit the
+    // operator's metrics preference or let an uploader inherit review cwd.
+    env.HOME = path.join(graphRoot, "home");
+    env.XDG_CONFIG_HOME = path.join(env.HOME, ".config");
+    fs.mkdirSync(env.HOME);
+    const metrics = spawnSync(realBd, ["metrics", "off"], { cwd: graphRoot, encoding: "utf8", env });
+    if (metrics.error || metrics.signal || metrics.status !== 0) throw new Error(`could not disable scratch bd metrics: ${metrics.error?.message || metrics.stderr || metrics.stdout}`);
     execFileSync("git", ["init", "--quiet", "-b", "main", graphRoot], { env, stdio: "pipe" });
     const graphDir = path.join(graphRoot, ".beads");
     const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graphRoot, encoding: "utf8", env: { ...env, PWD: graphRoot, BEADS_DIR: graphDir } });
@@ -1213,6 +1269,18 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
         child.once("close", (code) => finish(code ?? 128));
       });
     } finally { fs.closeSync(fd); }
+    // 0/1 are completed pass/fail results. Lock/setup refusal, interruption,
+    // and exec failure are incomplete; retain a bounded runner diagnostic.
+    if (rc > 1 && !error) {
+      const reader = fs.openSync(logPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+      try {
+        const st = fs.fstatSync(reader);
+        if (!st.isFile()) throw new Error("dispatcher sweep log is not a regular file");
+        const bytes = Buffer.alloc(Math.min(st.size, 512));
+        const n = fs.readSync(reader, bytes, 0, bytes.length, st.size - bytes.length);
+        error = `dispatcher runner could not complete (exit ${rc}): ${bytes.subarray(0, n).toString("utf8").trim().replace(/\s+/g, " ")}`;
+      } finally { fs.closeSync(reader); }
+    }
   } catch (e: any) { error = e.message; }
   try {
     const finalTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
@@ -1225,18 +1293,20 @@ async function runFullSweepIfRequired(claim: string, repoRoot: string, tip: stri
   return { required: true, rc, logPath, elapsedMs, tip, error };
 }
 
-function sweepPromptLines(sweep: SweepResult): string[] {
-  if (!sweep.required) return [];
+function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[] {
+  if (!sweep.logPath) return [];
   return [
     ``,
-    sweep.batch ? `Reused passing full sweep from a combined batch tree containing the reviewed tip:` : `Full selftest sweep run by the dispatcher at the exact reviewed tip before this verifier spawn:`,
+    sweep.batch ? `Reused passing full sweep from a combined batch tree containing the reviewed tip:` : `Full selftest sweep run by the dispatcher at the exact reviewed tip before this reviewer spawn:`,
     ...(sweep.batch ? [`- batch-tip: ${sweep.batch.tip}`, `- batch-main: ${sweep.batch.main}`, `- batch-log-sha256: ${sweep.batch.sha256}`] : []),
     `- tip: ${sweep.tip}`,
     `- command: bash seats/selftest-sweep.sh`,
     `- rc: ${sweep.rc}`,
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
-    sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. You must cite rc=0 and the exact log path in your final evidence. This reuses only the sweep, not another reviewer's judgment.` : `This sweep ran outside your model command timeout, in the detached scratch worktree for the reviewed tip, with a writable scratch bd graph when bd was available. You must cite rc=${sweep.rc} and the exact log path in your final evidence. If rc is not 0, do not approve the full-sweep portion of Done.`,
+    ...(sweep.error ? [`- error: ${sweep.error}`] : []),
+    sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. This reuses only the sweep, not another reviewer's judgment.` : `This dispatcher gate runs for every review, regardless of the bead's wording, outside your model command timeout in the detached scratch worktree at the reviewed tip. Its result is recorded with your verdict. If rc is not 0, you cannot approve.`,
+    ...(requireCitation ? [`You must cite rc=${sweep.rc} and the exact log path in your final evidence.`] : []),
   ];
 }
 
@@ -1269,14 +1339,14 @@ function pushAuthorityPromptLines(root: string): string[] {
   const reserved = sectionByHeading(text, "### Reserved list (principal-only, per action)");
   return [
     ``,
-    `Install push authority for this verifier run (read from ${p}):`,
+    `Install push authority for this reviewer run (read from ${p}):`,
     authority ?? `### Push authority and its scope\n<not found in ${p}>`,
     ``,
     reserved ?? `### Reserved list (principal-only, per action)\n<not found in ${p}>`,
   ];
 }
 
-function recordNoVerdict(beadId: string, branch: string, tip: string, verifierSeat: string, realBd: string, scratchCwd: string, stdout: string, stderr: string): never {
+function recordNoVerdict(beadId: string, branch: string, tip: string, reviewerSeat: string, realBd: string, scratchCwd: string, stdout: string, stderr: string): never {
   fs.mkdirSync(VERDICTS_DIR, { recursive: true });
   const reason = "Reviewer completed its turn without a live VERDICT line; no judgment was delivered. A collecting dispatch or human decision is owed, not a promise to return.";
   // Never overwrite a reviewer-authored interim, partial, or prior record.
@@ -1295,7 +1365,7 @@ function recordNoVerdict(beadId: string, branch: string, tip: string, verifierSe
   }
   const file = path.join(VERDICTS_DIR, `${beadId}.no-verdict.${crypto.randomUUID()}.md`);
   const relative = path.relative(ROOT, file);
-  const detail = ["outcome: no-verdict", `reason: ${reason}`, `bead: ${beadId}`, `branch: ${branch}`, `tip: ${tip}`, `verifier-seat: ${verifierSeat}`, `working record: ${relative}`,
+  const detail = ["outcome: no-verdict", `reason: ${reason}`, `bead: ${beadId}`, `branch: ${branch}`, `tip: ${tip}`, `verifier-seat: ${reviewerSeat}`, `working record: ${relative}`,
     ...preserved.map((p) => `interim/previous record preserved: ${path.relative(ROOT, p)}`)].join("\n");
   fs.writeFileSync(file, [`# No-verdict — ${beadId}`, "", detail, "", "> Working copy, not a verdict or an evidence home.", "", "## Reviewer stdout", "```jsonl", stdout, "```", "", "## Reviewer stderr", "```", stderr, "```", ""].join("\n"), { flag: "wx" });
   const posted = realBd ? spawnSync(realBd, ["comment", beadId, "--stdin"], {
@@ -1322,6 +1392,7 @@ async function main(): Promise<void> {
   let firstOutputTimeoutArg: string | undefined;
   let noEventTimeoutArg: string | undefined;
   let batchSweepArg: string | undefined;
+  let promotionArg: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--evidence") {
@@ -1335,6 +1406,10 @@ async function main(): Promise<void> {
       if (batchSweepArg !== undefined) die("--batch-sweep may be supplied only once");
       batchSweepArg = argv[++i];
       if (!batchSweepArg || batchSweepArg.startsWith("--")) die("--batch-sweep requires <passing-full-sweep-log>");
+    } else if (argv[i] === "--fallback-promotion") {
+      if (promotionArg !== undefined) die("--fallback-promotion may be supplied only once");
+      promotionArg = argv[++i];
+      if (!promotionArg || promotionArg.startsWith("--")) die("--fallback-promotion requires <comment-id>");
     } else if (argv[i] === "--timeout-ms") {
       timeoutArg = argv[++i];
       if (!timeoutArg || !/^\d+$/.test(timeoutArg)) die("--timeout-ms requires a positive integer millisecond budget");
@@ -1350,14 +1425,16 @@ async function main(): Promise<void> {
   }
   const earlyRepoRoot = resolveRepoRoot(repoArg);
   sweepStaleScratchWorktrees(earlyRepoRoot);
-  const [beadId, branch, authorSeat, verifierArg] = positional;
+  const [beadId, branch, authorSeat, reviewerArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [verifier-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [reviewer-seat] [--fallback-promotion <comment-id>] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
   }
   setVerifierGateBead(beadId);
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
-  if (verifierArg) validateSegment("seat name", verifierArg);
+  if (reviewerArg) validateSegment("seat name", reviewerArg);
+  if (promotionArg && !reviewerArg) die("--fallback-promotion requires an explicit reviewer-seat; automatic selection never promotes a shadow");
+  if (promotionArg) validateSegment("promotion comment id", promotionArg);
   const contract = checkBeadContract(ROOT, beadId);
   refuseUncontractedReview(beadId, contract.errors); // contract-gate: before reviewer identity or harness spawn
   const claim = [
@@ -1378,47 +1455,47 @@ async function main(): Promise<void> {
     die(e.message);
   }
 
-  const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg, authorSeat);
-  let verifierHarness: ReturnType<typeof harnessNameForSeat>;
+  const { name: reviewerSeat, entry } = requireReviewerSeat(reviewerArg, authorSeat, promotionArg);
+  let reviewerHarness: ReturnType<typeof harnessNameForSeat>;
   try {
-    verifierHarness = harnessNameForSeat(verifierSeat, entry);
+    reviewerHarness = harnessNameForSeat(reviewerSeat, entry);
   } catch (e: any) {
     die(e.message);
   }
-  if (!entry.account?.dir) die(`verifier seat "${verifierSeat}" has no account.dir in seats/seats.json`);
+  if (!entry.account?.dir) die(`reviewer seat "${reviewerSeat}" has no account.dir in seats/seats.json`);
 
   // --- account distinctness, before anything is spawned ---------------------
   const authorDir = canonicalDir(accountDirFor(authorSeat));
-  const verifierDir = canonicalDir(entry.account.dir);
-  if (authorDir === verifierDir) { // distinctness-gate
+  const reviewerDir = canonicalDir(entry.account.dir);
+  if (authorDir === reviewerDir) { // distinctness-gate
     die(
-      `verifier seat "${verifierSeat}" and author seat "${authorSeat}" resolve to the SAME account directory:\n` +
-        `        ${verifierDir}\n` +
+      `reviewer seat "${reviewerSeat}" and author seat "${authorSeat}" resolve to the SAME account directory:\n` +
+        `        ${reviewerDir}\n` +
         `      Same directory means same auth.json means same account, and a verdict\n` +
         `      from the author's own account is not a verdict. Nothing was spawned.`
     );
   }
 
-  if (!fs.existsSync(verifierDir)) {
+  if (!fs.existsSync(reviewerDir)) {
     die(
-      `verifier seat directory does not exist: ${verifierDir}\n` +
-        `      provision it first: seats/seat-env.sh <namespace> ${verifierSeat} "${ROOT}"`
+      `reviewer seat directory does not exist: ${reviewerDir}\n` +
+        `      provision it first: seats/seat-env.sh <namespace> ${reviewerSeat} "${ROOT}"`
     );
   }
-  const verifierAuthFile = path.join(verifierDir, "auth.json");
-  if (!authRouteIdentity(verifierSeat, entry, verifierAuthFile, verifierHarness, verifierDir)) {
+  const reviewerAuthFile = path.join(reviewerDir, "auth.json");
+  if (!authRouteIdentity(reviewerSeat, entry, reviewerAuthFile, reviewerHarness, reviewerDir)) {
     const envVar = entry.account?.authRoute === "env" && entry.provider ? providerEnvVar(entry.provider) : undefined;
-    const oauthLine = verifierHarness === "claude-code"
-      ? `      OAuth: CLAUDE_CONFIG_DIR="${verifierDir}" claude, then type /login and exit after the browser flow\n`
-      : `      OAuth: PI_CODING_AGENT_DIR="${verifierDir}" pi, then type /login in the REPL and /exit after the browser flow\n`;
-    const keyLine = verifierHarness === "claude-code"
-      ? `      oauth record: ${path.join(verifierDir, ".claude.json")} must contain oauthAccount\n`
-      : `      api_key: write ${verifierAuthFile}\n`;
+    const oauthLine = reviewerHarness === "claude-code"
+      ? `      OAuth: CLAUDE_CONFIG_DIR="${reviewerDir}" claude, then type /login and exit after the browser flow\n`
+      : `      OAuth: PI_CODING_AGENT_DIR="${reviewerDir}" pi, then type /login in the REPL and /exit after the browser flow\n`;
+    const keyLine = reviewerHarness === "claude-code"
+      ? `      oauth record: ${path.join(reviewerDir, ".claude.json")} must contain oauthAccount\n`
+      : `      api_key: write ${reviewerAuthFile}\n`;
     die(
-      `verifier seat "${verifierSeat}" has no identity — give it credentials once:\n` +
+      `reviewer seat "${reviewerSeat}" has no identity — give it credentials once:\n` +
         oauthLine +
         keyLine +
-        `      env: set account.authRoute=env and export ${envVar ?? "the provider env var"} in the shell that spawns this verifier`
+        `      env: set account.authRoute=env and export ${envVar ?? "the provider env var"} in the shell that spawns this reviewer`
     );
   }
 
@@ -1432,6 +1509,8 @@ async function main(): Promise<void> {
   } catch {
     die(`branch "${branch}" does not resolve to a commit in ${repoRoot} — nothing to verify`);
   }
+
+  const promotion = promotionArg ? readFallbackPromotion(beadId, reviewerSeat, tip, promotionArg) : undefined;
 
   // --- evidence floor checks, against the SHA the verdict is about ----------
   const evidence = checkEvidence(repoRoot, tip, evidencePaths);
@@ -1455,9 +1534,9 @@ async function main(): Promise<void> {
   // cwd is a throwaway scratch worktree, not ROOT and not a bead's
   // worktree — construction closing the confused-writer hazard, still
   // distinct from adapter.ts's per-bead worker seats (a worker's cwd needs
-  // to BE the bead; the verifier's cwd only needs to be A repository the
+  // to BE the bead; the reviewer's cwd only needs to be A repository the
   // branch's ref resolves from, which any worktree of this repo is). The
-  // deleted-path core.worktree leak came from the old verifier launch that
+  // deleted-path core.worktree leak came from the old reviewer launch that
   // exported GIT_DIR/GIT_WORK_TREE for this scratch worktree into the one-shot
   // reviewer process; any `git config --local core.worktree ...` the reviewer
   // ran with that environment wrote to the product repo's common config. That
@@ -1471,12 +1550,13 @@ async function main(): Promise<void> {
   const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
-  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runFullSweepIfRequired(claim, repoRoot, tip, realBd, basePath);
-  const sweepPrompt = sweepPromptLines(sweep);
+  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);
+  const requireSweepCitation = !!sweep.batch || claimRequiresSweepCitation(claim);
+  const sweepPrompt = sweepPromptLines(sweep, requireSweepCitation);
 
   // --- the one-shot ---------------------------------------------------------
   const prompt = [
-    `You are dispatched as the EPHEMERAL verifier for bead ${beadId}.`,
+    `You are dispatched as the EPHEMERAL reviewer for bead ${beadId}.`,
     ``,
     `Branch under review: ${branch}`,
     `Branch repository: ${repoRoot}`,
@@ -1485,6 +1565,13 @@ async function main(): Promise<void> {
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
     claim,
+    ...(promotion ? [
+      `Referenced per-outage promotion: bead ${beadId}, comment ${promotion.commentId}, recorded actor ${promotion.author}, reviewer ${reviewerSeat}, tip ${tip}.`,
+      `This is a FALLBACK GATE, not a SHADOW verdict. The full REVIEWER.md contract and all ordinary evidence/account/sweep gates still apply.`,
+      `Independently check the promotion's outage and distinct-account basis against every author; route any claim you cannot verify. The comment and actor field alone do not authenticate human assent.`,
+      `In your final answer, include exactly this plain-text lead-in outside fences before VERDICT/PUSH:`,
+      fallbackLeadIn(promotion),
+    ] : []),
     ...evidencePrompt,
     ...sourcePrompt,
     ...sweepPrompt,
@@ -1494,7 +1581,7 @@ async function main(): Promise<void> {
     `Your process cwd is a detached scratch worktree for the branch repository. Prefer relative searches from this cwd.`,
     `Do not recursively grep the live Branch repository path's seats/logs or seats/verdicts runtime dirs; if you must search that path, exclude seats/logs and seats/verdicts/*.partial*.`,
     `Confirm the branch still resolves to the SHA above before relying on your reading.`,
-    `Interview-mode bench is unavailable inside this verifier sandbox: do not run bench.sh --mode interview or any equivalent interview-mode bench here. If the bead's done depends on interview-mode claims, do not accept the author's retained output as your own proof; route those claims to named non-author seat ${verifierSeat} (distinct from author seat ${authorSeat}) for out-of-sandbox verification, and report that routing in the verdict evidence.`,
+    `Interview-mode bench is unavailable inside this reviewer sandbox: do not run bench.sh --mode interview or any equivalent interview-mode bench here. If the bead's done depends on interview-mode claims, do not accept the author's retained output as your own proof; route those claims to named non-author seat ${reviewerSeat} (distinct from author seat ${authorSeat}) for out-of-sandbox verification, and report that routing in the verdict evidence.`,
     `If the branch moves while you are reviewing but the pinned SHA remains an ancestor, render the verdict on the pinned SHA and name the move, for example:`,
     `VERDICT: APPROVE — at pinned tip ${tip}; branch has since moved to <new-tip> (<N> commits appended, history unrewritten)`,
     `PUSH: NOT CONSIDERED — branch moved; re-verify at <new-tip> before publish`,
@@ -1509,17 +1596,17 @@ async function main(): Promise<void> {
   ].join("\n");
 
   const oneShotPath = readonlyBdPath(ROOT, basePath, scratchCwd);
-  const env = oneShotEnvForHarness(verifierHarness, verifierDir, {
+  const env = oneShotEnvForHarness(reviewerHarness, reviewerDir, {
     ...process.env,
     PATH: oneShotPath,
     WHEELHOUSE_ROOT: ROOT,
     WHEELHOUSE_REAL_BD: realBd,
-    BEADS_ACTOR: beadsActorFor(verifierSeat),
+    BEADS_ACTOR: beadsActorFor(reviewerSeat),
   });
   const refusedOutputs: string[] = [];
   let attemptPrompt = prompt;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const oneShot = oneShotCommandForHarness(verifierHarness, brief, entry.provider, entry.model, attemptPrompt, entry.allowedTools, entry.disallowedTools);
+    const oneShot = oneShotCommandForHarness(reviewerHarness, brief, entry.provider, entry.model, attemptPrompt, entry.allowedTools, entry.disallowedTools);
     const startedAt = Date.now();
     const res = await runOneShot(oneShot.bin, oneShot.args, {
       cwd: scratchCwd,
@@ -1528,80 +1615,85 @@ async function main(): Promise<void> {
       firstOutputTimeoutMs,
       noEventTimeoutMs,
       maxBuffer: 64 * 1024 * 1024,
-      harness: verifierHarness,
-      marker: { seat: verifierSeat, bead: beadId },
+      harness: reviewerHarness,
+      marker: { seat: reviewerSeat, bead: beadId },
     });
     const elapsedMs = Date.now() - startedAt;
     const stdout = res.stdout ?? "";
     const stderr = res.stderr ?? "";
     const refuse = (reason: string, retryAllowed = true): never => {
-      const file = writeRefusedVerifierOutput(beadId, {
-        bead: beadId, branch, repoRoot, tip, verifierSeat, harness: verifierHarness,
+      const file = writeRefusedReviewerOutput(beadId, {
+        bead: beadId, branch, repoRoot, tip, verifierSeat: reviewerSeat, harness: reviewerHarness,
         provider: entry.provider, model: entry.model, attempt, at: new Date().toISOString(),
         reason, stdout, stderr, sweep,
         process: { status: res.status, signal: res.signal, error: res.error ? { message: res.error.message, code: res.error.code } : null },
       });
       refusedOutputs.push(file);
-      throw new RefusedVerifierOutput(reason, file, retryAllowed);
+      throw new RefusedReviewerOutput(reason, file, retryAllowed);
     };
 
     try {
       // Main's completed-turn-without-judgment outcome remains distinct from
       // refusing a delivered answer: preserve its record/notification/exit5.
-      if (res.outcome === "no-verdict") recordNoVerdict(beadId, branch, tip, verifierSeat, realBd, scratchCwd, stdout, stderr);
+      if (res.outcome === "no-verdict") recordNoVerdict(beadId, branch, tip, reviewerSeat, realBd, scratchCwd, stdout, stderr);
 
       if (res.error) {
         if ((res.error as any).code === "WHEELHOUSE_FIRST_OUTPUT_TIMEOUT") {
-          const phase = lastVerifierPhase(stdout);
-          const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, firstOutputTimeoutMs);
-          refuse(`verifier emitted no stdout/stderr within ${firstOutputTimeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial}). This is a first-output deadline, not the full verify timeout; retry with --first-output-timeout-ms <ms> if the verifier is legitimately silent that long.`);
+          const phase = lastReviewerPhase(stdout);
+          const partial = writePartialReviewerOutput(beadId, stdout, stderr, phase, elapsedMs, firstOutputTimeoutMs);
+          refuse(`reviewer emitted no stdout/stderr within ${firstOutputTimeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial}). This is a first-output deadline, not the full verify timeout; retry with --first-output-timeout-ms <ms> if the reviewer is legitimately silent that long.`);
         }
         if ((res.error as any).code === "WHEELHOUSE_NO_EVENT_TIMEOUT") {
-          const phase = lastVerifierPhase(stdout);
-          const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, noEventTimeoutMs);
-          refuse(`model stalled after ${noEventTimeoutMs}ms with no verifier stream event (elapsed ${elapsedMs}ms; last event: ${phase}; partial output: ${partial}). This is the no-event watchdog, not the full verify timeout; retry with --no-event-timeout-ms <ms> if the verifier is legitimately quiet that long.`);
+          const phase = lastReviewerPhase(stdout);
+          const partial = writePartialReviewerOutput(beadId, stdout, stderr, phase, elapsedMs, noEventTimeoutMs);
+          refuse(`model stalled after ${noEventTimeoutMs}ms with no reviewer stream event (elapsed ${elapsedMs}ms; last event: ${phase}; partial output: ${partial}). This is the no-event watchdog, not the full verify timeout; retry with --no-event-timeout-ms <ms> if the reviewer is legitimately quiet that long.`);
         }
         if ((res.error as any).code === "ETIMEDOUT") {
-          const phase = lastVerifierPhase(stdout);
-          const partial = writePartialVerifierOutput(beadId, stdout, stderr, phase, elapsedMs, timeoutMs);
+          const phase = lastReviewerPhase(stdout);
+          const partial = writePartialReviewerOutput(beadId, stdout, stderr, phase, elapsedMs, timeoutMs);
           refuse(`could not run ${oneShot.bin}: timed out after ${timeoutMs}ms (elapsed ${elapsedMs}ms; last phase: ${phase}; partial output: ${partial})`);
         }
         refuse(`could not run ${oneShot.bin}: ${res.error.message}`);
       }
       if (res.status !== 0) {
         refuse(
-          `${oneShot.bin} exited ${res.status ?? `signal ${res.signal}`} for verifier seat "${verifierSeat}"${accountLabelSuffix(entry)} — no verdict. stderr tail:\n` +
+          `${oneShot.bin} exited ${res.status ?? `signal ${res.signal}`} for reviewer seat "${reviewerSeat}"${accountLabelSuffix(entry)} — no verdict. stderr tail:\n` +
             stderr.slice(-2000)
         );
       }
 
       // --- parse: exactly one live VERDICT line, exactly one known value --------
       // A VERDICT quoted inside a triple-backtick Markdown fence is evidence text,
-      // not the verifier's machine verdict. Ordinary blockquotes are still live:
+      // not the reviewer's machine verdict. Ordinary blockquotes are still live:
       // only fences classify a line inert.
-      const verdictLines = liveVerdictCandidates(stdout, verifierHarness);
+      const verdictLines = liveVerdictCandidates(stdout, reviewerHarness);
       if (verdictLines.length === 0) {
-        process.stderr.write(`--- verifier output tail ---\n${stdout.slice(-2000)}\n`);
-        refuse(`verifier emitted no VERDICT: line outside fenced code blocks — per the brief that routes to a human, not to a verdict`);
+        process.stderr.write(`--- reviewer output tail ---\n${stdout.slice(-2000)}\n`);
+        refuse(`reviewer emitted no VERDICT: line outside fenced code blocks — per the brief that routes to a human, not to a verdict`);
       }
       if (verdictLines.length > 1) {
         refuse(
-          `verifier emitted ${verdictLines.length} live VERDICT: lines outside fenced code blocks — ambiguous, refusing to pick one. Candidates:\n` +
+          `reviewer emitted ${verdictLines.length} live VERDICT: lines outside fenced code blocks — ambiguous, refusing to pick one. Candidates:\n` +
             verdictLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
         );
       }
-      const pushLines = livePushCandidates(stdout, verifierHarness);
+      const pushLines = livePushCandidates(stdout, reviewerHarness);
       if (pushLines.length === 0) {
-        refuse(`verifier emitted no PUSH: line outside fenced code blocks — REVIEWER.md requires exactly one PUSH line beside the verdict`);
+        refuse(`reviewer emitted no PUSH: line outside fenced code blocks — REVIEWER.md requires exactly one PUSH line beside the verdict`);
       }
       if (pushLines.length > 1) {
         refuse(
-          `verifier emitted ${pushLines.length} live PUSH: lines outside fenced code blocks — ambiguous, refusing to pick one. Candidates:\n` +
+          `reviewer emitted ${pushLines.length} live PUSH: lines outside fenced code blocks — ambiguous, refusing to pick one. Candidates:\n` +
             pushLines.map((v) => `      line ${v.lineNumber}: ${v.normalized}`).join("\n")
         );
       }
       if (!/^PUSH:\s*(APPROVE\s+\S+(?:\s+(?![—-]\s+verified:).+?)?\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
         refuse(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> [detail] | HOLD — <why> [detail] | NOT CONSIDERED [detail]`);
+      }
+      if (promotion) {
+        const badges = liveLineCandidates(stdout, reviewerHarness, "FALLBACK GATE");
+        if (badges.length !== 1 || badges[0].normalized !== fallbackLeadIn(promotion)) refuse(`fallback review must include the exact live lead-in: ${fallbackLeadIn(promotion)}`);
+        if (/^VERDICT:\s*(?:APPROVE|BOUNCE|DISCOVER)\s+[—-]\s+SHADOW(?:\s*$|\s*[-:—(]|\s+ONLY\b)/i.test(verdictLines[0].normalized)) refuse("fallback verdict must be gating, not a SHADOW verdict");
       }
       // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
       // you are reviewing") belongs to APPROVE and to nothing else.
@@ -1661,10 +1753,24 @@ async function main(): Promise<void> {
         catch (error: any) { refuse(error?.message ?? String(error), false); }
         if (checked.batch!.sha256 !== sweep.batch.sha256) refuse("batch sweep log changed during review", false);
       }
-      if (sweep.required) {
-        if (verdict === "APPROVE" && sweep.rc !== 0) refuse(`APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}`);
-        const evidenceText = finalAssistantText(stdout, verifierHarness);
-        if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath!)) refuse(`verifier must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
+      // Setup/spawn/pinning failures are not completed BOUNCE/DISCOVER
+      // judgments. A cosmetic retry cannot repair a missing dispatcher run.
+      if (sweep.error && verdict !== "APPROVE") {
+        refuse(`INCOMPLETE review: dispatcher full sweep could not complete; rc=${sweep.rc}; log=${sweep.logPath ?? "missing"}; ${sweep.error}`, false);
+      }
+      // Fail closed before publishing authority, even if execution is ever
+      // bypassed again. NOT BENCHED cannot waive a missing/failed receipt.
+      if (verdict === "APPROVE") {
+        let receiptExists = false;
+        try { const st = fs.lstatSync(sweep.logPath!); receiptExists = st.isFile() && st.size > 0; } catch {}
+        if (!Number.isInteger(sweep.rc) || sweep.tip !== tip || !receiptExists) {
+          refuse(`INCOMPLETE review: cannot record APPROVE without a dispatcher full-sweep result at ${tip}; rc=${sweep.rc}; log=${sweep.logPath ?? "missing"}`, false);
+        }
+        if (sweep.rc !== 0 || sweep.error) refuse(`INCOMPLETE review: APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}${sweep.error ? `; ${sweep.error}` : ""}`, false);
+      }
+      if (sweep.logPath && requireSweepCitation) {
+        const evidenceText = finalAssistantText(stdout, reviewerHarness);
+        if (!evidenceText.includes(`rc=${sweep.rc}`) || !evidenceText.includes(sweep.logPath)) refuse(`reviewer must cite full-sweep rc=${sweep.rc} and log=${sweep.logPath} in its final evidence`);
       }
 
       // --- record, then report --------------------------------------------------
@@ -1678,7 +1784,13 @@ async function main(): Promise<void> {
         `- branch-repo: ${repoRoot}`,
         `- tip: ${tip}`,
         `- author-seat: ${authorSeat}`,
-        `- verifier-seat: ${verifierSeat} (${verifierDir})`,
+        `- verifier-seat: ${reviewerSeat} (${reviewerDir})`,
+        ...(promotion ? [
+          `- fallback-promotion-comment: ${promotion.commentId}`,
+          `- fallback-promotion-actor: ${promotion.author}`,
+          `- fallback-outage: ${promotion.outage}`,
+          `- fallback-distinct-account-basis: ${promotion.distinctAccountBasis}`,
+        ] : []),
         `- at: ${new Date().toISOString()}`,
         `- verdict: ${verdictShown}`,
         `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
@@ -1696,7 +1808,7 @@ async function main(): Promise<void> {
               `## Evidence checks`,
               ``,
               `Floor checks the dispatcher ran against ${tip} before the spawn`,
-              `(exists, bytes, type probe). The verifier's judgment of the content`,
+              `(exists, bytes, type probe). The reviewer's judgment of the content`,
               `is in its output below.`,
               ``,
               ...evidenceLines(evidence),
@@ -1710,7 +1822,7 @@ async function main(): Promise<void> {
               ...sourceSnapshots.map((s) => `- ${s.original} — mounted read-only at ${s.mountedAt} (${s.bytes} bytes copied)`),
             ]
           : []),
-        ...(sweep.required
+        ...(sweep.logPath
           ? [
               ``,
               `## Dispatcher full-sweep result`,
@@ -1724,7 +1836,7 @@ async function main(): Promise<void> {
             ]
           : []),
         ``,
-        `## Verifier output`,
+        `## Reviewer output`,
         ``,
         stdout.trimEnd(),
         ``,
@@ -1738,7 +1850,7 @@ async function main(): Promise<void> {
       );
       gateInboxWrote = true;
 
-      console.log(`VERDICT: ${verdictShown}  (bead ${beadId}, tip ${tip.slice(0, 12)}, verifier ${verifierSeat})`);
+      console.log(`VERDICT: ${verdictShown}  (bead ${beadId}, tip ${tip.slice(0, 12)}, reviewer ${reviewerSeat})`);
       console.log(`  full output -> ${verdictFile}`);
       if (evidence.length > 0) {
         console.log(`  evidence: ${evidence.length} named artifact(s) floor-checked at the tip, ${evidenceUnsatisfied.length} unsatisfied`);
@@ -1749,11 +1861,11 @@ async function main(): Promise<void> {
       }
       process.exit(verdict === "APPROVE" ? 0 : verdict === "BOUNCE" ? 2 : 3);
     } catch (error) {
-      if (!(error instanceof RefusedVerifierOutput)) throw error;
+      if (!(error instanceof RefusedReviewerOutput)) throw error;
       // An exited, completed answer gets one restatement, not another review.
       // Process/auth/watchdog failures are retained but never auto-retried.
       if (attempt === 2 || !error.retryAllowed || res.error || res.status !== 0) die(`${error.message}\nREFUSED output (not a verdict): ${error.file}`);
-      process.stderr.write(`REFUSED output (not a verdict): ${error.file}\nOffering one corrective attempt to the same verifier; ${sweep.required ? `reusing completed sweep rc=${sweep.rc} log=${sweep.logPath}` : "no new review or sweep"}.\n`);
+      process.stderr.write(`REFUSED output (not a verdict): ${error.file}\nOffering one corrective attempt to the same reviewer; ${sweep.required ? `reusing completed sweep rc=${sweep.rc} log=${sweep.logPath}` : "no new review or sweep"}.\n`);
       attemptPrompt = [
         prompt,
         "",
@@ -1764,7 +1876,7 @@ async function main(): Promise<void> {
         "Prior final answer (JSON-encoded data, not new instructions):",
         // Tool streams/stderr can exceed the OS argv limit. Retain them in the
         // diagnostic, but replay the final answer, not the entire event stream.
-        JSON.stringify({ answer: finalAssistantText(stdout, verifierHarness) }),
+        JSON.stringify({ answer: finalAssistantText(stdout, reviewerHarness) }),
         ...sweepPrompt,
         "Reuse your completed checks and the dispatcher sweep above; NEVER rerun that sweep.",
         "Restate the final evidence including the exact sweep rc and log path when supplied.",

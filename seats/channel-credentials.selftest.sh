@@ -8,7 +8,7 @@ SOURCE="${1:-$HERE}"
 command -v bun >/dev/null 2>&1 || { echo 'selftest: bun required' >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-channel-credentials-selftest.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
-trap 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"' EXIT
+selftest_install_cleanup_traps 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"'
 FAILED=0
 pass(){ printf '  ok    %s\n' "$*"; }
 # Do not print captured output on failure: a broken reader may expose a token.
