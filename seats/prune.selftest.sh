@@ -874,7 +874,12 @@ BIG_ID=$(ext_bead 'oversized build output'); ext_wt "$BIG_ID"
 printf 'target/\n' > "$EWTS/$BIG_ID/.gitignore"; git -C "$EWTS/$BIG_ID" add .gitignore; git -C "$EWTS/$BIG_ID" commit -q -m 'ignore target'; ext_merge "$BIG_ID"
 mkdir -p "$EWTS/$BIG_ID/target"
 if command -v mkfile >/dev/null 2>&1; then mkfile -n 21g "$EWTS/$BIG_ID/target/big"; else dd if=/dev/zero of="$EWTS/$BIG_ID/target/big" bs=1 count=0 seek=21g 2>/dev/null; fi
-BIG_APPARENT=$(stat -f %z "$EWTS/$BIG_ID/target/big" 2>/dev/null || stat -c %s "$EWTS/$BIG_ID/target/big"); BIG_ALLOC_K=$(du -sk "$EWTS/$BIG_ID/target/big" | awk '{print $1}')
+# A failed GNU stat BSD-style probe can still print filesystem information.
+# Keep captures separate so only the successful dialect supplies the size.
+if ! BIG_APPARENT=$(stat -f %z "$EWTS/$BIG_ID/target/big" 2>/dev/null); then
+  BIG_APPARENT=$(stat -c %s "$EWTS/$BIG_ID/target/big")
+fi
+BIG_ALLOC_K=$(du -sk "$EWTS/$BIG_ID/target/big" | awk '{print $1}')
 [ "$BIG_APPARENT" -ge 22000000000 ] && [ "$BIG_ALLOC_K" -lt 1048576 ] && pass "21 GB sparse build file allocates only ${BIG_ALLOC_K}K" || fail "sparse file apparent=$BIG_APPARENT allocated=${BIG_ALLOC_K}K"
 [ -z "$(git -C "$EWTS/$BIG_ID" status --porcelain --untracked-files=all)" ] && pass 'ignored build output leaves the tree clean' || fail 'tree not clean with ignored target/'
 ext_scan
