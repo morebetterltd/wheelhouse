@@ -277,10 +277,11 @@ cat > "$PROJ/seats/fixture.selftest.sh" <<'SH'
 set -eu
 printf 'legibility fixture sweep PASS\n'
 SH
+printf 'fixture.selftest.sh\n' > "$PROJ/seats/selftest-core.list"
 # A git repo: verify.ts resolves branches and reads evidence at the tip.
 ( cd "$PROJ" &&
   git init -q -b main &&
-  git add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+  git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
   git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
   git branch fleet/bead-rev && git branch fleet/bead-ev ) \
   || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
@@ -299,7 +300,7 @@ assert(record.includes('## Dispatcher full-sweep result'));
 const tip=record.match(/^- tip: ([0-9a-f]+)$/m)?.[1],log=record.match(/^- log: (.+)$/m)?.[1];
 assert(tip&&log);const st=fs.lstatSync(log);assert(st.isFile()&&st.size>0);
 const text=fs.readFileSync(log,'utf8');
-for(const expected of [`tip=${tip}`,`preparedTip=${tip}`,`finalTip=${tip}`,'command=bash seats/selftest-sweep.sh','legibility fixture sweep PASS','selftest-sweep: tier=full suites=1','\nrc=0\n'])assert(text.includes(expected),expected);
+for(const expected of [`tip=${tip}`,`preparedTip=${tip}`,`finalTip=${tip}`,'command=bash seats/selftest-sweep.sh','legibility fixture sweep PASS','selftest-sweep: tier=core suites=1 manifest=','\nrc=0\n'])assert(text.includes(expected),expected);
 assert.match(text,/^selftest-sweep: PASS \(1 suite\(s\), [0-9]+s\)$/m);
 console.log(`fixture dispatcher receipt: rc=0 tip=${tip} suites=1`);
 JS

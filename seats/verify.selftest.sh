@@ -498,6 +498,7 @@ SENTINEL='SENTINEL-TOKEN-9c2e'
 build_sweep_fixture() {   # real runner, one tiny tracked fixture suite
   local proj="$1"
   cp -f "$VERIFY_DIR/selftest-sweep.sh" "$proj/seats/selftest-sweep.sh" || exit 2
+  printf 'fixture.selftest.sh\n' > "$proj/seats/selftest-core.list"
   cat > "$proj/seats/fixture.selftest.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -540,7 +541,7 @@ EOF
   build_sweep_fixture "$proj"
   ( cd "$proj" &&
     git init -q -b main &&
-    git add seats/README.md seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add seats/README.md seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
@@ -606,7 +607,7 @@ EOF
   build_sweep_fixture "$umb"
   ( cd "$umb" &&
     git init -q -b main &&
-    git add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
   mkdir -p "$product/seats"
   selftest_copy_seat_runtime "$product" "$VERIFY_DIR"
@@ -614,7 +615,7 @@ EOF
   ( cd "$product" &&
     git init -q -b main &&
     mkdir -p evidence && printf 'product branch evidence\n' > evidence/bench.log &&
-    git add evidence/bench.log seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add evidence/bench.log seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build umbrella product git repo" >&2; exit 2; }
 }
@@ -793,6 +794,11 @@ if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-sea
   pass "installed-layout stub bench receives WHEELHOUSE_REAL_BD and writes only its scratch BEADS_DIR graph"
 else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/reviewer/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
 
+phase "0a1. required core/full tier selection and receipt gates"
+if bun "$HERE/fixtures/verify-tiers.ts" "$VERIFY_DIR" "$FIX" "$PROJ" "$HOME_FIX" "$RUN_PATH"; then
+  pass "tier selection, CLI receipts, core/full batch coverage and sensitive removal controls"
+else fail "core/full review tier regression"; fi
+
 phase "0a2. dispatcher-owned full sweep evidence for reviewer"
 SWEEP_PROJ="$FIX/sweep-proj"
 build_proj "$SWEEP_PROJ" sweep "$VERIFY"
@@ -844,7 +850,8 @@ exit "${SWEEP_FIXTURE_RC:-0}"
 SH
 chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
 # Detached evidence runs only committed files: include both runner companions.
-git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/slowed.selftest.sh
+printf 'slowed.selftest.sh\n' > "$SWEEP_PROJ/seats/selftest-core.list"
+git -C "$SWEEP_PROJ" add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/slowed.selftest.sh
 git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
@@ -953,9 +960,9 @@ RECEIPT_CONTROL="$FIX/receipt-control.ts"
 bun - "$VERIFY" "$RECEIPT_CONTROL" <<'JS' || exit 2
 import fs from 'node:fs';import assert from 'node:assert/strict';
 let s=fs.readFileSync(process.argv[2],'utf8');
-const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);';
+const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);';
 assert.equal(s.split(call).length,2);
-s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
+s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
 const start=s.indexOf('      // Setup/spawn/pinning failures are not completed BOUNCE/DISCOVER');
 const end=s.indexOf('      if (sweep.logPath && requireSweepCitation)',start);
 assert(start>0 && end>start);s=s.slice(0,start)+s.slice(end);
@@ -984,7 +991,7 @@ else fail "receipt regression negative control was insensitive (exit $CONTROL_RC
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
 cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
-bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep-old.lock" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-sweep-bypassed fleet/bead-1 worker-1

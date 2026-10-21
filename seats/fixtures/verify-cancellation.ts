@@ -59,7 +59,7 @@ for (const { phase, signal } of selected) {
   const verify = path.join(project, "seats/verify.ts"), text = fs.readFileSync(verify, "utf8");
   // Main may select reused batch evidence before the normal dispatcher call.
   // Observe its complete declaration without changing either execution path.
-  const anchors = text.match(/^  const sweep = [^\n]*\b(?:runFullSweepIfRequired\(claim, |runDispatcherFullSweep\()repoRoot, tip, realBd, basePath\);$/gm) ?? [];
+  const anchors = text.match(/^  const sweep = [^\n]*\b(?:runFullSweepIfRequired\(claim, |runDispatcherFullSweep\()repoRoot, tip, realBd, basePath(?:, selectedTier)?\);$/gm) ?? [];
   assert.equal(anchors.length, 1, "one dispatcher sweep declaration");
   const anchor = anchors[0];
   const observed = text.replace(anchor, '  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => fs.writeFileSync(process.env.CANCEL_CASE! + "/handler-returned", sig));\n  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "before-sweep\\n");\n' + anchor + '\n  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "after-sweep\\n");');
@@ -93,6 +93,7 @@ case "$1" in
  *) exit 1 ;;
 esac
 `, { mode: 0o755 });
+  fs.writeFileSync(path.join(project, "seats/selftest-core.list"), "idle.selftest.sh\n");
   fs.writeFileSync(path.join(project, "seats/idle.selftest.sh"), '#!/usr/bin/env bash\nset -eu\n[[ "$CANCEL_PHASE" = sweep* ]] || exit 0\nexec bash "$CANCEL_IDLE" suite\n', { mode: 0o755 });
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, CANCEL_CONTROLLER_PID: String(process.pid), WHEELHOUSE_SELFTEST_SWEEP_LOCK: targetLock };
   delete env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN;
