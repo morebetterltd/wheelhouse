@@ -172,3 +172,56 @@ left out. If nothing beyond a clone is needed, say that explicitly; a section
 left blank reads as unanswered rather than as none.
 -->
 
+### Linux cleanup identity regression target
+
+**Last passed: 2026-10-21 (UTC), template commit
+`a6467a26381074eb7a19bbe27603b5a5e721e9f2`.** This result includes that
+commit's stat-probe portability fix; it is not a passing result for its parent.
+
+The target runs the complete `seats/prune.selftest.sh`,
+`seats/cleanup.selftest.sh` and `seats/cleanup-host.selftest.sh` against the
+pinned checkout. All three exited 0, including the Linux libc FFI identity
+checks, real dispatch/close/cleanup ownership checks, and 22 host/adoption
+cases with 22 expected-failing removal controls. A printed footer alone is
+not success: retain each native status and separate stdout/stderr through EOF.
+
+- Host: Debian 12/bookworm arm64 container, glibc 2.36, native Linux tmpfs;
+  Docker 29.8.2 on an OrbStack Linux VM, kernel
+  `7.2.9-orbstack-00391-g2b298d05fbd4` (aarch64).
+- Base: `debian@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8`.
+- Guest tools: Bash 5.2.15, Git 2.39.5, Bun 1.2.22, bd 1.2.2, Node 22.19.0;
+  GNU coreutils 9.1, Perl 5.36, procps 4.0.2, lsof 4.95.0, tmux 3.3a, util-linux 2.38.1,
+  mawk 1.3.4 and xfsprogs 6.1.0. Provide native lsof at `/usr/sbin/lsof`;
+  provide `mkfile` via a wrapper executing the installed `xfs_mkfile` path
+  (not a symlink relocating that script away from its adjacent `xfs_io`).
+
+Rerun in a fresh isolated guest with a private Git clone/detached checkout,
+HOME, metrics-off state and container-local machine-id. Run as a non-root user
+(the measured UID:GID was 501:20), using writable **exec,nosuid,nodev tmpfs**
+for TMPDIR (2 GiB capacity); measured limits were 2 CPUs, 4 GiB memory,
+1024 PIDs and nofile 1024.
+Disconnect networking after provisioning; expose no ports, credentials or host
+Docker socket. On the host, admit the entire setup/run/teardown lifecycle via
+`bash seats/heavy-test.sh`; keep guest admission state inside the isolated
+container. Put scratch beneath the invoking bead's owned task root.
+
+Inside that prepared guest, from the clean pinned checkout:
+
+```bash
+set -e
+test "$(uname -s)" = Linux
+test "$(git rev-parse HEAD)" = a6467a26381074eb7a19bbe27603b5a5e721e9f2
+test -z "$(git status --porcelain=v1)"
+bash seats/prune.selftest.sh < /dev/null
+bash seats/cleanup.selftest.sh < /dev/null
+bash seats/cleanup-host.selftest.sh < /dev/null
+```
+
+Always remove the run's identity-checked container and any image it created;
+leave preexisting resources untouched. This run created no image and removed
+its container. Coverage is Linux arm64/glibc/native executable tmpfs; host-ID
+variations use the existing fixture providers. Other architectures, libcs,
+filesystems and simulator hardware are not declared covered. This regression
+target does not implement or claim completion of the generic built-artifact
+`wheelhouse/crew/bench.sh` stub.
+
