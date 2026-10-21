@@ -11,6 +11,16 @@ PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 
+if bun "$HERE/fixtures/runtime-copy-source.ts" "$HERE" "$FIX"; then
+  pass 'default runtime source ignores empty/planted caller cwd and copies complete bytes in under five seconds'
+else
+  fail 'default runtime source depends on caller cwd or incomplete runtime'
+fi
+if [ "${WHEELHOUSE_SELFTEST_RUNTIME_COPY_ONLY:-0}" = 1 ]; then
+  [ "$FAIL" = 0 ] || exit 1
+  echo 'selftest-lib.selftest: PASS (runtime source only)'; exit 0
+fi
+
 if bun "$HERE/fixtures/scratch-ownership.ts" lsof "$HERE/.." "$FIX"; then pass 'lsof capture leaves old pid file intact'; else fail 'lsof scratch ownership collision'; fi
 
 # Exercise a worker caller even when this suite is launched by the commander.

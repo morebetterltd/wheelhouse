@@ -140,11 +140,41 @@ Read it. If nothing changed in `contracts/`, you are already current and there i
 
 ## 3. Copy what the template owns — the nine contracts by name, the runbooks, and the seats machinery
 
+### Designer becomes producer
+
+Run this **before the copy block below**, so step 4 splices into the renamed target and keeps your own `## This project` half byte-for-byte. If both names exist, stop and reconcile them by hand; never overwrite either territory.
+
+```bash
+check_producer_rename() {
+  test ! -e wheelhouse/crew/DESIGNER.md || {
+    echo "STOP: legacy planning brief remains; rename it before copying and splicing the producer brief" >&2
+    return 1
+  }
+}
+if [ -e wheelhouse/crew/DESIGNER.md ]; then
+  [ ! -e wheelhouse/crew/PRODUCER.md ] || { echo "STOP: both planning briefs exist; reconcile their territory before renaming" >&2; exit 1; }
+  git mv wheelhouse/crew/DESIGNER.md wheelhouse/crew/PRODUCER.md
+fi
+if [ -e seats/seats.json ] || [ -L seats/seats.json ]; then
+  bun -e 'import fs from "node:fs"; const p="seats/seats.json", r=JSON.parse(fs.readFileSync(p,"utf8")); for(const [name,s] of Object.entries(r.seats ?? {})) if(s.role === "designer") { s.role="producer"; console.log("producer role changed: " + name); } fs.writeFileSync(p,JSON.stringify(r,null,2)+"\n");'
+else
+  echo "producer roster rewrite skipped: seats/seats.json absent (pre-seats install)"
+fi
+```
+
+A pre-seats install with no `seats/seats.json` skips only the roster rewrite, reporting that once; it does not invent a roster. Choose and record the required producer after copying the seats machinery and before step 5's roster check. An existing but unreadable or malformed roster still fails rather than being treated as absent.
+
+The roster rewrite changes roles, not seat keys or account directories. Update your `wheelhouse/fleet/SEATS.md` roster and declined-standing-session rows and your install's `CLAUDE.md` to say producer. The producer is required: if the install never took a designer, choose a standing producer or record `"producer": {"role": "producer", "external": true, "runtime": "commander-subagent"}` under `seats`, per BOOTSTRAP question 7. A subagent reads PRODUCER.md; the commander never writes intent or outcomes. For a Claude Code standing producer, adopt the read/graph-only tool limits in `seats/seats.json.example`; for Pi and Codex the brief is the limit. After copying the seats machinery, run `bun seats/roster.ts check` and repair any refusal before dispatch.
+
+Skipping the rename is data loss in disguise: the absent-file splice copies PRODUCER.md whole, while DESIGNER.md is left behind holding the only copy of your territory. Step 5 calls `check_producer_rename` and refuses that state. Keep this function in the upgrade shell; in a fresh shell, re-run this block before step 5. An install with no old brief gets PRODUCER.md whole via the ordinary absent-file path, with its empty template project scaffold.
+
+### Copy the contracts
+
 ```bash
 cp "$TEMPLATE/contracts/WORKER.md"   wheelhouse/fleet/WORKER.md.new
 cp "$TEMPLATE/contracts/SEATS.md"    wheelhouse/fleet/SEATS.md.new
 cp "$TEMPLATE/contracts/REVIEWER.md" wheelhouse/crew/REVIEWER.md.new
-cp "$TEMPLATE/contracts/DESIGNER.md" wheelhouse/crew/DESIGNER.md.new
+cp "$TEMPLATE/contracts/PRODUCER.md" wheelhouse/crew/PRODUCER.md.new
 cp "$TEMPLATE/contracts/VERIFIER.md" wheelhouse/crew/VERIFIER.md.new
 cp "$TEMPLATE/contracts/RESEARCHER.md" wheelhouse/crew/RESEARCHER.md.new
 mkdir -p wheelhouse/research/ # RESEARCHER.md cites this as the durable report destination.
@@ -154,6 +184,93 @@ cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 ```
 
 **Nine `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade. `RESEARCHER.md` is new in template upgrades that carry researcher seats; copy it whole, then fill only its `## This project` half if this install takes a researcher. Existing `seats/seats.json` rosters do not need a `skills` field; when present it is an optional array of skill directories that the adapter tilde-expands and passes as Pi `--skill`, stopping on a missing path. This list matches `BOOTSTRAP.md` step 2's — nine briefs plus the stub it alone copies — and step 5's integrity check is what catches the two drifting apart.
+
+### Adopt the host-wide heavy-test admission without replacing your bench
+
+After copying `seats/` below, preserve your implemented bench and add this prologue before any build, fixture or test work in `wheelhouse/crew/bench.sh` (Bash):
+
+```bash
+WHEELHOUSE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+. "$WHEELHOUSE_ROOT/seats/heavy-test.sh"
+```
+
+Do not copy the stub over an implemented bench. For a non-Bash bench, keep its public Bash entry point and delegate to the implementation via `bash "$WHEELHOUSE_ROOT/seats/heavy-test.sh" <command> [args...]`. Until adoption, workers must wrap direct bench/build/test commands that way. Updated `verify.ts` admits its entire review, so even a legacy bench called from it shares the FIFO. Nested sweeps reuse verified ancestor admission. Upgrade all contenders while the host lock is idle; every install uses the same default `/tmp/wheelhouse-selftest-sweep.lock`, not a project-specific override.
+
+If the install has a pressure guard, audit its brake action separately: it may block **new** heavy work, but must leave admitted reviews, sweeps, benches and their owning worker process trees running (or suspend/resume them). Do not signal a running review to implement a load brake. The template does not replace local guard scripts or thresholds. `WHEELHOUSE_HEAVY_TEST_PAUSE` defaults to the install's `seats/run/host-guard-pause`. For a Mac-wide brake, choose **one guard as the marker's writer**; two independent guards must not clear one another's brake. On the same Mac/account, add this to that guard, each bench **before** its source line above, and every fleet/verification launcher environment:
+
+```bash
+export WHEELHOUSE_HEAVY_TEST_PAUSE=/tmp/wheelhouse-heavy-test.pause
+# Keep the canonical FIFO; remove old per-install lock overrides everywhere.
+unset WHEELHOUSE_SELFTEST_SWEEP_LOCK WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER
+```
+
+In that guard, replace the old install-local pressure-marker assignment (often `BRAKE=...`) so its existing marker-presence tests and calm/release conditions inspect the shared marker too:
+
+```bash
+BRAKE="$WHEELHOUSE_HEAVY_TEST_PAUSE"
+```
+
+Do not leave a later assignment resetting `BRAKE` to the old path. In the designated guard's existing sustained-pressure branch, replace the pressure-pause/cancellation action with:
+
+```bash
+: > "$WHEELHOUSE_HEAVY_TEST_PAUSE"  # block admission, NOT a signal to a process
+```
+
+In its existing sustained-calm release branch:
+
+```bash
+rm -f "$WHEELHOUSE_HEAVY_TEST_PAUSE"
+```
+
+Also delete any old unconditional **“suite without a selftest-sweep ancestor”** kill loop (often labelled “suite outside the host lock” and implemented with `pgrep`, an ancestry walk and `kill_tree`). Do not merely exempt reviews from the pressure-pause action: that separate loop will still kill a direct suite legitimately admitted by `selftest-lib.sh` or `heavy-test.sh`. Sweep ancestry is no longer the ownership proof; the installed admission helpers validate the actual host token and FIFO head. Do not replace the old loop with another argv/cwd/process-name heuristic. Keep the pressure sampler and marker publication/release branches, not the obsolete enforcement loop.
+
+Leave the install's load/memory/swap thresholds configurable and its hysteresis intact. Other guards may observe the shared marker, but only the designated writer clears it. Remove pressure-triggered `adapter stop`, review/sweep/bench TERM/KILL, or an overnight-pause call that stops their worker process trees; marker admission replaces those actions, not the operator's explicit cancel command. Exporting a variable inside the guard does **not** configure already-running seat/verify launchers: put the same export in their launch environment and restart/reload them only through the install's normal safe upgrade procedure. A separate account needs an agreed shared path and permissions, not a private `$TMPDIR` marker.
+
+#### Check two real installs on one Mac
+
+First run `bash seats/heavy-test.selftest.sh` in each upgraded install. It proves two-install FIFO contention and mid-run brake completion with isolated idle fixtures; it does not fire a production guard. Then check the two **installed** entry points on the actual canonical FIFO. Use two terminals under the same Mac account. Set absolute `INSTALL_A`, `INSTALL_B`, `CONTAINER`, and an existing maintenance `CHECK_BEAD` whose owned scratch directory was allocated normally. In both terminals:
+
+```bash
+test -r "$INSTALL_A/seats/heavy-test.sh" && test -r "$INSTALL_B/seats/heavy-test.sh" || exit 1
+test -d "$CONTAINER/.wheelhouse-runs/$CHECK_BEAD" || exit 1
+CHECK="$CONTAINER/.wheelhouse-runs/$CHECK_BEAD/admission-check"
+mkdir -p "$CHECK"
+export WHEELHOUSE_HEAVY_TEST_PAUSE=/tmp/wheelhouse-heavy-test.pause
+unset WHEELHOUSE_SELFTEST_SWEEP_LOCK WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER
+```
+
+Use a fresh `CHECK` subdirectory for each repetition; stale ready files are not readiness. Terminal A:
+
+```bash
+cd "$INSTALL_A" || exit 1
+bash seats/heavy-test.sh bash -c '
+  printf "A admitted\\n"; : > "$1/A.admitted"
+  while [ ! -e "$1/release-A" ]; do sleep 1; done
+  printf "A finished\\n"
+' check "$CHECK" > "$CHECK/A.out" 2> "$CHECK/A.err"
+printf 'A exit=%s\\n' "$?"
+```
+
+Wait for `$CHECK/A.admitted` to exist (A may itself be behind another fleet), then terminal B:
+
+```bash
+cd "$INSTALL_B" || exit 1
+bash seats/heavy-test.sh bash -c '
+  printf "B admitted\\n"; : > "$1/B.admitted"
+' check "$CHECK" > "$CHECK/B.out" 2> "$CHECK/B.err"
+printf 'B exit=%s\\n' "$?"
+```
+
+From an observer terminal with the same `CHECK`, expect A's ready file, a B wait diagnostic naming `/private/tmp/wheelhouse-selftest-sweep.lock` (or `/tmp/...`), and **no** B ready file:
+
+```bash
+test -f "$CHECK/A.admitted" && test -s "$CHECK/B.err" || exit 1
+grep 'waiting for host-wide lock.*wheelhouse-selftest-sweep.lock.*queue_position=' "$CHECK/B.err" || exit 1
+test ! -e "$CHECK/B.admitted" || { echo 'FAIL: installs overlapped'; exit 1; }
+: > "$CHECK/release-A"
+```
+
+Both terminals must then exit 0; `A.out` contains `A finished`, and `B.out` contains `B admitted` with its ready file present. Repeat with A/B roles reversed and a fresh check directory. A wait that ends in an error or timeout is not a pass. To test an installed sweep against the held command, use `WHEELHOUSE_SELFTEST_SWEEP_PATTERN=<absolute-idle-probe.selftest.sh> bash seats/selftest-sweep.sh` in B with an idle probe under the same owned scratch; the automatic selftest already checks this direction and its reverse. Do not set or clear the production brake marker, stop a service, or launch a real application build just to perform this check. A production brake already set means wait for its designated guard to release it.
 
 ### The seats machinery comes too
 
@@ -175,6 +292,8 @@ for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
 done
 seats/install-fleet-pre-push-guard.sh || { echo "STOP: fleet pre-push guard installation failed" >&2; exit 1; }
 ```
+
+The copy does not remove retired selftests: existing installs must delete `seats/adapter-cwd.selftest.sh`, `seats/pid-ownership.selftest.sh`, and `seats/pipefail.selftest.sh` from their `seats/` directory; the source-resolution check now lives in `selftest-lib.selftest.sh`, and behavioural PID-reuse coverage remains in `adapter.selftest.sh`.
 
 The installer above protects both the container and the separate product Git root named by `product-repo=` in `wheelhouse/.template-source`. Preserve that value during upgrades; for an older install using the default, correct it before running the installer if the product is separate (absolute paths or paths relative to the install root are accepted). Each repository keeps its own hooks location, including a shared `.beads/hooks`, and its previous pre-push hook. Re-running refreshes the guard path without nesting wrappers or losing the previous hook. The product does not need a `seats/` directory: both hooks invoke the guard shipped with this install. Review the per-repository installation output; invalid/missing product roots stop the command rather than silently leaving them unguarded. The guard remains a bypassable tripwire, not credential isolation.
 
@@ -334,7 +453,7 @@ targets=(
   wheelhouse/fleet/WORKER.md
   wheelhouse/fleet/SEATS.md
   wheelhouse/crew/REVIEWER.md
-  wheelhouse/crew/DESIGNER.md
+  wheelhouse/crew/PRODUCER.md
   wheelhouse/crew/VERIFIER.md
   wheelhouse/crew/BENCH.md
   wheelhouse/GRAPH.md
@@ -384,7 +503,7 @@ splice() {   # splice <new-contract> <your-file>
 splice wheelhouse/fleet/WORKER.md.new   wheelhouse/fleet/WORKER.md
 splice wheelhouse/fleet/SEATS.md.new    wheelhouse/fleet/SEATS.md
 splice wheelhouse/crew/REVIEWER.md.new  wheelhouse/crew/REVIEWER.md
-splice wheelhouse/crew/DESIGNER.md.new  wheelhouse/crew/DESIGNER.md
+splice wheelhouse/crew/PRODUCER.md.new  wheelhouse/crew/PRODUCER.md
 splice wheelhouse/crew/VERIFIER.md.new  wheelhouse/crew/VERIFIER.md
 splice wheelhouse/crew/RESEARCHER.md.new wheelhouse/crew/RESEARCHER.md
 splice wheelhouse/crew/BENCH.md.new     wheelhouse/crew/BENCH.md
@@ -402,6 +521,13 @@ Read the lines and decide. A `not in yours` heading that is genuinely new is a s
 Do not split on the first occurrence of the words "this project", and do not split on a mention inside a sentence. A naive match has destroyed a contract file this way once already — it deleted a licensing-compliance rule while every automated check still passed. `BOOTSTRAP.md` states the same rule for the same reason; this is the operation it was stating it for.
 
 ## 5. Re-verify — the same checks the install runs
+
+- **The producer rename completed.** In the shell that ran the rename subsection, run the guard defined there. If you opened a new shell, run that subsection first; a missing function is not a passed check.
+
+  ```bash
+  check_producer_rename || { echo "STOP: producer rename not verified" >&2; exit 1; }
+  bun seats/roster.ts check || { echo "STOP: required producer missing or roster unreadable" >&2; exit 1; }
+  ```
 
 - **Contract integrity**, from `BOOTSTRAP.md`. Expect OK for all nine contract `.md` files, and no `FAIL` lines after them. That check is also this runbook's backstop: a contract missing from the copy list above never installs, and the check says so rather than passing quietly. Do not skip it on the grounds that the copies looked right. A FAIL now means the splice went wrong, or that this runbook's lists have fallen behind the template's — check that every file the integrity check compares also appears in steps 3 and 4 above before concluding anything about your splice.
 - **Your bench is the file you had before, whichever file that was.** Step 3 copies nine named `.md` files, the contents of `runbooks/`, and the template's `seats/` files, and none of those lists can reach `wheelhouse/crew/bench.sh` — so the check is that nothing reached it, and it reads the same in both states:
@@ -492,6 +618,23 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 - every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install;
 - the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
 - installs predating `github-report=` have no line, which the publisher reads as off; append `github-report=off` and `github-report-routes=` to `wheelhouse/.template-source` so the record is explicit, and point at `BOOTSTRAP.md`'s publishing question if the principal wants it on.
+
+### Dispatch refuses work that is not a contract
+
+After copying `seats/`, run the audit below. Use step 3's complete runtime copy, not `contract.ts` alone: Signal checks also load `intake.ts` and its shared helpers. This keeps the audit on the same intake implementation as dispatch and trace.
+
+```bash
+contract_audit_rc=0
+bun seats/contract.ts audit || contract_audit_rc=$?
+case "$contract_audit_rc" in
+  0) ;;
+  1) echo "Contract audit found legacy beads: repair their Intent: and Outcomes: before dispatch; continuing the upgrade sweep." ;;
+  *) echo "STOP: contract audit could not read the graph (exit $contract_audit_rc); repair the read failure before continuing." >&2
+     exit "$contract_audit_rc" ;;
+esac
+```
+
+Each listed open or in_progress bead needs its `Intent:` and `Outcomes:` sections, with a consumer, surface and matching check per outcome, before the fleet can dispatch it. Use `wheelhouse/GRAPH.md`, **Every bead is a contract**, for the grammar; `bun seats/contract.ts check <bead-id>` prints every defect for one bead. Audit exits 1 for invalid contracts and 3 if the graph cannot be read. The block reports legacy contracts without aborting the rest of the upgrade sweep, including under `set -e`; repair them before dispatch. An unreadable graph still stops the upgrade: repair the read failure instead of treating it as an empty queue. `verify.ts` also refuses uncontracted work with exit 6; `WHEELHOUSE_DISPATCH_FORCE=1` does not bypass the dispatch gate. Signal and Skills are parsed here; their refusal gates are separate upgrades.
 
 ### Adopt the autonomy mandate in existing installs
 

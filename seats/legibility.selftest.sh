@@ -36,6 +36,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -uo pipefail   # deliberately not -e: the injected failures are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 SRC="${1:-$HERE}"
 # The logger is a launched child, not an ES import reachable by the scanner.
 SEED_TS="floor.ts adapter.ts verify.ts recover.ts seat-event-log.ts"
@@ -269,7 +270,7 @@ done
 
 # Every review must run the dispatcher gate. Track the actual runner and its
 # companions plus one tiny suite; an empty fixture tip is not an exemption.
-for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts; do
+for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts heavy-test.sh; do
   cp -f "$SRC/$f" "$PROJ/seats/$f" || exit 2
 done
 cat > "$PROJ/seats/fixture.selftest.sh" <<'SH'
@@ -299,7 +300,8 @@ assert(record.includes('## Dispatcher full-sweep result'));
 const tip=record.match(/^- tip: ([0-9a-f]+)$/m)?.[1],log=record.match(/^- log: (.+)$/m)?.[1];
 assert(tip&&log);const st=fs.lstatSync(log);assert(st.isFile()&&st.size>0);
 const text=fs.readFileSync(log,'utf8');
-for(const expected of [`tip=${tip}`,`preparedTip=${tip}`,`finalTip=${tip}`,'command=bash seats/selftest-sweep.sh','legibility fixture sweep PASS','selftest-sweep: PASS (1 suite(s))','\nrc=0\n'])assert(text.includes(expected),expected);
+for(const expected of [`tip=${tip}`,`preparedTip=${tip}`,`finalTip=${tip}`,'command=bash seats/selftest-sweep.sh','legibility fixture sweep PASS','selftest-sweep: tier=full suites=1','\nrc=0\n'])assert(text.includes(expected),expected);
+assert.match(text,/^selftest-sweep: PASS \(1 suite\(s\), [0-9]+s\)$/m);
 console.log(`fixture dispatcher receipt: rc=0 tip=${tip} suites=1`);
 JS
 }

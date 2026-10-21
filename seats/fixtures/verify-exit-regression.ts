@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import identity from "./verify-child-identity.cjs";
 
 const [here, root] = process.argv.slice(2);
 const dir = path.join(root, "killed-before-readiness");
@@ -14,7 +15,8 @@ fs.writeFileSync(ledger, "");
 const child = spawn("bash", [path.join(here, "verify.selftest.sh")], {
   env: { ...process.env, TMPDIR: path.join(dir, "tmp"), WHEELHOUSE_SKIP_REAL_PI: "1",
     WHEELHOUSE_VERIFY_EXIT_BEFORE_READY_ONLY: "1", WHEELHOUSE_TEST_KILL_FIXTURE: "bead-sweep",
-    WHEELHOUSE_TEST_CHILD_LEDGER: ledger },
+    WHEELHOUSE_TEST_CHILD_LEDGER: ledger,
+    WHEELHOUSE_TEST_CHILD_IDENTITY: path.join(here, "fixtures/verify-child-identity.cjs") },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let out = "", err = "", closed = false, stdoutEOF = false, stderrEOF = false;
@@ -53,15 +55,25 @@ const killed = records.find(e => e.event === "exit" && e.name === "fixture" && e
 assert(killed && killed.code === null && killed.signal === "SIGKILL", "actual process exit must decide the leg");
 assert(records.some(e => e.event === "fixture-failure" && e.fixture === "bead-sweep" && !e.ready && !e.armed), "killed process must precede readiness and watchdog arming");
 assert(records.some(e => e.event === "spawn" && e.name === "holder"), "regression must actually start the file waiter");
-const pids = [...new Set(records.filter(e => ["spawn", "model"].includes(e.event)).map(e => e.pid))];
-assert(pids.length >= 4, "fixture/model/holder subjects must exist before checking their absence");
-for (const pid of pids) {
-  assert(Number.isInteger(pid) && pid > 1);
-  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, `surviving fixture child ${pid}`);
+const subjects = records.filter(e => ["spawn", "model"].includes(e.event));
+assert(subjects.length >= 4, "fixture/model/holder subjects must exist before checking their absence");
+for (const launch of records.filter(e => e.event === "launch")) {
+  assert(subjects.some(e => e.event === "spawn" && e.pid === launch.pid && e.launchId === launch.launchId && e.name === launch.name && e.fixture === launch.fixture), "launched child did not publish its pre-payload identity");
 }
-console.log(JSON.stringify({ event: "pre-readiness-exit-proof", suite: { ...res, stdoutEOF, stderrEOF }, killed, childPids: pids,
-  nativeChecks: pids.map(pid => ({ pid, result: "ESRCH" })), rescued: [...rescued],
+// Retain every generation, not just unique PID numbers. A long real-suite leg
+// can wrap the host PID space before it gets here. Publish native evidence
+// before the assertion so a genuine survivor is diagnosable on first failure.
+const nativeChecks = subjects.map(e => {
+  assert.equal(e.identity?.pid, e.pid, "ledger child lacks its spawn identity");
+  const check = identity.inspect(e.identity);
+  console.log(JSON.stringify({ event: "child-native-observation", name: e.name ?? "model", ...check }));
+  return check;
+});
+fs.writeFileSync(path.join(dir, "native-identities.json"), JSON.stringify(nativeChecks, null, 2) + "\n");
+identity.assertNoSurvivors(nativeChecks);
+console.log(JSON.stringify({ event: "pre-readiness-exit-proof", suite: { ...res, stdoutEOF, stderrEOF }, killed, childPids: subjects.map(e => e.pid),
+  nativeChecks, rescued: [...rescued],
   namedFailure: out.split("\n").find(line => line.includes("FAIL fixture bead-sweep:")),
   holderCleanup: records.filter(e => e.event === "holder-cleanup").map(({ release, ...e }) => e) }));
 assert.equal(rescued.size, 0, "FAIL pre-readiness cleanup left a file waiter unreleased (rescued to avoid hanging the regression)");
-console.log(`PASS killed-before-readiness: real verify suite exit=1; FAIL fixture bead-sweep exit=137 signal=SIGKILL; ${pids.length} recorded children gone; both EOF; no rescue`);
+console.log(`PASS killed-before-readiness: real verify suite exit=1; FAIL fixture bead-sweep exit=137 signal=SIGKILL; ${subjects.length} child identities no longer live; both EOF; no rescue`);

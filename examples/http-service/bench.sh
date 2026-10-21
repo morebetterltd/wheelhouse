@@ -15,6 +15,10 @@
 #
 set -euo pipefail
 
+# When installed at wheelhouse/crew/bench.sh; do this before any heavy work.
+WHEELHOUSE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+. "$WHEELHOUSE_ROOT/seats/heavy-test.sh"
+
 # --- clause 1: one command, artifact in, exit code out -------------------
 [ $# -eq 2 ] || { printf 'usage: %s <release-manifest> <output-dir>\n' "$0" >&2; exit 2; }
 MANIFEST="$1"

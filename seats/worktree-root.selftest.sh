@@ -7,6 +7,7 @@ set -uo pipefail
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 ADAPTER="$HERE/adapter.ts"
 PRUNE="$HERE/prune.ts"
 SEAT_ENV="$HERE/seat-env.sh"

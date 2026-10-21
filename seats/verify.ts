@@ -48,8 +48,8 @@
  * MALFORMED — exit 1, mirroring the NOT BENCHED parser rule — never exit 0.
  *
  * Why an argument rather than parsing `Evidence:` lines out of `bd show`:
- * the bead text reaching this dispatcher is a human rendering (and bd may be
- * unreachable, which beadClaim already tolerates). The commander reads the
+ * the contract gate reads bead text, but artifact selection is explicit.
+ * The commander reads the
  * bead and restates its requirement as arguments — the same relationship the
  * bead claim itself already has to the dispatch.
  *
@@ -72,17 +72,21 @@
  * --repo still wins. Evidence paths stay relative to the selected repository.
  *
  * Exit: 0 APPROVE | 2 BOUNCE | 3 DISCOVER | 4 reviewer busy/retry |
- * 5 no-verdict (reviewer ended its turn without a judgment) | 1 other errors.
+ * 5 no-verdict (reviewer ended its turn without a judgment) | 6 refused: not a contract |
+ * 1 other errors (including a malformed verdict — the machine must never mistake
+ * an error for a judgment).
  * A no-verdict outcome is recorded, never treated as an approval or timeout.
  */
 
 import * as crypto from "node:crypto";
+import { checkBeadContract, contractRemedy, parseContract, repoDeclarations } from "./contract";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
+import { heavyTestEntry } from "./heavy-test-entry";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool } from "./pool";
@@ -139,8 +143,9 @@ function assertHostBuildLockAvailable(): void {
  * verifier walks) so git never creates a branch named by the reviewed SHA.
  * The checked-out content isolates reviewer searches and dispatcher-run
  * suites at the pinned SHA; stray writes have somewhere harmless to land.
- * Removed on every exit path
- * via `process.on("exit", ...)`, which still fires synchronous cleanup
+ * Cleanup is attempted on every exit path; failed identity checks or Git
+ * refusal leave the path intact and report why. `process.on("exit", ...)`
+ * still fires synchronous cleanup
  * when `die()` calls `process.exit()` mid-run. TERM/INT/HUP instead join the
  * groups we started before invoking these cleanups. The one path that skips
  * "exit" — a SIGKILL of the dispatcher — is handled by
@@ -149,8 +154,52 @@ function assertHostBuildLockAvailable(): void {
  *
  * Named `wheelhouse-verify-<owning-pid>-<random>` or
  * `wheelhouse-review-<owning-pid>-<random>` so a later sweep can tell which
- * process made it without asking anything but the path.
+ * process made it. Ownership is recorded in this linked worktree's Git admin
+ * directory; a matching name alone never authorizes later deletion.
  */
+interface ScratchOwner {
+  version: 1;
+  dir: string;
+  dev: number;
+  ino: number;
+  pid: number;
+  kind: "verify" | "review";
+}
+const createdScratchCwds = new Map<string, ScratchOwner>();
+
+function scratchWorktreeInfo(repoRoot: string, dir: string): { ownerFile: string; canonical: string; stat: fs.Stats } | null {
+  try {
+    if (fs.lstatSync(dir).isSymbolicLink()) return null;
+    const canonical = fs.realpathSync(dir);
+    const tmp = fs.realpathSync(os.tmpdir());
+    const rel = path.relative(tmp, canonical);
+    if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+    const gitFile = path.join(canonical, ".git");
+    if (!fs.lstatSync(gitFile).isFile()) return null; // never a primary checkout or symlink
+    const gitdir = fs.readFileSync(gitFile, "utf8").trim().match(/^gitdir: (.+)$/)?.[1];
+    if (!gitdir) return null;
+    const admin = fs.realpathSync(path.resolve(canonical, gitdir));
+    const commonRaw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const common = fs.realpathSync(path.resolve(repoRoot, commonRaw));
+    if (path.dirname(admin) !== path.join(common, "worktrees")) return null;
+    const backlink = fs.readFileSync(path.join(admin, "gitdir"), "utf8").trim();
+    if (fs.realpathSync(backlink) !== fs.realpathSync(gitFile)) return null;
+    return { ownerFile: path.join(admin, "wheelhouse-scratch.json"), canonical, stat: fs.lstatSync(canonical) };
+  } catch { return null; }
+}
+
+function scratchOwner(repoRoot: string, dir: string): ScratchOwner | null {
+  const info = scratchWorktreeInfo(repoRoot, dir);
+  if (!info) return null;
+  try {
+    const owner: ScratchOwner = createdScratchCwds.get(info.canonical) ?? JSON.parse(fs.readFileSync(info.ownerFile, "utf8"));
+    const name = path.basename(info.canonical).match(/^wheelhouse-(verify|review)-(\d+)-/);
+    if (owner.version !== 1 || owner.dir !== info.canonical || owner.dev !== info.stat.dev || owner.ino !== info.stat.ino
+        || !name || owner.kind !== name[1] || owner.pid !== Number(name[2]) || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return null;
+    return owner;
+  } catch { return null; }
+}
+
 interface CoreWorktreeConfig { present: boolean; value: string }
 
 function readCoreWorktreeConfig(repoRoot: string): CoreWorktreeConfig {
@@ -169,23 +218,37 @@ function restoreCoreWorktreeConfig(repoRoot: string, before: CoreWorktreeConfig)
 
 export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD"): string {
   if (import.meta.main) installReviewSignals();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`)));
+  const stat = fs.lstatSync(dir);
+  const owner: ScratchOwner = { version: 1, dir, dev: stat.dev, ino: stat.ino, pid: process.pid, kind };
+  createdScratchCwds.set(dir, owner);
   const coreWorktreeBefore = readCoreWorktreeConfig(repoRoot);
   try {
     execFileSync("git", ["-C", repoRoot, "worktree", "add", "--detach", dir, `${tip}^{commit}`], { stdio: "pipe" });
+    const info = scratchWorktreeInfo(repoRoot, dir);
+    if (!info) throw new Error("scratch worktree identity could not be verified");
+    fs.writeFileSync(info.ownerFile, JSON.stringify(owner) + "\n", { flag: "wx", mode: 0o600 });
   } catch (e: any) {
-    fs.rmSync(dir, { recursive: true, force: true });
     restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
+    if (fs.existsSync(path.join(dir, ".git"))) removeScratchWorktree(repoRoot, dir);
+    else {
+      // Only the empty directory allocated above; never recursively remove a
+      // partially populated path after Git refused creation.
+      try { if (fs.lstatSync(dir).ino === owner.ino && fs.lstatSync(dir).dev === owner.dev) fs.rmdirSync(dir); } catch {}
+    }
+    createdScratchCwds.delete(dir);
     die(`could not create a detached scratch worktree for the ${kind} one-shot in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
   }
   let cleaned = false;
   const cleanup = () => {
     if (cleaned || (reviewCancelling && !reviewChildrenStopped)) return;
     cleaned = true;
+    // A verifier may have clobbered core.worktree: restore the main checkout's
+    // identity before asking Git which registered worktree is primary.
+    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
     reviewScratchCleanups.delete(cleanup);
     removeScratchWorktree(repoRoot, dir);
     sweepShaNamedBranches(repoRoot);
-    restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
   };
   reviewScratchCleanups.add(cleanup);
   process.on("exit", cleanup);
@@ -204,14 +267,30 @@ function makeWritableRecursive(p: string): void {
   } catch {}
 }
 
-function removeScratchWorktree(repoRoot: string, dir: string): void {
-  makeWritableRecursive(dir);
+function removeScratchWorktree(repoRoot: string, dir: string): boolean {
+  if (!fs.existsSync(dir)) { createdScratchCwds.delete(dir); return true; }
+  const owner = scratchOwner(repoRoot, dir);
+  if (!owner) {
+    process.stderr.write(`scratch cleanup: skipped unowned or ineligible path ${dir}; left in place\n`);
+    return false;
+  }
   try {
-    execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { stdio: "ignore" });
-  } catch {
+    const primary = execFileSync("git", ["-C", repoRoot, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split("\n").find(l => l.startsWith("worktree "))?.slice(9);
+    if (!primary || fs.realpathSync(primary) === owner.dir) {
+      process.stderr.write(`scratch cleanup: skipped main checkout ${dir}; left in place\n`);
+      return false;
+    }
+    if (!scratchOwner(repoRoot, dir)) {
+      process.stderr.write(`scratch cleanup: ownership changed for ${dir}; left in place\n`);
+      return false;
+    }
     makeWritableRecursive(dir);
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-    try { execFileSync("git", ["-C", repoRoot, "worktree", "prune"], { stdio: "ignore" }); } catch {}
+    execFileSync("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { stdio: "pipe" });
+    createdScratchCwds.delete(owner.dir);
+    return true;
+  } catch (e: any) {
+    process.stderr.write(`scratch cleanup: Git refused removal of ${dir}; left in place: ${(e.stderr ?? e.message).toString().trim()}\n`);
+    return false;
   }
 }
 
@@ -274,7 +353,10 @@ function pidAlive(pid: number): boolean {
  * touched that the branch repository does not already confirm is its own.
  * Filters those to the `wheelhouse-verify-<pid>-*` and
  * `wheelhouse-review-<pid>-*` naming makeScratchCwd() uses, and reclaims only
- * the ones whose stamped pid is no longer alive.
+ * the ones whose stamped pid is no longer alive, whose realpath is beneath
+ * the current temp root, and whose linked-worktree admin record proves the
+ * directory identity was allocated by makeScratchCwd(). Legacy unrecorded
+ * paths are deliberately left for inspection rather than adopted by name.
  *
  * No fd-based cross-check the way recover.ts's fixture sweep needs one:
  * that sweep KILLS live processes, so a reused pid is a real hazard it
@@ -298,12 +380,31 @@ export function sweepStaleScratchWorktrees(repoRoot: string): void {
     .split("\n")
     .filter((l) => l.startsWith("worktree "))
     .map((l) => l.slice("worktree ".length));
-  for (const p of worktreePaths) {
+  for (const [index, p] of worktreePaths.entries()) {
     const m = path.basename(p).match(/^wheelhouse-(?:verify|review)-(\d+)-/);
-    if (!m) continue; // not one of ours
-    if (pidAlive(Number(m[1]))) continue; // owner process is still running — not stale
-    removeScratchWorktree(repoRoot, p);
-    process.stderr.write(`swept: removed orphaned scratch worktree ${p} (owner pid ${m[1]} is gone)\n`);
+    if (!m) continue;
+    let primary = index === 0;
+    try { primary ||= fs.lstatSync(path.join(p, ".git")).isDirectory(); } catch {}
+    if (primary) {
+      process.stderr.write(`sweep: skipped main checkout ${p}; left in place\n`);
+      continue;
+    }
+    let underTmp = false;
+    try {
+      const rel = path.relative(fs.realpathSync(os.tmpdir()), fs.realpathSync(p));
+      underTmp = !!rel && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+    } catch {}
+    if (!underTmp) {
+      process.stderr.write(`sweep: skipped path outside current temp directory ${p}; left in place\n`);
+      continue;
+    }
+    const owner = scratchOwner(repoRoot, p);
+    if (!owner) {
+      process.stderr.write(`sweep: skipped unrecorded or changed scratch worktree ${p}; left in place\n`);
+      continue;
+    }
+    if (pidAlive(owner.pid)) continue;
+    if (removeScratchWorktree(repoRoot, p)) process.stderr.write(`swept: removed orphaned scratch worktree ${p} (owner pid ${owner.pid} is gone)\n`);
   }
   sweepShaNamedBranches(repoRoot);
 }
@@ -644,8 +745,7 @@ function defaultRepoArgFromTemplateSource(): string | undefined {
 }
 
 function repoDeclarationFromClaim(claim: string): string | null {
-  const m = claim.match(/^\s*Repo:\s*([^\s`'"]+)/mi);
-  return m ? m[1] : null;
+  return repoDeclarations(claim)?.[0] ?? null;
 }
 
 function repoArgFromClaim(claim: string): string | undefined {
@@ -998,15 +1098,18 @@ function fallbackLeadIn(promotion: FallbackPromotion): string {
 }
 
 function beadClaim(beadId: string): string {
-  // Best effort: embed the claim so the verdict file is self-contained. If
-  // bd is not reachable from here, the reviewer reads the bead itself — it
-  // has a shell; this dispatcher having one is a convenience, not a premise.
+  // Contract validation reads selected JSON fields; reviewers still need the
+  // full bd show record, including comments, labels and dependency context.
   try {
-    const out = execFileSync("bd", ["show", beadId], { encoding: "utf8", timeout: 30000 });
+    const out = execFileSync("bd", ["show", beadId], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000 });
     return `The bead, as \`bd show ${beadId}\` prints it from the dispatcher's machine:\n\n${out.trim()}`;
   } catch {
     return `The dispatcher could not run \`bd show ${beadId}\` — read the bead yourself (\`bd show ${beadId}\`) before judging anything against it.`;
   }
+}
+
+function refuseUncontractedReview(beadId: string, errors: string[]): void {
+  if (errors.length) die(contractRemedy(beadId, errors), 6);
 }
 
 interface SourceDeclaration { original: string; absolute: string }
@@ -1115,7 +1218,67 @@ function sourceAccessPromptLines(snapshots: SourceSnapshot[]): string[] {
   ];
 }
 
-interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; error?: string; batch?: { tip: string; main: string; sha256: string } }
+interface SuiteTiming { suite: string; seconds: number }
+interface SweepTimings { tierLine: string; footer: string; totalSeconds: number; suites: SuiteTiming[]; slowest: SuiteTiming[] }
+interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; timings?: SweepTimings; error?: string; batch?: { tip: string; main: string; sha256: string } }
+
+// Read only the outer runner's records. Nested fixture sweeps use other roots
+// and must not contribute to this receipt's inventory, seconds or slowest five.
+export function readSweepTimings(text: string): SweepTimings {
+  const invalid = (why: string): never => { throw new Error(`invalid sweep timings: ${why}`); };
+  const whole = (s: string): number => {
+    if (!/^(0|[1-9][0-9]*)$/.test(s) || !Number.isSafeInteger(Number(s))) invalid("seconds/count must be safe whole numbers");
+    return Number(s);
+  };
+  const tier = /^selftest-sweep: tier=full suites=([1-9][0-9]*)$/m.exec(text);
+  const footers = [...text.matchAll(/^selftest-sweep: (?:PASS \(([1-9][0-9]*) suite\(s\), ([0-9]+)s\)|FAIL \(([1-9][0-9]*) failure\(s\) of ([1-9][0-9]*) suite\(s\), ([0-9]+)s\))$/gm)];
+  const footer = footers.at(-1);
+  const lastSummary = [...text.matchAll(/^selftest-sweep: (?:PASS|FAIL) \([^\n]*\)$/gm)].at(-1);
+  const firstStart = /^selftest-sweep: START /m.exec(text);
+  if (!tier || !footer || !lastSummary || lastSummary.index !== footer.index || tier.index >= footer.index! || (firstStart && firstStart.index < tier.index)) invalid("missing tier/full completed footer");
+  const count = whole(tier![1]), totalSeconds = whole(footer![2] ?? footer![5]);
+  if (count !== whole(footer![1] ?? footer![4])) invalid("inventory/summary mismatch");
+  const body = text.slice(tier!.index + tier![0].length, footer!.index);
+  const first = /^selftest-sweep: START (.+\/seats\/)([^/\n]+\.selftest\.sh)$/m.exec(body);
+  if (!first) invalid("inventory/summary mismatch");
+  const prefix = first![1], suites: SuiteTiming[] = [], seen = new Set<string>();
+  let pending: string | undefined, failures = 0;
+  for (const line of body.split("\n")) {
+    if (line.startsWith(`selftest-sweep: START ${prefix}`)) {
+      const name = line.slice(`selftest-sweep: START ${prefix}`.length);
+      if (pending || !/^[^/\n]+\.selftest\.sh$/.test(name) || seen.has(name)) invalid("duplicate or unordered outer suite records");
+      pending = name;
+    } else if (["PASS", "FAIL"].some(kind => line.startsWith(`selftest-sweep: ${kind} ${prefix}`))) {
+      const pass = `selftest-sweep: PASS ${prefix}${pending} elapsed=`;
+      const fail = `selftest-sweep: FAIL ${prefix}${pending} `;
+      let seconds: string | undefined;
+      if (pending && line.startsWith(pass)) seconds = /^(0|[1-9][0-9]*)s$/.exec(line.slice(pass.length))?.[1];
+      else if (pending && line.startsWith(fail)) {
+        seconds = /^(?:rc=[0-9]+|timed out after [1-9][0-9]*s \(TERM then KILL after [1-9][0-9]*s grace; rc=[0-9]+\)) elapsed=(0|[1-9][0-9]*)s$/.exec(line.slice(fail.length))?.[1];
+        failures++;
+      }
+      if (seconds === undefined) invalid("missing, malformed or failed outer suite records");
+      suites.push({ suite: pending!, seconds: whole(seconds!) }); seen.add(pending!); pending = undefined;
+    }
+  }
+  if (pending || suites.length !== count) invalid("missing or filtered outer suite records");
+  if (failures !== (footer![3] ? whole(footer![3]) : 0)) invalid("failed outer suite records disagree with footer");
+  const sum = suites.reduce((n, s) => n + s.seconds, 0);
+  if (!Number.isSafeInteger(sum) || totalSeconds < sum) invalid("total seconds below per-suite sum");
+  const slowest = [...suites].sort((a, b) => b.seconds - a.seconds || a.suite.localeCompare(b.suite)).slice(0, 5);
+  return { tierLine: tier![0], footer: footer![0], totalSeconds, suites, slowest };
+}
+
+function sweepTimingLines(sweep: SweepResult): string[] {
+  if (!sweep.timings) return [];
+  return [
+    `- ${sweep.timings.tierLine}`,
+    `- ${sweep.timings.footer}`,
+    `- totalSeconds: ${sweep.timings.totalSeconds}`,
+    `- slowest suites (whole seconds, descending):`,
+    ...sweep.timings.slowest.map(s => `  - ${s.suite}: ${s.seconds}s`),
+  ];
+}
 
 // Opt-in only. Read the existing dispatcher's envelope, not arbitrary terminal
 // text that happens to contain PASS/rc=0. Never execute a sweep in this path.
@@ -1145,9 +1308,9 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
   } catch (e: any) { return refuse(`cannot read safe log: ${e.message}`); }
   finally { if (fd !== undefined) fs.closeSync(fd); }
   const header = /^tip=([0-9a-f]{40}|[0-9a-f]{64})\ncommand=bash seats\/selftest-sweep\.sh\nWHEELHOUSE_SKIP_REAL_PI=1 \(hermetic suites; no live login borrowed\)\npreparedTip=([0-9a-f]{40}|[0-9a-f]{64})\nscratchGraph=isolated nested repository\n/.exec(text!);
-  const footer = /\nselftest-sweep: PASS \(([1-9][0-9]*) suite\(s\)\)\nfinalTip=([0-9a-f]{40}|[0-9a-f]{64})\n\nrc=0\nelapsedMs=([0-9]+)\n$/.exec(text!);
-  if (!header || !footer || header[1] !== header[2] || header[1] !== footer[2] || text!.includes("\0")) refuse("not a completed passing hermetic full-sweep envelope (tip/prepared/final/command/rc)");
-  const batchTip = header![1], elapsedMs = Number(footer![3]);
+  const footer = /\nselftest-sweep: PASS \(([1-9][0-9]*) suite\(s\), ([0-9]+)s\)\nfinalTip=([0-9a-f]{40}|[0-9a-f]{64})\n\nrc=0\nelapsedMs=([0-9]+)\n$/.exec(text!);
+  if (!header || !footer || header[1] !== header[2] || header[1] !== footer[3] || text!.includes("\0")) refuse("not a completed passing hermetic full-sweep envelope (tip/prepared/final/command/rc)");
+  const batchTip = header![1], elapsedMs = Number(footer![4]);
   if (!Number.isSafeInteger(elapsedMs)) refuse("invalid elapsedMs");
   let main: string, committedMs: number, expected: string[];
   try {
@@ -1162,24 +1325,11 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
   if (!Number.isSafeInteger(committedMs!) || !Number.isFinite(stat!.mtimeMs) || stat!.mtimeMs < committedMs! || (stat!.birthtimeMs > 0 && stat!.birthtimeMs < committedMs!) || stat!.mtimeMs > Date.now() + 1) refuse("log is stale or future-dated relative to reviewed commit");
   // A filtered pass is not a full sweep. Match the outer runner's exact suite
   // set and serial START/PASS pairs; nested fixture runners have other roots.
-  const body = text!.slice(header![0].length, footer!.index);
-  const first = /^selftest-sweep: START (.+\/seats\/)([^/\n]+\.selftest\.sh)$/m.exec(body);
-  if (!first || expected!.length !== Number(footer![1]) || expected!.length === 0) refuse("full-suite inventory/summary mismatch");
-  const prefix = first![1], rows: string[] = [];
-  for (const line of body.split("\n")) {
-    for (const kind of ["START", "PASS", "FAIL"]) {
-      const marker = `selftest-sweep: ${kind} ${prefix}`;
-      if (line.startsWith(marker)) rows.push(`${kind} ${line.slice(marker.length)}`);
-    }
-  }
-  const seen = new Set<string>();
-  if (rows.length !== expected!.length * 2) refuse("missing, duplicate, failed or filtered outer suite records");
-  for (let i = 0; i < rows.length; i += 2) {
-    const name = rows[i].slice(6);
-    if (rows[i] !== `START ${name}` || rows[i + 1] !== `PASS ${name}` || !expected!.includes(name) || seen.has(name)) refuse("missing, duplicate, failed or filtered outer suite records");
-    seen.add(name);
-  }
-  return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, batch: { tip: batchTip, main: main!, sha256: sha256! } };
+  let timings: SweepTimings;
+  try { timings = readSweepTimings(text!.slice(header![0].length)); }
+  catch (e: any) { return refuse(e.message); }
+  if (expected!.length === 0 || timings.suites.length !== expected!.length || timings.suites.some(s => !expected!.includes(s.suite))) refuse("full-suite inventory/summary mismatch");
+  return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, timings, batch: { tip: batchTip, main: main!, sha256: sha256! } };
 }
 
 // Wording controls extra reviewer citations, never execution of the gate.
@@ -1279,10 +1429,15 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
     fs.appendFileSync(logPath, `finalTip=${finalTip}\n`);
     if (finalTip !== tip) { rc = 1; error = `sweep changed reviewed tip from ${tip} to ${finalTip}`; }
   } catch (e: any) { rc = 1; error = e.message; }
+  let timings: SweepTimings | undefined;
+  if (!error && (rc === 0 || rc === 1)) {
+    try { timings = readSweepTimings(fs.readFileSync(logPath, "utf8")); }
+    catch (e: any) { error = e.message; rc = 1; }
+  }
   const elapsedMs = Date.now() - started;
   fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
   removeScratchWorktree(repoRoot, scratchCwd);
-  return { required: true, rc, logPath, elapsedMs, tip, error };
+  return { required: true, rc, logPath, elapsedMs, tip, timings, error };
 }
 
 function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[] {
@@ -1296,6 +1451,7 @@ function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[
     `- rc: ${sweep.rc}`,
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
+    ...sweepTimingLines(sweep),
     ...(sweep.error ? [`- error: ${sweep.error}`] : []),
     sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. This reuses only the sweep, not another reviewer's judgment.` : `This dispatcher gate runs for every review, regardless of the bead's wording, outside your model command timeout in the detached scratch worktree at the reviewed tip. Its result is recorded with your verdict. If rc is not 0, you cannot approve.`,
     ...(requireCitation ? [`You must cite rc=${sweep.rc} and the exact log path in your final evidence.`] : []),
@@ -1427,7 +1583,14 @@ async function main(): Promise<void> {
   if (reviewerArg) validateSegment("seat name", reviewerArg);
   if (promotionArg && !reviewerArg) die("--fallback-promotion requires an explicit reviewer-seat; automatic selection never promotes a shadow");
   if (promotionArg) validateSegment("promotion comment id", promotionArg);
-  const claim = beadClaim(beadId);
+  const contract = checkBeadContract(ROOT, beadId);
+  refuseUncontractedReview(beadId, contract.errors); // contract-gate: before reviewer identity or harness spawn
+  const claim = [
+    beadClaim(beadId),
+    ``,
+    `Parsed work contract (validated before reviewer spawn):`,
+    JSON.stringify(parseContract(contract.text ?? ""), null, 2),
+  ].join("\n");
   const repoRoot = resolveRepoRoot(repoArg, claim);
   if (path.resolve(repoRoot) !== path.resolve(earlyRepoRoot)) sweepStaleScratchWorktrees(repoRoot);
   const timeoutMs = Number(timeoutArg || process.env.WHEELHOUSE_VERIFY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
@@ -1818,6 +1981,7 @@ async function main(): Promise<void> {
               `- rc: ${sweep.rc}`,
               `- log: ${sweep.logPath}`,
               `- elapsedMs: ${sweep.elapsedMs}`,
+              ...sweepTimingLines(sweep),
             ]
           : []),
         ``,
@@ -1872,4 +2036,12 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.main) main().catch((e) => die(e?.message ?? String(e)));
+// The review may invoke arbitrary project benches. Hold the same admission as
+// its dispatcher sweep for the whole review, before any model watchdog starts.
+if (import.meta.main) {
+  // Route a pre-main admission refusal too; it must not disappear merely
+  // because no scratch/model process (and thus no main parser) could start.
+  const earlyBead = process.argv[2];
+  if (earlyBead && !earlyBead.startsWith("-")) setVerifierGateBead(earlyBead);
+  heavyTestEntry(import.meta.path, main).catch((e) => die(e?.message ?? String(e)));
+}

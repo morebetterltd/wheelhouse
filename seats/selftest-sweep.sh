@@ -11,14 +11,14 @@ SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
 WATCHDOG_PID=""
 SUITE_STATE=""
+STARTING_SUITE=0
+PENDING_INTERRUPT=""
 # Optional reviewer-owned registry. Only our fixed launcher publishes pgids;
 # suite payloads do not inherit this capability.
 REVIEW_GROUPS="${WHEELHOUSE_SELFTEST_REVIEW_GROUPS:-}"
 SUITE_TIMED_OUT=0
 SUITE_RC=0
-# Measured: concurrency 62s; passing adapter capture <=335s; a whole
-# successful 53-suite review sweep took 843.256s (2026-10-17, wxuh 49e2970).
-# One hour is >4x that conservative bound, not a guessed short test budget.
+# Tune against the per-suite elapsed seconds retained in each sweep log.
 SUITE_TIMEOUT_S="${WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S:-3600}"
 SUITE_GRACE_S="${WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S:-5}"
 OWNED_LOCK=""
@@ -165,6 +165,11 @@ retire_review_group(){
 }
 
 start_suite(){
+  # Bash can dispatch a trap between a background fork and its $! assignment.
+  # Defer cleanup across the whole allocation/publication transaction: otherwise
+  # an unpublished suite can escape, or an unpublished watchdog competes with
+  # finish_current_suite's synchronous fallback for the single stop token.
+  STARTING_SUITE=1
   SUITE_TIMED_OUT=0
   SUITE_STATE="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/wheelhouse-suite-deadline.XXXXXX")" || exit 2
   mkfifo -m 600 "$SUITE_STATE/control" "$SUITE_STATE/grace" || exit 2
@@ -187,6 +192,8 @@ start_suite(){
     suite "$1" "$SUITE_STATE" 8>&- 9>&- &
   CURRENT_SUITE_PID=$!
   suite_watchdog "$CURRENT_SUITE_PID" "$SUITE_STATE" & WATCHDOG_PID=$!
+  STARTING_SUITE=0
+  if [ -n "$PENDING_INTERRUPT" ]; then interrupt_sweep "$PENDING_INTERRUPT"; fi
 }
 
 finish_current_suite(){
@@ -210,6 +217,10 @@ finish_current_suite(){
 
 acquire_lock(){
   local previous="" result rc
+  # A project bench or verify.ts may already own admission. Reuse only a
+  # validated ancestor's token/FIFO head, never a caller-supplied bypass flag.
+  if bun "$LOCK_HELPER" inherited "$LOCK"; then return 0; else rc=$?; fi
+  [ "$rc" = 75 ] || { info "STOP: selftest-sweep ancestry check failed (exit $rc)"; exit 2; }
   while :; do
     result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
@@ -236,6 +247,8 @@ release_lock(){
 }
 finish_sweep(){
   local rc=$?
+  # A startup allocation error must not erase a signal already accepted there.
+  [ -z "$PENDING_INTERRUPT" ] || rc="$PENDING_INTERRUPT"
   trap - EXIT
   if [ -n "$CURRENT_SUITE_PID" ]; then finish_current_suite stop; fi
   if [ -n "$SUITE_STATE" ]; then exec 8>&- 9>&-; rm -rf "$SUITE_STATE"; fi
@@ -244,6 +257,10 @@ finish_sweep(){
 }
 interrupt_sweep(){
   local rc="$1"
+  if [ "$STARTING_SUITE" = 1 ]; then
+    [ -n "$PENDING_INTERRUPT" ] || PENDING_INTERRUPT="$rc"
+    return
+  fi
   trap '' INT TERM HUP
   finish_current_suite stop
   exit "$rc"
@@ -289,10 +306,12 @@ fi
 # Preserve exit2 for incomplete audits; an unexamined tree is not a test result.
 bun "$AUDITOR" "$ROOT" || exit "$?"
 acquire_lock
+SWEEP_STARTED=$SECONDS
 
 shopt -s nullglob
 suites=( $PATTERN )
 shopt -u nullglob
+say "selftest-sweep: tier=full suites=${#suites[@]}"
 if [ "${#suites[@]}" -eq 0 ]; then
   info "selftest-sweep: no suites matched: $PATTERN"
   exit 1
@@ -304,26 +323,29 @@ info "selftest-sweep: suite timeout=${SUITE_TIMEOUT_S}s TERM grace=${SUITE_GRACE
 for suite in "${suites[@]}"; do
   [ -f "$suite" ] || continue
   say "selftest-sweep: START $suite"
+  suite_started=$SECONDS
   start_suite "$suite"
   finish_current_suite done
+  suite_elapsed=$((SECONDS-suite_started))
   rc="$SUITE_RC"
   if [ "$SUITE_TIMED_OUT" = 1 ]; then
-    say "selftest-sweep: FAIL $suite timed out after ${SUITE_TIMEOUT_S}s (TERM then KILL after ${SUITE_GRACE_S}s grace; rc=$rc)"
+    say "selftest-sweep: FAIL $suite timed out after ${SUITE_TIMEOUT_S}s (TERM then KILL after ${SUITE_GRACE_S}s grace; rc=$rc) elapsed=${suite_elapsed}s"
     failures=$((failures + 1))
     timeout_summary="${timeout_summary}selftest-sweep: timeout summary: $suite timed out after ${SUITE_TIMEOUT_S}s
 "
   elif [ "$rc" -eq 0 ]; then
-    say "selftest-sweep: PASS $suite"
+    say "selftest-sweep: PASS $suite elapsed=${suite_elapsed}s"
   else
-    say "selftest-sweep: FAIL $suite rc=$rc"
+    say "selftest-sweep: FAIL $suite rc=$rc elapsed=${suite_elapsed}s"
     failures=$((failures + 1))
   fi
 done
 
+sweep_elapsed=$((SECONDS-SWEEP_STARTED))
 if [ "$failures" -eq 0 ]; then
-  say "selftest-sweep: PASS (${#suites[@]} suite(s))"
+  say "selftest-sweep: PASS (${#suites[@]} suite(s), ${sweep_elapsed}s)"
   exit 0
 fi
 [ -z "$timeout_summary" ] || printf '%s' "$timeout_summary"
-say "selftest-sweep: FAIL ($failures failure(s) of ${#suites[@]} suite(s))"
+say "selftest-sweep: FAIL ($failures failure(s) of ${#suites[@]} suite(s), ${sweep_elapsed}s)"
 exit 1

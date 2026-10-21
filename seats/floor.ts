@@ -37,6 +37,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { effectiveRoster } from "./roster";
+import { seatTurnDisplay } from "./seat-turn-display";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -504,14 +505,18 @@ function assess(seat: Seat): Assessment {
   if (events === null) {
     return { cue: "amber", line: `no event log yet — ${path.relative(ROOT, seat.log)} missing` };
   }
-  if (lastType === "agent_end") {
+  const turnDisplay = seatTurnDisplay(seat.log);
+  if (rec.lastStalledEvent || turnDisplay === "STALLED") {
+    return { cue: "amber", line: `STALLED — ${rec.lastStalledEvent?.detail ?? "turn stopped before completion"}` };
+  }
+  if (turnDisplay === "SETTLED") {
     const ready = readyCount();
     if (ready !== null && ready > 0) {
-      return { cue: "amber", line: `IDLE with ready work — ${ready} bead(s) in bd ready` };
+      return { cue: "amber", line: `SETTLED — IDLE with ready work — ${ready} bead(s) in bd ready` };
     }
-    return { cue: "ok", line: `idle${rec.lastBead ? ` after ${rec.lastBead}` : ""}` };
+    return { cue: "ok", line: `SETTLED — idle${rec.lastBead ? ` after ${rec.lastBead}` : ""}` };
   }
-  return { cue: "ok", line: `working${rec.lastBead ? ` ${rec.lastBead}` : ""} — last event ${lastType}` };
+  return { cue: "ok", line: `RUNNING — working${rec.lastBead ? ` ${rec.lastBead}` : ""} — last event ${lastType}` };
 }
 
 function cueMark(cue: Cue): string {

@@ -481,3 +481,15 @@ selftest_admit_suite() {
   fi
 }
 selftest_admit_suite "$@"
+
+# Admission above observes the real host brake. Once admitted, this suite's
+# synthetic private-endpoint fixtures must not inherit that live marker: an
+# outside build must not make their liveness guards fail mid-sweep. Tests of
+# braking set an explicit fixture marker after sourcing this library.
+if selftest_fixture_nonce_valid; then
+  export WHEELHOUSE_HEAVY_TEST_PAUSE="${TMPDIR:-/tmp}/wheelhouse-selftest-fixture-pause.$WHEELHOUSE_SELFTEST_FIXTURE_NONCE"
+else
+  # Invalid-nonce tests still reach the allocator's own refusal; never put an
+  # unvalidated nonce (possibly containing separators) into this pathname.
+  export WHEELHOUSE_HEAVY_TEST_PAUSE="${TMPDIR:-/tmp}/wheelhouse-selftest-fixture-pause.invalid-$$"
+fi

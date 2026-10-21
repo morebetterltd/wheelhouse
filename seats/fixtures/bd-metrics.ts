@@ -63,7 +63,18 @@ for (const mode of modes) {
     // The outer canonical host lock is held. This tiny fixture payload is not
     // a second full product sweep: stop after the real verifier setup completes.
     fs.writeFileSync(path.join(project, "seats/metrics-fixture.selftest.sh"), '#!/usr/bin/env bash\nset -eu\nbd list --json >/dev/null\nprintf "%s\\n" "$PWD" > "$METRICS_CASE/review-cwd"\nprintf "%s\\n" "$HOME" > "$METRICS_CASE/review-home"\nprintf "ready\\n" > "$METRICS_CASE/setup-ready"\nread -r release < "$METRICS_CASE/release.fifo"\n', { mode: 0o700 });
-    fs.writeFileSync(path.join(project, "seats/selftest-sweep.sh"), '#!/usr/bin/env bash\nset -eu\nexec bash "$(dirname "$0")/metrics-fixture.selftest.sh"\n', { mode: 0o700 });
+    // The dispatcher reads the same timed envelope even for this one-suite stub.
+    fs.writeFileSync(path.join(project, "seats/selftest-sweep.sh"), `#!/usr/bin/env bash
+set -eu
+suite="$(cd "$(dirname "$0")" && pwd -P)/metrics-fixture.selftest.sh"
+started=$SECONDS
+printf 'selftest-sweep: tier=full suites=1\\n'
+printf 'selftest-sweep: START %s\\n' "$suite"
+bash "$suite"
+elapsed=$((SECONDS-started))
+printf 'selftest-sweep: PASS %s elapsed=%ss\\n' "$suite" "$elapsed"
+printf 'selftest-sweep: PASS (1 suite(s), %ss)\\n' "$elapsed"
+`, { mode: 0o700 });
     for (const args of [["init", "-q", "-b", "main"], ["add", "seats"], ["-c", "user.name=fixture", "-c", "user.email=fixture@local", "-c", "commit.gpgsign=false", "commit", "-qm", "review metrics fixture"]]) {
       const r = command("git", args, project); assert.equal(r.code, 0, r.stderr);
     }
