@@ -227,15 +227,23 @@ polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
 if [ "$polls" -ge 2 ] && grep -q 'courier scanned' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure recovers on a later cycle"; else fail "poll failure did not retry/recover polls=$polls log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
 stop_courier
 OVERLAP="$FIX/overlap"; make_proj "$OVERLAP"
-: > "$FIX/requests.jsonl"; rm -f "$FIX/max-poll-active"; printf '350\n' > "$FIX/poll-delay-ms"
-start_courier_daemon "$OVERLAP" 100 "$FIX/overlap.err"
-sleep 1.0
-stop_courier
-rm -f "$FIX/poll-delay-ms"
-max_active="$(cat "$FIX/max-poll-active" 2>/dev/null || echo 0)"
-overlap_polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
-if [ "$max_active" = 1 ] && [ "$overlap_polls" -ge 2 ]; then pass "courier interval skips ticks while a long poll is in flight"
-else fail "courier overlapped long polls or did not poll enough max_active=$max_active polls=$overlap_polls req=$(cat "$FIX/requests.jsonl" 2>/dev/null) err=$(cat "$FIX/overlap.err" 2>/dev/null)"; fi
+# Count actual endpoint admissions: initial poll plus two periodic polls. A
+# short startup clock cannot establish that the interval had an opportunity.
+bun "$HERE/fixtures/courier-poll-observation.ts" "$OVERLAP" "$FIX/overlap-observation" serial 350 > "$FIX/overlap-check.out" 2> "$FIX/overlap-check.err"; rc=$?
+if [ "$rc" = 0 ] && grep -F 'POLL_OBSERVED polls=' "$FIX/overlap-check.out" >/dev/null; then pass "courier interval skips ticks while a long poll is in flight: $(cat "$FIX/overlap-check.out")"
+else fail "courier poll observation rc=$rc out=$(cat "$FIX/overlap-check.out") err=$(cat "$FIX/overlap-check.err")"; fi
+# Below the unchanged1000ms abort: the old one-second window rejects this
+# healthy serial first poll before the first periodic tick can run.
+bun "$HERE/fixtures/courier-poll-observation.ts" "$OVERLAP" "$FIX/overlap-slow-observation" serial 900 > "$FIX/overlap-slow.out" 2> "$FIX/overlap-slow.err"; rc=$?
+if [ "$rc" = 0 ] && grep -F 'first_delay_ms=900 joined=true' "$FIX/overlap-slow.out" >/dev/null; then pass "slow first poll is judged on observed serial polls, not startup throughput: $(cat "$FIX/overlap-slow.out")"
+else fail "slow first-poll observation rc=$rc out=$(cat "$FIX/overlap-slow.out") err=$(cat "$FIX/overlap-slow.err")"; fi
+OVERLAP_BAD="$FIX/overlap-bad"; make_proj "$OVERLAP_BAD"
+bun "$HERE/fixtures/courier-poll-observation.ts" "$OVERLAP_BAD" "$FIX/overlap-bad-observation" parallel 350 > "$FIX/overlap-bad.out" 2> "$FIX/overlap-bad.err"; rc=$?
+if [ "$rc" = 1 ] && grep -F 'OVERLAP_REJECTED polls=' "$FIX/overlap-bad.err" >/dev/null && grep -F 'joined=true' "$FIX/overlap-bad.err" >/dev/null; then
+  printf 'OVERLAP_CONTROL %s\n' "$(cat "$FIX/overlap-bad.out")"
+  printf 'EXPECTED_REJECTION %s\n' "$(cat "$FIX/overlap-bad.err")"
+  pass 'planted concurrent courier polls are rejected after real endpoint overlap; original child joined'
+else fail "planted overlap not rejected rc=$rc out=$(cat "$FIX/overlap-bad.out") err=$(cat "$FIX/overlap-bad.err")"; fi
 HANG="$FIX/hang"; make_proj "$HANG"
 : > "$FIX/requests.jsonl"; : > "$HANG/seats/logs/courier.out.log"; touch "$FIX/hang-poll"
 WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS=200 start_courier_daemon "$HANG" 100 "$FIX/hang.err"
