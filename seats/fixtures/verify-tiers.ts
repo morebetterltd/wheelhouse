@@ -113,6 +113,12 @@ assert.equal(coreResult.rc, 0, coreResult.error); assert.equal(fullResult.rc, 0,
 // Real native output is captured BEFORE constructing corrupt inventory/hash fixtures.
 const captured = fs.readFileSync(coreResult.logPath, "utf8");
 assert.equal(native.readBatchSweep(batchRepo, coreTip, coreResult.logPath).choice.tier, "core");
+const tierLine = '  const tier = /^selftest-sweep: tier=(full suites=([1-9][0-9]*)|core suites=([1-9][0-9]*) manifest=([0-9a-f]{64}))$/m.exec(text);';
+const fullOnlyFile = path.join(batchRepo, "seats/verify-full-only-reader.ts");
+fs.writeFileSync(fullOnlyFile, once(source, tierLine, '  const tier = /^selftest-sweep: tier=(full suites=([1-9][0-9]*))$/m.exec(text);'));
+const fullOnly = await import(pathToFileURL(fullOnlyFile).href);
+assert.throws(() => fullOnly.readBatchSweep(batchRepo, coreTip, coreResult.logPath), /missing tier\/full completed footer/);
+console.log("PASS actual core batch accepted; removing core reader support refuses it");
 assert.equal(native.readBatchSweep(batchRepo, fullTip, fullResult.logPath).choice.tier, "full");
 assert.equal(native.readBatchSweep(batchRepo, coreTip, fullResult.logPath).choice.tier, "full");
 assert.throws(() => native.readBatchSweep(batchRepo, fullTip, coreResult.logPath), /full tier required by seats\/adapter.ts/);
@@ -138,5 +144,13 @@ assert.throws(() => native.readBatchSweep(batchRepo, coreTip, corrupt), /manifes
 const hashGuard = '  if (choice.tier === "core" && (!choice.manifest || timings.manifest !== choice.manifest.sha256 || timings.suites.length !== choice.manifest.suites.length || timings.suites.some((s, i) => s.suite !== choice.manifest!.suites[i]))) throw new Error("dispatcher core manifest/inventory mismatch");';
 const noHashFile = path.join(batchRepo, "seats/verify-no-manifest-guard.ts"); fs.writeFileSync(noHashFile, once(source, hashGuard, ""));
 const noHash = await import(pathToFileURL(noHashFile).href); assert.equal(noHash.readBatchSweep(batchRepo, coreTip, corrupt).rc, 0);
-console.log("PASS batch: actual core/full inventories; full covers core; core refuses adapter candidate; wrong manifest refuses; both guard removals detected");
+const wrongInventory = path.join(dir, "wrong-core-inventory.log");
+fs.writeFileSync(wrongInventory, captured.replaceAll("/fixture.selftest.sh", "/full-extra.selftest.sh"));
+assert.throws(() => native.readBatchSweep(batchRepo, coreTip, wrongInventory), /inventory\/summary mismatch/);
+const inventoryGuard = '  if (expected!.length === 0 || timings.suites.length !== expected!.length || timings.suites.some(s => !expected!.includes(s.suite))) refuse("full-suite inventory/summary mismatch");';
+const noInventoryFile = path.join(batchRepo, "seats/verify-no-core-inventory.ts");
+fs.writeFileSync(noInventoryFile, once(once(source, inventoryGuard, ""), hashGuard, ""));
+const noInventory = await import(pathToFileURL(noInventoryFile).href);
+assert.equal(noInventory.readBatchSweep(batchRepo, coreTip, wrongInventory).rc, 0);
+console.log("PASS batch: actual core/full inventories; full covers core; core refuses adapter candidate; wrong manifest/inventory refuses; matching guard removals detected");
 console.log("verify tiers: PASS (native Git branches, CLI receipts, actual core/full batch captures and sensitive removals)");

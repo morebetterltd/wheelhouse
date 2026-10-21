@@ -934,7 +934,7 @@ JS
   else fail "runner lock refusal recorded a completed review (rc=$RC out=$OUT)"; fi
   NO_SUITE_PROJ="$FIX/no-suite-proj-$variant"
   build_proj "$NO_SUITE_PROJ" "nosuite-$variant" "$VERIFY"
-  ( cd "$NO_SUITE_PROJ" && git rm -q seats/fixture.selftest.sh && git -c user.email=selftest@local -c user.name=selftest commit -q -m no-suite && git branch -f fleet/bead-1 HEAD ) || exit 2
+  ( cd "$NO_SUITE_PROJ" && git checkout -qb no-suite-candidate && git rm -q seats/fixture.selftest.sh && git -c user.email=selftest@local -c user.name=selftest commit -q -m no-suite && git branch -f fleet/bead-1 HEAD ) || exit 2
   RUN_PROJ="$NO_SUITE_PROJ"
   WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-no-suite fleet/bead-1 worker-1
   if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'no runnable seats/*.selftest.sh suites' && [ ! -f "$NO_SUITE_PROJ/seats/verdicts/bead-no-suite.md" ]; then
@@ -942,6 +942,7 @@ JS
   else fail "empty suite inventory recorded a completed review (rc=$RC out=$OUT)"; fi
   NO_RUNNER_PROJ="$FIX/no-runner-proj-$variant"
   build_proj "$NO_RUNNER_PROJ" "no-runner-$variant" "$VERIFY"
+  git -C "$NO_RUNNER_PROJ" checkout -qb no-runner-candidate
   git -C "$NO_RUNNER_PROJ" rm -q seats/selftest-sweep.sh seats/fixture.selftest.sh
   git -C "$NO_RUNNER_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m no-runner
   git -C "$NO_RUNNER_PROJ" branch -f fleet/bead-1 HEAD
