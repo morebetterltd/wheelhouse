@@ -10,29 +10,46 @@ const option = (key: string) => args.find(x => x.startsWith(key + '='))?.slice(k
 const selected = option('--case'), helperFile = option('--helper') ?? path.join(here, 'fixtures/verify-child-identity.cjs');
 const stubFile = option('--stub') ?? path.join(here, 'verify.selftest.sh');
 const helper = createRequire(import.meta.url)(helperFile);
-const cases = ['gone', 'zombie', 'reused', 'live', 'regrouped', 'model', 'preload', 'incomplete'];
+const cases = ['publication', 'gone', 'zombie', 'reused', 'live', 'regrouped', 'model', 'preload', 'incomplete'];
 assert(!selected || cases.includes(selected));
 async function until(test: () => boolean, label: string) {
   const end = performance.now() + 30000;
   while (!test()) { assert(performance.now() < end, `containment guard: ${label}`); await Bun.sleep(10); }
 }
-async function held(dir: string, zombie = false) {
+async function held(dir: string, zombie = false, blockPublication = false) {
   fs.mkdirSync(dir);
-  const child = spawn('perl', ['-MPOSIX', '-e', String.raw`
-my ($dir,$zombie)=@ARGV; $SIG{CHLD}="DEFAULT";
+  const child = spawn('perl', ['-MPOSIX', '-MFcntl=:DEFAULT', '-e', String.raw`
+my ($dir,$zombie,$block_publication)=@ARGV; $SIG{CHLD}="DEFAULT";
 if($zombie){ my $kid=fork(); defined($kid) or die "fork: $!"; if($kid){while(!-e "$dir/reap"){select undef,undef,undef,0.01;} waitpid($kid,0); exit 0;} }
-open(my $out,">","$dir/pid") or die $!; print $out "$$\n"; close $out;
+# File existence is the reader's readiness signal. Publish only closed bytes.
+my $pid_path = "$dir/pid.pending";
+sysopen(my $out,$pid_path,O_WRONLY|O_CREAT|O_EXCL) or die "open PID stage: $!";
+if($block_publication){
+  open(my $ack,">","$dir/pid-opened") or die $!; close $ack or die $!;
+  while(!-e "$dir/publish"){select undef,undef,undef,0.01;}
+}
+print $out "$$\n" or die "write PID stage: $!"; close $out or die "close PID stage: $!";
+rename($pid_path,"$dir/pid") or die "publish PID: $!";
 while(!-e "$dir/release"){
   if(-e "$dir/regroup" && !-e "$dir/regrouped"){POSIX::setpgid(0,0)==0 or die "setpgid: $!";open(my $ack,">","$dir/regrouped") or die $!;close $ack;}
   select undef,undef,undef,0.01;
 }
-`, dir, zombie ? '1' : '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
+`, dir, zombie ? '1' : '0', blockPublication ? '1' : '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = ''; child.stderr.on('data', b => stderr += b); child.stdout.resume();
   const closed = new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => { assert.equal(code, 0, stderr); assert.equal(signal, null); resolve(); }); });
-  const stop = async () => { fs.writeFileSync(path.join(dir, 'release'), 'release\n'); fs.writeFileSync(path.join(dir, 'reap'), 'reap\n'); await closed; };
+  const stop = async () => { fs.writeFileSync(path.join(dir, 'publish'), 'publish\n'); fs.writeFileSync(path.join(dir, 'release'), 'release\n'); fs.writeFileSync(path.join(dir, 'reap'), 'reap\n'); await closed; };
   try {
+    if (blockPublication) {
+      await until(() => fs.existsSync(path.join(dir, 'pid-opened')), 'child PID stage opened');
+      assert(!fs.existsSync(path.join(dir, 'pid')), 'partial child PID file exposed before publication');
+      assert.equal(fs.readFileSync(path.join(dir, 'pid.pending'), 'utf8'), '', 'writer must still be held before PID bytes');
+      console.log(JSON.stringify({ event: 'pid-publication-held', childPid: child.pid, published: false, stageBytes: 0 }));
+      fs.writeFileSync(path.join(dir, 'publish'), 'publish\n');
+    }
     await until(() => fs.existsSync(path.join(dir, 'pid')), 'real child readiness');
-    const pid = Number(fs.readFileSync(path.join(dir, 'pid'), 'utf8'));
+    const text = fs.readFileSync(path.join(dir, 'pid'), 'utf8');
+    assert.match(text, /^[1-9][0-9]*\n$/, 'published child PID must be complete');
+    const pid = Number(text);
     const initial = helper.readProcess(pid); assert.equal(initial.kind, 'present', 'native live subject');
     assert(!initial.identity.state.startsWith('Z'));
     return { pid, initial, stop, release: () => fs.writeFileSync(path.join(dir, 'release'), 'release\n') };
@@ -41,8 +58,8 @@ while(!-e "$dir/release"){
 for (const name of cases.filter(x => !selected || x === selected)) {
   const dir = path.join(root, `${process.env.IDENTITY_CASE_TAG ?? 'positive'}-${name}`); fs.mkdirSync(dir);
   try {
-    if (['gone', 'zombie', 'reused', 'live', 'regrouped'].includes(name)) {
-      const old = await held(path.join(dir, 'old'), name === 'zombie');
+    if (['publication', 'gone', 'zombie', 'reused', 'live', 'regrouped'].includes(name)) {
+      const old = await held(path.join(dir, 'old'), name === 'zombie', name === 'publication');
       try {
         if (name === 'gone') {
           await old.stop();
@@ -114,9 +131,10 @@ for (const name of cases.filter(x => !selected || x === selected)) {
   } catch (e) { console.error(`CASE_ASSERTION ${name}`); throw e; }
 }
 if (!selected) {
-  const source = fs.readFileSync(helperFile, 'utf8'), stub = fs.readFileSync(stubFile, 'utf8');
+  const source = fs.readFileSync(helperFile, 'utf8'), stub = fs.readFileSync(stubFile, 'utf8'), fixtureSource = fs.readFileSync(import.meta.path, 'utf8');
   const replace = (text: string, old: string, value: string) => { assert.equal(text.split(old).length, 2, 'mutation anchor: ' + old); return text.replace(old, value); };
   const variants = [
+    { name: 'no-atomic-pid', mode: 'publication', fixture: replace(fixtureSource, 'my $pid_path = ' + '"$dir/pid.pending";', 'my $pid_path = ' + '"$dir/pid";'), message: 'partial child PID file exposed before publication' },
     { name: 'no-absence', mode: 'gone', code: replace(source, 'if (native.status === 1 && !native.stdout.trim()) return { kind: "absent", native };', 'if (native.status === 1 && !native.stdout.trim()) throw new Error("removed absence handling");'), message: 'gone must not fail' },
     { name: 'no-zombie', mode: 'zombie', code: replace(source, 'if (observed.identity.state.startsWith("Z")) return "zombie";', 'if (false) return "zombie";'), message: 'zombie must not fail' },
     { name: 'no-birth', mode: 'reused', code: replace(source, 'if (recorded.started !== observed.identity.started) return "reused";', 'if (false) return "reused";'), message: 'reused PID must not fail' },
@@ -127,9 +145,14 @@ if (!selected) {
     { name: 'empty-is-absent', mode: 'incomplete', code: replace(source, 'if (native.status !== 0 || !m || Number(m[1]) !== pid) throw new Error(`incomplete child identity record: ${JSON.stringify({ pid, ...native })}`);', 'if (native.status !== 0 || !m || Number(m[1]) !== pid) return {kind:"absent",native};'), message: 'incomplete observer must not claim absence' },
   ];
   for (const v of variants) {
-    const file = path.join(root, v.name + '.cjs'), stubCopy = path.join(root, v.name + '.sh');
+    const file = path.join(root, v.name + '.cjs'), stubCopy = path.join(root, v.name + '.sh'), fixtureCopy = path.join(root, v.name + '.ts');
     fs.writeFileSync(file, v.code ?? source); fs.writeFileSync(stubCopy, v.stub ?? stub);
-    const r = spawnSync('bun', [import.meta.path, here, root, '--case=' + v.mode, '--helper=' + file, '--stub=' + stubCopy], { env: { ...process.env, IDENTITY_CASE_TAG: v.name }, encoding: 'utf8', timeout: 60000 });
+    if (v.fixture) {
+      const relocated = v.fixture.replace(/^import \{ own \} from .*;$/m, 'import { own } from ' + JSON.stringify(path.join(here, 'fixtures/verify-readiness.ts')) + ';');
+      assert.notEqual(relocated, v.fixture, 'fixture control import relocated');
+      fs.writeFileSync(fixtureCopy, relocated);
+    }
+    const r = spawnSync('bun', [v.fixture ? fixtureCopy : import.meta.path, here, root, '--case=' + v.mode, '--helper=' + file, '--stub=' + stubCopy], { env: { ...process.env, IDENTITY_CASE_TAG: v.name }, encoding: 'utf8', timeout: 60000 });
     fs.writeFileSync(path.join(root, v.name + '.stdout'), r.stdout ?? ''); fs.writeFileSync(path.join(root, v.name + '.stderr'), r.stderr ?? '');
     assert.ifError(r.error); assert.equal(r.signal, null); assert.equal(r.status, 1, v.name);
     assert(r.stderr.includes('CASE_ASSERTION ' + v.mode)); assert(r.stderr.includes('AssertionError')); assert(r.stderr.includes(v.message), r.stderr);
