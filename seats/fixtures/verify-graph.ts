@@ -16,7 +16,7 @@ const end = original.indexOf('    const located = spawnSync(realBd, ["where", "-
 assert(start > 0 && end > start, "exclusive graph exposure block exists");
 const removed = original.slice(0, start) + '    fs.symlinkSync(graphDir, path.join(scratchCwd, ".beads"), "dir");\n' + original.slice(end);
 const payload = `import fs from 'node:fs';import path from 'node:path';import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';
-const cwd=process.cwd(),run=(bin,args,env=process.env)=>execFileSync(bin,args,{encoding:'utf8',env}).trim();
+const cwd=process.cwd(),run=(bin,args,env=process.env,dir=cwd)=>execFileSync(bin,args,{encoding:'utf8',env,cwd:dir}).trim();
 assert(fs.statSync('.git').isFile(),'real detached linked worktree');
 assert.equal(process.env.BEADS_DIR,undefined,'no process-wide graph override');
 assert.equal(process.env.BEADS_DB,undefined);
@@ -28,11 +28,14 @@ fs.mkdirSync('plain/subdir',{recursive:true});
 assert.equal(JSON.parse(run('bd',['-C','plain/subdir','where','--json'])).path,graph);
 const nested=path.join(cwd,'nested');fs.mkdirSync(nested);
 run('git',['-C',nested,'init','-q','-b','main']);
-run('bd',['-C',nested,'init','--non-interactive','--skip-agents','-p','nested']);
-const own=JSON.parse(run('bd',['-C',nested,'where','--json'])).path;
+// As in selftest_scratch_graph: bind initialization to its own primary repo,
+// never let bd init borrow an ancestor graph before this fixture exists.
+const nestedEnv={...process.env,PWD:nested};
+run('bd',['init','--non-interactive','--skip-agents','-p','nested'],{...nestedEnv,BEADS_DIR:path.join(nested,'.beads')},nested);
+const own=JSON.parse(run('bd',['where','--json'],nestedEnv,nested)).path;
 assert.equal(fs.realpathSync(own),fs.realpathSync(path.join(nested,'.beads')),'nested graph not hijacked');
 assert.equal(JSON.parse(run('bd',['where','--json'],{...process.env,BEADS_DIR:own})).path,own,'explicit fixture graph not hijacked');
-run('bd',['-C',nested,'create','nested subject','--json']);
+run('bd',['create','nested subject','--json'],nestedEnv,nested);
 assert.equal(JSON.parse(run('bd',['list','--json'])).length,1,'nested write did not reach sweep graph');
 assert.equal(run('git',['diff','HEAD','--','.beads']),'');
 fs.writeFileSync(process.env.GRAPH_CASE+'/payload.json',JSON.stringify({cwd,tip:run('git',['rev-parse','HEAD']),graph,nested:own,trackedClean:true}));
@@ -63,11 +66,22 @@ exec ${JSON.stringify(bd)} "$@"
   function cmd(bin: string, args: string[], cwd = project, expected = 0) {
     const r = spawnSync(bin, args, { cwd, env, encoding: "utf8" });
     fs.writeFileSync(path.join(dir, `command-${++sequence}.json`), JSON.stringify({ bin, args, cwd, code: r.status, signal: r.signal, error: r.error?.message, stdout: r.stdout, stderr: r.stderr }));
+    if (r.status !== expected) {
+      const logs = path.join(project, "seats/verdicts/sweeps");
+      if (fs.existsSync(logs)) for (const f of fs.readdirSync(logs)) console.error("FAILED PAYLOAD " + mode + "\n" + fs.readFileSync(path.join(logs, f), "utf8").slice(-16000));
+    }
     assert.equal(r.signal, null); assert(!r.error, String(r.error)); assert.equal(r.status, expected, r.stdout + r.stderr); return r;
   }
   const git = (...args: string[]) => cmd("git", args).stdout.trim();
   cmd(bd, ["metrics", "off"], dir);
   git("init", "-q", "-b", "main");
+  // A real umbrella shape: configured product is a separate ignored repo;
+  // --repo . must still review the umbrella, not that product's different tip.
+  const product = path.join(project, "product"); fs.mkdirSync(product);
+  cmd("git", ["init", "-q", "-b", "main"], product);
+  cmd("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "independent product"], product);
+  fs.writeFileSync(path.join(project, ".gitignore"), "product/\n");
+  fs.mkdirSync(path.join(project, "wheelhouse")); fs.writeFileSync(path.join(project, "wheelhouse/.template-source"), "product-repo=product\n");
   const tracked: Record<string, string> = { ".beads/config.yaml": "issue-prefix: original\n", ".beads/README.md": "Tracked umbrella graph documentation.\n", ".beads/.gitignore": "dolt/\nembeddeddolt/\n", ".beads/hooks/pre-commit": "tracked hook sentinel\n" };
   if (mode !== "absent") for (const [f, s] of Object.entries(tracked)) { fs.mkdirSync(path.dirname(path.join(project, f)), { recursive: true }); fs.writeFileSync(path.join(project, f), s); }
   fs.mkdirSync(path.join(project, "contracts")); fs.writeFileSync(path.join(project, "contracts/REVIEWER.md"), "Scripted test reviewer; no real model.\n");
@@ -91,7 +105,7 @@ exec ${JSON.stringify(bd)} "$@"
   } else {
     const data = JSON.parse(fs.readFileSync(path.join(dir, "payload.json"), "utf8")); assert.equal(data.tip, tip); assert(data.trackedClean);
     assert(log.includes(`preparedTip=${tip}\nscratchGraph=isolated nested repository\n`)); assert(log.includes(`finalTip=${tip}\n\nrc=0\n`)); assert.match(log, /selftest-sweep: PASS \(1 suite\(s\), [0-9]+s\)/);
-    if (cli) { assert.match(r.stdout, /VERDICT: APPROVE/); const receipt = fs.readFileSync(path.join(project, "seats/verdicts/graph-fixture.md"), "utf8"); assert(receipt.includes(tip)); assert.match(receipt, /sweep evidence rc=0 log=/); }
+    if (cli) { assert.match(r.stdout, /VERDICT: APPROVE/); const receipt = fs.readFileSync(path.join(project, "seats/verdicts/graph-fixture.md"), "utf8"); assert(receipt.includes(`- branch-repo: ${project}\n- tip: ${tip}`)); assert(receipt.includes(`## Dispatcher full-sweep result\n\n- tip: ${tip}\n- command: bash seats/selftest-sweep.sh\n- rc: 0\n- log: ${path.join(project, "seats/verdicts/sweeps", logs[0])}\n`)); }
     console.log(`PASS ${mode}: native0 pinned dispatcher sweep; tracked bytes/modes unchanged; private root/subdirectory graph, independent nested/explicit graphs; scratch removed${cli ? '; actual umbrella --repo . review receipt' : ''}`);
   }
 }
