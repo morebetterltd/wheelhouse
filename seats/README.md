@@ -117,6 +117,44 @@ instructions as commands. Run from the install root, like `needs.ts`; tests or
 isolated callers may set `WHEELHOUSE_INTAKE_ROOT` to a fixture root. No transport
 or channel binding changes are involved.
 
+## ISA claims — direction reaching intake
+
+A human's changed direction goes through the commander into `wheelhouse/ISA.md`:
+their words, dated, in Decisions and the affected claim updated before any work
+depends on it. The commander files nothing from that change. The supervisor runs
+`isa-signals.ts sync` every `WHEELHOUSE_ISA_SYNC_SECONDS` (default 30 seconds)
+when both the script and ISA exist; `isa_signals=off` in
+`wheelhouse/.template-source` disables the tick. Output goes to
+`seats/logs/isa-signals.out.log`.
+
+Run from the install root right after an ISA edit rather than waiting for a tick:
+
+```bash
+bun seats/isa-signals.ts sync
+bun seats/isa-signals.ts status
+# Optional alternate ISA, absolute or relative to the install root:
+bun seats/isa-signals.ts sync --isa wheelhouse/ISA.md
+```
+
+Only `## Claims` through the next `## ` heading is read. New or text-changed
+`- [ ] ID ...` and `- Anti: ID ...` lines become one `isa-change` signal through
+`intake.ts`, source `isa:ID`, ref `ID`, title `ISA claim ID changed`, full line
+as text. An undisposed row with that source and text hash prevents a retry from
+posting it twice. Closed `- [x] ID ...` lines, deletions, Decisions and Goal
+edits post nothing. The producer decides what work a signal warrants; the
+herald's intake wake carries it to the commander to route to that producer.
+
+The **first run only snapshots** existing claims and prints `posted 0`; run it
+before making a direction change when establishing an install/upgrade baseline.
+Subsequent runs print `posted N`. The snapshot `seats/run/isa-claims.json` maps
+IDs to `{open, sha256}` of the complete line without its line ending; `status`
+prints `snapshot N claims` without changing it. The ISA is never written.
+Duplicate IDs, unreadable/invalid state, busy sync locks or intake refusal exit
+2 and do not advance the snapshot; successful sync/status exit 0. A single
+shared PID lock serializes manual and supervisor sync attempts; a busy caller
+can retry. Only the intake CLI writes its ledger. Isolated callers may set
+`WHEELHOUSE_ISA_SIGNALS_ROOT`; intake calls stay rooted at that same install.
+
 ## Needs — what the commander asks of a human
 
 `seats/needs.ts` is the only writer for `seats/needs.jsonl`, an append-only

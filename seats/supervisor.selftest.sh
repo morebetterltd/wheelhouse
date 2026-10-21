@@ -199,5 +199,59 @@ if cmp -s "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; then fail "can
   after="$(grep -c 'desk restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
   if [ $((after-before)) -ge 4 ]; then pass "canary: removing crash-loop guard makes the no-fourth-restart leg fail"; else fail "canary did not prove crash-loop guard coverage before=$before after=$after"; fi
 fi
+# ISA sync uses synchronous --once exits and injected clock values. No elapsed
+# sleep decides these new checks, and no real daemon or installed service runs.
+ISA_PROJ="$FIX/isa-tick"
+mkdir -p "$ISA_PROJ/seats/run" "$ISA_PROJ/seats/logs" "$ISA_PROJ/wheelhouse"
+cp -f "$HERE/supervisor.sh" "$ISA_PROJ/seats/supervisor.sh"
+cat > "$ISA_PROJ/seats/daemons.sh" <<'SH'
+daemon_alive(){ return 0; }
+principal_channel_declared(){ return 1; }
+recover_dead_seats(){ :; }
+SH
+cat > "$ISA_PROJ/seats/isa-signals.ts" <<'TS'
+import * as fs from "node:fs";
+import * as path from "node:path";
+import assert from "node:assert/strict";
+const root = path.resolve(import.meta.dir, "..");
+assert.equal(process.env.WHEELHOUSE_ISA_SIGNALS_ROOT, root);
+assert.equal(process.env.WHEELHOUSE_INTAKE_ROOT, root);
+assert.deepEqual(process.argv.slice(2), ["sync"]);
+fs.appendFileSync(path.join(root, "seats/run/isa-calls.log"), "sync\n");
+console.log("ISA sync acknowledged");
+process.exit(process.env.ISA_TEST_FAIL === "1" ? 42 : 0);
+TS
+: > "$ISA_PROJ/seats/run/isa-calls.log"
+printf '## Claims\n- [ ] C1 fixture direction\n' > "$ISA_PROJ/wheelhouse/ISA.md"
+printf 'cleanup=off\ndigest=off\nisa_signals=on\n' > "$ISA_PROJ/wheelhouse/.template-source"
+isa_once(){ (cd "$ISA_PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$ISA_PROJ" WHEELHOUSE_SUPERVISOR_NOW="2026-01-01T00:00:${1}Z" WHEELHOUSE_ISA_SYNC_SECONDS="${2:-30}" bash seats/supervisor.sh --once) > "$FIX/isa-once.out" 2> "$FIX/isa-once.err"; }
+isa_count(){ [ -f "$ISA_PROJ/seats/run/isa-calls.log" ] || return 2; awk 'END {print NR+0}' "$ISA_PROJ/seats/run/isa-calls.log"; }
+isa_once 00; isa_once 29
+if [ "$(isa_count)" = 1 ] && grep -q '^ISA sync acknowledged$' "$ISA_PROJ/seats/logs/isa-signals.out.log"; then pass "ISA sync runs once initially, logs its acknowledgement and waits until due"; else fail "ISA initial sync/interval/log wrong"; fi
+isa_once 30; isa_once 30
+if [ "$(isa_count)" = 2 ]; then pass "ISA sync runs at the default 30-second boundary, not twice at the same tick"; else fail "ISA default cadence wrong"; fi
+isa_once 39 10; isa_once 40 10
+if [ "$(isa_count)" = 3 ]; then pass "ISA sync honors WHEELHOUSE_ISA_SYNC_SECONDS"; else fail "ISA custom cadence wrong"; fi
+printf 'cleanup=off\ndigest=off\nisa_signals=off\n' > "$ISA_PROJ/wheelhouse/.template-source"
+isa_once 50 10
+if [ "$(isa_count)" = 3 ]; then pass "isa_signals=off skips the sync"; else fail "ISA opt-out ignored"; fi
+printf 'cleanup=off\ndigest=off\n' > "$ISA_PROJ/wheelhouse/.template-source"
+mv -f "$ISA_PROJ/wheelhouse/ISA.md" "$ISA_PROJ/wheelhouse/ISA.saved"
+isa_once 50 10
+mv -f "$ISA_PROJ/wheelhouse/ISA.saved" "$ISA_PROJ/wheelhouse/ISA.md"
+isa_once 50 10
+if [ "$(isa_count)" = 4 ]; then pass "ISA sync skips an absent ISA, and defaults on when present"; else fail "ISA file-presence/default guard wrong"; fi
+mv -f "$ISA_PROJ/seats/isa-signals.ts" "$ISA_PROJ/seats/isa-signals.saved"
+cp -f "$ISA_PROJ/seats/logs/isa-signals.out.log" "$FIX/isa-log.before-missing"
+isa_once 59 1
+if ! cmp -s "$FIX/isa-log.before-missing" "$ISA_PROJ/seats/logs/isa-signals.out.log"; then fail "missing ISA script was invoked"; fi
+mv -f "$ISA_PROJ/seats/isa-signals.saved" "$ISA_PROJ/seats/isa-signals.ts"
+isa_once 59 1
+if [ "$(isa_count)" = 5 ]; then pass "ISA sync skips an absent script and resumes when it exists"; else fail "ISA script-presence guard wrong"; fi
+# An unsuccessful child must not mark the interval completed: retry at the same
+# injected instant, not after a real wait. Both completion and failure are exits.
+ISA_TEST_FAIL=1 isa_once 59.999 0.5
+isa_once 59.999 0.5; isa_once 59.999 0.5
+if [ "$(isa_count)" = 7 ]; then pass "failed ISA sync retries without advancing the successful interval"; else fail "ISA failure advanced interval or retry failed"; fi
 if [ "$FAIL" -eq 0 ]; then echo "supervisor.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "supervisor.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1

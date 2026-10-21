@@ -24,6 +24,7 @@ So when you read a stage below, the question is never "was that passed along cor
 - The herald aims itself at the commander pane through `seats/run/commander-pane.json`; `seats/run/herald.target.json` records how it resolved and validated the target.
 - The supervisor keeps the herald, desk, and declared courier alive; `seats/run/supervisor.state.json` records crash-loop holds, and `seats/logs/supervisor.out.log` / `.stderr.log` hold the run output.
 - The supervisor runs dead-seat recovery on its tick; recovery decisions are appended to `seats/logs/cockpit-recovery.log` and seat logs.
+- The supervisor syncs changed open claims from `wheelhouse/ISA.md` into `isa-change` rows in `seats/intake.jsonl` for the producer every 30 seconds (unless `isa_signals=off`); the first run only snapshots. After a direction edit, the commander can run `bun seats/isa-signals.ts sync` immediately, before work depends on it. Output is in `seats/logs/isa-signals.out.log`.
 - The supervisor schedules the nightly cleanup reaper; `seats/logs/cleanup.log` is the audit trail for every removal or keep.
 - Alerts land as Dispatch Office rows in `seats/inbox.jsonl`; sustained or human-owned alerts also open needs in `seats/needs.jsonl` through `needs.ts`.
 - `seats/run/fleet-snapshot.json` is the status snapshot; optional prompt status readers display it rather than recomputing fleet liveness.
