@@ -18,10 +18,19 @@ const env = { ...process.env, TMPDIR: tmp, WHEELHOUSE_NIGHTLY_ROOT: repo, WHEELH
 for (const key of ["WHEELHOUSE_SUPERVISOR_PAUSE_FILE", "WHEELHOUSE_SUPERVISOR_NOW", "BASH_ENV", "ENV"]) delete env[key];
 const git = (...args: string[]) => execFileSync(realGit, ["-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 fs.writeFileSync(path.join(bin, "bd"), `#!/usr/bin/env bun
-import fs from "node:fs";import path from "node:path";
+import fs from "node:fs";import path from "node:path";import {spawnSync} from "node:child_process";
 const [cmd]=process.argv.slice(2);fs.appendFileSync(process.env.NIGHTLY_TEST_TRACE,JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),home:process.env.HOME})+"\\n");
 if(cmd==="metrics")process.exit(0);
-if(cmd==="init"){fs.mkdirSync(process.env.BEADS_DIR,{recursive:true});process.exit(0);}
+if(cmd==="init"){
+  fs.mkdirSync(process.env.BEADS_DIR,{recursive:true});
+  if(process.env.NIGHTLY_TEST_RACE_TOKEN){
+    const r=spawnSync("bun",[process.env.NIGHTLY_TEST_RACE_HELPER,"acquire",process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK,process.env.NIGHTLY_TEST_RACE_OWNER,process.env.NIGHTLY_TEST_RACE_TOKEN,""],{env:process.env,encoding:"utf8"});
+    if(r.error||r.status!==0)throw new Error("race holder acquisition failed: "+r.stderr+r.stdout);
+    fs.writeFileSync(process.env.NIGHTLY_TEST_RACE_FILE,r.stdout);
+    fs.copyFileSync(path.join(process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK,"wheelhouse-selftest-sweep"),process.env.NIGHTLY_TEST_RACE_FILE+".marker");
+  }
+  process.exit(0);
+}
 if(cmd==="where"){console.log(JSON.stringify({path:fs.realpathSync(path.join(process.cwd(),".beads"))}));process.exit(0);}
 throw new Error("unexpected fixture bd command "+cmd);
 `, { mode: 0o755 });
@@ -67,6 +76,37 @@ atBoundary = false; fs.renameSync = (() => { atBoundary = true; throw new Error(
 try { nonAtomic.writeNightlyJson(output, replacement); assert.equal(atBoundary, false); assert.notDeepEqual(fs.readFileSync(output), priorBytes); }
 finally { fs.renameSync = rename; fs.writeFileSync(output, priorBytes); }
 console.log("PASS nightly atomic publication: injected rename failure retains prior complete result and removes temp; direct-write removal changes the result and fails that criterion");
+// Claim the fixture endpoint AFTER preflight, during bd init. This is a real
+// ancestry-owned token: no-wait must decline fresh admission, not borrow it.
+const raceHelper = path.join(repo, "seats/selftest-sweep-lock.ts"), raceLock = env.WHEELHOUSE_SELFTEST_SWEEP_LOCK;
+function admissionRace(label: string, script: string, clock: string, expected: number) {
+  const raceToken = randomUUID().replaceAll("-", ""), raceFile = path.join(base, label + ".identity");
+  try {
+    const r = cli(label, script, { WHEELHOUSE_SUPERVISOR_NOW: clock, NIGHTLY_TEST_RACE_HELPER: raceHelper,
+      NIGHTLY_TEST_RACE_TOKEN: raceToken, NIGHTLY_TEST_RACE_OWNER: String(process.pid), NIGHTLY_TEST_RACE_FILE: raceFile });
+    assert(fs.statSync(raceFile).isFile(), "preflight passed and owned holder was published during setup");
+    assert.equal(r.status, expected, r.stderr + r.stdout);
+    assert.deepEqual(fs.readFileSync(path.join(raceLock, "wheelhouse-selftest-sweep")), fs.readFileSync(raceFile + ".marker"));
+    assert.deepEqual(worktrees(), [repo]);
+    const tickets = fs.readdirSync(raceLock + ".queue").filter(n => /^\d{20}\./.test(n)).map(n => read(path.join(raceLock + ".queue", n)));
+    assert.deepEqual(tickets.map(t => t.pid), [process.pid], "only our transient nightly ticket was withdrawn");
+    if (expected === 75) {
+      assert.match(read(missed).reason, /SKIP lock busy/); assert.deepEqual(fs.readFileSync(output), priorBytes);
+      const logs = fs.readdirSync(path.dirname(first.logPath)).map(n => path.join(path.dirname(first.logPath), n));
+      const skipped = logs.map(f => fs.readFileSync(f, "utf8")).filter(t => t.includes("SKIP lock busy"));
+      assert.equal(skipped.length, 1); assert(!skipped[0].includes("selftest-sweep: START "));
+    } else { assert.notDeepEqual(fs.readFileSync(output), priorBytes, "removed no-wait incorrectly publishes a completed run"); }
+  } finally {
+    if (fs.existsSync(raceFile)) execFileSync("bun", [raceHelper, "release", raceLock, String(process.pid), raceToken, fs.readFileSync(raceFile, "utf8").trim()], { env });
+  }
+}
+admissionRace("setup-admission-race", "nightly-sweep.ts", "2026-01-01T04:00:00Z", 75);
+const raceEntry = fs.readFileSync(path.join(repo, "seats/nightly-sweep.ts"), "utf8"), noWaitOption = "noWait: true";
+assert.equal(raceEntry.split(noWaitOption).length, 2);
+fs.writeFileSync(path.join(repo, "seats/nightly-race-removed.ts"), raceEntry.replace(noWaitOption, "noWait: false"));
+admissionRace("removed-setup-no-wait", "nightly-race-removed.ts", "2026-01-01T05:00:00Z", 1);
+fs.writeFileSync(output, priorBytes);
+console.log("PASS nightly setup/admission race: native75 missed, zero START, prior red bytes retained, holder/ticket unchanged and scratch removed; removed no-wait publishes a completed run instead");
 // A missed run must keep the last full result, not erase a red brake.
 const token = randomUUID().replaceAll("-", ""), helper = path.join(repo, "seats/selftest-sweep-lock.ts"), lock = env.WHEELHOUSE_SELFTEST_SWEEP_LOCK;
 const identity = execFileSync("bun", [helper, "acquire", lock, String(process.pid), token, ""], { env, encoding: "utf8" }).trim();
@@ -139,7 +179,15 @@ try {
   assert.ifError(r.error); assert.equal(r.status, 75, r.stderr + r.stdout); assert(r.stderr.includes("selftest-sweep: SKIP lock busy")); assert(!r.stdout.includes("selftest-sweep: START ")); assert.deepEqual(fs.readFileSync(path.join(lock, "wheelhouse-selftest-sweep")), before);
   const queued = () => fs.readdirSync(lock + ".queue").flatMap(f => { try { return [JSON.parse(fs.readFileSync(path.join(lock + ".queue", f), "utf8"))]; } catch { return []; } });
   assert.deepEqual(queued().filter(r => typeof r.pid === "number").map(r => r.pid), [process.pid]);
-  const runner = fs.readFileSync(path.join(repo, "seats/selftest-sweep.sh"), "utf8"), canary = path.join(repo, "seats/removed-no-wait.sh");
+  const ordinaryEnv = { ...env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: path.join(repo, "seats/tiny-green.selftest.sh") }; delete ordinaryEnv.WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT;
+  const ordinary = spawnSync("bash", [path.join(repo, "seats/selftest-sweep.sh"), "--tier", "full"], { cwd: repo, env: ordinaryEnv, encoding: "utf8" });
+  assert.ifError(ordinary.error); assert.equal(ordinary.status, 0, ordinary.stderr + ordinary.stdout); assert(!ordinary.stderr.includes("waiting for host-wide lock"));
+  assert.deepEqual(fs.readFileSync(path.join(lock, "wheelhouse-selftest-sweep")), before); assert.deepEqual(queued().filter(r => typeof r.pid === "number").map(r => r.pid), [process.pid]);
+  const runner = fs.readFileSync(path.join(repo, "seats/selftest-sweep.sh"), "utf8"), canary = path.join(repo, "seats/removed-no-wait.sh"), inheritedCanary = path.join(repo, "seats/removed-fresh-admission.sh");
+  fs.writeFileSync(inheritedCanary, once(runner, 'if [ "${WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT:-0}" != 1 ]; then', 'if true; then # removed fresh-only nightly admission'));
+  const inherited = spawnSync("bash", [inheritedCanary, "--tier", "full"], { cwd: repo, env: { ...env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: path.join(repo, "seats/tiny-green.selftest.sh"), WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT: "1" }, encoding: "utf8" });
+  assert.ifError(inherited.error); assert.equal(inherited.status, 1, inherited.stderr + inherited.stdout); assert(inherited.stdout.includes("admission flag leaked to suite")); assert(inherited.stdout.includes("selftest-sweep: START "));
+  console.log("PASS fresh-only nightly admission: held ancestor skips75 with no payload; ordinary nested sweep reuses validated owner; removed fresh-only guard reproduces flag-leak rc1");
   fs.writeFileSync(canary, once(runner, 'if [ "${WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT:-0}" = 1 ]; then', 'if false; then # removed nightly no-wait'));
   const child = spawn("bash", [canary, "--tier", "full"], { cwd: repo, env: { ...env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: path.join(repo, "seats/tiny-green.selftest.sh"), WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT: "1" }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "", closed = false; child.stdout.on("data", b => stdout += b); child.stderr.on("data", b => stderr += b); const done = new Promise<number | null>(resolve => child.on("close", c => { closed = true; resolve(c); }));
