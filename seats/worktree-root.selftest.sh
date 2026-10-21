@@ -221,15 +221,36 @@ if [ "$1" = show ]; then cat "$FIXTURE_REPO_CLAIM"; else printf '[]\n'; fi
 STUB
 chmod +x "$BIN/bd"
 CLAIM="$FIX/repo-claim.json"
+write_repo_claim() {
+  node - "$CLAIM" "$1" "$2" <<'JS'
+const fs=require('fs'),[file,mode,id]=process.argv.slice(2);
+const repo=mode==='occupied-line'?'Repo: UMBRELLA':'Closes: H7. Repo: UMBRELLA (project-owned machinery).';
+const description=repo+'\nTrace: Dispatch regression fixture: prepare work in the repository its contract names.\nSignal: isa-gap: W3\nSkills: intent@1.0.0\n\nIntent:\nRoute this fixture task to its declared repository without creating a branch in the product repository. Refuse clearly if the occupied target belongs to another repository.\n\nOutcomes:\n- O1 Dispatch prepares the declared worktree or refuses without changing the live seat.\n  consumer: machine — the fixture dispatcher and its Git witness\n  surface: the seat worktree, dispatch output and both repositories\' refs\n  check: run — dispatch this task and inspect the native branch lists and retained seat record\n';
+fs.writeFileSync(file,JSON.stringify([{id,description}])+'\n');
+JS
+}
+check_repo_claim() {
+  local bead="$1" rc=0 out
+  out="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/contract.ts" check "$bead" 2>&1)" || rc=$?
+  if [ "$rc" = 0 ]; then
+    pass "$bead fixture passes the real contract gate (native metadata, no fallback)"
+  else
+    fail "$bead fixture is not a contract (exit $rc): $out"
+    return 1
+  fi
+}
+# The original bare Repo description must still be rejected by the production gate.
+printf '%s\n' '[{"id":"bead-invalid-repo","description":"Repo: UMBRELLA"}]' > "$CLAIM"
+RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/contract.ts" check bead-invalid-repo 2>&1)" || RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -qF 'contract: Signal: missing'; then
+  pass "unchanged production gate rejects the former bare Repo fixture"
+else fail "former non-contract was not rejected for its missing Signal (exit $RC): $OUT"; fi
 for mode in occupied-line occupied-inline; do
   bead="bead-$mode"
-  if [ "$mode" = occupied-line ]; then
-    printf '%s\n' '[{"id":"fixture","description":"Repo: UMBRELLA"}]' > "$CLAIM"
-  else
-    printf '%s\n' '[{"id":"fixture","description":"Closes: H7. Repo: UMBRELLA (project-owned machinery)."}]' > "$CLAIM"
-  fi
+  write_repo_claim "$mode" "$bead"
+  check_repo_claim "$bead" || exit 1
   cp -f "$UMB/seats/state.json" "$FIX/$mode-before.json"
-  RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/adapter.ts" dispatch worker-1 "$bead" "must not prepare a product branch" 2>&1)" || RC=$?
+  RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/adapter.ts" dispatch worker-1 "$bead" "must not prepare a product branch" 2>&1)" || RC=$?
   printf '%s\n' "$OUT" > "$FIX/$mode-output.txt"
   if HOME="$HOME_FIX" node "$HERE/fixtures/dispatch-repo.mjs" "$UMB" "$bead" "$RC" "$mode" "$FIX/$mode-before.json" "$FIX/$mode-output.txt"; then
     pass "$mode declaration refuses a product target before creating or switching a branch"
@@ -248,8 +269,9 @@ if [ "$RC" = 0 ]; then pass "fresh umbrella seat is provisioned in the fixture";
 printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-umbrella/worker-2/auth.json"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$UMB/seats/adapter.ts" spawn worker-2 2>&1)" || RC=$?
 if [ "$RC" = 0 ]; then pass "fresh umbrella fixture seat spawns"; else fail "fresh seat spawn failed: $OUT"; fi
-printf '%s\n' '[{"id":"fixture","description":"Closes: H7. Repo: UMBRELLA (project-owned machinery)."}]' > "$CLAIM"
-RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/adapter.ts" dispatch worker-2 bead-umbrella-inline "prepare umbrella, not product" 2>&1)" || RC=$?
+write_repo_claim fresh-inline bead-umbrella-inline
+check_repo_claim bead-umbrella-inline || exit 1
+RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/adapter.ts" dispatch worker-2 bead-umbrella-inline "prepare umbrella, not product" 2>&1)" || RC=$?
 if HOME="$HOME_FIX" node "$HERE/fixtures/dispatch-repo.mjs" "$UMB" bead-umbrella-inline "$RC" fresh-inline unused unused; then
   pass "inline Repo: UMBRELLA prepares the fresh worktree in umbrella only"
 else fail "inline declaration prepared the wrong repository: $OUT"; fi
