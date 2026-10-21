@@ -121,7 +121,7 @@ fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
-if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) fs.appendFileSync(process.env.WHEELHOUSE_TEST_CHILD_LEDGER, JSON.stringify({event:"model",pid:process.pid}) + "\n");
+if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) require(process.env.WHEELHOUSE_TEST_CHILD_IDENTITY).recordChild({event:"model"});
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the reviewer), not rely on an operator
 // export reaching this one-shot process.

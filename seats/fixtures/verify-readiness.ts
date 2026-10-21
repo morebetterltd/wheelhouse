@@ -104,11 +104,19 @@ export async function settle<T>(dir: string, result: Promise<T>, exited: () => b
 }
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; error?: string };
-function own(name: string, label: string, bin: string, args: string[], env: NodeJS.ProcessEnv) {
-  const child = spawn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+export function own(name: string, label: string, bin: string, args: string[], env: NodeJS.ProcessEnv) {
+  // The child publishes its native identity before executing main, not a
+  // racy parent-side ps after a fast or deliberately killed child has exited.
+  const tracing = Boolean(process.env.WHEELHOUSE_TEST_CHILD_LEDGER), launchId = randomUUID();
+  if (tracing && bin !== "bun") throw new Error("fixture identity preload requires a Bun entrypoint");
+  const identityFile = process.env.WHEELHOUSE_TEST_CHILD_IDENTITY ?? path.join(import.meta.dir, "verify-child-identity.cjs");
+  const child = spawn(bin, tracing ? ["--preload", identityFile, ...args] : args, {
+    env: tracing ? { ...env, WHEELHOUSE_TEST_CHILD_CAPTURE: JSON.stringify({ name, fixture: label, launchId }) } : env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   child.stdout!.pipe(process.stdout, { end: false }); child.stderr!.pipe(process.stderr, { end: false });
   let exit: Exit | undefined;
-  ledger({ event: "spawn", name, fixture: label, pid: child.pid });
+  ledger({ event: "launch", name, fixture: label, pid: child.pid, launchId });
   const closed = new Promise<Exit>(resolve => {
     // Exit, not stdio EOF, is the readiness terminal event. EOF is joined below.
     child.once("exit", (code, signal) => { exit = { code, signal }; ledger({ event: "exit", name, fixture: label, pid: child.pid, ...exit }); });
