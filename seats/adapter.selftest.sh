@@ -90,6 +90,18 @@ selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+phase "0. shared status/floor turn display (display only, not alert policy)"
+selftest_copy_seat_runtime "$FIX/turn-display-runtime" "$ADAPTER_DIR" || exit 2
+if bun "$HERE/fixtures/seat-turn-display.ts" "$FIX/turn-display-runtime/seats" "$FIX/turn-display"; then
+  pass 'status and floor distinguish working/settled without changing alert snapshots'
+else
+  fail 'shared turn display regression'
+fi
+if [ "${WHEELHOUSE_ADAPTER_TURN_DISPLAY_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || exit 1
+  echo 'adapter.selftest: PASS (turn display only)'; exit 0
+fi
+
 phase "0. status only rotates owned, regular seat logs"
 selftest_copy_seat_runtime "$FIX/log-rotation-runtime" "$ADAPTER_DIR"
 if bun "$HERE/fixtures/log-rotation-owner.ts" "$FIX/log-rotation-runtime" "$FIX"; then
@@ -931,7 +943,7 @@ if [ $RC -eq 0 ] && says "OK" && says "capacity cleared at"; then
   pass "capacity: successful probe records capacity cleared time"
 else fail "capacity: probe did not report a capacity clear (exit $RC): $OUT"; fi
 run status
-if [ $RC -eq 0 ] && says "RUNNING" && ! says "PARKED" && ! says "CAPACITY: QUOTA"; then
+if [ $RC -eq 0 ] && grep -Eq 'worker-1.*(RUNNING|SETTLED)' <<<"$OUT" && ! says "PARKED" && ! says "CAPACITY: QUOTA"; then
   pass "capacity: successful probe clears the parked quota marker"
 else fail "capacity: status stayed parked after successful probe (exit $RC): $OUT"; fi
 if node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.exit(s.seats["worker-1"].lastCapacityEvent ? 1 : 0)' "$STATE"; then
@@ -941,7 +953,7 @@ run dispatch worker-1 quota-bead 'successful turn after quota'
 if [ $RC -eq 0 ] && wait_for "$LOG" 'echo: Bead quota-bead'; then pass "capacity: later successful turn reached the event log"
 else fail "capacity: later successful turn did not land (exit $RC): $OUT"; fi
 run status
-if [ $RC -eq 0 ] && says "RUNNING" && ! says "CAPACITY: QUOTA" && ! says "PARKED"; then
+if [ $RC -eq 0 ] && grep -Eq 'worker-1.*(RUNNING|SETTLED)' <<<"$OUT" && ! says "CAPACITY: QUOTA" && ! says "PARKED"; then
   pass "capacity: later successful turn clears the parked quota state"
 else fail "capacity: later successful turn did not clear quota state (exit $RC): $OUT"; fi
 run stop worker-1 >/dev/null 2>&1
@@ -1252,8 +1264,8 @@ LIVE_AGENT_DIR="${ARGV%argv.json}"
 LIVE_SESSION_BEFORE="$(state_get sessionFile)"
 touch "$LIVE_AGENT_DIR/ignore-get-state"
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/adapter.ts" status 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && grep -q 'worker-1.*RUNNING' <<<"$OUT" && ! says 'WEDGED'; then
-  pass "status reports a live silent responder RUNNING, not guessed WEDGED"
+if [ $RC -eq 0 ] && grep -Eq 'worker-1.*(RUNNING|SETTLED)' <<<"$OUT" && ! says 'WEDGED'; then
+  pass "status reports observed live turn state, not guessed WEDGED from silent RPC"
 else fail "status guessed a failure for a live silent responder (exit $RC): $OUT"; fi
 rm -f "$LIVE_AGENT_DIR/ignore-get-state"
 run dispatch worker-1 bead-x "live seat continues without self-heal"
@@ -1416,8 +1428,8 @@ if [ $RC -eq 0 ] && [ -f "$ROTLOG.1" ] && [ -f "$ROTLOG" ]; then pass "rotation 
 else fail "rotation did not archive settled oversize log (exit $RC): $OUT"; fi
 mv "$FIX/state-before-big.json" "$STATE"
 run status
-if [ $RC -eq 0 ] && says "worker-1" && says "RUNNING"; then
-  pass "a fresh status invocation reads worker-1 as RUNNING from state.json"
+if [ $RC -eq 0 ] && grep -Eq 'worker-1.*(RUNNING|SETTLED)' <<<"$OUT"; then
+  pass "a fresh status invocation reads worker-1 liveness and turn display from disk"
 else fail "status did not survive adapter restart (exit $RC): $OUT"; fi
 if ! says "account fixture-human-account"; then
   pass "status still works for a roster with no account.label"

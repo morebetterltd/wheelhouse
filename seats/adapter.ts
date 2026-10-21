@@ -69,6 +69,7 @@ import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
+import { seatTurnDisplay } from "./seat-turn-display";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
 import { waitForStateLock, StateLockCancelled } from "./state-lock";
@@ -1908,7 +1909,8 @@ async function cmdStatus(): Promise<void> {
     const last = ownedLog ? lastEvent(rec.log) : "-";
     // Status reports observed process/log facts, not a guessed get_state
     // deadline. A live, slow responder is not evidence of a wedged seat.
-    const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? "RUNNING" : died ? "DIED" : "STOPPED";
+    const turnDisplay = ownedLog ? seatTurnDisplay(rec.log) : "RUNNING";
+    const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? turnDisplay : died ? "DIED" : "STOPPED";
     const pid = alive ? `pid ${rec.pid}` : died ? (bareAlive ? `pid ${rec.pid} foreign` : `pid ${rec.pid} gone`) : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
