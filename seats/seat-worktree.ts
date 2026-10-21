@@ -234,7 +234,9 @@ function integrationLineFor(root: string, beadId: string): string | null {
 }
 
 function repoLineFor(root: string, beadId: string): string | null {
-  const m = beadText(root, beadId).match(/^\s*Repo:\s*([^\s`'"]+)/mi);
+  // Contracts also put the field after another sentence ("Closes: H7. Repo:").
+  // Do not match ordinary prose such as "a task naming Repo: UMBRELLA".
+  const m = beadText(root, beadId).match(/(?:^[ \t]*|[.;][ \t]+)Repo:[ \t]*([^\s`'",;]+)/mi);
   return m ? m[1] : null;
 }
 
@@ -671,17 +673,26 @@ export function productRepoFor(root: string): string | null {
 
 /** The repository seat worktrees belong to. A single-repo install IS the
  * repository unless wheelhouse/.template-source records a product-repo= for an
- * umbrella layout. An existing target's own repository wins first, because the
- * seat may already have been hand-created or may belong to the product repo
- * even when the umbrella root is itself a git repository. */
+ * umbrella layout. An explicit UMBRELLA declaration wins over an existing
+ * target: silently reusing a product worktree would prepare the wrong repo.
+ * Otherwise retain the existing target's repository, including hand-created
+ * product worktrees when the umbrella itself is also a git repository. */
 export function gitRepoFor(root: string, target: string, beadId?: string): string {
+  if (beadId && /^UMBRELLA$/i.test(repoLineFor(root, beadId) ?? "")) {
+    const umbrella = git(root, ["rev-parse", "--show-toplevel"]);
+    const expected = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    if (!umbrella.ok || !expected.ok) refuse(`${root} is not a git repository, but bead ${beadId} declares Repo: UMBRELLA`);
+    if (fs.existsSync(target)) {
+      const actual = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], target);
+      if (actual.ok && !samePath(actual.out, expected.out)) {
+        refuse(`bead ${beadId} declares Repo: UMBRELLA, but worktree ${target} belongs to another repository; refusing to create or switch its branch. Prepare an umbrella-owned seat worktree before dispatching this task.`);
+      }
+    }
+    return umbrella.out;
+  }
   if (fs.existsSync(target)) {
     const common = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], target);
     if (common.ok && common.out) return path.dirname(common.out);
-  }
-  if (beadId && /^UMBRELLA$/i.test(repoLineFor(root, beadId) ?? "")) {
-    if (git(root, ["rev-parse", "--is-inside-work-tree"]).ok) return git(root, ["rev-parse", "--show-toplevel"]).out || root;
-    refuse(`${root} is not a git repository, but bead ${beadId} declares Repo: UMBRELLA`);
   }
   const product = productRepoFor(root);
   if (product) {

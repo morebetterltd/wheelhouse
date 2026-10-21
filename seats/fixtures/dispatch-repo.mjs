@@ -1,0 +1,28 @@
+// Observe real adapter dispatch effects in manufactured umbrella/product repos.
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+const [root,bead,code,mode,beforeFile,outputFile]=process.argv.slice(2);
+for(const repo of [root,path.join(root,'template')])assert(fs.statSync(path.join(repo,'.git')).isDirectory());
+function git(repo,args){const r=spawnSync('git',['-C',repo,...args],{encoding:'utf8'});assert(!r.error,String(r.error));assert.equal(r.signal,null);return r;}
+function hasBranch(repo){const r=git(repo,['show-ref','--verify','--quiet','refs/heads/fleet/'+bead]);assert([0,1].includes(r.status),r.stderr);return r.status===0;}
+const state=JSON.parse(fs.readFileSync(path.join(root,'seats/state.json'),'utf8'));
+const witness={case:mode,code:Number(code),umbrellaBranchCreated:hasBranch(root),productBranchCreated:hasBranch(path.join(root,'template'))};
+console.log('REPO_DISPATCH_WITNESS '+JSON.stringify(witness));
+if(mode.startsWith('occupied-')){
+ assert.equal(Number(code),1,'foreign-repo target must be refused');
+ const output=fs.readFileSync(outputFile,'utf8');assert(output.includes('Repo: UMBRELLA')&&output.includes('belongs to another repository')&&output.includes('refusing to create or switch'),'refusal must explain repository mismatch');
+ assert.equal(witness.umbrellaBranchCreated,false);assert.equal(witness.productBranchCreated,false,'empty branch created in product repo');
+ const before=JSON.parse(fs.readFileSync(beforeFile,'utf8')).seats['worker-1'],after=state.seats['worker-1'];
+ for(const key of ['pid','cwd','lastBead','sessionFile','sessionId'])assert.deepEqual(after[key],before[key],key+' changed during refused dispatch');
+ const branch=git(after.cwd,['symbolic-ref','--short','HEAD']);assert.equal(branch.status,0,branch.stderr);assert.equal(branch.stdout.trim(),'fleet/bead-product-b');
+ process.kill(after.pid,0);
+ console.log('PASS '+mode+': clear refusal; no branch in either repo; product worktree, live seat and dispatch record preserved');
+}else{
+ assert.equal(mode,'fresh-inline');assert.equal(Number(code),0);assert.equal(witness.umbrellaBranchCreated,true);assert.equal(witness.productBranchCreated,false,'empty branch created in product repo');
+ const rec=state.seats['worker-2'];assert.equal(rec.lastBead,bead);assert.equal(rec.cwd,path.join(root,'.wheelhouse-worktrees/worker-2'));
+ const actual=git(rec.cwd,['rev-parse','--path-format=absolute','--git-common-dir']),expected=git(root,['rev-parse','--path-format=absolute','--git-common-dir']);assert.equal(actual.status,0,actual.stderr);assert.equal(expected.status,0,expected.stderr);assert.equal(actual.stdout,expected.stdout);
+ const cwdFile=path.join(process.env.HOME,'.pi-seats-umbrella/worker-2/cwd.txt');assert.equal(fs.readFileSync(cwdFile,'utf8'),rec.cwd);
+ console.log('PASS fresh-inline: umbrella branch/worktree prepared and worker launched there; no product branch');
+}
