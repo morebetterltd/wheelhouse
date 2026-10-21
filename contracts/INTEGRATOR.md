@@ -10,6 +10,10 @@ When several candidates need the same sweep tier, start an isolated batch branch
 
 The reviewer dispatcher refuses unless the batch contains the reviewed commit, its first-parent history reaches current main, the complete recorded command/env and recorded-tier inventory passed with rc=0 (for core, exactly the manifest at the batch tip; for full, every root suite), and the log is fresh and safely readable. The verdict names both candidate and batch tips and the log. A full batch can cover a core-required candidate; the receipt distinguishes actual batch tier/reason from the candidate's required tier/reason. A full-required candidate cannot reuse core coverage: refusal names the path or Done-line rule requiring full. A red, partial, stale or unrelated batch proves nothing for reuse. If main or a candidate moves outside the validated batch, make a new combined tree and obtain new evidence; do not edit a failed log into a pass. With no flag, the ordinary per-review sweep path remains unchanged. See `seats/README.md`, “Reuse one passing sweep for a review batch”, for the exact checks and evidence limits.
 
+## Nightly red brake
+
+Before merging on a core receipt, check the install's latest `seats/run/nightly-sweep.json`. While its completed result is red (`rc=1`), nothing merges on core coverage: obtain a full-tier receipt, even for a digest-only change or an older core batch. The dispatcher records `tier=full reason=nightly red <date> <tip>` and refuses core-batch reuse. A later completed green releases the brake; a missing record imposes none, and invalid/unreadable state conservatively requires full. `nightly-sweep-missed.json` reports skipped/setup-failed attempts without erasing a previous red. The `nightly-sweep-red` / `nightly-sweep-missed` alerts identify the evidence or reason to inspect. See `seats/README.md`, “Nightly full tier”.
+
 ## Contract
 
 Copied byte-for-byte into every project. Do not edit this section.

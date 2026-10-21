@@ -14,6 +14,8 @@ cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; selftest_remove
 selftest_install_cleanup_traps cleanup
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/wheelhouse"
 selftest_copy_seat_runtime "$PROJ" "$HERE"; chmod +x "$PROJ/seats/supervisor.sh" "$PROJ/seats/daemons.sh"
+# Never launch a real full sweep from the legacy daemon/clock fixtures.
+printf 'process.exit(0);\n' > "$PROJ/seats/nightly-sweep.ts"
 for d in herald desk courier; do cat > "$PROJ/seats/$d.ts" <<'TS'
 import * as fs from "node:fs";
 import { fixtureOwner, fixtureOwnerAlive } from "./herald-owner";
@@ -199,5 +201,9 @@ if cmp -s "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; then fail "can
   after="$(grep -c 'desk restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
   if [ $((after-before)) -ge 4 ]; then pass "canary: removing crash-loop guard makes the no-fourth-restart leg fail"; else fail "canary did not prove crash-loop guard coverage before=$before after=$after"; fi
 fi
+# Nightly-only fixture and sensitive removals, isolated from legacy daemons.
+if bun "$HERE/fixtures/nightly-supervisor.ts" "$HERE" "$FIX"; then
+  pass "nightly full-tier clock, pause, busy skip and sensitive removal controls"
+else fail "nightly full-tier supervisor regression"; fi
 if [ "$FAIL" -eq 0 ]; then echo "supervisor.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "supervisor.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1

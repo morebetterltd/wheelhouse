@@ -591,7 +591,7 @@ through `PATH` remains the read-only shim inside the reviewer process.
 
 ### Required review tier
 
-For **every** review, `verify.ts` runs a dispatcher-owned sweep of **the tier the change requires** at the exact reviewed tip **before** starting the reviewer. It records the selected tier and first matching reason, not merely a generic PASS. The default is core, the 34 suites in tracked `seats/selftest-core.list`. Full is required when the paths changed from main's merge base to the tip include `seats/selftest-sweep.sh`, `seats/selftest-lib.sh`, `seats/selftest-sweep-lock.ts`, `seats/selftest-herald.sh`, `seats/python-invocations.ts`, `seats/selftest-core.list`, a full-tier root suite, a fixture not named for a core suite, or `seats/adapter.ts`, `seats/seat-worktree.ts` or `seats/verify.ts`. Fixture ownership uses the longest known suite name: `adapter-rpc` is full, not the core `adapter` fixture. Shared/unknown fixtures conservatively require full. Deletions and both sides of renames count. The first matching path in sorted order is the reason; otherwise explicit “full sweep passes” or `selftest-sweep.sh` claim wording forces full with reason “Done line”; otherwise core/default. No nightly or quarantine override is implemented by this tier rule.
+For **every** review, `verify.ts` runs a dispatcher-owned sweep of **the tier the change requires** at the exact reviewed tip **before** starting the reviewer. It records the selected tier and first matching reason, not merely a generic PASS. The default is core, the 34 suites in tracked `seats/selftest-core.list`. Full is required when the paths changed from main's merge base to the tip include `seats/selftest-sweep.sh`, `seats/selftest-lib.sh`, `seats/selftest-sweep-lock.ts`, `seats/selftest-herald.sh`, `seats/python-invocations.ts`, `seats/selftest-core.list`, the nightly harness (`seats/nightly-sweep.ts` and `seats/nightly-state.ts`), a full-tier root suite, a fixture not named for a core suite, or `seats/adapter.ts`, `seats/seat-worktree.ts` or `seats/verify.ts`. Fixture ownership uses the longest known suite name: `adapter-rpc` is full, not the core `adapter` fixture. Shared/unknown fixtures conservatively require full. Deletions and both sides of renames count. The first matching path in sorted order is the reason; otherwise explicit “full sweep passes” or `selftest-sweep.sh` claim wording forces full with reason “Done line”; otherwise core/default. The nightly-red brake below takes precedence; quarantine is independent of the path-selection rule.
 
 The command is `bash seats/selftest-sweep.sh --tier core|full`. Its header records `tier=core reason=default` or, for example, `tier=full reason=seats/adapter.ts`. The prompt and verdict name both fields; core coverage also carries the manifest's SHA-256. The historical `## Dispatcher full-sweep result` heading remains for record consumers; the explicit tier below it is the coverage, not the heading. APPROVE still needs integer rc=0, a pinned tip and a retained nonempty regular log; the actual tier must match the dispatcher's choice, and core hash/inventory must match the pinned manifest. A mismatch is INCOMPLETE.
 
@@ -650,6 +650,20 @@ outside this guarantee. The regression uses idle sleeping stubs, TERM-ignoring
 suites at 5-second and 120-second runner grace, a KILLed runner, a TERM-ignoring
 reviewer, a same-group orphan, and an unrelated same-cwd process in a different
 group which must remain alive.
+
+### Nightly full tier
+
+The supervisor attempts one full sweep per local day during `sweep-hour=` in `wheelhouse/.template-source` (default `03`, hours `00`–`23`). `sweep=off` disables it; otherwise it is enabled. `WHEELHOUSE_SUPERVISOR_SWEEP_HOUR` overrides the recorded hour. Choose an hour when this install is available. A due tick records `lastSweepDay` in `seats/run/supervisor.state.json` and logs its start or skip; a skipped day is not repeatedly queued. A manual retry is `bun seats/nightly-sweep.ts`.
+
+Presence of `seats/run/paused` suppresses the nightly. `WHEELHOUSE_SUPERVISOR_PAUSE_FILE` selects a different marker (absolute or relative to the install root). Contents do not matter, and the nightly never removes the marker or changes the install's pause/service configuration. A live host sweep holder also causes a logged skip, not another queued review-sized job. The runner's opt-in `WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT=1` closes the preflight/admission race: it withdraws only its own FIFO ticket and exits **75** before any suite START when busy. Normal review admission still waits. The no-wait flag is consumed at admission, so suites and their nested fixture runners do not inherit it.
+
+The job resolves `merge-target=` (default `main`) in the configured product repository, takes its local branch tip or an already-present `origin/<name>` fallback, and makes a detached scratch worktree. It does not fetch or test the supervisor's current topic checkout. It reuses the dispatcher's isolated graph, metrics-off HOME, host-budget PATH, runner launch and teardown, runs `bash seats/selftest-sweep.sh --tier full` with `WHEELHOUSE_SKIP_REAL_PI=1`, and retains `seats/verdicts/sweeps/nightly.<tip>.<pid>.<ms>.selftest-sweep.log`. Scratch is removed after the run; owned-child cancellation joins groups before removal.
+
+`seats/run/nightly-sweep.json` is the atomic latest completed result: `{date, tip, rc, logPath, elapsedMs, failedSuites}`. Red (`rc=1`) forces **every new review to full**, including digest-only changes and batch reuse, with `tier=full reason=nightly red <date> <tip>` in its log and receipt. A later completed green releases the brake; a missing record imposes none. An unreadable/invalid record conservatively requires full. Core receipts cannot authorize merges while this brake is active: the integrator checks current state, not just an old receipt.
+
+A pause, busy lock, setup/scratch failure or interruption writes the separate atomic `seats/run/nightly-sweep-missed.json` with date/reason; it does **not** replace a completed red result. Alerts show `nightly-sweep-red` (date, tip, failed suite names) or `nightly-sweep-missed` (reason) on the existing fleet-gate line and emit one herald inbox row on transition. Repeated red results refresh detail without repeated wakes; a later completed run clears an older missed alert, and green clears red.
+
+For fixture-only checks, an explicit `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` may name two tiny suites; names are remapped into the pinned scratch checkout. A selection smaller than the pinned full inventory is marked `filtered: true`: even native rc=0 cannot release the full-review brake, and it raises the missed-coverage alert. Its `lastCompleted` field preserves the previous full result, including a red alert that no later full green has cleared. Do not use filtered fixtures as production nightly receipts. Scheduled launches clear the pattern and tier environment overrides. Old already-running supervisors do not acquire this tick merely because a new script was copied: restart through the install's normal approved procedure. No LaunchAgent/systemd definition change is needed.
 
 ### Reuse one passing sweep for a review batch
 
@@ -973,6 +987,7 @@ bash seats/desk.selftest.sh
 bash seats/principal-sentinel.selftest.sh
 bash seats/courier.selftest.sh
 bash seats/supervisor.selftest.sh
+bash seats/nightly-sweep.selftest.sh
 bash seats/transports.selftest.sh
 bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh

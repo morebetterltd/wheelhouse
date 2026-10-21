@@ -222,8 +222,17 @@ acquire_lock(){
   while :; do
     result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
-      0) ENROLLED=1; OWNED_LOCK="$result"; return 0 ;;
-      75) ENROLLED=1 ;; # Validated, durably registered waiter, not a Bun error.
+      0) ENROLLED=1; OWNED_LOCK="$result"
+         # Admission-only: nested fixture runners keep ordinary wait semantics.
+         unset WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT
+         return 0 ;;
+      75) ENROLLED=1
+          # Opt-in nightly admission: EXIT withdraws only our validated ticket.
+          # Ordinary reviews retain FIFO waiting. Status 75 means skipped.
+          if [ "${WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT:-0}" = 1 ]; then
+            info "selftest-sweep: SKIP lock busy $LOCK $result"
+            exit 75
+          fi ;; # Validated waiter, not a Bun error.
       *) info "STOP: selftest-sweep lock helper failed (exit $rc)"; exit 2 ;;
     esac
     if [ "$previous" != "$result" ]; then

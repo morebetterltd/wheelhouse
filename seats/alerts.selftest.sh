@@ -363,5 +363,11 @@ CCOUNT_FIRST="$( [ -f "$CAN/seats/inbox.jsonl" ] && wc -l < "$CAN/seats/inbox.js
 CCOUNT="$( [ -f "$CAN/seats/inbox.jsonl" ] && wc -l < "$CAN/seats/inbox.jsonl" | tr -d ' ' || echo 0 )"
 [ "$CAN_RC" = 0 ] && [ "$CCOUNT_FIRST" -gt 0 ] && [ "$CCOUNT" -gt "$CCOUNT_FIRST" ] && pass 'canary: fire-on-every-run variant fails the stays-quiet leg' || fail "canary did not produce repeated alert rows rc=$CAN_RC first=$CCOUNT_FIRST after=$CCOUNT"
 
+# Nightly-only condition/clear/dedupe/UI checks and removal controls.
+phase 'nightly full-tier alerts'
+set_low_disk 0
+if bun "$HERE/fixtures/nightly-alerts.ts" "$ROOT" "$HOME_FIX" "$BIN"; then
+  pass 'nightly red/missed alerts, green clear, fleet-gate visibility and sensitive removals'
+else fail 'nightly alert regression'; fi
 if [ "$FAILED" -eq 0 ]; then echo 'alerts.selftest.sh works on this machine.'; exit 0; fi
 echo "alerts.selftest.sh FAIL ($FAILED failure(s))" >&2; exit 1

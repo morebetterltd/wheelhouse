@@ -799,6 +799,12 @@ if bun "$HERE/fixtures/verify-tiers.ts" "$VERIFY_DIR" "$FIX" "$PROJ" "$HOME_FIX"
   pass "tier selection, CLI receipts, core/full batch coverage and sensitive removal controls"
 else fail "core/full review tier regression"; fi
 
+# Nightly-only brake and CLI receipt/batch controls; separate from quarantine.
+phase "0an. nightly red brake on digest-only reviews"
+if bun "$HERE/fixtures/verify-nightly.ts" "$VERIFY_DIR" "$FIX" "$PROJ" "$HOME_FIX" "$RUN_PATH"; then
+  pass "nightly red/green/missed policy, full-tier receipts and core-batch refusal"
+else fail "nightly review brake regression"; fi
+
 phase "0a2. dispatcher-owned full sweep evidence for reviewer"
 SWEEP_PROJ="$FIX/sweep-proj"
 build_proj "$SWEEP_PROJ" sweep "$VERIFY"
