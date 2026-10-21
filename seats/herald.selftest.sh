@@ -556,8 +556,8 @@ if [ $RC -eq 0 ] && [ $RC2 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && gre
 else fail "busy-looking scrollback blocked escalation (rc=$RC/$RC2 out=$OUT/$OUT2 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
-printf 'stable transcript\n❯\nLifeOS status repaint 1 tokens=10\n' > "$FIX/repaint-1.txt"
-printf 'stable transcript\n❯\nLifeOS status repaint 2 tokens=11\n' > "$FIX/repaint-2.txt"
+printf 'stable transcript\n❯\nIntent-layer status repaint 1 tokens=10\n' > "$FIX/repaint-1.txt"
+printf 'stable transcript\n❯\nIntent-layer status repaint 2 tokens=11\n' > "$FIX/repaint-2.txt"
 printf '%s\n' '{"type":"agent_end","messages":["repaint settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
 SEQ_STATE="$FIX/repaint.seq"
@@ -569,7 +569,7 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$PO
 {
   printf 'older transcript line\n✶ Thinking (esc to interrupt)\nmore active context above prompt\n'
   for i in $(seq 1 60); do printf 'status filler %s\n' "$i"; done
-  printf '❯\nLifeOS status footer\n'
+  printf '❯\nIntent-layer status footer\n'
 } > "$FIX/wide-mid-turn.txt"
 printf '%s\n' '{"type":"agent_end","messages":["wide old spinner settle"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
@@ -690,17 +690,17 @@ if [ $RC -eq 0 ] && grep -q 'poke refused .*reason=missing .*resolvedBy=scan' "$
 else fail "no-pane poke attempt was not logged refused/missing (rc=$RC out=$OUT log=$(cat "$POKE_LOG" 2>/dev/null))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
-printf 'lifeos wrapper ready>\n' > "$FIX/wrapper-idle.txt"
+printf 'fixture wrapper ready>\n' > "$FIX/wrapper-idle.txt"
 cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["wrapper idle settle"]}
 JSONL
 seed_log_cursor worker-1.jsonl 0
-RC=0; OUT="$(WHEELHOUSE_HERALD_IDLE_RE='lifeos wrapper ready>' WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_IDLE_RE='fixture wrapper ready>' WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=node FAKE_TMUX_CAPTURE_FILE="$FIX/wrapper-idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_with_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && grep -qx -- '-t wh-demo:bridge.0 check the fleet inbox Enter' "$SEND_LOG"; then pass "wrapper-shaped idle prompt matched by WHEELHOUSE_HERALD_IDLE_RE receives the constant poke"
 else fail "wrapper idle prompt was not accepted by configured regex (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/inbox.cursor" "$PROJ/seats/inbox.seen.json" "$PROJ/seats/herald.state.json" "$SEND_LOG" "$POKE_LOG"
-printf 'lifeos wrapper prompt never matches\n' > "$FIX/wrapper-never-idle.txt"
+printf 'fixture wrapper prompt never matches\n' > "$FIX/wrapper-never-idle.txt"
 cat > "$PROJ/seats/logs/worker-1.jsonl" <<'JSONL'
 {"type":"agent_end","messages":["fallback settle"]}
 JSONL
