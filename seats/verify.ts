@@ -1375,7 +1375,19 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
     const graphDir = path.join(graphRoot, ".beads");
     const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graphRoot, encoding: "utf8", env: { ...env, PWD: graphRoot, BEADS_DIR: graphDir } });
     if (init.status !== 0) throw new Error(`scratch bd init failed: ${init.stderr || init.stdout}`);
-    fs.symlinkSync(graphDir, path.join(scratchCwd, ".beads"), "dir");
+    const sweepBeads = path.join(scratchCwd, ".beads");
+    let existingBeads: fs.Stats | undefined;
+    try { existingBeads = fs.lstatSync(sweepBeads); }
+    catch (e: any) { if (e.code !== "ENOENT") throw e; }
+    if (!existingBeads) fs.symlinkSync(graphDir, sweepBeads, "dir");
+    else {
+      // Umbrella trees may track .beads/config.yaml, hooks, etc. Keep those
+      // bytes in place: bd's native redirect is local to this workspace, unlike
+      // an inherited BEADS_DIR that would hijack suites' own fixture graphs.
+      // Never follow a reviewed symlink or overwrite an existing redirect.
+      if (!existingBeads.isDirectory()) throw new Error("reviewed .beads is not a directory; cannot expose the isolated sweep graph safely");
+      fs.writeFileSync(path.join(sweepBeads, "redirect"), graphDir + "\n", { flag: "wx", mode: 0o600 });
+    }
     const located = spawnSync(realBd, ["where", "--json"], { cwd: scratchCwd, encoding: "utf8", env });
     if (located.status !== 0 || fs.realpathSync(JSON.parse(located.stdout).path) !== fs.realpathSync(graphDir)) {
       throw new Error("sweep bd did not resolve its owned scratch graph");
