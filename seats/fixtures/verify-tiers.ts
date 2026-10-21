@@ -21,6 +21,10 @@ let serial = 0;
 function world(label: string, code = source) {
   const repo = path.join(dir, `${++serial}-${label}`); fs.cpSync(baseProject, repo, { recursive: true });
   fs.writeFileSync(path.join(repo, "seats/verify.ts"), code);
+  // build_proj intentionally tracks only its tiny sweep. Establish the copied
+  // runtime on main before candidate changes, or git add would make digest-only
+  // reviews appear to add every harness file.
+  git(repo, "checkout", "-q", "main"); commit(repo);
   return repo;
 }
 const legacyRepo = world("legacy-module", legacy);

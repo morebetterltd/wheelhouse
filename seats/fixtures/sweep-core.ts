@@ -39,6 +39,7 @@ function run(name: string, text: string | null, args: string[], tier: string | u
   const hostCreated = fs.existsSync(lock + ".host");
   const ok = r.status === expected && JSON.stringify(observed) === JSON.stringify(events) && (expected === 0 ? hashed : !admitted && !hostCreated && r.stderr.includes("STOP:")) && !fs.existsSync(lock) && !fs.existsSync(lock + ".queue");
   console.log(JSON.stringify({ name, removed: !!broken, code: r.status, events: observed, admitted, hashed, hostCreated, positiveCriterion: ok }));
+  if (!ok && !broken) console.log(JSON.stringify({ name, stdout: r.stdout, stderr: r.stderr }));
   return ok;
 }
 const legacy = source.replace('TIER="$2"; tier_flag=1;', 'tier_flag=1;');
@@ -47,7 +48,7 @@ const withoutEnv = source.replace('TIER="${WHEELHOUSE_SELFTEST_SWEEP_TIER:-full}
 const validationStart = source.indexOf('if [ "$TIER" = core ]; then\n  # Validate before admission.');
 const validationEnd = source.indexOf('\nacquire_lock\n', validationStart);
 assert(validationStart > 0 && validationEnd > validationStart);
-const withoutValidation = source.slice(0, validationStart) + source.slice(validationEnd);
+const withoutValidation = (source.slice(0, validationStart) + source.slice(validationEnd)).replace('if [ "$TIER" = core ] && [ ! -r "$ROOT/seats/selftest-core.list" ]; then', 'if false; then');
 const cases = [
   { name: "flag-wins", text: raw, args: ["--tier", "core"], env: "full", broken: legacy, expected: 0, events: ["a", "b"] },
   { name: "env-core", text: raw, args: [], env: "core", broken: withoutEnv, expected: 0, events: ["a", "b"] },

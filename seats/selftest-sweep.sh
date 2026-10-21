@@ -288,6 +288,12 @@ check_source_files(){
     exit "$rejected"
   )
 }
+# The generic source scan reports unreadable files as exit1. Admit the core
+# manifest first so all malformed/unreadable manifest cases retain STOP/exit2.
+if [ "$TIER" = core ] && [ ! -r "$ROOT/seats/selftest-core.list" ]; then
+  info "STOP: core manifest: missing or unreadable regular file"
+  exit 2
+fi
 check_source_files || exit 1
 AUDITOR="$ROOT/seats/python-invocations.ts"
 if [ ! -f "$AUDITOR" ] || [ ! -r "$AUDITOR" ]; then

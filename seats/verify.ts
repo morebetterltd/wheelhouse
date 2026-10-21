@@ -1146,8 +1146,12 @@ function manifestAt(root: string, tip: string): CoreManifest {
 export function chooseSweepTier(root: string, tip: string, claim: string): SweepChoice {
   const base = tierGit(root, "merge-base", "refs/heads/main", tip).toString().trim();
   if (!base) throw new Error("cannot establish main merge base for sweep tier");
-  const manifest = manifestAt(root, tip), core = new Set(manifest.suites);
-  const names = [...new Set([...tierInventory(root, base), ...tierInventory(root, tip)])]
+  const knownSuites = [...new Set([...tierInventory(root, base), ...tierInventory(root, tip)])];
+  // A deleted core suite still has its policy identity. Do not turn the
+  // dispatcher's existing missing-runner/no-runnable-suite diagnostics into a
+  // selector exception; the actual core runner validates current readability.
+  const manifest = parseCoreManifest(tierGit(root, "show", `${tip}:seats/selftest-core.list`), knownSuites), core = new Set(manifest.suites);
+  const names = knownSuites
     .map(name => name.replace(/\.selftest\.sh$/, "")).sort((a, b) => b.length - a.length || a.localeCompare(b));
   const harness = new Set(["selftest-sweep.sh", "selftest-lib.sh", "selftest-sweep-lock.ts", "selftest-herald.sh", "python-invocations.ts", "selftest-core.list", "adapter.ts", "seat-worktree.ts", "verify.ts"].map(name => `seats/${name}`));
   // --no-renames includes both sides of deletions/renames; no pretty-printed
@@ -1307,7 +1311,7 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
   const started = Date.now();
   // Keep logical and physical cwd consistent for sweep child processes.
   const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1", WHEELHOUSE_SELFTEST_REVIEW_GROUPS: groupsFile };
-  for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN", "WHEELHOUSE_SELFTEST_SWEEP_TIER"])  delete env[key];
+  for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN", "WHEELHOUSE_SELFTEST_SWEEP_TIER"]) delete env[key];
   const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
   if (actualTip !== tip) die(`sweep scratch tip ${actualTip} differs from reviewed tip ${tip}`);
   fs.writeFileSync(logPath, `tip=${actualTip}\ncommand=bash seats/selftest-sweep.sh --tier ${choice.tier}\ntier=${choice.tier} reason=${choice.reason}\nWHEELHOUSE_SKIP_REAL_PI=1 (hermetic suites; no live login borrowed)\n`);
