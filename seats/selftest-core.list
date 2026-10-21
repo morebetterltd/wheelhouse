@@ -1,0 +1,36 @@
+# Core review tier: approved user/credential/gate/deletion-safety coverage.
+# One root-level suite per line; every other suite belongs to the full tier.
+adapter.selftest.sh
+channel-credentials.selftest.sh
+channels.selftest.sh
+cleanup-host.selftest.sh
+cleanup.selftest.sh
+digest.selftest.sh
+evidence-scrub.selftest.sh
+fleet-pre-push-guard.selftest.sh
+git-isolation.selftest.sh
+intent-check.selftest.sh
+log-rotation-owner.selftest.sh
+never-lose-work.selftest.sh
+no-tracked-evidence.selftest.sh
+placeholder-grep.selftest.sh
+product-pre-push.selftest.sh
+push-authority-lint.selftest.sh
+recover.selftest.sh
+report-issues.selftest.sh
+reset.selftest.sh
+seat-env.selftest.sh
+seat-path-safety.selftest.sh
+seat-worktree.selftest.sh
+selftest-lib.selftest.sh
+specimen-leak.selftest.sh
+stop-all.selftest.sh
+template-drift.selftest.sh
+transports.selftest.sh
+upgrade-runbook.selftest.sh
+verify-cancellation.selftest.sh
+verify-no-verdict.selftest.sh
+verify-readiness.selftest.sh
+verify.selftest.sh
+walk.selftest.sh
+worktree-root.selftest.sh

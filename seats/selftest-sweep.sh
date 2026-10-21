@@ -5,6 +5,17 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PATTERN="${WHEELHOUSE_SELFTEST_SWEEP_PATTERN:-$ROOT/seats/*.selftest.sh}"
+TIER="${WHEELHOUSE_SELFTEST_SWEEP_TIER:-full}"
+tier_flag=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --tier)
+      [ "$tier_flag" = 0 ] && [ "$#" -ge 2 ] || { echo 'STOP: --tier requires one core|full value' >&2; exit 2; }
+      TIER="$2"; tier_flag=1; shift 2 ;;
+    *) echo "STOP: unknown sweep argument: $1" >&2; exit 2 ;;
+  esac
+done
+case "$TIER" in core|full) ;; *) echo "STOP: invalid sweep tier: $TIER (use core|full)" >&2; exit 2 ;; esac
 # TMPDIR is per-run scratch; it must not split the host-wide lock domain.
 LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-/tmp/wheelhouse-selftest-sweep.lock}"
 SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
@@ -188,7 +199,7 @@ start_suite(){
     setsid or die "setsid: $!\n";
     exec @ARGV or die "exec @ARGV: $!\n";
   ' "$REVIEW_GROUPS" \
-    bash -c 'unset WHEELHOUSE_SELFTEST_REVIEW_GROUPS; ps -p "$$" -o pid=,pgid=,lstart= > "$2/owner" || exit 2; exec bash "$1"' \
+    bash -c 'unset WHEELHOUSE_SELFTEST_REVIEW_GROUPS WHEELHOUSE_SELFTEST_SWEEP_TIER; ps -p "$$" -o pid=,pgid=,lstart= > "$2/owner" || exit 2; exec bash "$1"' \
     suite "$1" "$SUITE_STATE" 8>&- 9>&- &
   CURRENT_SUITE_PID=$!
   suite_watchdog "$CURRENT_SUITE_PID" "$SUITE_STATE" & WATCHDOG_PID=$!
@@ -296,6 +307,12 @@ check_source_files(){
     exit "$rejected"
   )
 }
+# The generic source scan reports unreadable files as exit1. Admit the core
+# manifest first so all malformed/unreadable manifest cases retain STOP/exit2.
+if [ "$TIER" = core ] && [ ! -r "$ROOT/seats/selftest-core.list" ]; then
+  info "STOP: core manifest: missing or unreadable regular file"
+  exit 2
+fi
 check_source_files || exit 1
 AUDITOR="$ROOT/seats/python-invocations.ts"
 if [ ! -f "$AUDITOR" ] || [ ! -r "$AUDITOR" ]; then
@@ -305,13 +322,47 @@ fi
 # Refuse dependency calls before lock admission, queue registration or START.
 # Preserve exit2 for incomplete audits; an unexamined tree is not a test result.
 bun "$AUDITOR" "$ROOT" || exit "$?"
+CORE_SUITES=()
+MANIFEST_SHA=""
+if [ "$TIER" = core ]; then
+  # Validate before admission. Read one regular no-follow snapshot and hash its
+  # original bytes, including comments; never eval manifest contents as shell.
+  core_records="$(perl -MDigest::SHA=sha256_hex -MFcntl=:DEFAULT,:mode -e '
+    sub stop { print STDERR "STOP: core manifest: $_[0]\n"; exit 2 }
+    my ($file,$seats)=@ARGV;
+    my @before=lstat($file);
+    @before && S_ISREG($before[2]) && ($before[2]&0444) or stop("missing or unreadable regular file");
+    sysopen(my $in,$file,O_RDONLY|O_NOFOLLOW|O_NONBLOCK) or stop("cannot open: $!");
+    my @opened=stat($in);
+    $opened[0]==$before[0] && $opened[1]==$before[1] or stop("changed while opening");
+    local $/; my $raw=<$in>; close($in); defined($raw) or stop("cannot read");
+    my %seen;
+    for my $line (split /\n/,$raw) {
+      $line =~ s/#.*$//; $line =~ s/^\s+|\s+$//g; next unless length($line);
+      $line =~ /^[A-Za-z0-9][A-Za-z0-9._-]*\.selftest\.sh$/ or stop("invalid suite name: $line");
+      !$seen{$line}++ or stop("duplicate suite: $line");
+      my @s=lstat("$seats/$line");
+      @s && S_ISREG($s[2]) && ($s[2]&0444) && -r "$seats/$line" or stop("missing or unreadable suite: $line");
+    }
+    keys(%seen) or stop("empty inventory");
+    print sha256_hex($raw),"\n",join("\n",sort keys %seen),"\n";
+  ' "$ROOT/seats/selftest-core.list" "$ROOT/seats")" || exit 2
+  MANIFEST_SHA="${core_records%%$'\n'*}"
+  while IFS= read -r core_suite; do CORE_SUITES+=("$ROOT/seats/$core_suite"); done <<< "${core_records#*$'\n'}"
+fi
 acquire_lock
 SWEEP_STARTED=$SECONDS
 
-shopt -s nullglob
-suites=( $PATTERN )
-shopt -u nullglob
-say "selftest-sweep: tier=full suites=${#suites[@]}"
+if [ "$TIER" = core ]; then
+  # A pattern override must never silently filter the required core inventory.
+  suites=( "${CORE_SUITES[@]}" )
+  say "selftest-sweep: tier=core suites=${#suites[@]} manifest=$MANIFEST_SHA"
+else
+  shopt -s nullglob
+  suites=( $PATTERN )
+  shopt -u nullglob
+  say "selftest-sweep: tier=full suites=${#suites[@]}"
+fi
 if [ "${#suites[@]}" -eq 0 ]; then
   info "selftest-sweep: no suites matched: $PATTERN"
   exit 1

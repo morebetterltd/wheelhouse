@@ -1218,9 +1218,68 @@ function sourceAccessPromptLines(snapshots: SourceSnapshot[]): string[] {
   ];
 }
 
+export type SweepTier = "core" | "full";
+export interface SweepChoice { tier: SweepTier; reason: string; manifest?: CoreManifest }
+export interface CoreManifest { sha256: string; suites: string[] }
+export function parseCoreManifest(raw: Buffer | string, available: readonly string[]): CoreManifest {
+  const suites: string[] = [], seen = new Set<string>();
+  for (const row of raw.toString().split(/\n/)) {
+    const name = row.replace(/#.*$/, "").trim();
+    if (!name) continue;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.selftest\.sh$/.test(name)) throw new Error(`core manifest: invalid suite name: ${name}`);
+    if (seen.has(name)) throw new Error(`core manifest: duplicate suite: ${name}`);
+    if (!available.includes(name)) throw new Error(`core manifest: missing suite: ${name}`);
+    seen.add(name); suites.push(name);
+  }
+  if (!suites.length) throw new Error("core manifest: empty inventory");
+  return { sha256: crypto.createHash("sha256").update(raw).digest("hex"), suites: suites.sort() };
+}
+function tierGit(root: string, ...args: string[]): Buffer {
+  const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete env[key];
+  return execFileSync("git", ["--no-replace-objects", "-C", root, ...args], { env, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 });
+}
+function tierInventory(root: string, tip: string): string[] {
+  return tierGit(root, "ls-tree", "-r", "-z", "--name-only", tip, "--", "seats").toString().split("\0")
+    .filter(name => /^seats\/[^/]+\.selftest\.sh$/.test(name)).map(name => path.basename(name));
+}
+function manifestAt(root: string, tip: string): CoreManifest {
+  return parseCoreManifest(tierGit(root, "show", `${tip}:seats/selftest-core.list`), tierInventory(root, tip));
+}
+export function chooseSweepTier(root: string, tip: string, claim: string): SweepChoice {
+  const base = tierGit(root, "merge-base", "refs/heads/main", tip).toString().trim();
+  if (!base) throw new Error("cannot establish main merge base for sweep tier");
+  const knownSuites = [...new Set([...tierInventory(root, base), ...tierInventory(root, tip)])];
+  // A deleted core suite still has its policy identity. Do not turn the
+  // dispatcher's existing missing-runner/no-runnable-suite diagnostics into a
+  // selector exception; the actual core runner validates current readability.
+  const manifest = parseCoreManifest(tierGit(root, "show", `${tip}:seats/selftest-core.list`), knownSuites), core = new Set(manifest.suites);
+  const names = knownSuites
+    .map(name => name.replace(/\.selftest\.sh$/, "")).sort((a, b) => b.length - a.length || a.localeCompare(b));
+  const harness = new Set(["selftest-sweep.sh", "selftest-lib.sh", "selftest-sweep-lock.ts", "selftest-herald.sh", "python-invocations.ts", "selftest-core.list", "adapter.ts", "seat-worktree.ts", "verify.ts", "heavy-test.sh", "heavy-test-entry.ts"].map(name => `seats/${name}`));
+  // --no-renames includes both sides of deletions/renames; no pretty-printed
+  // quoting, terminal wrapping or GIT_* redirect can hide a touched path.
+  const touched = tierGit(root, "diff", "--name-only", "--no-renames", "-z", base, tip).toString().split("\0").filter(Boolean).sort();
+  for (const file of touched) {
+    if (/[\r\n]/.test(file)) throw new Error("control character in sweep tier path");
+    if (harness.has(file) || (/^seats\/[^/]+\.selftest\.sh$/.test(file) && !core.has(path.basename(file)))) return { tier: "full", reason: file, manifest };
+    if (file.startsWith("seats/fixtures/")) {
+      const component = file.slice("seats/fixtures/".length).split("/")[0];
+      // Longest known suite wins: adapter-rpc is full, not adapter's core fixture.
+      const owner = names.find(name => component === name || component.startsWith(name + ".") || component.startsWith(name + "-"));
+      if (!owner || !core.has(`${owner}.selftest.sh`)) return { tier: "full", reason: file, manifest };
+    }
+  }
+  if (claimRequiresSweepCitation(claim)) return { tier: "full", reason: "Done line", manifest };
+  return { tier: "core", reason: "default", manifest };
+}
 interface SuiteTiming { suite: string; seconds: number }
-interface SweepTimings { tierLine: string; footer: string; totalSeconds: number; suites: SuiteTiming[]; slowest: SuiteTiming[] }
-interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; timings?: SweepTimings; error?: string; batch?: { tip: string; main: string; sha256: string } }
+interface SweepTimings { tier: SweepTier; manifest?: string; tierLine: string; footer: string; totalSeconds: number; suites: SuiteTiming[]; slowest: SuiteTiming[] }
+interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; choice?: SweepChoice; requiredChoice?: SweepChoice; timings?: SweepTimings; error?: string; batch?: { tip: string; main: string; sha256: string } }
+function assertSweepChoice(timings: SweepTimings, choice: SweepChoice): void {
+  if (timings.tier !== choice.tier) throw new Error(`dispatcher tier mismatch: chose ${choice.tier} (${choice.reason}), log records ${timings.tier}`);
+  if (choice.tier === "core" && (!choice.manifest || timings.manifest !== choice.manifest.sha256 || timings.suites.length !== choice.manifest.suites.length || timings.suites.some((s, i) => s.suite !== choice.manifest!.suites[i]))) throw new Error("dispatcher core manifest/inventory mismatch");
+}
 
 // Read only the outer runner's records. Nested fixture sweeps use other roots
 // and must not contribute to this receipt's inventory, seconds or slowest five.
@@ -1230,13 +1289,13 @@ export function readSweepTimings(text: string): SweepTimings {
     if (!/^(0|[1-9][0-9]*)$/.test(s) || !Number.isSafeInteger(Number(s))) invalid("seconds/count must be safe whole numbers");
     return Number(s);
   };
-  const tier = /^selftest-sweep: tier=full suites=([1-9][0-9]*)$/m.exec(text);
+  const tier = /^selftest-sweep: tier=(full suites=([1-9][0-9]*)|core suites=([1-9][0-9]*) manifest=([0-9a-f]{64}))$/m.exec(text);
   const footers = [...text.matchAll(/^selftest-sweep: (?:PASS \(([1-9][0-9]*) suite\(s\), ([0-9]+)s\)|FAIL \(([1-9][0-9]*) failure\(s\) of ([1-9][0-9]*) suite\(s\), ([0-9]+)s\))$/gm)];
   const footer = footers.at(-1);
   const lastSummary = [...text.matchAll(/^selftest-sweep: (?:PASS|FAIL) \([^\n]*\)$/gm)].at(-1);
   const firstStart = /^selftest-sweep: START /m.exec(text);
   if (!tier || !footer || !lastSummary || lastSummary.index !== footer.index || tier.index >= footer.index! || (firstStart && firstStart.index < tier.index)) invalid("missing tier/full completed footer");
-  const count = whole(tier![1]), totalSeconds = whole(footer![2] ?? footer![5]);
+  const count = whole(tier![2] ?? tier![3]), totalSeconds = whole(footer![2] ?? footer![5]);
   if (count !== whole(footer![1] ?? footer![4])) invalid("inventory/summary mismatch");
   const body = text.slice(tier!.index + tier![0].length, footer!.index);
   const first = /^selftest-sweep: START (.+\/seats\/)([^/\n]+\.selftest\.sh)$/m.exec(body);
@@ -1266,7 +1325,7 @@ export function readSweepTimings(text: string): SweepTimings {
   const sum = suites.reduce((n, s) => n + s.seconds, 0);
   if (!Number.isSafeInteger(sum) || totalSeconds < sum) invalid("total seconds below per-suite sum");
   const slowest = [...suites].sort((a, b) => b.seconds - a.seconds || a.suite.localeCompare(b.suite)).slice(0, 5);
-  return { tierLine: tier![0], footer: footer![0], totalSeconds, suites, slowest };
+  return { tier: tier![4] ? "core" : "full", manifest: tier![4], tierLine: tier![0], footer: footer![0], totalSeconds, suites, slowest };
 }
 
 function sweepTimingLines(sweep: SweepResult): string[] {
@@ -1282,7 +1341,7 @@ function sweepTimingLines(sweep: SweepResult): string[] {
 
 // Opt-in only. Read the existing dispatcher's envelope, not arbitrary terminal
 // text that happens to contain PASS/rc=0. Never execute a sweep in this path.
-export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: string): SweepResult {
+export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: string, requiredChoice = chooseSweepTier(repoRoot, reviewedTip, "")): SweepResult {
   const refuse = (why: string): never => { throw new Error(`batch sweep refused: ${why}`); };
   const gitEnv: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete gitEnv[key];
@@ -1307,17 +1366,18 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
     logPath = file;
   } catch (e: any) { return refuse(`cannot read safe log: ${e.message}`); }
   finally { if (fd !== undefined) fs.closeSync(fd); }
-  const header = /^tip=([0-9a-f]{40}|[0-9a-f]{64})\ncommand=bash seats\/selftest-sweep\.sh\nWHEELHOUSE_SKIP_REAL_PI=1 \(hermetic suites; no live login borrowed\)\npreparedTip=([0-9a-f]{40}|[0-9a-f]{64})\nscratchGraph=isolated nested repository\n/.exec(text!);
+  const header = /^tip=([0-9a-f]{40}|[0-9a-f]{64})\ncommand=bash seats\/selftest-sweep\.sh --tier (core|full)\ntier=(core|full) reason=([^\n]+)\nWHEELHOUSE_SKIP_REAL_PI=1 \(hermetic suites; no live login borrowed\)\npreparedTip=([0-9a-f]{40}|[0-9a-f]{64})\nscratchGraph=isolated nested repository\n/.exec(text!);
   const footer = /\nselftest-sweep: PASS \(([1-9][0-9]*) suite\(s\), ([0-9]+)s\)\nfinalTip=([0-9a-f]{40}|[0-9a-f]{64})\n\nrc=0\nelapsedMs=([0-9]+)\n$/.exec(text!);
-  if (!header || !footer || header[1] !== header[2] || header[1] !== footer[3] || text!.includes("\0")) refuse("not a completed passing hermetic full-sweep envelope (tip/prepared/final/command/rc)");
+  if (!header || !footer || header[1] !== header[5] || header[1] !== footer[3] || header[2] !== header[3] || text!.includes("\0")) refuse("not a completed passing hermetic full-sweep envelope (tip/prepared/final/command/rc)");
   const batchTip = header![1], elapsedMs = Number(footer![4]);
   if (!Number.isSafeInteger(elapsedMs)) refuse("invalid elapsedMs");
-  let main: string, committedMs: number, expected: string[];
+  let main: string, committedMs: number, expected: string[], batchManifest: CoreManifest | undefined;
   try {
     if (git("rev-parse", "--verify", `${batchTip}^{commit}`) !== batchTip || git("rev-parse", "--verify", `${reviewedTip}^{commit}`) !== reviewedTip) refuse("tips must name exact commits");
     main = git("rev-parse", "--verify", "refs/heads/main^{commit}");
     committedMs = Number(git("show", "-s", "--format=%ct", reviewedTip)) * 1000;
-    expected = git("ls-tree", "-r", "-z", "--name-only", batchTip, "--", "seats").split("\0").filter(p => /^seats\/[^/]+\.selftest\.sh$/.test(p)).map(p => path.basename(p));
+    expected = tierInventory(repoRoot, batchTip);
+    if (header![3] === "core") { batchManifest = manifestAt(repoRoot, batchTip); expected = batchManifest.suites; }
     if (!git("rev-list", "--first-parent", batchTip).split("\n").includes(main)) refuse("batch first-parent chain does not reach current main");
   } catch (e: any) { return refuse(`cannot establish batch history: ${e.message}`); }
   const ancestor = spawnSync("git", ["--no-replace-objects", "-C", repoRoot, "merge-base", "--is-ancestor", reviewedTip, batchTip], { env: gitEnv, encoding: "utf8" });
@@ -1329,7 +1389,10 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
   try { timings = readSweepTimings(text!.slice(header![0].length)); }
   catch (e: any) { return refuse(e.message); }
   if (expected!.length === 0 || timings.suites.length !== expected!.length || timings.suites.some(s => !expected!.includes(s.suite))) refuse("full-suite inventory/summary mismatch");
-  return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, timings, batch: { tip: batchTip, main: main!, sha256: sha256! } };
+  const choice: SweepChoice = { tier: header![3] as SweepTier, reason: header![4], manifest: batchManifest };
+  try { assertSweepChoice(timings, choice); } catch (e: any) { refuse(e.message); }
+  if (requiredChoice.tier === "full" && choice.tier !== "full") refuse(`full tier required by ${requiredChoice.reason}; a core batch cannot cover this candidate`);
+  return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, choice, requiredChoice, timings, batch: { tip: batchTip, main: main!, sha256: sha256! } };
 }
 
 // Wording controls extra reviewer citations, never execution of the gate.
@@ -1337,7 +1400,8 @@ function claimRequiresSweepCitation(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
-export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
+// The exported name remains for existing callers which explicitly request full.
+export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string, choice: SweepChoice = { tier: "full", reason: "caller" }): Promise<SweepResult> {
   // Separate from the reviewer's cwd: no writable graph or bd wrapper reaches
   // that process. Suites create their OWN fixture graphs, not one redirected
   // global graph (which would invalidate graph-isolation selftests).
@@ -1350,10 +1414,10 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
   const started = Date.now();
   // Keep logical and physical cwd consistent for sweep child processes.
   const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1", WHEELHOUSE_SELFTEST_REVIEW_GROUPS: groupsFile };
-  for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN"]) delete env[key];
+  for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN", "WHEELHOUSE_SELFTEST_SWEEP_TIER"]) delete env[key];
   const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
   if (actualTip !== tip) die(`sweep scratch tip ${actualTip} differs from reviewed tip ${tip}`);
-  fs.writeFileSync(logPath, `tip=${actualTip}\ncommand=bash seats/selftest-sweep.sh\nWHEELHOUSE_SKIP_REAL_PI=1 (hermetic suites; no live login borrowed)\n`);
+  fs.writeFileSync(logPath, `tip=${actualTip}\ncommand=bash seats/selftest-sweep.sh --tier ${choice.tier}\ntier=${choice.tier} reason=${choice.reason}\nWHEELHOUSE_SKIP_REAL_PI=1 (hermetic suites; no live login borrowed)\n`);
   let rc = 1;
   let error: string | undefined;
   try {
@@ -1398,7 +1462,7 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
       // No wall-clock/model-command timeout: the runner owns H4 and waits for
       // its turn. Stream directly to disk even during a long lock wait.
       rc = await new Promise<number>((resolve) => {
-        const child = spawn("bash", ["seats/selftest-sweep.sh"], { cwd: scratchCwd, env, stdio: ["ignore", fd, fd], detached: true });
+        const child = spawn("bash", ["seats/selftest-sweep.sh", "--tier", choice.tier], { cwd: scratchCwd, env, stdio: ["ignore", fd, fd], detached: true });
         trackReviewChild(child, { sweep: {
           lock: path.resolve(scratchCwd, env.WHEELHOUSE_SELFTEST_SWEEP_LOCK || "/tmp/wheelhouse-selftest-sweep.lock"),
           helper: env.WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER || path.join(scratchCwd, "seats/selftest-sweep-lock.ts"),
@@ -1431,13 +1495,13 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
   } catch (e: any) { rc = 1; error = e.message; }
   let timings: SweepTimings | undefined;
   if (!error && (rc === 0 || rc === 1)) {
-    try { timings = readSweepTimings(fs.readFileSync(logPath, "utf8")); }
+    try { timings = readSweepTimings(fs.readFileSync(logPath, "utf8")); assertSweepChoice(timings, choice); }
     catch (e: any) { error = e.message; rc = 1; }
   }
   const elapsedMs = Date.now() - started;
   fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
   removeScratchWorktree(repoRoot, scratchCwd);
-  return { required: true, rc, logPath, elapsedMs, tip, timings, error };
+  return { required: true, rc, logPath, elapsedMs, tip, choice, timings, error };
 }
 
 function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[] {
@@ -1447,7 +1511,9 @@ function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[
     sweep.batch ? `Reused passing full sweep from a combined batch tree containing the reviewed tip:` : `Full selftest sweep run by the dispatcher at the exact reviewed tip before this reviewer spawn:`,
     ...(sweep.batch ? [`- batch-tip: ${sweep.batch.tip}`, `- batch-main: ${sweep.batch.main}`, `- batch-log-sha256: ${sweep.batch.sha256}`] : []),
     `- tip: ${sweep.tip}`,
-    `- command: bash seats/selftest-sweep.sh`,
+    `- command: bash seats/selftest-sweep.sh --tier ${sweep.choice?.tier ?? "unknown"}`,
+    `- tier: ${sweep.choice?.tier ?? "unknown"}; reason: ${sweep.choice?.reason ?? "missing"}`,
+    ...(sweep.requiredChoice ? [`- candidate required tier: ${sweep.requiredChoice.tier}; reason: ${sweep.requiredChoice.reason}`] : []),
     `- rc: ${sweep.rc}`,
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
@@ -1698,7 +1764,8 @@ async function main(): Promise<void> {
   const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
-  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);
+  const selectedTier = chooseSweepTier(repoRoot, tip, claim);
+  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);
   const requireSweepCitation = !!sweep.batch || claimRequiresSweepCitation(claim);
   const sweepPrompt = sweepPromptLines(sweep, requireSweepCitation);
 
@@ -1897,7 +1964,7 @@ async function main(): Promise<void> {
         // Preserve main's before-publication revalidation. Input revocation is
         // not a formatting problem a corrective model answer can repair.
         let checked: SweepResult;
-        try { checked = readBatchSweep(repoRoot, tip, batchSweepArg); }
+        try { checked = readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier); }
         catch (error: any) { refuse(error?.message ?? String(error), false); }
         if (checked.batch!.sha256 !== sweep.batch.sha256) refuse("batch sweep log changed during review", false);
       }
@@ -1915,6 +1982,10 @@ async function main(): Promise<void> {
           refuse(`INCOMPLETE review: cannot record APPROVE without a dispatcher full-sweep result at ${tip}; rc=${sweep.rc}; log=${sweep.logPath ?? "missing"}`, false);
         }
         if (sweep.rc !== 0 || sweep.error) refuse(`INCOMPLETE review: APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}${sweep.error ? `; ${sweep.error}` : ""}`, false);
+        try {
+          if (!sweep.choice) throw new Error("missing dispatcher tier choice");
+          assertSweepChoice(readSweepTimings(fs.readFileSync(sweep.logPath!, "utf8")), sweep.choice);
+        } catch (error: any) { refuse(`INCOMPLETE review: ${error.message}`, false); }
       }
       if (sweep.logPath && requireSweepCitation) {
         const evidenceText = finalAssistantText(stdout, reviewerHarness);
@@ -1977,7 +2048,10 @@ async function main(): Promise<void> {
               ``,
               ...(sweep.batch ? [`- batch-tip: ${sweep.batch.tip}`, `- batch-main: ${sweep.batch.main}`, `- batch-log-sha256: ${sweep.batch.sha256}`] : []),
               `- tip: ${sweep.tip}`,
-              `- command: bash seats/selftest-sweep.sh`,
+              `- command: bash seats/selftest-sweep.sh --tier ${sweep.choice?.tier ?? "unknown"}`,
+              `- tier: ${sweep.choice?.tier ?? "unknown"}`,
+              `- reason: ${sweep.choice?.reason ?? "missing"}`,
+              ...(sweep.requiredChoice ? [`- candidate-required-tier: ${sweep.requiredChoice.tier}; reason: ${sweep.requiredChoice.reason}`] : []),
               `- rc: ${sweep.rc}`,
               `- log: ${sweep.logPath}`,
               `- elapsedMs: ${sweep.elapsedMs}`,

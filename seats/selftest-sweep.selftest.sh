@@ -189,6 +189,9 @@ if [ "${WHEELHOUSE_SELFTEST_SWEEP_TIMING_ONLY:-0}" = 1 ]; then
   [ "$FAILED" = 0 ] || exit 1
   echo 'selftest-sweep.selftest: PASS (timing checks)'; exit 0
 fi
+if bun "$HERE/fixtures/sweep-core.ts" "$HERE" "$FIX" "$SWEEP"; then
+  pass 'core manifest/CLI admission and matching removal controls'
+else fail 'core manifest/CLI regression'; fi
 default_tmpdir_leg
 if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
   [ "$FAILED" -eq 0 ] || { echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1; }
