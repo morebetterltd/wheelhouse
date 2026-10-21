@@ -20,6 +20,7 @@ case "$TIER" in core|full) ;; *) echo "STOP: invalid sweep tier: $TIER (use core
 LOCK="${WHEELHOUSE_SELFTEST_SWEEP_LOCK:-/tmp/wheelhouse-selftest-sweep.lock}"
 SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
+CURRENT_SUITE_NAME=""
 WATCHDOG_PID=""
 SUITE_STATE=""
 STARTING_SUITE=0
@@ -61,29 +62,78 @@ RUNNER_PGID="${RUNNER_PGID//[[:space:]]/}"
 # an orphaned child is still owned after its parent exits during the grace.
 signal_suite_tree(){
   local signal="$1" root="$2" dir="$3" owner group born p parent g birth i j ancestor changed groups_seen=" " oldp oldg oldbirth
-  local pids=() parents=() pgids=() states=() births=() owned=() active=()
-  local state
+  local pids=() parents=() pgids=() states=() births=() commands=() owned=() via=() active=()
+  local scratch_pids=() scratch_groups=() scratch_births=()
+  local state weekday month day clock year command field cwd_pid="" ps_self=0 ps_before_self=0 cwd_self=0 lsof_bin
   SUITE_TREE_QUIESCENT=1
+  SUITE_SURVIVORS=0
   local previous_pids=() previous_groups=() previous_births=()
-  read -r owner group born < "$dir/owner" || return 2
-  [ "$owner" = "$root" ] && [ "$group" = "$root" ] || return 2
+  read -r owner group weekday month day clock year < "$dir/owner" || return 2
+  # lstart pads single-digit days. Compare date fields, not its display spaces,
+  # just as the widened argv-bearing process census below does.
+  born="$weekday $month $day $clock $year"
+  [ "$owner" = "$root" ] && [ "$group" = "$root" ] && [ "$group" -gt 1 ] && [ "$group" != "$RUNNER_PGID" ] && [ -n "$year" ] || return 2
+  [ -d "$dir/tmp" ] && [ ! -L "$dir/tmp" ] || return 2
+  # A private per-suite TMPDIR also attributes daemonized fixture children
+  # after the leader exits. Use native records, not formatted grep matches;
+  # absence is meaningful only when both inventories include this runner.
+  LC_ALL=C ps -ww -axo pid=,ppid=,pgid=,stat=,lstart=,command= > "$dir/processes.before" || return 2
+  lsof_bin="$(command -v lsof)" || { info 'STOP: suite cwd observer missing'; return 2; }
+  if ! "$lsof_bin" -nP -d cwd -Fpn > "$dir/cwds" 2> "$dir/cwds.err"; then
+    info 'STOP: cannot inventory suite cwd owners'
+    while IFS= read -r field; do info "$field"; done < "$dir/cwds.err"
+    return 2
+  fi
+  while IFS= read -r field; do
+    case "$field" in
+      p*) cwd_pid="${field#p}" ;;
+      n*)
+        [ "$cwd_pid" != "$$" ] || cwd_self=1
+        case "${field#n}" in "$dir/tmp"|"$dir/tmp/"*) scratch_pids[${#scratch_pids[@]}]="$cwd_pid" ;; esac ;;
+    esac
+  done < "$dir/cwds"
+  [ "$cwd_self" = 1 ] || { info 'STOP: suite cwd inventory omitted runner'; return 2; }
+  # Bracket cwd discovery with native identities: a recycled PID between
+  # lsof and ps must not transfer fixture ownership to a different process.
+  while read -r p parent g state weekday month day clock year command; do
+    [ "$p" != "$$" ] || ps_before_self=1
+    for ((j=0;j<${#scratch_pids[@]};j++)); do
+      if [ "$p" = "${scratch_pids[j]}" ]; then
+        scratch_groups[j]="$g"; scratch_births[j]="$weekday $month $day $clock $year"
+      fi
+    done
+  done < "$dir/processes.before"
+  [ "$ps_before_self" = 1 ] || { info 'STOP: suite pre-cwd process inventory omitted runner'; return 2; }
   if [ -f "$dir/targets" ]; then
     while read -r oldp oldg oldbirth; do
       i=${#previous_pids[@]}
       previous_pids[i]="$oldp"; previous_groups[i]="$oldg"; previous_births[i]="$oldbirth"
     done < "$dir/targets"
   fi
-  ps -axo pid=,ppid=,pgid=,stat=,lstart= > "$dir/processes" || return 2
+  LC_ALL=C ps -ww -axo pid=,ppid=,pgid=,stat=,lstart=,command= > "$dir/processes" || return 2
   i=0
-  while read -r p parent g state birth; do
-    pids[i]="$p"; parents[i]="$parent"; pgids[i]="$g"; states[i]="$state"; births[i]="$birth"; owned[i]=0
-    if [ "$p" = "$root" ] && [ "$g" = "$group" ] && [ "$birth" = "$born" ]; then owned[i]=1; fi
+  while read -r p parent g state weekday month day clock year command; do
+    birth="$weekday $month $day $clock $year"
+    [ "$p" != "$$" ] || ps_self=1
+    pids[i]="$p"; parents[i]="$parent"; pgids[i]="$g"; states[i]="$state"; births[i]="$birth"; commands[i]="$command"; owned[i]=0; via[i]=descendant
+    if [ "$p" = "$root" ] && { [ "$g" != "$group" ] || [ "$birth" != "$born" ]; }; then
+      info 'STOP: suite leader identity changed'; return 2
+    fi
+    # The launcher made root the session/group leader. Its group remains
+    # attributable even after wait reaps that leader (the original leak).
+    if [ "$g" = "$group" ]; then owned[i]=1; via[i]=group; fi
+    for ((j=0;j<${#scratch_pids[@]};j++)); do
+      if [ "$p" = "${scratch_pids[j]}" ] && [ "$g" = "${scratch_groups[j]:-}" ] && [ "$birth" = "${scratch_births[j]:-}" ]; then
+        owned[i]=1; via[i]=scratch; break
+      fi
+    done
     for ((j=0;j<${#previous_pids[@]};j++)); do
       if [ "$p" = "${previous_pids[j]}" ] && [ "$g" = "${previous_groups[j]}" ] && [ "$birth" = "${previous_births[j]}" ]; then owned[i]=1; break; fi
     done
     if [ "${owned[i]}" = 1 ]; then active[${#active[@]}]="$i"; fi
     i=$((i+1))
   done < "$dir/processes"
+  [ "$ps_self" = 1 ] || { info 'STOP: suite process inventory omitted runner'; return 2; }
   # Expand against only the owned cohort, not every host PID for every row.
   # Likewise load retained identities once, never reopening them per host PID.
   # A small suite tree must not make deadline cleanup quadratic in host size.
@@ -105,6 +155,12 @@ signal_suite_tree(){
     [ "${owned[i]}" = 1 ] || continue
     case "${states[i]}" in T*|t*|Z*) ;; *) SUITE_TREE_QUIESCENT=0 ;; esac
     printf '%s %s %s\n' "${pids[i]}" "${pgids[i]}" "${births[i]}" >> "$dir/targets.next"
+    case "${states[i]}" in Z*) continue ;; esac # zombies hold no output descriptors
+    SUITE_SURVIVORS=$((SUITE_SURVIVORS+1))
+    case "$signal" in
+      CHECK) info "selftest-sweep: LEAK $CURRENT_SUITE_NAME pid=${pids[i]} ppid=${parents[i]} pgid=${pgids[i]} state=${states[i]} via=${via[i]} started=${births[i]} command=${commands[i]}"; continue ;;
+      PROBE) continue ;;
+    esac
     g="${pgids[i]}"
     if [ "$g" != "$RUNNER_PGID" ] && [ "$g" -gt 1 ]; then
       case "$groups_seen" in *" $g "*) continue ;; esac
@@ -123,7 +179,8 @@ signal_suite_tree(){
 # census. Killing its parent then orphans an unrecorded group. Stop and rescan
 # until every attributable process is stopped/zombie before the final census;
 # no running owned parent can create another group in that snapshot window.
-# This does not contain earlier daemonization or an outside SIGCONT actor.
+# Daemonization outside private scratch, or an outside SIGCONT actor, is not
+# contained by this census/quiescence protocol.
 quiesce_suite_tree(){
   local root="$1" dir="$2" until=$((SECONDS+5))
   while :; do
@@ -137,6 +194,22 @@ quiesce_suite_tree(){
   done
 }
 
+# Normal-exit leaks use exactly the timeout/interrupt containment path.
+contain_suite_tree(){
+  local root="$1" dir="$2" message=""
+  signal_suite_tree TERM "$root" "$dir" || { info 'STOP: cannot identify suite tree for TERM'; return 2; }
+  # Separate unwritten FIFO: a parent's normal completion cannot cancel the
+  # grace/escalation after TERM has already caused the suite leader to exit.
+  read -r -t "$SUITE_GRACE_S" -u 8 message || true
+  if ! quiesce_suite_tree "$root" "$dir"; then
+    # Do not strand a stopped cohort on an observation failure. Still fail the
+    # sweep: a best-effort KILL is not a successful containment observation.
+    signal_suite_tree KILL "$root" "$dir" || true
+    return 2
+  fi
+  signal_suite_tree KILL "$root" "$dir" || { info 'STOP: cannot identify suite tree for KILL'; return 2; }
+}
+
 suite_watchdog(){ (
   # This asynchronous child must never run the parent's lock-release traps.
   trap - EXIT
@@ -147,17 +220,7 @@ suite_watchdog(){ (
   else
     printf '%s\n' "$SUITE_TIMEOUT_S" > "$dir/timed-out"
   fi
-  signal_suite_tree TERM "$root" "$dir" || { info 'STOP: cannot identify suite tree for TERM'; exit 2; }
-  # Separate unwritten FIFO: a parent's normal completion cannot cancel the
-  # grace/escalation after TERM has already caused the suite leader to exit.
-  read -r -t "$SUITE_GRACE_S" -u 8 message || true
-  if ! quiesce_suite_tree "$root" "$dir"; then
-    # Do not strand a stopped cohort on an observation failure. Still fail the
-    # sweep: a best-effort KILL is not a successful containment observation.
-    signal_suite_tree KILL "$root" "$dir" || true
-    exit 2
-  fi
-  signal_suite_tree KILL "$root" "$dir" || { info 'STOP: cannot identify suite tree for KILL'; exit 2; }
+  contain_suite_tree "$root" "$dir"
 ); }
 
 retire_review_group(){
@@ -182,7 +245,10 @@ start_suite(){
   # finish_current_suite's synchronous fallback for the single stop token.
   STARTING_SUITE=1
   SUITE_TIMED_OUT=0
+  CURRENT_SUITE_NAME="$1"
   SUITE_STATE="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/wheelhouse-suite-deadline.XXXXXX")" || exit 2
+  SUITE_STATE="$(cd "$SUITE_STATE" && pwd -P)" || exit 2
+  mkdir -m 700 "$SUITE_STATE/tmp" || exit 2
   mkfifo -m 600 "$SUITE_STATE/control" "$SUITE_STATE/grace" || exit 2
   exec 9<> "$SUITE_STATE/control"
   exec 8<> "$SUITE_STATE/grace"
@@ -190,7 +256,7 @@ start_suite(){
   # Publish while still in the runner group. KILL before publication therefore
   # kills the launcher too; after publication the reviewer knows its future
   # pgid even if the runner dies before setsid/exec. No reviewer ack is needed.
-  perl -MFcntl=:DEFAULT -MPOSIX=setsid -e '
+  TMPDIR="$SUITE_STATE/tmp" perl -MFcntl=:DEFAULT -MPOSIX=setsid -e '
     my $registry = shift @ARGV;
     if (length $registry) {
       sysopen(my $out, $registry, O_WRONLY|O_APPEND|O_NOFOLLOW|O_NONBLOCK) or die "registry open: $!\n";
@@ -199,7 +265,7 @@ start_suite(){
     setsid or die "setsid: $!\n";
     exec @ARGV or die "exec @ARGV: $!\n";
   ' "$REVIEW_GROUPS" \
-    bash -c 'unset WHEELHOUSE_SELFTEST_REVIEW_GROUPS WHEELHOUSE_SELFTEST_SWEEP_TIER; ps -p "$$" -o pid=,pgid=,lstart= > "$2/owner" || exit 2; exec bash "$1"' \
+    bash -c 'unset WHEELHOUSE_SELFTEST_REVIEW_GROUPS WHEELHOUSE_SELFTEST_SWEEP_TIER; LC_ALL=C ps -p "$$" -o pid=,pgid=,lstart= > "$2/owner" || exit 2; exec bash "$1"' \
     suite "$1" "$SUITE_STATE" 8>&- 9>&- &
   CURRENT_SUITE_PID=$!
   suite_watchdog "$CURRENT_SUITE_PID" "$SUITE_STATE" & WATCHDOG_PID=$!
@@ -219,6 +285,27 @@ finish_current_suite(){
   fi
   if [ "$mode" = stop ]; then wait "$CURRENT_SUITE_PID"; SUITE_RC=$?; fi
   [ ! -f "$SUITE_STATE/timed-out" ] || SUITE_TIMED_OUT=1
+  if signal_suite_tree CHECK "$CURRENT_SUITE_PID" "$SUITE_STATE"; then
+    if [ "$SUITE_SURVIVORS" != 0 ]; then
+      [ "$SUITE_RC" != 0 ] || SUITE_RC=1
+      contain_suite_tree "$CURRENT_SUITE_PID" "$SUITE_STATE" || watch_rc=2
+      # KILL is asynchronous; wait only for observed owned identities, never
+      # for output EOF (which is precisely what a leaked child can hold open).
+      local until=$((SECONDS+5))
+      while :; do
+        signal_suite_tree PROBE "$CURRENT_SUITE_PID" "$SUITE_STATE" || { watch_rc=2; break; }
+        [ "$SUITE_SURVIVORS" != 0 ] || break
+        if [ "$SECONDS" -ge "$until" ]; then
+          signal_suite_tree CHECK "$CURRENT_SUITE_PID" "$SUITE_STATE" || true
+          info "STOP: suite survivors remain after KILL: $CURRENT_SUITE_NAME"; watch_rc=2; break
+        fi
+        sleep 0.05
+      done
+    fi
+  else
+    info "STOP: incomplete survivor check: $CURRENT_SUITE_NAME"; watch_rc=2
+  fi
+  [ "$watch_rc" != 0 ] || info "selftest-sweep: CLEAN $CURRENT_SUITE_NAME pgid=$CURRENT_SUITE_PID"
   exec 8>&- 9>&-
   rm -rf "$SUITE_STATE"
   retire_review_group || { info 'STOP: cannot retire review suite group'; SUITE_RC=2; }

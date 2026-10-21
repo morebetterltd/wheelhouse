@@ -26,6 +26,7 @@ FAIL=0
 cleanup() {
   tmux -L "$SOCK" kill-server >/dev/null 2>&1 || true
   selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+  [ -z "${LEGACY_WD:-}" ] || wait "$LEGACY_WD" 2>/dev/null || true
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true
   pids=""
   for pid_file in "$FIX"/project/seats/run/*.pid; do
@@ -357,7 +358,7 @@ if [ -n "$SUPERVISOR_PID" ] && kill -0 "$SUPERVISOR_PID" 2>/dev/null && grep -Eq
 else
   fail "cockpit did not start/verify supervisor (pid=${SUPERVISOR_PID:-none} out=$(cat "$FIX/cockpit.out" 2>/dev/null))"
 fi
-(sleep 1000) & LEGACY_WD=$!
+(cd "$FIX" && exec sleep 1000) & LEGACY_WD=$!
 printf '%s\n' "$LEGACY_WD" > "$PROJ/seats/run/desk-watchdog.pid"
 run_cockpit
 if ! kill -0 "$LEGACY_WD" 2>/dev/null && grep -q 'legacy desk watchdog stopped: pid' "$FIX/cockpit.out"; then
