@@ -1213,7 +1213,67 @@ function sourceAccessPromptLines(snapshots: SourceSnapshot[]): string[] {
   ];
 }
 
-interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; error?: string; batch?: { tip: string; main: string; sha256: string } }
+interface SuiteTiming { suite: string; seconds: number }
+interface SweepTimings { tierLine: string; footer: string; totalSeconds: number; suites: SuiteTiming[]; slowest: SuiteTiming[] }
+interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; timings?: SweepTimings; error?: string; batch?: { tip: string; main: string; sha256: string } }
+
+// Read only the outer runner's records. Nested fixture sweeps use other roots
+// and must not contribute to this receipt's inventory, seconds or slowest five.
+export function readSweepTimings(text: string): SweepTimings {
+  const invalid = (why: string): never => { throw new Error(`invalid sweep timings: ${why}`); };
+  const whole = (s: string): number => {
+    if (!/^(0|[1-9][0-9]*)$/.test(s) || !Number.isSafeInteger(Number(s))) invalid("seconds/count must be safe whole numbers");
+    return Number(s);
+  };
+  const tier = /^selftest-sweep: tier=full suites=([1-9][0-9]*)$/m.exec(text);
+  const footers = [...text.matchAll(/^selftest-sweep: (?:PASS \(([1-9][0-9]*) suite\(s\), ([0-9]+)s\)|FAIL \(([1-9][0-9]*) failure\(s\) of ([1-9][0-9]*) suite\(s\), ([0-9]+)s\))$/gm)];
+  const footer = footers.at(-1);
+  const lastSummary = [...text.matchAll(/^selftest-sweep: (?:PASS|FAIL) \([^\n]*\)$/gm)].at(-1);
+  const firstStart = /^selftest-sweep: START /m.exec(text);
+  if (!tier || !footer || !lastSummary || lastSummary.index !== footer.index || tier.index >= footer.index! || (firstStart && firstStart.index < tier.index)) invalid("missing tier/full completed footer");
+  const count = whole(tier![1]), totalSeconds = whole(footer![2] ?? footer![5]);
+  if (count !== whole(footer![1] ?? footer![4])) invalid("inventory/summary mismatch");
+  const body = text.slice(tier!.index + tier![0].length, footer!.index);
+  const first = /^selftest-sweep: START (.+\/seats\/)([^/\n]+\.selftest\.sh)$/m.exec(body);
+  if (!first) invalid("inventory/summary mismatch");
+  const prefix = first![1], suites: SuiteTiming[] = [], seen = new Set<string>();
+  let pending: string | undefined, failures = 0;
+  for (const line of body.split("\n")) {
+    if (line.startsWith(`selftest-sweep: START ${prefix}`)) {
+      const name = line.slice(`selftest-sweep: START ${prefix}`.length);
+      if (pending || !/^[^/\n]+\.selftest\.sh$/.test(name) || seen.has(name)) invalid("duplicate or unordered outer suite records");
+      pending = name;
+    } else if (["PASS", "FAIL"].some(kind => line.startsWith(`selftest-sweep: ${kind} ${prefix}`))) {
+      const pass = `selftest-sweep: PASS ${prefix}${pending} elapsed=`;
+      const fail = `selftest-sweep: FAIL ${prefix}${pending} `;
+      let seconds: string | undefined;
+      if (pending && line.startsWith(pass)) seconds = /^(0|[1-9][0-9]*)s$/.exec(line.slice(pass.length))?.[1];
+      else if (pending && line.startsWith(fail)) {
+        seconds = /^(?:rc=[0-9]+|timed out after [1-9][0-9]*s \(TERM then KILL after [1-9][0-9]*s grace; rc=[0-9]+\)) elapsed=(0|[1-9][0-9]*)s$/.exec(line.slice(fail.length))?.[1];
+        failures++;
+      }
+      if (seconds === undefined) invalid("missing, malformed or failed outer suite records");
+      suites.push({ suite: pending!, seconds: whole(seconds!) }); seen.add(pending!); pending = undefined;
+    }
+  }
+  if (pending || suites.length !== count) invalid("missing or filtered outer suite records");
+  if (failures !== (footer![3] ? whole(footer![3]) : 0)) invalid("failed outer suite records disagree with footer");
+  const sum = suites.reduce((n, s) => n + s.seconds, 0);
+  if (!Number.isSafeInteger(sum) || totalSeconds < sum) invalid("total seconds below per-suite sum");
+  const slowest = [...suites].sort((a, b) => b.seconds - a.seconds || a.suite.localeCompare(b.suite)).slice(0, 5);
+  return { tierLine: tier![0], footer: footer![0], totalSeconds, suites, slowest };
+}
+
+function sweepTimingLines(sweep: SweepResult): string[] {
+  if (!sweep.timings) return [];
+  return [
+    `- ${sweep.timings.tierLine}`,
+    `- ${sweep.timings.footer}`,
+    `- totalSeconds: ${sweep.timings.totalSeconds}`,
+    `- slowest suites (whole seconds, descending):`,
+    ...sweep.timings.slowest.map(s => `  - ${s.suite}: ${s.seconds}s`),
+  ];
+}
 
 // Opt-in only. Read the existing dispatcher's envelope, not arbitrary terminal
 // text that happens to contain PASS/rc=0. Never execute a sweep in this path.
@@ -1243,9 +1303,9 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
   } catch (e: any) { return refuse(`cannot read safe log: ${e.message}`); }
   finally { if (fd !== undefined) fs.closeSync(fd); }
   const header = /^tip=([0-9a-f]{40}|[0-9a-f]{64})\ncommand=bash seats\/selftest-sweep\.sh\nWHEELHOUSE_SKIP_REAL_PI=1 \(hermetic suites; no live login borrowed\)\npreparedTip=([0-9a-f]{40}|[0-9a-f]{64})\nscratchGraph=isolated nested repository\n/.exec(text!);
-  const footer = /\nselftest-sweep: PASS \(([1-9][0-9]*) suite\(s\)\)\nfinalTip=([0-9a-f]{40}|[0-9a-f]{64})\n\nrc=0\nelapsedMs=([0-9]+)\n$/.exec(text!);
-  if (!header || !footer || header[1] !== header[2] || header[1] !== footer[2] || text!.includes("\0")) refuse("not a completed passing hermetic full-sweep envelope (tip/prepared/final/command/rc)");
-  const batchTip = header![1], elapsedMs = Number(footer![3]);
+  const footer = /\nselftest-sweep: PASS \(([1-9][0-9]*) suite\(s\), ([0-9]+)s\)\nfinalTip=([0-9a-f]{40}|[0-9a-f]{64})\n\nrc=0\nelapsedMs=([0-9]+)\n$/.exec(text!);
+  if (!header || !footer || header[1] !== header[2] || header[1] !== footer[3] || text!.includes("\0")) refuse("not a completed passing hermetic full-sweep envelope (tip/prepared/final/command/rc)");
+  const batchTip = header![1], elapsedMs = Number(footer![4]);
   if (!Number.isSafeInteger(elapsedMs)) refuse("invalid elapsedMs");
   let main: string, committedMs: number, expected: string[];
   try {
@@ -1260,24 +1320,11 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
   if (!Number.isSafeInteger(committedMs!) || !Number.isFinite(stat!.mtimeMs) || stat!.mtimeMs < committedMs! || (stat!.birthtimeMs > 0 && stat!.birthtimeMs < committedMs!) || stat!.mtimeMs > Date.now() + 1) refuse("log is stale or future-dated relative to reviewed commit");
   // A filtered pass is not a full sweep. Match the outer runner's exact suite
   // set and serial START/PASS pairs; nested fixture runners have other roots.
-  const body = text!.slice(header![0].length, footer!.index);
-  const first = /^selftest-sweep: START (.+\/seats\/)([^/\n]+\.selftest\.sh)$/m.exec(body);
-  if (!first || expected!.length !== Number(footer![1]) || expected!.length === 0) refuse("full-suite inventory/summary mismatch");
-  const prefix = first![1], rows: string[] = [];
-  for (const line of body.split("\n")) {
-    for (const kind of ["START", "PASS", "FAIL"]) {
-      const marker = `selftest-sweep: ${kind} ${prefix}`;
-      if (line.startsWith(marker)) rows.push(`${kind} ${line.slice(marker.length)}`);
-    }
-  }
-  const seen = new Set<string>();
-  if (rows.length !== expected!.length * 2) refuse("missing, duplicate, failed or filtered outer suite records");
-  for (let i = 0; i < rows.length; i += 2) {
-    const name = rows[i].slice(6);
-    if (rows[i] !== `START ${name}` || rows[i + 1] !== `PASS ${name}` || !expected!.includes(name) || seen.has(name)) refuse("missing, duplicate, failed or filtered outer suite records");
-    seen.add(name);
-  }
-  return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, batch: { tip: batchTip, main: main!, sha256: sha256! } };
+  let timings: SweepTimings;
+  try { timings = readSweepTimings(text!.slice(header![0].length)); }
+  catch (e: any) { return refuse(e.message); }
+  if (expected!.length === 0 || timings.suites.length !== expected!.length || timings.suites.some(s => !expected!.includes(s.suite))) refuse("full-suite inventory/summary mismatch");
+  return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, timings, batch: { tip: batchTip, main: main!, sha256: sha256! } };
 }
 
 // Wording controls extra reviewer citations, never execution of the gate.
@@ -1377,10 +1424,15 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
     fs.appendFileSync(logPath, `finalTip=${finalTip}\n`);
     if (finalTip !== tip) { rc = 1; error = `sweep changed reviewed tip from ${tip} to ${finalTip}`; }
   } catch (e: any) { rc = 1; error = e.message; }
+  let timings: SweepTimings | undefined;
+  if (!error && (rc === 0 || rc === 1)) {
+    try { timings = readSweepTimings(fs.readFileSync(logPath, "utf8")); }
+    catch (e: any) { error = e.message; rc = 1; }
+  }
   const elapsedMs = Date.now() - started;
   fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
   removeScratchWorktree(repoRoot, scratchCwd);
-  return { required: true, rc, logPath, elapsedMs, tip, error };
+  return { required: true, rc, logPath, elapsedMs, tip, timings, error };
 }
 
 function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[] {
@@ -1394,6 +1446,7 @@ function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[
     `- rc: ${sweep.rc}`,
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
+    ...sweepTimingLines(sweep),
     ...(sweep.error ? [`- error: ${sweep.error}`] : []),
     sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. This reuses only the sweep, not another reviewer's judgment.` : `This dispatcher gate runs for every review, regardless of the bead's wording, outside your model command timeout in the detached scratch worktree at the reviewed tip. Its result is recorded with your verdict. If rc is not 0, you cannot approve.`,
     ...(requireCitation ? [`You must cite rc=${sweep.rc} and the exact log path in your final evidence.`] : []),
@@ -1916,6 +1969,7 @@ async function main(): Promise<void> {
               `- rc: ${sweep.rc}`,
               `- log: ${sweep.logPath}`,
               `- elapsedMs: ${sweep.elapsedMs}`,
+              ...sweepTimingLines(sweep),
             ]
           : []),
         ``,

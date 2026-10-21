@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 const [here, root, seedFile, seedTip] = process.argv.slice(2);
 assert(fs.statSync(root).isDirectory()); assert(fs.statSync(seedFile).isFile());
-const { readBatchSweep } = await import(pathToFileURL(path.join(here, "verify.ts")).href);
+const { readBatchSweep, readSweepTimings } = await import(pathToFileURL(path.join(here, "verify.ts")).href);
 const repo = path.join(root, "batch-validation-repo"); fs.mkdirSync(repo);
 const env = { ...process.env, GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" };
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -36,9 +36,36 @@ const write = (name: string, text: string) => { const file = path.join(root, `ba
 const good = write("accept", valid);
 const accepted = readBatchSweep(repo, reviewed, good);
 assert.equal(accepted.rc, 0); assert.equal(accepted.required, true); assert.equal(accepted.tip, reviewed); assert.equal(accepted.batch.tip, batch); assert.equal(accepted.batch.main, main);
-console.log("PASS batch accepts passing descendant containing reviewed tip and current main on first-parent chain");
+assert.equal(accepted.timings.tierLine, 'selftest-sweep: tier=full suites=1');
+assert.deepEqual(accepted.timings.slowest, accepted.timings.suites);
+assert.equal(accepted.timings.slowest[0].suite, 'slowed.selftest.sh');
+console.log("PASS batch accepts passing descendant containing reviewed tip and current main on first-parent chain, with timings");
+// Shape fixtures are derived from the real captured outer prefix; these six
+// timings are deliberate test data, not a claim that six real suites ran.
+const prefix = /^selftest-sweep: START (.+\/seats\/)slowed.selftest.sh$/m.exec(valid)![1];
+const names = ['a','b','c','d','e','f'], seconds = [4,6,2,9,0,3];
+const records = names.map((name,i)=>`selftest-sweep: START ${prefix}${name}.selftest.sh\nselftest-sweep: PASS ${prefix}${name}.selftest.sh elapsed=${seconds[i]}s`).join('\n');
+const shaped = `selftest-sweep: tier=full suites=6\n${records}\nselftest-sweep: PASS (6 suite(s), 25s)\n`;
+const top = readSweepTimings(shaped);
+assert.equal(top.totalSeconds,25);assert.deepEqual(top.slowest.map(s=>s.suite),['d','b','a','f','c'].map(n=>n+'.selftest.sh'));
+assert.deepEqual(top.slowest.map(s=>s.seconds),[9,6,4,3,2]);
+const nested = `selftest-sweep: tier=full suites=1\nselftest-sweep: START /nested/seats/other.selftest.sh\nselftest-sweep: PASS /nested/seats/other.selftest.sh elapsed=999s\nselftest-sweep: PASS (1 suite(s), 999s)\n`;
+assert.deepEqual(readSweepTimings(shaped.replace(records,records+'\n'+nested)).slowest,top.slowest);
+const failed = `selftest-sweep: tier=full suites=1\nselftest-sweep: START ${prefix}fail.selftest.sh\nselftest-sweep: FAIL ${prefix}fail.selftest.sh rc=7 elapsed=3s\nselftest-sweep: FAIL (1 failure(s) of 1 suite(s), 3s)\n`;
+assert.equal(readSweepTimings(failed).slowest[0].seconds,3);
+assert.equal(readSweepTimings(failed.replace('rc=7 elapsed=','timed out after 1s (TERM then KILL after 1s grace; rc=137) elapsed=')).totalSeconds,3);
+console.log('PASS timings: slowest five sorted, nested runners excluded, FAIL and timeout shapes');
 let rejected = 0;
 const refuse = (name: string, file: string, why: RegExp) => { assert.throws(() => readBatchSweep(repo, reviewed, file), why, name); rejected++; console.log(`PASS batch refuses ${name}`); };
+const oldShape = valid.replace(/^selftest-sweep: tier=full suites=[0-9]+\n/m,'').replace(/ elapsed=[0-9]+s$/gm,'').replace(/(suite\(s\)), [0-9]+s\)/g,'$1)');
+refuse('old timing-free envelope',write('old-shape',oldShape),/passing hermetic full-sweep envelope/);
+refuse('missing tier',write('no-tier',valid.replace(/^selftest-sweep: tier=full suites=[0-9]+\n/m,'')),/missing tier/);
+for(const [name,value] of [['missing',''],['fractional',' elapsed=1.5s'],['negative',' elapsed=-1s'],['overflow',' elapsed=99999999999999999999s']]) {
+  refuse(name+' suite seconds',write('seconds-'+name,valid.replace(/ elapsed=[0-9]+s$/m,value)),/outer suite records|safe whole numbers/);
+}
+assert.throws(()=>readSweepTimings(shaped.replace('25s)','23s)')),/below per-suite sum/);
+assert.throws(()=>readSweepTimings(shaped.replace('suites=6','suites=5')),/inventory\/summary mismatch/);
+console.log('PASS timings refuse undersized total and inconsistent tier inventory');
 refuse("non-ancestor", write("nonancestor", swap(valid, batch, unrelated)), /not a proven ancestor/);
 refuse("red rc1", write("red", valid.replace(/\nrc=0\nelapsedMs=/, "\nrc=1\nelapsedMs=")), /passing hermetic full-sweep envelope/);
 const stale = write("stale", valid); fs.utimesSync(stale, new Date("1999-12-31T23:59:59Z"), new Date("1999-12-31T23:59:59Z")); refuse("stale", stale, /stale/);

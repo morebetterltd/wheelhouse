@@ -18,9 +18,7 @@ PENDING_INTERRUPT=""
 REVIEW_GROUPS="${WHEELHOUSE_SELFTEST_REVIEW_GROUPS:-}"
 SUITE_TIMED_OUT=0
 SUITE_RC=0
-# Measured: concurrency 62s; passing adapter capture <=335s; a whole
-# successful 53-suite review sweep took 843.256s (2026-10-17, wxuh 49e2970).
-# One hour is >4x that conservative bound, not a guessed short test budget.
+# Tune against the per-suite elapsed seconds retained in each sweep log.
 SUITE_TIMEOUT_S="${WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S:-3600}"
 SUITE_GRACE_S="${WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S:-5}"
 OWNED_LOCK=""
@@ -308,10 +306,12 @@ fi
 # Preserve exit2 for incomplete audits; an unexamined tree is not a test result.
 bun "$AUDITOR" "$ROOT" || exit "$?"
 acquire_lock
+SWEEP_STARTED=$SECONDS
 
 shopt -s nullglob
 suites=( $PATTERN )
 shopt -u nullglob
+say "selftest-sweep: tier=full suites=${#suites[@]}"
 if [ "${#suites[@]}" -eq 0 ]; then
   info "selftest-sweep: no suites matched: $PATTERN"
   exit 1
@@ -323,26 +323,29 @@ info "selftest-sweep: suite timeout=${SUITE_TIMEOUT_S}s TERM grace=${SUITE_GRACE
 for suite in "${suites[@]}"; do
   [ -f "$suite" ] || continue
   say "selftest-sweep: START $suite"
+  suite_started=$SECONDS
   start_suite "$suite"
   finish_current_suite done
+  suite_elapsed=$((SECONDS-suite_started))
   rc="$SUITE_RC"
   if [ "$SUITE_TIMED_OUT" = 1 ]; then
-    say "selftest-sweep: FAIL $suite timed out after ${SUITE_TIMEOUT_S}s (TERM then KILL after ${SUITE_GRACE_S}s grace; rc=$rc)"
+    say "selftest-sweep: FAIL $suite timed out after ${SUITE_TIMEOUT_S}s (TERM then KILL after ${SUITE_GRACE_S}s grace; rc=$rc) elapsed=${suite_elapsed}s"
     failures=$((failures + 1))
     timeout_summary="${timeout_summary}selftest-sweep: timeout summary: $suite timed out after ${SUITE_TIMEOUT_S}s
 "
   elif [ "$rc" -eq 0 ]; then
-    say "selftest-sweep: PASS $suite"
+    say "selftest-sweep: PASS $suite elapsed=${suite_elapsed}s"
   else
-    say "selftest-sweep: FAIL $suite rc=$rc"
+    say "selftest-sweep: FAIL $suite rc=$rc elapsed=${suite_elapsed}s"
     failures=$((failures + 1))
   fi
 done
 
+sweep_elapsed=$((SECONDS-SWEEP_STARTED))
 if [ "$failures" -eq 0 ]; then
-  say "selftest-sweep: PASS (${#suites[@]} suite(s))"
+  say "selftest-sweep: PASS (${#suites[@]} suite(s), ${sweep_elapsed}s)"
   exit 0
 fi
 [ -z "$timeout_summary" ] || printf '%s' "$timeout_summary"
-say "selftest-sweep: FAIL ($failures failure(s) of ${#suites[@]} suite(s))"
+say "selftest-sweep: FAIL ($failures failure(s) of ${#suites[@]} suite(s), ${sweep_elapsed}s)"
 exit 1
