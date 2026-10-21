@@ -901,7 +901,7 @@ check_dispatcher_receipts() {
       state-writes) outcome='The adapter recovers an abandoned empty state.lock and preserves live owners.' ;;
       process-isolation) outcome='The no-pi-spawned assertion counts only processes the test itself could have started.' ;;
     esac
-    printf 'Trace: %s regression\n\nIntent:\nCheck the claimed behavior independently.\n\nOutcomes:\n- O1 %s\n  consumer: machine — fixture runner\n  surface: fixture state and process records\n  check: run — inspect the claimed behavior\n' "$style" "$outcome" > "$SWEEP_GENERIC_CLAIM"
+    printf 'Trace: %s regression\nSignal: isa-gap: K1\n\nIntent:\nCheck the claimed behavior independently.\n\nOutcomes:\n- O1 %s\n  consumer: machine — fixture runner\n  surface: fixture state and process records\n  check: run — inspect the claimed behavior\n' "$style" "$outcome" > "$SWEEP_GENERIC_CLAIM"
     WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" "bead-implicit-$style" fleet/bead-1 worker-1
     if [ "$RC" = 0 ] && [ -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" ] && grep -q '## Dispatcher full-sweep result' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" && grep -q 'sweep evidence rc=0 log=' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md"; then
       pass "$style claim without sweep keywords still gets a dispatcher receipt"
@@ -1556,7 +1556,9 @@ for(const marker of ['fixture-review-label','fixture-parent-contract','fixture-d
 assert(prompt.includes(fs.readFileSync(process.argv[3],'utf8').trim()));
 const heading='Parsed work contract (validated before reviewer spawn):\n';
 assert(prompt.includes(heading));
-const parsed=JSON.parse(prompt.split(heading)[1].split('\nInstall push authority')[0].trim());
+const sweepHeading='\nFull selftest sweep run by the dispatcher at the exact reviewed tip before this reviewer spawn:';
+assert(prompt.includes(sweepHeading),'dispatcher sweep section missing from assembled review prompt');
+const parsed=JSON.parse(prompt.split(heading)[1].split(sweepHeading)[0].trim());
 assert(parsed.intent);assert(parsed.outcomes.length);assert.equal(parsed.outcomes[0].id,'O1');assert.deepEqual(parsed.errors,[]);
 NODE
 then pass "review prompt preserves fixture task comment, labels, dependencies and parsed contract"
