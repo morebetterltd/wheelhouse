@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 
 const [root, seats, selected] = process.argv.slice(2);
 assert(fs.statSync(path.join(root, '.wheelhouse-selftest-fixture')).isFile());
-const modes = ['group', 'scratch', 'term-resistant', 'failed', 'clean', 'bad-cwd'];
+const modes = ['group', 'scratch', 'term-resistant', 'failed', 'clean', 'bad-cwd', 'bad-before-ps'];
 assert(!selected || modes.includes(selected));
 const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 const psArgs = ['-ww', '-o', 'pid=,ppid=,pgid=,stat=,lstart=,command='];
@@ -34,7 +34,7 @@ for (const mode of modes.filter(x => !selected || x === selected)) {
   const suite = path.join(dir, '00-finished.selftest.sh');
   const after = path.join(dir, '01-after.selftest.sh');
   const before = path.join(dir, 'before.ps'), pidFile = path.join(dir, 'child.pid');
-  const clean = mode === 'clean', plant = mode !== 'bad-cwd';
+  const clean = mode === 'clean', plant = !mode.startsWith('bad-');
   const launch = mode === 'scratch'
     ? `(cd "$TMPDIR" && exec perl -MPOSIX=setsid -e 'setsid or die "setsid: $!"; exec @ARGV or die "exec: $!"' sleep 1000) &`
     : `(cd ${clean ? '"$CHILD_FIX"' : quote(dir)} && ${mode === 'term-resistant' ? "trap '' TERM; " : ''}exec sleep 1000) &`;
@@ -60,10 +60,15 @@ LC_ALL=C ps -p "$p" ${psArgs.map(quote).join(' ')} > ${quote(before)}
   fs.writeFileSync(after, `printf 'after\\n' > ${quote(path.join(dir, 'after'))}\n`);
   const env = { ...process.env, WHEELHOUSE_SELFTEST_SWEEP_LOCK: path.join(dir, 'private.lock'),
     WHEELHOUSE_SELFTEST_SWEEP_PATTERN: path.join(dir, '*.selftest.sh'), WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: '1' };
-  if (mode === 'bad-cwd') {
+  if (mode.startsWith('bad-')) {
     const bin = path.join(dir, 'bin'); fs.mkdirSync(bin);
-    // Successful but empty inventory must be incomplete, never CLEAN.
-    fs.writeFileSync(path.join(bin, 'lsof'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+    // Successful but empty inventories must be incomplete, never CLEAN.
+    if (mode === 'bad-cwd') fs.writeFileSync(path.join(bin, 'lsof'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+    else {
+      const native = spawnSync('bash', ['-c', 'command -v ps'], { encoding: 'utf8' });
+      assert.equal(native.status, 0); assert(native.stdout.trim());
+      fs.writeFileSync(path.join(bin, 'ps'), `#!/usr/bin/env bash\ncase "$*" in *-axo*) if [ ! -e ${quote(path.join(dir, 'ps-seen'))} ]; then : > ${quote(path.join(dir, 'ps-seen'))}; exit 0; fi ;; esac\nexec ${quote(native.stdout.trim())} "$@"\n`, { mode: 0o755 });
+    }
     env.PATH = `${bin}:${env.PATH}`;
   }
   // A sibling outside BOTH ownership boundaries must remain untouched.
@@ -100,9 +105,9 @@ LC_ALL=C ps -p "$p" ${psArgs.map(quote).join(' ')} > ${quote(before)}
         if (mode === 'term-resistant') assert(stderr.includes('KILL owned suite tree pgid='), 'no KILL escalation');
       }
     } else {
-      assert(stderr.includes('suite cwd inventory omitted runner'), 'empty inventory was not rejected');
+      assert(stderr.includes(mode === 'bad-cwd' ? 'suite cwd inventory omitted runner' : 'suite pre-cwd process inventory omitted runner'), 'empty inventory was not rejected');
       assert(stdout.includes(`selftest-sweep: FAIL ${suite} rc=2`));
-      assert(!stderr.includes('selftest-sweep: CLEAN '), 'incomplete inspection claimed CLEAN');
+      assert(!stderr.includes(`selftest-sweep: CLEAN ${suite} `), 'incomplete inspection claimed CLEAN');
     }
     await Promise.race([closed, deadline]); // real stdout AND stderr EOF
     assert(fs.existsSync(path.join(dir, 'after')), 'following suite did not run');

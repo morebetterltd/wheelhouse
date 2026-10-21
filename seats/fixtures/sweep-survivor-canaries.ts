@@ -23,6 +23,8 @@ const variants = [
   { name: 'no-private-tmp', mode: 'scratch', runner: replace(source, 'TMPDIR="$SUITE_STATE/tmp" perl', 'perl') },
   { name: 'no-wait', mode: 'clean', lib: replace(library,
     '  for fixture_pid in $fixture_pids; do wait "$fixture_pid" 2>/dev/null || true; done', '  : # direct-child wait removed') },
+  { name: 'empty-pre-cwd-ps-accepted', mode: 'bad-before-ps', runner: replace(source,
+    '  [ "$ps_before_self" = 1 ] || { info \'STOP: suite pre-cwd process inventory omitted runner\'; return 2; }', '  : # pre-cwd identity inventory proof removed') },
   { name: 'empty-cwd-accepted', mode: 'bad-cwd', runner: replace(source,
     '  [ "$cwd_self" = 1 ] || { info \'STOP: suite cwd inventory omitted runner\'; return 2; }', '  : # inventory completeness proof removed') },
 ];

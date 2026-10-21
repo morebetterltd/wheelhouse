@@ -5,7 +5,13 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-fleet-snapshot.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 PIDS=""
-cleanup(){ selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
+# These FIFO holders have no RPC reader; adapter stop-all would wait for a
+# get_state reply forever. Reap our actual exec'd sleeps directly instead.
+cleanup(){
+  [ -z "$PIDS" ] || kill $PIDS >/dev/null 2>&1 || true
+  for pid in $PIDS; do wait "$pid" 2>/dev/null || true; done
+  selftest_remove_fixture_dir "$FIX"
+}
 selftest_install_cleanup_traps cleanup
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }

@@ -53,7 +53,7 @@ signal_suite_tree(){
   local signal="$1" root="$2" dir="$3" owner group born p parent g birth i j ancestor changed groups_seen=" " oldp oldg oldbirth
   local pids=() parents=() pgids=() states=() births=() commands=() owned=() via=() active=()
   local scratch_pids=() scratch_groups=() scratch_births=()
-  local state weekday month day clock year command field cwd_pid="" ps_self=0 cwd_self=0 lsof_bin
+  local state weekday month day clock year command field cwd_pid="" ps_self=0 ps_before_self=0 cwd_self=0 lsof_bin
   SUITE_TREE_QUIESCENT=1
   SUITE_SURVIVORS=0
   local previous_pids=() previous_groups=() previous_births=()
@@ -82,12 +82,14 @@ signal_suite_tree(){
   # Bracket cwd discovery with native identities: a recycled PID between
   # lsof and ps must not transfer fixture ownership to a different process.
   while read -r p parent g state weekday month day clock year command; do
+    [ "$p" != "$$" ] || ps_before_self=1
     for ((j=0;j<${#scratch_pids[@]};j++)); do
       if [ "$p" = "${scratch_pids[j]}" ]; then
         scratch_groups[j]="$g"; scratch_births[j]="$weekday $month $day $clock $year"
       fi
     done
   done < "$dir/processes.before"
+  [ "$ps_before_self" = 1 ] || { info 'STOP: suite pre-cwd process inventory omitted runner'; return 2; }
   if [ -f "$dir/targets" ]; then
     while read -r oldp oldg oldbirth; do
       i=${#previous_pids[@]}
@@ -163,7 +165,8 @@ signal_suite_tree(){
 # census. Killing its parent then orphans an unrecorded group. Stop and rescan
 # until every attributable process is stopped/zombie before the final census;
 # no running owned parent can create another group in that snapshot window.
-# This does not contain earlier daemonization or an outside SIGCONT actor.
+# Daemonization outside private scratch, or an outside SIGCONT actor, is not
+# contained by this census/quiescence protocol.
 quiesce_suite_tree(){
   local root="$1" dir="$2" until=$((SECONDS+5))
   while :; do
