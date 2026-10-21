@@ -18,6 +18,7 @@ cleanup(){
   if declare -F kill_recorded_tree >/dev/null; then
     kill_recorded_tree "$FIX/ordinary" CLEANUP
     kill_recorded_tree "$FIX/term-ignored" CLEANUP
+    kill_recorded_tree "$FIX/live-target-control" CLEANUP
     kill_recorded_tree "$FIX/fork-frozen" CLEANUP
     kill_recorded_tree "$FIX/fork-unfrozen" CLEANUP
   fi
@@ -34,16 +35,23 @@ export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$HERE/selftest-sweep-lock.ts"
 # Independent bounded containment for deliberately broken runner controls.
 # It is not the feature under test: if it fires, the regression leg FAILs.
 kill_recorded_tree(){
-  local dir="$1" reason="$2" p g born fresh fp fg fb seen=" "
+  local dir="$1" reason="$2" p g born fresh fp fg state fb seen=" "
   [ -f "$dir/identities" ] || return 0
   while read -r p g born; do
     [[ "$p" =~ ^[1-9][0-9]*$ ]] && [[ "$g" =~ ^[1-9][0-9]*$ ]] || continue
-    fresh="$(ps -p "$p" -o pid=,pgid=,lstart=)" || continue
-    read -r fp fg fb <<< "$fresh"
+    fresh="$(ps -p "$p" -o pid=,pgid=,stat=,lstart=)" || continue
+    read -r fp fg state fb <<< "$fresh"
     [ "$fp" = "$p" ] && [ "$fg" = "$g" ] && [ "$fb" = "$born" ] || continue
     [ "$g" -gt 1 ] && [ "$g" != "$TEST_PGID" ] || continue
+    # An expired observer is not proof it rescued anything: the runner may
+    # already have reaped the cohort and still be doing survivor inventories.
+    case "$state" in Z*) continue ;; esac
     case "$seen" in *" $g "*) continue ;; esac
     seen="$seen$g "
+    if [ "$reason" = RESCUE ]; then
+      printf 'independent fixture rescue\n' > "$dir/rescued"
+      printf 'pid=%s pgid=%s state=%s birth=%s\n' "$p" "$g" "$state" "$born" >> "$dir/rescue-targets"
+    fi
     printf '%s KILL owned pgid=%s anchor=%s birth=%s\n' "$reason" "$g" "$p" "$born" >&2
     kill -KILL -- "-$g" 2>/dev/null || true
   done < "$dir/identities"
@@ -53,7 +61,7 @@ rescue_tree(){ (
   trap '' INT TERM HUP
   local dir="$1" message
   if read -r -t 15 -u 7 message; then exit 0; fi
-  printf 'independent fixture rescue\n' > "$dir/rescued"
+  printf 'independent 15s observation\n' > "$dir/rescue-checked"
   kill_recorded_tree "$dir" RESCUE
 ); }
 TEST_PGID="$(ps -p "$$" -o pgid=)"; TEST_PGID="${TEST_PGID//[[:space:]]/}"
@@ -127,6 +135,57 @@ SH
 }
 run_timeout_case ordinary 0 2
 run_timeout_case term-ignored 1 3
+
+# Deterministically expire the unchanged observer after a real cohort is gone.
+# This is the false-positive regression; it must not claim a rescue happened.
+run_absent_target_control(){
+  local dir="$FIX/absent-target" rc=0
+  mkdir -p "$dir"
+  cp -f "$FIX/ordinary/identities" "$dir/identities" || return 2
+  check_gone "$dir" || return 2
+  mkfifo -m 600 "$dir/rescue-control"; exec 7<> "$dir/rescue-control"; rm -f "$dir/rescue-control"
+  rescue_tree "$dir" & RESCUE_PID=$!
+  wait "$RESCUE_PID" || rc=$?; RESCUE_PID=""; exec 7>&-
+  if [ "$rc" = 0 ] && [ -s "$dir/rescue-checked" ] && [ ! -e "$dir/rescued" ] && check_gone "$dir"; then
+    pass 'absent-target control: 15s observer expired after recorded cohort exited; no rescue claimed'
+  else fail 'absent-target control: expired observation falsely claimed rescue'; fi
+}
+run_absent_target_control || fail 'absent-target control setup failed'
+
+# Remove containment ONLY from a pinned private runner's watchdog. The real
+# hung cohort must outlive its own 2s deadline and require independent rescue;
+# run_timeout_case must still reject it, not accept its eventual timeout footer.
+run_live_target_control(){
+  local original_project="$PROJECT" project="$FIX/live-target-project" before="$FAILED" rejected=0
+  selftest_copy_seat_runtime "$project" "$HERE" || return 2
+  awk '
+    /^suite_watchdog\(\)\{ \($/ { watchdog=1 }
+    watchdog && $0 == "  contain_suite_tree \"$root\" \"$dir\"" {
+      print "  : # control: watchdog observes expiry but leaves the cohort alive"; removed++; next
+    }
+    { print }
+    watchdog && /^\); \}$/ { watchdog=0 }
+    END { if (removed != 1) exit 2 }
+  ' "$SWEEP" > "$project/seats/selftest-sweep.sh" || return 2
+  git -C "$project" init -q -b main || return 2
+  git -C "$project" add seats || return 2
+  PROJECT="$project"
+  run_timeout_case live-target-control 0 2 > "$FIX/live-target-check.out" 2> "$FIX/live-target-check.err"
+  PROJECT="$original_project"
+  if [ "$FAILED" = "$((before+1))" ] && [ -s "$FIX/live-target-control/rescue-checked" ] && [ -s "$FIX/live-target-control/rescued" ] && [ -s "$FIX/live-target-control/rescue-targets" ] && grep -F 'FAIL live-target-control: deadline outcome rc=1 rescue=yes' "$FIX/live-target-check.out" >/dev/null && grep -F 'RESCUE KILL owned pgid=' "$FIX/live-target-check.err" >/dev/null && check_gone "$FIX/live-target-control"; then rejected=1; fi
+  # Expected rejection is a control result, not a failure of the fixed runner.
+  FAILED="$before"
+  if [ "$rejected" = 1 ]; then
+    printf 'EXPECTED_REJECTION FAIL live-target-control: deadline outcome rc=1 rescue=yes\n'
+    while IFS= read -r line; do printf 'LIVE_RESCUE %s\n' "$line"; done < "$FIX/live-target-control/rescue-targets"
+    pass 'live-target control: runner leaving cohort alive past 2s deadline rejected; 15s rescue killed freshly matching targets'
+  else
+    while IFS= read -r line; do printf '%s\n' "$line"; done < "$FIX/live-target-check.out"
+    while IFS= read -r line; do printf '%s\n' "$line" >&2; done < "$FIX/live-target-check.err"
+    fail 'live-target control: live overdue cohort was not rejected and contained'
+  fi
+}
+run_live_target_control || fail 'live-target control setup failed'
 . "$HERE/fixtures/sweep-timeout-fork.sh"
 
 # Defaults are observed on a completed fast suite, never by waiting an hour.
