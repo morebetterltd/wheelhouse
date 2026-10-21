@@ -47,7 +47,7 @@ The main files here:
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
 - `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and review markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
-- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, alerts}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work and invalid commander panes open/close human needs through `seats/needs.ts` only.
+- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, seatStreams, alerts}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work, silent mid-turn model streams and invalid commander panes open/close human needs through `seats/needs.ts` only.
 - `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
@@ -234,7 +234,7 @@ Each seat entry:
 |---|---|
 | `role` | What the seat does: `worker`, `reviewer`, `verifier`, `researcher`, or another installed brief. Free-form string; the crew briefs define what each role means. Installed fleets read `wheelhouse/fleet/WORKER.md` for workers and `wheelhouse/crew/<ROLE>.md` for other roles, with `contracts/<ROLE>.md` retained as the template-tree fallback. |
 | `harness` | Optional harness driver, one of `pi`, `claude-code`, or `codex`; absent means `pi` for existing rosters. `account.dir` stays under the historical `~/.pi-seats-<namespace>/<seat>` root for every harness, but the driver reads it as `PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME` respectively. The adapter implements all three harnesses, validates the harness name before launch, and STOPs naming the seat rather than spawning the wrong harness. `claude-code` runs a resident shim around `claude -p --input-format stream-json --output-format stream-json`; `codex` runs a resident shim around `codex app-server`. Both emit the same FIFO/log protocol as a Pi seat and strip `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `OPENAI_API_KEY` from the child environment. |
-| `shadow` | Optional boolean; absent means `false`. `"shadow": true` marks a mirror seat whose output is recorded but never gates or carries assigned work. The commander dispatches to a shadow seat only as a mirror of a gating dispatch, and its verdict or review comment is prefixed `SHADOW`; it informs the real reviewer/commander but never gates a merge. `seat-env.sh` and `adapter.ts` reject any present non-boolean value. |
+| `shadow` | Optional boolean; absent means `false`. `"shadow": true` marks a mirror seat whose output is recorded but never gates or carries assigned work by default. A mirror verdict/comment is prefixed `SHADOW`. A reviewer can gate only under the commander's explicit per-outage promotion recorded on the bead; see `runbooks/RUNNING_THE_LOOP.md`, "Gating reviewer down", and `verify.ts --fallback-promotion` below. Automatic review selection never uses a shadow. `seat-env.sh`, `adapter.ts`, and reviewer selection reject present non-boolean values. |
 | `provider` | Whose model the seat runs (`anthropic`, `openai`, ...), narrowed by harness: `claude-code` is first-party `anthropic`, `codex` is `openai-codex` or `openai`, and `pi` uses Pi's provider list. Recorded so the roster answers "which vendor is this seat" without starting the seat. |
 | `model` | The model the seat is pinned to, in the provider's own id format. Pin reasoning effort by appending Pi's thinking-level suffix to this same string, for example `gpt-5.6-sol:high`. |
 | `skills` | Optional array of skill directory paths passed to Pi as repeated `--skill <path>` arguments at spawn, resume, reset, and dispatch relaunch. Paths are tilde-expanded like `account.dir`. `adapter.ts` validates the field while reading `seats/seats.json`: it must be an array of non-empty strings if present, and every path must exist, or the adapter STOPs naming the seat and the missing path before spawning Pi. |
@@ -357,9 +357,10 @@ time Pi takes configuration. Brief resolution prefers the installed fleet
 layout (`wheelhouse/fleet/WORKER.md` for workers, `wheelhouse/crew/<ROLE>.md`
 for other roles) and falls back to the template layout (`contracts/<ROLE>.md`).
 The process outlives
-the adapter: its stdin is a FIFO under `seats/run/`, its stdout appends raw
-to `seats/logs/<seat>.jsonl` (every event, one JSON line each; stderr lands
-beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
+the adapter: its stdin is a FIFO under `seats/run/`, its stdout appends
+to `seats/logs/<seat>.jsonl` (one JSON record per line; Pi delta text is replaced
+by content-free activity evidence and tool-update payloads are bounded; stderr
+lands beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
 one line, and reads the response out of the log. A per-FIFO PID lock
 (`<seat>.stdin.write.lock`) covers the entire LF-terminated command, including
 all non-blocking partial writes: concurrent adapters cannot insert a command's
@@ -393,6 +394,53 @@ seat, attached to the same session, when its cwd does not already match the
 seat worktree.
 
 `probe` runs the rostered account, provider, and model through a one-shot `pi -p --no-session` liveness turn that asks only for `OK`; it does not need or create a bead worktree and writes no bead comment. A successful probe prints `OK`; a provider failure prints pi's stdout/stderr verbatim and exits with pi's status.
+
+### Silent model streams and long commands
+
+A live PID or successful `get_state` response does not mean its model is making
+progress. The herald's existing alert pass (normally every 60 seconds) observes
+each live seat's **own** event log. A mid-turn model stream with no progress for
+`seat-quiet-minutes=20` in `wheelhouse/.template-source` is shown as `STALLED` by
+`adapter.ts status`; the next alert pass appends one per-seat inbox row naming
+the seat, assigned task, last own event and its time. RPC responses do not
+advance that clock, even `isStreaming=false`: an unfinished turn still needs
+its completion event. A settled `agent_end`/`agent_settled` is exempt; a retrying
+`agent_end` (`willRetry=true`) is not settlement. An assignment alone is not
+proof that a model turn started. After copy-truncation, the detector recovers
+completion from the owned `.jsonl.1` archive when no new turn lifecycle is
+present; an old archive cannot override a newer own turn. Assigned-but-settled
+seats waiting on background work are a separate condition, not this watchdog.
+
+A condition still present after `seat-stall-need-after-minutes=15` additional
+minutes opens one notify need with seat/task machine fields. Repeated checks
+and herald restarts do not duplicate the inbox row or need. Progress,
+settlement, stopping or parking clears the condition and closes its need; a
+new task/quiet episode gets a new persistence grace. The equivalent millisecond
+overrides are `WHEELHOUSE_SEAT_QUIET_MS` (minimum 1000) and
+`WHEELHOUSE_SEAT_STALL_NEED_MS` (minimum 0). The detector never stops, aborts or
+restarts a seat: the commander diagnoses and redispatches it.
+
+**Keep long commands attached to their tool call.** A sweep/bench/tool can be
+quiet for hours without a model stream being dead. The adapter reports
+`TOOL WAIT` with the open tools and last event time; start/update/end events are
+correlated by tool-call ID, including parallel calls. That phase is exempt
+from the model quiet rule. After the final tool returns, the model quiet clock
+starts again. A hung tool is not diagnosed by this model-stream watchdog;
+inspect the named tool and its own progress/timeout evidence. If a command is
+backgrounded and the agent settles, arrange a collecting dispatch instead of
+promising to return—the settled seat is intentionally exempt.
+
+Pi logs preserve receipt timestamps and at most one content-free
+`stream_activity` record per second of actual incoming deltas; no heartbeat is
+manufactured by a timer. Thinking/text/tool-call delta text stays out of the
+persistent seat log. Tool-update output remains bounded. Normalized driver events
+also have receipt timestamps. Old un-stamped logs use file mtime on first
+observation, then persist the last progress key/time in the fleet snapshot so
+RPC-only appends cannot keep resetting it. Upgrade the seat logger on the next
+safe spawn/resume; already-running old log filters cannot retroactively recover
+discarded deltas. Checks require a running herald (or explicit
+`bun seats/alerts.ts check`); threshold detection occurs on the next pass, not
+an independent process supervisor timer.
 
 `status` prints an `ORPHAN:` line only for a confirmed duplicate seat process: a candidate must not be a descendant of the recorded seat pid, must either hold the seat FIFO or predate the recorded pid, and must still be present on a second scan a few seconds later. The line includes the remedy (`inspect pid ..., then stop it or run bun seats/recover.ts`) so transient child tools are not reported as duplicate seats and genuine duplicates say what to do next.
 
@@ -631,7 +679,7 @@ whatever the OS later did with that pid number.
 
 The reviewer seat comes from the roster: only entries with
 `"role": "reviewer"` qualify, including when the optional fourth argument
-names a seat explicitly. Role `verifier` is reserved for `walk.ts`. Before ANYTHING spawns, `verify.ts` compares the author seat's
+names a seat explicitly. Automatic selection excludes `shadow: true`, including when all non-shadow reviewers are busy or share the author account; it never silently promotes an idle mirror. An explicit shadow pick is a STOP unless `--fallback-promotion <comment-id>` references the commander's structured per-outage promotion on this bead for this seat and exact tip. That record must name the outage and distinct-account basis; the full format and procedure are in `runbooks/RUNNING_THE_LOOP.md`, "Gating reviewer down". The flag requires an explicit reviewer name, does not change the roster, and does not waive any ordinary account, evidence, sweep, verdict or push gate. Its final answer must carry the exact `FALLBACK GATE:` lead-in supplied in the prompt, outside fences, and cannot label its verdict `SHADOW`. The working verdict retains the promotion comment/actor, outage and account basis. Role `verifier` is reserved for `walk.ts`. Before ANYTHING spawns, `verify.ts` compares the author seat's
 `account.dir` (roster first, `seats/state.json` as fallback for a retired
 seat) against the reviewer's, both canonicalized — the same directory
 means the same `auth.json` means the same account, and that is a loud

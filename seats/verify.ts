@@ -53,7 +53,7 @@
  * bead and restates its requirement as arguments — the same relationship the
  * bead claim itself already has to the dispatch.
  *
- * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [reviewer-seat]
+ * Usage: bun seats/verify.ts <bead-id> <branch> <author-seat> [reviewer-seat] [--fallback-promotion <comment-id>]
  *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]
  *          [--timeout-ms <ms>] [--first-output-timeout-ms <ms>]
  *          [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]
@@ -825,6 +825,7 @@ interface SeatEntry {
   provider?: string;
   model?: string;
   external?: boolean;
+  shadow?: boolean;
   account?: { dir: string; label?: string; authRoute?: string };
   allowedTools?: string;
   disallowedTools?: string;
@@ -938,14 +939,18 @@ function verifyMarkerLive(seat: string): boolean {
   } catch { return false; }
 }
 
-function requireReviewerSeat(explicit: string | undefined, authorSeat: string): { name: string; entry: SeatEntry } {
+function requireReviewerSeat(explicit: string | undefined, authorSeat: string, promotionId?: string): { name: string; entry: SeatEntry } {
   const roster = readRoster();
+  for (const [name, entry] of Object.entries(roster)) {
+    if (entry.role === "reviewer" && entry.shadow !== undefined && typeof entry.shadow !== "boolean") die(`reviewer seat "${name}" has invalid shadow ${JSON.stringify(entry.shadow)} — use a boolean; absent means false`);
+  }
   if (explicit) {
     const entry = roster[explicit];
     if (!entry) die(`no seat named "${explicit}" in seats/seats.json`);
     if (entry.role !== "reviewer") {
       die(`seat "${explicit}" has role "${entry.role}", not "reviewer" — verify.ts reviews diffs; walk.ts uses verifier seats. If this is a legacy review seat, fix: set seats/seats.json seats[${JSON.stringify(explicit)}].role to "reviewer"`);
     }
+    if (entry.shadow === true && !promotionId) die(`reviewer seat "${explicit}" is shadow: true and never gates by default — the commander must record a per-outage promotion on this bead and supply --fallback-promotion <comment-id>; see runbooks/RUNNING_THE_LOOP.md: Gating reviewer down`);
     return { name: explicit, entry };
   }
   const reviewers = Object.entries(roster).filter(([, e]) => e.role === "reviewer" && !e.external);
@@ -954,12 +959,42 @@ function requireReviewerSeat(explicit: string | undefined, authorSeat: string): 
       .map(([name]) => `seat "${name}": if it reviews diffs, fix: set seats/seats.json seats[${JSON.stringify(name)}].role to "reviewer"; keep "verifier" only for walk.ts`).join("\n");
     die(`no seat with role "reviewer" in seats/seats.json — add one (its account.dir must differ from every author's)${legacy ? `\n${legacy}` : ""}`);
   }
+  const gating = reviewers.filter(([, entry]) => entry.shadow !== true);
+  if (gating.length === 0) die(`no non-shadow reviewer eligible for automatic selection — shadow seats never gate by default; name a reviewer explicitly with a per-outage --fallback-promotion <comment-id> recorded by the commander on this bead`);
   const authorDir = canonicalDir(accountDirFor(authorSeat));
-  const distinct = reviewers.filter(([, e]) => e.account?.dir && canonicalDir(e.account.dir) !== authorDir);
+  const distinct = gating.filter(([, e]) => e.account?.dir && canonicalDir(e.account.dir) !== authorDir);
   if (distinct.length === 0) die(`reviewer seat and author seat "${authorSeat}" resolve to the SAME account directory; waiting for a reviewer on a different subscription. Same directory means same auth.json means same account, and a verdict from the author's own account is not a verdict. Nothing was spawned.`);
   const free = distinct.find(([n]) => !verifyMarkerLive(n));
   if (!free) { console.error(`all eligible reviewer seats busy (${distinct.map(([n]) => n).join(", ")}) — retry later`); process.exit(4); }
   return { name: free[0], entry: free[1] };
+}
+
+interface FallbackPromotion { commentId: string; author: string; seat: string; tip: string; outage: string; distinctAccountBasis: string }
+function readFallbackPromotion(beadId: string, seat: string, tip: string, commentId: string): FallbackPromotion {
+  // Schema captured with bd comments <bead> --json. Actor attribution is a
+  // procedural check, not authentication: this remains a commander-facing CLI.
+  let rows: any;
+  try { rows = JSON.parse(execFileSync("bd", ["comments", beadId, "--json"], { cwd: ROOT, encoding: "utf8", timeout: 30000 })); }
+  catch (e: any) { die(`cannot read fallback promotion ${commentId} on bead ${beadId}: ${e.message}`); }
+  if (!Array.isArray(rows)) die("fallback promotion requires a JSON comment array from bd comments");
+  const matches = rows.filter((row: any) => row && String(row.id) === commentId);
+  if (matches.length !== 1) die(`fallback promotion comment ${commentId} not uniquely found on bead ${beadId}`);
+  const comment = matches[0];
+  if (comment.issue_id !== beadId) die("fallback promotion comment belongs to a different bead");
+  if (comment.author !== beadsActorFor("commander")) die(`fallback promotion must be recorded by commander actor ${JSON.stringify(beadsActorFor("commander"))}, not ${JSON.stringify(comment.author)}`);
+  const text = typeof comment.text === "string" ? comment.text.trim() : "";
+  if (!text.startsWith("FALLBACK GATE: ")) die("fallback promotion comment must be one FALLBACK GATE: <JSON> record; see runbooks/RUNNING_THE_LOOP.md: Gating reviewer down");
+  let value: any;
+  try { value = JSON.parse(text.slice("FALLBACK GATE: ".length)); }
+  catch { die("fallback promotion comment has invalid JSON"); }
+  const keys = ["seat", "tip", "outage", "distinctAccountBasis"];
+  if (!value || Array.isArray(value) || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify([...keys].sort()) || keys.some(k => typeof value[k] !== "string" || !value[k].trim() || value[k].length > 2000 || /[\u0000-\u001f\u007f\u2028\u2029]/.test(value[k]))) die("fallback promotion requires exactly nonempty single-line seat, tip, outage and distinctAccountBasis strings");
+  if (value.seat !== seat) die("fallback promotion names a different reviewer seat");
+  if (value.tip !== tip) die("fallback promotion is for a different tip; record a fresh promotion for this diff");
+  return { commentId, author: comment.author, ...value, outage: value.outage.trim(), distinctAccountBasis: value.distinctAccountBasis.trim() };
+}
+function fallbackLeadIn(promotion: FallbackPromotion): string {
+  return `FALLBACK GATE: promotion comment ${promotion.commentId}; outage: ${promotion.outage}; distinct-account basis: ${promotion.distinctAccountBasis}`;
 }
 
 function beadClaim(beadId: string): string {
@@ -1199,7 +1234,7 @@ function claimRequiresSweepCitation(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
-async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
+export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string): Promise<SweepResult> {
   // Separate from the reviewer's cwd: no writable graph or bd wrapper reaches
   // that process. Suites create their OWN fixture graphs, not one redirected
   // global graph (which would invalidate graph-isolation selftests).
@@ -1230,6 +1265,14 @@ async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: str
     // primary repository, then expose only that graph at the sweep root.
     const graphRoot = path.join(scratchCwd, ".wheelhouse-sweep-graph");
     fs.mkdirSync(graphRoot);
+    // Same switch/isolation as selftest_disable_bd_metrics: bd 1.2.2 uses
+    // HOME/.config/bd even when XDG_CONFIG_HOME differs. Never edit the
+    // operator's metrics preference or let an uploader inherit review cwd.
+    env.HOME = path.join(graphRoot, "home");
+    env.XDG_CONFIG_HOME = path.join(env.HOME, ".config");
+    fs.mkdirSync(env.HOME);
+    const metrics = spawnSync(realBd, ["metrics", "off"], { cwd: graphRoot, encoding: "utf8", env });
+    if (metrics.error || metrics.signal || metrics.status !== 0) throw new Error(`could not disable scratch bd metrics: ${metrics.error?.message || metrics.stderr || metrics.stdout}`);
     execFileSync("git", ["init", "--quiet", "-b", "main", graphRoot], { env, stdio: "pipe" });
     const graphDir = path.join(graphRoot, ".beads");
     const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graphRoot, encoding: "utf8", env: { ...env, PWD: graphRoot, BEADS_DIR: graphDir } });
@@ -1394,6 +1437,7 @@ async function main(): Promise<void> {
   let firstOutputTimeoutArg: string | undefined;
   let noEventTimeoutArg: string | undefined;
   let batchSweepArg: string | undefined;
+  let promotionArg: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--evidence") {
@@ -1407,6 +1451,10 @@ async function main(): Promise<void> {
       if (batchSweepArg !== undefined) die("--batch-sweep may be supplied only once");
       batchSweepArg = argv[++i];
       if (!batchSweepArg || batchSweepArg.startsWith("--")) die("--batch-sweep requires <passing-full-sweep-log>");
+    } else if (argv[i] === "--fallback-promotion") {
+      if (promotionArg !== undefined) die("--fallback-promotion may be supplied only once");
+      promotionArg = argv[++i];
+      if (!promotionArg || promotionArg.startsWith("--")) die("--fallback-promotion requires <comment-id>");
     } else if (argv[i] === "--timeout-ms") {
       timeoutArg = argv[++i];
       if (!timeoutArg || !/^\d+$/.test(timeoutArg)) die("--timeout-ms requires a positive integer millisecond budget");
@@ -1424,12 +1472,14 @@ async function main(): Promise<void> {
   sweepStaleScratchWorktrees(earlyRepoRoot);
   const [beadId, branch, authorSeat, reviewerArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [reviewer-seat] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [reviewer-seat] [--fallback-promotion <comment-id>] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
   }
   setVerifierGateBead(beadId);
   validateSegment("bead id", beadId);
   validateSegment("seat name", authorSeat);
   if (reviewerArg) validateSegment("seat name", reviewerArg);
+  if (promotionArg && !reviewerArg) die("--fallback-promotion requires an explicit reviewer-seat; automatic selection never promotes a shadow");
+  if (promotionArg) validateSegment("promotion comment id", promotionArg);
   const claim = beadClaim(beadId);
   const repoRoot = resolveRepoRoot(repoArg, claim);
   if (path.resolve(repoRoot) !== path.resolve(earlyRepoRoot)) sweepStaleScratchWorktrees(repoRoot);
@@ -1443,7 +1493,7 @@ async function main(): Promise<void> {
     die(e.message);
   }
 
-  const { name: reviewerSeat, entry } = requireReviewerSeat(reviewerArg, authorSeat);
+  const { name: reviewerSeat, entry } = requireReviewerSeat(reviewerArg, authorSeat, promotionArg);
   let reviewerHarness: ReturnType<typeof harnessNameForSeat>;
   try {
     reviewerHarness = harnessNameForSeat(reviewerSeat, entry);
@@ -1498,6 +1548,8 @@ async function main(): Promise<void> {
     die(`branch "${branch}" does not resolve to a commit in ${repoRoot} — nothing to verify`);
   }
 
+  const promotion = promotionArg ? readFallbackPromotion(beadId, reviewerSeat, tip, promotionArg) : undefined;
+
   // --- evidence floor checks, against the SHA the verdict is about ----------
   const evidence = checkEvidence(repoRoot, tip, evidencePaths);
   const evidenceUnsatisfied = evidence.filter((c) => !c.ok);
@@ -1551,6 +1603,13 @@ async function main(): Promise<void> {
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
     claim,
+    ...(promotion ? [
+      `Referenced per-outage promotion: bead ${beadId}, comment ${promotion.commentId}, recorded actor ${promotion.author}, reviewer ${reviewerSeat}, tip ${tip}.`,
+      `This is a FALLBACK GATE, not a SHADOW verdict. The full REVIEWER.md contract and all ordinary evidence/account/sweep gates still apply.`,
+      `Independently check the promotion's outage and distinct-account basis against every author; route any claim you cannot verify. The comment and actor field alone do not authenticate human assent.`,
+      `In your final answer, include exactly this plain-text lead-in outside fences before VERDICT/PUSH:`,
+      fallbackLeadIn(promotion),
+    ] : []),
     ...evidencePrompt,
     ...sourcePrompt,
     ...sweepPrompt,
@@ -1669,6 +1728,11 @@ async function main(): Promise<void> {
       if (!/^PUSH:\s*(APPROVE\s+\S+(?:\s+(?![—-]\s+verified:).+?)?\s+[—-]\s+verified:\s*\S.*|HOLD\s+[—-]\s+\S.*|NOT CONSIDERED(?:\s+\S.*)?)\s*$/.test(pushLines[0].normalized)) {
         refuse(`malformed PUSH line: "${pushLines[0].normalized}" — expected PUSH: APPROVE <remote> — verified: <what you checked> [detail] | HOLD — <why> [detail] | NOT CONSIDERED [detail]`);
       }
+      if (promotion) {
+        const badges = liveLineCandidates(stdout, reviewerHarness, "FALLBACK GATE");
+        if (badges.length !== 1 || badges[0].normalized !== fallbackLeadIn(promotion)) refuse(`fallback review must include the exact live lead-in: ${fallbackLeadIn(promotion)}`);
+        if (/^VERDICT:\s*(?:APPROVE|BOUNCE|DISCOVER)\s+[—-]\s+SHADOW(?:\s*$|\s*[-:—(]|\s+ONLY\b)/i.test(verdictLines[0].normalized)) refuse("fallback verdict must be gating, not a SHADOW verdict");
+      }
       // The NOT BENCHED qualifier (REVIEWER.md, "When no bench covers the part
       // you are reviewing") belongs to APPROVE and to nothing else.
       const branchTipAfter = currentBranchTip(repoRoot, branch);
@@ -1759,6 +1823,12 @@ async function main(): Promise<void> {
         `- tip: ${tip}`,
         `- author-seat: ${authorSeat}`,
         `- verifier-seat: ${reviewerSeat} (${reviewerDir})`,
+        ...(promotion ? [
+          `- fallback-promotion-comment: ${promotion.commentId}`,
+          `- fallback-promotion-actor: ${promotion.author}`,
+          `- fallback-outage: ${promotion.outage}`,
+          `- fallback-distinct-account-basis: ${promotion.distinctAccountBasis}`,
+        ] : []),
         `- at: ${new Date().toISOString()}`,
         `- verdict: ${verdictShown}`,
         `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,

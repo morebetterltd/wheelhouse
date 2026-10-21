@@ -462,12 +462,17 @@ while true; do
 done
 verb="${1:-}"
 case "$verb" in
+  metrics)
+    [ "${2:-}" = off ] || exit 1
+    exit 0 ;;
   show)
     [ "${STUB_BD_SHOW_FAIL:-0}" != 1 ] || { echo 'fixture bd show unavailable' >&2; exit 1; }
     if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf 'fixture bead\n'; fi
     exit 0 ;;
   comments)
-    printf 'fixture comments\n'; exit 0 ;;
+    [ "${STUB_BD_COMMENTS_FAIL:-0}" != 1 ] || { echo 'fixture bd comments unavailable' >&2; exit 1; }
+    if [ -n "${STUB_BD_COMMENTS_FILE:-}" ]; then cat "$STUB_BD_COMMENTS_FILE"; else printf 'fixture comments\n'; fi
+    exit 0 ;;
   where)
     node -e 'console.log(JSON.stringify({path:require("fs").realpathSync(".beads")}))'; exit $? ;;
   init)
@@ -749,6 +754,17 @@ kill "$BUSY_RV2" 2>/dev/null || true
 if [ $RC -eq 4 ] && says "all eligible reviewer seats busy"; then pass "pool reviewer routing retry-exits when all distinct reviewers are busy"; else fail "all-busy reviewer retry failed rc=$RC out=$OUT"; fi
 rm -f "$PROJ/seats/run/verify.reviewer-rv2.json"
 mv "$FIX/seats-json.before-pool" "$PROJ/seats/seats.json"; rm -f "$PROJ/seats/pool.json" "$PROJ/seats/staffing.json" "$PROJ/seats/state.json"
+
+phase "shadow reviewers — selection and scoped per-outage promotion"
+SHADOW_PROJ="$FIX/shadow-proj"
+build_proj "$SHADOW_PROJ" shadow "$VERIFY"
+if HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/reviewer-shadow.ts" "$SHADOW_PROJ" "$HOME_FIX"; then
+  pass "shadow reviewer cases and pinned fix-removal controls"
+else fail "shadow reviewer regression"; fi
+if [ "${WHEELHOUSE_TEST_VERIFY_SHADOW_ONLY:-0}" = 1 ]; then
+  printf 'verify shadow-focused selftest: failures=%s\n' "$FAILED"
+  [ "$FAILED" -eq 0 ]; exit $?
+fi
 
 phase "installed layout — wheelhouse/crew brief is preferred without contracts/"
 INST_PROJ="$FIX/installed-proj"
@@ -2108,9 +2124,11 @@ phase "9. canary — can these checks detect a broken verify.ts?"
 # 9a: a verify.ts whose account-distinctness gate never fires
 CAN_A="$FIX/can-a"
 cp "$VERIFY" "$FIX/can-a-verify.ts"
-perl -0pi -e 's/const distinct = reviewers\.filter\(\(\[, e\]\) => e\.account\?\.dir && canonicalDir\(e\.account\.dir\) !== authorDir\);/const distinct = reviewers;\/\/ canary disables picker distinctness/; s/if \(authorDir === reviewerDir\) \{ \/\/ distinctness-gate/if (false) { \/\/ distinctness-gate/' "$FIX/can-a-verify.ts"
-if cmp -s "$VERIFY" "$FIX/can-a-verify.ts"; then
-  fail "canary: could not disarm the distinctness gate — the line no longer matches, so the canary proves nothing"
+perl -0pi -e 's/const distinct = gating\.filter\(\(\[, e\]\) => e\.account\?\.dir && canonicalDir\(e\.account\.dir\) !== authorDir\);/const distinct = gating;\/\/ canary disables picker distinctness/; s/if \(authorDir === reviewerDir\) \{ \/\/ distinctness-gate/if (false) { \/\/ distinctness-gate/' "$FIX/can-a-verify.ts"
+if cmp -s "$VERIFY" "$FIX/can-a-verify.ts" \
+  || ! grep -Fq 'const distinct = gating;// canary disables picker distinctness' "$FIX/can-a-verify.ts" \
+  || ! grep -Fq 'if (false) { // distinctness-gate' "$FIX/can-a-verify.ts"; then
+  fail "canary: could not disarm BOTH distinctness gates — a source site no longer matches, so the canary proves nothing"
 else
   build_proj "$CAN_A" can-a "$FIX/can-a-verify.ts"
   env HOME="$HOME_FIX" bun -e '

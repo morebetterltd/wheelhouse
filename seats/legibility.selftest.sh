@@ -37,7 +37,8 @@ set -uo pipefail   # deliberately not -e: the injected failures are meant to fai
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 SRC="${1:-$HERE}"
-SEED_TS="floor.ts adapter.ts verify.ts recover.ts"
+# The logger is a launched child, not an ES import reachable by the scanner.
+SEED_TS="floor.ts adapter.ts verify.ts recover.ts seat-event-log.ts"
 for f in $SEED_TS; do
   [ -f "$SRC/$f" ] || { echo "selftest: not found: $SRC/$f" >&2; exit 2; }
 done
@@ -92,6 +93,8 @@ case "${1:-}" in
   # The dispatcher's sweep owns a fresh nested graph. The reviewer still uses
   # the production read-only wrapper; show deliberately fails as before.
   init) mkdir -p "${BEADS_DIR:-.beads}" ;;
+  # Accept only the scratch setup's metrics-off command, not other metrics ops.
+  metrics) [ "$#" -eq 2 ] && [ "$2" = off ] ;;
   where) node -e 'console.log(JSON.stringify({path:require("fs").realpathSync(".beads")}))' ;;
   *) exit 1 ;;
 esac
