@@ -431,13 +431,20 @@ TERM_SUITES="$FIX/term-suites"
 TERM_LOCK="$FIX/term.lock"
 TERM_EVENTS="$FIX/term-events.log"
 TERM_STARTED="$FIX/term-started"
+TERM_RELEASE="$FIX/term-release"
 mkdir -p "$TERM_SUITES"
 cat > "$TERM_SUITES/one.selftest.sh" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf 'one start\n' >> "$TERM_EVENTS"
-: > "$TERM_STARTED"
-( trap 'exit 0' TERM; sleep 1; printf 'child survived\n' >> "$TERM_EVENTS" ) &
+# A census can legitimately take longer than one second before delivering TERM.
+# Hold the child's work until cleanup returns; require its actual TERM receipt,
+# not a race between an arbitrary sleep and native ownership observation.
+( trap 'printf "child TERM\n" >> "$TERM_EVENTS"; exit 0' TERM
+  : > "$TERM_STARTED"
+  while [ ! -f "$TERM_RELEASE" ]; do sleep 0.05; done
+  printf 'child survived\n' >> "$TERM_EVENTS"
+) &
 while :; do sleep 0.05; done
 EOF
 cat > "$TERM_SUITES/two.selftest.sh" <<'EOF'
@@ -446,15 +453,16 @@ set -eu
 printf 'two start\n' >> "$TERM_EVENTS"
 EOF
 chmod +x "$TERM_SUITES"/*.selftest.sh
-TERM_EVENTS="$TERM_EVENTS" TERM_STARTED="$TERM_STARTED" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$TERM_SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$TERM_LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/term.out" 2> "$FIX/term.err" &
+TERM_EVENTS="$TERM_EVENTS" TERM_STARTED="$TERM_STARTED" TERM_RELEASE="$TERM_RELEASE" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$TERM_SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$TERM_LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/term.out" 2> "$FIX/term.err" &
 PID_TERM=$!
 for _ in $(seq 1 100); do [ -f "$TERM_STARTED" ] && break; sleep 0.05; done
 kill -TERM "$PID_TERM" 2>/dev/null || true
 wait "$PID_TERM"; RC_TERM=$?
+: > "$TERM_RELEASE"
 sleep 1.2
 TERM_ORDER="$(tr '\n' '|' < "$TERM_EVENTS" 2>/dev/null || true)"
-if [ "$RC_TERM" -eq 143 ] && [ "$TERM_ORDER" = 'one start|' ] && [ ! -e "$TERM_LOCK" ]; then
-  pass "TERM stops the running fixture suite process group, skips later suites, and releases the lock"
+if [ "$RC_TERM" -eq 143 ] && [ "$TERM_ORDER" = 'one start|child TERM|' ] && [ ! -e "$TERM_LOCK" ]; then
+  pass "TERM reaches the ready child, stops the suite group, skips later suites, and releases the lock"
 else
   fail "TERM did not stop cleanly (rc=$RC_TERM order=$TERM_ORDER lock=$(ls -ld "$TERM_LOCK" 2>/dev/null || true) out=$(cat "$FIX/term.out" 2>/dev/null) err=$(cat "$FIX/term.err" 2>/dev/null))"
 fi
