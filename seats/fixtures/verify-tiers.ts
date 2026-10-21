@@ -61,7 +61,7 @@ assert.notEqual(removed.chooseSweepTier(policy, deleted, "").reason, "seats/host
 console.log("PASS deleted full suite remains full; legacy reason removal detected");
 
 function cli(repo: string, bead: string, branch: string, claim: string, log?: string) {
-  const show = path.join(dir, bead + ".txt"), reply = path.join(dir, bead + ".reply"); fs.writeFileSync(show, claim); fs.writeFileSync(reply, "VERDICT: APPROVE\nPUSH: NOT CONSIDERED\n");
+  const show = path.join(dir, bead + ".txt"), reply = path.join(dir, bead + ".reply"); fs.writeFileSync(show, `Trace: tier selection CLI fixture\nSignal: isa-gap: K1\nSkills: intent@1.0.0 outcomes@1.0.0\n\nIntent:\nCheck the selected review policy independently.\n${claim}\n\nOutcomes:\n- O1 The review records its selected tier and reason.\n  consumer: machine — fixture reviewer\n  surface: dispatcher log and review receipt\n  check: run — inspect the selected tier, reason and exit code\n`); fs.writeFileSync(reply, "VERDICT: APPROVE\nPUSH: NOT CONSIDERED\n");
   const r = spawnSync("bun", [path.join(repo, "seats/verify.ts"), bead, branch, "worker-1", "reviewer", ...(log ? ["--batch-sweep", log] : [])], { env: { ...env, STUB_REPLY_FILE: reply, STUB_BD_SHOW_FILE: show, STUB_SWEEP_PROMPT_CHECK: "1", STUB_SWEEP_FORCE_APPROVE: "1", WHEELHOUSE_SELFTEST_SWEEP_LOCK: path.join(dir, bead + ".lock") }, encoding: "utf8" });
   assert.ifError(r.error); assert.equal(r.signal, null); fs.writeFileSync(path.join(dir, bead + ".stdout"), r.stdout); fs.writeFileSync(path.join(dir, bead + ".stderr"), r.stderr);
   const file = path.join(repo, "seats/verdicts", bead + ".md"), receipt = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
