@@ -11,7 +11,7 @@ const BD_TIMEOUT_MS = Number(process.env.WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS
 
 export interface ReadyItem { id: string; title: string; chained: boolean; groupKey: string | null }
 export interface BacklogItem { id: string; title: string; authorSeat: string | null; authorAccountDir: string | null }
-export interface LiveWorker { name: string; entry: string | null; accountDir: string | null; busy: boolean; lastBead?: string; lastActivityAt: string | null }
+export interface LiveWorker { name: string; entry: string | null; accountDir: string | null; busy: boolean; lastBead?: string; lastActivityAt: string | null; taskStatus?: string | null; taskNeedsReview?: boolean }
 export interface LiveReviewer { name: string; entry: string | null; accountDir: string | null; busy: boolean }
 export interface Snapshot { at: string; ready: ReadyItem[]; readyCount: number; chainedCount: number; overlapCount: number; reviewBacklog: BacklogItem[]; workers: { live: LiveWorker[]; idle: number; busy: number }; reviewers: { live: LiveReviewer[]; idle: number; busy: number }; changes: { isaHead: string | null; isaChanged: boolean; newEpics: number } }
 
@@ -99,7 +99,7 @@ export function fleetSnapshot(root: string = ROOT, opts: { since?: { isaHead?: s
     const inReviewOrRework = !!st && (st.status === "open" || st.status === "in_progress" || st.labels.includes("needs-review"));
     const settled = agentSettledEvent(lastEvent(rec.log));
     const busy = !settled || inReviewOrRework;
-    workerLive.push({ name, entry: entryForSeat(staffing, name), accountDir: authorDirs.get(name) ?? null, busy, lastBead: rec.lastBead, lastActivityAt: lastActivityAt(rec.log)?.toISOString() ?? null });
+    workerLive.push({ name, entry: entryForSeat(staffing, name), accountDir: authorDirs.get(name) ?? null, busy, lastBead: rec.lastBead, lastActivityAt: lastActivityAt(rec.log)?.toISOString() ?? null, taskStatus: st?.status ?? null, taskNeedsReview: st?.labels.includes("needs-review") ?? false });
   }
   const reviewersLive: LiveReviewer[] = [];
   for (const [name, entry] of Object.entries<any>(roster)) {

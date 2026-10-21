@@ -47,7 +47,7 @@ The main files here:
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
 - `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and review markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
-- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, alerts}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work and invalid commander panes open/close human needs through `seats/needs.ts` only.
+- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, alerts, settledSeats}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work and invalid commander panes open/close human needs through `seats/needs.ts` only.
 - `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
@@ -804,6 +804,50 @@ key off `sessionFile` (existence, and a same-file RUNNING match for the
 double-resume refusal) and `lastBead`, never `sessionId`. `verify.ts`
 never reads `sessionId` at all — author/reviewer distinctness there is
 `account.dir`, not the session.
+
+## Settled seats holding tasks
+
+`seat-settled.ts` powers a per-worker `seat-settled-task:<seat>` inbox reminder.
+Set `seat-settled-minutes=30` in `wheelhouse/.template-source` (default 30), or
+`WHEELHOUSE_SEAT_SETTLED_MS` in the herald/alerts environment (milliseconds,
+minimum 1000). The next successful herald alert pass, normally every 60 seconds,
+observes these conditions:
+
+- A live worker's own stream has explicitly settled (`agent_end` without
+  `willRetry: true`, or `agent_settled`), and its graph task is still in progress:
+  after no own event **or dispatch** for the period, the row says **check the
+  background work or redispatch**. Check the detached driver's actual exit/report
+  before deciding; this is a reminder, not proof that a background command hung.
+- The settled worker's task has `needs-review`: after no **dispatch** for the
+  period, the row says **seat free for new work**. A background driver marking
+  review-ready does not reset the dispatch clock. Thus a newly finished long
+  task can immediately expose its already-settled, now-free seat.
+- Re-dispatch resets both clocks' eligibility for a full period, even on the same
+  task. A resumed model/tool turn clears the reminder until actual settlement;
+  `turn_end`, RPC replies, and `isStreaming=false` alone do not settle a turn.
+
+Each row names worker, task, last own event/time, and the suggested next action.
+`settledSeats` persists observation keys and legacy first-observed times across
+alert processes; RPC polling does not postpone a reminder. Top-level driver or
+optional `wheelhouse_received_at` receipt timestamps are used, never an
+assistant message's creation timestamp. For in-progress work, unstamped legacy
+events begin a conservative first-observed clock; review-ready seats use the
+retained dispatch clock (or first observation if dispatch time is unavailable).
+Bounded owned regular-log reads and the
+owned rotation archive preserve known settlement without inventing one from
+an assignment or an empty/unreadable log. Repeated checks and log rotation do
+not re-raise an unchanged episode; entering review can raise the distinct
+free-for-work message after an earlier background-work reminder.
+
+This is separate from an unfinished-model-stream alarm (`seat-stalled:<seat>`
+when that feature is installed): that alarm watches a mid-turn model stream
+and exempts settled seats and open tool waits. This reminder requires settlement,
+works without that alarm or its logger, defaults to 30 minutes, and creates no
+automatic stop/reset/redispatch or human need. It does not change adapter
+RUNNING/available status or staffing's busy-count policy. Only the commander
+chooses new work after checking the task/run. Configure/install this code in the
+herald's runtime before expecting production notices; a passing fixture is not
+a deployed alert check.
 
 ## Fleet gate reader
 
