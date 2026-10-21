@@ -416,6 +416,14 @@ paths rejecting a command without ever acknowledging it. Pending RPCs print `WAI
 progress every five seconds; that is reporting cadence, not a deadline.
 `status` reports observed process/log facts and never guesses WEDGED from a
 slow `get_state`; dispatch does not stop and relaunch a merely slow seat.
+For live seats, status and the cockpit floor share the display-only
+`seat-turn-display.ts` activity field: `SETTLED` after an observed `agent_end`,
+`turn_end`, or `agent_settled`, and `RUNNING` after subsequent turn/tool/message
+work. Transport responses do not restart a turn; silence/age alone never proves
+settlement. Unreadable/unknown activity retains the live `RUNNING` fallback.
+`PARKED`, `STALLED`, `DIED` and `STOPPED` still take precedence. `SETTLED` does
+not mean the bead is closed or staffing considers the seat free: it is not a
+change to the idle-alert detector, snapshot or state.json schema.
 `WHEELHOUSE_PROMPT_ACK_MS`, `WHEELHOUSE_FIFO_WRITE_MS` and
 `WHEELHOUSE_WEDGED_GET_STATE_MS` no longer decide RPC outcomes.
 `WHEELHOUSE_RPC_TIMEOUT_MS` remains a legacy stop/SIGKILL-confirmation setting
@@ -1054,7 +1062,9 @@ or to state. Two regions:
 - **Rail** (bottom): one line per rostered seat, plus `[0] STATUS`. Each row
   is `name | role | provider/model | account label | state | active bead |
   last activity`. `account.label` is optional in `seats.json` and renders as
-  `-` when absent. Last activity is a humanized age (`12s ago`, `9m ago`)
+  `-` when absent. Its healthy activity state uses the same `RUNNING`/`SETTLED`
+  display field as adapter status; settled seats retain the idle/ready-work cue.
+  Last activity is a humanized age (`12s ago`, `9m ago`)
   derived from the newest timestamp in `seats/logs/<seat>.jsonl`, with file
   mtime as the fallback; raw epochs are not shown. A live RUNNING seat whose
   last activity is older than the quiet threshold (default 10m,
@@ -1066,7 +1076,7 @@ or to state. Two regions:
   | cue | meaning |
   |---|---|
   | red | AUTH DEAD (credential flow shown) or PROCESS GONE (pid died) |
-  | amber | QUOTA EXHAUSTED, IDLE with ready work (`bd ready` count), REVIEW BLOCKED (a BOUNCE waiting), EVIDENCE UNSATISFIED (a verdict whose evidence floor checks failed), VERDICT UNREADABLE (a verdict file with no parseable verdict line — routed to human), or a missing event log |
+  | amber | QUOTA EXHAUSTED, STALLED, IDLE with ready work (`bd ready` count), REVIEW BLOCKED (a BOUNCE waiting), EVIDENCE UNSATISFIED (a verdict whose evidence floor checks failed), VERDICT UNREADABLE (a verdict file with no parseable verdict line — routed to human), or a missing event log |
   | green | VERDICT LANDED (APPROVE/DISCOVER seen in the seat's output) |
 
   Failure states are DISTINCT named lines, never silence: a dead process, a
