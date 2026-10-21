@@ -31,12 +31,14 @@ phase(){ printf '\n%s\n' "$*"; }
 json_id(){ bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)'; }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-nlw-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 SLEEP_PID=""
 cleanup(){ [ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" >/dev/null 2>&1; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 export HOME="$FIX/home"
 mkdir -p "$HOME"
+selftest_disable_bd_metrics "$FIX" || exit 2
 
 ROOT="$FIX/container"
 PROD="$ROOT/product"
@@ -58,7 +60,7 @@ printf 'base\n' > "$PROD/app.txt"
 git -C "$PROD" add app.txt
 git -C "$PROD" commit -q -m base
 BARE="$FIX/origin.git"
-git -C "$PROD" init --bare -q "$BARE"
+git -C "$PROD" init --bare -q -b main "$BARE"
 git -C "$PROD" remote add origin "$BARE"
 git -C "$PROD" push -q -u origin main
 
@@ -117,7 +119,7 @@ wt_add "$E_ID"; merge_main "$E_ID"; git -C "$PROD" push -q origin "fleet/$E_ID"
 wt_add "$F_ID"
 
 BRANCHES_BEFORE=$(git -C "$PROD" for-each-ref --format='%(refname:short)' refs/heads/fleet | sort)
-registered(){ git -C "$PROD" worktree list --porcelain | grep -qxF "worktree $1"; }
+registered(){ git -C "$PROD" worktree list --porcelain | grep -xF >/dev/null "worktree $1"; }
 
 phase 'fixture seeded as intended'
 [ "$B_D" -ge 300 ] && [ "$B_OTHER" -eq 0 ] && pass "phantom worktree shows $B_D ' D' lines and nothing else" || fail "phantom worktree status unexpected: D=$B_D other=$B_OTHER"
@@ -144,7 +146,7 @@ grep -q "^[^ ]* removed merged-worktree $WTS/$C_ID bytes=[0-9]* reason=.*squash-
 grep -q "^[^ ]* removed merged-worktree $WTS/$C_ID .*archived as archive/$C_ID" "$LOG" && pass 'removed line names the archive tag' || fail "removed line for $C_ID does not name archive/$C_ID"
 [ "$(git -C "$PROD" rev-parse --verify --quiet "refs/tags/archive/$C_ID^{commit}")" = "$C_TIP" ] && pass 'archive/<name> tag points at the old tip (ISC-53)' || fail "archive/$C_ID tag missing or not at $C_TIP: $(git -C "$PROD" tag --list 'archive/*')"
 [ "$(git -C "$PROD" tag --list 'archive/*')" = "archive/$C_ID" ] && pass 'only the unpushed worktree was archive-tagged' || fail "unexpected archive tags: $(git -C "$PROD" tag --list 'archive/*')"
-git -C "$PROD" branch --list "fleet/$C_ID" | grep -q . && git -C "$PROD" log -1 --oneline "fleet/$C_ID" >/dev/null 2>&1 && [ "$(git -C "$PROD" rev-parse "fleet/$C_ID")" = "$C_TIP" ] && pass 'unpushed branch ref survives at its tip' || fail "fleet/$C_ID ref missing or moved"
+git -C "$PROD" branch --list "fleet/$C_ID" | grep >/dev/null . && git -C "$PROD" log -1 --oneline "fleet/$C_ID" >/dev/null 2>&1 && [ "$(git -C "$PROD" rev-parse "fleet/$C_ID")" = "$C_TIP" ] && pass 'unpushed branch ref survives at its tip' || fail "fleet/$C_ID ref missing or moved"
 grep -q "^[^ ]* removed merged-worktree $WTS/$E_ID bytes=[0-9]* reason=.*tip is an ancestor of " "$LOG" && pass 'plain merged worktree removed as an ancestor of an integration ref' || fail "no ancestor removed line for $E_ID"
 BRANCHES_AFTER=$(git -C "$PROD" for-each-ref --format='%(refname:short)' refs/heads/fleet | sort)
 [ "$BRANCHES_BEFORE" = "$BRANCHES_AFTER" ] && pass 'every fleet/* branch ref still exists (ISC-52)' || fail "branch refs changed:\nbefore: $BRANCHES_BEFORE\nafter: $BRANCHES_AFTER"
@@ -156,14 +158,14 @@ EOF
 [ "$GONE" -ge 1 ] && [ -z "$STILL" ] && pass 'every removed line names a path that no longer exists (ISC-47)' || fail "removed paths still present: $STILL (gone=$GONE)"
 [ "$(awk '$2=="removed"' "$LOG" | wc -l | tr -d ' ')" -eq 3 ] && pass 'exactly three removed lines' || fail "removed lines: $(awk '$2=="removed"' "$LOG")"
 [ "$(awk '$2=="kept"' "$LOG" | wc -l | tr -d ' ')" -eq 3 ] && pass 'exactly three kept lines' || fail "kept lines: $(awk '$2=="kept"' "$LOG")"
-tail -1 "$LOG" | grep -q '^[0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T[0-9:]*Z cleanup done removed=3 kept=3 bytes=[0-9]*$' && pass 'final line is "cleanup done removed=3 kept=3 bytes=<n>"' || fail "unexpected final line: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep >/dev/null '^[0-9]\{4\}-[0-9][0-9]-[0-9][0-9]T[0-9:]*Z cleanup done removed=3 kept=3 bytes=[0-9]*$' && pass 'final line is "cleanup done removed=3 kept=3 bytes=<n>"' || fail "unexpected final line: $(tail -1 "$LOG")"
 [ -z "$(git -C "$PROD" worktree prune --dry-run 2>&1)" ] && pass 'worktree registry is consistent after cleanup' || fail "worktree prune --dry-run has work: $(git -C "$PROD" worktree prune --dry-run 2>&1)"
 grep -q 'Z ' "$LOG" && ! grep -q "$(printf '\t')" "$LOG" && pass 'log lines are ISO8601Z-stamped and tab-free' || fail 'log format violation'
 
 phase 'a second (nightly) cleanup changes nothing'
 ( cd "$ROOT" && bun seats/prune.ts cleanup > "$FIX/cleanup2.out" 2>&1 ); RC2=$?
 [ "$RC2" -eq 0 ] && pass 'second cleanup exits 0' || fail "second cleanup exited $RC2: $(cat "$FIX/cleanup2.out")"
-tail -1 "$FIX/cleanup2.out" | grep -q 'cleanup done removed=0 kept=3 bytes=0$' && pass 'nightly run removed nothing and kept the same three' || fail "unexpected second summary: $(tail -1 "$FIX/cleanup2.out")"
+tail -1 "$FIX/cleanup2.out" | grep >/dev/null 'cleanup done removed=0 kept=3 bytes=0$' && pass 'nightly run removed nothing and kept the same three' || fail "unexpected second summary: $(tail -1 "$FIX/cleanup2.out")"
 [ -d "$WTS/$A_ID" ] && [ -d "$WTS/$D_ID" ] && [ -d "$WTS/$F_ID" ] && pass 'real-change, occupied and unmerged worktrees survive the nightly run' || fail 'a kept worktree vanished on the second run'
 [ "$(git -C "$PROD" for-each-ref --format='%(refname:short)' refs/heads/fleet | sort)" = "$BRANCHES_BEFORE" ] && pass 'branch refs unchanged after the nightly run' || fail 'branch refs changed on the second run'
 

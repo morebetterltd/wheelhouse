@@ -57,10 +57,11 @@ cleanup() {
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- fixture -----------------------------------------------------------------
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-floor-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"   # macOS: /var/... is really /private/var/...
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats/logs" "$FIX/bin"
@@ -266,16 +267,16 @@ for s in busy quiet idle gone authless quota reviewer bounced unsat nolog verifi
 done
 has 'busy.*worker.*openai-codex/gpt-5.5.*busy@example.*wh-busy-1.*12s ago' \
   && pass "row shape includes role, provider/model, account label, active bead, and humanized age" \
-  || fail "busy row is missing one-glance columns: $(printf '%s\n' "$OUT" | grep busy | head -1)"
+  || fail "busy row is missing one-glance columns: $(printf '%s\n' "$OUT" | grep busy | sed -n '1p')"
 has 'idle.*anthropic/claude-fable-5.*| - |' \
   && pass "missing account.label renders as dash" \
-  || fail "idle row did not render a dash for absent account.label: $(printf '%s\n' "$OUT" | grep idle | head -1)"
+  || fail "idle row did not render a dash for absent account.label: $(printf '%s\n' "$OUT" | grep idle | sed -n '1p')"
 has 'quiet.*QUIET.*wh-quiet-1.*11m ago' \
   && pass "old running seat is flagged QUIET with humanized age" \
-  || fail "quiet row missing QUIET/11m age: $(printf '%s\n' "$OUT" | grep quiet | head -1)"
+  || fail "quiet row missing QUIET/11m age: $(printf '%s\n' "$OUT" | grep quiet | sed -n '1p')"
 has 'verifier.*verifier.*anthropic/claude-fable-5.*verify-account.*| .*off.* - | - | -' \
   && pass "rostered verifier absent from state renders as a seat row with state dash" \
-  || fail "absent verifier row wrong: $(printf '%s\n' "$OUT" | grep verifier | head -1)"
+  || fail "absent verifier row wrong: $(printf '%s\n' "$OUT" | grep verifier | sed -n '1p')"
 has "PROCESS GONE"        && pass "gone: PROCESS GONE line (red)"     || fail "no PROCESS GONE line"
 has "AUTH DEAD"           && pass "authless: AUTH DEAD line (red)"    || fail "no AUTH DEAD line"
 has "PARKED/QUOTA"        && has "bun seats/adapter.ts probe quota" && pass "quota: PARKED/QUOTA line names the re-probe command" || fail "no PARKED/QUOTA line with re-probe command"
@@ -311,7 +312,7 @@ has " RED"   && has " AMBER" && has " GREEN" \
   && pass "cue words RED/AMBER/GREEN all present" || fail "cue words missing"
 has '\[0\] STATUS' && pass "rail has the [0] STATUS cell" || fail "no [0] STATUS row"
 if grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' <<< "$OUT"; then
-  fail "rail exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | head -1)"
+  fail "rail exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | sed -n '1p')"
 else
   pass "rail exposes humanized ages, not raw epoch/ISO timestamps"
 fi
@@ -324,7 +325,7 @@ has "bd ready: 2"   && pass "STATUS shows bd ready count"       || fail "no bd r
 has "last bead wh-rev-9" && pass "STATUS shows per-seat detail" || fail "no per-seat detail in STATUS"
 has "last activity 12s ago" && pass "STATUS uses humanized last-activity age" || fail "STATUS did not show humanized last activity"
 if grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' <<< "$OUT"; then
-  fail "STATUS exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | head -1)"
+  fail "STATUS exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | sed -n '1p')"
 else
   pass "STATUS exposes humanized ages, not raw epoch/ISO timestamps"
 fi
@@ -352,10 +353,10 @@ wait "$FLOOR_PID" 2>/dev/null
 CAPTURE="$(cat "$CAPTURE_FILE")"
 if [ -s "$CAPTURE_FILE" ]; then pass "multi-frame capture produced output before the scripted stop"
 else fail "multi-frame capture produced no output"; fi
-HOME_CLEAR_COUNT="$(printf '%s' "$CAPTURE" | python3 -c 'import sys; s=sys.stdin.read(); print(s.count("\x1b[H\x1b[J"))')"
+HOME_CLEAR_COUNT="$(printf '%s' "$CAPTURE" | bun -e 'console.log((await import("node:fs")).default.readFileSync(0,"utf8").split("\x1b[H\x1b[J").length-1)')"
 if [ "$HOME_CLEAR_COUNT" -ge 2 ]; then pass "multi-frame capture contains repeated cursor-home + clear-to-end repaint sequences"
 else fail "multi-frame capture did not show repeated in-place repaint sequences (count=$HOME_CLEAR_COUNT)"; fi
-if printf '%s' "$CAPTURE" | python3 -c 'import sys; frames=[f for f in sys.stdin.read().split("\x1b[H\x1b[J") if f]; raise SystemExit(0 if frames and max(x.count("\n") for x in frames) <= 24 else 1)'; then
+if printf '%s' "$CAPTURE" | bun -e 'const frames=(await import("node:fs")).default.readFileSync(0,"utf8").replace(/\r\n?/g,"\n").split("\x1b[H\x1b[J").filter(Boolean); process.exit(frames.length&&Math.max(...frames.map(f=>f.split("\n").length-1))<=24?0:1);'; then
   pass "multi-frame capture stays within the terminal height per frame — no scroll drift"
 else
   fail "multi-frame capture grew past the terminal height, indicating scroll drift"

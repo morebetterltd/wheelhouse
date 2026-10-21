@@ -2,12 +2,13 @@
 # evidence-scrub.sh — redact machine-local paths as evidence is written.
 #
 # Usage:
-#   command 2>&1 | seats/evidence-scrub.sh > evidence/<bead>/run.txt
-#   seats/evidence-scrub.sh -o evidence/<bead>/run.txt -- command args...
+#   command 2>&1 | seats/evidence-scrub.sh > .wheelhouse-runs/<bead>/run.txt
+#   seats/evidence-scrub.sh -o .wheelhouse-runs/<bead>/run.txt -- command args...
 #   . seats/evidence-scrub.sh; scrub_evidence < raw.txt > scrubbed.txt
 #
 # Redacts $TMPDIR, /var/folders paths, $HOME, and the local username to the
-# placeholders GRAPH.md requires before committed evidence enters the repo.
+# placeholders GRAPH.md requires before output is posted on the task.
+# Local captures are ignored working copies, never files to commit.
 
 scrub_evidence() {
   local home tmp user home_base tmp_phys home_phys

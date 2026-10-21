@@ -3,13 +3,14 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-fleet-snapshot.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PIDS=""
 cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 export WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS="${WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS:-120000}"
-ROOT="$FIX/proj"; BIN="$FIX/bin"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/contracts" "$BIN" "$FIX/home/.pi-seats-snap/worker" "$FIX/home/.pi-seats-snap/verifier"
+ROOT="$FIX/proj"; BIN="$FIX/bin"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/contracts" "$BIN" "$FIX/home/.pi-seats-snap/worker" "$FIX/home/.pi-seats-snap/reviewer"
 printf 'namespace=snap\n' > "$ROOT/wheelhouse/.template-source"
 printf '# Synthetic ISA\n' > "$ROOT/wheelhouse/ISA.md"
 git -C "$ROOT" init -q -b main
@@ -17,7 +18,7 @@ git -C "$ROOT" add wheelhouse/ISA.md wheelhouse/.template-source
 git -C "$ROOT" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture-isa
 selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$ROOT/seats/seats.json" <<'JSON'
-{"version":1,"seats":{"worker-1":{"role":"worker","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/worker","authRoute":"oauth"}},"verifier":{"role":"verifier","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/verifier","authRoute":"oauth"}}}}
+{"version":1,"seats":{"worker-1":{"role":"worker","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/worker","authRoute":"oauth"}},"verifier":{"role":"verifier","harness":"pi","provider":"openai","model":"walk","account":{"dir":"~/.pi-seats-snap/walker","authRoute":"env"}},"reviewer":{"role":"reviewer","harness":"codex","provider":"openai","model":"m","account":{"dir":"~/.pi-seats-snap/reviewer","authRoute":"oauth"}}}}
 JSON
 cat > "$BIN/bd" <<'SH'
 #!/usr/bin/env bash
@@ -53,13 +54,13 @@ cat > "$ROOT/seats/state.json" <<JSON
 JSON
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.workers.live.length!==1||s.workers.busy!==1||s.workers.idle!==0) process.exit(1)' && pass 'table row 2: settled worker remains busy when lastBead is in progress/rework' || fail "busy worker snapshot wrong rc=$RC out=$OUT"
 (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot, readyWorkNobodyOnIt } from "./seats/fleet-snapshot.ts"; if(readyWorkNobodyOnIt(fleetSnapshot(process.cwd()))) process.exit(1);') && pass 'readyWorkNobodyOnIt false when a worker is busy' || fail 'readyWorkNobodyOnIt false row failed'
-python3 - <<PY
-import json
-p='$ROOT/seats/state.json'; j=json.load(open(p)); j['seats']['worker-1']['lastBead']='closed-bead'; json.dump(j,open(p,'w'))
-p='$ROOT/list.json'; rows=json.load(open(p)); rows.append({'id':'closed-bead','status':'closed'}); json.dump(rows,open(p,'w'))
-PY
+bun - "$ROOT/seats/state.json" "$ROOT/list.json" <<'JS'
+const fs=(await import('node:fs')).default,[p,q]=process.argv.slice(2),j=JSON.parse(fs.readFileSync(p,'utf8')),rows=JSON.parse(fs.readFileSync(q,'utf8'));
+j.seats['worker-1'].lastBead='closed-bead'; fs.writeFileSync(p,JSON.stringify(j));
+rows.push({id:'closed-bead',status:'closed'}); fs.writeFileSync(q,JSON.stringify(rows));
+JS
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.workers.idle!==1||s.workers.busy!==0) process.exit(1)' && pass 'table row 3: settled live worker with closed bead is idle' || fail "idle worker wrong rc=$RC out=$OUT"
-printf '%s\n' '{"pid":'$$',"bead":"rev1","startedAt":"2026-01-01T00:00:00Z"}' > "$ROOT/seats/run/verify.verifier.json"
+printf '%s\n' '{"pid":'$$',"bead":"rev1","startedAt":"2026-01-01T00:00:00Z"}' > "$ROOT/seats/run/verify.reviewer.json"
 printf '%s\n' '{"pid":999999,"bead":"rev2","startedAt":"2026-01-01T00:00:00Z"}' > "$ROOT/seats/run/verify.stale.json"
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.reviewBacklog.length!==1||s.reviewBacklog[0].id!=="rev2"||s.reviewers.busy!==1) process.exit(1)' && pass 'table rows 4-5: live verify marker removes backlog; stale marker does not' || fail "verify marker table wrong rc=$RC out=$OUT"
 (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot, freeWorkers, freeReviewers } from "./seats/fleet-snapshot.ts"; const s=fleetSnapshot(process.cwd()); if(freeWorkers(s).length!==1||freeReviewers(s).length!==0) process.exit(1);') && pass 'freeWorkers/freeReviewers helpers return idle live seats only' || fail 'freeWorkers/freeReviewers helper coverage failed'
@@ -67,19 +68,31 @@ run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileS
 cp "$ROOT/ready.json" "$ROOT/ready.saved.json"; printf '[]\n' > "$ROOT/ready.json"
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.readyCount!==0||s.chainedCount!==0||s.overlapCount!==0) process.exit(1)' && pass 'table row 6: empty ready graph counts zero without hiding backlog' || fail "empty-ready row wrong rc=$RC out=$OUT"
 cp "$ROOT/ready.saved.json" "$ROOT/ready.json"
-BD_FAIL=1 run_snap; [ $RC -eq 2 ] && printf '%s\n' "$OUT" | grep -q 'STOP: bd ready --json failed' && pass 'bd non-zero is STOP, not a zero snapshot' || fail "bd failure behavior wrong rc=$RC out=$OUT"
+BD_FAIL=1 run_snap; [ $RC -eq 2 ] && printf '%s\n' "$OUT" | grep >/dev/null 'STOP: bd ready --json failed' && pass 'bd non-zero is STOP, not a zero snapshot' || fail "bd failure behavior wrong rc=$RC out=$OUT"
 DEFS="$(rg -n 'function readyWorkNobodyOnIt' "$HERE" -g '*.ts' | wc -l | tr -d ' ')"; [ "$DEFS" = 1 ] && pass 'grep finds exactly one readyWorkNobodyOnIt definition under seats/' || fail "definition count=$DEFS"
-BROKEN="$ROOT/seats/fleet-snapshot-broken.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN"; python3 - <<PY
-p='$BROKEN'; s=open(p).read(); s=s.replace('&& pidAlive(Number(m.pid))',''); open(p,'w').write(s)
-PY
+BROKEN="$ROOT/seats/fleet-snapshot-broken.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN"; bun - "$BROKEN" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='&& pidAlive(Number(m.pid))';
+if(!s.includes(needle)) throw new Error('stale-marker canary source changed');
+fs.writeFileSync(p,s.replaceAll(needle,''));
+JS
 if (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot } from "./seats/fleet-snapshot-broken.ts"; const s=fleetSnapshot(process.cwd()); if(s.reviewBacklog.length===1) process.exit(1);' >/dev/null 2>&1); then pass 'canary: removing stale-marker check makes backlog leg fail'; else fail 'canary did not prove stale-marker leg catches breakage'; fi
-BROKEN_CHAIN="$ROOT/seats/fleet-snapshot-broken-chain.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN_CHAIN"; python3 - <<PY
-p='$BROKEN_CHAIN'; s=open(p).read(); s=s.replace('const xs = Array.isArray(row?.dependencies) ? row.dependencies : [];','const xs = row?.blocks ?? row?.dependents ?? row?.blocked_by_me ?? row?.children ?? [];'); s=s.replace('return xs.filter((d: any) => d?.type !== "parent-child").map((d: any) => String(d?.depends_on_id ?? "")).filter(Boolean);','return Array.isArray(xs) ? xs.map((v: any) => typeof v === "string" ? v : String(v?.id ?? "")).filter(Boolean) : [];'); open(p,'w').write(s)
-PY
+BROKEN_CHAIN="$ROOT/seats/fleet-snapshot-broken-chain.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN_CHAIN"; bun - "$BROKEN_CHAIN" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
+for(const [old,replacement] of [
+ ['const xs = Array.isArray(row?.dependencies) ? row.dependencies : [];','const xs = row?.blocks ?? row?.dependents ?? row?.blocked_by_me ?? row?.children ?? [];'],
+ ['return xs.filter((d: any) => d?.type !== "parent-child").map((d: any) => String(d?.depends_on_id ?? "")).filter(Boolean);','return Array.isArray(xs) ? xs.map((v: any) => typeof v === "string" ? v : String(v?.id ?? "")).filter(Boolean) : [];']
+]) { if(!s.includes(old)) throw new Error('dependency canary source changed'); s=s.replaceAll(old,replacement); }
+fs.writeFileSync(p,s);
+JS
 if (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot } from "./seats/fleet-snapshot-broken-chain.ts"; const s=fleetSnapshot(process.cwd()); if(s.chainedCount!==1) process.exit(0); process.exit(1);' >/dev/null 2>&1); then pass 'canary: old non-dependencies parser fails the chained row'; else fail 'canary did not prove dependencies-shaped chained row catches old parser'; fi
-BROKEN_EPIC="$ROOT/seats/fleet-snapshot-broken-epic.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN_EPIC"; python3 - <<PY
-p='$BROKEN_EPIC'; s=open(p).read(); s=s.replace('String(x?.issue_type ?? x?.type ?? "").toLowerCase() === "epic"','String(x?.type ?? "").toLowerCase() === "epic"'); s=s.replace('Date.parse(String(x?.created_at ?? x?.created ?? 0))','Date.parse(String(x?.created ?? 0))'); open(p,'w').write(s)
-PY
+BROKEN_EPIC="$ROOT/seats/fleet-snapshot-broken-epic.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN_EPIC"; bun - "$BROKEN_EPIC" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
+for(const [old,replacement] of [
+ ['String(x?.issue_type ?? x?.type ?? "").toLowerCase() === "epic"','String(x?.type ?? "").toLowerCase() === "epic"'],
+ ['Date.parse(String(x?.created_at ?? x?.created ?? 0))','Date.parse(String(x?.created ?? 0))']
+]) { if(!s.includes(old)) throw new Error('epic canary source changed'); s=s.replaceAll(old,replacement); }
+fs.writeFileSync(p,s);
+JS
 if (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot } from "./seats/fleet-snapshot-broken-epic.ts"; const s=fleetSnapshot(process.cwd(), {since:{isaHead:"old", at:"2026-01-01T12:00:00Z"}}); if(s.changes.newEpics!==1) process.exit(0); process.exit(1);' >/dev/null 2>&1); then pass 'canary: old type/created fields fail the newEpics row'; else fail 'canary did not prove issue_type/created_at row catches old parser'; fi
 
 echo 'fleet-snapshot.selftest.sh works on this machine.'

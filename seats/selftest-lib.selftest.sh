@@ -4,11 +4,50 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-selftest-lib.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
+
+if bun "$HERE/fixtures/scratch-ownership.ts" lsof "$HERE/.." "$FIX"; then pass 'lsof capture leaves old pid file intact'; else fail 'lsof scratch ownership collision'; fi
+
+# Exercise a worker caller even when this suite is launched by the commander.
+for caller in unset worker-1 commander; do
+  actor_env=(env -u BEADS_ACTOR)
+  [ "$caller" = unset ] || actor_env+=("BEADS_ACTOR=$caller")
+  RC=0
+  ACTOR="$("${actor_env[@]}" bash -c '. "$1"; printenv BEADS_ACTOR' _ "$HERE/selftest-lib.sh")" || RC=$?
+  if [ "$RC" -eq 0 ] && [ "$ACTOR" = wheelhouse-selftest ]; then
+    pass "fixture actor ignores caller BEADS_ACTOR=$caller"
+  else
+    fail "fixture actor inherited caller BEADS_ACTOR=$caller (rc=$RC actor=$ACTOR)"
+  fi
+done
+
+# Override only the exercised child library for exact pre-fix controls; this
+# harness's enclosing allocation and Git boundary always use the fixed helper.
+OWNERSHIP_LIB="${WHEELHOUSE_SELFTEST_OWNERSHIP_LIB:-$HERE/selftest-lib.sh}"
+if bun "$HERE/fixtures/selftest-fixture-ownership.mjs" "$FIX/ownership" "$OWNERSHIP_LIB"; then
+  pass 'fixture mutation requires this run allocation nonce and physical path'
+else
+  fail 'fixture ownership regression'
+fi
+if [ "${WHEELHOUSE_SELFTEST_OWNERSHIP_ONLY:-}" = 1 ]; then
+  if [ "$FAIL" -eq 0 ]; then echo "selftest-lib.selftest: PASS ($PASS checks, ownership only)"; exit 0; fi
+  echo "selftest-lib.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1
+fi
+
+if bun "$HERE/fixtures/selftest-stale-fixtures.mjs" "$FIX/stale-fixtures" "$HERE/selftest-lib.sh" "$HERE"; then
+  pass 'stale sweeps remove only marked dead-owner allocations for all six prefixes'
+else
+  fail 'stale sweep fixture checks'
+fi
+if [ "${WHEELHOUSE_SELFTEST_STALE_ONLY:-}" = 1 ]; then
+  if [ "$FAIL" -eq 0 ]; then echo "selftest-lib.selftest: PASS ($PASS checks, stale only)"; exit 0; fi
+  echo "selftest-lib.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1
+fi
 
 SRCROOT="$FIX/source"; DEST="$FIX/dest"
 mkdir -p "$SRCROOT"
@@ -16,17 +55,12 @@ selftest_copy_seat_runtime "$SRCROOT" "$HERE"
 cat > "$SRCROOT/seats/fixture-added-module.ts" <<'TS'
 export const fixtureAddedModule = "copied";
 TS
-python3 - "$SRCROOT/seats/adapter.ts" <<'PY'
-import sys
-from pathlib import Path
-p=Path(sys.argv[1])
-s=p.read_text()
-if s.startswith('#!'):
-    first, rest = s.split('\n', 1)
-    p.write_text(first + '\nimport "./fixture-added-module";\n' + rest)
-else:
-    p.write_text('import "./fixture-added-module";\n' + s)
-PY
+bun - "$SRCROOT/seats/adapter.ts" <<'TS'
+import fs from "node:fs";
+const file = process.argv[2], source = fs.readFileSync(file, "utf8");
+const at = source.startsWith("#!") ? source.indexOf("\n") + 1 : 0;
+fs.writeFileSync(file, source.slice(0, at) + 'import "./fixture-added-module";\n' + source.slice(at));
+TS
 selftest_copy_seat_runtime "$DEST" "$SRCROOT/seats"
 if [ -f "$DEST/seats/fixture-added-module.ts" ] && grep -q 'fixture-added-module' "$DEST/seats/adapter.ts"; then
   pass "runtime copy helper carries a newly added adapter dependency into a fixture"
@@ -46,11 +80,19 @@ fi
 
 if command -v bd >/dev/null 2>&1; then
   REAL_BD="$(command -v bd)"
+  METRICS_FIX="$FIX/metrics-fixture"
+  mkdir -p "$METRICS_FIX"
+  selftest_disable_bd_metrics "$METRICS_FIX" || exit 2
+  if [ "$HOME" = "$METRICS_FIX/home" ] && [ "$XDG_CONFIG_HOME" = "$HOME/.config" ] && [ -f "$XDG_CONFIG_HOME/bd/config.yaml" ] && grep -Eq '^[[:space:]]+disabled: true$' "$XDG_CONFIG_HOME/bd/config.yaml"; then
+    pass 'shared fixture metrics setup pins HOME and XDG to an owned disabled config'
+  else
+    fail 'shared fixture metrics setup did not pin an owned disabled config'
+  fi
   INSTALL="$FIX/install-graph"
   mkdir -p "$INSTALL"
-  git -C "$INSTALL" init -q
+  git -C "$INSTALL" init -q -b main
   if (cd "$INSTALL" && "$REAL_BD" init --non-interactive --skip-agents -p install >/dev/null 2>"$FIX/install-bd-init.err"); then
-    count_install(){ (cd "$INSTALL" && "$REAL_BD" list --json) | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'; }
+    count_install(){ (cd "$INSTALL" && "$REAL_BD" list --json) | bun -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(0,"utf8")).length)'; }
     before_count="$(count_install)"
     INSIDE="$INSTALL/inside-install"
     mkdir -p "$INSIDE"
@@ -70,7 +112,7 @@ if command -v bd >/dev/null 2>&1; then
       mkdir -p "$SCRATCH_WORK"
       (cd "$SCRATCH_WORK" && bd create 'isolated helper row' --json >/dev/null)
       after_isolated_count="$(count_install)"
-      scratch_count="$(cd "$SCRATCH_WORK" && bd list --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+      scratch_count="$(cd "$SCRATCH_WORK" && bd list --json | bun -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync(0,"utf8")).length)')"
       if [ "$after_isolated_count" = "$before_isolated_count" ] && [ "$scratch_count" -ge 1 ]; then
         pass "selftest_scratch_graph isolates bd create from the fixture install graph"
       else

@@ -84,35 +84,14 @@ cleanup() {
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- stale-fixture sweep (same rule as the sibling selftests) ----------------
 FIX_PREFIX="wheelhouse-isolation-selftest"
-sweep_stale_fixtures() {
-  local base="${TMPDIR:-/tmp}" d stamp phys sf spid
-  while IFS= read -r d; do
-    [ -d "$d" ] || continue
-    stamp="${d##*/}"; stamp="${stamp#"$FIX_PREFIX".}"; stamp="${stamp%%.*}"
-    case "$stamp" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$stamp" 2>/dev/null && continue
-    phys="$(cd "$d" 2>/dev/null && pwd -P)" || phys="$d"
-    while IFS= read -r sf; do
-      [ -f "$sf" ] || continue
-      for spid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$spid" 2>/dev/null && lsof -p "$spid" 2>/dev/null | grep -qF "$phys"; then
-          kill "$spid" 2>/dev/null
-          echo "swept: killed leaked seat pid $spid (held open files under $d)"
-        fi
-      done
-    done < <(find "$d" -mindepth 3 -maxdepth 3 -path "*/seats/state.json" 2>/dev/null)
-    rm -rf "$d"
-    echo "swept: removed stale fixture $d"
-  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -name "$FIX_PREFIX.*" 2>/dev/null)
-  return 0
-}
-sweep_stale_fixtures
+selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 
-FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
@@ -296,14 +275,14 @@ else fail "namespace seat roots missing or not disjoint"; fi
 if grep -q "\"$PROJA\": true" "$SEAT_A/trust.json" 2>/dev/null; then
   pass "A's trust.json grants A's project root"
 else fail "A's trust.json does not grant $PROJA"; fi
-if ! grep -qF "$PROJB" "$SEAT_A/trust.json" 2>/dev/null; then
+if selftest_capture_lacks "$SEAT_A/trust.json" -qF -- "$PROJB"; then
   pass "A's trust.json contains no grant for B's root (B's path absent)"
 else fail "B's path appears in A's trust.json"; fi
-if ! grep -qF "$PROJA" "$SEAT_B/trust.json" 2>/dev/null; then
+if selftest_capture_lacks "$SEAT_B/trust.json" -qF -- "$PROJA"; then
   pass "B's trust.json contains no grant for A's root (symmetric)"
 else fail "A's path appears in B's trust.json"; fi
 
-if ! grep -qF "$PROJB" "$PROJA/seats/seats.json" && ! grep -q "nsB" "$PROJA/seats/seats.json"; then
+if selftest_capture_lacks "$PROJA/seats/seats.json" -qF -- "$PROJB" && selftest_capture_lacks "$PROJA/seats/seats.json" -q -- "nsB"; then
   pass "A's seats.json references no B path and no B namespace"
 else fail "a B path or namespace appears in A's roster"; fi
 
@@ -350,11 +329,11 @@ arun() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 STATE_A="$PROJA/seats/state.json"
 LOG_A="$PROJA/seats/logs/worker-a.jsonl"
-astate_get() { env HOME="$HOME_FIX" bun -e "const s=require('$STATE_A');const v=s.seats['worker-a']?.['$1'];if(v!=null)console.log(v)"; }
+astate_get() { env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE_A','utf8'));const v=s.seats['worker-a']?.['$1'];if(v!=null)console.log(v)"; }
 wait_for_from() {   # $1 = file, $2 = byte offset, $3 = substring, $4 = seconds
   local i=0 max=$((${4:-10} * 10))
   while [ $i -lt $max ]; do
-    [ -f "$1" ] && tail -c +"$(($2 + 1))" "$1" 2>/dev/null | grep -q "$3" && return 0
+    [ -f "$1" ] && tail -c +"$(($2 + 1))" "$1" 2>/dev/null | grep >/dev/null "$3" && return 0
     sleep 0.1; i=$((i + 1))
   done
   return 1
@@ -385,7 +364,7 @@ done
 [ $WS_OK -eq 1 ] && pass "write surfaces (state.json, run/, logs/) exist under A and only A (verdicts/: not exercised — verify.ts does not run here, and none appeared)"
 [ -e "$PROJB/seats/verdicts" ] && fail "verdicts/ appeared under B" || true
 
-if ! grep -qF "$PROJB" "$STATE_A" && ! grep -q "nsB" "$STATE_A"; then
+if selftest_capture_lacks "$STATE_A" -qF -- "$PROJB" && selftest_capture_lacks "$STATE_A" -q -- "nsB"; then
   pass "A's state.json references no B path and no B namespace"
 else fail "a B path or namespace appears in A's state.json"; fi
 
@@ -393,7 +372,7 @@ b_pristine "after the full benign run"
 mkdir -p "$HOME_FIX/foreign-planted"
 printf 'foreign\n' > "$HOME_FIX/foreign-planted/path.txt"
 HOME_WITH_FOREIGN="$(home_listing)"
-if [ "$HOME_BEFORE" != "$HOME_WITH_FOREIGN" ] && comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_WITH_FOREIGN") | grep -q 'foreign-planted/path.txt'; then
+if [ "$HOME_BEFORE" != "$HOME_WITH_FOREIGN" ] && comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_WITH_FOREIGN") | grep >/dev/null 'foreign-planted/path.txt'; then
   pass "negative control: a planted foreign path under \$HOME still trips the strict HOME assertion"
 else
   fail "negative control: planted foreign path was not detected by the HOME assertion"
@@ -402,7 +381,7 @@ rm -rf "$HOME_FIX/foreign-planted"
 HOME_AFTER="$(home_listing)"
 if [ "$HOME_BEFORE" = "$HOME_AFTER" ]; then
   pass "nothing new in \$HOME outside A's own seat namespace"
-else fail "unexpected paths appeared in \${HOME}: $(comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_AFTER") | head -5 | tr '\n' ' ')"; fi
+else fail "unexpected paths appeared in \${HOME}: $(comm -13 <(printf '%s\n' "$HOME_BEFORE") <(printf '%s\n' "$HOME_AFTER") | sed -n '1,5p' | tr '\n' ' ')"; fi
 
 phase "3. bead-graph isolation — A's bd calls are scoped to A's store, never B's"
 if [ -d "$PROJA/.beads" ] && [ -d "$PROJB/.beads" ] \
@@ -415,12 +394,12 @@ wait_for_from "$LOG_A" "$MARK" '"agent_end"' 10 || fail "A: GRAPH turn never end
 if [ -s "$BD_LOG" ]; then
   pass "the seat's bd call was captured ($(wc -l < "$BD_LOG" | tr -d ' ') call(s) logged)"
 else fail "no bd call reached the fake bd — the graph leg measured nothing"; fi
-if [ -s "$BD_LOG" ] && ! grep -v "graph=$PROJA/.beads" "$BD_LOG" | grep -q .; then
+if [ -s "$BD_LOG" ] && ! grep -v "graph=$PROJA/.beads" "$BD_LOG" | grep >/dev/null .; then
   pass "every logged bd call resolved to A's graph dir"
-else fail "a bd call resolved outside A's graph: $(grep -v "graph=$PROJA/.beads" "$BD_LOG" | head -2)"; fi
-if ! grep -qF "$PROJB" "$BD_LOG"; then
+else fail "a bd call resolved outside A's graph: $(grep -v "graph=$PROJA/.beads" "$BD_LOG" | sed -n '1,2p')"; fi
+if selftest_capture_lacks "$BD_LOG" -qF -- "$PROJB"; then
   pass "zero B-scoped bd calls (B's path appears in no call, cwd, or resolved graph)"
-else fail "a bd call carried B's path: $(grep -F "$PROJB" "$BD_LOG" | head -2)"; fi
+else fail "a bd call carried B's path: $(grep -F "$PROJB" "$BD_LOG" | sed -n '1,2p')"; fi
 b_pristine "after the graph leg"
 
 phase "4. the doors — path-shaped arguments refuse or stay inert data"

@@ -4,6 +4,12 @@ You are the integrator: whoever takes a reviewed branch and puts it into the sha
 
 These duties attach to the function and not to a job title, deliberately. An obligation attached to a role name is unowned wherever that role does not exist, and half of a two-party check with nobody on one side is not a weaker check — it is no check, wearing the appearance of one.
 
+## Optional batch review sweeps
+
+When several candidates need the same full sweep, start an isolated batch branch from current main and merge the candidate tips into it. Obtain one normal dispatcher full-sweep log at that combined tip. Review each candidate separately with `verify.ts --batch-sweep <complete log>`; only the sweep is shared, never the review judgment or permission to merge/push.
+
+The reviewer dispatcher refuses unless the batch contains the reviewed commit, its first-parent history reaches current main, the complete recorded command/env and full suite inventory passed with rc=0, and the log is fresh and safely readable. The verdict names both candidate and batch tips and the log. A red, partial, stale or unrelated batch proves nothing for reuse. If main or a candidate moves outside the validated batch, make a new combined tree and obtain new evidence; do not edit a failed log into a pass. With no flag, the ordinary per-review sweep path remains unchanged. See `seats/README.md`, “Reuse one passing sweep for a review batch”, for the exact checks and evidence limits.
+
 ## Contract
 
 Copied byte-for-byte into every project. Do not edit this section.

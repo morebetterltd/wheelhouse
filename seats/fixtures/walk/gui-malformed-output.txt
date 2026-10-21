@@ -1,0 +1,3 @@
+VERDICT: COULD-NOT-WALK — window-list command malformed JSON (printf "not json"): JSON Parse error: Unexpected identifier "not"
+transcript: ../out-gui-malformed/transcript.txt
+metadata: ../out-gui-malformed/walk.json
