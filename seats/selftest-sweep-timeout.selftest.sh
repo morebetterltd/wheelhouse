@@ -21,13 +21,35 @@ cleanup(){
     kill_recorded_tree "$FIX/live-target-control" CLEANUP
     kill_recorded_tree "$FIX/fork-frozen" CLEANUP
     kill_recorded_tree "$FIX/fork-unfrozen" CLEANUP
+    kill_recorded_tree "$FIX/fork-kill-omitted" CLEANUP
   fi
   selftest_remove_fixture_dir "$FIX"
 }
 selftest_install_cleanup_traps cleanup
+# Observe completion of the copied watchdog's containment pass. Fixture setup
+# and native censuses are not part of the independent 15s rescue observation.
+# Preserve the watchdog status; this hook cannot turn a refusal into success.
+observe_fixture_watchdog(){
+  local source="$1" target="$2" pending="$2.observer-new"
+  awk '
+    /^suite_watchdog\(\)\{ \($/ { watchdog=1 }
+    watchdog && /^\); \}$/ {
+      print "  local fixture_status=$?"
+      print "  if [ -n \"${CASE_DIR:-}\" ]; then"
+      print "    printf '\''%s\\n'\'' \"$fixture_status\" > \"$CASE_DIR/.containment-finished.$$\" || exit 2"
+      print "    mv -f \"$CASE_DIR/.containment-finished.$$\" \"$CASE_DIR/containment-finished\" || exit 2"
+      print "  fi"
+      print "  exit \"$fixture_status\""
+      observed++; watchdog=0
+    }
+    { print }
+    END { if (observed != 1) exit 2 }
+  ' "$source" > "$pending" || return 2
+  mv -f "$pending" "$target"
+}
 PROJECT="$FIX/project"
 selftest_copy_seat_runtime "$PROJECT" "$HERE"
-cp -f "$SWEEP" "$PROJECT/seats/selftest-sweep.sh"
+observe_fixture_watchdog "$SWEEP" "$PROJECT/seats/selftest-sweep.sh" || exit 2
 git -C "$PROJECT" init -q -b main || exit 2
 git -C "$PROJECT" add seats || exit 2
 export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$HERE/selftest-sweep-lock.ts"
@@ -59,9 +81,19 @@ kill_recorded_tree(){
 rescue_tree(){ (
   trap - EXIT
   trap '' INT TERM HUP
-  local dir="$1" message
-  if read -r -t 15 -u 7 message; then exit 0; fi
-  printf 'independent 15s observation\n' > "$dir/rescue-checked"
+  local dir="$1" message status
+  # Do not race a healthy runner still preparing or observing its owned tree.
+  # A broken KILL still completes this pass and arms the same bounded rescue.
+  while [ ! -f "$dir/containment-finished" ]; do
+    if read -r -t 1 -u 7 message; then
+      [ "$message" = done ] || exit 2
+      exit 0
+    fi
+  done
+  read -r status < "$dir/containment-finished" || exit 2
+  [[ "$status" =~ ^[0-9]+$ ]] || exit 2
+  if read -r -t 15 -u 7 message; then [ "$message" = done ]; exit "$?"; fi
+  printf 'independent 15s post-containment observation\n' > "$dir/rescue-checked"
   kill_recorded_tree "$dir" RESCUE
 ); }
 TEST_PGID="$(ps -p "$$" -o pgid=)"; TEST_PGID="${TEST_PGID//[[:space:]]/}"
@@ -115,7 +147,7 @@ SH
   CASE_DIR="$dir" IGNORE_TERM="$ignore" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$lock" WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S="$limit" WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S=1 WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$dir/*.selftest.sh" bash "$PROJECT/seats/selftest-sweep.sh" > "$dir/out" 2> "$dir/err"; rc=$?
   printf 'done\n' >&7
   wait "$RESCUE_PID"; rescue_rc=$?; RESCUE_PID=""; exec 7>&-
-  if [ "$rc" = 1 ] && [ "$rescue_rc" = 0 ] && [ ! -e "$dir/rescued" ] && grep -F "selftest-sweep: FAIL $dir/00-hang.selftest.sh timed out after ${limit}s" "$dir/out" >/dev/null && grep -F "selftest-sweep: timeout summary: $dir/00-hang.selftest.sh timed out after ${limit}s" "$dir/out" >/dev/null; then
+  if [ "$rc" = 1 ] && [ "$rescue_rc" = 0 ] && [ -s "$dir/containment-finished" ] && [ ! -e "$dir/rescued" ] && grep -F "selftest-sweep: FAIL $dir/00-hang.selftest.sh timed out after ${limit}s" "$dir/out" >/dev/null && grep -F "selftest-sweep: timeout summary: $dir/00-hang.selftest.sh timed out after ${limit}s" "$dir/out" >/dev/null; then
     pass "$name: deadline reports FAIL and timed out after ${limit}s (without independent rescue)"
   else fail "$name: deadline outcome rc=$rc rescue=$([ -e "$dir/rescued" ] && echo yes || echo no)"; fi
   if [ -f "$dir/after" ] && grep -F "selftest-sweep: PASS $dir/01-after.selftest.sh elapsed=" "$dir/out" >/dev/null && [ ! -e "$lock" ] && [ ! -e "$lock.queue" ]; then
@@ -143,6 +175,7 @@ run_absent_target_control(){
   mkdir -p "$dir"
   cp -f "$FIX/ordinary/identities" "$dir/identities" || return 2
   check_gone "$dir" || return 2
+  printf '0\n' > "$dir/containment-finished"
   mkfifo -m 600 "$dir/rescue-control"; exec 7<> "$dir/rescue-control"; rm -f "$dir/rescue-control"
   rescue_tree "$dir" & RESCUE_PID=$!
   wait "$RESCUE_PID" || rc=$?; RESCUE_PID=""; exec 7>&-
@@ -167,6 +200,7 @@ run_live_target_control(){
     watchdog && /^\); \}$/ { watchdog=0 }
     END { if (removed != 1) exit 2 }
   ' "$SWEEP" > "$project/seats/selftest-sweep.sh" || return 2
+  observe_fixture_watchdog "$project/seats/selftest-sweep.sh" "$project/seats/selftest-sweep.sh" || return 2
   git -C "$project" init -q -b main || return 2
   git -C "$project" add seats || return 2
   PROJECT="$project"
