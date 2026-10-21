@@ -130,7 +130,7 @@ exec ${JSON.stringify(bd)} "$@"
   } else {
     const data = JSON.parse(fs.readFileSync(path.join(dir, "payload.json"), "utf8")); assert.equal(data.tip, tip); assert(data.trackedClean);
     assert(log.includes(`preparedTip=${tip}\nscratchGraph=isolated nested repository\n`)); assert(log.includes(`finalTip=${tip}\n\nrc=0\n`)); assert.match(log, /selftest-sweep: PASS \(1 suite\(s\), [0-9]+s\)/);
-    if (cli) { assert.match(r.stdout, /VERDICT: APPROVE/); const receipt = fs.readFileSync(path.join(project, "seats/verdicts/graph-fixture.md"), "utf8"); assert(receipt.includes(`- branch-repo: ${project}\n- tip: ${tip}`)); assert(receipt.includes(`## Dispatcher full-sweep result\n\n- tip: ${tip}\n- command: bash seats/selftest-sweep.sh\n- rc: 0\n- log: ${path.join(project, "seats/verdicts/sweeps", logs[0])}\n`)); }
+    if (cli) { assert.match(r.stdout, /VERDICT: APPROVE/); const receipt = fs.readFileSync(path.join(project, "seats/verdicts/graph-fixture.md"), "utf8"); assert(receipt.includes(`- branch-repo: ${project}\n- tip: ${tip}`)); assert(receipt.includes(`## Dispatcher full-sweep result\n\n- tip: ${tip}\n- command: bash seats/selftest-sweep.sh --tier core\n- tier: core\n- reason: default\n- rc: 0\n- log: ${path.join(project, "seats/verdicts/sweeps", logs[0])}\n`)); }
     console.log(`PASS ${mode}: native0 pinned dispatcher sweep; tracked bytes/modes unchanged; private root/subdirectory graph, independent nested/explicit graphs; scratch removed${cli ? '; actual umbrella --repo . review receipt' : ''}`);
   }
 }
