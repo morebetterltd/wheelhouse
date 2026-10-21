@@ -67,8 +67,8 @@ if(kind==='drift') {
 }
 if(kind==='prune') {
   // Extract the actual hazardous allocation AND its actual owning cleanup,
-  // not a reimplementation. The outer prune suite still runs its full scan.
-  const text=fs.readFileSync(path.join(source,'seats/prune.selftest.sh'),'utf8');
+  // not a reimplementation. Both prune tiers source this exact fixture setup.
+  const text=fs.readFileSync(path.join(source,'seats/fixtures/prune-fixture.sh'),'utf8');
   const start=text.indexOf('TMP_ROOT='), end=text.indexOf('\n',text.indexOf('OPEN_TMP_BEFORE=',start));
   assert(start>=0&&end>start,'actual prune tmp allocation block absent');
   const cleanup=text.split('\n').find(line=>line.startsWith('cleanup(){'));

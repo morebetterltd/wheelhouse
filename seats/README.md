@@ -591,7 +591,7 @@ through `PATH` remains the read-only shim inside the reviewer process.
 
 ### Required review tier
 
-For **every** review, `verify.ts` runs a dispatcher-owned sweep of **the tier the change requires** at the exact reviewed tip **before** starting the reviewer. It records the selected tier and first matching reason, not merely a generic PASS. The default is core, the 34 suites in tracked `seats/selftest-core.list`. Full is required when the paths changed from main's merge base to the tip include `seats/selftest-sweep.sh`, `seats/selftest-lib.sh`, `seats/selftest-sweep-lock.ts`, `seats/selftest-herald.sh`, `seats/python-invocations.ts`, `seats/selftest-core.list`, a full-tier root suite, a fixture not named for a core suite, or `seats/adapter.ts`, `seats/seat-worktree.ts` or `seats/verify.ts`. Fixture ownership uses the longest known suite name: `adapter-rpc` is full, not the core `adapter` fixture. Shared/unknown fixtures conservatively require full. Deletions and both sides of renames count. The first matching path in sorted order is the reason; otherwise explicit “full sweep passes” or `selftest-sweep.sh` claim wording forces full with reason “Done line”; otherwise core/default. No nightly or quarantine override is implemented by this tier rule.
+For **every** review, `verify.ts` runs a dispatcher-owned sweep of **the tier the change requires** at the exact reviewed tip **before** starting the reviewer. It records the selected tier and first matching reason, not merely a generic PASS. The default is core, the 35 suites in tracked `seats/selftest-core.list`. Full is required when the paths changed from main's merge base to the tip include `seats/selftest-sweep.sh`, `seats/selftest-lib.sh`, `seats/selftest-sweep-lock.ts`, `seats/selftest-herald.sh`, `seats/python-invocations.ts`, `seats/selftest-core.list`, a full-tier root suite, a fixture not named for a core suite, or `seats/adapter.ts`, `seats/seat-worktree.ts` or `seats/verify.ts`. Fixture ownership uses the longest known suite name: `adapter-rpc` is full, not the core `adapter` fixture. Shared/unknown fixtures conservatively require full. Deletions and both sides of renames count. The first matching path in sorted order is the reason; otherwise explicit “full sweep passes” or `selftest-sweep.sh` claim wording forces full with reason “Done line”; otherwise core/default. No nightly or quarantine override is implemented by this tier rule.
 
 The command is `bash seats/selftest-sweep.sh --tier core|full`. Its header records `tier=core reason=default` or, for example, `tier=full reason=seats/adapter.ts`. The prompt and verdict name both fields; core coverage also carries the manifest's SHA-256. The historical `## Dispatcher full-sweep result` heading remains for record consumers; the explicit tier below it is the coverage, not the heading. APPROVE still needs integer rc=0, a pinned tip and a retained nonempty regular log; the actual tier must match the dispatcher's choice, and core hash/inventory must match the pinned manifest. A mismatch is INCOMPLETE.
 
@@ -941,7 +941,7 @@ For the full host sweep, run the locked runner instead of an ad-hoc loop:
 bash seats/selftest-sweep.sh
 ```
 
-It runs the selected tier serially and holds the same host-wide lock for core and full so another seat or install waits rather than starting a second sweep. `bash seats/selftest-sweep.sh --tier core` runs exactly the sorted `seats/selftest-core.list` (34 approved suites); every other root suite belongs to full by absence. The default is `--tier full`. `WHEELHOUSE_SELFTEST_SWEEP_TIER=core|full` is the environment form; an explicit flag wins. Core ignores `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` so a filter cannot silently weaken its manifest; full retains the pattern override for targeted diagnostics, never reusable full-batch evidence. Missing/unreadable manifests, invalid or duplicate names, empty lists and missing/unreadable suites STOP with exit2 before lock admission. Comments beginning with `#` and blank lines are allowed. The manifest's original bytes, including comments, determine its SHA-256. Tier environment selection does not leak into nested suite fixtures. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
+It runs the selected tier serially and holds the same host-wide lock for core and full so another seat or install waits rather than starting a second sweep. `bash seats/selftest-sweep.sh --tier core` runs exactly the sorted `seats/selftest-core.list` (35 suites, including the prune deletion-safety split); every other root suite belongs to full by absence. The default is `--tier full`. `WHEELHOUSE_SELFTEST_SWEEP_TIER=core|full` is the environment form; an explicit flag wins. Core ignores `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` so a filter cannot silently weaken its manifest; full retains the pattern override for targeted diagnostics, never reusable full-batch evidence. Missing/unreadable manifests, invalid or duplicate names, empty lists and missing/unreadable suites STOP with exit2 before lock admission. Comments beginning with `#` and blank lines are allowed. The manifest's original bytes, including comments, determine its SHA-256. Tier environment selection does not leak into nested suite fixtures. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
 
 Immediately after admission the runner prints `selftest-sweep: tier=full suites=<count>` or `selftest-sweep: tier=core suites=<count> manifest=<sha256>`. Each unchanged `selftest-sweep: START <path>` is followed by `selftest-sweep: PASS <path> elapsed=<N>s` or `selftest-sweep: FAIL <path> rc=<rc> elapsed=<N>s`; timeout failures retain their timeout/grace wording and append `elapsed=<N>s`. These are whole seconds around suite launch and teardown, excluding lock wait. The footer is `selftest-sweep: PASS (<N> suite(s), <T>s)` or `selftest-sweep: FAIL (<F> failure(s) of <N> suite(s), <T>s)`, with total admitted sweep seconds (at least the sum of the suites). Reviewer prompts and verdict receipts include the tier, footer total and the slowest five suites' seconds. Batch reuse requires this timed envelope; old timing-free logs must be regenerated, not accepted through a compatibility path.
 
@@ -978,6 +978,7 @@ bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/walk.selftest.sh
+bash seats/prune-safety.selftest.sh
 bash seats/prune.selftest.sh
 bash seats/staffing.selftest.sh
 bash seats/staffing-live.selftest.sh
@@ -992,6 +993,18 @@ bash seats/cockpit.selftest.sh
 bash seats/supervisor.selftest.sh
 bash seats/herald.selftest.sh
 ```
+
+`prune-safety.selftest.sh` is **core**: enclosing-Git containment, fresh cleanup
+identity/seat-scratch/reviewed-row regressions (including symlink-ancestor
+redirection), reviewed deletion guards, seat/ISA anchors, unavailable lsof,
+symlinks/spaces and interactive checkouts. `prune.selftest.sh` remains **full**:
+classification, active-bench/dry-run behavior, real host-budget auto-prune,
+cleanup policy/integration/concurrency/push/oversized-tree cases, scratch
+allocation measurements and the enclosing-Git harness's five cases/five removal
+controls. Each suite lists its owned phases; both source
+`fixtures/prune-fixture.sh` for fresh scratch installs, graphs, repositories and
+bare origins. Neither repeats the other's assertion phases. Read the runner's
+`elapsed=` field for current timings, not the former whole-suite estimate.
 
 `bash seats/no-tracked-evidence.sh [repo-or-subdirectory]` rejects root
 `evidence/` paths in the Git index or HEAD, including forced adds and staged

@@ -15,6 +15,7 @@ never-lose-work.selftest.sh
 no-tracked-evidence.selftest.sh
 placeholder-grep.selftest.sh
 product-pre-push.selftest.sh
+prune-safety.selftest.sh
 push-authority-lint.selftest.sh
 recover.selftest.sh
 report-issues.selftest.sh
