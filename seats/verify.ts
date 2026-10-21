@@ -82,6 +82,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { resolveRoleBrief } from "./briefs";
+import { parseQuarantine, type QuarantineEntry } from "./quarantine";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
@@ -1153,7 +1154,7 @@ export function chooseSweepTier(root: string, tip: string, claim: string): Sweep
   const manifest = parseCoreManifest(tierGit(root, "show", `${tip}:seats/selftest-core.list`), knownSuites), core = new Set(manifest.suites);
   const names = knownSuites
     .map(name => name.replace(/\.selftest\.sh$/, "")).sort((a, b) => b.length - a.length || a.localeCompare(b));
-  const harness = new Set(["selftest-sweep.sh", "selftest-lib.sh", "selftest-sweep-lock.ts", "selftest-herald.sh", "python-invocations.ts", "selftest-core.list", "adapter.ts", "seat-worktree.ts", "verify.ts"].map(name => `seats/${name}`));
+  const harness = new Set(["selftest-sweep.sh", "selftest-lib.sh", "selftest-sweep-lock.ts", "selftest-herald.sh", "python-invocations.ts", "selftest-core.list", "selftest-quarantine.list", "quarantine.ts", "adapter.ts", "seat-worktree.ts", "verify.ts"].map(name => `seats/${name}`));
   // --no-renames includes both sides of deletions/renames; no pretty-printed
   // quoting, terminal wrapping or GIT_* redirect can hide a touched path.
   const touched = tierGit(root, "diff", "--name-only", "--no-renames", "-z", base, tip).toString().split("\0").filter(Boolean).sort();
@@ -1170,8 +1171,21 @@ export function chooseSweepTier(root: string, tip: string, claim: string): Sweep
   if (claimRequiresSweepCitation(claim)) return { tier: "full", reason: "Done line", manifest };
   return { tier: "core", reason: "default", manifest };
 }
-interface SuiteTiming { suite: string; seconds: number }
-interface SweepTimings { tier: SweepTier; manifest?: string; tierLine: string; footer: string; totalSeconds: number; suites: SuiteTiming[]; slowest: SuiteTiming[] }
+interface SuiteTiming { suite: string; seconds: number; quarantined?: boolean }
+interface QuarantineResult extends QuarantineEntry { result: "PASS" | "FAIL" }
+interface SweepTimings { tier: SweepTier; manifest?: string; tierLine: string; footer: string; totalSeconds: number; suites: SuiteTiming[]; slowest: SuiteTiming[]; quarantine: QuarantineResult[] }
+function quarantineAt(root: string, tip: string): QuarantineEntry[] {
+  if (!tierGit(root, "ls-tree", "--name-only", tip, "--", "seats/selftest-quarantine.list").length) return [];
+  return parseQuarantine(tierGit(root, "show", `${tip}:seats/selftest-quarantine.list`).toString(), tierInventory(root, tip));
+}
+function assertSweepQuarantine(timings: SweepTimings, entries: QuarantineEntry[]): void {
+  const selected = entries.filter(e=>timings.suites.some(s=>s.suite===e.suite)).sort((a,b)=>a.suite.localeCompare(b.suite));
+  const actual = [...timings.quarantine].sort((a,b)=>a.suite.localeCompare(b.suite));
+  if (actual.length !== selected.length || selected.some((e,i)=>e.suite!==actual[i].suite || e.owner!==actual[i].owner || e.deadline!==actual[i].deadline)) throw new Error("dispatcher quarantine policy/summary mismatch");
+}
+function quarantineLines(sweep: SweepResult): string[] {
+  return ["- quarantined failures:", ...(sweep.timings?.quarantine.filter(q=>q.result==="FAIL").map(q=>`  - ${q.suite} owner=${q.owner} until=${q.deadline}`) ?? [])];
+}
 interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; choice?: SweepChoice; requiredChoice?: SweepChoice; timings?: SweepTimings; error?: string; batch?: { tip: string; main: string; sha256: string } }
 function assertSweepChoice(timings: SweepTimings, choice: SweepChoice): void {
   if (timings.tier !== choice.tier) throw new Error(`dispatcher tier mismatch: chose ${choice.tier} (${choice.reason}), log records ${timings.tier}`);
@@ -1199,30 +1213,47 @@ export function readSweepTimings(text: string): SweepTimings {
   if (!first) invalid("inventory/summary mismatch");
   const prefix = first![1], suites: SuiteTiming[] = [], seen = new Set<string>();
   let pending: string | undefined, failures = 0;
+  const quarantined = new Set<string>();
   for (const line of body.split("\n")) {
     if (line.startsWith(`selftest-sweep: START ${prefix}`)) {
       const name = line.slice(`selftest-sweep: START ${prefix}`.length);
       if (pending || !/^[^/\n]+\.selftest\.sh$/.test(name) || seen.has(name)) invalid("duplicate or unordered outer suite records");
       pending = name;
-    } else if (["PASS", "FAIL"].some(kind => line.startsWith(`selftest-sweep: ${kind} ${prefix}`))) {
+    } else if (["PASS", "FAIL", "QUARANTINED-FAIL"].some(kind => line.startsWith(`selftest-sweep: ${kind} ${prefix}`))) {
       const pass = `selftest-sweep: PASS ${prefix}${pending} elapsed=`;
       const fail = `selftest-sweep: FAIL ${prefix}${pending} `;
+      const quarantineFail = `selftest-sweep: QUARANTINED-FAIL ${prefix}${pending} `;
       let seconds: string | undefined;
-      if (pending && line.startsWith(pass)) seconds = /^(0|[1-9][0-9]*)s$/.exec(line.slice(pass.length))?.[1];
+      if (pending && line.startsWith(quarantineFail)) {
+        const result = /^rc=([1-9][0-9]*) elapsed=(0|[1-9][0-9]*)s$/.exec(line.slice(quarantineFail.length));
+        seconds = result?.[2]; if (result) quarantined.add(pending);
+      }
+      else if (pending && line.startsWith(pass)) seconds = /^(0|[1-9][0-9]*)s$/.exec(line.slice(pass.length))?.[1];
       else if (pending && line.startsWith(fail)) {
         seconds = /^(?:rc=[0-9]+|timed out after [1-9][0-9]*s \(TERM then KILL after [1-9][0-9]*s grace; rc=[0-9]+\)) elapsed=(0|[1-9][0-9]*)s$/.exec(line.slice(fail.length))?.[1];
         failures++;
       }
       if (seconds === undefined) invalid("missing, malformed or failed outer suite records");
-      suites.push({ suite: pending!, seconds: whole(seconds!) }); seen.add(pending!); pending = undefined;
+      suites.push({ suite: pending!, seconds: whole(seconds!), ...(quarantined.has(pending!) ? {quarantined:true} : {}) }); seen.add(pending!); pending = undefined;
     }
   }
   if (pending || suites.length !== count) invalid("missing or filtered outer suite records");
   if (failures !== (footer![3] ? whole(footer![3]) : 0)) invalid("failed outer suite records disagree with footer");
   const sum = suites.reduce((n, s) => n + s.seconds, 0);
   if (!Number.isSafeInteger(sum) || totalSeconds < sum) invalid("total seconds below per-suite sum");
+  const tail = body.trimEnd().split("\n"); const summaries: string[] = [];
+  while (tail.at(-1)?.startsWith("selftest-sweep: quarantine: ")) summaries.unshift(tail.pop()!);
+  const quarantine: QuarantineResult[] = [];
+  if (summaries.includes("selftest-sweep: quarantine: none")) {
+    if (summaries.length !== 1) invalid("mixed empty quarantine summary");
+  } else for (const row of summaries) {
+    const q = /^selftest-sweep: quarantine: ([A-Za-z0-9][A-Za-z0-9._-]*\.selftest\.sh) owner=([A-Za-z0-9][A-Za-z0-9._-]*) until=(\d{4}-\d{2}-\d{2}) result=(PASS|FAIL)$/.exec(row);
+    if (!q || quarantine.some(e=>e.suite===q[1]) || !seen.has(q[1]) || (q[4]==="FAIL") !== quarantined.has(q[1])) invalid("invalid quarantine summary/result");
+    quarantine.push({suite:q![1],owner:q![2],deadline:q![3],result:q![4] as "PASS"|"FAIL"});
+  }
+  if ([...quarantined].some(name=>!quarantine.some(q=>q.suite===name))) invalid("quarantined failure missing summary");
   const slowest = [...suites].sort((a, b) => b.seconds - a.seconds || a.suite.localeCompare(b.suite)).slice(0, 5);
-  return { tier: tier![4] ? "core" : "full", manifest: tier![4], tierLine: tier![0], footer: footer![0], totalSeconds, suites, slowest };
+  return { tier: tier![4] ? "core" : "full", manifest: tier![4], tierLine: tier![0], footer: footer![0], totalSeconds, suites, slowest, quarantine };
 }
 
 function sweepTimingLines(sweep: SweepResult): string[] {
@@ -1233,6 +1264,7 @@ function sweepTimingLines(sweep: SweepResult): string[] {
     `- totalSeconds: ${sweep.timings.totalSeconds}`,
     `- slowest suites (whole seconds, descending):`,
     ...sweep.timings.slowest.map(s => `  - ${s.suite}: ${s.seconds}s`),
+    ...quarantineLines(sweep),
   ];
 }
 
@@ -1287,7 +1319,7 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
   catch (e: any) { return refuse(e.message); }
   if (expected!.length === 0 || timings.suites.length !== expected!.length || timings.suites.some(s => !expected!.includes(s.suite))) refuse("full-suite inventory/summary mismatch");
   const choice: SweepChoice = { tier: header![3] as SweepTier, reason: header![4], manifest: batchManifest };
-  try { assertSweepChoice(timings, choice); } catch (e: any) { refuse(e.message); }
+  try { assertSweepChoice(timings, choice); assertSweepQuarantine(timings, quarantineAt(repoRoot, batchTip)); } catch (e: any) { refuse(e.message); }
   if (requiredChoice.tier === "full" && choice.tier !== "full") refuse(`full tier required by ${requiredChoice.reason}; a core batch cannot cover this candidate`);
   return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, choice, requiredChoice, timings, batch: { tip: batchTip, main: main!, sha256: sha256! } };
 }
@@ -1392,7 +1424,7 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
   } catch (e: any) { rc = 1; error = e.message; }
   let timings: SweepTimings | undefined;
   if (!error && (rc === 0 || rc === 1)) {
-    try { timings = readSweepTimings(fs.readFileSync(logPath, "utf8")); assertSweepChoice(timings, choice); }
+    try { timings = readSweepTimings(fs.readFileSync(logPath, "utf8")); assertSweepChoice(timings, choice); assertSweepQuarantine(timings, quarantineAt(repoRoot, tip)); }
     catch (e: any) { error = e.message; rc = 1; }
   }
   const elapsedMs = Date.now() - started;
@@ -1412,6 +1444,7 @@ function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[
     `- tier: ${sweep.choice?.tier ?? "unknown"}; reason: ${sweep.choice?.reason ?? "missing"}`,
     ...(sweep.requiredChoice ? [`- candidate required tier: ${sweep.requiredChoice.tier}; reason: ${sweep.requiredChoice.reason}`] : []),
     `- rc: ${sweep.rc}`,
+    `a quarantined failure does not block APPROVE; read it and BOUNCE if it looks caused by this change`,
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
     ...sweepTimingLines(sweep),
@@ -1874,7 +1907,9 @@ async function main(): Promise<void> {
         if (sweep.rc !== 0 || sweep.error) refuse(`INCOMPLETE review: APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}${sweep.error ? `; ${sweep.error}` : ""}`, false);
         try {
           if (!sweep.choice) throw new Error("missing dispatcher tier choice");
-          assertSweepChoice(readSweepTimings(fs.readFileSync(sweep.logPath!, "utf8")), sweep.choice);
+          const retainedTimings = readSweepTimings(fs.readFileSync(sweep.logPath!, "utf8"));
+          assertSweepChoice(retainedTimings, sweep.choice);
+          assertSweepQuarantine(retainedTimings, quarantineAt(repoRoot, sweep.batch?.tip ?? tip));
         } catch (error: any) { refuse(`INCOMPLETE review: ${error.message}`, false); }
       }
       if (sweep.logPath && requireSweepCitation) {

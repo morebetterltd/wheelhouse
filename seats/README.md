@@ -961,6 +961,16 @@ Source policy runs before lock admission, queue registration or suite START, inc
 
 Every maintained suite loads `selftest-lib.sh` before fixture work (including the driver suites). Direct Bash launches now queue on that same lock/FIFO automatically. The library re-enters the script or `bash -c` command under the lock helper, preserving arguments, cwd and active shell options; suite traps and `exec` cannot replace the supervisor's release. A gated suite PID owns the token before its body can start: killing its supervisor does not make a still-running suite appear stale. TERM/INT/HUP/QUIT forward to the owned suite group and retain admission through its cleanup; the existing dead-owner protocol recovers an owner after it exits without release. Nested suites reuse a validated token-owned lock/FIFO head only when its owner is their actual ancestor (or their own suite PID), never from an exported bypass flag. Deliberate private fixture lock paths remain separate domains. Install the library and helper together; even shell-only suites now require Bun for admission. Unsupported interactive/stdin-only entry forms fail closed rather than running unlocked.
 
+### Quarantine
+
+`seats/selftest-quarantine.list` ships empty. A suite qualifies only when the owner task records evidence of the same failure on main, or a passing lone rerun **through the sweep runner**. Failures consistently caused by the change stay in the gate. Adding or renewing an exemption is a reviewed change, never an automatic retry policy.
+
+Each non-comment line is `<suite>.selftest.sh <owner-task-id> <deadline YYYY-MM-DD>`; `#` comments are allowed. Names must identify an existing root suite, owners match `[A-Za-z0-9][A-Za-z0-9._-]*`, and deadlines are valid calendar dates **strictly after today in local time**. Duplicate, malformed, missing-suite, unreadable or expired entries STOP with exit2 before admission, naming the line. Today is expired too: remove or renew the row by review to resume sweeps. Older installs without a list have no exemptions.
+
+Quarantine never skips a suite. In its selected tier it records normal PASS or `selftest-sweep: QUARANTINED-FAIL <path> rc=<rc> elapsed=<N>s`, including a nonzero timeout result. Only that suite's failure is exempted; other failures still fail the sweep. Before the footer, the summary prints `selftest-sweep: quarantine: none`, or one `quarantine: <suite> owner=<id> until=<date> result=PASS|FAIL` row per selected entry. Valid entries outside the selected tier are ignored; all configured rows are still validated before admission. The review prompt and verdict retain quarantined failures with owner/deadline. A quarantined failure does not block APPROVE; read it and BOUNCE if it looks caused by this change. Batch reuse checks that coverage against the committed batch-tip list and current expiry, not a caller's uncommitted exemptions.
+
+The alerts snapshot carries `quarantined: {count, names}` for the valid configured list. The snapshot-only fleet-gate line shows `quarantine: <n>` when nonzero, and the herald receives one inbox row whenever the count changes (including clearing it), not a row per polling tick. No provider retry, nightly brake or idle-alert input is changed by quarantine.
+
 Individual suites are still run directly when only a touched surface needs proof:
 
 ```bash

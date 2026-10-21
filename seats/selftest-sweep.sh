@@ -294,6 +294,46 @@ if [ "$TIER" = core ] && [ ! -r "$ROOT/seats/selftest-core.list" ]; then
   info "STOP: core manifest: missing or unreadable regular file"
   exit 2
 fi
+# No exemption is inferred when an older install has no list. Validate every
+# present row before admission; inactive-tier entries are valid but not run.
+quarantine_records="$(perl -MFcntl=:DEFAULT,:mode -MErrno=ENOENT -MPOSIX=strftime -MTime::Local=timelocal -e '
+  sub stop { print STDERR "STOP: quarantine line $_[0]: $_[1]\n"; exit 2 }
+  my ($file,$seats)=@ARGV; my @s=lstat($file);
+  if (!@s) { exit 0 if $! == ENOENT; stop(0,"cannot inspect list") }
+  S_ISREG($s[2]) && ($s[2]&0444) && $s[7]<=65536 or stop(0,"unreadable regular list required (64KiB maximum)");
+  sysopen(my $in,$file,O_RDONLY|O_NOFOLLOW|O_NONBLOCK) or stop(0,"cannot open list");
+  my @opened=stat($in); $s[0]==$opened[0] && $s[1]==$opened[1] or stop(0,"list changed while opening");
+  local $/; my $raw=<$in>; close($in); $raw="" unless defined $raw;
+  my $today=strftime("%Y-%m-%d",localtime); my %seen; my @rows; my $n=0;
+  for my $line (split /\n/,$raw) {
+    ++$n; $line =~ s/#.*$//; $line =~ s/^\s+|\s+$//g; next unless length($line);
+    my @f=split /\s+/,$line; @f==3 or stop($n,"expected suite, owner task and YYYY-MM-DD deadline");
+    my ($suite,$owner,$date)=@f;
+    $suite =~ /^[A-Za-z0-9][A-Za-z0-9._-]*\.selftest\.sh$/ or stop($n,"invalid suite");
+    my @suite=lstat("$seats/$suite"); @suite && S_ISREG($suite[2]) or stop($n,"missing suite");
+    !$seen{$suite}++ or stop($n,"duplicate suite");
+    $owner =~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ or stop($n,"invalid owner task id");
+    $date =~ /^(\d{4})-(\d{2})-(\d{2})$/ or stop($n,"invalid calendar deadline");
+    my ($y,$m,$d)=($1,$2,$3); my $t=eval { timelocal(0,0,12,$d,$m-1,$y) };
+    defined($t) && strftime("%Y-%m-%d",localtime($t)) eq $date or stop($n,"invalid calendar deadline");
+    $date gt $today or stop($n,"deadline is today or expired; remove or renew by reviewed change");
+    push @rows,join("\t",$suite,$owner,$date);
+  }
+  print join("\n",sort @rows);
+' "$ROOT/seats/selftest-quarantine.list" "$ROOT/seats")" || exit 2
+QUARANTINE=(); QUARANTINE_COUNT=0
+while IFS= read -r entry; do
+  [ -z "$entry" ] || { QUARANTINE+=("$entry"); QUARANTINE_COUNT=$((QUARANTINE_COUNT+1)); }
+done <<< "$quarantine_records"
+quarantine_for(){
+  [ "$QUARANTINE_COUNT" -gt 0 ] || return 1
+  local entry name owner deadline
+  for entry in "${QUARANTINE[@]}"; do
+    read -r name owner deadline <<< "$entry"
+    if [ "$name" = "$1" ]; then printf '%s\t%s\n' "$owner" "$deadline"; return 0; fi
+  done
+  return 1
+}
 check_source_files || exit 1
 AUDITOR="$ROOT/seats/python-invocations.ts"
 if [ ! -f "$AUDITOR" ] || [ ! -r "$AUDITOR" ]; then
@@ -350,6 +390,7 @@ if [ "${#suites[@]}" -eq 0 ]; then
 fi
 
 failures=0
+quarantine_summary=""
 timeout_summary=""
 info "selftest-sweep: suite timeout=${SUITE_TIMEOUT_S}s TERM grace=${SUITE_GRACE_S}s"
 for suite in "${suites[@]}"; do
@@ -360,7 +401,17 @@ for suite in "${suites[@]}"; do
   finish_current_suite done
   suite_elapsed=$((SECONDS-suite_started))
   rc="$SUITE_RC"
-  if [ "$SUITE_TIMED_OUT" = 1 ]; then
+  exemption="$(quarantine_for "${suite##*/}" || true)"
+  if [ -n "$exemption" ]; then
+    read -r owner deadline <<< "$exemption"
+    result=PASS; [ "$rc" -eq 0 ] || result=FAIL
+    quarantine_summary="${quarantine_summary}selftest-sweep: quarantine: ${suite##*/} owner=$owner until=$deadline result=$result
+"
+  fi
+  if [ "$rc" -ne 0 ] && [ -n "$exemption" ]; then
+    say "selftest-sweep: QUARANTINED-FAIL $suite rc=$rc elapsed=${suite_elapsed}s"
+    [ "$SUITE_TIMED_OUT" != 1 ] || info "selftest-sweep: quarantined timeout: $suite after ${SUITE_TIMEOUT_S}s (TERM then KILL after ${SUITE_GRACE_S}s grace)"
+  elif [ "$SUITE_TIMED_OUT" = 1 ]; then
     say "selftest-sweep: FAIL $suite timed out after ${SUITE_TIMEOUT_S}s (TERM then KILL after ${SUITE_GRACE_S}s grace; rc=$rc) elapsed=${suite_elapsed}s"
     failures=$((failures + 1))
     timeout_summary="${timeout_summary}selftest-sweep: timeout summary: $suite timed out after ${SUITE_TIMEOUT_S}s
@@ -373,11 +424,12 @@ for suite in "${suites[@]}"; do
   fi
 done
 
+[ -z "$timeout_summary" ] || printf '%s' "$timeout_summary"
+if [ -n "$quarantine_summary" ]; then printf '%s' "$quarantine_summary"; else say 'selftest-sweep: quarantine: none'; fi
 sweep_elapsed=$((SECONDS-SWEEP_STARTED))
 if [ "$failures" -eq 0 ]; then
   say "selftest-sweep: PASS (${#suites[@]} suite(s), ${sweep_elapsed}s)"
   exit 0
 fi
-[ -z "$timeout_summary" ] || printf '%s' "$timeout_summary"
 say "selftest-sweep: FAIL ($failures failure(s) of ${#suites[@]} suite(s), ${sweep_elapsed}s)"
 exit 1
