@@ -102,6 +102,7 @@ set -eu
 printf '%s\\n' "$1" >> "$CANCEL_CASE/bd-calls"
 case "$1" in
  show) cat "$CANCEL_CONTRACT" ;;
+ metrics) [ "\${2:-}" = off ] ;;
  init) mkdir -p .beads ;;
  where) printf '{"path":"%s/.beads"}\\n' "$PWD" ;;
  *) exit 1 ;;

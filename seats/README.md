@@ -48,7 +48,7 @@ The main files here:
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
 - `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and review markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
-- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, alerts}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work and invalid commander panes open/close human needs through `seats/needs.ts` only.
+- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, seatStreams, alerts}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work, silent mid-turn model streams and invalid commander panes open/close human needs through `seats/needs.ts` only.
 - `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
@@ -299,7 +299,7 @@ Each seat entry:
 | `external` / `runtime` | A producer subagent of the commander is recorded with `"external": true, "runtime": "commander-subagent"`; it reads PRODUCER.md and is not provisioned or spawned by the adapter. The producer role remains required. |
 | `allowedTools` | Claude Code producer: `Read,Grep,Glob,Bash(bd:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*)`. These read/graph-only tools are A9's boundary in the roster example; for Pi and Codex producers the brief is the limit. |
 | `disallowedTools` | Claude Code producer: `Edit,Write,NotebookEdit`. It never edits product repos or judges built work. |
-| `shadow` | Optional boolean; absent means `false`. `"shadow": true` marks a mirror seat whose output is recorded but never gates or carries assigned work. The commander dispatches to a shadow seat only as a mirror of a gating dispatch, and its verdict or review comment is prefixed `SHADOW`; it informs the real reviewer/commander but never gates a merge. `seat-env.sh` and `adapter.ts` reject any present non-boolean value. |
+| `shadow` | Optional boolean; absent means `false`. `"shadow": true` marks a mirror seat whose output is recorded but never gates or carries assigned work by default. A mirror verdict/comment is prefixed `SHADOW`. A reviewer can gate only under the commander's explicit per-outage promotion recorded on the bead; see `runbooks/RUNNING_THE_LOOP.md`, "Gating reviewer down", and `verify.ts --fallback-promotion` below. Automatic review selection never uses a shadow. `seat-env.sh`, `adapter.ts`, and reviewer selection reject present non-boolean values. |
 | `provider` | Whose model the seat runs (`anthropic`, `openai`, ...), narrowed by harness: `claude-code` is first-party `anthropic`, `codex` is `openai-codex` or `openai`, and `pi` uses Pi's provider list. Recorded so the roster answers "which vendor is this seat" without starting the seat. |
 | `model` | The model the seat is pinned to, in the provider's own id format. Pin reasoning effort by appending Pi's thinking-level suffix to this same string, for example `gpt-5.6-sol:high`. |
 | `skills` | Optional array of skill directory paths passed to Pi as repeated `--skill <path>` arguments at spawn, resume, reset, and dispatch relaunch. Paths are tilde-expanded like `account.dir`. `adapter.ts` validates the field while reading `seats/seats.json`: it must be an array of non-empty strings if present, and every path must exist, or the adapter STOPs naming the seat and the missing path before spawning Pi. |
@@ -422,9 +422,10 @@ time Pi takes configuration. Brief resolution prefers the installed fleet
 layout (`wheelhouse/fleet/WORKER.md` for workers, `wheelhouse/crew/<ROLE>.md`
 for other roles) and falls back to the template layout (`contracts/<ROLE>.md`).
 The process outlives
-the adapter: its stdin is a FIFO under `seats/run/`, its stdout appends raw
-to `seats/logs/<seat>.jsonl` (every event, one JSON line each; stderr lands
-beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
+the adapter: its stdin is a FIFO under `seats/run/`, its stdout appends
+to `seats/logs/<seat>.jsonl` (one JSON record per line; Pi delta text is replaced
+by content-free activity evidence and tool-update payloads are bounded; stderr
+lands beside it in `<seat>.stderr.log`). A later command opens the FIFO, writes
 one line, and reads the response out of the log. A per-FIFO PID lock
 (`<seat>.stdin.write.lock`) covers the entire LF-terminated command, including
 all non-blocking partial writes: concurrent adapters cannot insert a command's
@@ -458,6 +459,53 @@ seat, attached to the same session, when its cwd does not already match the
 seat worktree.
 
 `probe` runs the rostered account, provider, and model through a one-shot `pi -p --no-session` liveness turn that asks only for `OK`; it does not need or create a bead worktree and writes no bead comment. A successful probe prints `OK`; a provider failure prints pi's stdout/stderr verbatim and exits with pi's status.
+
+### Silent model streams and long commands
+
+A live PID or successful `get_state` response does not mean its model is making
+progress. The herald's existing alert pass (normally every 60 seconds) observes
+each live seat's **own** event log. A mid-turn model stream with no progress for
+`seat-quiet-minutes=20` in `wheelhouse/.template-source` is shown as `STALLED` by
+`adapter.ts status`; the next alert pass appends one per-seat inbox row naming
+the seat, assigned task, last own event and its time. RPC responses do not
+advance that clock, even `isStreaming=false`: an unfinished turn still needs
+its completion event. A settled `agent_end`/`agent_settled` is exempt; a retrying
+`agent_end` (`willRetry=true`) is not settlement. An assignment alone is not
+proof that a model turn started. After copy-truncation, the detector recovers
+completion from the owned `.jsonl.1` archive when no new turn lifecycle is
+present; an old archive cannot override a newer own turn. Assigned-but-settled
+seats waiting on background work are a separate condition, not this watchdog.
+
+A condition still present after `seat-stall-need-after-minutes=15` additional
+minutes opens one notify need with seat/task machine fields. Repeated checks
+and herald restarts do not duplicate the inbox row or need. Progress,
+settlement, stopping or parking clears the condition and closes its need; a
+new task/quiet episode gets a new persistence grace. The equivalent millisecond
+overrides are `WHEELHOUSE_SEAT_QUIET_MS` (minimum 1000) and
+`WHEELHOUSE_SEAT_STALL_NEED_MS` (minimum 0). The detector never stops, aborts or
+restarts a seat: the commander diagnoses and redispatches it.
+
+**Keep long commands attached to their tool call.** A sweep/bench/tool can be
+quiet for hours without a model stream being dead. The adapter reports
+`TOOL WAIT` with the open tools and last event time; start/update/end events are
+correlated by tool-call ID, including parallel calls. That phase is exempt
+from the model quiet rule. After the final tool returns, the model quiet clock
+starts again. A hung tool is not diagnosed by this model-stream watchdog;
+inspect the named tool and its own progress/timeout evidence. If a command is
+backgrounded and the agent settles, arrange a collecting dispatch instead of
+promising to return—the settled seat is intentionally exempt.
+
+Pi logs preserve receipt timestamps and at most one content-free
+`stream_activity` record per second of actual incoming deltas; no heartbeat is
+manufactured by a timer. Thinking/text/tool-call delta text stays out of the
+persistent seat log. Tool-update output remains bounded. Normalized driver events
+also have receipt timestamps. Old un-stamped logs use file mtime on first
+observation, then persist the last progress key/time in the fleet snapshot so
+RPC-only appends cannot keep resetting it. Upgrade the seat logger on the next
+safe spawn/resume; already-running old log filters cannot retroactively recover
+discarded deltas. Checks require a running herald (or explicit
+`bun seats/alerts.ts check`); threshold detection occurs on the next pass, not
+an independent process supervisor timer.
 
 `status` prints an `ORPHAN:` line only for a confirmed duplicate seat process: a candidate must not be a descendant of the recorded seat pid, must either hold the seat FIFO or predate the recorded pid, and must still be present on a second scan a few seconds later. The line includes the remedy (`inspect pid ..., then stop it or run bun seats/recover.ts`) so transient child tools are not reported as duplicate seats and genuine duplicates say what to do next.
 
@@ -696,7 +744,7 @@ whatever the OS later did with that pid number.
 
 The reviewer seat comes from the roster: only entries with
 `"role": "reviewer"` qualify, including when the optional fourth argument
-names a seat explicitly. Role `verifier` is reserved for `walk.ts`. Before ANYTHING spawns, `verify.ts` compares the author seat's
+names a seat explicitly. Automatic selection excludes `shadow: true`, including when all non-shadow reviewers are busy or share the author account; it never silently promotes an idle mirror. An explicit shadow pick is a STOP unless `--fallback-promotion <comment-id>` references the commander's structured per-outage promotion on this bead for this seat and exact tip. That record must name the outage and distinct-account basis; the full format and procedure are in `runbooks/RUNNING_THE_LOOP.md`, "Gating reviewer down". The flag requires an explicit reviewer name, does not change the roster, and does not waive any ordinary account, evidence, sweep, verdict or push gate. Its final answer must carry the exact `FALLBACK GATE:` lead-in supplied in the prompt, outside fences, and cannot label its verdict `SHADOW`. The working verdict retains the promotion comment/actor, outage and account basis. Role `verifier` is reserved for `walk.ts`. Before ANYTHING spawns, `verify.ts` compares the author seat's
 `account.dir` (roster first, `seats/state.json` as fallback for a retired
 seat) against the reviewer's, both canonicalized — the same directory
 means the same `auth.json` means the same account, and that is a loud
@@ -934,7 +982,21 @@ Use canonical absolute paths and only a directory this run created/recorded as i
 
 Automatic cleanup also discovers `.wheelhouse-runs/<bead>*` inside registered fleet worktrees. Such scratch uses the same creation-record API with that worktree as `$ROOT`; cleanup never retroactively marks historical controls. Only closed-task scratch is eligible. Registered controls inside it must satisfy the worktree safety checks before any are removed through `git worktree remove`; cleanup then removes the scratch and prunes registrations. Open-task scratch, dirty/unmerged controls, anchors, live holders, and unmarked/foreign scratch are kept. This discovery is automatic-cleanup-only, not a widening of reviewed `prune` policy.
 
-`cleanup-identity.ts` is required beside `prune.ts`. On macOS/Linux, descriptor-relative no-follow operations and a runtime-directory `flock` guard lock transitions; lock removal is never recursive. Symlinked `seats`/`seats/run`, extra lock entries, nonregular/symlinked pid files and unparseable owners are refused with exit `2`. A canonical legacy lock containing only a numeric `pid` can be reclaimed only when that pid is provably dead; live owners are kept (`already running`, or `--wait`). New locks add a root/inode/pid/token ownership marker and release only that exact identity/content. Upgrade both files with cleanup idle: old installed code does not acquire the new transition mutex. The target rechecks close the probed D6/D7 windows; they are not a kernel-atomic recursive deletion or a universal defense against uncooperative filesystem changes after the last check.
+New scratch and cleanup-lock markers are version 2: `hostId` uses the **same provider and digest** as the sweep lock (`selftest-sweep-lock.ts`), not the mutable diagnostic `hostname`. They survive network-name changes without rewriting the marker or needing an alias cache. A different stable ID is refused even when the hostname matches. Creating a new ownership record requires an available hardware/machine ID; unlike sweep admission, cleanup does not publish hostname-derived v2 authority. Legacy v1 current-name records retain their original root/inode checks. After a name change, v1 recognition additionally requires that old name in the read-only, stable-ID-authenticated sweep `<lock>.host` cache (`WHEELHOUSE_SELFTEST_SWEEP_LOCK`, default `/tmp/wheelhouse-selftest-sweep.lock`). Missing, foreign, malformed or symlinked caches never authorize an unproven name. Unmarked folders remain unmarked.
+
+### Explicit legacy scratch host adoption
+
+A v1 scratch marker has no stable ID. If its old name cannot be proved locally, dispatch refuses and prints this **operator-only** recovery command. First establish that the folder really belongs to this install/task; matching metadata is necessary, not independent proof of its historical machine. With cleanup/prune and other scratch writers idle (and no `cleanup.lock` present), run from the install root:
+
+```bash
+bun seats/cleanup-identity.ts adopt-v1 --root "$PWD" --target "$PWD/.wheelhouse-runs/<bead>" --bead '<bead>'
+```
+
+This explicit authorization checks the existing v1 schema, canonical root, direct scratch target, directory inode and bead before atomically replacing only its marker with a v2 record for this machine. It never runs automatically, never changes payload files, and rejects unmarked folders, v2 markers (including foreign stable IDs), mismatched metadata and symlinked paths. It does not override a cleanup lease. All cooperating transitions share the runtime-directory mutex; keep other writers idle because the final check and replacement are not a kernel compare-and-swap against uncooperative writers.
+
+Adoption emits JSON on stdout and durable `adopt-v1-intent` / `adopted-v1` records in `seats/logs/cleanup-adoptions.jsonl`, including root/target/bead/inode, old hostname, old/new marker hashes and the new stable ID. The audit path is no-follow, regular, single-link and current-user-owned. An intent alone is **not** completed adoption. A failure after marker publication explicitly says v2 was committed: inspect the marker and audit rather than blindly retrying. Dispatch/cleanup still cannot adopt an unproven folder themselves. `cleanup-host.selftest.sh` covers the rename/refusal/adoption boundaries and failing removal controls; `cleanup.selftest.sh` covers actual adapter redispatch after a stored-name change.
+
+`cleanup-identity.ts` and `selftest-sweep-lock.ts` are required beside `prune.ts` and `adapter.ts`. On macOS/Linux, descriptor-relative no-follow operations and a runtime-directory `flock` guard lock transitions; lock removal is never recursive. Symlinked `seats`/`seats/run`, extra lock entries, nonregular/symlinked pid files and unparseable owners are refused with exit `2`. A canonical legacy lock containing only a numeric `pid` can be reclaimed only when that pid is provably dead; live owners are kept (`already running`, or `--wait`). New locks add a root/inode/pid/token ownership marker and release only that exact identity/content. Upgrade these files together with cleanup idle: old installed code does not acquire the new transition mutex, and old readers refuse v2 cleanup/scratch records rather than ignoring their stable ID. The target rechecks close the probed D6/D7 windows; they are not a kernel-atomic recursive deletion or a universal defense against uncooperative filesystem changes after the last check.
 
 The reviewed path stays for exceptions only — a `kept` row a person has looked at and judged:
 

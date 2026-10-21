@@ -298,7 +298,10 @@ function handle(cmd) {
           out({ type: "tool_execution_start", toolCallId: "midtool-1", toolName: "Bash", command: "sleep 1000" });
           return;
         }
-        if (/TOOLBIG/.test(cmd.message)) out({ type: "tool_execution_update", output: "X".repeat(200000) });
+        if (/TOOLBIG/.test(cmd.message)) {
+          out({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "private streaming payload" } });
+          out({ type: "tool_execution_update", output: "X".repeat(200000) });
+        }
         out({ type: "message_end", message: { role: "assistant",
               content: [{ type: "text", text: "echo: " + cmd.message }] } });
         out({ type: "agent_end", messages: [] });
@@ -1241,8 +1244,8 @@ run stop worker-1 >/dev/null 2>&1
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 LOG_MARK=$(wc -c < "$LOG" | tr -d ' ')
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_LOG_EVENT_STRING_BYTES=1024 bun "$RUN_PROJ/seats/adapter.ts" dispatch worker-1 bead-x "TOOLBIG payload" 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes' && grep -q 'wheelhouse log truncated' "$LOG"; then
-  pass "tool_execution_update payload is trimmed in the seat log with byte count noted"
+if [ $RC -eq 0 ] && wait_for_from "$LOG" "$LOG_MARK" 'wheelhouse_truncated_bytes' && grep -q 'wheelhouse log truncated' "$LOG" && grep -q '"type":"stream_activity"' "$LOG"; then
+  pass "spawned seat records redacted stream activity and trims tool output with byte count noted"
 else fail "tool_execution_update payload was not trimmed (exit $RC): $OUT"; fi
 
 DELTA_STREAM="$FIX/delta-stream.jsonl"
@@ -1258,16 +1261,10 @@ cat > "$DELTA_STREAM" <<'JSONL'
 {"type":"agent_end","messages":[]}
 {"id":"delta-response","type":"response","command":"prompt","success":true}
 JSONL
-bun - "$RUN_PROJ/seats/adapter.ts" "$FIX/log-filter.js" <<'JS'
-const fs=(await import('node:fs')).default,[src,out]=process.argv.slice(2),s=fs.readFileSync(src,'utf8');
-const matches=[...s.matchAll(/const script = `([\s\S]*?)`;\n  return/g)];
-if(matches.length!==1) throw new Error('expected exactly one logFilterShell script');
-fs.writeFileSync(out,matches[0][1]);
-JS
-RC=0; node "$FIX/log-filter.js" < "$DELTA_STREAM" > "$DELTA_SLICE" 2> "$FIX/log-filter.err" || RC=$?
+RC=0; bun "$RUN_PROJ/seats/seat-event-log.ts" < "$DELTA_STREAM" > "$DELTA_SLICE" 2> "$FIX/log-filter.err" || RC=$?
 DELTA_COUNT="$(bun -e 'console.log((await import("node:fs")).default.readFileSync(process.argv[1],"utf8").split("_delta").length-1)' "$DELTA_SLICE")"
-if [ $RC -eq 0 ] && [ "$DELTA_COUNT" = 0 ] && grep -q '"type":"message_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_end"' "$DELTA_SLICE" && grep -q 'echo: DELTAS payload' "$DELTA_SLICE" && grep -q '"type":"response"' "$DELTA_SLICE"; then
-  pass "message_update *_delta stream frames are dropped while settle, tool, and response events remain"
+if [ $RC -eq 0 ] && [ "$DELTA_COUNT" = 0 ] && grep -q '"type":"stream_activity"' "$DELTA_SLICE" && grep -q '"type":"message_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_start"' "$DELTA_SLICE" && grep -q '"type":"tool_execution_end"' "$DELTA_SLICE" && grep -q 'echo: DELTAS payload' "$DELTA_SLICE" && grep -q '"type":"response"' "$DELTA_SLICE"; then
+  pass "delta text is dropped but receipt activity, settle, tool, and response events remain"
 else fail "delta filtering wrong (exit $RC delta_count=$DELTA_COUNT err=$(cat "$FIX/log-filter.err" 2>/dev/null) slice=$(cat "$DELTA_SLICE" 2>/dev/null))"; fi
 
 printf '%s\n' '{"type":"filler","text":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}' '{"type":"agent_end","messages":[]}' >> "$LOG"

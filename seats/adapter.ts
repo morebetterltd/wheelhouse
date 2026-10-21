@@ -74,6 +74,7 @@ import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
 import { waitForStateLock, StateLockCancelled } from "./state-lock";
 import { prepareTaskScratch } from "./cleanup-identity";
+import { readStreamObservations, seatStreamHealth } from "./seat-stream-health";
 
 interface SeatDriver {
   readonly name: string;
@@ -902,8 +903,7 @@ function processCwd(pid: number): string | null {
 }
 
 function logFilterShell(): string {
-  const script = `import readline from 'node:readline'; const limit=Number(process.env.WHEELHOUSE_LOG_EVENT_STRING_BYTES||65536); function trim(v){ if(typeof v==='string' && Buffer.byteLength(v)>limit){ const b=Buffer.from(v); return b.subarray(0,limit).toString('utf8')+'\\n[wheelhouse log truncated '+(b.length-limit)+' bytes; full output remains in the pi session file]'; } if(Array.isArray(v)) return v.map(trim); if(v&&typeof v==='object'){ for(const k of Object.keys(v)) v[k]=trim(v[k]); } return v;} function isDelta(o){const ev=o&&typeof o==='object'?(o.assistantMessageEvent||o.delta||o):null; const t=String(ev&&ev.type||''); return o&&o.type==='message_update'&&/_delta$/.test(t);} const rl=readline.createInterface({input:process.stdin}); rl.on('line',l=>{try{const o=JSON.parse(l); if(isDelta(o)) return; if(o.type==='tool_execution_update'){const before=Buffer.byteLength(l); const t=trim(o); const after=Buffer.byteLength(JSON.stringify(t)); if(after<before) t.wheelhouse_truncated_bytes=before-after; process.stdout.write(JSON.stringify(t)+'\\n');} else process.stdout.write(l+'\\n');}catch{process.stdout.write(l+'\\n')}});`;
-  return `'${process.execPath.replace(/'/g, `'\\''`)}' -e '${script.replace(/'/g, `'\\''`)}'`;
+  return [process.execPath, path.join(SEATS_DIR, "seat-event-log.ts")].map(s => `'${s.replace(/'/g, `'\\''`)}'`).join(" ");
 }
 
 function requirePiModelPin(name: string, entry: SeatEntry): void {
@@ -1897,6 +1897,7 @@ async function cmdStatus(): Promise<void> {
   }
   const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   const rows = processRows();
+  const observations = readStreamObservations(ROOT);
   let sawSettled = false;
   for (const name of names) {
     const ownedLog = ownedSeatLog(name, state.seats[name]?.log);
@@ -1911,7 +1912,8 @@ async function cmdStatus(): Promise<void> {
     // graceful stop earns would be a failure conflated into a normal state.
     const died = !alive && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
-    const stalled = Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log));
+    const stream = ownedLog && alive ? seatStreamHealth(ROOT, name, rec, observations[name]) : null;
+    const stalled = Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log)) || Boolean(stream?.stalled);
     const last = ownedLog ? lastEvent(rec.log) : "-";
     // Status reports observed process/log facts, not a guessed get_state
     // deadline. A live, slow responder is not evidence of a wedged seat.
@@ -1934,6 +1936,8 @@ async function cmdStatus(): Promise<void> {
     if (stalled && rec.lastStalledEvent) {
       console.log(`${" ".repeat(16)} STALLED: ${rec.lastStalledEvent.detail}`);
     }
+    if (stream?.stalled) console.log(`${" ".repeat(16)} STALLED: no own stream event for ${Math.floor(stream.quietForMs / 1000)}s; last ${stream.lastEvent} at ${stream.lastEventAt}; commander inspect/redispatch (no automatic restart)`);
+    else if (stream?.phase === "tool") console.log(`${" ".repeat(16)} TOOL WAIT: ${stream.pendingTools.join(", ")}; last stream event ${stream.lastEventAt}; not a model-stream stall`);
     for (const orphan of orphanMatchesFor(name, rec, rows, roster[name])) {
       if (orphan.fixtureBead) {
         console.log(`${" ".repeat(16)} fixture leak (${orphan.fixtureBead}): pid ${orphan.pid} matches rostered seat ${name} but is running under a .wheelhouse-runs fixture root; reason: ${orphan.reason}; remedy: kill the fixture process and inspect fixture cleanup`);
