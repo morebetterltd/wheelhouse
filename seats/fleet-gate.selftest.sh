@@ -55,7 +55,7 @@ exit 1
 SH
 chmod +x "$BIN/bd" "$BIN/gh"
 ( cd "$PROJ" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats wheelhouse contracts && git commit -q -m base )
-(sleep 1000) & P1=$!; (sleep 1000) & P2=$!
+(cd "$FIX" && exec sleep 1000) & P1=$!; (cd "$FIX" && exec sleep 1000) & P2=$!
 cat > "$PROJ/seats/state.json" <<JSON
 {"seats":{"worker-a":{"pid":$P1,"log":"$PROJ/seats/logs/worker-a.jsonl"},"worker-b":{"pid":$P2,"log":"$PROJ/seats/logs/worker-b.jsonl"}}}
 JSON

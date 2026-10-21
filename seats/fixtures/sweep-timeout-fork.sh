@@ -30,7 +30,7 @@ SH
       print "  if ! :; then"; removed++; next
     }
     { print }
-    /^  ps -axo .* > "\$dir\/processes" \|\| return 2$/ {
+    /^  LC_ALL=C ps -ww -axo .* > "\$dir\/processes" \|\| return 2$/ {
       while ((getline line < hook) > 0) print line
       close(hook); injected++
     }
