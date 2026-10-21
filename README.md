@@ -74,7 +74,7 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 ├── .beads/                      the work graph
 ├── .agents/skills/
 │   ├── intent/                  signal to plain-words what-and-why; SKILL.md and worked examples
-│   └── outcomes/                intent to outcome contract — arriving in the same producer goal
+│   └── outcomes/                intent to consumer/surface/check outcomes; SKILL.md and worked contracts
 ├── .claude/skills/              symlinks for Claude Code, pointing to .agents/skills/
 ├── seats/                       the seat machinery, at the root because every path it prints is root-relative
 │   ├── seats.json               generated — the roster: role, harness, provider, model, auth route, account dir per seat; never a secret

@@ -20,6 +20,16 @@ leg(){
   out="$(bun "$CONTRACT" check --file "$HERE/fixtures/contracts/$name.md" 2>&1)" || rc=$?
   if [ "$rc" = "$expected" ] && { [ -z "$error" ] || grep -Fq "$error" <<<"$out"; }; then pass "$name (exit $rc)"; else fail "$name expected exit $expected + '$error', got $rc: $out"; fi
 }
+outcomes_skill_leg(){
+  local rc=0
+  bun "$HERE/fixtures/outcomes-skill.ts" "$HERE/.." "$CONTRACT" "$FIX/outcomes" || rc=$?
+  [ "$rc" = 0 ] && pass 'outcomes skill examples and consumer/check mismatch' || fail "outcomes skill examples and consumer/check mismatch (exit $rc)"
+}
+if [ "${WHEELHOUSE_OUTCOMES_SKILL_ONLY:-0}" = 1 ]; then
+  outcomes_skill_leg
+  [ "$FAILED" = 0 ] && exit 0
+  exit 1
+fi
 # Intent-only linter never reads the graph. All fixtures are owned by this run.
 mkdir -p "$FIX/intents"
 intent_leg(){
@@ -171,5 +181,6 @@ console.log(`Signal/trace checks: ${passed} PASS / ${failed} FAIL`);process.exit
 JS
 SIGNAL_RC=$?
 [ "$SIGNAL_RC" = 0 ] || FAILED=$((FAILED+1))
+outcomes_skill_leg
 if [ "$FAILED" = 0 ]; then echo 'contract.selftest: PASS'; exit 0; fi
 echo "contract.selftest: FAIL ($FAILED failures)"; exit 1
