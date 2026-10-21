@@ -57,8 +57,11 @@ signal_suite_tree(){
   SUITE_TREE_QUIESCENT=1
   SUITE_SURVIVORS=0
   local previous_pids=() previous_groups=() previous_births=()
-  read -r owner group born < "$dir/owner" || return 2
-  [ "$owner" = "$root" ] && [ "$group" = "$root" ] && [ "$group" -gt 1 ] && [ "$group" != "$RUNNER_PGID" ] && [ -n "$born" ] || return 2
+  read -r owner group weekday month day clock year < "$dir/owner" || return 2
+  # lstart pads single-digit days. Compare date fields, not its display spaces,
+  # just as the widened argv-bearing process census below does.
+  born="$weekday $month $day $clock $year"
+  [ "$owner" = "$root" ] && [ "$group" = "$root" ] && [ "$group" -gt 1 ] && [ "$group" != "$RUNNER_PGID" ] && [ -n "$year" ] || return 2
   [ -d "$dir/tmp" ] && [ ! -L "$dir/tmp" ] || return 2
   # A private per-suite TMPDIR also attributes daemonized fixture children
   # after the leader exits. Use native records, not formatted grep matches;

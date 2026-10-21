@@ -14,4 +14,5 @@ git -C "$PROJECT" init -q -b main || exit 2
 git -C "$PROJECT" add seats || exit 2
 bun "$HERE/fixtures/sweep-survivors.ts" "$FIX" "$PROJECT/seats" || exit "$?"
 bun "$HERE/fixtures/sweep-survivor-canaries.ts" "$FIX" "$PROJECT/seats" "$HERE" || exit "$?"
+bun "$HERE/fixtures/sweep-owner-birth.ts" "$FIX" "$PROJECT/seats" || exit "$?"
 echo 'selftest-sweep-processes: PASS'
