@@ -32,6 +32,8 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 # phases still decide the exit code.
 #
 # Usage: verify.selftest.sh [path-to-verify.ts]
+# Focused load case: WHEELHOUSE_VERIFY_SELFTEST_CASE=bead-progress-past-total
+# (same setup, CLI and assertions as the full suite; no other phases run).
 #
 # Exit 0 = verify.ts works here. Non-zero = read the FAIL lines: a failure
 # in phases 1-8 or the real leg means verify.ts broke; a canary failure
@@ -687,6 +689,27 @@ VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/reviewer/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/reviewer/cwd.txt"
 
+# Shared by the full suite and focused load repetitions: the same actual CLI,
+# fixture Pi, acknowledged clock generations and verdict/proof assertions.
+progress_past_total() {
+  cat > "$REPLY" <<'EOF'
+Finished after quoting the previous review without being reaped mid-run.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED
+EOF
+  WATCHDOG_DIR="$(mktemp -d "$FIX/progress-clock.XXXXXX")"
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" progress bead-progress-past-total fleet/bead-1 worker-1 reviewer --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
+  if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && [ -s "$WATCHDOG_DIR/progress-proof" ]; then
+    pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
+  else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
+}
+if [ -n "${WHEELHOUSE_VERIFY_SELFTEST_CASE:-}" ]; then
+  [ "$WHEELHOUSE_VERIFY_SELFTEST_CASE" = bead-progress-past-total ] || { echo "unknown verify selftest case: $WHEELHOUSE_VERIFY_SELFTEST_CASE" >&2; exit 2; }
+  progress_past_total
+  [ "$FAILED" = 0 ]
+  exit $?
+fi
+
 phase "contract gate: no-outcomes review is refused before harness spawn"
 # The gate-removed negative must reach a normally answering harness, not fail
 # because the reply fixture has not been created yet.
@@ -1320,11 +1343,7 @@ OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIM
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143" && grep -q 'VERDICT: APPROVE' "$VDIR/bead-pi-quoted-verdict.md" 2>/dev/null; then
   pass "pi quoted mid-run verdict is not reaped before agent_end"
 else fail "pi quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
-WATCHDOG_DIR="$(mktemp -d "$FIX/progress-clock.XXXXXX")"
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" progress bead-progress-past-total fleet/bead-1 worker-1 reviewer --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && [ -s "$WATCHDOG_DIR/progress-proof" ]; then
-  pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
-else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
+progress_past_total
 WATCHDOG_DIR="$(mktemp -d "$FIX/silent-readiness.XXXXXX")"
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" silent bead-silent fleet/bead-1 worker-1 reviewer 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && [ -f "$WATCHDOG_DIR/expired-first" ] && says "reviewer emitted no stdout/stderr within" && says "first-output deadline" && says "--first-output-timeout-ms"; then
