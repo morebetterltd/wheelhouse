@@ -2197,30 +2197,28 @@ if grep -q '/wheelhouse-verify-' "$CORE_GUARD_CLOBBER" 2>/dev/null && ! grep -qF
 else fail "restore-path fixture did not write a scratch wheelhouse-verify path: $(cat "$CORE_GUARD_CLOBBER" 2>/dev/null)"; fi
 
 phase "10. sweep — a SIGKILLed run's scratch worktree and stale SHA branch are reclaimed"
-# sweepStaleScratchWorktrees() runs at the very top of main(), before argv
-# is even validated, so a bare no-args invocation (an immediate usage STOP)
-# exercises it as cheaply as a full round trip does.
-ORPHAN_DIR="$FIX/wheelhouse-verify-999999999-orphan"
-REVIEW_ORPHAN_DIR="$FIX/wheelhouse-review-999999998-orphan"
+# Keep every janitor target, including os.tmpdir(), inside this invocation's FIX.
+export TMPDIR="$FIX/scratch-tmp"
+mkdir -p "$TMPDIR" "$FIX/janitor-safety"
+if bun "$HERE/fixtures/janitor-safety.ts" "$PROJ/seats/verify.ts" "$FIX/janitor-safety"; then
+  pass "janitor preserves main, outside-temp, unrecorded and Git-refused checkouts"
+else fail "janitor ownership safety regression failed"; fi
+# Plant real makeScratchCwd allocations, not unrelated checkouts adopted by name.
+# The benign owners kill themselves only after writing a receipt, bypassing EXIT.
+for kind in verify review; do
+  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/scratch-owner.ts" dead "$PROJ/seats/verify.ts" "$PROJ" "$kind" "$FIX/orphan-$kind.json" > "$FIX/orphan-$kind.out" 2>&1
+  owner_rc=$?
+  [ "$owner_rc" = 137 ] && [ -s "$FIX/orphan-$kind.json" ] || fail "could not plant recorded $kind orphan (rc=$owner_rc)"
+done
+ORPHAN_DIR="$(node -pe 'require(process.argv[1]).dir' "$FIX/orphan-verify.json")"
+REVIEW_ORPHAN_DIR="$(node -pe 'require(process.argv[1]).dir' "$FIX/orphan-review.json")"
 SHA_BRANCH="0123456789abcdef0123456789abcdef01234567"
-mkdir -p "$ORPHAN_DIR" "$REVIEW_ORPHAN_DIR"
-git -C "$PROJ" worktree add --detach "$ORPHAN_DIR" HEAD >/dev/null 2>&1
-git -C "$PROJ" worktree add --detach "$REVIEW_ORPHAN_DIR" HEAD >/dev/null 2>&1
 git -C "$PROJ" branch "$SHA_BRANCH" HEAD >/dev/null 2>&1
-bash -c '
-  pid=$$
-  dir="$1/wheelhouse-verify-${pid}-live"
-  mkdir -p "$dir"
-  git -C "$2" worktree add --detach "$dir" HEAD >/dev/null 2>&1
-  printf "%s\n%s\n" "$pid" "$dir" > "$1/live-owner.txt"
-  deadline=$((SECONDS+300))
-  while [ ! -f "$1/live-owner.release" ]; do [ "$SECONDS" -lt "$deadline" ] || exit 124; sleep 0.05; done
-' _ "$FIX" "$PROJ" &
-LIVE_OWNER_CHILD=$!
+HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/scratch-owner.ts" live "$PROJ/seats/verify.ts" "$PROJ" verify "$FIX/live-owner.json" > "$FIX/live-owner.out" 2>&1 &
+LIVE_OWNER_PID=$!
 LIVE_READY_DEADLINE=$((SECONDS+300))
-while [ ! -f "$FIX/live-owner.txt" ] && kill -0 "$LIVE_OWNER_CHILD" 2>/dev/null && [ "$SECONDS" -lt "$LIVE_READY_DEADLINE" ]; do sleep 0.05; done
-LIVE_OWNER_PID=$(sed -n '1p' "$FIX/live-owner.txt")
-LIVE_DIR=$(sed -n '2p' "$FIX/live-owner.txt")
+while [ ! -s "$FIX/live-owner.json" ] && kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ "$SECONDS" -lt "$LIVE_READY_DEADLINE" ]; do sleep 0.05; done
+LIVE_DIR="$(node -pe 'require(process.argv[1]).dir' "$FIX/live-owner.json")"
 if git -C "$PROJ" worktree list | grep -F >/dev/null "$ORPHAN_DIR" \
    && git -C "$PROJ" worktree list | grep -F >/dev/null "$REVIEW_ORPHAN_DIR" \
    && git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" \
@@ -2277,12 +2275,9 @@ kill "$CONCURRENT_PID_A" "$CONCURRENT_PID_B" 2>/dev/null || true
 wait "$CONCURRENT_PID_A" 2>/dev/null || true
 wait "$CONCURRENT_PID_B" 2>/dev/null || true
 
-if [ "$LIVE_OWNER_PID" = "$LIVE_OWNER_CHILD" ] && kill -0 "$LIVE_OWNER_CHILD" 2>/dev/null; then
-  printf 'release\n' > "$FIX/live-owner.release"
-  wait "$LIVE_OWNER_CHILD" 2>/dev/null || true
-else
-  fail "live scratch owner exited before its release (recorded=$LIVE_OWNER_PID child=$LIVE_OWNER_CHILD)"
-fi
+kill -KILL "$LIVE_OWNER_PID" 2>/dev/null
+wait "$LIVE_OWNER_PID" 2>/dev/null || true
+i=0; while kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 run   # a second sweep pass, now that the "live" owner has actually exited
 if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
   pass "once its owner pid actually exits, a later sweep reclaims that worktree too"
@@ -2299,17 +2294,20 @@ KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
 (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
+PI_PID_FILE="$HOME_FIX/.pi-seats-kill/reviewer/pi-pid.txt"
 KILLED_READY_DEADLINE=$((SECONDS+300))
 while [ "$SECONDS" -lt "$KILLED_READY_DEADLINE" ]; do
   KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
-  [ -n "$KILLED_DIR" ] && break
+  # Child launch proves makeScratchCwd finished its ownership record, not just
+  # Git registration. Killing before that record must fail closed, not adopt it.
+  [ -n "$KILLED_DIR" ] && [ -s "$PI_PID_FILE" ] && break
   sleep 0.05
 done
 if [ -n "$KILLED_DIR" ]; then pass "killed one-shot fixture reached a registered scratch worktree"
 else fail "killed one-shot fixture never registered a scratch worktree: $(cat "$OUT_FILE" 2>/dev/null)"; fi
 kill -9 "$KILLED_DISPATCHER_PID" 2>/dev/null || true
 wait "$KILLED_DISPATCHER_PID" 2>/dev/null || true
-PI_PID_FILE="$HOME_FIX/.pi-seats-kill/reviewer/pi-pid.txt"
+
 if [ -s "$PI_PID_FILE" ]; then kill "$(cat "$PI_PID_FILE")" 2>/dev/null || true; fi
 run   # sweep the killed run's scratch worktree and stale SHA branch
 if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -F >/dev/null "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
