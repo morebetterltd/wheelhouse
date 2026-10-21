@@ -856,30 +856,37 @@ mkdir -p "$ROOT_GONE/seats/logs" "$ROOT_GONE/seats/run"
 printf '%s\n' '{"logs":{},"seen":[],"alerts":{"lastCheckAt":"2999-01-01T00:00:00Z"},"staffing":{"lastCheckAt":"2999-01-01T00:00:00Z"}}' > "$ROOT_GONE/seats/herald.state.json"
 WHEELHOUSE_HERALD_ROOT="$ROOT_GONE" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=20 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=20 bun "$ROOT/seats/herald.ts" > "$FIX/root-gone.out" 2> "$FIX/root-gone.err" &
 ROOT_GONE_PID=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  [ -s "$ROOT_GONE/seats/run/herald.pid" ] && break
-  sleep 0.05
-done
-for _ in 1 2 3 4 5; do
-  rm -rf "$ROOT_GONE" 2>/dev/null
-  [ ! -e "$ROOT_GONE" ] && break
-  sleep 0.1
-done
-if [ -e "$ROOT_GONE" ]; then
-  fail "fixture root-gone directory could not be removed before disappearance assertion"
-  kill "$ROOT_GONE_PID" 2>/dev/null || true
+# PID publication follows fixture-owner validation and lock acquisition. Do not
+# delete the root while the child is still starting; a safety cap is a failure.
+wait_root_gone_event(){
+  with_timeout 120 bash -c '
+    mode="$1"; pid="$2"; file="$3"
+    while kill -0 "$pid" 2>/dev/null; do
+      state="$(ps -p "$pid" -o stat= 2>/dev/null)" || state=""
+      case "$state" in *Z*) [ "$mode" = exit ]; exit $?;; esac
+      if [ "$mode" = ready ] && [ -n "$state" ] && [ -s "$file" ] && IFS= read -r advertised < "$file" && [ "$advertised" = "$pid" ]; then exit 0; fi
+      sleep 0.05
+    done
+    [ "$mode" = exit ]
+  ' root-gone-event "$1" "$ROOT_GONE_PID" "$ROOT_GONE/seats/run/herald.pid"
+}
+if ! wait_root_gone_event ready; then
+  fail "root-gone herald did not publish its live PID before the startup safety cap (err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
+  selftest_stop_herald_child "$ROOT_GONE_PID"
 else
-  for _ in $(seq 1 100); do
-    kill -0 "$ROOT_GONE_PID" 2>/dev/null || break
-    sleep 0.1
-  done
-  ROOT_GONE_STAT="$(ps -p "$ROOT_GONE_PID" -o stat= 2>/dev/null | tr -d ' ' || true)"
-  if { ! kill -0 "$ROOT_GONE_PID" 2>/dev/null || case "$ROOT_GONE_STAT" in Z*) true;; *) false;; esac; } && grep -q 'project root disappeared' "$FIX/root-gone.err" 2>/dev/null; then
-    pass "herald exits when its project root disappears"
-    wait "$ROOT_GONE_PID" 2>/dev/null || true
+  DELETE_RC=0
+  with_timeout 120 bash -c 'while [ -e "$1" ]; do rm -rf "$1" 2>/dev/null; [ ! -e "$1" ] || sleep 0.05; done' remove-fixture-root "$ROOT_GONE" || DELETE_RC=$?
+  if [ "$DELETE_RC" != 0 ] || [ -e "$ROOT_GONE" ]; then
+    fail "fixture root-gone directory could not be removed before disappearance assertion"
+    selftest_stop_herald_child "$ROOT_GONE_PID"
+  elif wait_root_gone_event exit && grep -q 'project root disappeared' "$FIX/root-gone.err" 2>/dev/null; then
+    wait "$ROOT_GONE_PID"; ROOT_GONE_RC=$?
+    ROOT_GONE_PID=""
+    if [ "$ROOT_GONE_RC" = 0 ]; then pass "herald exits when its project root disappears"
+    else fail "herald disappearance exit was not clean (rc=$ROOT_GONE_RC)"; fi
   else
-    fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID stat=${ROOT_GONE_STAT:-none} out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
-    kill "$ROOT_GONE_PID" 2>/dev/null || true
+    fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
+    selftest_stop_herald_child "$ROOT_GONE_PID"
   fi
 fi
 
