@@ -41,6 +41,19 @@ assert.equal(run('git',['diff','HEAD','--','.beads']),'');
 fs.writeFileSync(process.env.GRAPH_CASE+'/payload.json',JSON.stringify({cwd,tip:run('git',['rev-parse','HEAD']),graph,nested:own,trackedClean:true}));
 console.log('PASS native scratch graph: tracked bytes intact, private write, plain subdirectory, nested repo and explicit BEADS_DIR independent');
 `;
+const taskDescription = `Trace: verify-graph regression fixture
+Signal: isa-gap: K1
+Skills: intent@1.0.0 outcomes@1.0.0
+
+Intent:
+Review the umbrella repository without changing its tracked graph or borrowing that graph for independent nested repositories.
+
+Outcomes:
+- O1 The pinned dispatcher sweep uses an isolated scratch graph while tracked umbrella bytes and independent graphs remain unchanged.
+  consumer: machine — the verify-graph fixture runner
+  surface: detached sweep worktree, native graph reads and writes, tracked bytes and review receipt
+  check: run — inspect the pinned tip, graph paths, tracked bytes, native exit status and scratch removal
+`;
 for (const mode of ["absent", "tracked", "umbrella-cli", "removed-tracked", "removed-umbrella-cli"]) {
   const dir = path.join(root, mode), project = path.join(dir, "umbrella"), bin = path.join(dir, "bin"), tmp = path.join(dir, "tmp"), home = path.join(dir, "home");
   for (const d of [project, bin, tmp, home]) fs.mkdirSync(d, { recursive: true });
@@ -53,7 +66,18 @@ for (const mode of ["absent", "tracked", "umbrella-cli", "removed-tracked", "rem
   fs.writeFileSync(path.join(bin, "bd"), `#!/usr/bin/env bash
 set -eu
 case "\${1:-}" in
- show) printf '## Done\\nUmbrella graph isolation works.\\n'; exit 0 ;;
+ show)
+   case " $* " in
+     *" --json "*) cat <<'GRAPH_FIXTURE_JSON'
+${JSON.stringify([{ id: "graph-fixture", title: "Umbrella graph isolation", description: taskDescription }])}
+GRAPH_FIXTURE_JSON
+       ;;
+     *) cat <<'GRAPH_FIXTURE_TEXT'
+${taskDescription}
+GRAPH_FIXTURE_TEXT
+       ;;
+   esac
+   exit 0 ;;
  comments) printf '[]\\n'; exit 0 ;;
 esac
 exec ${JSON.stringify(bd)} "$@"
