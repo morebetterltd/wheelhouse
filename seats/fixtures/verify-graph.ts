@@ -63,6 +63,7 @@ for (const mode of ["absent", "tracked", "umbrella-cli", "removed-tracked", "rem
   if (mode.startsWith("removed-")) fs.writeFileSync(verify, removed);
   fs.writeFileSync(path.join(project, "seats/graph-payload.ts"), payload);
   fs.writeFileSync(path.join(project, "seats/graph.selftest.sh"), '#!/usr/bin/env bash\nset -eu\nbun seats/graph-payload.ts\n');
+  fs.writeFileSync(path.join(project, "seats/selftest-core.list"), "graph.selftest.sh\n");
   fs.writeFileSync(path.join(bin, "bd"), `#!/usr/bin/env bash
 set -eu
 case "\${1:-}" in
