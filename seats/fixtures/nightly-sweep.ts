@@ -122,7 +122,7 @@ const core = mutant("core-only", '{ tier: "full", reason: "nightly" }', `{ tier:
 const prefix = mutant("no-prefix", 'logPrefix: "nightly."', 'logPrefix: ""'); assert.equal(cli("removed-prefix", prefix).status, 1); assert(!path.basename(read(output).logPath).startsWith("nightly."));
 const noRecord = mutant("no-record", '    writeNightlyJson(nightlyPath(root), record); finished = true;', '    void record; finished = true;'); fs.unlinkSync(output); assert.equal(cli("removed-record", noRecord).status, 1); assert(!fs.existsSync(output));
 const verifyFile = path.join(repo, "seats/verify.ts"), verify = fs.readFileSync(verifyFile, "utf8");
-fs.writeFileSync(verifyFile, once(verify, 'function removeScratchWorktree(repoRoot: string, dir: string): void {', 'function removeScratchWorktree(repoRoot: string, dir: string): void { return; // removed teardown'));
+fs.writeFileSync(verifyFile, once(verify, 'function removeScratchWorktree(repoRoot: string, dir: string): boolean {', 'function removeScratchWorktree(repoRoot: string, dir: string): boolean { return true; // removed teardown'));
 try { assert.equal(cli("removed-cleanup").status, 1); const residue = worktrees().filter(p => p !== repo); assert.equal(residue.length, 1); assert(residue.every(p => p.startsWith(tmp + path.sep))); for (const dir of residue) git("worktree", "remove", "--force", dir); }
 finally { fs.writeFileSync(verifyFile, verify); }
 assert.equal(state.nightlyConditions(repo).red.on, true);

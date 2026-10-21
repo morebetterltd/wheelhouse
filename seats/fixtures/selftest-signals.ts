@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
 // Proxy the real lock helper, recording actual releases, not idempotent results.
-if (process.argv[2] === 'release' || process.argv[2] === 'acquire') {
+if (['release', 'acquire', 'inherited'].includes(process.argv[2])) {
   const args = process.argv.slice(2);
   if (args[0] === 'release') fs.appendFileSync(process.env.SIGNAL_RELEASES!, 'release\n');
   const r = spawnSync('bun', [process.env.SIGNAL_REAL_LOCK_HELPER!, ...args], { stdio: 'inherit' });

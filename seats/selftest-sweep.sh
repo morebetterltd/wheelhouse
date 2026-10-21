@@ -22,6 +22,8 @@ SLEEP_SECS="${WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS:-1}"
 CURRENT_SUITE_PID=""
 WATCHDOG_PID=""
 SUITE_STATE=""
+STARTING_SUITE=0
+PENDING_INTERRUPT=""
 # Optional reviewer-owned registry. Only our fixed launcher publishes pgids;
 # suite payloads do not inherit this capability.
 REVIEW_GROUPS="${WHEELHOUSE_SELFTEST_REVIEW_GROUPS:-}"
@@ -174,6 +176,11 @@ retire_review_group(){
 }
 
 start_suite(){
+  # Bash can dispatch a trap between a background fork and its $! assignment.
+  # Defer cleanup across the whole allocation/publication transaction: otherwise
+  # an unpublished suite can escape, or an unpublished watchdog competes with
+  # finish_current_suite's synchronous fallback for the single stop token.
+  STARTING_SUITE=1
   SUITE_TIMED_OUT=0
   SUITE_STATE="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/wheelhouse-suite-deadline.XXXXXX")" || exit 2
   mkfifo -m 600 "$SUITE_STATE/control" "$SUITE_STATE/grace" || exit 2
@@ -196,6 +203,8 @@ start_suite(){
     suite "$1" "$SUITE_STATE" 8>&- 9>&- &
   CURRENT_SUITE_PID=$!
   suite_watchdog "$CURRENT_SUITE_PID" "$SUITE_STATE" & WATCHDOG_PID=$!
+  STARTING_SUITE=0
+  if [ -n "$PENDING_INTERRUPT" ]; then interrupt_sweep "$PENDING_INTERRUPT"; fi
 }
 
 finish_current_suite(){
@@ -219,6 +228,10 @@ finish_current_suite(){
 
 acquire_lock(){
   local previous="" result rc
+  # A project bench or verify.ts may already own admission. Reuse only a
+  # validated ancestor's token/FIFO head, never a caller-supplied bypass flag.
+  if bun "$LOCK_HELPER" inherited "$LOCK"; then return 0; else rc=$?; fi
+  [ "$rc" = 75 ] || { info "STOP: selftest-sweep ancestry check failed (exit $rc)"; exit 2; }
   while :; do
     result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
@@ -254,6 +267,8 @@ release_lock(){
 }
 finish_sweep(){
   local rc=$?
+  # A startup allocation error must not erase a signal already accepted there.
+  [ -z "$PENDING_INTERRUPT" ] || rc="$PENDING_INTERRUPT"
   trap - EXIT
   if [ -n "$CURRENT_SUITE_PID" ]; then finish_current_suite stop; fi
   if [ -n "$SUITE_STATE" ]; then exec 8>&- 9>&-; rm -rf "$SUITE_STATE"; fi
@@ -262,6 +277,10 @@ finish_sweep(){
 }
 interrupt_sweep(){
   local rc="$1"
+  if [ "$STARTING_SUITE" = 1 ]; then
+    [ -n "$PENDING_INTERRUPT" ] || PENDING_INTERRUPT="$rc"
+    return
+  fi
   trap '' INT TERM HUP
   finish_current_suite stop
   exit "$rc"

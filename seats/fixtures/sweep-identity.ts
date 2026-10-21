@@ -23,8 +23,8 @@ for (const hostname of ["network-before", "network-after"]) {
   const file = path.join(root, hostname + ".ts");
   fs.writeFileSync(file, source.replace("const HOST = os.hostname();", `const HOST = ${JSON.stringify(hostname)};`)); helpers.set(hostname, file);
 }
-function call(dir: string, op: string, token: string, owned = "", file = helper) {
-  const args = [file, op, path.join(dir, "host.lock"), String(process.pid), token, owned];
+function call(dir: string, op: string, token: string, owned = "", file = helper, pid = process.pid) {
+  const args = [file, op, path.join(dir, "host.lock"), String(pid), token, owned];
   const r = spawnSync("bun", args, { encoding: "utf8" });
   assert.equal(r.signal, null); assert(!r.error, String(r.error));
   fs.appendFileSync(path.join(dir, "calls.jsonl"), JSON.stringify({ command: ["bun", ...args], status: r.status, stdout: r.stdout, stderr: r.stderr }) + "\n");
@@ -52,7 +52,15 @@ function diagnostic(r: ReturnType<typeof call>, file: string, operation?: string
   return d;
 }
 async function network(dir: string) {
-  const before = helpers.get("network-before")!, after = helpers.get("network-after")!, owned = acquired(dir, before), lock = path.join(dir, "host.lock");
+  const before = helpers.get("network-before")!, after = helpers.get("network-after")!, lock = path.join(dir, "host.lock");
+  // Contention needs a sibling owner. An ancestor-owned token is now correctly
+  // inherited by the nested sweep instead of generating a waiter ticket.
+  const holder = spawn("bash", ["-c", "IFS= read -r release"], { cwd: dir, stdio: ["pipe", "ignore", "ignore"] });
+  const holderDone = new Promise<number | null>((resolve, reject) => { holder.once("error", reject); holder.once("close", resolve); });
+  try {
+  assert(holder.pid);
+  const admission = call(dir, "acquire", tokenA, "", before, holder.pid); assert.equal(admission.status, 0, admission.stderr);
+  const owned = admission.stdout.trim();
   const m = JSON.parse(fs.readFileSync(path.join(lock, marker), "utf8")); assert.equal(m.hostname, "network-before");
   const cache = JSON.parse(fs.readFileSync(path.join(lock + ".host", marker + "-host"), "utf8")); assert.match(cache.hostId, /^[0-9a-f]{64}$/);
   assert.equal(Object.hasOwn(m, "hostId"), false, "wire marker shape stays unchanged");
@@ -70,12 +78,13 @@ async function network(dir: string) {
     // Read a new-name ticket using the old reported hostname, then release an
     // old-name owner using the new one: all three marker kinds use the cache.
     const queued = call(dir, "acquire", tokenB, "", before); assert.equal(queued.status, 75, queued.stderr);
-    release(dir, owned, after);
+    const released = call(dir, "release", tokenA, owned, after, holder.pid); assert.equal(released.status, 0, released.stderr);
     assert.equal(await done, 0, out + err); assert.equal(fs.readFileSync(stamp, "utf8"), "ran\n");
     assert(!fs.existsSync(lock));
     const cancel = call(dir, "release", tokenB); assert.equal(cancel.status, 0, cancel.stderr); assert(!fs.existsSync(lock + ".queue"));
     const legacyOwned = acquired(dir); release(dir, legacyOwned);
   } finally { if (!closed) child.kill("SIGTERM"); await done; fs.writeFileSync(path.join(dir, "runner.out"), out); fs.writeFileSync(path.join(dir, "runner.err"), err); }
+  } finally { holder.stdin!.end("release\n"); assert.equal(await holderDone, 0); }
 }
 async function rewritten(dir: string, kind: "lock" | "queue" | "waiter") {
   const owned = acquired(dir), lock = path.join(dir, "host.lock");

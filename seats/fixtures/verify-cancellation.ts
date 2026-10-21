@@ -81,12 +81,27 @@ if [ "$role" = reviewer ] && [ "$CANCEL_PHASE" = reviewer-orphan ]; then exit 0;
 wait
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "pi"), '#!/usr/bin/env bash\nprintf \'entered\\n\' > "$CANCEL_CASE/pi-entered"\nexec bash "$CANCEL_IDLE" reviewer\n', { mode: 0o755 });
+  // Feed a valid work contract through the existing bd stub, never bypass the gate.
+  const contract = path.join(dir, "contract.md");
+  fs.writeFileSync(contract, `Trace: Verifier cancellation regression fixture
+Signal: isa-gap: K1
+Skills: intent@1.0.0 outcomes@1.0.0
+
+Intent:
+Stop a cancelled check promptly while leaving unrelated work alone. Callers need to know that its owned processes and temporary state have gone before another check can begin.
+
+Outcomes:
+- O1 Cancelling the full seats/*.selftest.sh sweep or review stops only owned processes before releasing its lock and scratch.
+  consumer: machine — the cancellation fixture controller
+  surface: recorded process groups, exit status, sweep lock and review worktrees
+  check: run — signal the active dispatcher and inspect group absence, lock readmission, scratch removal and the live unsignalled foreign canary
+`);
   fs.writeFileSync(path.join(bin, "bd"), `#!/usr/bin/env bash
 set -eu
 [ "\${1:-}" != --readonly ] || shift
 printf '%s\\n' "$1" >> "$CANCEL_CASE/bd-calls"
 case "$1" in
- show) printf '## Done\\nFull sweep passes\\n' ;;
+ show) cat "$CANCEL_CONTRACT" ;;
  metrics) [ "\${2:-}" = off ] ;;
  init) mkdir -p .beads ;;
  where) printf '{"path":"%s/.beads"}\\n' "$PWD" ;;
@@ -95,7 +110,7 @@ esac
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(project, "seats/selftest-core.list"), "idle.selftest.sh\n");
   fs.writeFileSync(path.join(project, "seats/idle.selftest.sh"), '#!/usr/bin/env bash\nset -eu\n[[ "$CANCEL_PHASE" = sweep* ]] || exit 0\nexec bash "$CANCEL_IDLE" suite\n', { mode: 0o755 });
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, CANCEL_CONTROLLER_PID: String(process.pid), WHEELHOUSE_SELFTEST_SWEEP_LOCK: targetLock };
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_CONTRACT: contract, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, CANCEL_CONTROLLER_PID: String(process.pid), WHEELHOUSE_SELFTEST_SWEEP_LOCK: targetLock };
   delete env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN;
   // Do not couple reviewer teardown to the runner's deadline grace.
   if (phase === "sweep-stubborn-long-grace") env.WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S = "120";

@@ -41,6 +41,7 @@ set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="${1:-$HERE/verify.ts}"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 VERIFY_DIR="$(cd "$(dirname "$VERIFY")" && pwd)"
 READINESS_DRIVER="${WHEELHOUSE_TEST_VERIFY_READINESS_DRIVER:-$(dirname "$SELFTEST_LIB")/fixtures/verify-readiness.ts}"
 BRIEFS="$VERIFY_DIR/briefs.ts"
@@ -121,7 +122,7 @@ fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
-if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) fs.appendFileSync(process.env.WHEELHOUSE_TEST_CHILD_LEDGER, JSON.stringify({event:"model",pid:process.pid}) + "\n");
+if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) require(process.env.WHEELHOUSE_TEST_CHILD_IDENTITY).recordChild({event:"model"});
 // The dispatcher must set BEADS_ACTOR in OUR env by construction (adapter.ts's
 // beadsActorFor mirrored here for the reviewer), not rely on an operator
 // export reaching this one-shot process.
@@ -467,7 +468,9 @@ case "$verb" in
     exit 0 ;;
   show)
     [ "${STUB_BD_SHOW_FAIL:-0}" != 1 ] || { echo 'fixture bd show unavailable' >&2; exit 1; }
-    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else printf 'fixture bead\n'; fi
+    if [[ " $* " = *" --json "* ]] && [ -n "${STUB_BD_JSON_SHOW_FILE:-}" ]; then
+      cat "$STUB_BD_JSON_SHOW_FILE"
+    elif [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi
     exit 0 ;;
   comments)
     [ "${STUB_BD_COMMENTS_FAIL:-0}" != 1 ] || { echo 'fixture bd comments unavailable' >&2; exit 1; }
@@ -684,6 +687,14 @@ VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/reviewer/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/reviewer/cwd.txt"
 
+phase "contract gate: no-outcomes review is refused before harness spawn"
+# The gate-removed negative must reach a normally answering harness, not fail
+# because the reply fixture has not been created yet.
+printf 'VERDICT: APPROVE\n' > "$REPLY"
+run_with_bd_show "$HERE/fixtures/contracts/no-outcomes.md" bead-no-outcomes fleet/bead-1 worker-1
+[ "$RC" = 6 ] && says 'STOP:' && says 'bead-no-outcomes is not a contract' && says 'bead-no-outcomes: contract: Outcomes: missing' && pass 'contract refusal: review exits 6 naming bead and Outcomes' || fail "contract refusal: review expected exit 6, got $RC: $OUT"
+[ ! -f "$VINVOKED" ] && pass 'contract refusal: no reviewer harness spawned' || fail 'contract refusal: reviewer harness was spawned'
+if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 phase "fixture containment — exclusive H4 publication and bounded release wait"
 BOUNDS_DIR="$(mktemp -d "$FIX/holder-bounds.XXXXXX")"
 if bun "$READINESS_DRIVER" "$VERIFY" "$BOUNDS_DIR" holder-bounds; then
@@ -862,7 +873,10 @@ git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
 SWEEP_BD_SHOW="$FIX/sweep-bd-show.txt"
-cat > "$SWEEP_BD_SHOW" <<'EOF'
+# Ordinary show overrides must pass the same contract gate as the default.
+# Refusal cases opt into explicit non-contract fixtures above.
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$SWEEP_BD_SHOW"
+cat >> "$SWEEP_BD_SHOW" <<'EOF'
 ○ bead-sweep [task]
 
 DESCRIPTION
@@ -871,6 +885,11 @@ DESCRIPTION
 
   The full seats/*.selftest.sh sweep passes.
 EOF
+if bun "$VERIFY_DIR/contract.ts" check --file "$SWEEP_BD_SHOW"; then
+  pass "sweep bd-show fixture is a valid work contract"
+else
+  fail "sweep bd-show fixture is not a contract"; exit 1
+fi
 RUN_PROJ="$SWEEP_PROJ"
 VARGV="$HOME_FIX/.pi-seats-sweep/reviewer/argv.json"
 SWEEP_LOCK="$FIX/review-sweep.lock"
@@ -895,7 +914,7 @@ check_dispatcher_receipts() {
       state-writes) outcome='The adapter recovers an abandoned empty state.lock and preserves live owners.' ;;
       process-isolation) outcome='The no-pi-spawned assertion counts only processes the test itself could have started.' ;;
     esac
-    printf 'Trace: %s regression\n\nIntent:\nCheck the claimed behavior independently.\n\nOutcomes:\n- O1 %s\n  consumer: machine — fixture runner\n  surface: fixture state and process records\n  check: run — inspect the claimed behavior\n' "$style" "$outcome" > "$SWEEP_GENERIC_CLAIM"
+    printf 'Trace: %s regression\nSignal: isa-gap: K1\nSkills: intent@1.0.0 outcomes@1.0.0\n\nIntent:\nCheck the claimed behavior independently.\n\nOutcomes:\n- O1 %s\n  consumer: machine — fixture runner\n  surface: fixture state and process records\n  check: run — inspect the claimed behavior\n' "$style" "$outcome" > "$SWEEP_GENERIC_CLAIM"
     WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" "bead-implicit-$style" fleet/bead-1 worker-1
     if [ "$RC" = 0 ] && [ -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" ] && grep -q '## Dispatcher full-sweep result' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md" && grep -q 'sweep evidence rc=0 log=' "$SWEEP_PROJ/seats/verdicts/bead-implicit-$style.md"; then
       pass "$style claim without sweep keywords still gets a dispatcher receipt"
@@ -930,13 +949,19 @@ JS
   done
   SWEEP_BAD_LOCK="$FIX/refused-review-sweep-$variant.lock"
   mkdir "$SWEEP_BAD_LOCK"
-  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_BAD_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-implicit-lock-refused fleet/bead-1 worker-1
-  if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'lock helper failed (exit 2)' && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-lock-refused.md" ] && [ -d "$SWEEP_BAD_LOCK" ] && bun - "$SWEEP_PROJ/seats/inbox.jsonl" <<'JS'
+  # Admission now refuses this before scratch/model/watchdog readiness. Use the
+  # ordinary CLI, not a driver that requires a ready model to prove this STOP.
+  local refusal_account
+  refusal_account="$(node -e 'console.log(require(process.argv[1]).seats.reviewer.account.dir.replace(/^~/,process.argv[2]))' "$SWEEP_PROJ/seats/seats.json" "$HOME_FIX")" || exit 2
+  [ -d "$refusal_account" ] || exit 2
+  rm -f "$refusal_account/invoked"
+  WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_BAD_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_with_bd_show "$SWEEP_GENERIC_CLAIM" bead-implicit-lock-refused fleet/bead-1 worker-1
+  if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'heavy-test admission check failed: 2' && [ ! -e "$refusal_account/invoked" ] && [ ! -f "$SWEEP_PROJ/seats/verdicts/bead-implicit-lock-refused.md" ] && [ -d "$SWEEP_BAD_LOCK" ] && bun - "$SWEEP_PROJ/seats/inbox.jsonl" <<'JS'
 import fs from 'node:fs';import assert from 'node:assert/strict';
 const rows=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(s=>JSON.parse(s)).filter(r=>r.title==='verifier gate STOP — bead-implicit-lock-refused');
-assert.equal(rows.length,1);assert.equal(rows[0].class,'distress');assert.equal(rows[0].state,'failed');assert.match(rows[0].detail,/INCOMPLETE review:.*lock helper failed \(exit 2\)/);
+assert.equal(rows.length,1);assert.equal(rows[0].class,'distress');assert.equal(rows[0].state,'failed');assert.match(rows[0].detail,/INCOMPLETE review:.*heavy-test admission check failed: 2/);
 JS
-  then pass 'runner lock refusal records an incomplete review with its reason, not BOUNCE';
+  then pass 'admission lock refusal is incomplete before model spawn, not BOUNCE';
   else fail "runner lock refusal recorded a completed review (rc=$RC out=$OUT)"; fi
   NO_SUITE_PROJ="$FIX/no-suite-proj-$variant"
   build_proj "$NO_SUITE_PROJ" "nosuite-$variant" "$VERIFY"
@@ -985,14 +1010,17 @@ SWEEP_PROJ="$SAVED_SWEEP_PROJ"; RUN_PROJ="$SWEEP_PROJ"; VERIFY="$SAVED_VERIFY"
 if [ "$CONTROL_RC" = 1 ] && [ ! -s "$FIX/receipt-control.err" ] && node - "$FIX/receipt-control.out" <<'JS'
 const fs=require('fs'),assert=require('assert/strict'),s=fs.readFileSync(process.argv[2],'utf8');
 const failed=s.split('\n').filter(line=>line.startsWith('  FAIL  '));
-assert.equal(failed.length,12,s);
-for(const phrase of ['lock-recovery claim bypassed','state-writes claim bypassed','process-isolation claim bypassed','unavailable bead text bypassed','failed implicit sweep approved','sweep setup error swallowed','missing dispatcher log accepted','setup failure recorded BOUNCE','setup failure recorded DISCOVER','runner lock refusal recorded a completed review','empty suite inventory recorded a completed review','missing branch runner approved']) assert(failed.some(line=>line.includes(phrase)),phrase);
+// Removing dispatcher receipt guards cannot remove the independent, earlier
+// admission refusal. It must still STOP without ever spawning the model.
+assert(s.includes('admission lock refusal is incomplete before model spawn, not BOUNCE'),s);
+assert.equal(failed.length,11,s);
+for(const phrase of ['lock-recovery claim bypassed','state-writes claim bypassed','process-isolation claim bypassed','unavailable bead text bypassed','failed implicit sweep approved','sweep setup error swallowed','missing dispatcher log accepted','setup failure recorded BOUNCE','setup failure recorded DISCOVER','empty suite inventory recorded a completed review','missing branch runner approved']) assert(failed.some(line=>line.includes(phrase)),phrase);
 JS
 then
   node - "$FIX/receipt-control.out" <<'JS'
 const fs=require('fs');for(const line of fs.readFileSync(process.argv[2],'utf8').split('\n').filter(line=>line.startsWith('  FAIL  '))) console.log('CONTROL (fix removed) '+line.trim());
 JS
-  pass "fix-removed wording skip and receipt guards fail all 12 dispatcher regressions (exit 1)";
+  pass "fix-removed receipt guards fail all 11 dispatcher regressions; admission refusal remains independent (exit 1)";
 else fail "receipt regression negative control was insensitive (exit $CONTROL_RC): $(cat "$FIX/receipt-control.out" "$FIX/receipt-control.err")"; fi
 # First reproduce the old dispatch path: no precomputed evidence, model tool
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
@@ -1017,13 +1045,13 @@ if [ "$RC" = 0 ] && grep -q '^- verdict: APPROVE$' "$SWEEP_PROJ/seats/verdicts/b
   pass "fix-removed final APPROVE guard exposes the bypass (unsafe fixture exit 0)"
 else fail "APPROVE receipt guard negative control was insensitive rc=$RC out=$OUT"; fi
 cp -f "$FIX/verify-with-sweep.ts" "$SWEEP_PROJ/seats/verify.ts"
-# Hold H4 until the dispatcher log proves it waited, before reviewer readiness.
+# Hold H4 until the entry wait diagnostic proves it waited, before reviewer readiness.
 # The controller then releases the fixture holder. No elapsed-time comparison.
 # The readiness driver owns AND joins its H4 holder, including early-exit paths.
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_TEST_HOLD_H4=1 run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep fleet/bead-1 worker-1
 SWEEP_CHECK="$HOME_FIX/.pi-seats-sweep/reviewer/sweep-prompt-check.json"
 SWEEP_LOG="$(node -e 'console.log(require(process.argv[1]).log)' "$SWEEP_CHECK")"
-if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && grep -q 'waiting for host-wide lock' "$SWEEP_LOG"; then
+if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q '"ok": true' "$SWEEP_CHECK" && grep -q "sweep evidence rc=0 log=" "$SWEEP_PROJ/seats/verdicts/bead-sweep.md" && grep -q "sweep cwd tip=$SWEEP_TIP" "$SWEEP_LOG" && says 'waiting for host-wide lock' && [ -f "$WATCHDOG_DIR/holder-wait-observed" ]; then
   BATCH_SEED_LOG="$SWEEP_LOG"
   pass "full-sweep done: exact tip, H4 wait outside model limit, scratch bd, reviewer cites rc/log"
 else fail "full-sweep dispatcher evidence failed rc=$RC out=$OUT check=$(cat "$SWEEP_CHECK" 2>/dev/null)"; fi
@@ -1167,7 +1195,8 @@ else fail "umbrella layout: default repo verdict did not record product repo and
 UMB_AMBIG_TIP="$(git -C "$UMB_PROJ" rev-parse fleet/bead-ambiguous)"
 PROD_AMBIG_TIP="$(git -C "$UMB_PROJ/product" rev-parse fleet/bead-ambiguous)"
 BD_UMBRELLA_REPO="$FIX/bd-umbrella-repo.txt"
-cat > "$BD_UMBRELLA_REPO" <<EOF
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$BD_UMBRELLA_REPO"
+cat >> "$BD_UMBRELLA_REPO" <<EOF
 fixture ambiguous repo bead
 
 DESCRIPTION
@@ -1194,7 +1223,8 @@ mkdir -p "$ALLOWED_SIB" "$UNLISTED_SIB"
 printf 'allowed sibling source\n' > "$ALLOWED_SIB/allowed.txt"
 printf 'unlisted sibling source\n' > "$UNLISTED_SIB/secret.txt"
 BD_SOURCE="$FIX/bd-source.txt"
-cat > "$BD_SOURCE" <<EOF
+cp -f "$WHEELHOUSE_CONTRACT_FIXTURE" "$BD_SOURCE"
+cat >> "$BD_SOURCE" <<EOF
 wheelhouse-source [BUG]
 
 DESCRIPTION
@@ -1545,6 +1575,34 @@ run bead-1nb-expired fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && says "BENCH GAP EXPIRED" && grep -q "BENCH GAP EXPIRED" "$VDIR/bead-1nb-expired.md" 2>/dev/null; then
   pass "expired NOT BENCHED gap passes only with an explicit gate nudge"
 else fail "expired NOT BENCHED gap passed silently or failed wrong (exit $RC): $OUT verdict=$(cat "$VDIR/bead-1nb-expired.md" 2>/dev/null)"; fi
+
+phase "1a. full task context survives contract validation"
+# The real bd capture has a JSON array for validation and a rendered show
+# with COMMENTS/PARENT/BLOCKS. Those are separate views, not interchangeable.
+CONTEXT_SHOW="$FIX/review-context.txt"
+CONTEXT_JSON="$FIX/review-contract.json"
+node - "$WHEELHOUSE_CONTRACT_FIXTURE" "$CONTEXT_SHOW" "$CONTEXT_JSON" <<'NODE'
+const fs=require('fs');
+const [valid,raw,json]=process.argv.slice(2),description=fs.readFileSync(valid,'utf8');
+fs.writeFileSync(json,JSON.stringify([{id:'bead-review-context',title:'Fixture task',description}]));
+fs.writeFileSync(raw,description+'\nLABELS\n  fixture-review-label\nPARENT\n  fixture-parent-contract\nBLOCKS\n  fixture-dependent-contract\nCOMMENTS\n  fixture worker: FIXTURE_TASK_COMMENT_MUST_REACH_REVIEWER\n');
+NODE
+STUB_BD_JSON_SHOW_FILE="$CONTEXT_JSON" run_with_bd_show "$CONTEXT_SHOW" bead-review-context fleet/bead-1 worker-1
+if [ "$RC" -eq 0 ] && node - "$VARGV" "$CONTEXT_SHOW" <<'NODE'
+const fs=require('fs'),assert=require('assert');
+const argv=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),prompt=argv.at(-1);
+assert(prompt.includes('FIXTURE_TASK_COMMENT_MUST_REACH_REVIEWER'),'fixture task comment missing from assembled review prompt');
+for(const marker of ['fixture-review-label','fixture-parent-contract','fixture-dependent-contract']) assert(prompt.includes(marker));
+assert(prompt.includes(fs.readFileSync(process.argv[3],'utf8').trim()));
+const heading='Parsed work contract (validated before reviewer spawn):\n';
+assert(prompt.includes(heading));
+// JSON.stringify's complete pretty-printed block ends at the first blank line;
+// dispatcher sweep evidence may now appear before the push-authority section.
+const parsed=JSON.parse(prompt.split(heading)[1].split('\n\n')[0].trim());
+assert(parsed.intent);assert(parsed.outcomes.length);assert.equal(parsed.outcomes[0].id,'O1');assert.deepEqual(parsed.errors,[]);
+NODE
+then pass "review prompt preserves fixture task comment, labels, dependencies and parsed contract"
+else fail "review prompt lost full bd show context or parsed contract rc=$RC"; fi
 
 phase "1b. branch moves mid-pass — verdict stays pinned, publish waits"
 MOVE_PROJ="$FIX/proj-move"
@@ -2228,30 +2286,28 @@ if grep -q '/wheelhouse-verify-' "$CORE_GUARD_CLOBBER" 2>/dev/null && ! grep -qF
 else fail "restore-path fixture did not write a scratch wheelhouse-verify path: $(cat "$CORE_GUARD_CLOBBER" 2>/dev/null)"; fi
 
 phase "10. sweep — a SIGKILLed run's scratch worktree and stale SHA branch are reclaimed"
-# sweepStaleScratchWorktrees() runs at the very top of main(), before argv
-# is even validated, so a bare no-args invocation (an immediate usage STOP)
-# exercises it as cheaply as a full round trip does.
-ORPHAN_DIR="$FIX/wheelhouse-verify-999999999-orphan"
-REVIEW_ORPHAN_DIR="$FIX/wheelhouse-review-999999998-orphan"
+# Keep every janitor target, including os.tmpdir(), inside this invocation's FIX.
+export TMPDIR="$FIX/scratch-tmp"
+mkdir -p "$TMPDIR" "$FIX/janitor-safety"
+if bun "$HERE/fixtures/janitor-safety.ts" "$PROJ/seats/verify.ts" "$FIX/janitor-safety"; then
+  pass "janitor preserves main, outside-temp, unrecorded and Git-refused checkouts"
+else fail "janitor ownership safety regression failed"; fi
+# Plant real makeScratchCwd allocations, not unrelated checkouts adopted by name.
+# The benign owners kill themselves only after writing a receipt, bypassing EXIT.
+for kind in verify review; do
+  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/scratch-owner.ts" dead "$PROJ/seats/verify.ts" "$PROJ" "$kind" "$FIX/orphan-$kind.json" > "$FIX/orphan-$kind.out" 2>&1
+  owner_rc=$?
+  [ "$owner_rc" = 137 ] && [ -s "$FIX/orphan-$kind.json" ] || fail "could not plant recorded $kind orphan (rc=$owner_rc)"
+done
+ORPHAN_DIR="$(node -pe 'require(process.argv[1]).dir' "$FIX/orphan-verify.json")"
+REVIEW_ORPHAN_DIR="$(node -pe 'require(process.argv[1]).dir' "$FIX/orphan-review.json")"
 SHA_BRANCH="0123456789abcdef0123456789abcdef01234567"
-mkdir -p "$ORPHAN_DIR" "$REVIEW_ORPHAN_DIR"
-git -C "$PROJ" worktree add --detach "$ORPHAN_DIR" HEAD >/dev/null 2>&1
-git -C "$PROJ" worktree add --detach "$REVIEW_ORPHAN_DIR" HEAD >/dev/null 2>&1
 git -C "$PROJ" branch "$SHA_BRANCH" HEAD >/dev/null 2>&1
-bash -c '
-  pid=$$
-  dir="$1/wheelhouse-verify-${pid}-live"
-  mkdir -p "$dir"
-  git -C "$2" worktree add --detach "$dir" HEAD >/dev/null 2>&1
-  printf "%s\n%s\n" "$pid" "$dir" > "$1/live-owner.txt"
-  deadline=$((SECONDS+300))
-  while [ ! -f "$1/live-owner.release" ]; do [ "$SECONDS" -lt "$deadline" ] || exit 124; sleep 0.05; done
-' _ "$FIX" "$PROJ" &
-LIVE_OWNER_CHILD=$!
+HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/scratch-owner.ts" live "$PROJ/seats/verify.ts" "$PROJ" verify "$FIX/live-owner.json" > "$FIX/live-owner.out" 2>&1 &
+LIVE_OWNER_PID=$!
 LIVE_READY_DEADLINE=$((SECONDS+300))
-while [ ! -f "$FIX/live-owner.txt" ] && kill -0 "$LIVE_OWNER_CHILD" 2>/dev/null && [ "$SECONDS" -lt "$LIVE_READY_DEADLINE" ]; do sleep 0.05; done
-LIVE_OWNER_PID=$(sed -n '1p' "$FIX/live-owner.txt")
-LIVE_DIR=$(sed -n '2p' "$FIX/live-owner.txt")
+while [ ! -s "$FIX/live-owner.json" ] && kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ "$SECONDS" -lt "$LIVE_READY_DEADLINE" ]; do sleep 0.05; done
+LIVE_DIR="$(node -pe 'require(process.argv[1]).dir' "$FIX/live-owner.json")"
 if git -C "$PROJ" worktree list | grep -F >/dev/null "$ORPHAN_DIR" \
    && git -C "$PROJ" worktree list | grep -F >/dev/null "$REVIEW_ORPHAN_DIR" \
    && git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" \
@@ -2275,19 +2331,30 @@ else fail "the live worktree was swept even though its owner pid is still alive"
 
 CONCURRENT_OUT_A="$FIX/concurrent-verify-a.out"
 CONCURRENT_OUT_B="$FIX/concurrent-verify-b.out"
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$CONCURRENT_OUT_A" 2>&1) &
+# This is reaper coverage, not an admission bypass: the enclosing suite holds
+# the real host FIFO. Two idle fixture reviews need separate private endpoints
+# now that a whole review, not only its sweep, owns admission. Shared-endpoint
+# serialization is exercised by heavy-test.selftest.sh.
+CONCURRENT_LOCK_A="$FIX/concurrent-a.lock"
+CONCURRENT_LOCK_B="$FIX/concurrent-b.lock"
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$CONCURRENT_LOCK_A" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-a fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$CONCURRENT_OUT_A" 2>&1) &
 CONCURRENT_PID_A=$!
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$CONCURRENT_OUT_B" 2>&1) &
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$CONCURRENT_LOCK_B" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$CONCURRENT_OUT_B" 2>&1) &
 CONCURRENT_PID_B=$!
 CONCURRENT_DIRS=""
 CONCURRENT_READY_DEADLINE=$((SECONDS+300))
 while [ "$SECONDS" -lt "$CONCURRENT_READY_DEADLINE" ]; do
-  CONCURRENT_DIRS="$(git -C "$PROJ" worktree list --porcelain 2>/dev/null | awk -v a="wheelhouse-verify-${CONCURRENT_PID_A}-" -v b="wheelhouse-verify-${CONCURRENT_PID_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
+  # The token-bearing owner is the real review, not its forwarding entry PID.
+  # Legacy direct entries remain their own PID if no active lock is present.
+  CONCURRENT_OWNER_A="$CONCURRENT_PID_A"; CONCURRENT_OWNER_B="$CONCURRENT_PID_B"
+  [ ! -f "$CONCURRENT_LOCK_A/pid" ] || IFS= read -r CONCURRENT_OWNER_A < "$CONCURRENT_LOCK_A/pid"
+  [ ! -f "$CONCURRENT_LOCK_B/pid" ] || IFS= read -r CONCURRENT_OWNER_B < "$CONCURRENT_LOCK_B/pid"
+  CONCURRENT_DIRS="$(git -C "$PROJ" worktree list --porcelain 2>/dev/null | awk -v a="wheelhouse-verify-${CONCURRENT_OWNER_A}-" -v b="wheelhouse-verify-${CONCURRENT_OWNER_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
   [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ] && break
   sleep 0.05
  done
-if [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ]; then
-  pass "concurrent verify gates both reached registered scratch worktrees"
+if [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ] && kill -0 "$CONCURRENT_OWNER_A" 2>/dev/null && kill -0 "$CONCURRENT_OWNER_B" 2>/dev/null; then
+  pass "concurrent verify gates both reached registered scratch worktrees (real owner pids $CONCURRENT_OWNER_A and $CONCURRENT_OWNER_B)"
 else
   fail "concurrent verify gates did not both register scratch worktrees: a=$(cat "$CONCURRENT_OUT_A" 2>/dev/null) b=$(cat "$CONCURRENT_OUT_B" 2>/dev/null) dirs=$CONCURRENT_DIRS"
 fi
@@ -2308,12 +2375,9 @@ kill "$CONCURRENT_PID_A" "$CONCURRENT_PID_B" 2>/dev/null || true
 wait "$CONCURRENT_PID_A" 2>/dev/null || true
 wait "$CONCURRENT_PID_B" 2>/dev/null || true
 
-if [ "$LIVE_OWNER_PID" = "$LIVE_OWNER_CHILD" ] && kill -0 "$LIVE_OWNER_CHILD" 2>/dev/null; then
-  printf 'release\n' > "$FIX/live-owner.release"
-  wait "$LIVE_OWNER_CHILD" 2>/dev/null || true
-else
-  fail "live scratch owner exited before its release (recorded=$LIVE_OWNER_PID child=$LIVE_OWNER_CHILD)"
-fi
+kill -KILL "$LIVE_OWNER_PID" 2>/dev/null
+wait "$LIVE_OWNER_PID" 2>/dev/null || true
+i=0; while kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 run   # a second sweep pass, now that the "live" owner has actually exited
 if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
   pass "once its owner pid actually exits, a later sweep reclaims that worktree too"
@@ -2327,20 +2391,34 @@ KILL_SHA_BRANCH="89abcdef0123456789abcdef0123456789abcdef"
 git -C "$KILL_PROJ" branch "$KILL_SHA_BRANCH" HEAD >/dev/null 2>&1
 OUT_FILE="$FIX/killed-verify.out"
 KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
-(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
+KILLED_GATE_LOCK="$FIX/killed-gate.lock"
+(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$KILLED_GATE_LOCK" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
+PI_PID_FILE="$HOME_FIX/.pi-seats-kill/reviewer/pi-pid.txt"
 KILLED_READY_DEADLINE=$((SECONDS+300))
 while [ "$SECONDS" -lt "$KILLED_READY_DEADLINE" ]; do
   KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
-  [ -n "$KILLED_DIR" ] && break
+  # Child launch proves makeScratchCwd finished its ownership record, not just
+  # Git registration. Killing before that record must fail closed, not adopt it.
+  [ -n "$KILLED_DIR" ] && [ -s "$PI_PID_FILE" ] && break
   sleep 0.05
 done
 if [ -n "$KILLED_DIR" ]; then pass "killed one-shot fixture reached a registered scratch worktree"
 else fail "killed one-shot fixture never registered a scratch worktree: $(cat "$OUT_FILE" 2>/dev/null)"; fi
-kill -9 "$KILLED_DISPATCHER_PID" 2>/dev/null || true
+# Kill the real dispatcher owning this fresh private endpoint, not merely its
+# proxy (whose death intentionally leaves a live admitted run protected).
+KILLED_REAL_PID="$KILLED_DISPATCHER_PID"
+[ ! -f "$KILLED_GATE_LOCK/pid" ] || IFS= read -r KILLED_REAL_PID < "$KILLED_GATE_LOCK/pid"
+case "$KILLED_DIR" in
+  */wheelhouse-verify-"$KILLED_REAL_PID"-*)
+    kill -9 "$KILLED_REAL_PID" 2>/dev/null || true ;;
+  *)
+    fail "killed fixture's registered scratch does not match its actual owner"
+    kill -TERM "$KILLED_DISPATCHER_PID" 2>/dev/null || true ;;
+esac
 wait "$KILLED_DISPATCHER_PID" 2>/dev/null || true
-PI_PID_FILE="$HOME_FIX/.pi-seats-kill/reviewer/pi-pid.txt"
+
 if [ -s "$PI_PID_FILE" ]; then kill "$(cat "$PI_PID_FILE")" 2>/dev/null || true; fi
 run   # sweep the killed run's scratch worktree and stale SHA branch
 if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -F >/dev/null "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then

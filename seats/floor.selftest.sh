@@ -281,6 +281,17 @@ has "PROCESS GONE"        && pass "gone: PROCESS GONE line (red)"     || fail "n
 has "AUTH DEAD"           && pass "authless: AUTH DEAD line (red)"    || fail "no AUTH DEAD line"
 has "PARKED/QUOTA"        && has "bun seats/adapter.ts probe quota" && pass "quota: PARKED/QUOTA line names the re-probe command" || fail "no PARKED/QUOTA line with re-probe command"
 has "IDLE with ready work.*2 bead" && pass "idle: IDLE-with-ready-work counts bd ready" || fail "no idle-with-ready-work line"
+has 'busy.*RUNNING.*working' && pass 'mid-tool seat is visibly RUNNING' || fail 'busy seat lost RUNNING activity field'
+for terminal in agent_end turn_end agent_settled; do
+  printf '{"type":"agent_start"}\n{"type":"%s"}\n{"type":"response","command":"get_state","success":true}\n' "$terminal" > "$LOGS/idle.jsonl"
+  render "$PROJ/seats/floor.ts" --pin 0
+  has 'idle.*SETTLED.*IDLE with ready work' && pass "$terminal plus transport metadata remains SETTLED in STATUS/rail" || fail "$terminal settlement missing: $OUT"
+done
+printf '{"type":"agent_settled"}\n{"type":"agent_start"}\n{"type":"tool_execution_start"}\n' > "$LOGS/idle.jsonl"
+render "$PROJ/seats/floor.ts" --pin idle
+has 'idle.*RUNNING.*working' && pass 'next turn leaves SETTLED display immediately on work evidence' || fail "next turn still settled: $OUT"
+printf '{"type":"agent_end"}\n' > "$LOGS/idle.jsonl"
+render "$PROJ/seats/floor.ts" --pin 1
 has "VERDICT LANDED — APPROVE" && pass "reviewer: VERDICT LANDED (green)" || fail "no VERDICT LANDED line"
 has "REVIEW BLOCKED.*BOUNCE"   && pass "bounced: REVIEW BLOCKED line"     || fail "no REVIEW BLOCKED line"
 has "EVIDENCE UNSATISFIED.*wh-unsat-1" && pass "unsat: BOUNCE with failed evidence-floor renders EVIDENCE UNSATISFIED" || fail "no EVIDENCE UNSATISFIED line"

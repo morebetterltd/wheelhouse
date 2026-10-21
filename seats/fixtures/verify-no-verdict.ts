@@ -101,7 +101,21 @@ async function test(): Promise<void> {
     const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
     for (const cli of ["pi", "claude", "codex"]) fs.writeFileSync(path.join(bin, cli), `#!/usr/bin/env bash\nexec bun ${quote(import.meta.path)} --reviewer "$@"\n`, { mode: 0o755 });
     const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, WHEELHOUSE_TEST_WATCHDOG_DIR: dir, WHEELHOUSE_NO_VERDICT_CASE: dir, WHEELHOUSE_NO_VERDICT_HOLD: hold ? "1" : "0", WHEELHOUSE_NO_VERDICT_RETRY: retry ? "1" : "0" };
-    const created = JSON.parse(command("bd", ["create", `no-verdict ${name}`, "--description", "## Done\nA local fake reviewer fixture completes.", "--json"], proj, env, dir, "create"));
+    // Pass the real pre-spawn contract gate; this fixture tests a completed
+    // turn without a judgment, not refusal of malformed work.
+    const description = `Trace: verify-no-verdict regression fixture
+Signal: isa-gap: K1
+
+Intent:
+Keep a completed local check distinguishable from a final judgment, so unfinished evidence cannot be mistaken for approval.
+
+Outcomes:
+- O1 The captured local result reaches the correct judgment or no-judgment path.
+  consumer: machine — the fixture runner
+  surface: local verifier output, retained records and task comments
+  check: run — replay the captured terminal events and inspect the exit status and retained records
+`;
+    const created = JSON.parse(command("bd", ["create", `no-verdict ${name}`, "--description", description, "--json"], proj, env, dir, "create"));
     assert(created.id); const bead = created.id;
     const vdir = path.join(proj, "seats/verdicts"); fs.mkdirSync(vdir);
     const saved = [".md", ".partial.md"].map(suffix => path.join(vdir, bead + suffix));

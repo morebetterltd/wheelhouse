@@ -36,6 +36,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -uo pipefail   # deliberately not -e: the injected failures are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 SRC="${1:-$HERE}"
 # The logger is a launched child, not an ES import reachable by the scanner.
 SEED_TS="floor.ts adapter.ts verify.ts recover.ts seat-event-log.ts"
@@ -269,7 +270,7 @@ done
 
 # Every review must run the dispatcher gate. Track the actual runner and its
 # companions plus one tiny suite; an empty fixture tip is not an exemption.
-for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts; do
+for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts heavy-test.sh; do
   cp -f "$SRC/$f" "$PROJ/seats/$f" || exit 2
 done
 cat > "$PROJ/seats/fixture.selftest.sh" <<'SH'

@@ -3,6 +3,7 @@
 set -uo pipefail
 S="$(cd "$(dirname "$0")" && pwd)"
 . "$S/selftest-lib.sh"
+export WHEELHOUSE_CONTRACT_FIXTURE="$S/fixtures/contracts/valid.md" # dispatches in this suite carry a valid contract (producer contract gate)
 ADAPTER="${1:-$S/adapter.ts}"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-adapter-rpc.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2

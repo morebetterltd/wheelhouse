@@ -408,6 +408,22 @@ kill -TERM "$PID_G" 2>/dev/null || true
 wait "$PID_G" 2>/dev/null || true
 rm -rf "$EPERM"
 
+# PID 1 can also be a real runner (a container entrypoint). Unlike the bare
+# live-holder fixture above, its complete token/FIFO record proves admission.
+PID_ONE="$FIX/pid-one-owned.lock"
+PID_ONE_TOKEN="$(bun -e 'console.log(crypto.randomUUID().replace(/-/g,""))')"
+PID_ONE_OWNED="$(bun "$WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER" acquire "$PID_ONE" 1 "$PID_ONE_TOKEN" "" 2> "$FIX/pid-one-acquire.err")"; PID_ONE_ACQUIRE_RC=$?
+PID_ONE_INHERITED_RC=2; PID_ONE_RELEASE_RC=2
+if [ "$PID_ONE_ACQUIRE_RC" = 0 ]; then
+  bun "$WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER" inherited "$PID_ONE" > "$FIX/pid-one-inherited.out" 2> "$FIX/pid-one-inherited.err"; PID_ONE_INHERITED_RC=$?
+  bun "$WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER" release "$PID_ONE" 1 "$PID_ONE_TOKEN" "$PID_ONE_OWNED" > "$FIX/pid-one-release.out" 2> "$FIX/pid-one-release.err"; PID_ONE_RELEASE_RC=$?
+fi
+if [ "$PID_ONE_ACQUIRE_RC" = 0 ] && [ "$PID_ONE_INHERITED_RC" = 0 ] && [ "$PID_ONE_RELEASE_RC" = 0 ] && [ ! -e "$PID_ONE" ]; then
+  pass 'a valid token/FIFO PID-1 owner remains inheritable and releasable'
+else
+  fail "valid token/FIFO PID-1 owner refused (acquire=$PID_ONE_ACQUIRE_RC inherited=$PID_ONE_INHERITED_RC release=$PID_ONE_RELEASE_RC)"
+fi
+
 TERM_SUITES="$FIX/term-suites"
 TERM_LOCK="$FIX/term.lock"
 TERM_EVENTS="$FIX/term-events.log"
