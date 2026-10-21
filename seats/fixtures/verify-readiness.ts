@@ -8,15 +8,20 @@ import { randomUUID } from "node:crypto";
 type Timer = { dir: string; kind: string; callback: () => void; active: boolean; deadline: number };
 const clocks = new Map<string, number>();
 const timers = new Set<Timer>();
-const record = (dir: string, name: string, value = "yes") => fs.writeFileSync(path.join(dir, name), value);
+// Cross-process clock requests must never expose a truncated/partial value.
+const record = (dir: string, name: string, value = "yes") => {
+  const file = path.join(dir, name), stage = `${file}.${process.pid}.${randomUUID()}.new`;
+  try { fs.writeFileSync(stage, value, { flag: "wx", mode: 0o600 }); fs.renameSync(stage, file); }
+  finally { fs.rmSync(stage, { force: true }); }
+};
 const exists = (dir: string, name: string) => fs.existsSync(path.join(dir, name));
 // Poll cadence only schedules work. It never decides success, failure or expiry.
 setInterval(() => {
   for (const dir of new Set([...timers].map(timer => timer.dir))) {
     const request = path.join(dir, "advance");
     if (!fs.existsSync(request)) continue;
-    const next = Number(fs.readFileSync(request, "utf8"));
-    if (!Number.isFinite(next) || next < (clocks.get(dir) ?? 0)) throw new Error("fixture clock must advance monotonically");
+    const raw = fs.readFileSync(request, "utf8"), next = Number(raw);
+    if (!raw || !Number.isFinite(next) || next < (clocks.get(dir) ?? 0)) throw new Error(`fixture clock must advance monotonically (request=${JSON.stringify(raw)}, previous=${clocks.get(dir) ?? 0})`);
     clocks.set(dir, next); fs.unlinkSync(request);
     for (const timer of [...timers]) {
       if (!timer.active || timer.dir !== dir || timer.deadline > next) continue;
@@ -107,6 +112,8 @@ type Exit = { code: number | null; signal: NodeJS.Signals | null; error?: string
 function own(name: string, label: string, bin: string, args: string[], env: NodeJS.ProcessEnv) {
   const child = spawn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout!.pipe(process.stdout, { end: false }); child.stderr!.pipe(process.stderr, { end: false });
+  let stderr = "";
+  child.stderr!.on("data", chunk => { stderr += chunk; });
   let exit: Exit | undefined;
   ledger({ event: "spawn", name, fixture: label, pid: child.pid });
   const closed = new Promise<Exit>(resolve => {
@@ -115,7 +122,7 @@ function own(name: string, label: string, bin: string, args: string[], env: Node
     child.once("error", error => { exit = { code: 1, signal: null, error: error.message }; });
     child.once("close", (code, signal) => { exit ??= { code, signal }; resolve(exit); });
   });
-  return { child, closed, exited: () => exit !== undefined, status: () => exit };
+  return { child, closed, exited: () => exit !== undefined, status: () => exit, stderr: () => stderr };
 }
 function status(exit: Exit): number { return exit.code ?? (exit.signal ? 128 + constants.signals[exit.signal] : 1); }
 
@@ -241,7 +248,9 @@ async function drive(): Promise<void> {
     const result = fixture.closed.then(status);
     if (holder) {
       const logs = path.join(path.dirname(sourceFile), "verdicts", "sweeps");
-      await until(() => exists(dir, "ready") || (fs.existsSync(logs) && fs.readdirSync(logs).filter(name => name.includes(`.${child.pid}.`)).some(name => fs.readFileSync(path.join(logs, name), "utf8").includes("waiting for host-wide lock"))), () => ended() || holder!.exited(), "dispatcher H4 wait");
+      // New reviews queue before main/scratch/watchdogs; old dispatchers wait
+      // inside the sweep log. Observe either real admission checkpoint.
+      await until(() => exists(dir, "ready") || /waiting for host-wide lock[^\n]*queue_position=/.test(fixture!.stderr()) || (fs.existsSync(logs) && fs.readdirSync(logs).filter(name => name.includes(`.${child.pid}.`)).some(name => fs.readFileSync(path.join(logs, name), "utf8").includes("waiting for host-wide lock"))), () => ended() || holder!.exited(), "dispatcher H4 wait");
       if (exists(dir, "ready")) throw new Error("reviewer started before held sweep was released");
       record(dir, "holder-wait-observed");
       fs.writeFileSync(holderRelease, "release\n");

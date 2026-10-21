@@ -518,10 +518,16 @@ function main(): number {
       if (snapshot?.marker.pid === pid && snapshot.marker.token === token && current[0].token === token) {
         console.log(snapshot.identity); return 0; // Idempotent admission of this owner.
       }
-      if (snapshot || current[0].token !== token) {
+      // The brake is admission-only. Never revoke a token already admitted,
+      // including idempotent retries above or nested runs checked by ancestry.
+      const pauseFile = process.env.WHEELHOUSE_HEAVY_TEST_PAUSE || path.join(import.meta.dir, "run", "host-guard-pause");
+      let paused = false;
+      try { fs.lstatSync(pauseFile); paused = true; }
+      catch (e: any) { if (e.code !== "ENOENT") throw e; }
+      if (snapshot || current[0].token !== token || paused) {
         const waiting = current.filter(t => !(snapshot && t.pid === snapshot.marker.pid && t.token === snapshot.marker.token));
         const position = waiting.findIndex(t => t.token === token) + 1;
-        console.log(`queue_position=${position} holder=${snapshot ? `pid=${snapshot.marker.pid} started=${snapshot.marker.started}` : "none"} head_pid=${current[0].pid}`);
+        console.log(`queue_position=${position} holder=${snapshot ? `pid=${snapshot.marker.pid} started=${snapshot.marker.started}` : "none"} head_pid=${current[0].pid}${paused ? ` paused_by=${pauseFile}` : ""}`);
         return 75; // Validated queue wait; helper/runtime errors remain fatal.
       }
       console.log(publish(parent, name, pid, token));
@@ -558,7 +564,13 @@ function ancestorOwnsLock(lock: string): boolean {
       pid = Number(result.stdout.trim());
     }
     const queue = queueFd(parent, `${path.basename(lock)}.queue`, false);
-    if (queue === null) throw new Refused("inherited lock has no FIFO ownership record");
+    if (queue === null) {
+      // Every process reaches init, so a bare PID-1 claim is not inherited
+      // admission. Queue behind it as a live holder. A genuine PID-1 runner
+      // (e.g. a container entrypoint) can still prove its token/FIFO head.
+      if (snapshot.marker.pid === 1) return false;
+      throw new Refused("inherited lock has no FIFO ownership record");
+    }
     try {
       const first = tickets(queue)[0];
       if (!first || first.pid !== snapshot.marker.pid || first.token !== snapshot.marker.token) throw new Refused("inherited lock does not match FIFO head");
@@ -585,7 +597,7 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
   };
   const handlers = new Map<NodeJS.Signals, () => void>();
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"] as const) {
-    const handler = () => { interrupted = signal; forward(signal); };
+    const handler = () => { console.error(`heavy-test: KILLED by signal ${os.constants.signals[signal]}`); interrupted = signal; forward(signal); };
     handlers.set(signal, handler); process.on(signal, handler);
   }
   let code = 2;
