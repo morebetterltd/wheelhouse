@@ -63,9 +63,13 @@ for (const name of names) {
     const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line); assert(m, line); return [+m[1], +m[2]];
   });
   assert(rows.some(([pid]) => pid === process.pid), "fixture subject exists before ancestry measurement");
-  assert(!rows.some(([pid]) => pid === 2147483647), "absent native probe PID is actually absent");
-  const gone = run(ps, ["-o", "ppid=", "-p", "2147483647"]);
-  assert.equal(gone.status, 1); assert.equal(gone.stdout, ""); assert.equal(gone.stderr, "");
+  const used = new Set(rows.map(([pid]) => pid));
+  let probePid = 2;
+  while (used.has(probePid)) probePid++;
+  assert(probePid < Math.max(...used), "probe stays within the native observed PID range");
+  assert(!used.has(probePid), "no-row probe subject is absent from the captured table");
+  const gone = run(ps, ["-o", "ppid=", "-p", String(probePid)]);
+  assert.equal(gone.status, 1); assert.equal(gone.stdout, "");
   fs.writeFileSync(path.join(dir, "native-gone.json"), JSON.stringify(gone));
   fs.writeFileSync(path.join(bin, "ps"), shim, { mode: 0o700 });
   const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
