@@ -53,7 +53,22 @@ async function main(){
   const events:any[]=[],invocations:any[]=[];let peer:any,closed=false;
   const token=crypto.randomUUID();const server=net.createServer(socket=>{let text='';socket.on('data',b=>{text+=b;let at;while((at=text.indexOf('\n'))>=0){const m=JSON.parse(text.slice(0,at));text=text.slice(at+1);if(m.type==='ready'){assert.equal(m.token,token);assert.equal(m.uid,process.getuid!());assert.equal(m.cwd,project);peer={...m,socket};}events.push(m);fs.appendFileSync(path.join(dir,'peer-events.jsonl'),JSON.stringify(m)+'\n');}});socket.on('end',()=>{closed=true;socket.destroy();});socket.on('close',()=>{closed=true;});});
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen('control.sock',resolve);});
-  const env={...process.env,HOME:path.join(dir,'home'),PATH:bin+path.delimiter+process.env.PATH,WHEELHOUSE_SKIP_BD:'1',WHEELHOUSE_CLEANUP:'0',WHEELHOUSE_FRAMING_CASE:dir,WHEELHOUSE_FRAMING_TRACE:td,WHEELHOUSE_FRAMING_SOCKET:'../control.sock',WHEELHOUSE_FRAMING_TOKEN:token,WHEELHOUSE_FRAMING_PEER:path.join(import.meta.dir,'adapter-framing-peer.mjs')};
+  // Supply data to the real contract gate; SKIP_BD already isolates this fixture.
+  const contract=path.join(dir,'dispatch-contract.md');
+  fs.writeFileSync(contract,`Trace: Native FIFO framing and parse-error regression fixture
+Signal: isa-gap: K1
+Skills: intent@1.0.0 outcomes@1.0.0
+
+Intent:
+Keep commands intact when two callers write to the same running seat, and make rejected input visible to the caller. A failed request must not be reported as a successful delivery or silently restart the seat.
+
+Outcomes:
+- O1 The adapter reports the observed command delivery or parse failure accurately.
+  consumer: machine — the native framing fixture controller
+  surface: FIFO bytes, peer frames, adapter exit status and stderr, and recorded seat identity
+  check: run — compare native writes with complete peer frames, or require a parse-error refusal with the same live seat
+`);
+  const env={...process.env,HOME:path.join(dir,'home'),PATH:bin+path.delimiter+process.env.PATH,WHEELHOUSE_CONTRACT_FIXTURE:contract,WHEELHOUSE_SKIP_BD:'1',WHEELHOUSE_CLEANUP:'0',WHEELHOUSE_FRAMING_CASE:dir,WHEELHOUSE_FRAMING_TRACE:td,WHEELHOUSE_FRAMING_SOCKET:'../control.sock',WHEELHOUSE_FRAMING_TOKEN:token,WHEELHOUSE_FRAMING_PEER:path.join(import.meta.dir,'adapter-framing-peer.mjs')};
   const requests:any[]=[];function cli(args:string[],role:string){const child=Bun.spawn(['bun',path.join(project,'seats/adapter.ts'),...args],{env:{...env,WHEELHOUSE_FRAMING_ROLE:role},stdin:'ignore',stdout:'pipe',stderr:'pipe'});let ended=false;const finished=Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]).then(([rc,out,err])=>{ended=true;const value={args,role,rc,out,err};invocations.push(value);return value;});const value={finished,ended:()=>ended};requests.push(value);return value;}
   const send=(type:string,extra:object={})=>peer.socket.write(JSON.stringify({type,...extra})+'\n');
   const traces=()=>fs.readFileSync(path.join(td,'events.jsonl'),'utf8').trim().split('\n').filter(Boolean).map(x=>JSON.parse(x));

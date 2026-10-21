@@ -4,7 +4,7 @@ State lives in git and the work graph, so this works after any shutdown, reboot,
 
 ## Minimum viable fleet
 
-Commander + one worker + one reviewer. Start there. It is a working loop, and it is what makes this installable rather than aspirational.
+Commander + producer + one worker + one reviewer. Start there. The producer is required; this install runs it as a commander subagent with `wheelhouse/crew/PRODUCER.md`, not a separate standing process. The commander does not write intent or outcomes. It is a working loop, and it is what makes this installable rather than aspirational.
 
 ## 1. Commander
 

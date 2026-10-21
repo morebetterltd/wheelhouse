@@ -5,6 +5,15 @@
     "runtime": "claude-code"
   },
   "seats": {
+    "producer": {
+      "role": "producer",
+      "harness": "claude-code",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5",
+      "account": { "dir": "~/.pi-seats-myproject/producer", "authRoute": "oauth" },
+      "allowedTools": "Read,Grep,Glob,Bash(bd:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*)",
+      "disallowedTools": "Edit,Write,NotebookEdit"
+    },
     "worker-1": {
       "role": "worker",
       "harness": "claude-code",

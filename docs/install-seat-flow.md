@@ -96,9 +96,9 @@ Take researcher seat?
   2) no
 Choice [2]: 2
 
-Take designer seat?
-  1) yes: designer
-  2) no
+Producer is required. Which form should it take?
+  1) standing producer seat
+  2) producer subagent of the commander
 Choice [2]: 2
 ```
 
@@ -106,13 +106,14 @@ Resulting provisional seat list:
 
 ```text
 commander   external Claude Code session
+producer    role=producer  external=true runtime=commander-subagent; reads PRODUCER.md
 worker-1    role=worker    account.dir=~/.pi-seats-project-placeholder/worker-1
 worker-2    role=worker    account.dir=~/.pi-seats-project-placeholder/worker-2
 reviewer-1  role=reviewer  account.dir=~/.pi-seats-project-placeholder/reviewer-1
 verifier    role=verifier  account.dir=~/.pi-seats-project-placeholder/verifier
 ```
 
-Declined seats are recorded in the human roster section later, as BOOTSTRAP already requires.
+Declined optional standing seats are recorded in the human roster section later, as BOOTSTRAP already requires. Producer has no opt-out: it judges signals and writes intent and outcomes; the commander never does. A commander-subagent producer is an explicit external entry under `seats`, without an account directory or Q8 provisioning round. After writing the roster, `bun seats/roster.ts check` refuses builder seats without a non-shadow producer.
 
 ## Step 2 — pick a harness per seat
 
@@ -325,6 +326,7 @@ Step 6 of 6 — Read-back
 
 seat       role      harness      provider       authRoute  model                 account.dir
 commander  commander external     claude-code    -          -                     -
+producer   producer  external     subagent       -          -                     -
 worker-1   worker    claude-code  anthropic      oauth      claude-sonnet-5       ~/.pi-seats-project-placeholder/worker-1
 worker-2   worker    codex        openai-codex   oauth      gpt-5.5               ~/.pi-seats-project-placeholder/worker-2
 reviewer-1 reviewer  pi           openrouter     api_key    z-ai/glm-5.3-flash    ~/.pi-seats-project-placeholder/reviewer-1
@@ -344,6 +346,11 @@ Example output:
     "runtime": "claude-code"
   },
   "seats": {
+    "producer": {
+      "role": "producer",
+      "external": true,
+      "runtime": "commander-subagent"
+    },
     "worker-1": {
       "role": "worker",
       "harness": "claude-code",
@@ -392,7 +399,7 @@ Notice what is absent: no API key, no OAuth token, no account label copied from 
 
 ## Step 7 — provision and probe selected accounts
 
-Purpose: turn the roster into real per-seat account directories and prove each binding.
+Purpose: turn managed roster entries into real per-seat account directories and prove each binding. External commander and producer-subagent entries skip provisioning; the producer still reads PRODUCER.md on dispatch.
 
 This step wraps today's `seats/seat-env.sh` behavior. The command creates/trusts the directory, prints the harness-specific environment variable and login/probe instructions, and refuses to overwrite an existing identity.
 

@@ -20,7 +20,22 @@ const file=${JSON.stringify(path.join(account, "session.jsonl"))};fs.writeFileSy
 readline.createInterface({input:process.stdin}).on('line',line=>{const c=JSON.parse(line);const data=c.type==='get_state'?{isStreaming:false,sessionFile:file,sessionId:'cleanup-fixture',messageCount:0}:{};console.log(JSON.stringify({id:c.id,type:'response',command:c.type,success:true,data}));if(c.type==='prompt'){console.log(JSON.stringify({type:'agent_start'}));console.log(JSON.stringify({type:'agent_end',messages:[]}));}});
 process.on('SIGTERM',()=>process.exit(0));\n`);
 fs.writeFileSync(path.join(bin, "pi"), '#!/usr/bin/env bash\nexec node "$WHEELHOUSE_CLEANUP_FIXTURE_PEER" "$@"\n', { mode: 0o755 });
-const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, WHEELHOUSE_CLEANUP_FIXTURE_PEER: peer,
+// All dispatches, including unsafe-path probes, must reach the real contract gate.
+const contract = path.join(root, "dispatch-contract.md");
+fs.writeFileSync(contract, `Trace: Real dispatch and closed-task scratch cleanup regression fixture
+Signal: isa-gap: K1
+Skills: intent@1.0.0 outcomes@1.0.0
+
+Intent:
+Keep scratch data while its task is open and remove it after the task closes only when ownership is proven. Unsafe or unowned paths must remain untouched when another task is dispatched.
+
+Outcomes:
+- O1 Dispatch cleans only the closed task's proven-owned scratch directory.
+  consumer: machine — the isolated cleanup fixture controller
+  surface: task status, scratch ownership marker, retained file bytes and adapter output
+  check: run — dispatch, close the scratch task, dispatch another task and compare owned, unmarked and unsafe paths
+`);
+const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, WHEELHOUSE_CONTRACT_FIXTURE: contract, WHEELHOUSE_CLEANUP_FIXTURE_PEER: peer,
   WHEELHOUSE_SKIP_BD: "1", WHEELHOUSE_CLEANUP_SYNC: "1" };
 delete env.WHEELHOUSE_CLEANUP;
 const invocations: any[] = [], failures: string[] = [];
