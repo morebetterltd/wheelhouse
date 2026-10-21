@@ -40,18 +40,25 @@ scrub_evidence() {
       our @literal = sort { length($b->[0]) <=> length($a->[0]) }
         grep { !$seen{$_->[0]}++ }
         ((map { [$_, "[tmpdir]"] } @tmp), (map { [$_, "[home]"] } @home));
-      our $user = $ENV{USER_RAW} // "";
-      our $home_base = $ENV{HOME_BASE} // "";
+      our %replacement;
+      for my $entry (@literal) {
+        my ($p, $token) = @$entry;
+        $replacement{$p} //= $token if $p ne "/";
+      }
+      for my $name ($ENV{USER_RAW} // "", $ENV{HOME_BASE} // "") {
+        $replacement{$name} //= "[user]" if length($name);
+      }
+      # One pass: emitted text is never rescanned. Already-redacted tokens
+      # are opaque too, even if HOME ends in home, user, tmpdir, or a letter.
+      $replacement{$_} = $_ for ("[tmpdir]", "[home]", "[user]");
+      my @parts = (map { quotemeta($_) } ("[tmpdir]", "[home]", "[user]"));
+      push @parts, map { quotemeta($_) }
+        sort { length($b) <=> length($a) || $a cmp $b } keys %replacement;
+      push @parts, q{/(?:private/)?var/folders/[^[:space:]"'"'"'`)>,;]+};
+      our $pattern = join("|", @parts);
     }
-    our (@literal, $user, $home_base);
-    for my $entry (@literal) {
-      my ($p, $replacement) = @$entry;
-      next if $p eq "/";
-      s/\Q$p\E/$replacement/g;
-    }
-    s{/(?:private/)?var/folders/[^[:space:]"'"'"'`)>,;]+}{[tmpdir]}g;
-    s{\Q$user\E}{[user]}g if length($user);
-    s{\Q$home_base\E}{[user]}g if length($home_base) && $home_base ne $user;
+    our (%replacement, $pattern);
+    s{($pattern)}{exists($replacement{$1}) ? $replacement{$1} : "[tmpdir]"}ge;
   '
 }
 

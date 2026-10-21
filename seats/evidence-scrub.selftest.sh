@@ -44,6 +44,12 @@ grep -qF "$TMP_RAW/wheelhouse.planted" "$OUT" && LEAKS=$((LEAKS + 1))
 if [ $LEAKS -eq 0 ]; then pass "scrubbed capture contains none of the planted raw values"
 else fail "scrubbed capture leaked $LEAKS planted raw value(s): $(tr '\n' ' ' < "$OUT")"; fi
 
+if node "$HERE/fixtures/evidence-placeholders.mjs" "$SCRUB" "$FIX"; then
+  pass "common HOME basenames preserve existing and emitted placeholders across all entry points"
+else
+  fail "opaque-placeholder regression"
+fi
+
 if [ $FAILED -eq 0 ]; then
   printf '\nevidence-scrub.selftest: PASS\n'
   exit 0
