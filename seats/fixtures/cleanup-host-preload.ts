@@ -14,7 +14,15 @@ function unavailable(): never { throw Object.assign(new Error("fixture hardware 
 const execFileSync = ((file: any, ...args: any[]) => {
   if (file === "/usr/sbin/ioreg") {
     if (machine === "unavailable") unavailable();
-    return capture.replace("10000000-0000-0000-0000-000000000001", uuid);
+    const output = capture.replace("10000000-0000-0000-0000-000000000001", uuid);
+    // Model the native command's stdio contract, not only its pipe return.
+    // The production identity reader now captures into a private descriptor.
+    const stdout = args[1]?.stdio?.[1];
+    if (typeof stdout === "number") {
+      nativeFs.writeSync(stdout, output);
+      return null;
+    }
+    return output;
   }
   return (nativeCp.execFileSync as any)(file, ...args);
 }) as typeof cp.execFileSync;
