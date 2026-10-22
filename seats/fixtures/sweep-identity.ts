@@ -228,9 +228,9 @@ async function hostnameOnlyMutant(dir: string) {
     const result = mode(dir, "supervise", ["bash", "-c", 'printf "ran\\n" > "$1"', "fixture", stamp], mutant);
     assert.equal(result.status, 2, "hostname-only matcher must break cross-name admission");
     const diagnostics = result.stderr.split("\n").filter(x => x.startsWith("SELFTEST_LOCK_REFUSAL ")).map(x => JSON.parse(x.slice("SELFTEST_LOCK_REFUSAL ".length)));
-    assert(diagnostics.some(x => x.operation === "acquire" && x.reason === "invalid queue marker"), "reject the actual lost-alias proof, not an unrelated setup error");
+    assert(diagnostics.some(x => x.operation === "acquire" && x.reason === "marker host identity is not this host" && x.host.identitySource !== "hostname" && x.host.identityFailures.length === 0), "reject the actual lost-alias proof with valid captured hardware identity, not an unrelated setup error");
     assert(!fs.existsSync(stamp), "broken matcher must not admit the payload");
-    console.log("EXPECTED_REJECTION hostname-only-matcher native=2 reason=invalid-queue-marker payload=absent");
+    console.log("EXPECTED_REJECTION hostname-only-matcher native=2 reason=marker-host-identity payload=absent");
   } finally { release(dir, owned, after); }
 }
 async function identityAvailability(dir: string, kind: "path" | "missing" | "error" | "malformed") {

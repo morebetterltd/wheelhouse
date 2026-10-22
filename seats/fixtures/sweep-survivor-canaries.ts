@@ -32,7 +32,9 @@ try {
   for (const v of variants) {
     fs.writeFileSync(runner, v.runner ?? source); fs.writeFileSync(lib, v.lib ?? library);
     const r = spawnSync('bun', [path.join(here, 'fixtures/sweep-survivors.ts'), root, seats, v.mode], {
-      env: { ...process.env, WHEELHOUSE_SURVIVOR_TAG: v.name }, encoding: 'utf8', timeout: 60000,
+      // Same outer suite watchdog as the positive: require the real rejecting
+      // assertion, not a 60s spawn timeout under scheduler pressure.
+      env: { ...process.env, WHEELHOUSE_SURVIVOR_TAG: v.name }, encoding: 'utf8',
     });
     fs.writeFileSync(path.join(root, `${v.name}.stdout`), r.stdout ?? '');
     fs.writeFileSync(path.join(root, `${v.name}.stderr`), r.stderr ?? '');
