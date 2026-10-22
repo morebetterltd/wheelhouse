@@ -56,7 +56,7 @@ for (const hostname of ["network-before", "network-after"]) {
   let named = source.replace("const HOST = os.hostname();", `const HOST = ${JSON.stringify(hostname)};`);
   if (provider) {
     const needle = process.platform === "darwin"
-      ? 'execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 })'
+      ? 'readIdentityProvider("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 })'
       : 'fs.readFileSync("/etc/machine-id", "utf8")';
     assert.equal(named.split(needle).length, 2, "one native provider to replay");
     named = named.replace(needle, `fs.readFileSync(${JSON.stringify(provider)}, "utf8")`);
@@ -233,7 +233,7 @@ async function hostnameOnlyMutant(dir: string) {
     console.log("EXPECTED_REJECTION hostname-only-matcher native=2 reason=marker-host-identity payload=absent");
   } finally { release(dir, owned, after); }
 }
-async function identityAvailability(dir: string, kind: "path" | "missing" | "error" | "malformed") {
+async function identityAvailability(dir: string, kind: "path" | "missing" | "error" | "empty" | "truncated" | "malformed") {
   const lock = path.join(dir, "host.lock"), nativeOwned = acquired(dir);
   const cacheFile = path.join(lock + ".host", marker + "-host");
   const cache = fs.existsSync(cacheFile) ? { bytes: fs.readFileSync(cacheFile), ino: fs.statSync(cacheFile).ino } : undefined;
@@ -251,14 +251,21 @@ async function identityAvailability(dir: string, kind: "path" | "missing" | "err
     // No OS binary, machine-id, platform ABI or installed helper is changed.
     const provider = path.join(dir, "identity-source");
     if (process.platform === "darwin") {
-      if (kind !== "missing") fs.writeFileSync(provider, kind === "error" ? "#!/bin/sh\nexit 73\n" : "#!/bin/sh\nprintf 'not a hardware UUID\\n'\n", { mode: 0o700 });
-      const pattern = /execFileSync\("(?:\/usr\/sbin\/)?ioreg"/g;
+      const script = kind === "error" ? "#!/bin/sh\nexit 73\n"
+        : kind === "empty" ? "#!/bin/sh\nexit 0\n"
+        // Truncate the captured IOPlatformUUID field shape; normalized value.
+        : kind === "truncated" ? "#!/bin/sh\nprintf '  \"IOPlatformUUID\" = \"12345678-1234-\\n'\n"
+        : "#!/bin/sh\nprintf 'not a hardware UUID\\n'\n";
+      if (kind !== "missing") fs.writeFileSync(provider, script, { mode: 0o700 });
+      const pattern = /readIdentityProvider\("(?:\/usr\/sbin\/)?ioreg"/g;
       assert.equal([...source.matchAll(pattern)].length, 1);
-      file = path.join(dir, "helper.ts"); fs.writeFileSync(file, source.replace(pattern, `execFileSync(${JSON.stringify(provider)}`));
+      file = path.join(dir, "helper.ts"); fs.writeFileSync(file, source.replace(pattern, `readIdentityProvider(${JSON.stringify(provider)}`));
     } else {
       assert.equal(process.platform, "linux", "availability fixture supports native macOS/Linux");
       if (kind === "error") fs.mkdirSync(provider);
       if (kind === "malformed") fs.writeFileSync(provider, "not a machine id\n");
+      if (kind === "empty") fs.writeFileSync(provider, "");
+      if (kind === "truncated") fs.writeFileSync(provider, "1234567890abcdef\n");
       const needle = 'fs.readFileSync("/etc/machine-id", "utf8")'; assert.equal(source.split(needle).length, 2);
       file = path.join(dir, "helper.ts"); fs.writeFileSync(file, source.replace(needle, `fs.readFileSync(${JSON.stringify(provider)}, "utf8")`));
     }
@@ -299,7 +306,7 @@ async function identityAvailability(dir: string, kind: "path" | "missing" | "err
   const calls = fs.readFileSync(path.join(dir, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
   fs.writeFileSync(path.join(dir, "identity-observation.json"), JSON.stringify({ kind, source: d.host.identitySource, failures: d.host.identityFailures, statuses: calls.map(c => c.status), stableCachePreserved: !!cache, freshStatuses }, null, 2) + "\n");
 }
-const cases = [["minimal-path", (d: string) => identityAvailability(d, "path")], ["identity-source-missing", (d: string) => identityAvailability(d, "missing")], ["identity-source-error", (d: string) => identityAvailability(d, "error")], ["identity-source-malformed", (d: string) => identityAvailability(d, "malformed")], ["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["hostname-only-mutant", hostnameOnlyMutant], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
+const cases = [["minimal-path", (d: string) => identityAvailability(d, "path")], ["identity-source-missing", (d: string) => identityAvailability(d, "missing")], ["identity-source-error", (d: string) => identityAvailability(d, "error")], ["identity-source-malformed", (d: string) => identityAvailability(d, "malformed")], ["identity-source-empty", (d: string) => identityAvailability(d, "empty")], ["identity-source-truncated", (d: string) => identityAvailability(d, "truncated")], ["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["hostname-only-mutant", hostnameOnlyMutant], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
 assert(!selected || cases.some(([name]) => name === selected), "known selected identity leg");
 for (const [name, run] of cases) {
   if (selected && selected !== name) continue;
