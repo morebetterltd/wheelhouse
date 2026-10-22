@@ -694,7 +694,17 @@ perl -0pe 's/fs\.constants\.O_WRONLY \| fs\.constants\.O_NONBLOCK/fs.constants.O
 if ! cmp -s "$ADAPTER" "$BROKEN_ADAPTER"; then
   selftest_copy_seat_runtime "$FIX/fifo-mutant-source" "$ADAPTER_DIR"
   bun -e 'import fs from "node:fs";fs.copyFileSync(process.argv[1],process.argv[2]);' "$BROKEN_ADAPTER" "$FIX/fifo-mutant-source/seats/adapter.ts"
-  perl -0pi -e 's/\n  if \(fifo && fs\.existsSync\(fifo\) && !fifoHasReader\(fifo\)\) return false;//' "$FIX/fifo-mutant-source/seats/seat-activity.ts"
+  bun - "$FIX/fifo-mutant-source/seats/seat-activity.ts" <<'JS'
+import fs from 'node:fs'; import assert from 'node:assert/strict';
+const file=process.argv[2], source=fs.readFileSync(file,'utf8');
+const guards=[
+  '  if (fifo && fs.existsSync(fifo) && !fifoHasReader(fifo)) return false;',
+  '  if (fifo && fs.existsSync(fifo) && !fifoHasReader(fifo)) return { kind: "foreign", reason: "seat FIFO has no reader" };',
+].filter(guard=>source.includes(guard));
+assert.equal(guards.length,1,'blocking-open canary must remove the actual reader guard');
+assert.equal(source.split(guards[0]).length,2,'reader guard must be unique');
+fs.writeFileSync(file,source.replace(guards[0],''));
+JS
   selftest_copy_seat_runtime "$DEAD_FIFO_PROJ" "$FIX/fifo-mutant-source/seats"
   env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" PID="$NO_READER_PID" bun -e '
     import fs from "node:fs"; import path from "node:path"; import cp from "node:child_process";
