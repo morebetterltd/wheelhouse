@@ -25,7 +25,7 @@ PROJ="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"
 mkdir -p "$PROJ/seats/run" "$PROJ/seats/logs" "$PROJ/wheelhouse" "$PROJ/contracts" "$BIN" "$HOME_FIX"
 cp "$GATE" "$PROJ/seats/fleet-gate.sh"
 chmod +x "$PROJ/seats/fleet-gate.sh"
-for f in quarantine.ts alerts.ts seat-settled.ts fleet-snapshot.ts roster.ts pool.ts seat-activity.ts seat-stream-health.ts seat-worktree.ts credential-shapes.ts harness.ts needs.ts template-drift.sh lock.ts; do cp "$HERE/$f" "$PROJ/seats/$f"; done
+for f in quarantine.ts alerts.ts seat-settled.ts fleet-snapshot.ts completed-command.ts roster.ts pool.ts seat-activity.ts seat-stream-health.ts seat-worktree.ts credential-shapes.ts harness.ts needs.ts template-drift.sh lock.ts; do cp "$HERE/$f" "$PROJ/seats/$f"; done
 chmod +x "$PROJ/seats/template-drift.sh"
 cat > "$PROJ/seats/template-drift.sh" <<'SH'
 #!/usr/bin/env bash
