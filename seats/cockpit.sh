@@ -198,7 +198,7 @@ install_resize_hook() {
   if [ -n "${WHEELHOUSE_TMUX_SOCKET:-}" ]; then
     prefix="tmux -L $WHEELHOUSE_TMUX_SOCKET"
   fi
-  tmx set-hook -t "$S" client-attached "run-shell 'sleep 0.1; $prefix resize-pane -t ${S}:bridge.0 -x ${COMMANDER_PANE_PERCENT}%'"
+  tmx set-hook -t "$S" client-attached "run-shell '$prefix resize-pane -t ${S}:bridge.0 -x ${COMMANDER_PANE_PERCENT}%'"
 }
 
 spawn_floor_pane() {
