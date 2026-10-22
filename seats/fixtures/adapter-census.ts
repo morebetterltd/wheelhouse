@@ -29,13 +29,20 @@ const bytes=fs.readFileSync(path.join(dir,'ps.stdout')),err=fs.readFileSync(path
 const capture={command:[process.env.CENSUS_REAL_PS,...args],status:r.status,signal:r.signal,error:r.error?{message:r.error.message,code:r.error.code}:null,bytes:bytes.length,stderrBytes:err.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex')};
 fs.writeFileSync(path.join(dir,'capture.json'),JSON.stringify(capture,null,2));
 if(r.error||r.signal||r.status!==0||!bytes.length||err.length){process.stderr.write('fixture real ps capture failed\\n');process.exit(2);}
-let payload=bytes,exit=0,diagnostic='';
-if(mode==='large')payload=Buffer.concat(Array(Math.ceil(2*1024*1024/bytes.length)+1).fill(bytes));
+let payload=bytes,exit=0,diagnostic='',candidateOffset=null;
+if(mode==='large'){
+ const text=bytes.toString('utf8');if(!Buffer.from(text).equals(bytes))throw Error('fixture requires actual UTF-8 ps records');
+ if(!text.endsWith('\\n'))throw Error('native ps records must be LF terminated');
+ const lines=text.slice(0,-1).split('\\n'),candidate=lines.filter(x=>new RegExp('^\\\\s*'+process.env.CENSUS_EXPECT_PID+'\\\\s+').test(x)),other=lines.filter(x=>!candidate.includes(x));
+ if(candidate.length!==1)throw Error('captured candidate must exist exactly once before replay');
+ const padding=Buffer.from(other.join('\\n')+'\\n'),prefix=Buffer.concat(Array(Math.ceil(2*1024*1024/padding.length)+1).fill(padding));
+ candidateOffset=prefix.length;payload=Buffer.concat([prefix,Buffer.from(candidate[0]+'\\n')]);
+}
 if(mode==='exit23'){exit=23;diagnostic='fixture census native23\\n';}
 if(mode==='empty')payload=Buffer.alloc(0);
 if(mode==='malformed')payload=Buffer.from('fixture malformed census\\n');
 if(mode==='stderr')diagnostic='fixture census diagnostic despite exit0\\n';
-fs.writeFileSync(path.join(dir,'replay.json'),JSON.stringify({mode,bytes:payload.length,exit,diagnostic,sha256:crypto.createHash('sha256').update(payload).digest('hex')},null,2));
+fs.writeFileSync(path.join(dir,'replay.json'),JSON.stringify({mode,bytes:payload.length,candidateOffset,exit,diagnostic,sha256:crypto.createHash('sha256').update(payload).digest('hex')},null,2));
 process.stdout.write(payload);if(diagnostic)process.stderr.write(diagnostic);process.exitCode=exit;
 `);
 fs.writeFileSync(wrapper, '#!/bin/sh\nexec node "$CENSUS_WRAPPER_SCRIPT" "$@"\n', { mode: 0o700 });
@@ -78,7 +85,7 @@ try {
   for (const mode of ["large", "exit23", "empty", "malformed", "stderr"]) {
     const dir = path.join(evidence, mode); fs.mkdirSync(dir);
     const child = Bun.spawn(["bun", path.join(root, "seats/adapter.ts"), "status"], {
-      cwd: root, env: { ...process.env, HOME: home, WHEELHOUSE_SKIP_BD: "1", WHEELHOUSE_CLEANUP: "0", PATH: bin + path.delimiter + process.env.PATH, CENSUS_REAL_PS: realPs, CENSUS_WRAPPER_SCRIPT: wrapperScript, CENSUS_MODE: mode, CENSUS_CASE_DIR: dir, WHEELHOUSE_ORPHAN_CONFIRM_MS: "0" },
+      cwd: root, env: { ...process.env, HOME: home, WHEELHOUSE_SKIP_BD: "1", WHEELHOUSE_CLEANUP: "0", PATH: bin + path.delimiter + process.env.PATH, CENSUS_REAL_PS: realPs, CENSUS_WRAPPER_SCRIPT: wrapperScript, CENSUS_MODE: mode, CENSUS_CASE_DIR: dir, CENSUS_EXPECT_PID: String(peer.pid), WHEELHOUSE_ORPHAN_CONFIRM_MS: "0" },
       stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -93,7 +100,7 @@ try {
       const healthy = stdout.split("\n").find(line => line.startsWith("worker-1"));
       assert(healthy?.includes("RUNNING") && healthy.includes(`pid ${recorded.pid}`), "healthy recorded seat remains visible");
       if (mode === "large") {
-        assert(replay.bytes > 2 * 1024 * 1024); assert.equal(replay.exit, 0);
+        assert(replay.bytes > 2 * 1024 * 1024 && replay.candidateOffset > 2 * 1024 * 1024, "actual candidate is beyond every historical default pipe prefix"); assert.equal(replay.exit, 0);
         assert(stdout.includes(`pid ${peer.pid}`) && /ORPHAN|fixture leak/.test(stdout) && stdout.includes("remedy:"), "large census must report the real captured duplicate");
         assert(!stderr.includes("UNVERIFIED orphan census"), "complete captured census is verified");
       } else {
