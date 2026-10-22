@@ -9,6 +9,9 @@
 #
 # Usage:  bench.sh <release-manifest> <output-dir>
 #
+# HTTP_BENCH_TIMEOUT: whole-run resource policy in seconds (default 3600).
+# Expiry reports the last observed state, then TERM/KILLs only this bench's
+# private process group (5s teardown grace). This is not a throughput SLA.
 # Exit 0 only if both deployables did their job: the API served a record it
 # had stored, and the worker consumed a queued job that the API then reported
 # as done. A running container is not a pass.
@@ -28,12 +31,68 @@ mkdir -p "$OUT"
 case "$MANIFEST" in /*) ;; *) MANIFEST="$PWD/$MANIFEST" ;; esac
 case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
 
+HTTP_BENCH_TIMEOUT="${HTTP_BENCH_TIMEOUT:-3600}"
+case "$HTTP_BENCH_TIMEOUT" in ''|*[!0-9]*|????????*) printf 'bench: HTTP_BENCH_TIMEOUT must be 1..2147483 seconds\n' >&2; exit 2;; esac
+[ "$HTTP_BENCH_TIMEOUT" -ge 1 ] && [ "$HTTP_BENCH_TIMEOUT" -le 2147483 ] \
+  || { printf 'bench: HTTP_BENCH_TIMEOUT must be 1..2147483 seconds\n' >&2; exit 2; }
+# heavy-test.sh already requires Bun. Supervise a private worker group so the
+# policy also interrupts a blocked curl/docker command: a Bash signal trap
+# alone can wait forever for a foreground command. The re-entry value is bound
+# to this direct parent's PID, not a generic inherited "skip timeout" flag.
+if [ "${WHEELHOUSE_HTTP_BENCH_SUPERVISOR:-}" != "$PPID" ]; then
+  exec bun - "$BASH" "$0" "$MANIFEST" "$OUT" "$HTTP_BENCH_TIMEOUT" <<'SUPERVISE'
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+const [bash, script, manifest, out, seconds] = process.argv.slice(2);
+const stateFile = path.join(out, 'bench-state.txt');
+fs.writeFileSync(stateFile, 'initialising bench\n');
+const child = spawn(bash, [script, manifest, out], {
+  detached: true, stdio: 'inherit',
+  env: { ...process.env, WHEELHOUSE_HTTP_BENCH_SUPERVISOR: String(process.pid) },
+});
+let expired = false, interrupted = 0, grace;
+function stopGroup() {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  try { process.kill(-child.pid, 'SIGTERM'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
+  if (!grace) grace = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      console.error('[bench] teardown grace expired; killing only owned bench group');
+      try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
+    }
+  }, 5000);
+}
+function expire() {
+  expired = true;
+  let last = 'state unavailable';
+  try { last = fs.readFileSync(stateFile, 'utf8').trim(); } catch {}
+  const line = `[bench] FAIL: HTTP_BENCH_TIMEOUT policy expired after ${seconds}s; last state: ${last}`;
+  fs.writeFileSync(path.join(out, 'timeout.txt'), line + '\n');
+  console.error(line);
+  stopGroup();
+}
+const timer = setTimeout(expire, Number(seconds) * 1000);
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+  process.on(signal, () => { interrupted = code; stopGroup(); });
+}
+child.on('error', error => { clearTimeout(timer); console.error(error); process.exitCode = 1; });
+child.on('close', (code, signal) => {
+  clearTimeout(timer); if (grace) clearTimeout(grace);
+  process.exitCode = expired ? 124 : interrupted || (signal ? 1 : code ?? 1);
+});
+SUPERVISE
+fi
+
 log()  { printf '[bench] %s\n' "$*"; }
 fail() { printf '[bench] FAIL: %s\n' "$*" >&2; exit 1; }
 
-# Readiness is an observed result, not N seconds on a quiet host. The caller
-# supplies whole-bench containment; these loops stop on the actual event or a
-# native terminal failure. Keep the last input/result for a failed review.
+# Readiness is an observed result, not N seconds on a quiet host. The bench's
+# supervisor above owns the whole-run bound; these loops stop on the event
+# or a native terminal failure. Keep the last input/result for a failed review.
+bench_state() {
+  printf '%s\n' "$*" > "$OUT/bench-state.new"
+  mv -f "$OUT/bench-state.new" "$OUT/bench-state.txt"
+}
 container_running() {
   local name="$1" running
   docker inspect --format '{{.State.Running}}' "$name" > "$OUT/container-state.stdout" 2> "$OUT/container-state.stderr" \
@@ -104,6 +163,7 @@ esac
 cp "$MANIFEST" "$OUT/release-manifest.txt"
 log "api    $API_IMG"
 log "worker $WRK_IMG"
+bench_state "pulling reviewed images"
 docker pull --quiet "$API_IMG" >/dev/null || fail "cannot pull $API_IMG"
 docker pull --quiet "$WRK_IMG" >/dev/null || fail "cannot pull $WRK_IMG"
 
@@ -118,12 +178,14 @@ docker run -d --name "$DB" --network "$NET" \
   postgres:16-alpine >/dev/null
 log "waiting for the database to accept connections"
 while :; do
+  container_running "$DB"
+  bench_state "database container up; awaiting pg_isready"
   ready_rc=0
   docker exec "$DB" pg_isready -q -U postgres > "$OUT/db-ready.stdout" 2> "$OUT/db-ready.stderr" || ready_rc=$?
   printf 'pg_isready rc=%s\n' "$ready_rc" >> "$OUT/readiness.log"
+  bench_state "database container up; pg_isready rc=$ready_rc"
   [ "$ready_rc" = 0 ] && break
   case "$ready_rc" in 1|2) ;; *) fail "database readiness command failed (rc=$ready_rc); see db-ready.stderr";; esac
-  container_running "$DB"
   sleep 1
 done
 
@@ -148,11 +210,13 @@ BASE="http://127.0.0.1:$PORT"
 log "api binding observed at $BASE; awaiting health response"
 
 while :; do
+  container_running "$API"
+  bench_state "API container up; endpoint not answering; awaiting health response"
   health_rc=0
   curl -fsS "$BASE/healthz" > "$OUT/health.stdout" 2> "$OUT/health.stderr" || health_rc=$?
   printf 'healthz rc=%s\n' "$health_rc" >> "$OUT/readiness.log"
+  bench_state "API container up; endpoint health rc=$health_rc"
   [ "$health_rc" = 0 ] && break
-  container_running "$API"
   sleep 1
 done
 
@@ -182,9 +246,11 @@ curl -fsS -X POST "$BASE/v1/readings/$ID/summarise" -o "$OUT/queue.json" \
   || fail "POST .../summarise failed"
 STATE=""
 while :; do
+  bench_state "API and worker launched; awaiting job state (last '$STATE')"
   curl -fsS "$BASE/v1/readings/$ID" -o "$OUT/job-state.json" || fail "cannot observe job state"
   STATE=$(jq -r '.summary_state' < "$OUT/job-state.json") || fail "invalid job state JSON"
   printf 'job state=%s\n' "$STATE" >> "$OUT/readiness.log"
+  bench_state "job state '$STATE'"
   case "$STATE" in
     done|failed) break;;
     queued|pending|running) ;;
