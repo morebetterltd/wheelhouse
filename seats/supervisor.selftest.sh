@@ -129,6 +129,13 @@ TS
 chmod +x "$PROJ/seats/adapter.ts"
 printf '{"seats":{"worker-dead":{"pid":999999,"lastBead":"bead-live","cwd":"%s","log":"%s/seats/logs/worker-dead.jsonl"},"worker-stopped":{"pid":null,"stoppedAt":"2026-01-01T00:00:00.000Z","lastBead":"bead-old","cwd":"%s","log":"%s/seats/logs/worker-stopped.jsonl"}}}\n' "$PROJ" "$PROJ" "$PROJ" "$PROJ" > "$PROJ/seats/state.json"
 : > "$PROJ/seats/run/adapter-calls.log"
+# Earlier real-time ticks populated this field. Start the injected-clock leg
+# with an explicit initial state, not a January clock behind an October tick.
+node - "$PROJ/seats/run/supervisor.state.json" <<'JS'
+const fs=require('node:fs'),file=process.argv[2],state=JSON.parse(fs.readFileSync(file,'utf8'));
+console.log('RECOVERY_CLOCK_INPUT '+JSON.stringify({previousLastRecoveryMs:state.lastRecoveryMs,initialInjectedClock:'2026-01-01T00:00:00.000Z',reset:'fixture-only lastRecoveryMs'}));
+delete state.lastRecoveryMs; fs.writeFileSync(file,JSON.stringify(state,null,2)+'\n');
+JS
 for instant in 2026-01-01T00:00:00.000Z 2026-01-01T00:00:00.199Z 2026-01-01T00:00:00.200Z; do
   (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW="$instant" WHEELHOUSE_SEAT_RECOVERY_SECONDS=0.2 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
 done
