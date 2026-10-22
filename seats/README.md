@@ -562,8 +562,13 @@ never leaves `status` naming the previous bead after the prompt has been sent.
 RPC readiness, state replies, FIFO drain and prompt acknowledgements have no
 elapsed-time failure budget: a live seat with an open pipe may answer late.
 The adapter waits for the matching response, or fails with the seat name and
-pid when the process dies or its pipe closes (EOF). A
-`command:"parse", success:false` response fails immediately when read, before
+pid when the process dies or its pipe closes (EOF). An established seat whose
+response-log path disappears or whose file inode changes during an RPC is refused with
+`response source lost`, seat, pid and path: a live PID/FIFO cannot establish
+that replies remain observable. Each read checks and consumes the same opened
+file descriptor. Fresh launches may still wait for their first log creation;
+source loss does not signal/restart the seat or rewrite its PID/session/bead.
+A `command:"parse", success:false` response fails immediately when read, before
 acknowledgement matching, with `PI_PARSE_ERROR`, seat, pid, pi's error and
 `adapter.ts stop <seat> && adapter.ts resume <seat>`. Pi cannot recover a
 request id from malformed JSON: pending calls observing that transport error
@@ -600,7 +605,9 @@ change to the idle-alert detector, snapshot or state.json schema.
 `WHEELHOUSE_WEDGED_GET_STATE_MS` no longer decide RPC outcomes.
 `WHEELHOUSE_RPC_TIMEOUT_MS` remains a legacy stop/SIGKILL-confirmation setting
 only, not an RPC budget. `adapter-rpc.selftest.sh` covers held replies beyond
-the old logical budgets, live backpressure, death, EOF and partial writes.
+the old logical budgets, live backpressure, death, EOF, partial writes, a missing
+established response log, and removal/inode replacement while a reply is held.
+The loss controls fail on actual forbidden delivery/WAIT events, not a deadline.
 Fleet snapshot graph reads, contract reads and fixture-owner inspection also
 wait for native command completion, not a quiet-machine deadline. The legacy
 `WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS` is no longer an authority to fail a

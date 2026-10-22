@@ -7,8 +7,15 @@ const root = path.resolve(process.argv[2]);
 const runtime = path.join(root, "runtime/seats");
 const peerFile = path.join(import.meta.dir, "adapter-rpc-peer.mjs");
 const clockFile = path.join(import.meta.dir, "adapter-rpc-clock.ts");
-const cases = ["held-reply", "dead-peer", "closed-pipe", "backpressure", "partial-eof"];
+const caseNames = ["held-reply", "dead-peer", "closed-pipe", "backpressure", "partial-eof", "missing-log", "lost-log", "replaced-log"];
+// Optional exact-case diagnosis; the unfiltered full sweep still runs all8.
+const wanted = process.env.WHEELHOUSE_TEST_RPC_CASES?.split(",").map(s => s.trim());
+if (wanted) assert(wanted.every(name => caseNames.includes(name)), "unknown RPC case selection");
+const cases = caseNames.filter(name => !wanted || wanted.includes(name));
+assert(cases.length > 0, "RPC selection must exercise a case");
 const results: any[] = [];
+const evidence = process.env.WHEELHOUSE_RPC_EVIDENCE;
+if (evidence) fs.mkdirSync(evidence, { recursive: true });
 
 function fileSignal(file: string) {
   let resolve: () => void;
@@ -102,6 +109,52 @@ for (const kind of cases) {
     state.seats["reviewer-1"].lastBead = "old-bead";
     fs.writeFileSync(stateFile, JSON.stringify(state));
     const send = (type: string) => peer.socket.write(JSON.stringify({ type }) + "\n");
+    const log = state.seats["reviewer-1"].log;
+    const originalLog = fs.statSync(log, { bigint: true });
+    const assertSourceLost = async (request: ReturnType<typeof cli>, forbiddenEvent: Promise<any>) => {
+      const outcome = await Promise.race([
+        request.finished.then(result => ({ result })),
+        forbiddenEvent.then(event => ({ event })),
+      ]);
+      if ("event" in outcome) {
+        // An actual request on a missing established channel, or an explicit
+        // WAIT after loss, proves the guard is absent. No elapsed-time verdict:
+        // cancel only this directly owned client AFTER recording that event.
+        const current = fs.existsSync(log) ? fs.statSync(log, { bigint: true }) : null;
+        const proof = { kind, event: outcome.event, pid, log, original: `${originalLog.dev}:${originalLog.ino}`, current: current ? `${current.dev}:${current.ino}` : null };
+        assert(current === null || proof.current !== proof.original);
+        assert.equal(peer.closed, false);
+        assert.doesNotThrow(() => process.kill(pid, 0));
+        fs.writeFileSync(path.join(dir, "source-loss-before-client-cancel.json"), JSON.stringify(proof));
+        if (evidence) {
+          fs.mkdirSync(path.join(evidence, kind), { recursive: true });
+          fs.writeFileSync(path.join(evidence, kind, "source-loss-before-client-cancel.json"), JSON.stringify(proof));
+        }
+        request.child.kill("SIGTERM");
+        await request.finished;
+        throw new Error(`continued RPC after response source loss: ${kind}; observed ${JSON.stringify(outcome.event)} before owned-client cancellation`);
+      }
+      const result = outcome.result;
+      assert.notEqual(result.rc, 0, "lost response source must refuse");
+      assert.match(result.err, /response source lost/);
+      assert(result.err.includes(`seat "reviewer-1" (pid ${pid})`), result.err);
+      assert(result.err.includes(log), result.err);
+      assert.match(result.err, kind === "replaced-log" ? /inode changed/ : /path missing/);
+      assert.doesNotMatch(result.err, /timed out|process died/);
+      assert.equal(peer.closed, false, "loss is unobservable, not proof of death");
+      assert.doesNotThrow(() => process.kill(pid, 0));
+      assert(!events.some(e => e.type === "term"), "refusal must not signal the seat");
+      assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, "utf8")), state, "PID/session/bead context remains unchanged");
+      assert.equal(fs.existsSync(path.join(clock, "advance")), false);
+      console.log(`PASS ${kind}: response source lost names seat/pid/path; same live unsignalled peer and unchanged PID/session/bead context`);
+    };
+    if (kind === "missing-log") {
+      const holding = next("holding"); send("hold"); await holding;
+      fs.unlinkSync(log);
+      const forbidden = next("held");
+      await assertSourceLost(cli(["dispatch", "reviewer-1", "new-bead", kind], true), forbidden);
+      continue;
+    }
     const waitingForDrain = kind === "backpressure" || kind === "partial-eof";
     let barrier = next(waitingForDrain ? "pause-armed" : "holding");
     send(waitingForDrain ? "pause-after-state" : "hold");
@@ -115,6 +168,18 @@ for (const kind of cases) {
     await expectBeforeExit(barrier);
     assert.equal(peer.closed, false);
     assert.doesNotThrow(() => process.kill(pid, 0));
+    if (kind === "lost-log" || kind === "replaced-log") {
+      signal = fileSignal(path.join(clock, "progress"));
+      fs.writeFileSync(path.join(clock, "observe"), "report actual WAIT after loss, never a time budget\n");
+      if (kind === "lost-log") fs.unlinkSync(log);
+      else {
+        fs.renameSync(log, log + ".original");
+        fs.writeFileSync(log, "");
+        assert.notEqual(fs.statSync(log, { bigint: true }).ino, originalLog.ino);
+      }
+      await assertSourceLost(request, signal.promise.then(() => JSON.parse(fs.readFileSync(path.join(clock, "progress"), "utf8"))));
+      continue;
+    }
     if (kind === "held-reply" || waitingForDrain) {
       signal = fileSignal(path.join(clock, "progress"));
       fs.writeFileSync(path.join(clock, "observe"), "report progress AFTER this barrier\n");
@@ -168,10 +233,15 @@ for (const kind of cases) {
     await new Promise<void>(resolve => server.close(() => resolve()));
     const result = { kind, failure: failure ?? null, events, invocations };
     fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(result, null, 2) + "\n");
+    if (evidence) {
+      fs.mkdirSync(path.join(evidence, kind), { recursive: true });
+      fs.writeFileSync(path.join(evidence, kind, "result.json"), JSON.stringify(result, null, 2) + "\n");
+    }
     results.push(result);
   }
 }
 fs.writeFileSync(path.join(root, "results.json"), JSON.stringify(results, null, 2) + "\n");
+if (evidence) fs.writeFileSync(path.join(evidence, "results.json"), JSON.stringify(results, null, 2) + "\n");
 const failures = results.filter(r => r.failure).length;
 console.log(`adapter-rpc.selftest: ${cases.length} checks, ${failures} failures`);
 process.exitCode = failures ? 1 : 0;

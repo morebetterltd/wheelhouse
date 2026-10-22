@@ -613,19 +613,23 @@ function sleep(ms: number): Promise<void> {
 
 /** Read complete log lines from a byte offset; for old offset=0 callers, tail only. */
 function logLinesFrom(log: string, offset: number, maxBytes = LOG_TAIL_BYTES): { lines: string[]; offset: number; truncated: boolean } {
-  if (!fs.existsSync(log)) return { lines: [], offset, truncated: false };
-  const size = fs.statSync(log).size;
+  let fd: number;
+  try { fd = fs.openSync(log, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); }
+  catch (e: any) {
+    if (e.code === "ENOENT") return { lines: [], offset, truncated: false };
+    throw e;
+  }
+  try { return logLinesFromDescriptor(fd, offset, maxBytes); }
+  finally { fs.closeSync(fd); }
+}
+
+function logLinesFromDescriptor(fd: number, offset: number, maxBytes = LOG_TAIL_BYTES): { lines: string[]; offset: number; truncated: boolean } {
+  const size = fs.fstatSync(fd).size;
   if (size <= offset) return { lines: [], offset, truncated: false };
   const start = offset === 0 && size > maxBytes ? size - maxBytes : offset;
   const truncated = start > offset;
-  const fd = fs.openSync(log, "r");
-  let chunk: Buffer;
-  try {
-    chunk = Buffer.alloc(size - start);
-    fs.readSync(fd, chunk, 0, chunk.length, start);
-  } finally {
-    fs.closeSync(fd);
-  }
+  const chunk = Buffer.alloc(size - start);
+  fs.readSync(fd, chunk, 0, chunk.length, start);
   let text = chunk.toString("utf8");
   let base = start;
   if (truncated) {
@@ -651,12 +655,40 @@ function promptCommand(message: string, streamingBehavior: "followUp" | "steer")
 
 async function rpc(rec: RpcSeat, command: Record<string, unknown>): Promise<any> {
   const id = crypto.randomUUID();
-  let offset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
+  let responseSource: string | undefined;
+  const lost = (reason: string) => new Error(`${rpcSeat(rec)} response source lost: ${JSON.stringify(rec.log)} — ${reason}`);
+  const openResponseSource = (): number | null => {
+    let fd: number;
+    try { fd = fs.openSync(rec.log, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); }
+    catch (e: any) {
+      // A fresh launch may not have created its first log yet. Once observed,
+      // or for an established seat, absence is a lost channel, not latency.
+      if (e.code === "ENOENT" && rec.startedAt === undefined && responseSource === undefined) return null;
+      throw lost(e.code === "ENOENT" ? "path missing" : `cannot open response file (${e.code ?? e.message})`);
+    }
+    try {
+      const st = fs.fstatSync(fd, { bigint: true });
+      if (!st.isFile()) throw lost("response path is not a regular file");
+      const identity = `${st.dev}:${st.ino}`;
+      if (responseSource !== undefined && responseSource !== identity) throw lost(`inode changed (${responseSource} -> ${identity})`);
+      responseSource = identity;
+      return fd;
+    } catch (e) { fs.closeSync(fd); throw e; }
+  };
+  const initial = openResponseSource();
+  let offset = 0;
+  if (initial !== null) {
+    try { offset = fs.fstatSync(initial).size; }
+    finally { fs.closeSync(initial); }
+  }
   await fifoWrite(rec, { ...command, id });
   const phase = `while waiting for ${command.type} response`;
   const progress = rpcProgress(rec, () => `${phase}; pipe open`);
   for (;;) {
-    const r = logLinesFrom(rec.log, offset);
+    const fd = openResponseSource();
+    let r: ReturnType<typeof logLinesFromDescriptor>;
+    try { r = fd === null ? { lines: [], offset, truncated: false } : logLinesFromDescriptor(fd, offset); }
+    finally { if (fd !== null) fs.closeSync(fd); }
     offset = r.offset;
     for (const line of r.lines) {
       let obj: any;
