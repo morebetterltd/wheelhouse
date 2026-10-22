@@ -58,6 +58,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import { checkBeadContract, contractRemedy } from "./contract";
+import { completedCommand } from "./completed-command";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1625,18 +1626,27 @@ async function cmdSteer(name: string, text: string): Promise<void> {
 interface ProcessRow { pid: number; ppid: number; startMs: number | null; command: string }
 type OpenPathSnapshot = Map<number, string[]>;
 
-function processRows(): Map<number, ProcessRow> {
-  const rows = new Map<number, ProcessRow>();
+type ProcessRowsSnapshot = { rows: Map<number, ProcessRow>; error?: undefined } | { rows: null; error: string };
+
+function processRows(): ProcessRowsSnapshot {
   try {
-    const out = spawnSync("ps", ["axo", "pid=,ppid=,lstart=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout || "";
-    for (const line of out.split(/\n/)) {
+    const result = completedCommand("ps", ["axo", "pid=,ppid=,lstart=,command="]);
+    if (result.error || result.signal || result.status !== 0 || result.stderr.trim()) {
+      return { rows: null, error: `ps exit=${result.status ?? "none"} signal=${result.signal ?? "none"}${result.error ? ` error=${result.error.message}` : ""}${result.stderr ? ` stderr=${JSON.stringify(result.stderr)}` : ""}` };
+    }
+    if (!result.stdout.trim()) return { rows: null, error: "ps returned an empty census" };
+    const rows = new Map<number, ProcessRow>();
+    for (const [index, line] of result.stdout.split(/\n/).entries()) {
+      if (!line.trim()) continue;
       const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$/);
-      if (!m) continue;
+      if (!m) return { rows: null, error: `ps returned a malformed census record at line ${index + 1}` };
       const start = Date.parse(m[3]);
       rows.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), startMs: Number.isFinite(start) ? start : null, command: m[4] || "" });
     }
-  } catch { /* ps should exist; absence only removes an extra status hint */ }
-  return rows;
+    return { rows };
+  } catch (error) {
+    return { rows: null, error: `ps capture failed: ${String(error)}` };
+  }
 }
 
 function isDescendantOf(pid: number, ancestor: number | null | undefined, rows: Map<number, ProcessRow>): boolean {
@@ -1929,7 +1939,9 @@ async function cmdStatus(): Promise<void> {
     return;
   }
   const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
-  const rows = processRows();
+  const census = processRows();
+  if (census.rows === null) console.error(`UNVERIFIED orphan census: ${census.error}; no absence of extra processes inferred; recorded seat rows still reported`);
+  const rows = census.rows;
   const observations = readStreamObservations(ROOT);
   let sawSettled = false;
   for (const name of names) {
@@ -1981,7 +1993,7 @@ async function cmdStatus(): Promise<void> {
     }
     if (stream?.stalled) console.log(`${" ".repeat(16)} STALLED: no own stream event for ${Math.floor(stream.quietForMs / 1000)}s; last ${stream.lastEvent} at ${stream.lastEventAt}; commander inspect/redispatch (no automatic restart)`);
     else if (stream?.phase === "tool") console.log(`${" ".repeat(16)} TOOL WAIT: ${stream.pendingTools.join(", ")}; last stream event ${stream.lastEventAt}; not a model-stream stall`);
-    for (const orphan of identity.kind === "unverified" ? [] : orphanMatchesFor(name, rec, rows, roster[name])) {
+    for (const orphan of identity.kind === "unverified" || rows === null ? [] : orphanMatchesFor(name, rec, rows, roster[name])) {
       if (orphan.fixtureBead) {
         console.log(`${" ".repeat(16)} fixture leak (${orphan.fixtureBead}): pid ${orphan.pid} matches rostered seat ${name} but is running under a .wheelhouse-runs fixture root; reason: ${orphan.reason}; remedy: kill the fixture process and inspect fixture cleanup`);
       } else {

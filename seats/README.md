@@ -618,6 +618,13 @@ Native nonzero exits, signals, spawn errors and non-JSON/empty graph stdout
 remain errors. Cancel a hung command explicitly; the admitted selftest sweep supplies
 test containment. Staffing growth and stop-all busy actors use observed events
 and explicit release, never elapsed startup/turn clocks.
+Status's one whole-host `ps` orphan census uses the same descriptor capture.
+Native errors/signals/nonzero, diagnostics, empty or malformed census output
+produce `UNVERIFIED orphan census` rather than an empty-table inference.
+Healthy recorded seat rows remain visible; an unavailable census neither proves
+absence of extra processes nor changes seat identity/state. Adapter regression
+cases replay actual captured process records beyond the old pipe ceiling and
+exercise native23, empty, malformed and stderr-bearing results.
 `stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
