@@ -625,6 +625,17 @@ Healthy recorded seat rows remain visible; an unavailable census neither proves
 absence of extra processes nor changes seat identity/state. Adapter regression
 cases replay actual captured process records beyond the old pipe ceiling and
 exercise native23, empty, malformed and stderr-bearing results.
+An early `verify-cancellation` child exit before idle readiness is not diagnosed
+from its case/signal name. The FAIL line names retained `stdout`, `stderr` and
+`exit.json` outside both cancellation scratch and the per-suite TMPDIR. Files
+are private (0600 in a fresh0700 directory); an initial snapshot is completed
+after owned cleanup and stream EOF. `WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT`
+overrides the destination, otherwise the explicit evidence root or
+`seats/verdicts/verify-cancellation-failures` beside the test is used. Keep that
+root outside temporary trees; storage refusal is reported, never called saved.
+A planted native37 leg deletes its scratch and verifies both streams/exit status
+and the printed FAIL path survive. This preserves the next diagnosis; it does
+not claim a cause or cure for historical early exits whose streams were lost.
 `stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
