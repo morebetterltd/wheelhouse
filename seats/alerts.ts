@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { readQuarantine } from "./quarantine";
-import { fleetSnapshot, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
+import { fleetSnapshot, readyWorkNobodyOnIt, hasUnverifiedWorkers, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
 import { observeSettledSeats, type SettledSeat } from "./seat-settled";
 import { acquirePidLock, releasePidLock } from "./lock";
@@ -19,7 +19,7 @@ const ALERT_LOG = path.join(LOGS, "alerts.log");
 const DEFAULT_INTERVAL_MS = 60_000;
 export const TEMPLATE_DRIFT_ALERT_HOLD_MS = Number(process.env.WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS ?? 10 * 60_000);
 
-type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|`seat-stalled:${string}`;
+type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|`seat-stalled:${string}`|`seat-unverified:${string}`;
 type AlertState = { active:boolean; since:string|null; lastFiredAt:string|null; needId?:string|null; signature?:string; detail?:string };
 type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; github:any; drift:any; quarantined:{count:number;names:string[]}; seatStreams:Record<string,StreamHealth>; alerts:Record<string,AlertState>; settledSeats:Record<string,SettledSeat> };
 
@@ -112,10 +112,11 @@ function maybeHuman(name:AlertName, st:AlertState, stream?:StreamHealth){ const 
 
 // Independent namespace/state from the unfinished-model-stream watchdog.
 // No automatic dispatch, abort, capacity change or human need is created here.
-function settledTaskAlerts(observations:Record<string,SettledSeat>, prior:Record<string,AlertState>, alerts:Record<string,AlertState>){
+function settledTaskAlerts(observations:Record<string,SettledSeat>, prior:Record<string,AlertState>, alerts:Record<string,AlertState>, unverified:Record<string,unknown>={}){
   const prefix="seat-settled-task:";
   const names=new Set([...Object.keys(observations).map(seat=>prefix+seat),...Object.keys(prior).filter(name=>name.startsWith(prefix))]);
   for(const name of names){
+    if(unverified[name.slice(prefix.length)]) { if(prior[name]) alerts[name]=prior[name]; continue; }
     const observation=observations[name.slice(prefix.length)], was=prior[name];
     const signature=observation?JSON.stringify([observation.contextKey,observation.mode==="review"?null:observation.eventKey,observation.mode]):was?.signature??"";
     const next=alertRow(!!observation?.due,was,signature); next.detail=was?.detail;
@@ -134,11 +135,21 @@ function settledTaskAlerts(observations:Record<string,SettledSeat>, prior:Record
 
 export function buildSnapshot(root=ROOT):SnapshotFile{
   const entries=readQuarantine(root); const quarantined={count:entries.length,names:entries.map(e=>e.suite)};
-  const prior=readJson(SNAP) as SnapshotFile|null; const priorAlerts=prior?.alerts??{}; const snap=fleetSnapshot(root); const settledSeats=observeSettledSeats(root,snap.workers.live,prior?.settledSeats); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const github=githubInfo(); const drift=driftInfo();
-  const seatStreams=observeSeatStreams(root,prior?.seatStreams??{});
+  const prior=readJson(SNAP) as SnapshotFile|null; const priorAlerts=prior?.alerts??{}; const snap=fleetSnapshot(root);
+  const unverified=snap.unverified??={};
+  const unknown=(seat:string,rec:any,reason:string)=>{
+    const worker=snap.workers.live.find(w=>w.name===seat),reviewer=snap.reviewers.live.find(w=>w.name===seat);
+    unverified[seat]={pid:rec.pid??null,role:worker?"worker":reviewer?"reviewer":rec.role??unverified[seat]?.role??"unknown",status:"UNVERIFIED",reason};
+    for(const entry of [worker,reviewer]) if(entry){entry.busy=true;entry.identity="UNVERIFIED";}
+  };
+  const settledSeats=observeSettledSeats(root,snap.workers.live,prior?.settledSeats,Date.now(),unknown); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const github=githubInfo(); const drift=driftInfo();
+  const seatStreams=observeSeatStreams(root,prior?.seatStreams??{},Date.now(),unknown);
+  for(const seat of Object.keys(unverified)){delete seatStreams[seat];delete settledSeats[seat];}
+  snap.workers.busy=snap.workers.live.filter(w=>w.busy).length;snap.workers.idle=snap.workers.live.length-snap.workers.busy;
+  snap.reviewers.busy=snap.reviewers.live.filter(w=>w.busy).length;snap.reviewers.idle=snap.reviewers.live.length-snap.reviewers.busy;
   const active:Record<AlertName,{on:boolean; sig:string; detail:string}>={
     "idle-fleet-ready-work":{on:readyWorkNobodyOnIt(snap),sig:"",detail:`ready=${snap.readyCount}; busy workers=${snap.workers.busy}; ready beads=${snap.ready.map(r=>r.id).join(", ")}`},
-    "cold-seats-ready-work":{on:snap.readyCount>0&&snap.workers.live.length===0,sig:"",detail:`ready=${snap.readyCount}; live workers=${snap.workers.live.length}; ready beads=${snap.ready.map(r=>r.id).join(", ")}`},
+    "cold-seats-ready-work":{on:!hasUnverifiedWorkers(snap)&&snap.readyCount>0&&snap.workers.live.length===0,sig:"",detail:`ready=${snap.readyCount}; live workers=${snap.workers.live.length}; ready beads=${snap.ready.map(r=>r.id).join(", ")}`},
     "inbox-lag":{on:inbox.undrainedRows>0&&inbox.lagMs>=minutesValue("alert-inbox-lag-minutes",10)*60_000,sig:"",detail:`undrained rows=${inbox.undrainedRows}; oldest=${inbox.oldestUndrainedAt}; lagMs=${inbox.lagMs}`},
     "untriaged-github-issues":{on:Array.isArray(github.untriaged)&&github.untriaged.length>0,sig:Array.isArray(github.untriaged)?github.untriaged.join("\n"):"",detail:`untriaged issues=${(github.untriaged??[]).join(", ")}`},
     "capacity-events":{on:capacity.seats.length>0,sig:capacity.seats.join("\n"),detail:`capacity seats=${capacity.seats.join(", ")}`},
@@ -151,8 +162,11 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
   // seat settles, stops, resumes progress, parks on capacity, or is removed.
   for(const name of Object.keys(priorAlerts)) if(name.startsWith("seat-stalled:")) active[name as AlertName]={on:false,sig:"",detail:""};
   for(const stream of Object.values(seatStreams)) active[`seat-stalled:${stream.seat}`]={on:stream.stalled,sig:`${stream.processKey}:${stream.bead??""}:${stream.progressKey}`,detail:`seat=${stream.seat}; task=${stream.bead??"unassigned"}; last own event=${stream.lastEvent} at ${stream.lastEventAt}; quietMs=${stream.quietForMs}; phase=${stream.phase}`};
+  for(const name of Object.keys(priorAlerts)) if(name.startsWith("seat-unverified:")) active[name as AlertName]={on:false,sig:"",detail:""};
+  for(const [seat,proof] of Object.entries(unverified)) active[`seat-unverified:${seat}`]={on:true,sig:proof.reason,detail:`seat=${seat}; pid=${proof.pid}; UNVERIFIED: ${proof.reason}; left untouched; repair/retry identity inspection, do not restart or reclaim`};
   const alerts:Record<string,AlertState>={};
   for(const name of Object.keys(active) as AlertName[]){
+    if(name.startsWith("seat-stalled:")&&unverified[name.slice("seat-stalled:".length)]){if(priorAlerts[name])alerts[name]=priorAlerts[name];continue;}
     const stored=priorAlerts[name], stream=name.startsWith("seat-stalled:")?seatStreams[name.slice("seat-stalled:".length)]:undefined;
     let was=name==="template-drift"&&stored ? {...stored,signature:priorDriftSignature(stored.signature)} : stored;
     if(stream?.stalled && was?.active && was.signature!==active[name].sig){ if(was.needId) needClose(was.needId); was=undefined; }
@@ -165,7 +179,7 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
     alerts[name]=next;
   }
   if(quarantined.count!==(prior?.quarantined?.count??0)) appendInboxAlert("quarantine",`Alert quarantine: count=${quarantined.count}; suites=${quarantined.names.join(", ")||"none"}. Cost: these suites keep running but their failures do not block review. Next: inspect each owner task and deadline in seats/selftest-quarantine.list.`);
-  settledTaskAlerts(settledSeats,priorAlerts,alerts);
+  settledTaskAlerts(settledSeats,priorAlerts,alerts,unverified);
   return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,github,drift,quarantined,seatStreams,alerts,settledSeats};
 }
 export function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }

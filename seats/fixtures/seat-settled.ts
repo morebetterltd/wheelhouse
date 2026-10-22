@@ -18,7 +18,13 @@ function make(label: string) {
   fs.cpSync(here, seats, { recursive: true });
   for (const d of [logs, path.join(seats, "run"), bin, path.join(root, "home"), path.join(root, "wheelhouse")]) fs.mkdirSync(d, { recursive: true });
   const log = path.join(logs, "worker-a.jsonl"), tasks = path.join(root, "tasks.json"), stateFile = path.join(seats, "state.json"), rosterFile = path.join(seats, "seats.json");
-  const state = { seats: { "worker-a": { pid: process.pid, log, lastBead: "fixture-task", lastDispatchAt: iso(t0 - minute) } as any } };
+  // A live PID alone is not seat identity. Hold a real FIFO so the fixture's
+  // synthetic activity clock stays independent of the process's native birth.
+  const fifo = path.join(seats, "run/worker-a.stdin"), made = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
+  console.log("CAPTURE settled fixture FIFO " + JSON.stringify({ pid: process.pid, status: made.status, signal: made.signal, stdout: made.stdout, stderr: made.stderr }));
+  assert.equal(made.status, 0); assert(fs.statSync(fifo).isFIFO());
+  fs.openSync(fifo, fs.constants.O_RDWR); // kept until this case process exits
+  const state = { seats: { "worker-a": { pid: process.pid, fifo, log, lastBead: "fixture-task", lastDispatchAt: iso(t0 - minute) } as any } };
   const roster = { seats: { "worker-a": { role: "worker", account: { dir: "~/fixture-worker" } } as any } };
   // Shape captured with bd list --json --limit 5000 on 2026-10-20:
   // status=in_progress with labels=[needs-review] is still a review-ready task.

@@ -56,9 +56,17 @@ SH
 chmod +x "$BIN/bd" "$BIN/gh"
 ( cd "$PROJ" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats wheelhouse contracts && git commit -q -m base )
 (cd "$FIX" && exec sleep 1000) & P1=$!; (cd "$FIX" && exec sleep 1000) & P2=$!
-cat > "$PROJ/seats/state.json" <<JSON
-{"seats":{"worker-a":{"pid":$P1,"log":"$PROJ/seats/logs/worker-a.jsonl"},"worker-b":{"pid":$P2,"log":"$PROJ/seats/logs/worker-b.jsonl"}}}
-JSON
+bun - "$PROJ" "$P1" "$P2" <<'JS'
+import fs from 'node:fs';import {spawnSync} from 'node:child_process';import assert from 'node:assert/strict';
+const [root,...pids]=process.argv.slice(2),seats={};
+for(const [i,pid]of pids.entries()){
+ const r=spawnSync('ps',['-p',pid,'-o','lstart='],{encoding:'utf8'});
+ console.error('CAPTURE fleet-gate fixture ps '+JSON.stringify({pid,status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));
+ assert.equal(r.status,0);assert.equal(r.signal,null);assert.equal(r.error,undefined);
+ seats['worker-'+String.fromCharCode(97+i)]={pid:Number(pid),startedAt:new Date(Date.parse(r.stdout.trim())).toISOString(),log:root+'/seats/logs/worker-'+String.fromCharCode(97+i)+'.jsonl'};
+}
+fs.writeFileSync(root+'/seats/state.json',JSON.stringify({seats}));
+JS
 printf '%s\n' '{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}' > "$PROJ/seats/logs/worker-a.jsonl"
 printf '%s\n' '{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}' > "$PROJ/seats/logs/worker-b.jsonl"
 

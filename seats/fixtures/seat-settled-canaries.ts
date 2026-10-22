@@ -7,7 +7,7 @@ assert(fs.statSync(here).isDirectory() && fs.statSync(root).isDirectory());
 const helper = "seat-settled.ts", alerts = "alerts.ts";
 const due = 'due: phase === "settled" && mode !== null && quietForMs >= quietMs';
 const mutations = [
-  { id: "wiring", test: "review", file: alerts, old: "observeSettledSeats(root,snap.workers.live,prior?.settledSeats)", next: "({})" },
+  { id: "wiring", test: "review", file: alerts, old: "observeSettledSeats(root,snap.workers.live,prior?.settledSeats,Date.now(),unknown)", next: "({})" },
   { id: "graph-status", test: "threshold", file: "fleet-snapshot.ts", old: "taskStatus: st?.status ?? null", next: "taskStatus: null" },
   { id: "graph-review", test: "review", file: "fleet-snapshot.ts", old: 'taskNeedsReview: st?.labels.includes("needs-review") ?? false', next: "taskNeedsReview: false" },
   { id: "config", test: "config", file: helper, old: "return 30 * 60_000;", next: "return 31 * 60_000;" },
