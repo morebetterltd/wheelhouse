@@ -17,11 +17,51 @@ assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());
 assert(fs.statSync(helper).isFile()); assert(fs.statSync(runner).isFile());
 const source = fs.readFileSync(helper, "utf8"), marker = "wheelhouse-selftest-sweep", anchor = marker + "-queue";
 const tokenA = "a".repeat(32), tokenB = "b".repeat(32), results: object[] = [];
+// These three legs vary the reported network name, not hardware availability.
+// Capture/drain one real native provider to close, then replay those exact
+// private bytes for both names. Missing/error/malformed-provider legs below
+// continue to exercise the untouched production helper and lookup policy.
+const selected = process.env.WHEELHOUSE_IDENTITY_TEST_CASE;
+const nameCases = ["inherited-network-change", "supervise-network-change", "network-change", "hostname-only-mutant"];
+let provider: string | undefined;
+if (!selected || nameCases.includes(selected)) {
+  const began = performance.now();
+  let bytes: string, command: string[], status = 0;
+  if (process.platform === "darwin") {
+    command = ["/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"];
+    const child = spawn(command[0], command.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    child.stdout!.on("data", b => out += b); child.stderr!.on("data", b => err += b);
+    const native = await new Promise<{code: number | null; signal: string | null}>((resolve, reject) => {
+      child.once("error", reject); child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    assert.equal(native.signal, null); assert.equal(native.code, 0, err); assert.equal(err, "");
+    bytes = out;
+    const match = /^\s*"IOPlatformUUID" = "([0-9A-Fa-f-]+)"\s*$/m.exec(bytes);
+    assert(match && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(match[1]) && !/^0+$/.test(match[1].replaceAll("-", "")), "native identity capture must be valid before the name-change experiment");
+  } else {
+    assert.equal(process.platform, "linux"); command = ["read", "/etc/machine-id"];
+    bytes = fs.readFileSync(command[1], "utf8");
+    assert(/^[0-9a-f]{32}$/i.test(bytes.trim()) && !/^0+$/.test(bytes.trim()), "valid native machine-id capture");
+  }
+  const response = path.join(root, "native-identity-response");
+  fs.writeFileSync(response, bytes, { mode: 0o600 });
+  provider = response;
+  console.log("NATIVE_IDENTITY_CAPTURE " + JSON.stringify({ command, status, bytes: Buffer.byteLength(bytes), valid: true, elapsedMs: performance.now()-began, nice: os.getPriority(0) }));
+}
 const helpers = new Map<string, string>();
 for (const hostname of ["network-before", "network-after"]) {
   assert.equal(source.split("const HOST = os.hostname();").length, 2, "instrument only reported hostname");
   const file = path.join(root, hostname + ".ts");
-  fs.writeFileSync(file, source.replace("const HOST = os.hostname();", `const HOST = ${JSON.stringify(hostname)};`)); helpers.set(hostname, file);
+  let named = source.replace("const HOST = os.hostname();", `const HOST = ${JSON.stringify(hostname)};`);
+  if (provider) {
+    const needle = process.platform === "darwin"
+      ? 'execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 })'
+      : 'fs.readFileSync("/etc/machine-id", "utf8")';
+    assert.equal(named.split(needle).length, 2, "one native provider to replay");
+    named = named.replace(needle, `fs.readFileSync(${JSON.stringify(provider)}, "utf8")`);
+  }
+  fs.writeFileSync(file, named); helpers.set(hostname, file);
 }
 function call(dir: string, op: string, token: string, owned = "", file = helper, pid = process.pid) {
   const args = [file, op, path.join(dir, "host.lock"), String(pid), token, owned];
@@ -177,6 +217,22 @@ async function supervisedNetwork(dir: string) {
     assert(!fs.existsSync(lock)); assert(!fs.existsSync(lock + ".queue"));
   } finally { if (!closed) child.kill("SIGTERM"); await done; fs.writeFileSync(path.join(dir, "supervisor.out"), out); fs.writeFileSync(path.join(dir, "supervisor.err"), err); }
 }
+async function hostnameOnlyMutant(dir: string) {
+  const before = helpers.get("network-before")!, after = helpers.get("network-after")!;
+  const named = fs.readFileSync(after, "utf8"), needle = "return hostNames.has(marker.hostname);";
+  assert.equal(named.split(needle).length, 2);
+  const mutant = path.join(dir, "hostname-only.ts");
+  fs.writeFileSync(mutant, named.replace(needle, "return marker.hostname === HOST;"));
+  const owned = acquired(dir, before), stamp = path.join(dir, "ran");
+  try {
+    const result = mode(dir, "supervise", ["bash", "-c", 'printf "ran\\n" > "$1"', "fixture", stamp], mutant);
+    assert.equal(result.status, 2, "hostname-only matcher must break cross-name admission");
+    const diagnostics = result.stderr.split("\n").filter(x => x.startsWith("SELFTEST_LOCK_REFUSAL ")).map(x => JSON.parse(x.slice("SELFTEST_LOCK_REFUSAL ".length)));
+    assert(diagnostics.some(x => x.operation === "acquire" && x.reason === "invalid queue marker"), "reject the actual lost-alias proof, not an unrelated setup error");
+    assert(!fs.existsSync(stamp), "broken matcher must not admit the payload");
+    console.log("EXPECTED_REJECTION hostname-only-matcher native=2 reason=invalid-queue-marker payload=absent");
+  } finally { release(dir, owned, after); }
+}
 async function identityAvailability(dir: string, kind: "path" | "missing" | "error" | "malformed") {
   const lock = path.join(dir, "host.lock"), nativeOwned = acquired(dir);
   const cacheFile = path.join(lock + ".host", marker + "-host");
@@ -243,8 +299,7 @@ async function identityAvailability(dir: string, kind: "path" | "missing" | "err
   const calls = fs.readFileSync(path.join(dir, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
   fs.writeFileSync(path.join(dir, "identity-observation.json"), JSON.stringify({ kind, source: d.host.identitySource, failures: d.host.identityFailures, statuses: calls.map(c => c.status), stableCachePreserved: !!cache, freshStatuses }, null, 2) + "\n");
 }
-const cases = [["minimal-path", (d: string) => identityAvailability(d, "path")], ["identity-source-missing", (d: string) => identityAvailability(d, "missing")], ["identity-source-error", (d: string) => identityAvailability(d, "error")], ["identity-source-malformed", (d: string) => identityAvailability(d, "malformed")], ["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
-const selected = process.env.WHEELHOUSE_IDENTITY_TEST_CASE;
+const cases = [["minimal-path", (d: string) => identityAvailability(d, "path")], ["identity-source-missing", (d: string) => identityAvailability(d, "missing")], ["identity-source-error", (d: string) => identityAvailability(d, "error")], ["identity-source-malformed", (d: string) => identityAvailability(d, "malformed")], ["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["hostname-only-mutant", hostnameOnlyMutant], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
 assert(!selected || cases.some(([name]) => name === selected), "known selected identity leg");
 for (const [name, run] of cases) {
   if (selected && selected !== name) continue;
