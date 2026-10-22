@@ -96,6 +96,12 @@ try {
       assert.equal(captured.status, 0); assert.equal(captured.signal, null); assert.equal(captured.error, null);
       const actual = fs.readFileSync(path.join(dir, "ps.stdout"), "utf8");
       assert(actual.split("\n").some(line => new RegExp(`^\\s*${peer.pid}\\s+`).test(line) && line.includes(account)), "actual captured candidate row exists before replay");
+      process.kill(recorded.pid, 0); process.kill(peer.pid, 0);
+      assert(recorded.exitCode === null && peer.exitCode === null, "both actual subjects remain live before the reporting assertion");
+      const current = JSON.parse(fs.readFileSync(stateFile, "utf8")).seats["worker-1"];
+      for (const key of ["pid", "sessionId", "lastBead"]) assert.equal(current[key], (seat as any)[key], "reporting preserves context");
+      result.subject = { recordedAlive: true, candidateAlive: true, contextUnchanged: true };
+      result.capture = captured; result.replay = replay;
       assert.equal(code, 0, "status must keep its total reporting contract");
       const healthy = stdout.split("\n").find(line => line.startsWith("worker-1"));
       assert(healthy?.includes("RUNNING") && healthy.includes(`pid ${recorded.pid}`), "healthy recorded seat remains visible");
@@ -114,9 +120,7 @@ try {
       }
       process.kill(recorded.pid, 0); assert(recorded.exitCode === null, "healthy process remains live");
       process.kill(peer.pid, 0); assert(peer.exitCode === null, "candidate remains live, not stopped/restarted by reporting");
-      const current = JSON.parse(fs.readFileSync(stateFile, "utf8")).seats["worker-1"];
-      for (const key of ["pid", "sessionId", "lastBead"]) assert.equal(current[key], (seat as any)[key], "reporting preserves context");
-      result.capture = captured; result.replay = replay;
+
     } catch (error) { result.failure = String(error); failures++; }
     fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(result, null, 2)); results.push(result);
     console.log(`${result.failure ? "FAIL" : "PASS"} adapter-census ${mode}: ${result.failure || "captured native records/status honoured; healthy row visible; context and live candidate preserved"}`);
