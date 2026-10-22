@@ -23,7 +23,7 @@ for (const [name, file, args] of [["ps", ps, ["-p", "999999999", "-o", "lstart="
 }
 const fifo = path.join(seats, "run/worker.stdin"), ready = path.join(root, "holder.ready"), signalled = path.join(root, "holder.signalled");
 assert.equal(command("mkfifo", [fifo]).status, 0);
-const holder = spawn("node", ["-e", `const fs=require('fs');fs.openSync(process.argv[1],fs.constants.O_RDWR);process.on('SIGTERM',()=>fs.writeFileSync(process.argv[3],'SIGTERM'));fs.writeFileSync(process.argv[2],String(process.pid));setInterval(()=>{},1000);`, fifo, ready, signalled], { cwd: root, stdio: "ignore" });
+const holder = spawn("node", ["-e", `const fs=require('fs');fs.openSync(process.argv[1],fs.constants.O_RDWR);process.on('SIGTERM',()=>fs.writeFileSync(process.argv[3],'SIGTERM'));fs.writeFileSync(process.argv[2]+'.new',String(process.pid));fs.renameSync(process.argv[2]+'.new',process.argv[2]);setInterval(()=>{},1000);`, fifo, ready, signalled], { cwd: root, stdio: "ignore" });
 let failures = 0, checked = 0;
 function check(name: string, fn: () => void) {
   if (process.env.WHEELHOUSE_IDENTITY_CASE && process.env.WHEELHOUSE_IDENTITY_CASE !== name) return;
