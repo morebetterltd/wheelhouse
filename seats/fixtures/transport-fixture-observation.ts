@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 
 type State = { ready: boolean; [key: string]: unknown };
 export async function observe(probe: () => State, alive: () => boolean, event: (kind: string, state: State) => void): Promise<State> {
@@ -30,12 +31,32 @@ function completeLines(file: string): string[] {
 }
 async function main() {
   const [mode, rootArg, pidArg, inputArg, requestsArg] = process.argv.slice(2);
-  const root = fs.realpathSync(rootArg), pid = Number(pidArg), input = path.resolve(inputArg);
+  const root = fs.realpathSync(rootArg);
   assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());
+  if (mode === "once") {
+    const project = fs.realpathSync(pidArg), label = inputArg;
+    assert(project.startsWith(root + path.sep)); assert(/^[a-z0-9-]+$/.test(label));
+    const file = path.join(project, "seats/courier.ts"); assert(fs.statSync(file).isFile());
+    const endpoint = new URL(process.env.WHEELHOUSE_TELEGRAM_API_BASE!);
+    assert.equal(endpoint.protocol, "http:"); assert.equal(endpoint.hostname, "127.0.0.1"); assert(Number(endpoint.port) > 0, "one-shot fixture requires its isolated endpoint");
+    const argv = ["bun", file, "--once"], child = spawn(argv[0], argv.slice(1), { cwd: project, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "", stdoutEOF = false, stderrEOF = false, error: string | undefined;
+    child.stdout!.on("data", b => { stdout += b; }); child.stderr!.on("data", b => { stderr += b; });
+    child.stdout!.on("end", () => { stdoutEOF = true; }); child.stderr!.on("end", () => { stderrEOF = true; }); child.once("error", e => { error = e.message; });
+    const status = await new Promise<{ code: number | null; signal: string | null }>(resolve => child.once("close", (code, signal) => resolve({ code, signal })));
+    const result = { label, argv, cwd: project, endpoint: endpoint.origin, ...status, error, stdout, stderr, stdoutEOF, stderrEOF, nice: os.getPriority(0) };
+    fs.writeFileSync(path.join(root, label + ".out"), stdout); fs.writeFileSync(path.join(root, label + ".err"), stderr); fs.writeFileSync(path.join(root, label + ".native.json"), JSON.stringify(result, null, 2) + "\n");
+    console.log("COURIER_ONCE_RESULT " + JSON.stringify(result));
+    assert(stdoutEOF && stderrEOF, "one-shot courier did not join both streams");
+    if (result.code !== 0 || result.signal || result.error) process.exitCode = 1;
+    return;
+  }
+  const pid = Number(pidArg), input = path.resolve(inputArg);
   assert(Number.isInteger(pid) && pid > 1);
   assert(input.startsWith(root + path.sep), "observation must stay in its owned fixture");
   assert(["ready", "send-failed", "retry-complete", "poll-recovered", "hung-retried"].includes(mode));
-  if (mode !== "ready") assert(fs.statSync(path.join(input, "seats/needs.jsonl")).isFile(), "seeded ledger must exist before observation");
+  if (mode !== "ready") assert(fs.statSync(path.join(input, "seats")).isDirectory(), "actor project must exist before observation");
+  if (mode !== "ready" && mode !== "hung-retried") assert(fs.statSync(path.join(input, "seats/needs.jsonl")).isFile(), "seeded ledger must exist before send/recovery observation");
   const requests = requestsArg ? path.resolve(requestsArg) : "";
   if (requests) assert(requests.startsWith(root + path.sep));
   const alive = () => { try { process.kill(pid, 0); return true; } catch (error: any) { if (error.code === "ESRCH") return false; throw error; } };

@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 
 type Capture = { code: number | null; signal: string | null; stdout: string; stderr: string; stdoutEOF: boolean; stderrEOF: boolean };
-function start(argv: string[]) {
-  const child = spawn(argv[0], argv.slice(1), { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+function start(argv: string[], extra: Record<string, string> = {}) {
+  const child = spawn(argv[0], argv.slice(1), { env: { ...process.env, ...extra }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderr = "", stdoutEOF = false, stderrEOF = false;
   const events: any[] = []; let pending = "", onEvent: (() => void) | undefined;
   child.stdout!.on("data", b => { stdout += b; });
@@ -26,7 +26,7 @@ async function entered(file: string, actor: ReturnType<typeof start>) {
 async function one(root: string, mode: string, source: string, label: string) {
   const dir = path.join(root, label); fs.mkdirSync(dir);
   const project = path.join(dir, "project"), ledger = path.join(project, "seats/needs.jsonl"), log = path.join(project, "seats/logs/courier.out.log"), requests = path.join(dir, "requests.jsonl"), ready = path.join(dir, "ready.json"), gate = path.join(dir, "release"), stop = path.join(dir, "stop"), began = path.join(dir, "entered");
-  fs.mkdirSync(path.dirname(log), { recursive: true }); fs.writeFileSync(ledger, '{"type":"opened","id":"need-retry"}\n'); fs.writeFileSync(log, ""); fs.writeFileSync(requests, "");
+  fs.mkdirSync(path.dirname(log), { recursive: true }); if (mode !== "hung-retried") fs.writeFileSync(ledger, '{"type":"opened","id":"need-retry"}\n'); fs.writeFileSync(log, ""); fs.writeFileSync(requests, "");
   const script = path.join(dir, "actor.ts");
   fs.writeFileSync(script, `import fs from 'node:fs';
 const mode=${JSON.stringify(mode)}, ledger=${JSON.stringify(ledger)}, log=${JSON.stringify(log)}, requests=${JSON.stringify(requests)};
@@ -63,6 +63,18 @@ server?.stop(true);
     if (observer && !native) await observer.result;
   }
 }
+async function onceCase(root: string, helper: string, label: string, code: number) {
+  const project = path.join(root, label); fs.mkdirSync(path.join(project, "seats"), { recursive: true });
+  fs.writeFileSync(path.join(project, "seats/courier.ts"), `import fs from "node:fs";fs.writeFileSync(${JSON.stringify(path.join(project, "entered"))},"entered");fs.writeFileSync(${JSON.stringify(path.join(project, "seats/needs.jsonl"))},'{"type":"sent","id":"stale-valid-ledger"}\\n');console.log("owned courier stdout");console.error("owned courier stderr");process.exit(${code});`);
+  const endpoint = JSON.parse(fs.readFileSync(path.join(root, "server.ready.json"), "utf8"));
+  const native = await start(["bun", helper, "once", root, project, label], { WHEELHOUSE_TELEGRAM_API_BASE: `http://127.0.0.1:${endpoint.port}` }).result;
+  const child = JSON.parse(fs.readFileSync(path.join(root, label + ".native.json"), "utf8"));
+  const actorEntered = fs.readFileSync(path.join(project, "entered"), "utf8") === "entered";
+  console.log("ONCE_CONTROL_RESULT " + JSON.stringify({ label, actorEntered, child, native }));
+  assert(actorEntered); assert.equal(child.code, code); assert.equal(child.signal, null); assert(child.stdoutEOF && child.stderrEOF); assert(native.stdoutEOF && native.stderrEOF);
+  assert.equal(native.code, code === 0 ? 0 : 1, "native command failure must not be masked by a valid ledger");
+  assert.equal(child.stdout, "owned courier stdout\n"); assert.equal(child.stderr, "owned courier stderr\n", "native stderr must be retained");
+}
 function copyRuntime(source: string, project: string) {
   const dest = path.join(project, "seats"); fs.mkdirSync(path.join(dest, "run"), { recursive: true });
   for (const name of fs.readdirSync(source)) if (/\.(ts|sh)$/.test(name) && !name.endsWith(".selftest.sh") && fs.statSync(path.join(source, name)).isFile()) fs.copyFileSync(path.join(source, name), path.join(dest, name));
@@ -71,6 +83,7 @@ function copyRuntime(source: string, project: string) {
 }
 async function main() {
   if (process.argv[2] === "--case") { const [root, mode, source, label] = process.argv.slice(3); await one(root, mode, source, label); return; }
+  if (process.argv[2] === "--once-case") { const [root, helper, label, code] = process.argv.slice(3); await onceCase(root, helper, label, Number(code)); return; }
   const [sourceSeats, root] = process.argv.slice(2); assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());
   const helper = path.join(sourceSeats, "fixtures/transport-fixture-observation.ts"), text = fs.readFileSync(helper, "utf8"), removed = path.join(root, "observer-no-wait.ts"), uncommitted = path.join(root, "observer-uncommitted.ts");
   const guard = 'if (state.ready) { event("complete", state); return state; }'; assert.equal(text.split(guard).length, 2);
@@ -90,6 +103,17 @@ async function main() {
   const partial = await start(["bun", import.meta.path, "--case", root, "retry-complete", uncommitted, "observer-uncommitted"]).result;
   assert.equal(partial.code, 1, JSON.stringify(partial)); assert(partial.stdout.includes('"actorEntered":true')); assert(partial.stderr.includes("observation completed before the entered actor committed its event"));
   console.log("PASS uncommitted-record removal: native1 after valid actor/setup; partial ledger publication cannot satisfy recovery");
+
+  const noStatus = path.join(root, "observer-no-status.ts"), noStderr = path.join(root, "observer-no-stderr.ts");
+  const statusGuard = 'if (result.code !== 0 || result.signal || result.error) process.exitCode = 1;'; assert.equal(text.split(statusGuard).length, 2); fs.writeFileSync(noStatus, text.replace(statusGuard, 'if (false) process.exitCode = 1;'));
+  const stderrGuard = 'child.stderr!.on("data", b => { stderr += b; });'; assert.equal(text.split(stderrGuard).length, 2); fs.writeFileSync(noStderr, text.replace(stderrGuard, 'child.stderr!.on("data", () => {});'));
+  for (const [label, source, childCode, expected] of [["once-success", helper, 0, 0], ["once-failure", helper, 23, 0], ["once-status-removed", noStatus, 23, 1], ["once-stderr-removed", noStderr, 23, 1]] as const) {
+    const native = await start(["bun", import.meta.path, "--once-case", root, source, label, String(childCode)]).result;
+    assert.equal(native.code, expected, JSON.stringify(native)); assert(native.stdoutEOF && native.stderrEOF); assert(native.stdout.includes('"actorEntered":true'));
+    if (label === "once-status-removed") assert(native.stderr.includes("native command failure must not be masked by a valid ledger"));
+    if (label === "once-stderr-removed") assert(native.stderr.includes("native stderr must be retained"));
+    console.log(`PASS ${label}: native${native.code}, entered one-shot child code${childCode}, both EOF`);
+  }
 
   const actual = path.join(sourceSeats, "fixtures/courier-poll-observation.ts"), original = fs.readFileSync(actual, "utf8"), clocked = path.join(root, "poll-clocked.ts"), oldClock = path.join(root, "poll-clock-removed.ts"), noClass = path.join(root, "poll-no-policy-class.ts");
   const anchor = 'let active = 0, maximum = 0, polls = 0;'; assert.equal(original.split(anchor).length, 2);
