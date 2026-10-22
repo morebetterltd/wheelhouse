@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 const file = process.argv[2], original = fs.readFileSync(file, "utf8");
 let source = original;
-function replace(old: string, next: string) { assert.equal(source.split(old).length, 2, "one observation anchor: " + old); source = source.replace(old, next); }
+function replace(old: string, next: string) { assert.equal(source.split(old).length, 2, "one observation anchor: " + old); source = source.replace(old, () => next); }
 replace('--once) tick ;;', `--once) tick; fixture_rc=$?; for fixture_job in $(jobs -p); do
   wait "$fixture_job"; fixture_job_rc=$?
   printf '{"job":%s,"native":%s}\\n' "$fixture_job" "$fixture_job_rc" >> "$RUN/fixture-once-results.jsonl"
