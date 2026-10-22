@@ -78,7 +78,7 @@ cleanup(){ stop_courier; [ -n "$WATCHDOG_PID" ] && stop_child "$WATCHDOG_PID" "w
 selftest_install_cleanup_traps cleanup
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-port(){ bun -e 'const s=(await import("node:net")).default.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});'; }
+observe(){ bun "$HERE/fixtures/transport-fixture-observation.ts" "$@"; }
 make_proj(){
   local p="$1"; mkdir -p "$p/seats/transports" "$p/seats/run" "$p/seats/logs" "$p/wheelhouse"
   selftest_copy_seat_runtime "$p" "$HERE"
@@ -97,7 +97,7 @@ function json(path:string, fallback:any){ try { return JSON.parse(fs.readFileSyn
 function append(path:string, row:any){ fs.appendFileSync(`${dir}/${path}`, JSON.stringify(row)+"\n"); }
 function delayMs(): number { try { return Number(fs.readFileSync(`${dir}/poll-delay-ms`, "utf8").trim()) || 0; } catch { return 0; } }
 function sleep(ms:number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
-Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
+const server = Bun.serve({ hostname:"127.0.0.1", port:0, async fetch(req){
   const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : {};
   if(u.pathname.endsWith('/sendMessage')) {
     msg++; append('requests.jsonl', {method:'sendMessage', body});
@@ -140,6 +140,9 @@ Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetc
   }
   return Response.json({ok:false,description:'no route'}, {status:404});
 }});
+const ready = `${dir}/server.ready.json`;
+fs.writeFileSync(ready + '.new', JSON.stringify({pid:process.pid,root:fs.realpathSync(dir),port:server.port})+'\n');
+fs.renameSync(ready + '.new', ready);
 EOF
 }
 start_courier_daemon(){
@@ -171,8 +174,8 @@ printf 'match match one\nno hit\nmatch two\n' > "$PROJ/seats/needs.jsonl"
 helper_count="$(count_ledger match)"; rc=$?
 [ "$rc" = 0 ] && [ "$helper_count" = 2 ] && pass 'ledger helper counts matching lines rather than occurrences' || fail 'ledger helper count failed'
 PROJ="$FIX/proj"; make_proj "$PROJ"; write_server
-P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
-for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$P/" >/dev/null 2>&1 || true; kill -0 "$SERVER_PID" 2>/dev/null && break; sleep 0.1; done
+STUB_DIR="$FIX" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
+P="$(observe ready "$FIX" "$SERVER_PID" "$FIX/server.ready.json")" || { fail "fake endpoint exited before publishing its bound port"; exit 1; }
 cat > "$PROJ/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-one","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Approve tag","body":"Ship it?","options":[{"label":"A","text":"Yes"},{"label":"B","text":"No"}],"machine":{}}
 EOF
@@ -209,19 +212,19 @@ cat > "$RETRY/seats/needs.jsonl" <<'EOF'
 EOF
 : > "$FIX/requests.jsonl"; : > "$RETRY/seats/logs/courier.out.log"; touch "$FIX/fail-send-once"
 start_courier_daemon "$RETRY" 200 "$FIX/retry.err"
-sleep 0.8
+observe send-failed "$FIX" "$COURIER_PID" "$RETRY" "$FIX/requests.jsonl" || fail 'retry observation ended before its named send failure'
 if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'send failed need=need-retry: Bad Request: chat not found' "$RETRY/seats/logs/courier.out.log"; then pass "transport send failure is logged with need id and courier keeps running"; else fail "courier did not survive/log first send failure pid=$COURIER_PID log=$(cat "$RETRY/seats/logs/courier.out.log" 2>/dev/null) err=$(cat "$FIX/retry.err" 2>/dev/null)"; fi
-for _ in $(seq 1 30); do grep -q '"type":"sent"' "$RETRY/seats/needs.jsonl" && break; sleep 0.2; done
+observe retry-complete "$FIX" "$COURIER_PID" "$RETRY" "$FIX/requests.jsonl" || fail 'retry did not complete observed recovery cycles'
+stop_courier
 sent_count="$(grep -c '"type":"sent"' "$RETRY/seats/needs.jsonl" || true)"
 if [ "$sent_count" -eq 1 ]; then pass "failed outbound event is retried and records exactly one sent event after success"; else fail "retry sent count=$sent_count ledger=$(cat "$RETRY/seats/needs.jsonl") requests=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
-stop_courier
 POLLFAIL="$FIX/pollfail"; make_proj "$POLLFAIL"
 cat > "$POLLFAIL/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-poll","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Poll failure","body":"Keep daemon alive","options":[],"machine":{}}
 EOF
 : > "$FIX/requests.jsonl"; : > "$POLLFAIL/seats/logs/courier.out.log"; touch "$FIX/fail-poll-once"
 start_courier_daemon "$POLLFAIL" 200 "$FIX/pollfail.err"
-sleep 0.8
+observe poll-recovered "$FIX" "$COURIER_PID" "$POLLFAIL" "$FIX/requests.jsonl" || fail 'poll failure did not reach an observed recovery cycle'
 if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'poll failed: Bad Request: poll failed' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure is logged and courier daemon keeps running"; else fail "poll failure killed courier or missed log pid=$COURIER_PID log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) err=$(cat "$FIX/pollfail.err" 2>/dev/null)"; fi
 polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
 if [ "$polls" -ge 2 ] && grep -q 'courier scanned' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure recovers on a later cycle"; else fail "poll failure did not retry/recover polls=$polls log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
@@ -247,7 +250,7 @@ else fail "planted overlap not rejected rc=$rc out=$(cat "$FIX/overlap-bad.out")
 HANG="$FIX/hang"; make_proj "$HANG"
 : > "$FIX/requests.jsonl"; : > "$HANG/seats/logs/courier.out.log"; touch "$FIX/hang-poll"
 WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS=200 start_courier_daemon "$HANG" 100 "$FIX/hang.err"
-sleep 0.9
+observe hung-retried "$FIX" "$COURIER_PID" "$HANG" "$FIX/requests.jsonl" || fail 'hung poll did not reach named policy expiry and a subsequent admitted poll'
 stop_courier
 rm -f "$FIX/hang-poll"
 hang_polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
@@ -273,6 +276,11 @@ start_courier_daemon "$WATCH" 100 "$FIX/watch.err"
 printf '%s\n' "$COURIER_PID" > "$WATCH/seats/run/courier.pid"
 # Courier restart supervision moved to seats/supervisor.selftest.sh; this selftest covers courier behavior only.
 stop_courier
+if bun "$HERE/fixtures/transport-observation-controls.ts" "$HERE" "$FIX"; then
+  pass 'fixture observation barriers require entered actors and committed events; meaningful removals fail'
+else
+  fail 'fixture observation barrier controls failed'
+fi
 survivors="$(fixture_courier_pids)"
 if [ -z "${COURIER_PID:-}" ] && [ -z "$survivors" ]; then pass "courier daemon started by this test is stopped before exit"; else fail "courier child survived cleanup check survivors=${survivors:-none}"; fi
 if [ "$FAIL" -eq 0 ]; then echo "courier.selftest: PASS ($PASS checks)"; exit 0; fi

@@ -8,7 +8,7 @@ const [projectArg, outputArg, mode = "serial", delayArg = "350"] = process.argv.
 const project = fs.realpathSync(projectArg), fixture = path.dirname(project), output = path.resolve(outputArg);
 assert(fs.statSync(path.join(fixture, ".wheelhouse-selftest-fixture")).isFile());
 assert.equal(path.dirname(output), fixture);
-assert(["serial", "parallel"].includes(mode));
+assert(["serial", "parallel", "policy-timeout"].includes(mode));
 const firstDelay = Number(delayArg);
 assert(Number.isInteger(firstDelay) && firstDelay > 0 && firstDelay < 1000);
 fs.mkdirSync(output, { recursive: true });
@@ -19,6 +19,8 @@ if (mode === "parallel") {
   assert.equal(source.split(needle).length, 2, "one initial processOnce call to mutate");
   fs.writeFileSync(courier, source.replace(needle, "line=(await Promise.all([processOnce(), processOnce()]))[0];"));
 }
+const log = path.join(project, "seats/logs/courier.out.log");
+const logOffset = fs.existsSync(log) ? fs.statSync(log).size : 0;
 let active = 0, maximum = 0, polls = 0;
 let releasePair!: () => void;
 const pair = new Promise<void>(resolve => { releasePair = resolve; });
@@ -33,6 +35,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
     // together: keep the first pending until the second has been observed.
     if (mode === "parallel" && index === 1) await pair;
     if (mode === "parallel" && index === 2) releasePair();
+    if (mode === "policy-timeout") await new Promise(() => {});
     await Bun.sleep(index === 1 ? firstDelay : 350);
     return Response.json({ ok: true, result: [] });
   } finally {
@@ -59,10 +62,8 @@ try {
   const exited = child.exited;
   const out = new Response(child.stdout).text(), err = new Response(child.stderr).text();
   try {
-    const until = performance.now() + 30000;
     while (polls < 3) {
       if (child.exitCode != null || child.signalCode != null) throw new Error("courier exited before three real polls");
-      if (performance.now() >= until) throw new Error("bounded observation ended before three real polls");
       await Bun.sleep(20);
     }
     observation = { mode, firstDelay, intervalMs: 100, abortMs: 1000, nice: os.getPriority(0),
@@ -76,6 +77,10 @@ try {
     joined = result !== null;
     if (joined) [stdout, stderr] = await Promise.all([out, err]);
     else failure = "original child handle did not join after TERM/KILL";
+    const produced = fs.existsSync(log) ? fs.readFileSync(log).subarray(logOffset).toString("utf8") : "";
+    // A request cancelled by the unchanged API policy is not evidence that
+    // the courier overlapped live requests or failed to start on this host.
+    if (produced.includes("STOP: poll failed: telegram getUpdates timed out after 1000ms")) failure = "network policy expired: telegram getUpdates timed out after 1000ms";
   }
 } catch (e: any) { failure = e.message; }
 finally {
