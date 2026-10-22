@@ -48,14 +48,16 @@ let fixturePulsed=false;setInterval(()=>{if(!fixturePulsed&&fs.existsSync(proces
 function command(name:string,args:string[],cwd:string,env:any){
  const out=path.join(root,name+'.out'),err=path.join(root,name+'.err');const a=fs.openSync(out,'wx',0o600),b=fs.openSync(err,'wx',0o600);
  let p;try{p=spawnSync('bash',args,{cwd,env,stdio:['ignore',a,b],timeout:60000});}finally{fs.closeSync(a);fs.closeSync(b);}
+ const result={code:p.status,stdout:fs.readFileSync(out,'utf8'),stderr:fs.readFileSync(err,'utf8')};
+ console.log('DRIVER_NATIVE_COMMAND '+JSON.stringify({name,args,signal:p.signal,error:p.error?.message??null,...result}));
  assert.equal(p.error,undefined,'INCOMPLETE native fixture invocation');assert.equal(p.signal,null);
- return{code:p.status,stdout:fs.readFileSync(out,'utf8'),stderr:fs.readFileSync(err,'utf8')};
+ return result;
 }
 for(const kind of['claude','codex'])for(const broken of[false,true]){
  const name='gate-'+kind+(broken?'-removed':'-fixed'),dir=path.join(root,name),project=path.join(dir,'project');
  fs.mkdirSync(path.join(project,'seats/fixtures'),{recursive:true});fs.mkdirSync(path.join(dir,'tmp'));fs.mkdirSync(path.join(dir,'home'));
- fs.cpSync(path.join(source,'seats/drivers'),path.join(project,'seats/drivers'),{recursive:true});
- for(const file of['selftest-lib.sh','fixtures/driver-readiness.sh'])fs.copyFileSync(path.join(source,'seats',file),path.join(project,'seats',file));
+ const copied=command('copy-'+name,['-c','set -e; . "$1/seats/selftest-lib.sh"; selftest_copy_seat_runtime "$2" "$1/seats"; cp -f "$1/seats/fixtures/driver-readiness.sh" "$2/seats/fixtures/driver-readiness.sh"','runtime-copy',source,project],dir,process.env);
+ assert.equal(copied.code,0,'INCOMPLETE actual runtime-copy helper');
  const script=path.join(project,'seats/drivers',kind==='claude'?'claude-code':'codex','selftest.sh'),original=fs.readFileSync(script,'utf8');let body=original;
  const gate=kind==='claude'?"const release=setInterval(()=>{if(fs.existsSync(path.join(acct,'rate-release'))){clearInterval(release);finish();}},10);":"const release=setInterval(()=>{if(fs.existsSync(path.join(home,'turn-release'))){clearInterval(release);complete(msg);}},10);";
  assert.equal(body.split(gate).length,2);if(broken)body=body.replace(gate,()=>kind==='claude'?'finish();':'complete(msg);');fs.writeFileSync(script,body);
