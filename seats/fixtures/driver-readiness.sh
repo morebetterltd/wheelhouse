@@ -2,7 +2,8 @@
 # the canonical suite deadline bounds an incomplete fixture.
 driver_read_record(){
   bun -e '
-const fs=require("node:fs"),[file,key,value]=process.argv.slice(1);
+import fs from "node:fs";
+const [file,key,value]=process.argv.slice(1);
 try{
  let text;try{text=fs.readFileSync(file,"utf8")}catch(e){if(e.code==="ENOENT")process.exit(1);throw e;}
  for(const line of text.slice(0,text.lastIndexOf("\n")+1).split("\n").filter(Boolean)){
