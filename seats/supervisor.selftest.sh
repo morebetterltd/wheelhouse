@@ -206,6 +206,7 @@ mkdir -p "$ISA_PROJ/seats/run" "$ISA_PROJ/seats/logs" "$ISA_PROJ/wheelhouse"
 cp -f "$HERE/supervisor.sh" "$ISA_PROJ/seats/supervisor.sh"
 cat > "$ISA_PROJ/seats/daemons.sh" <<'SH'
 daemon_alive(){ return 0; }
+daemon_starting(){ return 1; }
 principal_channel_declared(){ return 1; }
 recover_dead_seats(){ :; }
 SH

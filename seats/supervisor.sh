@@ -33,6 +33,7 @@ Restart after fixing: seats/supervisor.sh reset $d"
 
 tick_daemon(){
   d="$1"; should_run "$d" || return 0
+  daemon_starting "$d" && return 0
   rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log(j.crashLoop?"1":"0")})')"
   [ "$crash" = 1 ] && return 0
   old="$(cat "$RUN/$d.pid" 2>/dev/null || true)"; if daemon_alive "$d"; then return 0; fi
@@ -92,7 +93,7 @@ tick_digest(){
   printf '%s digest started for %s (pid %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$day" "$!" >> "$OUT_LOG"
 }
 tick(){ tick_daemon herald; tick_daemon desk; tick_daemon courier; tick_recovery; tick_isa_signals; tick_cleanup; tick_digest; }
-status(){ for d in herald desk courier; do if ! should_run "$d"; then echo "$d SKIPPED"; continue; fi; rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | grep -q '"crashLoop":true' && echo 1 || echo 0)"; if [ "$crash" = 1 ]; then since="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log((j.restarts||[])[0]||"")})')"; echo "$d CRASH-LOOP since $since"; elif daemon_alive "$d"; then echo "$d RUNNING pid $(cat "$RUN/$d.pid")"; else echo "$d DEAD"; fi; done; }
+status(){ for d in herald desk courier; do if ! should_run "$d"; then echo "$d SKIPPED"; continue; fi; rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | grep -q '"crashLoop":true' && echo 1 || echo 0)"; if [ "$crash" = 1 ]; then since="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log((j.restarts||[])[0]||"")})')"; echo "$d CRASH-LOOP since $since"; elif daemon_starting "$d"; then echo "$d STARTING pid $(cat "$RUN/$d.starting.pid")"; elif daemon_alive "$d"; then echo "$d RUNNING pid $(cat "$RUN/$d.pid")"; else echo "$d DEAD"; fi; done; }
 resetd(){ d="$1"; state_set "$d" '{"restarts":[],"crashLoop":false}'; restart_cmd "$d"; }
 supervisor_holder_alive(){
   pid="$1"

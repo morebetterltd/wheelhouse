@@ -22,6 +22,7 @@ desk_fixture_processes(){
   ps axww -o pid=,command= > "$capture" 2> "$capture.err"; rc=$?
   printf '%s\n' "$rc" > "$capture.rc"
   [ "$rc" = 0 ] || { echo "STOP: native desk census failed rc=$rc" >&2; return 2; }
+  awk -v subject="$$" '$1==subject{found=1} END{exit found?0:1}' "$capture" || { echo "STOP: native desk census omitted its live caller" >&2; return 2; }
   awk -v root="$FIX" '$2 ~ /(^|\/)bun$/ && index($0, root) && index($0, "seats/desk.ts") {print}' "$capture"
 }
 stop_fixture_desks(){

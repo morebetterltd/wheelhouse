@@ -15,6 +15,12 @@ DAEMONS_LOGS="$DAEMONS_SEATS/logs"
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 daemon_alive() { pid_alive "$(cat "$DAEMONS_RUN/$1.pid" 2>/dev/null || true)"; }
+daemon_starting() {
+  local name="$1" pending
+  pending="$(cat "$DAEMONS_RUN/$name.starting.pid" 2>/dev/null || true)"
+  pid_alive "$pending" || return 1
+  if [ "$name" = desk ]; then [ ! -s "$DAEMONS_RUN/desk.port" ]; else ! daemon_alive "$name"; fi
+}
 
 json_string() {
   printf '%s' "$1" | bun -e 'const chunks=[]; process.stdin.on("data", c=>chunks.push(c)); process.stdin.on("end",()=>process.stdout.write(JSON.stringify(Buffer.concat(chunks).toString())));'
