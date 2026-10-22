@@ -24,6 +24,7 @@ for(const broken of [false,true]){
   await success(client,["new-session","-d","-x","152","-y","40","-s","wh-client","-c",root,`tmux -L '${socket}' attach-session -t wh-probe`]);clientServer=Number(await success(client,["display-message","-p","#{pid}"]));
   await until(async()=>fs.existsSync(mark)&&await success(socket,["display-message","-p","-t","wh-probe:bridge.0","#{window_width}"])==="152","real attached client and completed native hook");
   const width=Number(await success(socket,["display-message","-p","-t","wh-probe:bridge.0","#{window_width}"])),commander=Number(await success(socket,["display-message","-p","-t","wh-probe:bridge.0","#{pane_width}"]));
+  assert(Number.isInteger(width)&&width===152&&Number.isInteger(commander)&&commander>0&&commander<width,"complete native geometry required before checking sizing");
   const accepted=Math.abs(commander-width*0.55)<=2;let assertionRejected=false;try{assert(accepted,"native attached pane did not restore configured ratio");}catch(e){if(!(e instanceof assert.AssertionError))throw e;assertionRejected=true;}assert.equal(assertionRejected,broken,"same geometry assertion must reject missing sizing");
   console.log((broken?"EXPECTED_REJECTION ":"PASS ")+"ATTACH "+JSON.stringify({broken,checkerAccepted:accepted,assertionRejected,inputComplete:true,width,commander,targetPercent:55,commands:records}));
  }finally{
