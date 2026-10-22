@@ -170,13 +170,16 @@ for (const kind of cases) {
     assert.doesNotThrow(() => process.kill(pid, 0));
     if (kind === "lost-log" || kind === "replaced-log") {
       signal = fileSignal(path.join(clock, "progress"));
-      fs.writeFileSync(path.join(clock, "observe"), "report actual WAIT after loss, never a time budget\n");
       if (kind === "lost-log") fs.unlinkSync(log);
       else {
-        fs.renameSync(log, log + ".original");
-        fs.writeFileSync(log, "");
+        const replacement = log + ".replacement";
+        fs.writeFileSync(replacement, "");
+        fs.renameSync(replacement, log); // atomic identity change, no missing-path gap
         assert.notEqual(fs.statSync(log, { bigint: true }).ino, originalLog.ino);
       }
+      // Enable observation only AFTER loss; a valid pre-loss WAIT is not a
+      // counterexample, even if the controller was descheduled for a while.
+      fs.writeFileSync(path.join(clock, "observe"), "report actual WAIT after loss, never a time budget\n");
       await assertSourceLost(request, signal.promise.then(() => JSON.parse(fs.readFileSync(path.join(clock, "progress"), "utf8"))));
       continue;
     }
