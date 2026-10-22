@@ -17,11 +17,11 @@ const results: any[] = [];
 const evidence = process.env.WHEELHOUSE_RPC_EVIDENCE;
 if (evidence) fs.mkdirSync(evidence, { recursive: true });
 
-function fileSignal(file: string) {
+function fileSignal(file: string, ready = () => fs.existsSync(file)) {
   let resolve: () => void;
   const promise = new Promise<void>(r => { resolve = r; });
-  const watcher = fs.watch(path.dirname(file), () => { if (fs.existsSync(file)) resolve(); });
-  if (fs.existsSync(file)) resolve!();
+  const watcher = fs.watch(path.dirname(file), () => { if (ready()) resolve(); });
+  if (ready()) resolve!();
   return { promise, close: () => watcher.close() };
 }
 
@@ -121,6 +121,7 @@ for (const kind of cases) {
         // WAIT after loss, proves the guard is absent. No elapsed-time verdict:
         // cancel only this directly owned client AFTER recording that event.
         const current = fs.existsSync(log) ? fs.statSync(log, { bigint: true }) : null;
+        if (kind !== "missing-log") assert(outcome.event.observations >= 2, "one in-flight pre-loss snapshot may still report WAIT");
         const proof = { kind, event: outcome.event, pid, log, original: `${originalLog.dev}:${originalLog.ino}`, current: current ? `${current.dev}:${current.ino}` : null };
         assert(current === null || proof.current !== proof.original);
         assert.equal(peer.closed, false);
@@ -169,7 +170,11 @@ for (const kind of cases) {
     assert.equal(peer.closed, false);
     assert.doesNotThrow(() => process.kill(pid, 0));
     if (kind === "lost-log" || kind === "replaced-log") {
-      signal = fileSignal(path.join(clock, "progress"));
+      const progressFile = path.join(clock, "progress");
+      // One loop may have checked the old file just before loss and report
+      // afterwards. Only a second post-enable WAIT proves another loop failed
+      // to refuse loss. This is a native event fence, not an elapsed budget.
+      signal = fileSignal(progressFile, () => fs.existsSync(progressFile) && JSON.parse(fs.readFileSync(progressFile, "utf8")).observations >= 2);
       if (kind === "lost-log") fs.unlinkSync(log);
       else {
         const replacement = log + ".replacement";
