@@ -601,6 +601,16 @@ change to the idle-alert detector, snapshot or state.json schema.
 `WHEELHOUSE_RPC_TIMEOUT_MS` remains a legacy stop/SIGKILL-confirmation setting
 only, not an RPC budget. `adapter-rpc.selftest.sh` covers held replies beyond
 the old logical budgets, live backpressure, death, EOF and partial writes.
+Fleet snapshot graph reads, contract reads and fixture-owner inspection also
+wait for native command completion, not a quiet-machine deadline. The legacy
+`WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS` is no longer an authority to fail a
+still-running graph read. Their stdout/stderr are captured through exclusive
+regular descriptors, then read after exit; host-wide process listings and graph
+bodies cannot overflow a pipe capture buffer or silently become an empty graph.
+Native nonzero exits, signals, spawn errors and non-JSON/empty graph stdout
+remain errors. Cancel a hung command explicitly; the admitted selftest sweep supplies
+test containment. Staffing growth and stop-all busy actors use observed events
+and explicit release, never elapsed startup/turn clocks.
 `stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat

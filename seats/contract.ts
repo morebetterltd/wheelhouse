@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedCommand } from "./completed-command";
 import { fold, INTAKE_KINDS, type IntakeEvent, type IntakeRow } from "./intake";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_CONTRACT_ROOT || path.join(import.meta.dir, ".."));
@@ -147,7 +147,7 @@ function fixtureText(file: string): BeadText {
   } catch (e: any) { return { text: null, error: `cannot read contract fixture ${file}: ${e.message}` }; }
 }
 function bd(root: string, args: string[]) {
-  return spawnSync("bd", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
+  return completedCommand("bd", args, { cwd: root });
 }
 export function readBeadText(root: string, beadId: string): BeadText {
   const fixture = process.env.WHEELHOUSE_CONTRACT_FIXTURE;
@@ -241,7 +241,7 @@ function defaultRepos(root: string): string[] {
 function gitRead(repo: string, args: string[]): string {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(repo) };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[key];
-  const r = spawnSync("git", ["-C", repo, ...args], { env, encoding: "utf8", timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
+  const r = completedCommand("git", ["-C", repo, ...args], { env });
   if (r.status !== 0 || r.error) throw new Error(`repository link at ${repo}: ${(r.stderr || r.error?.message || `git exit ${r.status}`).trim()}`);
   return r.stdout.trimEnd();
 }

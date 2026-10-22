@@ -22,7 +22,9 @@ cases.push({ phase: "sweep-stubborn-long-grace", signal: "SIGTERM" });
 cases.push({ phase: "sweep-stubborn-runner-killed", signal: "SIGTERM" });
 cases.push({ phase: "sweep-stubborn-runner-killed-aliased-parent", signal: "SIGTERM" });
 cases.push({ phase: "sweep-stubborn-runner-killed-aliased-parent-replacement", signal: "SIGTERM" });
-const selected = process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_ALIASES_ONLY === "1" ? cases.filter(c => c.phase.includes("-aliased-parent")) : cases;
+const selected = process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_CASE
+  ? cases.filter(c => c.phase + "-" + c.signal === process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_CASE)
+  : process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_ALIASES_ONLY === "1" ? cases.filter(c => c.phase.includes("-aliased-parent")) : cases;
 assert(selected.length > 0);
 const results: any[] = [];
 for (const { phase, signal } of selected) {
@@ -166,7 +168,7 @@ esac
     fs.writeFileSync(path.join(dir, "out"), out); fs.writeFileSync(path.join(dir, "err"), err);
     const sweepDir = path.join(project, "seats/verdicts/sweeps");
     const stage = { steps: fs.existsSync(path.join(dir, "steps")) ? fs.readFileSync(path.join(dir, "steps"), "utf8") : "", bdCalls: fs.existsSync(path.join(dir, "bd-calls")) ? fs.readFileSync(path.join(dir, "bd-calls"), "utf8") : "", piEntered: fs.existsSync(path.join(dir, "pi-entered")), runnerStarted: fs.existsSync(path.join(dir, "runner.pid")), suiteReady: fs.existsSync(path.join(dir, "suite.pid")), reviewerReady: fs.existsSync(path.join(dir, "reviewer.pid")), sweepLogs: fs.existsSync(sweepDir) ? fs.readdirSync(sweepDir).map(file => ({ file, tail: fs.readFileSync(path.join(sweepDir, file), "utf8").slice(-16000) })) : [] };
-    fs.writeFileSync(path.join(dir, "before-cleanup.json"), JSON.stringify({ name, failure: failure ?? null, measurement, stage, groups: [...groups] }, null, 2) + "\n");
+    fs.writeFileSync(path.join(dir, "before-cleanup.json"), JSON.stringify({ name, failure: failure ?? null, measurement, dispatcher: { code: child.exitCode, signal: child.signalCode, stdout: out, stderr: err }, stage, groups: [...groups] }, null, 2) + "\n");
     const early = process.env.WHEELHOUSE_VERIFY_CANCEL_EVIDENCE;
     if (early) { fs.mkdirSync(early, { recursive: true }); fs.copyFileSync(path.join(dir, "before-cleanup.json"), path.join(early, name + ".before-cleanup.json")); }
     // Fix-removed cleanup: ONLY recorded groups from processes this fixture
