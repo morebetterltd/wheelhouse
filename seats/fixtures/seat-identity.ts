@@ -42,6 +42,12 @@ try {
   fs.writeFileSync(path.join(bin, "ps"), `#!/bin/sh
 if [ "\${1:-}" = -p ] && [ "\${2:-}" = ${holder.pid} ] && [ "\${4:-}" = lstart= ]; then
  case "$IDENTITY_FAULT_MODE" in
+ later|stream-later)
+ count=0; [ ! -f ${q(path.join(root,"probe.count"))} ] || read -r count < ${q(path.join(root,"probe.count"))}
+ count=$((count+1)); printf '%s\\n' "$count" > ${q(path.join(root,"probe.count"))}
+ limit=1; [ "$IDENTITY_FAULT_MODE" != stream-later ] || limit=2
+ [ "$count" -gt "$limit" ] || exec ${q(ps)} "$@"
+ cat ${q(path.join(root,"ps.failure.stdout"))}; cat ${q(path.join(root,"ps.failure.stderr"))} >&2; exit 1;;
  fail) cat ${q(path.join(root, "ps.failure.stdout"))}; cat ${q(path.join(root, "ps.failure.stderr"))} >&2; read -r rc < ${q(path.join(root, "ps.failure.rc"))}; exit "$rc";;
  empty) exit 0;;
  malformed) printf 'not a process start time\\n'; exit 0;;
@@ -69,6 +75,7 @@ exec ${q(lsof)} "$@"
     // An unsafe removal control may have unlinked it. Later timestamp-only
     // cases must still start with their sentinel present, not inherit a failure.
     if (!fs.existsSync(fifo)) assert.equal(command("mkfifo", [fifo]).status, 0);
+    fs.rmSync(path.join(root,"probe.count"),{force:true});
     fs.writeFileSync(stateFile, JSON.stringify({ seats: { worker: { ...baseRecord, ...extra } } }));
   }
   function cli(file: string, args: string[], mode = "fail") {
@@ -132,12 +139,30 @@ exec ${q(lsof)} "$@"
   check("recover retains UNVERIFIED FIFO/session, offers no resume/spawn", () => {
     state({ fifo }); const r = cli("recover.ts", []); assert.equal(r.status, 0); assert.match(r.stdout, /^worker\s+UNVERIFIED/m); assert.doesNotMatch(r.stdout, /resume: bun|spawn fresh|removed orphaned FIFO/); untouched();
   });
-  for (const role of ["worker", "reviewer"]) check(`snapshot aborts before allocating UNVERIFIED ${role}`, () => {
+  for (const role of ["worker", "reviewer"]) check(`snapshot reports UNVERIFIED ${role} as occupied, not free`, () => {
     state({ role }); const roster = JSON.parse(fs.readFileSync(path.join(seats, "seats.json"), "utf8")); roster.seats.worker.role = role; fs.writeFileSync(path.join(seats, "seats.json"), JSON.stringify(roster));
-    const r = cli("fleet-snapshot.ts", ["--json"]); assert.notEqual(r.status, 0); assert.match(text(r), /UNVERIFIED/); assert.equal(r.stdout, ""); untouched();
+    const r = cli("fleet-snapshot.ts", ["--json"]); assert.equal(r.status, 0, text(r)); const snap=JSON.parse(r.stdout);
+    assert.equal(snap.unverified.worker.status,"UNVERIFIED");assert.equal(snap.unverified.worker.pid,holder.pid);
+    const occupied=(role==='worker'?snap.workers:snap.reviewers);assert.equal(occupied.idle,0);assert(occupied.live.some(s=>s.name==='worker'&&s.identity==='UNVERIFIED'&&s.busy));untouched();
   });
-  check("alerts do not emit cold/idle/stalled advice from UNVERIFIED", () => {
-    state(); const r = cli("alerts.ts", ["check", "--json"]); assert.notEqual(r.status, 0); assert.match(text(r), /UNVERIFIED/); assert(!fs.existsSync(path.join(seats, "run/fleet-snapshot.json"))); assert(!fs.existsSync(path.join(seats, "inbox.jsonl"))); untouched();
+  check("one UNVERIFIED seat does not hide a healthy idle peer", () => {
+    state();const born=command(ps,['-p',String(process.pid),'-o','lstart=']);assert.equal(born.status,0);console.log('CAPTURE healthy peer birth '+JSON.stringify({pid:process.pid,status:born.status,stdout:born.stdout,stderr:born.stderr}));
+    const roster=JSON.parse(fs.readFileSync(path.join(seats,'seats.json'),'utf8'));roster.seats.worker.role='worker';roster.seats.healthy={...roster.seats.worker,account:{dir:path.join(root,'healthy-account')}};fs.writeFileSync(path.join(seats,'seats.json'),JSON.stringify(roster));
+    const s=JSON.parse(fs.readFileSync(stateFile,'utf8'));s.seats.healthy={...baseRecord,pid:process.pid,startedAt:new Date(Date.parse(born.stdout.trim())).toISOString(),log:path.join(seats,'logs/healthy.jsonl')};fs.writeFileSync(s.seats.healthy.log,'{"type":"agent_end"}\n');fs.writeFileSync(stateFile,JSON.stringify(s));
+    const r=cli('fleet-snapshot.ts',['--json']);assert.equal(r.status,0,text(r));const snap=JSON.parse(r.stdout);assert.equal(snap.workers.idle,1);assert.equal(snap.workers.busy,1);assert(snap.workers.live.some(w=>w.name==='healthy'&&!w.busy));assert.equal(snap.unverified.worker.status,'UNVERIFIED');untouched();
+  });
+  for(const mode of ['fail','later','stream-later']) check(`alerts publish snapshot with UNVERIFIED (${mode}), without cold/idle/stalled advice`, () => {
+    state();const roster=JSON.parse(fs.readFileSync(path.join(seats,'seats.json'),'utf8'));roster.seats.worker.role='worker';delete roster.seats.healthy;fs.writeFileSync(path.join(seats,'seats.json'),JSON.stringify(roster));
+    fs.rmSync(path.join(seats,'inbox.jsonl'),{force:true});fs.rmSync(path.join(seats,'run/fleet-snapshot.json'),{force:true});
+    if(mode==='fail')fs.writeFileSync(path.join(seats,'run/fleet-snapshot.json'),JSON.stringify({alerts:{'seat-stalled:worker':{active:true,since:'2026-01-01T00:00:00Z',lastFiredAt:'2026-01-01T00:00:00Z'},'seat-settled-task:worker':{active:true,since:'2026-01-01T00:00:00Z',lastFiredAt:'2026-01-01T00:00:00Z'}}}));
+    const r = cli("alerts.ts", ["check", "--json"],mode); assert.equal(r.status,0,text(r));const snapshot=JSON.parse(r.stdout);
+    assert.equal(snapshot.snapshot.unverified.worker.status,'UNVERIFIED');assert(snapshot.alerts['seat-unverified:worker'].active);assert.equal(snapshot.snapshot.workers.idle,0);
+    if(mode==='fail'){assert(snapshot.alerts['seat-stalled:worker'].active,'uncertainty is not proof of recovery');assert(snapshot.alerts['seat-settled-task:worker'].active);}
+    assert(fs.existsSync(path.join(seats,'run/fleet-snapshot.json')));const stored=JSON.parse(fs.readFileSync(path.join(seats,'run/fleet-snapshot.json'),'utf8'));assert.equal(stored.snapshot.unverified.worker.pid,holder.pid);
+    const inbox=fs.readFileSync(path.join(seats,'inbox.jsonl'),'utf8').trim().split('\n').map(l=>JSON.parse(l));assert(inbox.some(r=>r.source.name==='seat-unverified:worker'));
+    assert(!inbox.some(r=>/^(cold-seats-ready-work|idle-fleet-ready-work|seat-stalled:|seat-settled-task:)/.test(r.source.name)));
+    if(mode==='fail'){const again=cli('alerts.ts',['check','--json'],mode);assert.equal(again.status,0,text(again));const next=fs.readFileSync(path.join(seats,'inbox.jsonl'),'utf8').trim().split('\n').map(l=>JSON.parse(l));assert.equal(next.filter(r=>r.source.name==='seat-unverified:worker').length,inbox.filter(r=>r.source.name==='seat-unverified:worker').length,'identity warning dedupes independently of other fleet alerts');}
+    untouched();
   });
   check("cleanup refuses UNVERIFIED before scanning/reclaiming", () => {
     state(); const r = cli("prune.ts", ["cleanup", "--root", root]); assert.notEqual(r.status, 0); assert.match(text(r), /UNVERIFIED/); untouched();

@@ -585,8 +585,13 @@ settlement. Unreadable/unknown activity retains the live `RUNNING` fallback.
 proof). It is **not** death, foreign identity, idle capacity, or permission to
 restart. Status and floor show it explicitly. Stop/resume/spawn/reset/dispatch
 refuse it without signalling or replacing the seat; recovery keeps its FIFO
-and gives no resume/spawn advice. Snapshot/alerts/staffing stop before decisions,
-and cleanup/prune refuse reclamation. Repair/retry the observer; never clear the
+and gives no resume/spawn advice. Snapshots still publish: `unverified` names
+uncertain seats with their PID, role and reason; their occupied entries carry
+`identity: UNVERIFIED`, count as busy, and are never free capacity. Alerts report
+`seat-unverified:<name>` without cold/idle/stall/restart advice from that seat;
+healthy peers remain visible. A later failed stream/settlement probe is also
+reported, not allowed to abort the fleet snapshot. Staffing rechecks identity
+before allocating/releasing that entry, and cleanup/prune refuse reclamation. Repair/retry the observer; never clear the
 record or manufacture a matching timestamp to silence the warning. A completed
 start-time mismatch or definite FIFO mismatch remains foreign, as before. `SETTLED` does
 not mean the bead is closed or staffing considers the seat free: it is not a

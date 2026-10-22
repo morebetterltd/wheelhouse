@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { pidAlive } from "./seat-activity";
+import { pidAlive, SeatIdentityUnverified } from "./seat-activity";
 import type { LiveWorker } from "./fleet-snapshot";
 
 export interface SettledSeat {
@@ -69,12 +69,14 @@ function scan(log: string, st: fs.Stats, phase: SettledSeat["phase"] = "unknown"
   }
   return last;
 }
-export function observeSettledSeats(root: string, workers: LiveWorker[], prior: Record<string, SettledSeat> = {}, now = Date.now()): Record<string, SettledSeat> {
+export function observeSettledSeats(root: string, workers: LiveWorker[], prior: Record<string, SettledSeat> = {}, now = Date.now(), onUnverified?: (seat: string, rec: any, reason: string) => void): Record<string, SettledSeat> {
   const quietMs = settledSeatMs(root), out: Record<string, SettledSeat> = Object.create(null);
   let state: any; try { state = JSON.parse(fs.readFileSync(path.join(root, "seats/state.json"), "utf8")).seats ?? {}; } catch { return out; }
   for (const worker of workers) {
     const seat = worker.name, rec = state[seat];
-    if (!rec?.lastBead || rec.lastBead !== worker.lastBead || rec.stoppedAt || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) continue;
+    if (worker.identity === "UNVERIFIED" || !rec?.lastBead || rec.lastBead !== worker.lastBead || rec.stoppedAt) continue;
+    try { if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) continue; }
+    catch (e) { if (!(e instanceof SeatIdentityUnverified)) throw e; onUnverified?.(seat, rec, e.message); continue; }
     const st = rec.log && ownedLog(root, seat, rec.log); if (!st) continue;
     const contextKey = JSON.stringify([rec.pid, rec.startedAt ?? null, rec.lastBead, rec.lastDispatchAt ?? null]);
     const stored = prior[seat], sameContext = stored?.contextKey === contextKey;
