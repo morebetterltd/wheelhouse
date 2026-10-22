@@ -68,15 +68,12 @@ for (const kind of ["empty", "truncated", "malformed"]) {
   const bad = await moduleCopy("bad-" + kind, badSource);
   const fallback = (module: any) => assert.equal(module.stableHostIdentity().source, "hostname", kind + " must not become hardware identity");
   fallback(bad);
-  // Remove the bad-input decision while still executing that real bad provider.
-  const rawLine = process.platform === "darwin"
-    ? badSource.split("\n").find(x => x.includes("const raw = readIdentityProvider("))!
-    : badSource.split("\n").find(x => x.includes("const machine = fs.readFileSync("))!;
-  assert(rawLine);
-  const forged = process.platform === "darwin"
-    ? rawLine.replace(/;$/, `; /* removed validator input */`).replace("const raw = ", "const ignored = ") + `\n      const raw = ${JSON.stringify(raw)};`
-    : rawLine.replace("const machine = ", "const ignored = ") + `\n      const machine = ${JSON.stringify(raw.trim())};`;
-  const mutant = await moduleCopy("bad-accepted-" + kind, replace(badSource, rawLine, forged));
+  // Plant the forbidden hardware label at the fallback decision itself. This
+  // still executes the bad provider, but cannot lose the fault merely because
+  // that command took an error path before a forged parser input was reached.
+  const mutant = await moduleCopy("bad-accepted-" + kind, replace(badSource,
+    '  identitySource = "hostname";\n  return digest(`hostname:${HOST}`);',
+    '  identitySource = darwin ? "darwin-ioplatformuuid" : "linux-machine-id";\n  return digest(`hostname:${HOST}`);'));
   rejected = false;
   try { fallback(mutant); } catch (e: any) { if (e.code !== "ERR_ASSERTION" || e.expected !== "hostname" || e.actual === "hostname") throw e; rejected = true; }
   assert(rejected); console.log(`PASS ${kind}: hostname fallback retained; false hardware-upgrade mutant rejected`);
