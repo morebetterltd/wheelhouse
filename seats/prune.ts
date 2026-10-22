@@ -53,6 +53,7 @@ import { spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import { PLACEHOLDER_MARKER, phantomOnlyStatus, porcelainStatus } from "./seat-worktree";
 import { acquireCleanupLock, prepareCleanupRuntime, cleanupPathIdentity, cleanupPathUnchanged, scratchOwnership, type CleanupPathIdentity } from "./cleanup-identity";
+import { assertSeatIdentities } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const FLEET_CONTAINER = ".wheelhouse-worktrees";
@@ -725,6 +726,7 @@ function getState(rec: any): any | null {
   return readJsonlResponse(String(rec.log), id, start, Date.now() + 2000);
 }
 function midTurnSeatReason(): string | null {
+  assertSeatIdentities(ROOT);
   let state: any;
   try { state = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "state.json"), "utf8")); } catch { return null; }
   for (const [name, rec] of Object.entries<any>(state.seats ?? {})) {
@@ -974,6 +976,7 @@ function cleanup(o: CleanupOptions): number {
   prepareCleanupRuntime(root);
   fs.mkdirSync(path.dirname(o.log), { recursive: true });
   const emit = (line: string) => { const l = `${nowIso()} ${line}`; console.log(l); fs.appendFileSync(o.log, l + "\n"); };
+  assertSeatIdentities(root); // no scan/removal may treat unknown identity as vacancy
   const policy = cleanupPolicy(root);
   if (policy === "off") { emit("cleanup skipped cleanup=off in wheelhouse/.template-source"); return 0; }
   if (policy === "report") o = { ...o, dryRun: true };
@@ -1012,6 +1015,8 @@ function cleanup(o: CleanupOptions): number {
       const expectedBead = r.category === "run-scratch" ? /^scratch belongs to closed bead (.+)$/.exec(r.reason)?.[1] : undefined;
       const nestedScratch = seatScratchLocation(root, r.path);
       const ownershipRoot = nestedScratch?.seatRoot ?? root;
+      assertSeatIdentities(root);
+      if (ownershipRoot !== root) assertSeatIdentities(ownershipRoot);
       let ownership: ReturnType<typeof scratchOwnership> | null = null;
       if (r.action === "rm") {
         try {

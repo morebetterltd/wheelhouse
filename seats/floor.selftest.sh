@@ -179,9 +179,19 @@ cat > "$PROJ/seats/seats.json" <<EOF
 }
 EOF
 
+# The floor now checks seat identity, not just kill(0). Seed actual native birth
+# for our live holder rather than the historical display-only timestamp.
+STARTED_AT="$(bun - "$ME" <<'JS'
+import { spawnSync } from 'node:child_process';
+const r=spawnSync('ps',['-p',process.argv[2],'-o','lstart='],{encoding:'utf8'});
+console.error('CAPTURE floor fixture ps '+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));
+if(r.status!==0||r.error||r.signal)process.exit(2);
+console.log(new Date(Date.parse(r.stdout.trim())).toISOString());
+JS
+)" || exit 2
 seat_rec() { # name pid extra-json
-  printf '"%s":{"pid":%s,"startedAt":"2026-08-29T00:00:00Z","accountDir":"%s","role":"worker","roleBrief":"x","fifo":"%s","log":"%s","sessionId":"s-%s","sessionFile":null%s}' \
-    "$1" "$2" "$FIX/acct/$1" "$PROJ/seats/run/$1.stdin" "$LOGS/$1.jsonl" "$1" "${3:-}"
+  printf '"%s":{"pid":%s,"startedAt":"%s","accountDir":"%s","role":"worker","roleBrief":"x","fifo":"%s","log":"%s","sessionId":"s-%s","sessionFile":null%s}' \
+    "$1" "$2" "$STARTED_AT" "$FIX/acct/$1" "$PROJ/seats/run/$1.stdin" "$LOGS/$1.jsonl" "$1" "${3:-}"
 }
 {
   printf '{"seats":{'

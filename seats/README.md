@@ -579,7 +579,16 @@ For live seats, status and the cockpit floor share the display-only
 `turn_end`, or `agent_settled`, and `RUNNING` after subsequent turn/tool/message
 work. Transport responses do not restart a turn; silence/age alone never proves
 settlement. Unreadable/unknown activity retains the live `RUNNING` fallback.
-`PARKED`, `STALLED`, `DIED` and `STOPPED` still take precedence. `SETTLED` does
+`UNVERIFIED`, `PARKED`, `STALLED`, `DIED` and `STOPPED` still take precedence.
+`UNVERIFIED` means process identity could not be established (for example,
+`ps`/`lsof` failed, returned an incomplete observation, or the record lacks
+proof). It is **not** death, foreign identity, idle capacity, or permission to
+restart. Status and floor show it explicitly. Stop/resume/spawn/reset/dispatch
+refuse it without signalling or replacing the seat; recovery keeps its FIFO
+and gives no resume/spawn advice. Snapshot/alerts/staffing stop before decisions,
+and cleanup/prune refuse reclamation. Repair/retry the observer; never clear the
+record or manufacture a matching timestamp to silence the warning. A completed
+start-time mismatch or definite FIFO mismatch remains foreign, as before. `SETTLED` does
 not mean the bead is closed or staffing considers the seat free: it is not a
 change to the idle-alert detector, snapshot or state.json schema.
 `WHEELHOUSE_PROMPT_ACK_MS`, `WHEELHOUSE_FIFO_WRITE_MS` and
@@ -1405,9 +1414,10 @@ process's open-file table (`lsof`). Every recorded seat comes back as one of:
 
 | class | meaning |
 |---|---|
-| `RUNNING` | The recorded pid is alive AND holds this seat's FIFO open — so it is our process, whatever its ps line says. |
+| `RUNNING` | The recorded pid is alive AND holds this seat's FIFO open. For records without a FIFO, native start time must match. |
 | `DEAD` | The process is gone, or the pid is alive but does not hold the FIFO (reused/foreign), while the session file is intact. Resumable: if a bead was in flight, the seat line names it and the EXACT resume command is printed beneath. |
 | `STALE` | A state entry with no session artifacts on disk. Nothing to resume; spawn fresh when the seat is needed. |
+| `UNVERIFIED` | Identity inspection is unavailable/incomplete. Keep the PID, FIFO and session; no resume/spawn advice or reclamation. |
 
 Identity is established by file descriptors, never by command lines. Pi
 rewrites its process title: a live seat's ps line is exactly `pi` — no role
@@ -1417,7 +1427,8 @@ anything that greps `ps` for a seat's paths calls every live real seat dead,
 resumes over it, and unlinks the FIFO it is reading. What a live seat cannot
 hide is its open fds: the adapter starts every seat with stdin opened
 read-write on `seats/run/<seat>.stdin`, so a process that holds that FIFO IS
-that seat, and one that does not — whatever its pid or title — is not.
+that seat. A complete descriptor observation that does not hold it proves a
+foreign PID; a failed inspection proves nothing and is UNVERIFIED.
 
 The same mechanism answers the machine-restart story. After a reboot every
 pid in `state.json` is stale, and some of those numbers come back alive as
@@ -1433,20 +1444,21 @@ What recover will and will not do:
 - **It never resumes anything itself.** Resuming is a commander decision;
   recover puts the command and the bead id in front of you and stops. Its
   only writes are FIFO removals under `seats/run/` for seats that are not
-  RUNNING — each one printed — and the adapter recreates a missing FIFO at
+  RUNNING **and not UNVERIFIED** — each one printed — and the adapter recreates a missing FIFO at
   the next spawn or resume, so cleanup never costs you a seat. It does not
   touch `state.json`, spawn `pi`, or call `bd`: recovering must never
   re-dispatch or re-integrate work that already happened, so the tool that
   runs first after an interruption is structurally unable to.
 - **It refuses a double-resume.** If a DEAD seat's session is already
-  attached — another recorded seat RUNNING on the same session file, or any
+  attached — another recorded seat RUNNING or UNVERIFIED on the same session file, or any
   live process holding that file open — recover prints
   `REFUSED double-resume` naming the holder instead of a resume command.
   One session with two writers is corruption with extra steps. (The
   open-file check is best-effort for resumes the state never recorded; the
   state-based check covers everything the adapter did record.)
-- **It requires `lsof`** (present on macOS and virtually every Linux) and
-  STOPs honestly without it rather than guessing identity from `ps`.
+- **FIFO identity requires `lsof`** (present on macOS and virtually every
+  Linux). An unavailable inspection is UNVERIFIED, not a guessed DEAD seat;
+  missing session-attachment tooling STOPs rather than authorizing a resume.
 
 The forced-interruption exercise is `seats/recover.selftest.sh`. Phases 1-5
 and the canaries are hermetic, against a stub `pi` that rewrites its process

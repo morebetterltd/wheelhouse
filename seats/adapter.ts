@@ -69,7 +69,7 @@ import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
-import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
+import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath, seatIdentity, SeatIdentityUnverified } from "./seat-activity";
 import { seatTurnDisplay } from "./seat-turn-display";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
@@ -1907,40 +1907,49 @@ async function cmdStatus(): Promise<void> {
     const rec = ownedLog ? await syncCapacityFromLog(name, roster) : state.seats[name];
     if (!rec) continue;
     const bareAlive = barePidAlive(rec.pid);
-    const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
+    let identity = seatIdentity(rec.pid, rec.fifo, rec.startedAt);
+    let alive = identity.kind === "owned";
     // A seat nobody stopped whose pid is gone — or whose pid was reused by a
     // foreign process — DIED. Rendering either as the same calm STOPPED a
     // graceful stop earns would be a failure conflated into a normal state.
-    const died = !alive && rec.pid != null && !rec.stoppedAt;
+    const died = (identity.kind === "gone" || identity.kind === "foreign") && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
-    const stream = ownedLog && alive ? seatStreamHealth(ROOT, name, rec, observations[name]) : null;
+    let stream: ReturnType<typeof seatStreamHealth> = null;
+    try { stream = ownedLog && alive ? seatStreamHealth(ROOT, name, rec, observations[name]) : null; }
+    catch (e) {
+      if (!(e instanceof SeatIdentityUnverified)) throw e;
+      identity = { kind: "unverified", reason: e.message }; alive = false;
+    }
     const stalled = Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log)) || Boolean(stream?.stalled);
     const last = ownedLog ? lastEvent(rec.log) : "-";
     // Status reports observed process/log facts, not a guessed get_state
     // deadline. A live, slow responder is not evidence of a wedged seat.
     const turnDisplay = ownedLog ? seatTurnDisplay(rec.log) : "RUNNING";
-    const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? turnDisplay : died ? "DIED" : "STOPPED";
-    const pid = alive ? `pid ${rec.pid}` : died ? (bareAlive ? `pid ${rec.pid} foreign` : `pid ${rec.pid} gone`) : "stopped";
+    const word = identity.kind === "unverified" ? "UNVERIFIED" : parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? turnDisplay : died ? "DIED" : "STOPPED";
+    const pid = identity.kind === "unverified" ? `pid ${rec.pid} unverified` : alive ? `pid ${rec.pid}` : died ? (bareAlive ? `pid ${rec.pid} foreign` : `pid ${rec.pid} gone`) : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
     const labelText = label ? `  account ${label}` : "";
     const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
     if (agentSettledEvent(last)) sawSettled = true;
     console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${last}${bead}${labelText}`);
-    rotateLogIfSafe(name, rec.log, last);
+    if (identity.kind !== "unverified") rotateLogIfSafe(name, rec.log, last);
+    if (identity.kind === "unverified") {
+      console.log(`${" ".repeat(16)} UNVERIFIED: ${identity.reason}; left untouched — do not restart or reclaim until identity is verified`);
+    }
     if (died) {
-      console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? "is alive but is not this seat (no FIFO/start-time proof)" : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
+      console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? `is alive but is not this seat (${identity.reason})` : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
     if (rec.lastCapacityEvent) {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
       console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
     }
-    if (stalled && rec.lastStalledEvent) {
+    if (identity.kind !== "unverified" && stalled && rec.lastStalledEvent) {
       console.log(`${" ".repeat(16)} STALLED: ${rec.lastStalledEvent.detail}`);
     }
     if (stream?.stalled) console.log(`${" ".repeat(16)} STALLED: no own stream event for ${Math.floor(stream.quietForMs / 1000)}s; last ${stream.lastEvent} at ${stream.lastEventAt}; commander inspect/redispatch (no automatic restart)`);
     else if (stream?.phase === "tool") console.log(`${" ".repeat(16)} TOOL WAIT: ${stream.pendingTools.join(", ")}; last stream event ${stream.lastEventAt}; not a model-stream stall`);
-    for (const orphan of orphanMatchesFor(name, rec, rows, roster[name])) {
+    for (const orphan of identity.kind === "unverified" ? [] : orphanMatchesFor(name, rec, rows, roster[name])) {
       if (orphan.fixtureBead) {
         console.log(`${" ".repeat(16)} fixture leak (${orphan.fixtureBead}): pid ${orphan.pid} matches rostered seat ${name} but is running under a .wheelhouse-runs fixture root; reason: ${orphan.reason}; remedy: kill the fixture process and inspect fixture cleanup`);
       } else {

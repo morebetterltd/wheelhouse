@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { effectiveRoster, type StaffingFile } from "./roster";
-import { agentSettledEvent, lastActivityAt, lastEvent, pidAlive } from "./seat-activity";
+import { agentSettledEvent, lastActivityAt, lastEvent, pidAlive, assertSeatIdentities } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
@@ -72,6 +72,9 @@ function anyVerifyMarkerForBead(root: string, bead: string): boolean {
 function isaHead(root: string): string | null { try { return execFileSync("git", ["log", "-1", "--format=%H", "--", "wheelhouse/ISA.md"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; } catch { return null; } }
 
 export function fleetSnapshot(root: string = ROOT, opts: { since?: { isaHead?: string | null; at?: string } } = {}): Snapshot {
+  // Abort before alert/staffing decisions, including reviewer allocation.
+  // UNVERIFIED is occupied/unknown, never dead, idle or spare capacity.
+  assertSeatIdentities(root);
   const at = new Date().toISOString();
   const readyRaw = readyIssues(root);
   const all = allIssues(root);
