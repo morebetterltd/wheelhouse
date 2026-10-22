@@ -31,6 +31,17 @@ case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
 log()  { printf '[bench] %s\n' "$*"; }
 fail() { printf '[bench] FAIL: %s\n' "$*" >&2; exit 1; }
 
+# Readiness is an observed result, not N seconds on a quiet host. The caller
+# supplies whole-bench containment; these loops stop on the actual event or a
+# native terminal failure. Keep the last input/result for a failed review.
+container_running() {
+  local name="$1" running
+  docker inspect --format '{{.State.Running}}' "$name" > "$OUT/container-state.stdout" 2> "$OUT/container-state.stderr" \
+    || fail "cannot observe container $name; see container-state.stdout/container-state.stderr"
+  running="$(cat "$OUT/container-state.stdout")"
+  [ "$running" = true ] || fail "container $name is not running (last state '$running')"
+}
+
 # Every name carries a run id, so concurrent runs do not collide and a leaked
 # container from an earlier run is not mistaken for this one's (clause 8).
 # $$ alone is not enough for that claim: pids recycle, and a fresh container or
@@ -106,11 +117,15 @@ docker run -d --name "$DB" --network "$NET" \
   -e POSTGRES_PASSWORD=bench -e POSTGRES_DB=tideline \
   postgres:16-alpine >/dev/null
 log "waiting for the database to accept connections"
-for _ in $(seq 1 60); do
-  docker exec "$DB" pg_isready -q -U postgres && break
+while :; do
+  ready_rc=0
+  docker exec "$DB" pg_isready -q -U postgres > "$OUT/db-ready.stdout" 2> "$OUT/db-ready.stderr" || ready_rc=$?
+  printf 'pg_isready rc=%s\n' "$ready_rc" >> "$OUT/readiness.log"
+  [ "$ready_rc" = 0 ] && break
+  case "$ready_rc" in 1|2) ;; *) fail "database readiness command failed (rc=$ready_rc); see db-ready.stderr";; esac
+  container_running "$DB"
   sleep 1
 done
-docker exec "$DB" pg_isready -q -U postgres || fail "database never became ready"
 
 log "migrating from empty"
 docker run --rm --network "$NET" \
@@ -119,17 +134,25 @@ docker run --rm --network "$NET" \
   || { cat "$OUT/migrate.log" >&2; fail "migration failed"; }
 
 # --- start both deployables ----------------------------------------------
-docker run -d --name "$API" --network "$NET" -p 0:8080 \
+docker run -d --name "$API" --network "$NET" -p 127.0.0.1::8080 \
   -e DATABASE_URL="postgres://postgres:bench@$DB:5432/tideline" \
   "$API_IMG" >/dev/null
 docker run -d --name "$WORKER" --network "$NET" \
   -e DATABASE_URL="postgres://postgres:bench@$DB:5432/tideline" \
   "$WRK_IMG" >/dev/null
-BASE="http://127.0.0.1:$(docker port "$API" 8080/tcp | head -1 | sed 's/.*://')"
-log "api listening at $BASE"
+docker port "$API" 8080/tcp > "$OUT/port.stdout" 2> "$OUT/port.stderr" \
+  || fail "cannot observe API port; see port.stdout/port.stderr"
+PORT="$(awk -F: 'NF==2 && $1=="127.0.0.1" && $2~/^[0-9]+$/ && $2>0 && $2<65536 {p=$2; good++} END {if (NR!=1 || good!=1) exit 1; print p}' "$OUT/port.stdout")" \
+  || fail "API binding is not one isolated loopback endpoint; see port.stdout"
+BASE="http://127.0.0.1:$PORT"
+log "api binding observed at $BASE; awaiting health response"
 
-for _ in $(seq 1 30); do
-  curl -fsS "$BASE/healthz" >/dev/null 2>&1 && break
+while :; do
+  health_rc=0
+  curl -fsS "$BASE/healthz" > "$OUT/health.stdout" 2> "$OUT/health.stderr" || health_rc=$?
+  printf 'healthz rc=%s\n' "$health_rc" >> "$OUT/readiness.log"
+  [ "$health_rc" = 0 ] && break
+  container_running "$API"
   sleep 1
 done
 
@@ -158,10 +181,17 @@ log "asserting the worker consumes a job"
 curl -fsS -X POST "$BASE/v1/readings/$ID/summarise" -o "$OUT/queue.json" \
   || fail "POST .../summarise failed"
 STATE=""
-for _ in $(seq 1 45); do
-  STATE=$(curl -fsS "$BASE/v1/readings/$ID" | jq -r '.summary_state')
-  [ "$STATE" = "done" ] && break
-  [ "$STATE" = "failed" ] && break
+while :; do
+  curl -fsS "$BASE/v1/readings/$ID" -o "$OUT/job-state.json" || fail "cannot observe job state"
+  STATE=$(jq -r '.summary_state' < "$OUT/job-state.json") || fail "invalid job state JSON"
+  printf 'job state=%s\n' "$STATE" >> "$OUT/readiness.log"
+  case "$STATE" in
+    done|failed) break;;
+    queued|pending|running) ;;
+    *) fail "unknown job state '$STATE'; see job-state.json";;
+  esac
+  container_running "$API"
+  container_running "$WORKER"
   sleep 1
 done
 [ "$STATE" = "done" ] || fail "job never completed; last state '$STATE' (worker log in $OUT/$WORKER.log)"
