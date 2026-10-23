@@ -13,6 +13,8 @@ function waitForCondition({ predicate, site, paths = [], interval = 50 }) {
     throw new TypeError('waitForCondition requires a predicate, named site, paths and positive observation interval');
   }
   const id = ++nextId, watchers = [];
+  const dropNotifications = process.env.WHEELHOUSE_CONDITION_DROP_WATCH === '1';
+  let dropped = false;
   let timer, disposed = false, settled = false, checking = false, initiallyPending = false;
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
@@ -43,11 +45,11 @@ function waitForCondition({ predicate, site, paths = [], interval = 50 }) {
       if (value) {
         const errors = dispose();
         if (errors.length) { failure(errors[0]); return; }
-        trace({ id, site, event: 'resolved', origin, initiallyPending });
+        trace({ id, site, event: 'resolved', origin, initiallyPending, watchSuppressed: dropNotifications });
         settled = true; resolve(value);
       } else if (!initiallyPending) {
         initiallyPending = true;
-        trace({ id, site, event: 'pending', origin });
+        trace({ id, site, event: 'pending', origin, watchSuppressed: dropNotifications });
       }
     } catch (error) { failure(error); }
     finally { checking = false; }
@@ -56,7 +58,13 @@ function waitForCondition({ predicate, site, paths = [], interval = 50 }) {
   for (const target of [...new Set(paths)]) {
     if (disposed) break;
     try {
-      const watcher = fs.watch(target, () => reconcile('watch'));
+      const watcher = fs.watch(target, () => {
+        if (!dropNotifications) { reconcile('watch'); return; }
+        if (!dropped) {
+          dropped = true;
+          try { trace({ id, site, event: 'watch-dropped' }); } catch (captureError) { failure(captureError); }
+        }
+      });
       if (disposed) { watcher.close(); break; }
       watchers.push(watcher);
       // Losing a subscription does not lose the condition observer. A genuine

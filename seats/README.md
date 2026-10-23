@@ -1191,8 +1191,11 @@ real publication after an initially false condition. `watch-wait-audit.selftest.
 refuses direct/aliased watch access outside the helper and narrowly identified
 notification-suppression instrumentation, including generated code in shell
 stubs. New waits must use the helper, not grow another local watch/poll loop.
-`WHEELHOUSE_CONDITION_TRACE`, when used for verification, points at a private
-capture outside the watched directories; it records observations, not authority
+`WHEELHOUSE_CONDITION_DROP_WATCH=1` is the deterministic fixture control: the
+helper suppresses watch callbacks but still inspects real conditions. The unit
+also replaces the watch backend entirely. `WHEELHOUSE_CONDITION_TRACE`, when
+used for verification, points at a private capture outside the watched
+directories; it records observations, not authority
 to signal or clean up the historical PIDs it contains.
 
 For the full host sweep, run the locked runner instead of an ad-hoc loop:
