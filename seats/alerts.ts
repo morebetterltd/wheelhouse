@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { readQuarantine } from "./quarantine";
 import { fleetSnapshot, readyWorkNobodyOnIt, hasUnverifiedWorkers, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";

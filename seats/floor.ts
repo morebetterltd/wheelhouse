@@ -35,7 +35,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { completedExecFileSync as execFileSync } from "./native-command";
 import { effectiveRoster } from "./roster";
 import { seatTurnDisplay } from "./seat-turn-display";
 import { seatIdentity, type SeatIdentity } from "./seat-activity";
@@ -414,8 +414,10 @@ function readyCount(): number | null {
   if (Date.now() - readyCache.at < READY_TTL_MS) return readyCache.count;
   let count: number | null = null;
   try {
-    const out = execFileSync("bd", ["ready"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
-    count = out.split("\n").filter((l) => /\S/.test(l) && !/no issues|nothing/i.test(l)).length;
+    const out = execFileSync("bd", ["ready", "--json", "--limit", "0"], { encoding: "utf8" });
+    const rows = JSON.parse(out);
+    if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw new Error("bd ready did not return an issue array");
+    count = rows.length;
   } catch {
     count = null; // bd missing or unhappy — the rail just skips this signal
   }

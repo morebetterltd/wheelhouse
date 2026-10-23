@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { templateValue, repoFromRemote } from "./alerts";
 import { rosterSeatActors } from "./comms";
 import { CREDENTIAL_SHAPE_RE } from "./credential-shapes";

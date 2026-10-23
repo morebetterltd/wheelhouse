@@ -49,7 +49,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { completedExecFileSync as execFileSync } from "./native-command";
 import { seatIdentity } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");

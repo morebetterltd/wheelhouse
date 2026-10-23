@@ -33,7 +33,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { effectiveRoster } from "./roster";
 import { CREDENTIAL_SHAPE_RE } from "./credential-shapes";
 

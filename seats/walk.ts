@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
 import { resolveRoleBrief } from "./briefs";
 import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
@@ -481,8 +481,7 @@ function main(): void {
     cwd: scratchCwd,
     env,
     encoding: "utf8",
-    timeout: TIMEOUT_MS,
-    maxBuffer: 64 * 1024 * 1024,
+    policyTimeoutMs: TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
   });
 

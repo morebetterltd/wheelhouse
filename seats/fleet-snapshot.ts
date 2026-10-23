@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { completedExecFileSync as execFileSync } from "./native-command";
 import { completedCommand } from "./completed-command";
 import { effectiveRoster, type StaffingFile } from "./roster";
 import { agentSettledEvent, lastActivityAt, lastEvent, pidAlive, seatIdentity } from "./seat-activity";

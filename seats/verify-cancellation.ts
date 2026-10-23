@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 
 // Direct detached children and suite groups published by our fixed launcher
 // before setsid are the ownership proof. Never infer ownership from ps,

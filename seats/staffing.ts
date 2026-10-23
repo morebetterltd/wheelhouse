@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { hasPool, loadPool, seatEntryFor, staffedSeatName, type Pool } from "./pool";
 import { staffingPath, type StaffingFile } from "./roster";
 import { fleetSnapshot, freeWorkers, freeReviewers, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";

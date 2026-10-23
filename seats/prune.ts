@@ -49,7 +49,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import * as crypto from "node:crypto";
 import { PLACEHOLDER_MARKER, phantomOnlyStatus, porcelainStatus } from "./seat-worktree";
 import { acquireCleanupLock, prepareCleanupRuntime, cleanupPathIdentity, cleanupPathUnchanged, scratchOwnership, type CleanupPathIdentity } from "./cleanup-identity";

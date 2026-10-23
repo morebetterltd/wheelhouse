@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
-import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { dlopen, FFIType, read, CString, toArrayBuffer } from "bun:ffi";
 
 const MARKER = "wheelhouse-selftest-sweep";

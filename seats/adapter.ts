@@ -55,14 +55,15 @@
  * moment its bead closes.
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import * as crypto from "node:crypto";
 import { checkBeadContract, contractRemedy } from "./contract";
 import { completedCommand } from "./completed-command";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { completedExecFileSync as execFileSync } from "./native-command";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
@@ -70,7 +71,7 @@ import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
-import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath, seatIdentity, SeatIdentityUnverified } from "./seat-activity";
+import { agentSettledEvent, barePidAlive, eventTimeIso, inspectProcessStart, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath, seatIdentity, SeatIdentityUnverified } from "./seat-activity";
 import { seatTurnDisplay } from "./seat-turn-display";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
@@ -946,6 +947,22 @@ function requirePiModelPin(name: string, entry: SeatEntry): void {
   }
 }
 
+function spawnedBirth(child: ReturnType<typeof spawn>): { startedAt: string; birthUnverified?: string } {
+  const observation = child.pid ? inspectProcessStart(child.pid) : { ms: null, reason: "spawn returned no child pid" };
+  const reason = child.exitCode != null || child.signalCode != null
+    ? "original child exited during birth observation"
+    : observation.reason;
+  if (observation.ms === null || reason) {
+    // Refuse the timestamp capture, not an independently observed FIFO proof.
+    // Retain the live record; never restamp, classify it dead/foreign, or signal
+    // a numeric occupant merely because the birth observer was unavailable.
+    const detail = reason || "native child birth unavailable";
+    console.error(`UNVERIFIED native birth for spawned pid ${child.pid}: ${detail}; no timestamp fallback recorded`);
+    return { startedAt: "", birthUnverified: detail };
+  }
+  return { startedAt: new Date(observation.ms).toISOString() };
+}
+
 async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
   requirePiModelPin(name, entry);
   requireCwdDir(cwd);
@@ -1000,6 +1017,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   });
   child.unref();
   const pid = child.pid!;
+  const birth = spawnedBirth(child);
 
   // Ask the seat who it is. This doubles as the readiness gate: pi answers
   // get_state only once its session exists, and the answer carries the
@@ -1036,7 +1054,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
 
   const record: SeatRecord = {
     pid,
-    startedAt: new Date().toISOString(),
+    ...birth,
     accountDir,
     ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
@@ -1154,6 +1172,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   const child = spawn("bash", ["-c", shellCmd], { cwd, env: claudeChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" });
   child.unref();
   const pid = child.pid!;
+  const birth = spawnedBirth(child);
 
   const probe = { fifo, log, pid };
   let st: any;
@@ -1174,7 +1193,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   const liveCwd = processCwd(pid);
   const record: SeatRecord = {
     pid,
-    startedAt: new Date().toISOString(),
+    ...birth,
     accountDir,
     ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
@@ -1248,11 +1267,11 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
   const shellCmd = `exec ${q(process.execPath)} ${args.map(q).join(" ")} 0<> ${q(fifo)} 2>> ${q(errLog)}`;
   const child = spawn("bash", ["-c", shellCmd], { cwd, env: codexChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" }); child.unref();
-  const pid = child.pid!, probe = { fifo, log, pid }; let st: any;
+  const pid = child.pid!, birth = spawnedBirth(child), probe = { fifo, log, pid }; let st: any;
   try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
-  const record: SeatRecord = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
+  const record: SeatRecord = { pid, ...birth, accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
   await recordLaunchedSeat(name, record); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`); console.log(`  events -> ${log}`);
 }
 function codexProbe(name: string, entry: SeatEntry): void {
