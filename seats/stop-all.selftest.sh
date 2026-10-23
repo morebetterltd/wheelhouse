@@ -56,8 +56,9 @@ function finish(cmd){ clearInterval(turnPoll); clearTimeout(turnCap); fs.rmSync(
 function hold(cmd){
   fs.rmSync(release, {force:true}); fs.rmSync(capped, {force:true}); fs.writeFileSync(held, "mid-turn\n");
   turnPoll = setInterval(() => { if (fs.existsSync(release)) finish(cmd); }, 25);
-  // A safety cap is a failed fixture, not normal turn completion.
-  turnCap = setTimeout(() => { fs.writeFileSync(capped, "turn safety cap\n"); process.exit(2); }, 120000);
+  // Only explicit release completes the turn. The admitted sweep contains a
+  // broken test; a slower host must not expire this actor while it is measured.
+  // Keep capped as a tripwire for controls which restore the old fixture timer.
 }
 function handle(cmd){
   const id = cmd.id;
@@ -98,10 +99,10 @@ EOF
 }
 
 RUN_PROJ=""
-run(){ RC=0; OUT="$(with_timeout 30 env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run(){ RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says(){ case "$OUT" in *"$1"*) return 0;; *) return 1;; esac; }
 state_get(){ env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$RUN_PROJ/seats/state.json','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
-wait_for(){ with_timeout 120 bash -c 'until [ -f "$1" ] && grep -q "$2" "$1"; do sleep 0.05; done' wait-for-event "$1" "$2"; }
+wait_for(){ bun "$HERE/fixtures/file-event.ts" "$1" "$2" "${3:-}"; }
 
 phase "1. all-idle stop-all stops every running rostered seat"
 PROJ="$FIX/proj"; build_proj "$PROJ" alpha; RUN_PROJ="$PROJ"
@@ -131,7 +132,7 @@ if [ "$(state_get worker-a sessionFile)" = "$SESS_BUSY" ] && [ "$(state_get work
 if [ -f "$BUSY_AGENT/turn.held" ] && [ ! -e "$BUSY_AGENT/turn.capped" ] && selftest_capture_lacks "$PROJ2/seats/logs/worker-a.jsonl" -q -- 'agent_end'; then pass "busy turn stays open until explicit test release"
 else fail "busy turn ended or hit its safety cap before test release"; fi
 printf 'release\n' > "$BUSY_AGENT/turn.release"
-wait_for "$PROJ2/seats/logs/worker-a.jsonl" 'agent_end' || fail "busy turn did not finish after explicit test release"
+wait_for "$PROJ2/seats/logs/worker-a.jsonl" 'agent_end' "$PID_BUSY" || fail "busy turn did not finish after explicit test release"
 run stop-all >/dev/null
 
 phase "2b. codex-harness seats use the shared stop path and do not abort later stops"

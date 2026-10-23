@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { completedCommand } from "./completed-command";
 import { effectiveRoster, type StaffingFile } from "./roster";
 import { agentSettledEvent, lastActivityAt, lastEvent, pidAlive, seatIdentity } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
-const BD_TIMEOUT_MS = Number(process.env.WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS || "30000");
 
 export interface ReadyItem { id: string; title: string; chained: boolean; groupKey: string | null }
 export interface BacklogItem { id: string; title: string; authorSeat: string | null; authorAccountDir: string | null }
@@ -19,9 +19,9 @@ export interface Snapshot { unverified?: Record<string, UnverifiedSeat>; at: str
 function stop(msg: string): never { throw new Error(`STOP: ${msg}`); }
 function readJson(file: string): any { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } }
 function runBd(root: string, args: string[]): any[] {
-  const r = spawnSync("bd", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: BD_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
-  if (r.status !== 0) stop(`bd ${args.join(" ")} failed (${r.status ?? r.error?.message}): ${(r.stderr || r.stdout || "").trim()}`);
-  try { return JSON.parse(r.stdout || "[]"); } catch (e: any) { stop(`bd ${args.join(" ")} did not return JSON: ${e.message}`); }
+  const r = completedCommand("bd", args, { cwd: root });
+  if (r.error || r.signal || r.status !== 0) stop(`bd ${args.join(" ")} failed (${r.status ?? r.error?.message}): ${(r.stderr || r.stdout || "").trim()}`);
+  try { return JSON.parse(r.stdout); } catch (e: any) { stop(`bd ${args.join(" ")} did not return JSON: ${e.message}`); }
 }
 function idOf(x: any): string { return String(x?.id ?? x?.key ?? x?.name ?? ""); }
 function titleOf(x: any): string { return String(x?.title ?? x?.summary ?? x?.description ?? ""); }
