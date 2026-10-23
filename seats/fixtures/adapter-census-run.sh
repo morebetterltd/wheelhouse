@@ -2,7 +2,7 @@
 # Keep a failed/interrupted census's real native evidence outside suite CLEAN.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
-. "$HERE/selftest-lib.sh"
+. "$HERE/selftest-lib.sh" || exit 2
 [ "$#" = 2 ] || { echo 'usage: adapter-census-run.sh <fresh-project> <adapter.ts>' >&2; exit 2; }
 owned=0
 if [ -n "${WHEELHOUSE_CENSUS_EVIDENCE:-}" ]; then
