@@ -5,7 +5,14 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 PIDS=""
-cleanup(){ selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
+cleanup(){
+  # The stub's callers may intentionally suppress streams; retain real native
+  # fixture outcomes before deleting the fixture, including successful calls.
+  if [ -n "${ROOT:-}" ] && [ -f "$ROOT/native-commands.jsonl" ]; then
+    while IFS= read -r record; do printf 'CAPTURE staffing native %s\n' "$record" >&2; done < "$ROOT/native-commands.jsonl"
+  fi
+  selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"
+}
 selftest_install_cleanup_traps cleanup
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
@@ -56,19 +63,31 @@ function pool(){return JSON.parse(fs.readFileSync(path.join(root,"seats/pool.jso
 function modelFor(seat:string){const p=pool(); const ent=seat.replace(/^worker-/,'').replace(/^reviewer-/,''); const r=p.roles.workers.entries.includes(ent)?p.roles.workers:p.roles.reviewers; return typeof r.model==='string'?r.model:r.model[ent]}
 if(cmd==='spawn'){
  const seat=args[0]; const fifo=path.join(root,"seats/run",`${seat}.stdin`);
- if(!fs.existsSync(fifo)){const made=completedCommand("mkfifo",[fifo]);console.error('CAPTURE staffing FIFO '+JSON.stringify(made));if(made.status!==0)throw new Error('fixture FIFO allocation failed');}
+ if(!fs.existsSync(fifo)){const made=completedCommand("mkfifo",[fifo]);fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'mkfifo',fifo,native:made})+"\n");console.error('CAPTURE staffing FIFO '+JSON.stringify(made));if(made.status!==0)throw new Error('fixture FIFO allocation failed');}
  if(!fs.statSync(fifo).isFIFO())throw new Error('fixture FIFO is not a FIFO');
  const actor=fs.mkdtempSync(path.join(root,"seats/run/holder-")),signals=process.env.LIFECYCLE_SIGNAL_HELPER!;
  const child=spawn("bun",[signals,"hold",actor+"/release",actor+"/ready",fifo],{detached:true,stdio:"ignore"}); child.unref();
  const ready=completedCommand("bun",[signals,"exists",actor+"/ready","","0",String(child.pid)]);
+ fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'holder-ready',pid:child.pid,fifo,native:ready})+"\n");
  console.error('CAPTURE staffing holder readiness '+JSON.stringify({pid:child.pid,fifo,native:ready}));
  if(ready.status!==0)throw new Error('fixture holder exited before FIFO readiness');
  const born=completedCommand("ps",["-p",String(child.pid),"-o","lstart="]);
+ fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'birth',pid:child.pid,native:born})+"\n");
  console.error('CAPTURE staffing holder native birth '+JSON.stringify(born));
  if(born.error||born.signal||born.status!==0)throw new Error('fixture holder birth unavailable');
  const startedAt=new Date(Date.parse(born.stdout.trim())).toISOString();
  const wt=path.join(root,".wheelhouse-worktrees",seat);
- if(!fs.existsSync(wt)){const added=completedCommand("git",["-C",root,"worktree","add","--detach",wt,"HEAD"]);console.error('CAPTURE staffing worktree allocation '+JSON.stringify(added));if(added.status!==0)throw new Error('fixture worktree allocation failed');}
+ if(!fs.existsSync(wt)){
+  // This fixture deliberately removes worktree directories between policy
+  // scenarios. Complete its registry reset too, rather than ignoring add128.
+  const pruned=completedCommand("git",["-C",root,"worktree","prune","--expire","now"]);
+  fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'prune',wt,native:pruned})+"\n");
+  if(pruned.error||pruned.signal||pruned.status!==0)throw new Error('fixture worktree registry reset failed');
+  const added=completedCommand("git",["-C",root,"worktree","add","--detach",wt,"HEAD"]);
+  fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'add',wt,native:added})+"\n");
+  console.error('CAPTURE staffing worktree allocation '+JSON.stringify(added));
+  if(added.error||added.signal||added.status!==0)throw new Error('fixture worktree allocation failed');
+ }
  const st=read(path.join(root,"seats/state.json")); st.seats[seat]={pid:child.pid,startedAt,fifo,log:path.join(root,"seats/logs",`${seat}.jsonl`),cwd:wt}; write(path.join(root,"seats/state.json"),st);
  fs.writeFileSync(path.join(root,"seats/logs",`${seat}.jsonl`),'{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}\n');
  fs.appendFileSync(path.join(root,"spawn-models.log"),`${seat} ${modelFor(seat)}\n`); process.exit(0);
