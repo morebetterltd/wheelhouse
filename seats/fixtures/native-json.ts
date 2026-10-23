@@ -49,7 +49,8 @@ function floor(removed: boolean) {
   const root = path.join(parent, "floor-count-" + (removed ? "removed" : "positive")); fs.cpSync(runtime, root, { recursive: true });
   if (removed) fs.writeFileSync(path.join(root, "seats/floor.ts"), floorSource.replace(old, () => legacy));
   for (const dir of ["bin", "wheelhouse"]) fs.mkdirSync(path.join(root, dir), { recursive: true });
-  fs.writeFileSync(path.join(root, "seats/seats.json"), '{"seats":{}}\n'); fs.writeFileSync(path.join(root, "seats/state.json"), '{"seats":{}}\n');
+  fs.writeFileSync(path.join(root, "seats/seats.json"), JSON.stringify({ seats: { worker: { role: "worker", cwd: root } } }) + "\n"); fs.writeFileSync(path.join(root, "seats/state.json"), '{"seats":{}}\n');
+  assert.equal(Object.keys(JSON.parse(fs.readFileSync(path.join(root, "seats/seats.json"), "utf8")).seats).length, 1, "a real roster subject must exist before measuring the status view");
   // bd 1.2.2's real ready renderer was captured before fixture construction:
   // issue rows plus separator/Ready/Status footer. Replace private content;
   // only the JSON records, never these display lines, define the cardinality.
