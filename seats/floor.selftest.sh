@@ -396,16 +396,29 @@ else
   cat > "$QSCRIPT" <<EOF
 # Named outer PTY resource containment, not a startup/repaint SLA.
 set timeout 1800
-expect_before timeout { puts stderr "INCOMPLETE floor PTY outer30min bound; last_seen=\$expect_out(buffer)"; exit 124 }
+fconfigure stdout -buffering none
 spawn bun "$PROJ/seats/floor.ts" --pin 1
+# Bind the timeout to the spawned PTY, not the caller's closed stdin.
+expect_before timeout { puts stderr "INCOMPLETE floor PTY outer30min bound; last_seen=\$expect_out(buffer)"; exit 124 }
 puts stderr "WAIT floor PTY SPOTLIGHT"
-expect { "SPOTLIGHT" {} eof { puts stderr "FAIL floor exited before SPOTLIGHT"; exit 1 } }
+# Expect's multiline pattern list is significant: a one-line brace block
+# is a single literal glob, not separate pattern/action pairs.
+expect {
+  "SPOTLIGHT" {}
+  eof { puts stderr "FAIL floor exited before SPOTLIGHT"; exit 1 }
+}
 send "q"
 puts stderr "WAIT floor PTY OVERVIEW after q"
-expect { "OVERVIEW" {} eof { puts stderr "FAIL floor exited before OVERVIEW"; exit 1 } }
+expect {
+  "OVERVIEW" {}
+  eof { puts stderr "FAIL floor exited before OVERVIEW"; exit 1 }
+}
 send "1"
 puts stderr "WAIT floor PTY SPOTLIGHT after return key (q must not exit)"
-expect { "SPOTLIGHT" {} eof { puts stderr "FAIL q exited instead of keeping floor alive"; exit 1 } }
+expect {
+  "SPOTLIGHT" {}
+  eof { puts stderr "FAIL q exited instead of keeping floor alive"; exit 1 }
+}
 send "\003"
 expect eof
 EOF
