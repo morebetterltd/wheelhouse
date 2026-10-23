@@ -220,6 +220,7 @@ async function supervisedNetwork(dir: string) {
   } finally { if (!closed) child.kill("SIGTERM"); await done; fs.writeFileSync(path.join(dir, "supervisor.out"), out); fs.writeFileSync(path.join(dir, "supervisor.err"), err); }
 }
 async function hostnameOnlyMutant(dir: string) {
+  copyCaptureDependencies(dir);
   const before = helpers.get("network-before")!, after = helpers.get("network-after")!;
   const named = fs.readFileSync(after, "utf8"), needle = "return hostNames.has(marker.hostname);";
   assert.equal(named.split(needle).length, 2);
@@ -228,7 +229,7 @@ async function hostnameOnlyMutant(dir: string) {
   const owned = acquired(dir, before), stamp = path.join(dir, "ran");
   try {
     const result = mode(dir, "supervise", ["bash", "-c", 'printf "ran\\n" > "$1"', "fixture", stamp], mutant);
-    assert.equal(result.status, 2, "hostname-only matcher must break cross-name admission");
+    assert.equal(result.status, 2, "hostname-only matcher must break cross-name admission; native stderr=" + result.stderr);
     const diagnostics = result.stderr.split("\n").filter(x => x.startsWith("SELFTEST_LOCK_REFUSAL ")).map(x => JSON.parse(x.slice("SELFTEST_LOCK_REFUSAL ".length)));
     assert(diagnostics.some(x => x.operation === "acquire" && x.reason === "marker host identity is not this host" && x.host.identitySource !== "hostname" && x.host.identityFailures.length === 0), "reject the actual lost-alias proof with valid captured hardware identity, not an unrelated setup error");
     assert(!fs.existsSync(stamp), "broken matcher must not admit the payload");
