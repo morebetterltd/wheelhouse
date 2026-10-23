@@ -176,17 +176,21 @@ if (selected.includes('preexisting')) {
   let subject: Actor | null = null; const owned: any[] = [];
   try {
     subject = actor(dir + '/subject', 'preexisting', '', true); result.executedSha256 = subject.executedSha256;
-    // Both endpoints belong to this separate native setup, NOT to the suite
-    // whose still-live exec PID appears in their names (e.g. PID recycling).
-    for (const sock of [subject.sock, subject.sock + '-client']) {
+    // This endpoint belongs to a separate native setup, NOT to the suite
+    // whose still-live exec PID appears in its name (e.g. PID recycling).
+    for (const sock of [subject.sock]) {
       const r = tmux(sock, ['new-session', '-d', '-s', 'preexisting', '-c', dir, 'exec tail -f /dev/null']); assert.equal(r.code, 0);
       owned.push(snapshot(sock));
     }
-    result.foreignBefore = owned;
+    result.foreignBefore = [...owned];
     subject.authorize();
     await until(subject, 'preexisting endpoint refusal or native adoption', () => subject!.closed || fs.existsSync(subject!.dir + '/client-up.json'));
     result.adopted = fs.existsSync(subject.dir + '/client-up.json');
     result.foreignAfter = owned.map(x => ({ sock: x.sock, state: socketState(x.file), alive: live(x.pid), native: tmux(x.sock, ['has-session']) }));
+    // The old subject may adopt the primary and then create its own client.
+    // Record that new inode BEFORE stopping it; never adopt a replacement of
+    // the foreign setup's inode merely to make rescue succeed.
+    if (result.adopted) owned.push(snapshot(subject.sock + '-client'));
     assert.equal(result.adopted, false, 'PREEXISTING_ENDPOINT_ADOPTED');
     result.subjectExit = await subject.exited; assert.deepEqual(result.subjectExit, { code: 2, signal: null });
     result.stderr = fs.readFileSync(subject.dir + '/stderr', 'utf8'); assert.match(result.stderr, /refuses preexisting tmux endpoint/);
