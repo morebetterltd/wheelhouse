@@ -44,19 +44,32 @@ fi
 echo unexpected bd "$@" >&2; exit 9
 SH
 chmod +x "$BIN/bd"
+export LIFECYCLE_SIGNAL_HELPER="$HERE/fixtures/adapter-selftest-signals.ts"
 cat > "$ROOT/seats/adapter.ts" <<'BUN'
 #!/usr/bin/env bun
-import * as fs from "node:fs"; import * as path from "node:path"; import { spawnSync, spawn } from "node:child_process";
+import * as fs from "node:fs"; import * as path from "node:path"; import { spawn } from "node:child_process";
+import {completedCommand} from "./completed-command.ts";
 const root=path.resolve(import.meta.dir,".."); const [cmd,...args]=process.argv.slice(2); const log=path.join(root,"adapter-argv.log"); fs.appendFileSync(log, JSON.stringify(process.argv.slice(2))+"\n");
 function read(file:string){try{return JSON.parse(fs.readFileSync(file,"utf8"))}catch{return {seats:{}}}}
 function write(file:string,j:any){fs.mkdirSync(path.dirname(file),{recursive:true}); fs.writeFileSync(file,JSON.stringify(j,null,2)+"\n")}
 function pool(){return JSON.parse(fs.readFileSync(path.join(root,"seats/pool.json"),"utf8"))}
 function modelFor(seat:string){const p=pool(); const ent=seat.replace(/^worker-/,'').replace(/^reviewer-/,''); const r=p.roles.workers.entries.includes(ent)?p.roles.workers:p.roles.reviewers; return typeof r.model==='string'?r.model:r.model[ent]}
 if(cmd==='spawn'){
- const seat=args[0]; const fifo=path.join(root,"seats/run",`${seat}.stdin`); try{fs.mkfifoSync(fifo)}catch{spawnSync("mkfifo",[fifo])}
- const child=spawn("bash",["-c",`exec 3<>${JSON.stringify(fifo)}; exec sleep 1000`],{detached:true,stdio:"ignore"}); child.unref();
- const wt=path.join(root,".wheelhouse-worktrees",seat); spawnSync("git",["-C",root,"worktree","add","--detach",wt,"HEAD"],{stdio:"ignore"});
- const st=read(path.join(root,"seats/state.json")); st.seats[seat]={pid:child.pid,startedAt:new Date().toISOString(),fifo,log:path.join(root,"seats/logs",`${seat}.jsonl`),cwd:wt}; write(path.join(root,"seats/state.json"),st);
+ const seat=args[0]; const fifo=path.join(root,"seats/run",`${seat}.stdin`);
+ if(!fs.existsSync(fifo)){const made=completedCommand("mkfifo",[fifo]);console.error('CAPTURE staffing FIFO '+JSON.stringify(made));if(made.status!==0)throw new Error('fixture FIFO allocation failed');}
+ if(!fs.statSync(fifo).isFIFO())throw new Error('fixture FIFO is not a FIFO');
+ const actor=fs.mkdtempSync(path.join(root,"seats/run/holder-")),signals=process.env.LIFECYCLE_SIGNAL_HELPER!;
+ const child=spawn("bun",[signals,"hold",actor+"/release",actor+"/ready",fifo],{detached:true,stdio:"ignore"}); child.unref();
+ const ready=completedCommand("bun",[signals,"exists",actor+"/ready","","0",String(child.pid)]);
+ console.error('CAPTURE staffing holder readiness '+JSON.stringify({pid:child.pid,fifo,native:ready}));
+ if(ready.status!==0)throw new Error('fixture holder exited before FIFO readiness');
+ const born=completedCommand("ps",["-p",String(child.pid),"-o","lstart="]);
+ console.error('CAPTURE staffing holder native birth '+JSON.stringify(born));
+ if(born.error||born.signal||born.status!==0)throw new Error('fixture holder birth unavailable');
+ const startedAt=new Date(Date.parse(born.stdout.trim())).toISOString();
+ const wt=path.join(root,".wheelhouse-worktrees",seat);
+ if(!fs.existsSync(wt)){const added=completedCommand("git",["-C",root,"worktree","add","--detach",wt,"HEAD"]);console.error('CAPTURE staffing worktree allocation '+JSON.stringify(added));if(added.status!==0)throw new Error('fixture worktree allocation failed');}
+ const st=read(path.join(root,"seats/state.json")); st.seats[seat]={pid:child.pid,startedAt,fifo,log:path.join(root,"seats/logs",`${seat}.jsonl`),cwd:wt}; write(path.join(root,"seats/state.json"),st);
  fs.writeFileSync(path.join(root,"seats/logs",`${seat}.jsonl`),'{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}\n');
  fs.appendFileSync(path.join(root,"spawn-models.log"),`${seat} ${modelFor(seat)}\n`); process.exit(0);
 }

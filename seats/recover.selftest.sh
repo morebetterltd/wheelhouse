@@ -134,7 +134,7 @@ chmod +x "$BIN/bd"
 # it REWRITES ITS PROCESS TITLE to bare `pi` (so ps carries no argv and any
 # command-line-based identity test would misclassify it, exactly as it would
 # the real pi), and its stdin stays on the seat FIFO the adapter opened. A
-# prompt containing SLOW finishes its turn late — the SIGKILL window.
+# SLOW publishes an owned held-turn marker; only explicit release/kill ends it.
 cat > "$BIN/pi" <<STUB
 #!/usr/bin/env node
 process.title = "pi"; // the real pi does this too — ps shows NO argv
@@ -175,7 +175,14 @@ function handle(cmd) {
               content: [{ type: "text", text: "echo: " + cmd.message }] } });
         out({ type: "agent_end", messages: [] });
       };
-      if (/SLOW/.test(cmd.message)) setTimeout(finish, 3000); else finish();
+      if (/SLOW/.test(cmd.message)) {
+        const release = path.join(agentDir, sessionId + ".release");
+        fs.rmSync(release, {force:true});
+        const check = () => { if (fs.existsSync(release)) { watcher.close(); finish(); } };
+        const watcher = fs.watch(agentDir, check);
+        fs.writeFileSync(path.join(agentDir, sessionId + ".held"), String(process.pid));
+        check();
+      } else finish();
       break;
     }
     default:
@@ -241,8 +248,9 @@ state_get() { env HOME="$HOME_FIX" bun -e 'import fs from "node:fs";const s=JSON
 pi_count() { awk 'END { print NR + 0 }' "$PI_PIDS"; }
 
 # a pid that is definitely dead (spawned, then reaped)
-sleep 0.01 & DEADPID=$!
-wait "$DEADPID" 2>/dev/null
+(exit 0) & DEADPID=$!
+wait "$DEADPID"; DEAD_RC=$?
+printf 'CAPTURE native dead fixture pid=%s exit=%s\n' "$DEADPID" "$DEAD_RC"
 
 phase "1. SIGKILL mid-turn — DEAD, bead named, printed resume re-attaches the same session"
 adapter_run spawn worker-1
@@ -261,8 +269,11 @@ adapter_run dispatch worker-1 bead-98m "SLOW think about it"
 # spawn reported before dispatch replaced it.
 KPID="$(state_get worker-1 pid)"
 SESS="$(state_get worker-1 sessionFile)"
+HELD="$SEATDIR/$(basename "$SESS" .jsonl).held"
+bun "$HERE/fixtures/adapter-selftest-signals.ts" exists "$HELD" '' 0 "$KPID" || { fail 'mid-turn producer exited before held marker'; exit 1; }
+[ "$(cat "$HELD")" = "$KPID" ] || { fail 'mid-turn marker names a different producer'; exit 1; }
 kill -9 "$KPID" 2>/dev/null
-i=0; while kill -0 "$KPID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+bun "$HERE/fixtures/adapter-selftest-signals.ts" exit "$KPID" || fail 'native killed-producer observation failed'
 if ! kill -0 "$KPID" 2>/dev/null; then pass "seat pid $KPID force-killed mid-turn"
 else fail "could not kill the stub seat"; fi
 
@@ -295,7 +306,8 @@ if [ "$(state_get worker-1 lastBead)" = "bead-98m" ]; then
 else fail "lastBead lost across the forced kill"; fi
 
 phase "2. commander-restart simulation — fresh process, state.json only, all classes correct"
-sleep 300 & SLEEP_PID=$!; disown 2>/dev/null || true
+(cd "$FIX" && exec bun "$HERE/fixtures/adapter-selftest-signals.ts" hold "$FIX/foreign.release" "$FIX/foreign.ready") & SLEEP_PID=$!
+bun "$HERE/fixtures/adapter-selftest-signals.ts" exists "$FIX/foreign.ready" '' 0 "$SLEEP_PID" || exit 2
 tail -f "$PROJ/contracts/WORKER.md" >/dev/null 2>&1 & SPOOF_PID=$!; disown 2>/dev/null || true
 env HOME="$HOME_FIX" bun -e "
 import fs from 'node:fs';
@@ -323,7 +335,7 @@ if seat_line worker-stale | grep >/dev/null 'STALE' && ! says "resume worker-sta
 else fail "worker-stale misclassified: $OUT"; fi
 if seat_line worker-reuse | grep >/dev/null 'DEAD' && seat_line worker-reuse | grep >/dev/null 'reused or foreign'; then
   pass "live-but-reused pid classified DEAD and called out (restart hazard)"
-else fail "worker-reuse (pid held by 'sleep 300') misclassified: $OUT"; fi
+else fail "worker-reuse (explicitly owned unrelated holder) misclassified: $OUT"; fi
 if seat_line worker-spoof | grep >/dev/null 'DEAD' && ! seat_line worker-spoof | grep >/dev/null 'RUNNING'; then
   pass "argv spoof (tail -f on the role brief) classified DEAD — identity is fds, not command lines"
 else fail "worker-spoof (tail -f carrying the brief path in argv) misclassified: $OUT"; fi
@@ -394,18 +406,13 @@ else
   # busy machine trails process creation by seconds — poll for it instead of
   # sampling once and calling a slow start a changed premise.
   PS_LINE=""
-  i=0
-  while [ $i -lt 40 ] && kill -0 "$PROBE_PID" 2>/dev/null; do
-    PS_LINE="$(ps -p "$PROBE_PID" -o command= | sed 's/ *$//')"
-    [ "$PS_LINE" = "pi" ] && break
-    sleep 0.5; i=$((i + 1))
-  done
+  if bun "$HERE/fixtures/adapter-selftest-signals.ts" title "$PROBE_PID" pi; then PS_LINE=pi; fi
   if kill -0 "$PROBE_PID" 2>/dev/null; then
     pass "real pi started login-free in the RPC shape (pid $PROBE_PID)"
     if [ "$PS_LINE" = "pi" ]; then
       pass "real pi's ps line is exactly 'pi' — NO argv: any command-line identity test is blind here"
     else
-      fail "real pi's ps line is '$PS_LINE' after 20s — the title-rewrite premise changed; re-examine recover's identity mechanism AND this suite"
+      fail "real pi exited or native title observation was unavailable before the pi premise — inspect retained last observation"
     fi
     if lsof -Fn -p "$PROBE_PID" 2>/dev/null | grep -F >/dev/null "n$RPDIR/probe.stdin"; then
       pass "real pi holds its stdin FIFO where lsof sees it — the identity mechanism recover relies on"
@@ -457,7 +464,7 @@ else
 { "seats": { "ghost": { "pid": $DEADPID, "fifo": "$CAN_B/seats/run/ghost.stdin", "sessionFile": "$CAN_B/sess-b.jsonl", "lastBead": "bead-b" } } }
 EOF
   tail -f "$CAN_B/sess-b.jsonl" >/dev/null 2>&1 & TAIL_PID=$!; disown 2>/dev/null || true
-  sleep 0.2
+  bun "$HERE/fixtures/adapter-selftest-signals.ts" fd "$TAIL_PID" "$CAN_B/sess-b.jsonl" || { fail 'tail exited or fd observation unavailable'; exit 1; }
   # the REAL recover must refuse: a live process HOLDS the session file open
   RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$CAN_B/seats/recover.ts" 2>&1)" || RC=$?
   if [ $RC -eq 0 ] && says "REFUSED double-resume"; then

@@ -406,7 +406,7 @@ arun spawn d-seat
 arun dispatch d-seat bead-d "hello"
 DPID="$(state_get d-seat pid)"
 kill -9 "$DPID" 2>/dev/null
-sleep 0.3
+bun "$HERE/fixtures/adapter-selftest-signals.ts" exit "$DPID" || fail 'native d-seat exit observation unavailable'
 if ! kill -0 "$DPID" 2>/dev/null; then pass "d-seat pid $DPID SIGKILLed"
 else fail "could not kill d-seat pid $DPID"; fi
 render

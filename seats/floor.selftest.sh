@@ -368,19 +368,11 @@ phase "phase 5: repaint — repeated frames return home and clear to end"
 CAPTURE_FILE="$FIX/repaint.capture"
 env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$PROJ/seats/floor.ts" > "$CAPTURE_FILE" 2> "$FIX/repaint.stderr" &
 FLOOR_PID=$!
-# Native identity inspection makes a frame's cost host-dependent. Observe the
-# second actual repaint; the generous cap contains failure, not correctness.
-if ! bun - "$FLOOR_PID" "$CAPTURE_FILE" <<'JS'
-import fs from 'node:fs';
-const [pid,file]=process.argv.slice(2),deadline=Date.now()+120000;
-while(Date.now()<deadline){
-  if(fs.existsSync(file)&&fs.readFileSync(file,'utf8').split('\x1b[H\x1b[J').length-1>=2)process.exit(0);
-  try{process.kill(Number(pid),0);}catch{process.exit(1);}
-  await Bun.sleep(50);
-}
-process.exit(1);
-JS
-then fail 'floor did not publish a second repaint before exit/safety cap'; fi
+# Observe the actual second repaint; the admitted suite owns named3600s
+# containment, with the helper's last count/file/producer printed before wait.
+if ! bun "$HERE/fixtures/adapter-selftest-signals.ts" count "$CAPTURE_FILE" $'\033[H\033[J' 0 "$FLOOR_PID" 2; then
+  fail 'floor producer exited before its second repaint'
+fi
 kill "$FLOOR_PID" 2>/dev/null
 wait "$FLOOR_PID" 2>/dev/null
 CAPTURE="$(cat "$CAPTURE_FILE")"
@@ -402,11 +394,18 @@ if ! command -v expect >/dev/null 2>&1; then
 else
   QCAP="$FIX/q.expect"
   env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" expect > "$QCAP" 2>&1 <<EOF
-set timeout 5
-spawn bun "$PROJ/seats/floor.ts"
-expect "RAIL"
+# Named outer PTY resource containment, not a startup/repaint SLA.
+set timeout 1800
+expect_before timeout { puts stderr "INCOMPLETE floor PTY outer30min bound; last_seen=\$expect_out(buffer)"; exit 124 }
+spawn bun "$PROJ/seats/floor.ts" --pin 1
+puts stderr "WAIT floor PTY SPOTLIGHT"
+expect { "SPOTLIGHT" {} eof { puts stderr "FAIL floor exited before SPOTLIGHT"; exit 1 } }
 send "q"
-expect "OVERVIEW"
+puts stderr "WAIT floor PTY OVERVIEW after q"
+expect { "OVERVIEW" {} eof { puts stderr "FAIL floor exited before OVERVIEW"; exit 1 } }
+send "1"
+puts stderr "WAIT floor PTY SPOTLIGHT after return key (q must not exit)"
+expect { "SPOTLIGHT" {} eof { puts stderr "FAIL q exited instead of keeping floor alive"; exit 1 } }
 send "\003"
 expect eof
 EOF
