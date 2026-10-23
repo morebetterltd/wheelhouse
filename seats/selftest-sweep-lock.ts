@@ -25,6 +25,40 @@ const HOST_RECORD = `${MARKER}-host`;
 const C = fs.constants;
 const darwin = process.platform === "darwin";
 class Refused extends Error {}
+/** Capture native bytes through regular descriptors, not Bun's synchronous
+ * stdout pipe result: a successful fast command can return an empty string
+ * there before its output has been observed. Keep the existing timeout and
+ * bounded read, and remove the private hardware bytes on every path. */
+export function readIdentityProvider(file: string, args: string[], options: { encoding: "utf8"; timeout: number; maxBuffer: number }): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wheelhouse-native-identity-"));
+  const output = path.join(dir, "stdout"), errors = path.join(dir, "stderr");
+  let out = -1, err = -1;
+  try {
+    out = fs.openSync(output, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW | fs.constants.O_RDWR, 0o600);
+    err = fs.openSync(errors, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW | fs.constants.O_RDWR, 0o600);
+    execFileSync(file, args, { ...options, stdio: ["ignore", out, err] });
+    const stat = fs.fstatSync(out), errorStat = fs.fstatSync(err);
+    if (!stat.isFile() || !errorStat.isFile() || stat.size > options.maxBuffer || errorStat.size > options.maxBuffer) {
+      throw Object.assign(new Error("native identity output exceeds capture limit"), { code: "ENOBUFS" });
+    }
+    const bytes = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      // The child advanced the shared descriptor offset while writing.
+      const count = fs.readSync(out, bytes, offset, bytes.length - offset, offset);
+      if (!count) throw Object.assign(new Error("native identity output shortened during capture"), { code: "EIO" });
+      offset += count;
+    }
+    return bytes.toString("utf8");
+  } finally {
+    if (out >= 0) fs.closeSync(out);
+    if (err >= 0) fs.closeSync(err);
+    for (const name of [output, errors]) {
+      try { fs.unlinkSync(name); } catch (e: any) { if (e.code !== "ENOENT") throw e; }
+    }
+    fs.rmdirSync(dir);
+  }
+}
 function stableHostId(): string {
   const digest = (value: string) => createHash("sha256").update(value).digest("hex");
   const unavailable = (source: IdentitySource, error: any) => identityFailures.push({ source,
@@ -32,7 +66,7 @@ function stableHostId(): string {
   if (darwin) {
     try {
       // System location, independent of a suite's deliberately minimal PATH.
-      const raw = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
+      const raw = readIdentityProvider("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
       const match = /^\s*"IOPlatformUUID" = "([0-9A-Fa-f-]+)"\s*$/m.exec(raw);
       if (match && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(match[1]) && !/^0+$/.test(match[1].replaceAll("-", ""))) {
         identitySource = "darwin-ioplatformuuid";
@@ -680,7 +714,13 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
     }
   } finally {
     gate?.destroy();
-    if (!closed) { forward(interrupted ?? "SIGTERM"); await done; }
+    if (!closed) {
+      // No payload was admitted: closing fd3 is the gate's exit instruction.
+      // Join that original child instead of signaling its dying numeric group
+      // during Darwin's post-EOF/pre-close EPERM window.
+      if (!owned && !interrupted) await done;
+      else { forward(interrupted ?? "SIGTERM"); await done; }
+    }
     // Never release before the real suite/gate has closed, including custom
     // signal cleanup. SIGKILL of this supervisor leaves the live suite's PID
     // protecting the lock; the existing dead-owner protocol recovers it later.
