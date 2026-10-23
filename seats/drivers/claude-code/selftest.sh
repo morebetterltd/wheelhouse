@@ -49,6 +49,11 @@ printf '{"id":"rate","type":"prompt","message":"rate then finish"}\n' >&4
 driver_wait_record "$FIX/logs/rate.jsonl" message.stopReason error "$rpid" || exit 2
 printf '{"id":"state","type":"get_state"}\n' >&4
 driver_wait_record "$FIX/logs/rate.jsonl" id state "$rpid" || exit 2
+if driver_read_record "$FIX/logs/rate.jsonl" type agent_end; then
+  echo 'FAIL driver turn completed before explicit release' >&2; exit 1
+else
+  rc=$?; [ "$rc" = 1 ] || exit "$rc"
+fi
 printf "release after native state observation\n" > "$FIX/account/rate-release"
 driver_wait_record "$FIX/logs/rate.jsonl" type agent_end "$rpid" || exit 2
 kill "$rpid" 2>/dev/null || true

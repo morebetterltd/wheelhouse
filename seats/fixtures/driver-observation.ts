@@ -27,8 +27,8 @@ let fixturePulsed=false;setInterval(()=>{if(!fixturePulsed&&fs.existsSync(proces
  }
  const shim=path.join(dir,'shim.ts');fs.writeFileSync(shim,body);const input={kind,broken,sourceSha256:createHash('sha256').update(original).digest('hex'),executedSha256:createHash('sha256').update(body).digest('hex'),scenario:kind==='claude'?'session publication held until independent get_state response':'real app-server reply held; deterministically pulse captured original120000ms callbacks after registration turn completes',policy:'no natural-load causality or actual120second elapsed claim'};fs.writeFileSync(path.join(dir,'input.json'),JSON.stringify(input,null,2)+'\n');
  const log=path.join(dir,'log.jsonl'),env={...process.env,HOME:path.join(dir,'home'),CLAUDE_CONFIG_DIR:kind==='claude'?path.join(dir,'account'):undefined,DRIVER_CASE:dir,DRIVER_KIND:kind,PATH:path.join(dir,'bin')+':'+process.env.PATH};const child=spawn(process.execPath,[shim,'--log',log,'--raw-log',path.join(dir,'raw.jsonl'),'--err-log',path.join(dir,'err.log'),'--account-dir',path.join(dir,'account'),'--brief',path.join(dir,'brief'),'--model','fixture','--cwd',path.join(dir,'cwd'),'--actor','fixture'],{cwd:dir,env,stdio:['pipe','pipe','pipe']});let stdout='',stderr='',closed=false;child.stdout!.on('data',b=>stdout+=b);child.stderr!.on('data',b=>stderr+=b);const close=new Promise<any>((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>{closed=true;resolve({code,signal})});});
- const resource=setTimeout(()=>child.kill('SIGTERM'),60000);let result:any;
- async function wait(label:string,fn:()=>any){for(;;){const v=fn();if(v)return v;if(closed)throw Error('INCOMPLETE '+label+' original shim closed '+stderr);await new Promise(r=>setTimeout(r,10));}}
+ let result:any;
+ async function wait(label:string,fn:()=>any){let previous='';for(;;){const v=fn();if(v)return v;const last={kind,broken,label,pid:child.pid,closed,normalized:lines(log).at(-1)??null,stub:lines(path.join(dir,'stub-events.jsonl')).at(-1)??null,clock:lines(path.join(dir,'clock.jsonl')).at(-1)??null,stdoutLastBytes:stdout.slice(-4096),stderrLastBytes:stderr.slice(-4096),outer:'canonical suite resource containment (default3600s)'};const snapshot=JSON.stringify(last);if(snapshot!==previous){console.error('DRIVER_WAIT_LAST_STATE '+snapshot);previous=snapshot;}if(closed)throw Error('INCOMPLETE original shim closed before observation; last_state='+snapshot);await new Promise(r=>setTimeout(r,10));}}
  const write=(x:any)=>child.stdin!.write(JSON.stringify(x)+'\n');
  try{
  write({id:'initial',type:'get_state'});await wait('initial state',()=>lines(log).find(x=>x.id==='initial'));write({id:'prompt',type:'prompt',message:'held turn'});
@@ -42,17 +42,29 @@ let fixturePulsed=false;setInterval(()=>{if(!fixturePulsed&&fs.existsSync(proces
  let rejection:string|null=null;try{assert.equal(reply.success,true,'live RPC must not timeout before matching native reply');if(kind==='claude'){assert.equal(typeof reply.data.sessionFile,'string','prompt ack must retain the actually published continuity file');assert(fs.statSync(reply.data.sessionFile).isFile());}else assert.equal(pulse.pending,1,'outstanding RPC stays pending through clock pulse');}catch(e){if(!(e instanceof assert.AssertionError))throw e;rejection=String(e.message);}
  assert.equal(Boolean(rejection),broken,'same behavioural assertion must accept fixed and reject removed guard');
  result={...input,complete,checkerAccepted:!rejection,rejection,reply,state,pulse,events:lines(path.join(dir,'stub-events.jsonl')),clock:lines(path.join(dir,'clock.jsonl')),normalized:lines(log)};console.log((broken?'EXPECTED_REJECTION':'PASS')+' DRIVER_OBSERVATION '+JSON.stringify(result));
- }finally{clearTimeout(resource);if(!closed)child.kill('SIGTERM');const nativeClose=await close;fs.writeFileSync(path.join(dir,'child.out'),stdout);fs.writeFileSync(path.join(dir,'child.err'),stderr);fs.writeFileSync(path.join(dir,'result.json'),JSON.stringify({...result,nativeClose,stdout,stderr},null,2)+'\n');console.log('DRIVER_CHILD '+JSON.stringify({kind,...nativeClose,stdout,stderr}));}
+ }finally{if(!closed)child.kill('SIGTERM');const nativeClose=await close;fs.writeFileSync(path.join(dir,'child.out'),stdout);fs.writeFileSync(path.join(dir,'child.err'),stderr);fs.writeFileSync(path.join(dir,'result.json'),JSON.stringify({...result,nativeClose,stdout,stderr},null,2)+'\n');console.log('DRIVER_CHILD '+JSON.stringify({kind,...nativeClose,stdout,stderr}));}
 }
+// A diagnostic-only observer remains runnable while descriptor capture blocks
+// this JS thread. No local kill/SLA: canonical suite containment owns expiry,
+// and its retained stderr includes the last observed native command bytes.
+const commandState=path.join(root,'active-command.json');
+const diagnostics=spawn(process.execPath,['-e',String.raw`
+const fs=require('node:fs'),path=require('node:path'),root=process.argv[1];let previous='';
+function scan(){try{const file=path.join(root,'active-command.json');if(!fs.existsSync(file))return;const input=JSON.parse(fs.readFileSync(file,'utf8'));const last={...input,stdoutLastBytes:fs.readFileSync(input.stdoutFile,'utf8').slice(-4096),stderrLastBytes:fs.readFileSync(input.stderrFile,'utf8').slice(-4096)};const text=JSON.stringify(last);if(text!==previous){console.error('DRIVER_COMMAND_LAST_STATE '+text);previous=text;}}catch(e){console.error('DRIVER_COMMAND_LAST_STATE_UNVERIFIED '+String(e));}}
+const watch=fs.watch(root,scan);scan();process.stdin.resume();process.stdin.on('end',()=>{scan();watch.close();process.exit(0);});
+`,root],{cwd:root,stdio:['pipe','inherit','inherit']});
+const diagnosticsClosed=new Promise<any>((resolve,reject)=>{diagnostics.once('error',reject);diagnostics.once('close',(code,signal)=>resolve({code,signal}));});
 // Exercise the actual shell test gates, not a model of their assertions.
 function command(name:string,args:string[],cwd:string,env:any){
  const out=path.join(root,name+'.out'),err=path.join(root,name+'.err');const a=fs.openSync(out,'wx',0o600),b=fs.openSync(err,'wx',0o600);
- let p;try{p=spawnSync('bash',args,{cwd,env,stdio:['ignore',a,b],timeout:60000});}finally{fs.closeSync(a);fs.closeSync(b);}
+ const active={name,args,cwd,stdoutFile:out,stderrFile:err,outer:'canonical suite resource containment (default3600s)'};fs.writeFileSync(commandState+'.next',JSON.stringify(active));fs.renameSync(commandState+'.next',commandState);console.error('DRIVER_COMMAND_BEGIN '+JSON.stringify(active));
+ let p;try{p=spawnSync('bash',args,{cwd,env,stdio:['ignore',a,b]});}finally{fs.closeSync(a);fs.closeSync(b);}
  const result={code:p.status,stdout:fs.readFileSync(out,'utf8'),stderr:fs.readFileSync(err,'utf8')};
  console.log('DRIVER_NATIVE_COMMAND '+JSON.stringify({name,args,signal:p.signal,error:p.error?.message??null,...result}));
  assert.equal(p.error,undefined,'INCOMPLETE native fixture invocation');assert.equal(p.signal,null);
  return result;
 }
+try{
 for(const kind of['claude','codex'])for(const broken of[false,true]){
  const name='gate-'+kind+(broken?'-removed':'-fixed'),dir=path.join(root,name),project=path.join(dir,'project');
  fs.mkdirSync(path.join(project,'seats/fixtures'),{recursive:true});fs.mkdirSync(path.join(dir,'tmp'));fs.mkdirSync(path.join(dir,'home'));
@@ -60,13 +72,38 @@ for(const kind of['claude','codex'])for(const broken of[false,true]){
  assert.equal(copied.code,0,'INCOMPLETE actual runtime-copy helper');
  const script=path.join(project,'seats/drivers',kind==='claude'?'claude-code':'codex','selftest.sh'),original=fs.readFileSync(script,'utf8');let body=original;
  const gate=kind==='claude'?"const release=setInterval(()=>{if(fs.existsSync(path.join(acct,'rate-release'))){clearInterval(release);finish();}},10);":"const release=setInterval(()=>{if(fs.existsSync(path.join(home,'turn-release'))){clearInterval(release);complete(msg);}},10);";
- assert.equal(body.split(gate).length,2);if(broken)body=body.replace(gate,()=>kind==='claude'?'finish();':'complete(msg);');fs.writeFileSync(script,body);
+ assert.equal(body.split(gate).length,2);if(broken){
+  body=body.replace(gate,()=>kind==='claude'?'finish();':'complete(msg);');
+  // Removing a producer gate does not schedule the receiver. Observe the
+  // resulting completion BEFORE asking for midstate, not after a guessed turn.
+  const mid=kind==='claude'?`printf '{"id":"state","type":"get_state"}\\n' >&4`:`printf '{"id":"mid","type":"get_state"}\\n' >&4`;
+  const file=kind==='claude'?'$FIX/logs/rate.jsonl':'$TMP/log.jsonl',owner=kind==='claude'?'$rpid':'$pid',release=kind==='claude'?'$FIX/account/rate-release':'$TMP/home/codex/turn-release';
+  assert.equal(body.split(mid).length,2,'unique actual midstate request');
+  const fence=`driver_wait_record "${file}" type agent_end "${owner}" || exit 2\n[ ! -e "${release}" ] || { echo 'INCOMPLETE early-completion premise: release already exists' >&2; exit 2; }\nprintf 'OBSERVED_DRIVER_EARLY_COMPLETION {"kind":"${kind}","releaseExists":false}\\n'\n`;
+  body=body.replace(mid,()=>fence+mid);
+ }fs.writeFileSync(script,body);
  const native=command(name,[script],project,{...process.env,HOME:path.join(dir,'home'),TMPDIR:path.join(dir,'tmp'),WHEELHOUSE_SCRATCH_COLLISION_CHILD:'1'});
  const records=native.stdout.split('\n').filter(x=>x.startsWith('OBSERVED_DRIVER_RECORD ')).map(x=>JSON.parse(x.slice(23))),mid=records.find(x=>x.id===(kind==='claude'?'state':'mid')),terminal=records.filter(x=>x.type==='agent_end');
  assert(mid&&typeof mid.data?.isStreaming==='boolean'&&terminal.length>0,'INCOMPLETE real midstate/terminal input');
+ const output=native.stdout.split('\n'),fenceIndex=output.findIndex(x=>x.startsWith('OBSERVED_DRIVER_EARLY_COMPLETION '));let earlyCompletion:any=null;
+ if(broken){
+  assert(fenceIndex>=0,'INCOMPLETE missing early-completion observation fence');
+  earlyCompletion=JSON.parse(output[fenceIndex].slice('OBSERVED_DRIVER_EARLY_COMPLETION '.length));
+  const previous=output.slice(0,fenceIndex).filter(x=>x.startsWith('OBSERVED_DRIVER_RECORD ')).at(-1);
+  assert(previous&&JSON.parse(previous.slice(23)).type==='agent_end','actual normalized terminal observed before fence');
+  const midIndex=output.findIndex(x=>x.startsWith('OBSERVED_DRIVER_RECORD ')&&JSON.parse(x.slice(23)).id===(kind==='claude'?'state':'mid'));
+  assert(midIndex>fenceIndex,'terminal observation happens before actual midstate request/response');
+  assert.equal(earlyCompletion.kind,kind);assert.equal(earlyCompletion.releaseExists,false);
+  assert.equal(native.code,1,'planted break must FAIL the actual shell gate, not setup');
+  assert(native.stderr.includes('FAIL driver turn completed before explicit release'),'rejection must be the observed early terminal, not a state/steer race');
+ }else assert.equal(fenceIndex,-1,'real gate is not scheduled by the planted-break fence');
  let rejection:string|null=null;try{assert.equal(native.code,0,'real test assertions must pass');assert.equal(mid.data.isStreaming,true,'state/steer observation precedes explicit release');}catch(e){if(!(e instanceof assert.AssertionError))throw e;rejection=String(e.message);}
- assert.equal(Boolean(rejection),broken);assert.equal(mid.data.isStreaming,!broken,'rejection is the intended early-completion fault, not setup');
- console.log((broken?'EXPECTED_REJECTION':'PASS')+' DRIVER_GATE '+JSON.stringify({kind,broken,inputComplete:true,sourceSha256:createHash('sha256').update(body).digest('hex'),checkerAccepted:!rejection,rejection,mid,terminalCount:terminal.length,...native}));
+ assert.equal(Boolean(rejection),broken);
+ if(!broken)assert.equal(mid.data.isStreaming,true,'real gate retains a held turn');
+ // The removed gate is rejected by its OBSERVED terminal before owner release.
+ // Keep midstate as evidence, but never use its scheduling-dependent value as
+ // proof of early completion (a reply continuation may still report streaming).
+ console.log((broken?'EXPECTED_REJECTION':'PASS')+' DRIVER_GATE '+JSON.stringify({kind,broken,inputComplete:true,sourceSha256:createHash('sha256').update(body).digest('hex'),checkerAccepted:!rejection,rejection,earlyCompletion,mid,terminalCount:terminal.length,...native}));
 }
 // Complete JSONL is a fixture input boundary, not a short polling window.
 const reader=fs.readFileSync(path.join(source,'seats/fixtures/driver-readiness.sh'),'utf8');
@@ -78,4 +115,5 @@ for(const mode of['complete','partial','malformed'])for(const broken of[false,tr
  assert(fs.statSync(file).size>0);const rejected=native.code!==expected;assert.equal(rejected,broken,'same record-boundary checker rejects removed guard');
  console.log((broken?'EXPECTED_REJECTION':'PASS')+' DRIVER_READER '+JSON.stringify({mode,broken,inputComplete:true,expected,checkerAccepted:!rejected,sourceSha256:createHash('sha256').update(body).digest('hex'),...native}));
 }
+}finally{diagnostics.stdin!.end();const nativeClose=await diagnosticsClosed;console.log('DRIVER_DIAGNOSTICS_EXIT '+JSON.stringify(nativeClose));assert.equal(nativeClose.signal,null);assert.equal(nativeClose.code,0,'INCOMPLETE diagnostic observer lifetime');}
 console.log('driver-observation: 7 fixed observations, 7 meaningful removal rejections (session, RPC, two test gates, three record boundaries)');

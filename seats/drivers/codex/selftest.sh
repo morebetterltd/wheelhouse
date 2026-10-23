@@ -39,6 +39,12 @@ printf '{"id":"p","type":"prompt","message":"tools"}\n' >&4
 driver_wait_record "$TMP/log.jsonl" message.stopReason error "$pid" || exit 2
 printf '{"id":"mid","type":"get_state"}\n' >&4
 driver_wait_record "$TMP/log.jsonl" id mid "$pid" || exit 2
+# Streaming state is not a substitute for observing an early terminal record.
+if driver_read_record "$TMP/log.jsonl" type agent_end; then
+  echo 'FAIL driver turn completed before explicit release' >&2; exit 1
+else
+  rc=$?; [ "$rc" = 1 ] || exit "$rc"
+fi
 printf '{"id":"x","type":"steer","message":"steer now"}\n' >&4
 driver_wait_record "$TMP/log.jsonl" id x "$pid" || exit 2
 printf "release after native steer ack\n" > "$TMP/home/codex/turn-release"
