@@ -63,6 +63,7 @@ async function close(id: string) {
   const r = await ok(["bd", "show", id, "--json"]);
   assert.equal(JSON.parse(r.stdout)[0].status, "closed", "assert the real graph transition before measuring cleanup");
 }
+let primaryFailed = false, primaryError: unknown;
 try {
   await ok(["git", "init", "-q", "-b", "main"]);
   fs.writeFileSync(path.join(project, ".gitignore"), "seats/\n.wheelhouse-runs/\n.beads/\n");
@@ -121,9 +122,16 @@ try {
     check("dispatch refuses symlink scratch parent without creating outside", parent.code !== 0 && !fs.existsSync(path.join(outside, "unsafe-parent")));
   } finally { fs.unlinkSync(runs); fs.renameSync(runs + ".original", runs); }
   check("unsafe-root refusals leave recorded task unchanged", JSON.parse(fs.readFileSync(path.join(project, "seats/state.json"), "utf8")).seats["reviewer-1"].lastBead === seatBefore);
+} catch (error) {
+  primaryFailed = true;
+  primaryError = error;
 } finally {
-  await cli("stop", "reviewer-1");
-  console.log("MEASUREMENTS " + JSON.stringify(invocations));
+  try { await cli("stop", "reviewer-1"); }
+  catch (teardownError) {
+    if (primaryFailed) throw new AggregateError([primaryError, teardownError], "cleanup dispatch: primary and teardown failures");
+    throw teardownError;
+  } finally { console.log("MEASUREMENTS " + JSON.stringify(invocations)); }
 }
+if (primaryFailed) throw primaryError;
 console.log(`cleanup dispatch fixtures: ${failures.length ? "FAIL" : "PASS"} failures=${failures.length}`);
 process.exit(failures.length ? 1 : 0);
