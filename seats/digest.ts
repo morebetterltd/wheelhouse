@@ -119,13 +119,16 @@ export function renderHuman(d:Digest){ const out=md(d,true); for(const line of o
 function readDigestLast(): string { try { return fs.readFileSync(DIGEST_LAST, "utf8").trim(); } catch { return ""; } }
 function writeAtomic(file:string, data:string){ fs.mkdirSync(path.dirname(file),{recursive:true}); const tmp=`${file}.tmp.${process.pid}`; fs.writeFileSync(tmp,data); fs.renameSync(tmp,file); }
 function deskDigestUrl(): string {
+  let raw: string;
+  try { raw = fs.readFileSync(DESK_PORT, "utf8").trim(); }
+  catch (e: any) { if (e.code === "ENOENT") return ""; throw e; }
+  let u: URL;
   try {
-    const raw=fs.readFileSync(DESK_PORT,"utf8").trim();
-    if(!raw) return "";
-    const u=new URL(raw);
-    u.pathname="/digest"; u.search=""; u.hash="";
-    return u.toString();
-  } catch { return ""; }
+    u = new URL(raw);
+    if (!raw.startsWith("http://") || u.protocol !== "http:" || u.pathname !== "/needs" || u.username || u.password || u.search || u.hash) throw Error("not a desk URL");
+  } catch { throw Error(`Invalid desk.port: expected a complete http://host[:port]/needs URL (${DESK_PORT})`); }
+  u.pathname = "/digest";
+  return u.toString();
 }
 function windowArgs(useDigestLast=false){ const rawUntil=arg("--until"), rawSince=arg("--since"), rawHours=arg("--hours"); const until=rawUntil ? new Date(rawUntil) : new Date(); let since: Date; if(rawSince) since=new Date(rawSince); else if(rawHours!==undefined) since=new Date(until.getTime()-Number(rawHours)*3600000); else if(useDigestLast) { const last=readDigestLast(); since=last ? new Date(last) : new Date(until.getTime()-24*3600000); } else since=new Date(until.getTime()-24*3600000); try { until.toISOString(); since.toISOString(); } catch { throw new Error("invalid digest window"); } return { since, until }; }
 function notifyTitle(until:Date){ return `Fleet digest — ${until.toLocaleDateString(undefined,{month:"short",day:"2-digit",year:"numeric"})}`; }
