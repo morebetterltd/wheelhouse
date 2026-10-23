@@ -63,5 +63,6 @@ function floor(removed: boolean) {
   return actual.stdout;
 }
 assert.match(floor(false), /bd ready: 2 bead\(s\) waiting/); console.log("PASS native-json floor-machine-count");
-assert.throws(() => assert.match(floor(true), /bd ready: 2 bead\(s\) waiting/), assert.AssertionError); console.log("REJECT native-json floor-machine-count native=0");
+const removedFloor = floor(true);
+assert.throws(() => assert.match(removedFloor, /bd ready: 2 bead\(s\) waiting/), assert.AssertionError); console.log("REJECT native-json floor-machine-count native=0");
 console.log("PASS native-json: 4 observations, 4 meaningful removals; native failure/schema uncertainty and real machine cardinality");

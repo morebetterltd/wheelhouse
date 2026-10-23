@@ -52,9 +52,11 @@ try {
   }
   function check(out: string) { assert.match(out, /REFUSED resume: UNVERIFIED session attachment/); assert.doesNotMatch(out, /\n\s+(?:resume:|resumable)/, "unknown holder observation cannot authorize a second writer"); }
   check(run(false)); console.log("PASS native-recover failed-observer");
-  assert.throws(() => check(run(true)), assert.AssertionError); console.log("REJECT native-recover failed-observer consumerNative=0 holderStillLive=true");
+  const failedObserverRemoval = run(true);
+  assert.throws(() => check(failedObserverRemoval), assert.AssertionError); console.log("REJECT native-recover failed-observer consumerNative=0 holderStillLive=true");
   function checkHolder(out: string) { assert.match(out, /REFUSED double-resume/); assert(out.includes("pid " + actor.pid)); assert.doesNotMatch(out, /UNVERIFIED session attachment/); }
   checkHolder(run(false, false)); console.log("PASS native-recover native-pid-fd-protocol");
-  assert.throws(() => checkHolder(run(true, false)), assert.AssertionError); console.log("REJECT native-recover native-pid-fd-protocol consumerNative=0 holderStillLive=true");
+  const pidFdRemoval = run(true, false);
+  assert.throws(() => checkHolder(pidFdRemoval), assert.AssertionError); console.log("REJECT native-recover native-pid-fd-protocol consumerNative=0 holderStillLive=true");
 } finally { fs.writeFileSync(stop, "release\n"); assert.equal(await actor.exited, 0); }
 console.log("PASS native-recover: 2 observations, 2 meaningful removals; native pPID/fFD protocol and failed-observer refusal; original actor retired");
