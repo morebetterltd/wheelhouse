@@ -969,6 +969,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   requireLaunchCredential(name, entry, accountDir, authFile, labelSuffix);
 
   const brief = roleBriefPath(entry.role);
+  const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
   fs.mkdirSync(RUN_DIR, { recursive: true });
   fs.mkdirSync(LOG_DIR, { recursive: true });
   const fifo = path.join(RUN_DIR, `${name}.stdin`);
@@ -1044,6 +1045,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
     roleBrief: brief,
+    roleBriefHash,
     cwd: requestedCwd,
     fifo,
     log,
@@ -1510,6 +1512,17 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
       );
       await cmdStop(name);
       forcedStop = true;
+    }
+  }
+
+  // A live session can still hold the pre-upgrade canonical-path brief. Do
+  // not send an authoritative legacy path beneath stale system instructions,
+  // or infer freshness for an older Pi record that has no loaded-brief hash.
+  if (rosterEntry && seatUsesWorktree(entry()) && seatWorktreesSetting() === "per-seat") {
+    const brief = roleBriefPath(entry().role);
+    const currentHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+    if (rec.roleBriefHash !== currentHash) {
+      die(`seat "${name}" brief changed; reset instead of resume before dispatch (loaded brief hash ${rec.roleBriefHash ?? "unknown"}, current ${currentHash}). Seat anchor ${seatCwdFor(name, entry())}; recorded worktree ${rec.cwd ?? ROOT}. No prompt sent; this dispatch has not discarded the session.`);
     }
   }
 

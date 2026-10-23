@@ -10,6 +10,10 @@ const adapter=fs.readFileSync(path.join(here,'adapter.ts'),'utf8');
 const worktree=fs.readFileSync(path.join(here,'seat-worktree.ts'),'utf8');
 const brief=fs.readFileSync(path.join(here,'../contracts/WORKER.md'),'utf8');
 const rule=brief.split('\n').find(line=>line.startsWith('- Work ONLY'))!;assert(rule.includes("adapter's dispatch context"));
+const piRecordStart=adapter.indexOf('const record: SeatRecord = {',adapter.indexOf('async function piLaunch'));
+const piRecordEnd=adapter.indexOf('await recordLaunchedSeat',piRecordStart);
+assert(piRecordStart>=0&&piRecordEnd>piRecordStart);
+const piRecord=adapter.slice(piRecordStart,piRecordEnd);assert.equal(piRecord.split('    roleBriefHash,\n').length,2);
 const controls=[
  {name:'brief-path',case:'legacy',env:'WHEELHOUSE_DISPATCH_ADAPTER_SOURCE',source:adapter,old:'Worktree: ${targetCwd}',next:'Worktree: ${seatCwdFor(name, entry())}',message:'brief must name the actual adopted worktree'},
  {name:'native-cwd',case:'recorded-cwd',env:'WHEELHOUSE_DISPATCH_ADAPTER_SOURCE',source:adapter,old:'!samePath(actualCwd ?? rec.cwd, targetCwd)',next:'!samePath(rec.cwd, targetCwd)',message:'native cwd'},
@@ -17,6 +21,9 @@ const controls=[
  {name:'associated-collision',case:'associated-collision',env:'WHEELHOUSE_DISPATCH_WORKTREE_SOURCE',source:worktree,old:'(w.branch === branch || w.branch === beadBranch(o.beadId))',next:'w.branch === branch',message:'branch occupied elsewhere must refuse'},
  {name:'both-paths',case:'collision',env:'WHEELHOUSE_DISPATCH_WORKTREE_SOURCE',source:worktree,old:'; cannot prepare target ${target}: a branch can be in one worktree at a time',next:'; a branch can be in one worktree at a time',message:'refusal must name both target and branch-owner paths'},
  {name:'stopped-record',case:'stopped-record',env:'WHEELHOUSE_DISPATCH_WORKTREE_SOURCE',source:worktree,old:'if (other === o.seat || !otherRec?.cwd || !pidAlive(otherRec.pid ?? null)) continue;',next:'if (other === o.seat || !otherRec?.cwd) continue;',message:'occupied by seat worker-stopped'},
+ {name:'stale-brief',case:'stale-brief',env:'WHEELHOUSE_DISPATCH_ADAPTER_SOURCE',source:adapter,old:'if (rec.roleBriefHash !== currentHash)',next:'if (false && rec.roleBriefHash !== currentHash)',message:'stale brief dispatch must refuse without resetting the session'},
+ {name:'unknown-brief',case:'unknown-brief',env:'WHEELHOUSE_DISPATCH_ADAPTER_SOURCE',source:adapter,old:'if (rec.roleBriefHash !== currentHash)',next:'if (rec.roleBriefHash && rec.roleBriefHash !== currentHash)',message:'stale brief dispatch must refuse without resetting the session'},
+ {name:'pi-record-hash',case:'legacy',env:'WHEELHOUSE_DISPATCH_ADAPTER_SOURCE',source:adapter,old:piRecord,next:piRecord.replace('    roleBriefHash,\n',''),message:'loaded brief hash unknown'},
  {name:'brief-rule',case:'legacy',env:'WHEELHOUSE_DISPATCH_BRIEF_SOURCE',source:brief,old:rule,next:'- Work ONLY in your seat\'s canonical worktree (`.wheelhouse-worktrees/<seat>`), on the task branch.',message:'brief must name the actual adopted worktree'},
 ];
 const dir=path.join(root,'controls');fs.mkdirSync(dir);
