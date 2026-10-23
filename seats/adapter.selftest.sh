@@ -34,6 +34,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -uo pipefail   # deliberately not -e: half these cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+export WHEELHOUSE_TEST_CONDITION_HELPER="$HERE/fixtures/wait-for-condition.cjs"
 ADAPTER="${1:-$HERE/adapter.ts}"
 export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 ADAPTER_DIR="$(cd "$(dirname "$ADAPTER")" && pwd)"
@@ -258,9 +259,13 @@ const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 let streaming = false, pendingSlow;
 function held(name, id, done) {
   const release = path.join(agentDir, name + ".release"), marker = path.join(agentDir, name + ".held");
-  const check = () => { if (fs.existsSync(release)) { watch.close(); fs.rmSync(release); fs.rmSync(marker, {force:true}); done(); } };
-  const watch = fs.watch(agentDir, check);
-  fs.writeFileSync(marker, JSON.stringify({pid:process.pid,id})); check();
+  const {waitForCondition} = require(process.env.WHEELHOUSE_TEST_CONDITION_HELPER);
+  fs.writeFileSync(marker, JSON.stringify({pid:process.pid,id}));
+  const observed = waitForCondition({site:'adapter.stub.held',paths:[agentDir],predicate:()=>{
+    if (!fs.existsSync(release)) return false;
+    fs.rmSync(release); fs.rmSync(marker, {force:true}); done(); return true;
+  }});
+  observed.promise.catch(error => { console.error(error); process.exit(1); });
 }
 function handle(cmd) {
   fs.appendFileSync(commandsFile, JSON.stringify(cmd) + "\n");

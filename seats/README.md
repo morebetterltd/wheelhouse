@@ -1176,6 +1176,25 @@ Reviewed scan files are install-bound: TSV starts with a `# wheelhouse-prune-sca
 
 Selftests register their teardown with `selftest_install_cleanup_traps cleanup` from `selftest-lib.sh` (a trusted shell command string is also accepted). The callback must return, not `exit`: it runs once, in the owning shell so it can reap its children, on normal EXIT and on INT/TERM. Signals exit 130/143 instead of resuming the script against a removed fixture; repeated signals are ignored during teardown. The sweep likewise drains its current suite group and releases its lock only from EXIT. `bash seats/selftest-signals.selftest.sh` checks both signal paths, normal exits, re-entrant signals, fixture removal and child reaping; `--old-trap` deliberately restores the returning trap in the fixture and must fail.
 
+Test file/state waits use `fixtures/wait-for-condition.cjs`, shared by Bun,
+Node, CJS/MJS fixtures and the Node stubs embedded in shell suites. Supply a
+named `site`, synchronous `predicate` and optional watched `paths`. The helper
+checks immediately and reconciles the actual condition every50ms (existing
+20ms observation cadences may be retained); notifications are advisory. The
+cadence never decides success or failure. Owners cancel a losing race; resolved
+or cancelled observations retire their timer/watch resources. Predicate errors
+reject with the site name. Explicit fixture IPC checkpoints can reconcile the
+same registered predicates, without duplicating their logic.
+
+`watch-wait.selftest.sh` drops notifications under both runtimes and requires a
+real publication after an initially false condition. `watch-wait-audit.selftest.sh`
+refuses direct/aliased watch access outside the helper and narrowly identified
+notification-suppression instrumentation, including generated code in shell
+stubs. New waits must use the helper, not grow another local watch/poll loop.
+`WHEELHOUSE_CONDITION_TRACE`, when used for verification, points at a private
+capture outside the watched directories; it records observations, not authority
+to signal or clean up the historical PIDs it contains.
+
 For the full host sweep, run the locked runner instead of an ad-hoc loop:
 
 ```bash

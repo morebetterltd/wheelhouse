@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import {spawn,spawnSync,type ChildProcess} from "node:child_process";
+import conditionWait from './wait-for-condition.cjs';
+const {waitForCondition} = conditionWait;
 
 const [source,root]=process.argv.slice(2);
 assert(fs.statSync(path.join(source,"seats/recover.ts")).isFile());
@@ -37,7 +39,7 @@ if(role==='reader')fs.openSync(pipe,fs.constants.O_RDWR|fs.constants.O_NONBLOCK)
 fs.writeFileSync(ready,String(process.pid));setInterval(()=>{},1000); // hold only; no timing verdict
 `);
 function exited(child:ChildProcess){return new Promise<{code:number|null;signal:NodeJS.Signals|null}>((resolve,reject)=>{child.once("error",reject);child.once("close",(code,signal)=>resolve({code,signal}));});}
-function published(file:string){let watch:fs.FSWatcher;const promise=new Promise<void>(resolve=>{const check=()=>{if(fs.existsSync(file)){watch.close();resolve();}};watch=fs.watch(path.dirname(file),check);check();});return{promise,cancel:()=>watch.close()};}
+function published(file:string){return waitForCondition({site:'recover-dead-pipe.published',paths:[path.dirname(file)],predicate:()=>fs.existsSync(file)});}
 function capture(name:string,command:string,args:string[]){const r=spawnSync(command,args,{encoding:"utf8",env:{...process.env,LC_ALL:"C"}});fs.writeFileSync(path.join(root,name+".json"),JSON.stringify({command:[command,...args],exit:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr})+"\n");assert(!r.error);return r;}
 function identity(child:ChildProcess,expected:string){
   const p=capture(`identity-${child.pid}`,"ps",["-p",String(child.pid),"-o","pid=,ppid=,lstart=,command="]);
