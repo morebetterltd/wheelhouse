@@ -53,12 +53,13 @@ fs.writeFileSync(path.join(root, "session.jsonl"), '{"type":"session","id":"nati
 // branches. This does not claim provider/driver interoperability.
 fs.writeFileSync(preload, `import fs from "node:fs";import {mock} from "bun:test";
 const cp=await import("node:child_process"),nativeSpawn=cp.spawn,nativeSync=cp.spawnSync;let ownedPid;
+const publish=(file,value)=>{const tmp=file+".new";fs.writeFileSync(tmp,JSON.stringify(value)+"\\n",{flag:"wx"});fs.renameSync(tmp,file);};
 const spawn=(file,args,options)=>{
  if(file!=="bash"||!options?.detached)return nativeSpawn(file,args,options);
  fs.writeFileSync(${q(path.join(root, "launch.json"))},JSON.stringify({file,args,cwd:options.cwd,detached:options.detached,stdio:options.stdio}));
  const child=nativeSpawn("node",[${q(actorFile)},${q(root)},${q(token)}],options);ownedPid=child.pid;
- child.once("exit",(code,signal)=>fs.writeFileSync(${q(path.join(root, "child-exit.json"))},JSON.stringify({pid:child.pid,code,signal})));
- child.once("close",(code,signal)=>fs.writeFileSync(${q(path.join(root, "child-close.json"))},JSON.stringify({pid:child.pid,code,signal})));
+ child.once("exit",(code,signal)=>publish(${q(path.join(root, "child-exit.json"))},{pid:child.pid,code,signal}));
+ child.once("close",(code,signal)=>publish(${q(path.join(root, "child-close.json"))},{pid:child.pid,code,signal}));
  child.unref=()=>child;return child;
 };
 const spawnSync=(file,args,options)=>{
