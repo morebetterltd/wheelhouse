@@ -5,6 +5,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-supervisor.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
+. "$HERE/fixtures/readiness.sh"
 . "$HERE/selftest-herald.sh"
 selftest_bind_herald_owner "$FIX" || exit 2
 PASS=0; FAIL=0
@@ -14,12 +15,15 @@ cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; selftest_remove
 selftest_install_cleanup_traps cleanup
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/wheelhouse"
 selftest_copy_seat_runtime "$PROJ" "$HERE"; chmod +x "$PROJ/seats/supervisor.sh" "$PROJ/seats/daemons.sh"
+bun "$HERE/fixtures/supervisor-observation.ts" "$PROJ/seats/supervisor.sh" || exit 2
 for d in herald desk courier; do cat > "$PROJ/seats/$d.ts" <<'TS'
 import * as fs from "node:fs";
 import { fixtureOwner, fixtureOwnerAlive } from "./herald-owner";
 const owner = import.meta.path.endsWith("/herald.ts") ? fixtureOwner(`${import.meta.dir}/..`) : null;
-if (import.meta.path.endsWith("/herald.ts")) fs.writeFileSync(`${import.meta.dir}/run/herald.pid`, `${process.pid}\n`);
 if (process.env.WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY === "1") { console.error("synthetic crash"); process.exit(42); }
+const role = import.meta.path.split("/").pop()!.replace(/\.ts$/, "");
+if (role === "herald" || role === "courier") fs.writeFileSync(`${import.meta.dir}/run/${role}.pid`, `${process.pid}\n`);
+if (role === "desk") fs.writeFileSync(`${import.meta.dir}/run/desk.port`, "http://127.0.0.1:0/needs\n");
 setInterval(() => { if (!fixtureOwnerAlive(owner)) process.exit(0); }, 100);
 TS
 done
@@ -28,16 +32,17 @@ import * as fs from "node:fs"; import * as path from "node:path";
 const root=path.resolve(import.meta.dir,".."); fs.mkdirSync(path.join(root,"seats","run"),{recursive:true});
 fs.appendFileSync(path.join(root,"seats","run","needs-open.log"), JSON.stringify(process.argv.slice(2))+"\n");
 TS
-run_once(){ (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_SECONDS=0.2 "$PROJ/seats/supervisor.sh" --once) > "$FIX/once.out" 2>&1; }
+run_once(){ (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$PROJ/seats/supervisor.sh" --once) > "$FIX/once.out" 2>&1; }
+call_count(){ [ -f "$2" ] || { echo "STOP: missing call ledger $2" >&2; return 2; }; awk -v wanted="$1" '$0==wanted{n++} END{print n+0}' "$2"; }
 status(){ (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$PROJ/seats/supervisor.sh" --status) > "$FIX/status.out" 2>&1; }
 # courier absent until declared
 run_once
 if [ ! -f "$PROJ/seats/run/courier.pid" ]; then pass "courier not declared -> never started"; else fail "courier started without principal channel"; fi
 # restart dead herald
-H1="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"; [ -n "$H1" ] && kill "$H1" 2>/dev/null || true; sleep 0.2; run_once; H2="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
+H1="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"; [ -n "$H1" ] && kill "$H1" 2>/dev/null || true; fixture_wait_exit "$H1" || exit 1; run_once; H2="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 if [ -n "$H2" ] && [ "$H2" != "$H1" ] && kill -0 "$H2" 2>/dev/null && grep -q 'herald restarted: pid' "$PROJ/seats/logs/supervisor.out.log"; then pass "dead herald restarts within one tick"; else fail "herald restart failed old=$H1 new=$H2 log=$(cat "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null)"; fi
 # crash loop: mark desk, exactly one inbox + need, no fourth restart
-kill "$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)" 2>/dev/null || true; rm -f "$PROJ/seats/run/desk.pid"; export WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY=1
+OLD_DESK="$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)"; kill "$OLD_DESK" 2>/dev/null || true; fixture_wait_exit "$OLD_DESK" || exit 1; rm -f "$PROJ/seats/run/desk.pid"; export WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY=1
 run_once; run_once; run_once; before="$(grep -c '"class":"daemon-down"' "$PROJ/seats/inbox.jsonl" 2>/dev/null || echo 0)"; restarts="$(grep -c 'desk restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"; run_once; after="$(grep -c '"class":"daemon-down"' "$PROJ/seats/inbox.jsonl" 2>/dev/null || echo 0)"; needs="$(grep -c 'supervisor:desk' "$PROJ/seats/run/needs-open.log" 2>/dev/null || echo 0)"
 if [ "$before" = 1 ] && [ "$after" = 1 ] && [ "$needs" = 1 ] && [ "$restarts" = 3 ]; then pass "crash loop alerts once and stops restarting"; else fail "crash-loop guard failed before=$before after=$after needs=$needs restarts=$restarts log=$(cat "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null)"; fi
 unset WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY
@@ -83,29 +88,32 @@ before_restarts="$(grep -c 'restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>
 rm -f "$PROJ/seats/run/supervisor.pid"
 (cd "$PROJ" && exec env WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_STARTED_BY_COCKPIT=1 WHEELHOUSE_SUPERVISOR_SECONDS=0.1 "$PROJ/seats/supervisor.sh") > "$FIX/supervisor-holder.out" 2>&1 &
 holder_pid=$!
-for _ in $(seq 1 30); do [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" = "$holder_pid" ] && break; sleep 0.05; done
-holder_pid="$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || printf '%s' "$holder_pid")"
+holder_published(){ [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" = "$holder_pid" ]; }
+fixture_wait "original holder PID publication" "$holder_pid" holder_published || exit 1
 (cd "$PROJ" && exec env WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_SECONDS=0.1 "$PROJ/seats/supervisor.sh") > "$FIX/supervisor-contender.out" 2>&1 &
 contender_pid=$!
-sleep 0.35
+contender_decided(){ grep -qx "$contender_pid" "$PROJ/seats/run/fixture-holder-waits" 2>/dev/null || [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" = "$contender_pid" ]; }
+fixture_wait "native contender wait or ownership decision" "$contender_pid" contender_decided || exit 1
 after_restarts="$(grep -c 'restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
 if kill -0 "$holder_pid" 2>/dev/null && kill -0 "$contender_pid" 2>/dev/null && [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" = "$holder_pid" ] && [ "$before_restarts" = "$after_restarts" ]; then pass "launchd-style supervisor waits on live cockpit holder instead of exiting and churning"; else fail "contender did not wait holder=$holder_pid contender=$contender_pid pidfile=$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null) holder_alive=$(kill -0 "$holder_pid" 2>/dev/null; echo $?) contender_alive=$(kill -0 "$contender_pid" 2>/dev/null; echo $?) before=$before_restarts after=$after_restarts out=$(cat "$FIX/supervisor-contender.out" 2>/dev/null)"; fi
 kill "$holder_pid" 2>/dev/null || true
-sleep 0.1
-kill -KILL "$holder_pid" 2>/dev/null || true
 wait "$holder_pid" 2>/dev/null || true
+contender_published(){ [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" = "$contender_pid" ]; }
+fixture_wait "contender ownership after original holder exit" "$contender_pid" contender_published || exit 1
+if grep -qx "$contender_pid $holder_pid 0" "$PROJ/seats/run/fixture-holder-claims"; then pass "contender claims ownership only after observing the original holder gone"; else fail "contender claimed while original holder was alive"; fi
 kill "$contender_pid" 2>/dev/null || true
-for _ in $(seq 1 20); do kill -0 "$contender_pid" 2>/dev/null || break; sleep 0.05; done
+wait "$contender_pid" 2>/dev/null || true
 
 echo $$ > "$PROJ/seats/run/supervisor.pid"
 (cd "$PROJ" && exec env WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_SECONDS=0.1 "$PROJ/seats/supervisor.sh") > "$FIX/supervisor-reused-pid.out" 2>&1 &
 takeover_pid=$!
-for _ in $(seq 1 30); do [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" != "$$" ] && break; sleep 0.05; done
+takeover_published(){ [ "$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)" = "$takeover_pid" ]; }
+fixture_wait "original takeover child's PID publication" "$takeover_pid" takeover_published || exit 1
 takeover_live_pid="$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null || true)"
 if [ -n "$takeover_live_pid" ] && [ "$takeover_live_pid" != "$$" ] && kill -0 "$takeover_live_pid" 2>/dev/null && grep -q 'non-supervisor process' "$FIX/supervisor-reused-pid.out"; then pass "reused supervisor pid fixture is treated as stale and taken over"; else fail "reused pid did not take over takeover=$takeover_pid live=${takeover_live_pid:-none} alive=$(kill -0 "${takeover_live_pid:-$takeover_pid}" 2>/dev/null; echo $?) pidfile=$(cat "$PROJ/seats/run/supervisor.pid" 2>/dev/null) out=$(cat "$FIX/supervisor-reused-pid.out" 2>/dev/null)"; fi
 if [ "${takeover_live_pid:-$takeover_pid}" != "$$" ]; then
-  kill "${takeover_live_pid:-$takeover_pid}" 2>/dev/null || true
-  for _ in $(seq 1 20); do kill -0 "${takeover_live_pid:-$takeover_pid}" 2>/dev/null || break; sleep 0.05; done
+  kill "$takeover_pid" 2>/dev/null || true
+  wait "$takeover_pid" 2>/dev/null || true
 fi
 if ! grep -Eq '^[[:space:]]*launchctl[[:space:]]+(bootstrap|bootout|kickstart)' "$PROJ/seats/supervisor.sh"; then pass "supervisor never executes launchctl bootstrap/bootout/kickstart"; else fail "supervisor contains executable launchctl mutator"; fi
 
@@ -121,10 +129,17 @@ TS
 chmod +x "$PROJ/seats/adapter.ts"
 printf '{"seats":{"worker-dead":{"pid":999999,"lastBead":"bead-live","cwd":"%s","log":"%s/seats/logs/worker-dead.jsonl"},"worker-stopped":{"pid":null,"stoppedAt":"2026-01-01T00:00:00.000Z","lastBead":"bead-old","cwd":"%s","log":"%s/seats/logs/worker-stopped.jsonl"}}}\n' "$PROJ" "$PROJ" "$PROJ" "$PROJ" > "$PROJ/seats/state.json"
 : > "$PROJ/seats/run/adapter-calls.log"
-(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SEAT_RECOVERY_SECONDS=0.2 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-sleep 0.25
-(cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SEAT_RECOVERY_SECONDS=0.2 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-if grep -q '^resume worker-dead$' "$PROJ/seats/run/adapter-calls.log" && ! grep -q 'worker-stopped' "$PROJ/seats/run/adapter-calls.log" && grep -q 'seat worker-dead resumed after dead pid 999999' "$PROJ/seats/logs/cockpit-recovery.log"; then pass "supervisor recovery resumes dead seats and ignores gracefully stopped seats"; else fail "recovery did not call only resume worker-dead calls=$(cat "$PROJ/seats/run/adapter-calls.log" 2>/dev/null) log=$(cat "$PROJ/seats/logs/cockpit-recovery.log" 2>/dev/null)"; fi
+# Earlier real-time ticks populated this field. Start the injected-clock leg
+# with an explicit initial state, not a January clock behind an October tick.
+node - "$PROJ/seats/run/supervisor.state.json" <<'JS'
+const fs=require('node:fs'),file=process.argv[2],state=JSON.parse(fs.readFileSync(file,'utf8'));
+console.log('RECOVERY_CLOCK_INPUT '+JSON.stringify({previousLastRecoveryMs:state.lastRecoveryMs,initialInjectedClock:'2026-01-01T00:00:00.000Z',reset:'fixture-only lastRecoveryMs'}));
+delete state.lastRecoveryMs; fs.writeFileSync(file,JSON.stringify(state,null,2)+'\n');
+JS
+for instant in 2026-01-01T00:00:00.000Z 2026-01-01T00:00:00.199Z 2026-01-01T00:00:00.200Z; do
+  (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW="$instant" WHEELHOUSE_SEAT_RECOVERY_SECONDS=0.2 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
+done
+if [ "$(call_count 'resume worker-dead' "$PROJ/seats/run/adapter-calls.log")" = 2 ] && ! grep -q 'worker-stopped' "$PROJ/seats/run/adapter-calls.log" && grep -q 'seat worker-dead resumed after dead pid 999999' "$PROJ/seats/logs/cockpit-recovery.log"; then pass "supervisor recovery resumes dead seats and ignores gracefully stopped seats"; else fail "recovery did not call only resume worker-dead calls=$(cat "$PROJ/seats/run/adapter-calls.log" 2>/dev/null) log=$(cat "$PROJ/seats/logs/cockpit-recovery.log" 2>/dev/null)"; fi
 
 cat > "$PROJ/seats/prune.ts" <<'TS'
 #!/usr/bin/env bun
@@ -136,30 +151,25 @@ fs.appendFileSync(path.join(root, "seats", "run", "prune-calls.log"), process.ar
 TS
 chmod +x "$PROJ/seats/prune.ts"
 printf 'cleanup=on\n' > "$PROJ/wheelhouse/.template-source"
-rm -f "$PROJ/seats/run/prune-calls.log" "$PROJ/seats/run/supervisor.state.json"
+: > "$PROJ/seats/run/prune-calls.log"; rm -f "$PROJ/seats/run/supervisor.state.json"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T02:59:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-c1="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+c1="$(call_count cleanup "$PROJ/seats/run/prune-calls.log")"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T03:00:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-for _ in $(seq 1 20); do [ -s "$PROJ/seats/run/prune-calls.log" ] && break; sleep 0.05; done
-c2="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+c2="$(call_count cleanup "$PROJ/seats/run/prune-calls.log")"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T03:30:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-sleep 0.1
-c3="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+c3="$(call_count cleanup "$PROJ/seats/run/prune-calls.log")"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-02T03:00:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-for _ in $(seq 1 20); do [ "$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)" -ge 2 ] && break; sleep 0.05; done
-c4="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+c4="$(call_count cleanup "$PROJ/seats/run/prune-calls.log")"
 if [ "$c1" = 0 ] && [ "$c2" = 1 ] && [ "$c3" = 1 ] && [ "$c4" = 2 ]; then pass "nightly cleanup runs once per local day at configured hour"; else fail "cleanup cadence wrong c1=$c1 c2=$c2 c3=$c3 c4=$c4 state=$(cat "$PROJ/seats/run/supervisor.state.json" 2>/dev/null)"; fi
 printf 'cleanup=off\n' > "$PROJ/wheelhouse/.template-source"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-03T03:00:00 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-sleep 0.1
-c5="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+c5="$(call_count cleanup "$PROJ/seats/run/prune-calls.log")"
 if [ "$c5" = 2 ]; then pass "cleanup=off disables nightly cleanup"; else fail "cleanup=off still ran cleanup count=$c5"; fi
 CLEAN_CAN="$FIX/cleanup-canary"; mkdir -p "$CLEAN_CAN/seats"; cp "$PROJ/seats/supervisor.sh" "$CLEAN_CAN/seats/supervisor.sh"; perl -0pi -e 's/supervisor_state_set lastCleanupDay "\$day"/true/' "$CLEAN_CAN/seats/supervisor.sh"
-printf 'cleanup=on\n' > "$PROJ/wheelhouse/.template-source"; rm -f "$PROJ/seats/run/prune-calls.log" "$PROJ/seats/run/supervisor.state.json"
+printf 'cleanup=on\n' > "$PROJ/wheelhouse/.template-source"; : > "$PROJ/seats/run/prune-calls.log"; rm -f "$PROJ/seats/run/supervisor.state.json"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-04T03:00:00 "$CLEAN_CAN/seats/supervisor.sh" --once) >/dev/null 2>&1
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-04T03:30:00 "$CLEAN_CAN/seats/supervisor.sh" --once) >/dev/null 2>&1
-for _ in $(seq 1 20); do [ "$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)" -ge 2 ] && break; sleep 0.05; done
-cc="$(grep -c '^cleanup$' "$PROJ/seats/run/prune-calls.log" 2>/dev/null || echo 0)"
+cc="$(call_count cleanup "$PROJ/seats/run/prune-calls.log")"
 if [ "$cc" -ge 2 ]; then pass "canary: removing lastCleanupDay makes same-day cleanup run twice"; else fail "cleanup canary did not prove daily guard coverage count=$cc"; fi
 
 cat > "$PROJ/seats/digest.ts" <<'TS'
@@ -172,26 +182,23 @@ fs.appendFileSync(path.join(root, "seats", "run", "digest-calls.log"), process.a
 TS
 chmod +x "$PROJ/seats/digest.ts"
 printf 'digest=on\n' > "$PROJ/wheelhouse/.template-source"
-rm -f "$PROJ/seats/run/digest-calls.log" "$PROJ/seats/run/supervisor.state.json"
+: > "$PROJ/seats/run/digest-calls.log"; rm -f "$PROJ/seats/run/supervisor.state.json"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T05:59:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-d1="$(grep -c '^--notify$' "$PROJ/seats/run/digest-calls.log" 2>/dev/null || echo 0)"
+d1="$(call_count --notify "$PROJ/seats/run/digest-calls.log")"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T06:00:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-for _ in $(seq 1 20); do [ -s "$PROJ/seats/run/digest-calls.log" ] && break; sleep 0.05; done
-d2="$(grep -c '^--notify$' "$PROJ/seats/run/digest-calls.log" 2>/dev/null || echo 0)"
+d2="$(call_count --notify "$PROJ/seats/run/digest-calls.log")"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-01T06:30:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-sleep 0.1
-d3="$(grep -c '^--notify$' "$PROJ/seats/run/digest-calls.log" 2>/dev/null || echo 0)"
+d3="$(call_count --notify "$PROJ/seats/run/digest-calls.log")"
 if [ "$d1" = 0 ] && [ "$d2" = 1 ] && [ "$d3" = 1 ] && grep -q 'digest started for 2026-01-01' "$PROJ/seats/logs/supervisor.out.log"; then pass "daily digest starts once per local day at configured hour"; else fail "digest cadence wrong d1=$d1 d2=$d2 d3=$d3 state=$(cat "$PROJ/seats/run/supervisor.state.json" 2>/dev/null) log=$(cat "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null)"; fi
 printf 'digest=off\n' > "$PROJ/wheelhouse/.template-source"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-02T06:00:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
-sleep 0.1
-d4="$(grep -c '^--notify$' "$PROJ/seats/run/digest-calls.log" 2>/dev/null || echo 0)"
+d4="$(call_count --notify "$PROJ/seats/run/digest-calls.log")"
 if [ "$d4" = 1 ]; then pass "digest=off disables daily digest"; else fail "digest=off still ran digest count=$d4"; fi
 # canary: if crashLoop marker is removed, the no-fourth-restart property fails.
 CAN="$FIX/canary"; mkdir -p "$CAN/seats"; cp "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; perl -0pi -e 's/j\.crashLoop=rs\.length>=3;/j.crashLoop=false;/' "$CAN/seats/supervisor.sh"
 if cmp -s "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; then fail "canary edit did not change supervisor"; else
   before="$(grep -c 'desk restarted:' "$PROJ/seats/logs/supervisor.out.log" 2>/dev/null || echo 0)"
-  kill "$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)" 2>/dev/null || true; rm -f "$PROJ/seats/run/desk.pid"
+  OLD_DESK="$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)"; kill "$OLD_DESK" 2>/dev/null || true; fixture_wait_exit "$OLD_DESK" || exit 1; rm -f "$PROJ/seats/run/desk.pid"
   WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY=1 WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$CAN/seats/supervisor.sh" --once >/dev/null 2>&1
   WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY=1 WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$CAN/seats/supervisor.sh" --once >/dev/null 2>&1
   WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY=1 WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" "$CAN/seats/supervisor.sh" --once >/dev/null 2>&1
@@ -206,6 +213,7 @@ mkdir -p "$ISA_PROJ/seats/run" "$ISA_PROJ/seats/logs" "$ISA_PROJ/wheelhouse"
 cp -f "$HERE/supervisor.sh" "$ISA_PROJ/seats/supervisor.sh"
 cat > "$ISA_PROJ/seats/daemons.sh" <<'SH'
 daemon_alive(){ return 0; }
+daemon_starting(){ return 1; }
 principal_channel_declared(){ return 1; }
 recover_dead_seats(){ :; }
 SH
@@ -253,5 +261,8 @@ if [ "$(isa_count)" = 5 ]; then pass "ISA sync skips an absent script and resume
 ISA_TEST_FAIL=1 isa_once 59.999 0.5
 isa_once 59.999 0.5; isa_once 59.999 0.5
 if [ "$(isa_count)" = 7 ]; then pass "failed ISA sync retries without advancing the successful interval"; else fail "ISA failure advanced interval or retry failed"; fi
+if bun "$HERE/fixtures/supervisor-ordering.ts" "$FIX" "$HERE"; then pass "native holder/recovery ordering and both removal controls"; else fail "supervisor ordering observation/control failed"; fi
+printf 'NATIVE_ONCE_RESULTS\n'; cat "$PROJ/seats/run/fixture-once-results.jsonl"
+printf 'NATIVE_HOLDER_CLAIMS\n'; cat "$PROJ/seats/run/fixture-holder-claims"
 if [ "$FAIL" -eq 0 ]; then echo "supervisor.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "supervisor.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1
