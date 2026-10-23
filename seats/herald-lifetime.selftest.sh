@@ -8,6 +8,7 @@ FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-herald-lifetime.XXX
 selftest_isolate_git "$FIX" || exit 2
 selftest_bind_herald_owner "$FIX"
 selftest_install_cleanup_traps 'selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"'
+bun "$HERE/fixtures/herald-child-identity-tests.ts" "$FIX"
 # Recorded child, but NOT a herald: a stale/unrelated PID must not be signaled.
 sleep 60 & NON_HERALD=$!
 selftest_stop_herald_child "$NON_HERALD"
@@ -51,6 +52,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 const [here,rawBase,recordReader]=process.argv.slice(2),base=fs.realpathSync(rawBase);
 const {waitForOwnerAllocationRecord}=await import(recordReader);
+const {captureAllocation,signalObservedChild}=await import(path.join(here,'fixtures/herald-child-identity.ts'));
 const failures=[],children=[],detached=[];
 let checks=1; // The unrelated-child refusal above is also a check.
 const read=p=>fs.readFileSync(p,'utf8');
@@ -103,12 +105,7 @@ function remember(pid,cwd,script,direct) {
   rec.generation=identity(pid,rec.cwd,script,direct);
   return rec;
 }
-function signal(rec,sig) {
-  if(!alive(rec.pid)) return;
-  assert.ok(rec.generation,'identity captured while allocated');
-  assert.equal(identity(rec.pid,rec.cwd,rec.script,rec.direct),rec.generation,'same PID generation before signal');
-  process.kill(rec.pid,sig);
-}
+function signal(rec,sig) { signalObservedChild(rec,sig,alive,identity); }
 async function spawn(args,options,script) {
   // A detached launcher must not keep a captured pipe's EOF pending. Capture
   // private files instead; exit deadlines and all stdout/stderr checks remain.
@@ -123,13 +120,7 @@ async function spawn(args,options,script) {
     output:()=>files.stdout?read(files.stdout).replace(/\r\n?/g,'\n'):'',
     errors:()=>files.stderr?read(files.stderr).replace(/\r\n?/g,'\n'):''};
   children.push(rec);
-  try { rec.generation=identity(rec.pid,rec.cwd,script,true); }
-  catch(error) {
-    // A fast child may finish while ps/lsof is sampling it. Dispatch completion
-    // before deciding: an exited child needs no signal; live mismatches STOP.
-    await Bun.sleep(0);
-    if(child.exitCode===null && child.signalCode===null) throw error;
-  }
+  rec.generation=await captureAllocation(child,()=>identity(rec.pid,rec.cwd,script,true));
   return rec;
 }
 function root(name) {
