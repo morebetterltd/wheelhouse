@@ -636,6 +636,14 @@ root outside temporary trees; storage refusal is reported, never called saved.
 A planted native37 leg deletes its scratch and verifies both streams/exit status
 and the printed FAIL path survive. This preserves the next diagnosis; it does
 not claim a cause or cure for historical early exits whose streams were lost.
+The runtime-source copy regression is test-only, not an install-path timeout.
+It preserves full inventory/byte/sentinel assertions and accepts native completion
+through regular stdout/stderr descriptors. A delayed FIFO input crosses the
+retired5s kill/SLA; elapsed time is diagnostic only. Its named30-minute outer
+resource containment (inside the normal3600s suite containment) reports expected
+inventory and both observed partial copies on expiry or supervisor cancellation,
+then stops only its own spawned copy group. Containment is INCOMPLETE, not a
+claim of incorrect copied bytes.
 `stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
