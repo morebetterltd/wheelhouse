@@ -19,15 +19,22 @@ const toolNames = new Map<string, string>();
 let currentAssistantContent: any[] = [];
 let capacityErrorEmitted = false;
 type NativeLifecycle = { state: number; turn: number };
-type TurnStartObservation = { threadId: string; atSend: NativeLifecycle; completed: Set<string | null> };
+type TurnStartObservation = { threadId: string; atSend: NativeLifecycle; completed: Set<string | null>; started: Map<string, number> };
 let nativeStateRevision = 0, nativeTurnRevision = 0;
 const rpcReplyLifecycle = new WeakMap<object, NativeLifecycle>();
 const turnStartObservations = new Set<TurnStartObservation>();
 function nativeLifecycle(): NativeLifecycle { return { state: nativeStateRevision, turn: nativeTurnRevision }; }
 function beginTurnStart(): TurnStartObservation {
-  const observation: TurnStartObservation = { threadId, atSend: nativeLifecycle(), completed: new Set() };
+  const observation: TurnStartObservation = { threadId, atSend: nativeLifecycle(), completed: new Set(), started: new Map<string, number>(activeTurnId == null ? [] : [[String(activeTurnId), nativeTurnRevision]]) };
   turnStartObservations.add(observation);
   return observation;
+}
+function observeStartedTurn(params: any) {
+  if (params.turn?.id == null) return;
+  for (const observation of turnStartObservations) {
+    if ((params.threadId ?? threadId) !== observation.threadId) continue;
+    observation.started.set(String(params.turn.id), nativeTurnRevision);
+  }
 }
 function observeCompletedTurn(params: any) {
   for (const observation of turnStartObservations) {
@@ -40,8 +47,11 @@ function applyTurnStartAcknowledgement(reply: any, observation: TurnStartObserva
   // Delivery succeeds without resurrecting a matching completed turn. These
   // identities live only until this request's continuation settles, not forever.
   if (observation.completed.has(null) || (id == null ? observation.completed.size > 0 : observation.completed.has(String(id)))) return;
-  // An older reply must not replace a genuinely newer native turn's identity.
-  if (streaming && activeTurnId != null && id != null && String(activeTurnId) !== String(id) && nativeTurnRevision !== observation.atSend.turn) return;
+  // Rank observed identities, not just events since send. An unrelated active
+  // notification does not prove a fresh acknowledged identity is older. Once
+  // newer work IS observed, it stays newer even after that work completes.
+  const acknowledgedStart = id == null ? undefined : observation.started.get(String(id));
+  if (acknowledgedStart !== undefined && [...observation.started.values()].some(revision => revision > acknowledgedStart)) return;
   // Receipt-time revisions distinguish a fresh acknowledgement AFTER idle from
   // native notifications parsed AFTER the reply but before its continuation.
   const received = rpcReplyLifecycle.get(reply) ?? observation.atSend;
@@ -74,7 +84,7 @@ function quotaText(rateLimits: any): string { return JSON.stringify(rateLimits ?
 child.stdout.on("data", (chunk) => { appBuf += chunk.toString("utf8"); let i; while ((i = appBuf.indexOf("\n")) >= 0) { const line = appBuf.slice(0, i); appBuf = appBuf.slice(i + 1); if (!line.trim()) continue; let ev: any; try { ev = JSON.parse(line); } catch { continue; } raw(ev); if (ev.id !== undefined && rpcPending.has(ev.id) && (ev.result !== undefined || ev.error !== undefined)) { const fn = rpcPending.get(ev.id)!; rpcPending.delete(ev.id); rpcReplyLifecycle.set(ev, nativeLifecycle()); fn(ev); }
   const m = ev.method; const p = ev.params ?? {};
   if (m === "thread/status/changed") { nativeStateRevision++; streaming = p.status?.type === "active"; continue; }
-  if (m === "turn/started") { nativeStateRevision++; nativeTurnRevision++; activeTurnId = p.turn?.id ?? activeTurnId; streaming = true; appendJson(log, { type: "agent_start" }); continue; }
+  if (m === "turn/started") { nativeStateRevision++; nativeTurnRevision++; observeStartedTurn(p); activeTurnId = p.turn?.id ?? activeTurnId; streaming = true; appendJson(log, { type: "agent_start" }); continue; }
   if (m === "account/rateLimits/updated") { const text = quotaText(p.rateLimits); appendJson(log, { type: "message_end", message: { role: "assistant", content: [{ type: "text", text }], stopReason: "error", errorMessage: text }, error: text }); continue; }
   if (m === "item/started") { const item = p.item ?? {}; if (["commandExecution", "fileChange", "mcpToolCall"].includes(item.type)) { const tn = toolNameFor(item); const args = itemArgs(item); toolNames.set(String(item.id), tn); pushPart({ type: "toolCall", id: item.id, name: tn, args }); appendJson(log, { type: "tool_execution_start", toolCallId: item.id, toolName: tn, args }); } continue; }
   if (m === "item/completed") { const item = p.item ?? {}; if (item.type === "userMessage") appendJson(log, { type: "message_end", message: { role: "user", content: [{ type: "text", text: itemText(item) }] } }); else if (item.type === "reasoning") { pushPart({ type: "thinking", text: itemText(item) }); } else if (item.type === "agentMessage") { const text = itemText(item); if (text) pushPart({ type: "text", text }); appendJson(log, { type: "message_end", message: { role: "assistant", content: currentAssistantContent.length ? currentAssistantContent : [{ type: "text", text }] } }); } else if (["commandExecution", "fileChange", "mcpToolCall"].includes(item.type)) appendJson(log, { type: "tool_execution_end", toolCallId: item.id, toolName: toolNames.get(String(item.id)) ?? toolNameFor(item), result: { isError: item.status === "failed" || Number(item.exitCode ?? 0) !== 0, status: item.status, exitCode: item.exitCode, output: item.output ?? item.stderr ?? item.message ?? "" } }); continue; }

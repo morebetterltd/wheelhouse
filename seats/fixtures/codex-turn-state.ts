@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 
 const [source, parent] = process.argv.slice(2);
 assert(fs.statSync(path.join(parent, '.wheelhouse-selftest-fixture')).isFile());
-const cases = ['coalesced', 'late-prompt', 'late-fallback', 'held-ack-only', 'held-status-only', 'idle-before-ack', 'other-terminal-before-ack', 'newer-native-turn', 'newer-no-end', 'late-auth', 'late-resume'];
+const cases = ['coalesced', 'late-prompt', 'late-fallback', 'held-ack-only', 'held-status-only', 'idle-before-ack', 'other-terminal-before-ack', 'newer-native-turn', 'newer-no-end', 'late-auth', 'late-resume', 'fresh-ack-after-unrelated-active', 'newer-completed-before-ack', 'ack-before-terminal'];
 const selected = process.env.WHEELHOUSE_TEST_CODEX_TURN_CASES?.split(',') ?? cases;
 assert(selected.length && selected.every(x => cases.includes(x)), 'known nonempty case selection');
 const root = path.join(parent, 'codex-turn-state'); fs.mkdirSync(root);
@@ -30,8 +30,9 @@ process.stdin.on('data',b=>{buf+=b;let i;while((i=buf.indexOf('\n'))>=0){const t
  const id='turn-'+(++starts),reply={jsonrpc:'2.0',id:x.id,result:{turn:{id,status:'inProgress'}}};
  if(starts>1){live=id;emit([reply,...active(id)]);record({kind:'held',id});}
  else if(mode==='coalesced'){emit([reply,...active(id),...terminal(id)]);record({kind:'first-ended',id});}
+ else if(mode==='ack-before-terminal'){live=id;emit([reply,...active(id)]);record({kind:'held',id});}
  else if(mode==='held-ack-only'||mode==='held-status-only'){live=id;emit([reply,...(mode==='held-status-only'?[{jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'active'}}}]:[])]);record({kind:'held',id});}
- else{pending=reply;if(mode==='idle-before-ack'){live=id;emit([{jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'idle'}}}]);}else if(mode==='other-terminal-before-ack'){live=id;emit([...active('prior-turn'),...terminal('prior-turn')]);}else if(mode==='newer-no-end'){live='turn-2';emit([...active(id),...active(live)]);}else{const rows=[...active(id),...terminal(id,mode==='late-auth')];if(mode==='newer-native-turn'){live='turn-2';emit([...rows,...active(live)]);}else emit(rows);}record({kind:'ack-held',id:x.id,turn:id,newLive:live});}
+ else{pending=reply;if(mode==='idle-before-ack'||mode==='fresh-ack-after-unrelated-active'){live=id;emit([{jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'idle'}}},...(mode==='fresh-ack-after-unrelated-active'?active('prior-turn'):[])]);}else if(mode==='other-terminal-before-ack'){live=id;emit([...active('prior-turn'),...terminal('prior-turn')]);}else if(mode==='newer-no-end'){live='turn-2';emit([...active(id),...active(live)]);}else{const rows=mode==='newer-completed-before-ack'?[...active(id),...active('newer-turn'),...terminal('newer-turn')]:[...active(id),...terminal(id,mode==='late-auth')];if(mode==='newer-native-turn'){live='turn-2';emit([...rows,...active(live)]);}else emit(rows);}record({kind:'ack-held',id:x.id,turn:id,newLive:live});}
  }else if(x.method==='turn/steer'){emit([{jsonrpc:'2.0',id:x.id,result:{turn:{id:live,status:'inProgress'}}}]);record({kind:'steered',live,params:x.params});}}});
 `;
 function rows(file: string): any[] { try { const text = fs.readFileSync(file, 'utf8'); return text.slice(0, text.lastIndexOf('\n') + 1).split('\n').filter(Boolean).map(x => JSON.parse(x)); } catch (e: any) { if (e.code === 'ENOENT') return []; throw e; } }
@@ -78,23 +79,28 @@ for (const mode of cases.filter(x => selected.includes(x))) {
     const init = calls().find(x => x.method === 'thread/start' || x.method === 'thread/resume'); assert(init); assert.equal(init.method, mode === 'late-resume' ? 'thread/resume' : 'thread/start'); if (mode === 'late-resume') assert.equal(init.params.threadId, 'resumed-thread');
     const startType = mode === 'late-fallback' ? 'steer' : 'prompt'; write({ id: 'work', type: startType, message: 'first actual work' });
     const held = mode.startsWith('held-'), newer = mode === 'newer-native-turn' || mode === 'newer-no-end';
-    if (!held && mode !== 'coalesced') {
-      if (mode !== 'idle-before-ack' && mode !== 'newer-no-end') await wait('native first terminal before held ack', () => ends()[0]);
+    if (!held && mode !== 'coalesced' && mode !== 'ack-before-terminal') {
+      if (mode !== 'idle-before-ack' && mode !== 'fresh-ack-after-unrelated-active' && mode !== 'newer-no-end') await wait('native first terminal before held ack', () => ends()[0]);
       await wait('matching native ack held', () => native().find(x => x.kind === 'ack-held'));
       assert(!normalized().some(x => x.id === 'work'), 'ack really remains withheld after native lifecycle observation');
       if (newer) await wait('newer native turn started', () => rows(raw).find(x => x.method === 'turn/started' && x.params?.turn?.id === 'turn-2'));
-      if (mode === 'idle-before-ack') { assert(rows(raw).some(x => x.method === 'thread/status/changed' && x.params?.status?.type === 'idle')); assert.equal(ends().length, 0); }
+      if (mode === 'idle-before-ack' || mode === 'fresh-ack-after-unrelated-active') { assert(rows(raw).some(x => x.method === 'thread/status/changed' && x.params?.status?.type === 'idle')); assert.equal(ends().length, 0); }
       fs.writeFileSync(dir + '/release-ack', 'owner releases valid acknowledgement\n');
     }
     const ack = await response('work'); result.ack = ack;
+    if (mode === 'ack-before-terminal') await finish('turn-1', 1);
     if (mode === 'coalesced') await wait('actual coalesced terminal', () => ends()[0]);
     const snapshot = await state('after-work'); result.snapshot = snapshot;
     const firstCalls = calls().filter(x => x.method === 'turn/start' || x.method === 'turn/steer');
     assert.equal(firstCalls.length, 1, 'no additional caller RPC before the lifecycle snapshot'); assert.equal(firstCalls[0].method, 'turn/start'); assert.equal(firstCalls[0].params.threadId, initial.sessionId);
     assert.equal(ack.success, true, 'late matching native acknowledgement must remain successful'); assert.equal(ack.data.delivered, true, 'delivery authority retained'); assert.equal(snapshot.sessionId, initial.sessionId); assert.equal(snapshot.sessionFile, initial.sessionFile); assert(fs.statSync(snapshot.sessionFile).isFile());
-    const live = held || newer || mode === 'idle-before-ack' || mode === 'other-terminal-before-ack';
+    const live = held || newer || mode === 'idle-before-ack' || mode === 'other-terminal-before-ack' || mode === 'fresh-ack-after-unrelated-active';
     assert.equal(snapshot.isStreaming, live, live ? 'actual held/newer native work must remain active' : 'completed turn must not reopen after matching acknowledgement');
-    assert.equal(ack.data.isStreaming, live, 'acknowledgement snapshot must preserve newer native lifecycle state');
+    // A reply written before an actual terminal can truthfully report active.
+    // One producer write does not establish receiver chunk/continuation order.
+    const ordered = normalized(), ackIndex = ordered.findIndex(x => x.type === 'response' && x.id === 'work'), endIndex = ordered.findIndex(x => x.type === 'agent_end');
+    const ackStreaming = live || ((mode === 'coalesced' || mode === 'ack-before-terminal') && ackIndex < endIndex);
+    assert.equal(ack.data.isStreaming, ackStreaming, 'acknowledgement snapshot must preserve newer native lifecycle state');
     if (live) {
       const turn = newer ? 'turn-2' : 'turn-1'; await steerLive(turn, 'live-steer'); assert.equal((await state('still-live')).isStreaming, true);
       await finish(turn, mode === 'newer-native-turn' || mode === 'other-terminal-before-ack' ? 2 : 1); assert.equal((await state('settled')).isStreaming, false);
