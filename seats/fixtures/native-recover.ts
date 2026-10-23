@@ -31,18 +31,20 @@ try {
   let missing: any; try { process.kill(999999999, 0); } catch (e) { missing = e; } assert.equal(missing?.code, "ESRCH");
   console.log('CAPTURE native-recover recorded-seat absence {"signal":0,"error":"ESRCH"}');
   const source = fs.readFileSync(path.join(runtime, "seats/recover.ts"), "utf8");
-  function run(removed: boolean) {
-    const root = path.join(parent, "recovery-" + (removed ? "removed" : "positive")); fs.cpSync(runtime, root, { recursive: true });
+  assert(holder.stdout.split("\n").some(line => /^f[0-9]+$/.test(line)), "native numeric FD record must exist before testing its parser");
+  function run(removed: boolean, failed = true) {
+    const root = path.join(parent, "recovery-" + (failed ? "failed-" : "holder-") + (removed ? "removed" : "positive")); fs.cpSync(runtime, root, { recursive: true });
     fs.mkdirSync(path.join(root, "bin"));
     fs.writeFileSync(path.join(root, "seats/state.json"), JSON.stringify({ seats: { worker: { pid: 999999999, role: "worker", sessionId: "fixture", sessionFile: session, cwd: root } } }));
-    fs.writeFileSync(path.join(root, "bin/lsof"), `#!/usr/bin/env node\nconst fs=require('node:fs'),cp=require('node:child_process'),args=process.argv.slice(2);if(args[0]==='-Fp'&&args[1]==='--'&&args[2]===${JSON.stringify(session)}){process.stdout.write(fs.readFileSync(${JSON.stringify(holder.outFile)}));process.stderr.write('controlled native observer failure\\n');process.exitCode=7;}else{const r=cp.spawnSync(${JSON.stringify(realLsof)},args,{stdio:'inherit'});process.exitCode=r.status??2;}\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(root, "bin/lsof"), `#!/usr/bin/env node\nconst fs=require('node:fs'),cp=require('node:child_process'),args=process.argv.slice(2);if(args[0]==='-Fp'&&args[1]==='--'&&args[2]===${JSON.stringify(session)}){process.stdout.write(fs.readFileSync(${JSON.stringify(holder.outFile)}));process.stderr.write(${JSON.stringify(failed ? "controlled native observer failure\n" : "")});process.exitCode=${failed ? 7 : 0};}else{const r=cp.spawnSync(${JSON.stringify(realLsof)},args,{stdio:'inherit'});process.exitCode=r.status??2;}\n`, { mode: 0o755 });
     if (removed) {
-      const old = 'if (r.error || r.signal || r.status !== 0) return unknown("lsof session-file observation failed");';
+      const old = failed ? 'if (r.error || r.signal || r.status !== 0) return unknown("lsof session-file observation failed");' : 'if (/^f[0-9]+$/.test(line) && currentPid !== null) continue;';
       assert.equal(source.split(old).length - 1, 1);
-      fs.writeFileSync(path.join(root, "seats/recover.ts"), source.replace(old, 'if (r.error || r.signal || r.status !== 0) return { holders: [], reason: "" };'));
+      const replacement = failed ? 'if (r.error || r.signal || r.status !== 0) return { holders: [], reason: "" };' : 'if (/^f[0-9]+$/.test(line)) return unknown("restored PID-only protocol assumption");';
+      fs.writeFileSync(path.join(root, "seats/recover.ts"), source.replace(old, () => replacement));
     }
     const env = { ...process.env, PATH: path.join(root, "bin") + ":" + process.env.PATH };
-    const failure = capture("lsof", ["-Fp", "--", session], root, env); assert.equal(failure.status, 7); assert.equal(failure.stdout, holder.stdout); assert(failure.stderr.includes("controlled native observer failure"));
+    const failure = capture("lsof", ["-Fp", "--", session], root, env); assert.equal(failure.status, failed ? 7 : 0); assert.equal(failure.stdout, holder.stdout); assert.equal(failure.stderr, failed ? "controlled native observer failure\n" : "");
     const consumer = capture("bun", [path.join(root, "seats/recover.ts")], root, env); assert.equal(consumer.status, 0);
     const final = capture(realLsof, ["-Fp", "--", session]); assert.equal(final.status, 0); assert(final.stdout.split("\n").includes("p" + actor.pid), "same original session holder remains live");
     assert(fs.existsSync(session));
@@ -51,5 +53,8 @@ try {
   function check(out: string) { assert.match(out, /REFUSED resume: UNVERIFIED session attachment/); assert.doesNotMatch(out, /\n\s+(?:resume:|resumable)/, "unknown holder observation cannot authorize a second writer"); }
   check(run(false)); console.log("PASS native-recover failed-observer");
   assert.throws(() => check(run(true)), assert.AssertionError); console.log("REJECT native-recover failed-observer consumerNative=0 holderStillLive=true");
+  function checkHolder(out: string) { assert.match(out, /REFUSED double-resume/); assert(out.includes("pid " + actor.pid)); assert.doesNotMatch(out, /UNVERIFIED session attachment/); }
+  checkHolder(run(false, false)); console.log("PASS native-recover native-pid-fd-protocol");
+  assert.throws(() => checkHolder(run(true, false)), assert.AssertionError); console.log("REJECT native-recover native-pid-fd-protocol consumerNative=0 holderStillLive=true");
 } finally { fs.writeFileSync(stop, "release\n"); assert.equal(await actor.exited, 0); }
-console.log("PASS native-recover: actual session holder, actual failed-observer protocol, meaningful false-empty removal; original actor retired");
+console.log("PASS native-recover: 2 observations, 2 meaningful removals; native pPID/fFD protocol and failed-observer refusal; original actor retired");

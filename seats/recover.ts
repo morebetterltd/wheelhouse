@@ -107,11 +107,21 @@ function pidsHoldingFile(file: string): { holders: number[] | null; reason: stri
   const r = spawnSync("lsof", ["-Fp", "--", file], { encoding: "utf8" });
   if (r.error?.code === "ENOENT") die("lsof is not on PATH — recover cannot establish process identity without it");
   if (!r.error && !r.signal && r.status === 1 && r.stdout === "" && r.stderr === "") return { holders: [], reason: "" };
-  const unknown = (reason: string) => ({ holders: null, reason: `${reason}; native status=${r.status ?? "unknown"} signal=${r.signal ?? "none"}; ${r.error?.message ?? r.stderr}`.trim() });
+  const unknown = (reason: string) => ({ holders: null, reason: `${reason}; native status=${r.status ?? "unknown"} signal=${r.signal ?? "none"}; stdoutBytes=${Buffer.byteLength(r.stdout)} stdoutTail=${JSON.stringify(r.stdout.slice(-512))}; ${r.error?.message ?? r.stderr}`.trim() });
   if (r.error || r.signal || r.status !== 0) return unknown("lsof session-file observation failed");
-  const lines = r.stdout.split("\n").filter(Boolean);
-  if (!lines.length || lines.some(line => !/^p[1-9][0-9]*$/.test(line) || !Number.isSafeInteger(Number(line.slice(1))) || Number(line.slice(1)) > 2147483647)) return unknown("lsof returned no complete holder observation");
-  return { holders: lines.map(line => Number(line.slice(1))).filter(pid => pid !== process.pid), reason: "" };
+  if (!r.stdout.endsWith("\n")) return unknown("lsof returned no complete holder observation");
+  const holders = new Set<number>(); let currentPid: number | null = null;
+  // Captured native `lsof -Fp -- <file>` emits pPID AND numeric fFD records
+  // (for example p40785\\nf3\\n), not a stream consisting only of PID lines.
+  for (const line of r.stdout.split("\n").filter(Boolean)) {
+    if (/^p[1-9][0-9]*$/.test(line) && Number.isSafeInteger(Number(line.slice(1))) && Number(line.slice(1)) <= 2147483647) {
+      currentPid = Number(line.slice(1)); holders.add(currentPid); continue;
+    }
+    if (/^f[0-9]+$/.test(line) && currentPid !== null) continue;
+    return unknown("lsof returned an unsupported holder record");
+  }
+  if (!holders.size) return unknown("lsof returned no complete holder observation");
+  return { holders: [...holders].filter(pid => pid !== process.pid), reason: "" };
 }
 
 function classify(rec: SeatRecord): { cls: Cls; detail: string } {
