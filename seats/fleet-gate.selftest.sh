@@ -184,8 +184,17 @@ SH
  done
 chmod +x "$BIN/bd" "$BIN/bun" "$BIN/gh"
 cp "$FIX/real-fleet-snapshot.json" "$PROJ/seats/run/fleet-snapshot.json"; mutate_snapshot fresh
-TIME_OUT="$(cd "$PROJ" && bash seats/fleet-gate.sh 2>&1)"; TIME_RC=$?
-printf 'CAPTURE snapshot reader native=%s forbidden-tools=%s\n' "$TIME_RC" "$(cat "$FLEET_GATE_TOOL_CALLS")"
+TIME_RC=0
+bun - "$HERE/completed-command.ts" "$PROJ" "$BIN" "$FIX/reader.stdout" <<'JS' || TIME_RC=$?
+import fs from 'node:fs';
+const [moduleFile,root,bin,capture]=process.argv.slice(2),{completedCommand}=await import(moduleFile);
+const native=completedCommand('bash',['seats/fleet-gate.sh'],{cwd:root,env:{...process.env,PATH:bin+':'+process.env.PATH}});
+fs.writeFileSync(capture,native.stdout);fs.writeFileSync(capture+'.stderr',native.stderr);
+console.log('CAPTURE snapshot reader '+JSON.stringify(native));
+process.exit(native.error||native.signal||native.status===null?1:native.status);
+JS
+TIME_OUT="$(cat "$FIX/reader.stdout")"
+printf 'CAPTURE snapshot reader harness=%s forbidden-tools=%s\n' "$TIME_RC" "$(cat "$FLEET_GATE_TOOL_CALLS")"
 if [ $TIME_RC -eq 0 ] && printf '%s\n' "$TIME_OUT" | grep >/dev/null '🚢 FLEET: 2 seats live' && ! printf '%s\n' "$TIME_OUT" | grep >/dev/null '2/2 seats live' && [ ! -s "$FLEET_GATE_TOOL_CALLS" ]; then
   pass 'reader completes without live tool calls or invented rostered count; no throughput verdict'
 else

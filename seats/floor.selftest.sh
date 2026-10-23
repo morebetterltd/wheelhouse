@@ -392,8 +392,8 @@ phase "phase 6: interactive keys — q keeps the pane alive by returning to over
 if ! command -v expect >/dev/null 2>&1; then
   skip "expect not on PATH — q key pty leg not run"
 else
-  QCAP="$FIX/q.expect"
-  env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" expect > "$QCAP" 2>&1 <<EOF
+  QCAP="$FIX/q.expect"; QSCRIPT="$FIX/q.exp"
+  cat > "$QSCRIPT" <<EOF
 # Named outer PTY resource containment, not a startup/repaint SLA.
 set timeout 1800
 expect_before timeout { puts stderr "INCOMPLETE floor PTY outer30min bound; last_seen=\$expect_out(buffer)"; exit 124 }
@@ -409,7 +409,16 @@ expect { "SPOTLIGHT" {} eof { puts stderr "FAIL q exited instead of keeping floo
 send "\003"
 expect eof
 EOF
-  QRC=$?
+  QRC=0
+  env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun - "$HERE/completed-command.ts" "$QSCRIPT" "$QCAP" <<'JS' || QRC=$?
+import fs from 'node:fs';
+const [module,script,capture]=process.argv.slice(2),{completedCommand}=await import(module);
+const native=completedCommand('expect',[script]);
+fs.writeFileSync(capture,native.stdout);fs.writeFileSync(capture+'.stderr',native.stderr);
+console.log('CAPTURE floor PTY native '+JSON.stringify(native));
+process.exit(native.error||native.signal||native.status===null?1:native.status);
+JS
+  printf 'CAPTURE floor PTY harness exit=%s\n' "$QRC"
   if [ $QRC -eq 0 ]; then pass "q changes the live floor to OVERVIEW before Ctrl-C exits"
   else fail "q did not reach OVERVIEW in the live floor: $(cat "$QCAP")"; fi
 fi

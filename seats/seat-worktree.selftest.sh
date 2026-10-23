@@ -162,6 +162,7 @@ const head = native.stdout.trim();
 if (head !== process.env.EXPECT) throw new Error(`HEAD ${head} !== ${process.env.EXPECT}`);
 console.log(JSON.stringify({ base: result.base, head }));
 ' > "$OUT" 2>&1; then
+  cat "$OUT"
   pass "new seat branch starts from wheelhouse/.template-source merge-target before origin/HEAD"
 else
   fail "new seat branch did not start from recorded merge target: $(cat "$OUT" 2>/dev/null)"
@@ -182,6 +183,7 @@ const head = native.stdout.trim();
 if (head !== process.env.EXPECT) throw new Error(`HEAD ${head} !== ${process.env.EXPECT}`);
 console.log(JSON.stringify({ base: result.base, head }));
 ' > "$OUT" 2>&1; then
+  cat "$OUT"
   pass "Integration: fleet/<goal> resolves to origin/fleet/<goal> when only the remote ref exists"
 else
   fail "Integration remote-only goal ref did not resolve before merge-target/origin-HEAD: $(cat "$OUT" 2>/dev/null)"
