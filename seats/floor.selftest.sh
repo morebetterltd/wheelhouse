@@ -71,6 +71,7 @@ selftest_copy_seat_runtime "$PROJ" "$HERE"
 cat > "$FIX/bin/bd" <<'EOF'
 #!/bin/sh
 [ "$1" = "ready" ] || exit 1
+case " $* " in *" --json "*) printf '[{"id":"wh-001","title":"first waiting bead","status":"open"},{"id":"wh-002","title":"second waiting bead","status":"open"}]\n'; exit 0 ;; esac
 echo "wh-001  P2  ready  first waiting bead"
 echo "wh-002  P2  ready  second waiting bead"
 EOF

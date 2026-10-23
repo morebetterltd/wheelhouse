@@ -193,6 +193,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$DIGEST_CAN"; then
   fail "canary: could not disable digest id filter; test proves nothing"
 else
   mkdir -p "$FIX/digestcan/seats" "$FIX/digestcan/wheelhouse" "$FIX/digestcan/bin" "$FIX/digestcan/product"
+  selftest_copy_seat_runtime "$FIX/digestcan" "$PROJ/seats" || exit 2
   cp "$DIGEST_CAN" "$FIX/digestcan/seats/desk.ts"; cp "$NEEDS" "$FIX/digestcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/digestcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/digestcan/seats/needs.jsonl"; cp "$PROJ/seats/inbox.jsonl" "$FIX/digestcan/seats/inbox.jsonl"; cp "$PROJ/seats/seats.json" "$FIX/digestcan/seats/seats.json" 2>/dev/null || true; cp "$PROJ/bin/bd" "$FIX/digestcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/digestcan/wheelhouse/.template-source"; cp -R "$PROJ/product/." "$FIX/digestcan/product/"
   P4="$(port)"; (cd "$FIX/digestcan" && exec env PATH="$FIX/digestcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/digestcan" WHEELHOUSE_DESK_PORT="$P4" bun "$FIX/digestcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P4/digest?$DIGEST_Q" > "$FIX/digest-canary.html" 2>/dev/null || true; grep -q 'demo-merged' "$FIX/digest-canary.html" 2>/dev/null && break; sleep 0.1; done

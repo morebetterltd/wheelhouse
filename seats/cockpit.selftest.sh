@@ -136,11 +136,13 @@ session_exists() { tmux -L "$SOCK" has-session -t "=$1" >/dev/null 2>&1; }
 CANARY_CWD="$FIX/bad-tmpdir-canary"
 mkdir -p "$CANARY_CWD"
 printf 'sentinel\n' > "$CANARY_CWD/sentinel.txt"
+BAD_TMPDIR="$FIX/missing-tmpdir"
+[ ! -e "$BAD_TMPDIR" ] || exit 2
 set +e
-CANARY_OUT="$(cd "$CANARY_CWD" && TMPDIR=/nonexistent WHEELHOUSE_COCKPIT_MKTEMP_CANARY=0 bash "$HERE/cockpit.selftest.sh" 2>&1)"
+CANARY_OUT="$(cd "$CANARY_CWD" && TMPDIR="$BAD_TMPDIR" WHEELHOUSE_COCKPIT_MKTEMP_CANARY=0 bash "$HERE/cockpit.selftest.sh" 2>&1)"
 CANARY_RC=$?
 set -u
-if [ "$CANARY_RC" -ne 0 ] && [ -f "$CANARY_CWD/sentinel.txt" ] && printf '%s\n' "$CANARY_OUT" | grep >/dev/null 'STOP: mktemp failed for fixture template'; then
+if [ "$CANARY_RC" -eq 2 ] && printf '%s\n' "$CANARY_OUT" | grep -q 'STOP:' && printf '%s\n' "$CANARY_OUT" | grep -Fq -- "$BAD_TMPDIR" && node -e 'const fs=require("node:fs"),a=require("node:assert/strict");a(!fs.existsSync(process.argv[2]));a.deepEqual(fs.readdirSync(process.argv[1]),["sentinel.txt"]);a.equal(fs.readFileSync(process.argv[1]+"/sentinel.txt","utf8"),"sentinel\n");' "$CANARY_CWD" "$BAD_TMPDIR"; then
   pass "bad TMPDIR stops before cleanup and preserves caller cwd sentinel"
 else
   fail "bad TMPDIR canary failed (rc=$CANARY_RC sentinel=$([ -f "$CANARY_CWD/sentinel.txt" ] && echo present || echo missing) out=$CANARY_OUT)"

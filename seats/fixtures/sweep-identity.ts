@@ -16,6 +16,8 @@ assert.equal(createHash("sha1").update(`blob ${oldBytes.length}\0`).update(oldBy
 assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());
 assert(fs.statSync(helper).isFile()); assert(fs.statSync(runner).isFile());
 const source = fs.readFileSync(helper, "utf8"), marker = "wheelhouse-selftest-sweep", anchor = marker + "-queue";
+function copyCaptureDependencies(dir: string) { for (const name of ["native-command.ts", "completed-command.ts"]) fs.copyFileSync(path.join(path.dirname(helper), name), path.join(dir, name)); }
+copyCaptureDependencies(root);
 const tokenA = "a".repeat(32), tokenB = "b".repeat(32), results: object[] = [];
 // These three legs vary the reported network name, not hardware availability.
 // Capture/drain one real native provider to close, then replay those exact
@@ -238,6 +240,7 @@ async function identityAvailability(dir: string, kind: "path" | "missing" | "err
   const cacheFile = path.join(lock + ".host", marker + "-host");
   const cache = fs.existsSync(cacheFile) ? { bytes: fs.readFileSync(cacheFile), ino: fs.statSync(cacheFile).ino } : undefined;
   let file = helper, env = process.env;
+  copyCaptureDependencies(dir);
   if (kind === "path") {
     const bin = path.join(dir, "minimal-bin"); fs.mkdirSync(bin); fs.symlinkSync(fs.realpathSync(process.execPath), path.join(bin, "bun"));
     const shims = (process.env.PATH ?? "").split(path.delimiter).filter(p => p.endsWith("/seats/bin"));

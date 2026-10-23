@@ -48,7 +48,7 @@ Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch
 TS
 P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
 sleep 0.2
-base_env(){ env -u BEADS_ACTOR WHEELHOUSE_COMMS_ROOT="$ROOT" WHEELHOUSE_TELEGRAM_TOKEN=tg-token WHEELHOUSE_TELEGRAM_CHAT_ID=111 WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_SLACK_TOKEN="$(printf 'xox%s-%s' b fixture)" WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TEAMS_TOKEN=teams-token WHEELHOUSE_TEAMS_API_BASE="http://127.0.0.1:$P" "$@"; }
+base_env(){ env -u BEADS_ACTOR WHEELHOUSE_ALERT_INTERVAL_MS=0 WHEELHOUSE_STAFFING_INTERVAL_MS=0 WHEELHOUSE_COMMS_ROOT="$ROOT" WHEELHOUSE_TELEGRAM_TOKEN=tg-token WHEELHOUSE_TELEGRAM_CHAT_ID=111 WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_SLACK_TOKEN="$(printf 'xox%s-%s' b fixture)" WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TEAMS_TOKEN=teams-token WHEELHOUSE_TEAMS_API_BASE="http://127.0.0.1:$P" "$@"; }
 count_req(){ [ -f "$FIX/requests.jsonl" ] && wc -l < "$FIX/requests.jsonl" | tr -d ' ' || printf '0'; }
 count_rows(){ if [ -f "$ROOT/seats/comms.jsonl" ]; then awk -v t="\"type\":\"$1\"" 'index($0,t){n++} END{print n+0}' "$ROOT/seats/comms.jsonl"; else printf '0'; fi; }
 reset_logs(){ rm -f "$FIX/requests.jsonl" "$FIX/slack.jsonl" "$FIX/telegram.jsonl" "$FIX/teams.jsonl" "$FIX/fail-readback" "$FIX/fail-read-once" "$ROOT/seats/comms.jsonl" "$ROOT/seats/inbox.jsonl" "$ROOT/seats/herald.state.json" "$ROOT/seats/run/comms."*.cursor "$ROOT/seats/logs/courier.out.log" 2>/dev/null || true; }

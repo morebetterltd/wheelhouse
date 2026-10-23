@@ -34,9 +34,15 @@ console.log(`PASS audit baseline: ${baseline} exists, is an ancestor, has old co
 const noAllocation = path.join(scratch, "must-not-allocate");
 assert(!fs.existsSync(noAllocation));
 const missingSource = source.replace(`BASELINE=${baseline}`, `BASELINE=${absent}`);
+const admissionTmp = path.join(scratch, "audit-admission-tmp"); fs.mkdirSync(admissionTmp);
+let lastMissingResult: any;
+function observeMissing(code: string, isolateAdmission = true) {
+  const anchor = '. "$HERE/selftest-lib.sh"'; assert.equal(code.split(anchor).length, 2);
+  if (isolateAdmission) code = code.replace(anchor, () => `saved_baseline_tmp=$TMPDIR; export TMPDIR=${JSON.stringify(admissionTmp)}; ${anchor}; export TMPDIR="$saved_baseline_tmp"`);
+  return lastMissingResult = spawnSync("bash", ["-c", code, suite], { cwd: root, env: { ...process.env, TMPDIR: noAllocation }, encoding: "utf8" });
+}
 function checkMissing(code: string) {
-  // Preserve $0 so HERE/ROOT still describe the actual suite, not this copy.
-  const result = spawnSync("bash", ["-c", code, suite], { cwd: root, env: { ...process.env, TMPDIR: noAllocation }, encoding: "utf8" });
+  const result = observeMissing(code);
   assert.ifError(result.error);
   assert.equal(result.status, 2, result.stdout + result.stderr);
   assert(result.stderr.includes(`STOP: upgrade contract audit baseline "${absent}" is missing from template history`), result.stderr);
@@ -45,6 +51,10 @@ function checkMissing(code: string) {
   assert(!result.stderr.includes("mktemp"), "allocation must not precede refusal");
   assert(!fs.existsSync(noAllocation), "refusal must leave allocation root absent");
 }
+const early = observeMissing(missingSource, false);
+assert.ifError(early.error); assert.equal(early.status, 2, early.stdout + early.stderr); assert.equal(early.stdout, "");
+assert(early.stderr.includes(`STOP: upgrade contract audit baseline "${absent}"`) || (early.stderr.includes("STOP:") && early.stderr.includes(noAllocation)), "earlier refusal must name the missing baseline or bad TMPDIR");
+assert(!fs.existsSync(noAllocation), "earlier refusal must leave allocation root absent");
 checkMissing(missingSource);
 console.log("PASS missing audit baseline: exit=2 names the absent commit and remedy before fixture allocation");
 for (const [name, code] of [["missing default", missingSource], ["new-contract default", source.replace(`BASELINE=${baseline}`, `BASELINE=${git(["rev-parse", "HEAD"]).trim()}`)]]) {
@@ -56,4 +66,5 @@ const guard = 'if ! git -C "$ROOT" cat-file -e "${BASELINE}^{commit}" >/dev/null
 assert.equal(missingSource.split(guard).length, 2, "one early-refusal mutation anchor");
 let caught = false; try { checkMissing(missingSource.replace(guard, "if false; then")); } catch { caught = true; }
 assert(caught, "removed preflight control passed");
+assert(lastMissingResult.stderr.includes("STOP: mktemp failed for fixture template") && lastMissingResult.stderr.includes(noAllocation), "removed baseline guard must reach actual fixture allocation, not fail admission setup");
 console.log("PASS negative control: removing preflight fails the early-refusal leg");
