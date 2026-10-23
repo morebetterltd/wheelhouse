@@ -22,7 +22,9 @@ function emit(rows){record({kind:'emit',rows});process.stdout.write(rows.map(x=>
 function active(id){return[{jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'active'}}},{jsonrpc:'2.0',method:'turn/started',params:{threadId:thread,turn:{id,status:'inProgress'}}}];}
 function terminal(id,auth=false){return[{jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'idle'}}},{jsonrpc:'2.0',method:'turn/completed',params:{threadId:thread,turn:{id,status:auth?'failed':'completed',...(auth?{error:{message:'401 not logged in'}}:{})}}}];}
 function releases(){if(pending&&fs.existsSync(root+'/release-ack')){const reply=pending;pending=null;emit([reply]);record({kind:'ack-released',id:reply.id});}if(live){const file=root+'/finish-'+live;if(!finished.has(live)&&fs.existsSync(file)){const id=live;finished.add(id);live=null;emit(terminal(id));record({kind:'finished',id});}}}
-const watcher=fs.watch(root,releases);process.stdin.on('end',()=>{watcher.close();process.exit(0);});
+// Poll release levels: a directory notification is not proof that an append
+// or release has (or has not) happened. Cadence never decides a verdict.
+const releasePoll=setInterval(releases,25);process.stdin.on('end',()=>{clearInterval(releasePoll);process.exit(0);});
 process.stdin.on('data',b=>{buf+=b;let i;while((i=buf.indexOf('\n'))>=0){const text=buf.slice(0,i);buf=buf.slice(i+1);if(!text.trim())continue;const x=JSON.parse(text);record({kind:'receive',record:x});if(x.method==='initialize')emit([{jsonrpc:'2.0',id:x.id,result:{}}]);else if(x.method==='thread/start'||x.method==='thread/resume'){const file=root+'/account/session.jsonl';fs.writeFileSync(file,'{}\n');emit([{jsonrpc:'2.0',id:x.id,result:{thread:{id:thread,path:file},model:'fixture-model'}}]);}else if(x.method==='turn/start'){
  const id='turn-'+(++starts),reply={jsonrpc:'2.0',id:x.id,result:{turn:{id,status:'inProgress'}}};
  if(starts>1){live=id;emit([reply,...active(id)]);record({kind:'held',id});}
@@ -48,7 +50,20 @@ for (const mode of cases.filter(x => selected.includes(x))) {
   const result: any = { mode, input, argv, checkpoints: [], failure: null };
   const write = (cmd: any) => { fs.appendFileSync(dir + '/commands.jsonl', JSON.stringify(cmd) + '\n'); child.stdin!.write(JSON.stringify(cmd) + '\n'); };
   const normalized = () => rows(log), native = () => rows(dir + '/native.jsonl'), calls = () => native().filter(x => x.kind === 'receive').map(x => x.record), ends = () => normalized().filter(x => x.type === 'agent_end');
-  async function wait(label: string, predicate: () => any) { return await new Promise<any>((resolve, reject) => { let previous = ''; const watch = fs.watch(dir, check); child.once('close', check); function finish(error: any, value?: any) { watch.close(); child.removeListener('close', check); error ? reject(error) : resolve(value); } function check() { try { const value = predicate(); if (value) { finish(null, value); return; } const last = { mode, label, pid: child.pid, closed, lastNormalized: normalized().at(-1) ?? null, lastNative: native().at(-1) ?? null, outer: 'canonical suite containment (default3600s)' }; const text = JSON.stringify(last); if (text !== previous) { console.error('CODEX_TURN_WAIT ' + text); previous = text; } if (closed) finish(Error('INCOMPLETE original shim closed before ' + label + ': ' + text)); } catch (error) { finish(error); } } check(); }); }
+  async function wait(label: string, predicate: () => any) {
+    let previous = '';
+    for (;;) {
+      const value = predicate();
+      if (value) return value;
+      const last = { mode, label, pid: child.pid, closed, lastNormalized: normalized().at(-1) ?? null, lastNative: native().at(-1) ?? null, outer: 'canonical suite containment (default3600s)' };
+      const text = JSON.stringify(last);
+      if (text !== previous) { console.error('CODEX_TURN_WAIT ' + text); previous = text; }
+      if (closed) throw Error('INCOMPLETE original shim closed before ' + label + ': ' + text);
+      // Re-read actual records even if directory notifications coalesce. This
+      // is observation spacing, not a deadline or an elapsed success condition.
+      await Bun.sleep(25);
+    }
+  }
   async function response(id: string) { return await wait('native response ' + id, () => normalized().find(x => x.type === 'response' && x.id === id)); }
   async function state(id: string) { write({ id, type: 'get_state' }); const x = await response(id); assert(x.success && typeof x.data?.isStreaming === 'boolean', 'complete actual get_state premise'); result.checkpoints.push({ id, response: x, calls: calls(), normalized: normalized() }); return x.data; }
   async function finish(turn: string, expectedEnds: number) { fs.writeFileSync(dir + '/finish-' + turn, 'owner finishes turn\n'); await wait('actual terminal ' + turn, () => ends().length >= expectedEnds); }
