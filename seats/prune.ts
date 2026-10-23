@@ -761,6 +761,11 @@ function midTurnSeatReason(): string | null {
   catch (e: any) { return e.code === "ENOENT" ? null : `seat state UNVERIFIED: ${e.message}; prune not authorized`; }
   for (const [name, rec] of Object.entries<any>(state.seats ?? {})) {
     if (!pidAlive(Number(rec?.pid ?? 0))) continue;
+    // Cwd-only records are generic anchors, not declarations of an RPC seat.
+    // They remain protected by the independent live-cwd/seat-anchor guards;
+    // do not invent an idle result or require a protocol they never claimed.
+    const rpcSeat = rec.fifo !== undefined || rec.log !== undefined || rec.role === "worker" || rec.role === "reviewer" || rec.accountDir || rec.sessionFile || rec.sessionId;
+    if (!rpcSeat) continue;
     let st: any;
     try { st = getState(rec); } catch (e: any) { return `seat "${name}" state UNVERIFIED: ${e.message}; prune not authorized`; }
     if (!st?.success || typeof st?.data?.isStreaming !== "boolean") return `seat "${name}" state UNVERIFIED: no successful streaming observation; prune not authorized`;
