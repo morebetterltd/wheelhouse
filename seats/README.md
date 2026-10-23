@@ -1191,8 +1191,9 @@ tolerance or restamp old records. Other positive FIFO identity proof still works
 Prune waits for a complete matching state response from declared RPC seats;
 a two-minute observation policy reports the last offset/source/PID and defers
 prune if it expires. Cwd-only records remain anchors, not invented RPC seats.
-Unknown graph/GitHub/disk observations do not become zero counts or clear active
-alerts; unverified session-file holders do not authorize a second resume.
+Digest and issue-publication readers reject malformed/unavailable command data.
+Unavailable GitHub-watch/disk observations do not clear prior active conditions;
+unverified session-file holders do not authorize a second resume.
 
 `native-observation.selftest.sh` exercises real native emitters, delayed readiness,
 unknown observations and meaningful feature-removal copies. It is part of the
