@@ -22,7 +22,8 @@ const copies = ['empty-cwd-copy', 'planted-cwd-copy'];
 function copiedSoFar() {
   return copies.map(name => {
     const root = path.join(fixture, name, 'seats');
-    if (!fs.existsSync(root)) return {name, state: 'not created'};
+    try { fs.lstatSync(root); }
+    catch(error:any) { return error.code==='ENOENT' ? {name,state:'not created'} : {name,state:'unverified',error:String(error)}; }
     try { const files=inventory(root); return {name, state:'observed', count:files.length, files}; }
     catch(error) { return {name, state:'unverified', error:String(error)}; }
   });
