@@ -73,6 +73,7 @@ for (const [label, adapter, expectedNative] of [
     assert.equal(result.code, 0);
     assert.deepEqual(result.subject, { recordedAlive: true, candidateAlive: true, contextUnchanged: true });
     if (result.mode === "large") {
+      assert(!result.stderr.includes("UNVERIFIED orphan census"), "only the planted reporting fault may cause this rejection; native census must be verified");
       assert(replay.bytes > 2 * 1024 * 1024 && replay.candidateOffset > 2 * 1024 * 1024);
       assert(bytes.toString("utf8").split("\n").some(line => new RegExp(`^\\s*${result.candidatePid}\\s+`).test(line)));
       assert(result.failure.includes("large census must report the real captured duplicate"));
