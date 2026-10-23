@@ -22,11 +22,19 @@ selftest_isolate_git "$FIX" || exit 2
 . "$HERE/selftest-herald.sh"
 selftest_bind_herald_owner "$FIX" || exit 2
 SOCK="wheelhouse-cockpit-selftest.$$"
+CLIENT_SOCK="${SOCK}-client"
+SOCKET_DIR=""
+SOCKETS_OWNED=0
 PASS=0
 FAIL=0
 cleanup() {
-  tmux -L "$SOCK" kill-server >/dev/null 2>&1 || true
-  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+  local cleanup_rc=0 sock socket_path
+  if [ "$SOCKETS_OWNED" = 1 ]; then
+    for sock in "$CLIENT_SOCK" "$SOCK"; do
+      tmux -L "$sock" kill-server >/dev/null 2>&1 || true
+    done
+  fi
+  selftest_cleanup_fixture_processes "${FIX:-}" || cleanup_rc=1
   [ -z "${LEGACY_WD:-}" ] || wait "$LEGACY_WD" 2>/dev/null || true
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true
   pids=""
@@ -44,9 +52,34 @@ cleanup() {
   done
   pkill -9 -f "$FIX/project/seats/herald.ts" >/dev/null 2>&1 || true
   pkill -9 -f "$FIX/project/seats/desk.ts" >/dev/null 2>&1 || true
-  selftest_remove_fixture_dir "$FIX"
+  # tmux leaves its Unix socket inode after the server exits. Address only
+  # the two names reserved by this still-live script PID; never glob the host.
+  if [ "$SOCKETS_OWNED" = 1 ]; then
+    for socket_path in "$SOCKET_DIR/$CLIENT_SOCK" "$SOCKET_DIR/$SOCK"; do
+      if [ -L "$socket_path" ] || { [ -e "$socket_path" ] && [ ! -S "$socket_path" ]; }; then
+        echo "STOP: refusing unexpected non-socket endpoint: $socket_path" >&2
+        cleanup_rc=1
+      elif [ -S "$socket_path" ]; then
+        rm -f -- "$socket_path" || cleanup_rc=1
+      fi
+    done
+  fi
+  selftest_remove_fixture_dir "$FIX" || cleanup_rc=1
+  return "$cleanup_rc"
 }
 selftest_install_cleanup_traps cleanup
+# A recycled PID may meet a historical endpoint. Do not adopt, kill or unlink
+# it. Register cleanup first, but claim names only after both are absent.
+SOCKET_BASE="$(cd "${TMUX_TMPDIR:-/tmp}" && pwd -P)" || exit 2
+SOCKET_UID="$(id -u)" || exit 2
+SOCKET_DIR="$SOCKET_BASE/tmux-$SOCKET_UID"
+for socket_path in "$SOCKET_DIR/$SOCK" "$SOCKET_DIR/$CLIENT_SOCK"; do
+  if [ -e "$socket_path" ] || [ -L "$socket_path" ]; then
+    echo "STOP: cockpit selftest refuses preexisting tmux endpoint: $socket_path" >&2
+    exit 2
+  fi
+done
+SOCKETS_OWNED=1
 pass() { PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail() { FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 

@@ -9,7 +9,7 @@ import { completedCommand } from '../completed-command';
 const [source, fixture] = process.argv.slice(2);
 assert(fs.statSync(fixture + '/.wheelhouse-selftest-fixture').isFile());
 const realTmux = Bun.which('tmux'); assert(realTmux);
-const modes = ['pass', 'fail', 'TERM', 'INT', 'HUP'];
+const modes = ['pass', 'fail', 'TERM', 'INT', 'HUP', 'preexisting'];
 const selected = process.env.WHEELHOUSE_COCKPIT_CLEANUP_CASES?.split(',') ?? modes;
 assert(selected.length && selected.every(x => modes.includes(x)));
 const root = fixture + '/cockpit-cleanup'; fs.mkdirSync(root);
@@ -63,7 +63,7 @@ function copyRuntime(dest: string) {
     else if (item.isDirectory() && ['fixtures', 'drivers', 'transports'].includes(item.name)) fs.cpSync(source + '/seats/' + item.name, dest + '/seats/' + item.name, { recursive: true });
   }
 }
-function actor(dir: string, action: string, foreign = '') {
+function actor(dir: string, action: string, foreign = '', defer = false) {
   fs.mkdirSync(dir); for (const sub of ['bin', 'commands', 'tmp', 'home']) fs.mkdirSync(dir + '/' + sub);
   copyRuntime(dir + '/runtime');
   const program = dir + '/runtime/seats/cockpit.selftest.sh';
@@ -78,11 +78,16 @@ function actor(dir: string, action: string, foreign = '') {
   // real suite can create anything. Never adopt another run's stale endpoint.
   const child = spawn('/bin/bash', ['-c', 'IFS= read -r release || exit 2; exec /bin/bash "$1"', 'cockpit-cleanup-owner', program], { cwd: dir, env, stdio: ['pipe', stdout, stderr] });
   assert(child.pid && child.pid > 1); const sock = 'wheelhouse-cockpit-selftest.' + child.pid;
-  assert(!socketState(endpoint(sock)).exists && !socketState(endpoint(sock + '-client')).exists, 'refuse preexisting endpoints');
-  child.stdin!.end('owner authorizes unique endpoint creation\n');
+  if (socketState(endpoint(sock)).exists || socketState(endpoint(sock + '-client')).exists) {
+    child.once('close', () => { fs.closeSync(stdout); fs.closeSync(stderr); });
+    child.stdin!.end(); // allocation refused before exec; do not adopt/delete it
+    throw Error('INCOMPLETE allocation met a preexisting endpoint: ' + sock);
+  }
+  const authorize = () => child.stdin!.end('owner authorizes suite execution\n');
+  if (!defer) authorize();
   let closed: any = null;
   const exited = new Promise<any>((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => { closed = { code, signal }; resolve(closed); }); });
-  return { dir, child, sock, executedSha256, exited, get closed() { return closed; }, release() { fs.writeFileSync(dir + '/release-client', 'owner releases real client return\n'); }, closeDescriptors() { fs.closeSync(stdout); fs.closeSync(stderr); } };
+  return { dir, child, sock, executedSha256, exited, authorize, get closed() { return closed; }, release() { fs.writeFileSync(dir + '/release-client', 'owner releases real client return\n'); }, closeDescriptors() { fs.closeSync(stdout); fs.closeSync(stderr); } };
 }
 type Actor = ReturnType<typeof actor>;
 async function until(a: Actor, label: string, check: () => any): Promise<any> {
@@ -110,7 +115,7 @@ async function stop(a: Actor) {
   const r = await a.exited; a.closeDescriptors(); return r;
 }
 const results: any[] = [];
-for (const mode of modes.filter(x => selected.includes(x))) {
+for (const mode of modes.filter(x => selected.includes(x) && x !== 'preexisting')) {
   const dir = root + '/' + mode; fs.mkdirSync(dir);
   let other: Actor | null = null, subject: Actor | null = null;
   const owned: any[] = [], result: any = { mode, sourceSha256: sha(sourceBytes), failure: null };
@@ -162,6 +167,45 @@ for (const mode of modes.filter(x => selected.includes(x))) {
     }
     const evidence = process.env.WHEELHOUSE_COCKPIT_CLEANUP_EVIDENCE;
     if (evidence) { fs.mkdirSync(evidence, { recursive: true }); fs.writeFileSync(evidence + '/' + mode + '.json', JSON.stringify(result, null, 2)); }
+    results.push(result); console.log('COCKPIT_CLEANUP_RESULT ' + JSON.stringify(result));
+  }
+}
+if (selected.includes('preexisting')) {
+  const dir = root + '/preexisting'; fs.mkdirSync(dir);
+  const result: any = { mode: 'preexisting', sourceSha256: sha(sourceBytes), failure: null };
+  let subject: Actor | null = null; const owned: any[] = [];
+  try {
+    subject = actor(dir + '/subject', 'preexisting', '', true); result.executedSha256 = subject.executedSha256;
+    // Both endpoints belong to this separate native setup, NOT to the suite
+    // whose still-live exec PID appears in their names (e.g. PID recycling).
+    for (const sock of [subject.sock, subject.sock + '-client']) {
+      const r = tmux(sock, ['new-session', '-d', '-s', 'preexisting', '-c', dir, 'exec tail -f /dev/null']); assert.equal(r.code, 0);
+      owned.push(snapshot(sock));
+    }
+    result.foreignBefore = owned;
+    subject.authorize();
+    await until(subject, 'preexisting endpoint refusal or native adoption', () => subject!.closed || fs.existsSync(subject!.dir + '/client-up.json'));
+    result.adopted = fs.existsSync(subject.dir + '/client-up.json');
+    result.foreignAfter = owned.map(x => ({ sock: x.sock, state: socketState(x.file), alive: live(x.pid), native: tmux(x.sock, ['has-session']) }));
+    assert.equal(result.adopted, false, 'PREEXISTING_ENDPOINT_ADOPTED');
+    result.subjectExit = await subject.exited; assert.deepEqual(result.subjectExit, { code: 2, signal: null });
+    result.stderr = fs.readFileSync(subject.dir + '/stderr', 'utf8'); assert.match(result.stderr, /refuses preexisting tmux endpoint/);
+    for (let i = 0; i < owned.length; i++) { assert(result.foreignAfter[i].alive && result.foreignAfter[i].native.code === 0, 'PREEXISTING_SERVER_CHANGED'); assert.deepEqual(result.foreignAfter[i].state, owned[i].state, 'PREEXISTING_SOCKET_CHANGED'); }
+  } catch (error: any) {
+    result.failure = { kind: error instanceof assert.AssertionError ? 'behavior' : 'incomplete', message: String(error?.message ?? error) };
+    console.error('COCKPIT_CLEANUP_BEFORE_RESCUE ' + JSON.stringify(result));
+  } finally {
+    if (subject) { result.subjectJoin = await stop(subject); result.stdout = fs.readFileSync(subject.dir + '/stdout', 'utf8'); result.stderr = fs.readFileSync(subject.dir + '/stderr', 'utf8'); }
+    result.rescue = [];
+    for (const x of owned) {
+      const kill = tmux(x.sock, ['kill-server']), state = socketState(x.file);
+      if (state.exists) { assert.equal(state.dev, x.state.dev); assert.equal(state.ino, x.state.ino); assert(state.socket && !state.symlink); fs.unlinkSync(x.file); }
+      while (live(x.pid)) await Bun.sleep(25);
+      result.rescue.push({ sock: x.sock, kill, after: socketState(x.file), originalServerAlive: live(x.pid) });
+    }
+    if (subject) result.subjectCommands = fs.readdirSync(subject.dir + '/commands').filter(x => x.endsWith('.json')).map(x => JSON.parse(fs.readFileSync(subject!.dir + '/commands/' + x, 'utf8')));
+    const evidence = process.env.WHEELHOUSE_COCKPIT_CLEANUP_EVIDENCE;
+    if (evidence) { fs.mkdirSync(evidence, { recursive: true }); fs.writeFileSync(evidence + '/preexisting.json', JSON.stringify(result, null, 2)); }
     results.push(result); console.log('COCKPIT_CLEANUP_RESULT ' + JSON.stringify(result));
   }
 }
