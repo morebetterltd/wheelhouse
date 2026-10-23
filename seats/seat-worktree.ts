@@ -515,6 +515,10 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   const repo = gitRepoFor(root, legacy ?? seatTarget, o.beadId);
   const registered = registeredWorktrees(repo);
   const atLegacy = legacy ? registered.find((w) => samePath(w.path, legacy)) : undefined;
+  // A task-named legacy directory may carry an intentional custom branch,
+  // even after migration to the seat anchor. lastBead alone proves neither:
+  // a stale dispatch record must not preserve an unrelated current branch.
+  const legacyTaskBranch = atLegacy && path.basename(atLegacy.path) === o.beadId && (!rec?.lastBead || rec.lastBead === o.beadId) ? atLegacy.branch : null;
   if (atLegacy && (!rec?.pid || !pidAlive(rec.pid ?? null)) && !fs.existsSync(seatTarget)) {
     const mv = git(repo, ["worktree", "move", atLegacy.path, seatTarget]);
     if (mv.ok) {
@@ -528,7 +532,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     target = atLegacy.path;
   }
   let atTarget = registeredWorktrees(repo).find((w) => samePath(w.path, target));
-  if (atTarget?.branch && (path.basename(target) === o.beadId || rec?.lastBead === o.beadId)) branch = atTarget.branch;
+  if (atTarget?.branch && legacyTaskBranch === atTarget.branch) branch = atTarget.branch;
   for (const [other, otherRec] of Object.entries(o.state.seats ?? {})) {
     if (other === o.seat || !otherRec?.cwd || !pidAlive(otherRec.pid ?? null)) continue;
     if (samePath(otherRec.cwd, target)) refuse(`worktree ${target} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
@@ -558,8 +562,8 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
 
   const base = resolveBase(repo, o.beadId, o.base, root);
   const baseTip = git(repo, ["rev-parse", `${base}^{commit}`]).out;
-  const elsewhere = registeredWorktrees(repo).find((w) => w.branch === branch && !samePath(w.path, target));
-  if (elsewhere) refuse(`branch ${branch} is already checked out at ${elsewhere.path}; a branch can be in one worktree at a time`);
+  const elsewhere = registeredWorktrees(repo).find((w) => (w.branch === branch || w.branch === beadBranch(o.beadId)) && !samePath(w.path, target));
+  if (elsewhere) refuse(`branch ${elsewhere.branch} is already checked out at ${elsewhere.path}; cannot prepare target ${target}: a branch can be in one worktree at a time`);
   const exists = branchExists(repo, branch);
 
   if (!atTarget) {

@@ -8,4 +8,7 @@ selftest_isolate_git "$FIX" || exit 2
 cleanup() { selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
 selftest_install_cleanup_traps cleanup
 selftest_copy_seat_runtime "$FIX/runtime" "$HERE" || exit 2
-bun "$HERE/fixtures/dispatch-worktree.ts" "$HERE" "$FIX" "${WHEELHOUSE_DISPATCH_WORKTREE_CASE:-all}"
+bun "$HERE/fixtures/dispatch-worktree.ts" "$HERE" "$FIX" "${WHEELHOUSE_DISPATCH_WORKTREE_CASE:-all}" || exit $?
+if [ "${WHEELHOUSE_DISPATCH_WORKTREE_CASE:-all}" = all ]; then
+  bun "$HERE/fixtures/dispatch-worktree-controls.ts" "$HERE" "$FIX" || exit $?
+fi

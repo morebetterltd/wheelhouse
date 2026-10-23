@@ -2,8 +2,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import os from 'node:os';
 import { completedCommand } from '../completed-command';
-const [here, root, selected = 'all'] = process.argv.slice(2);
+const [here, root, selected = 'all', group = 'positive'] = process.argv.slice(2);
+assert(/^[a-z][a-z-]*$/.test(group));
 assert(fs.statSync(path.join(root, '.wheelhouse-selftest-fixture')).isFile());
 const evidence = process.env.WHEELHOUSE_DISPATCH_WORKTREE_EVIDENCE;
 if (evidence) assert(fs.statSync(evidence).isDirectory());
@@ -27,7 +29,7 @@ function run(file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv =
   const result = completedCommand(file, args, { cwd, env });
   assert(!result.error && !result.signal, `native command failed: ${file}: ${result.error?.message ?? result.signal}`);
   if (evidence) {
-    const name = String(++commandId).padStart(4, '0');
+    const name = group + '-' + String(++commandId).padStart(4, '0');
     fs.writeFileSync(path.join(evidence, name + '.stdout'), result.stdout);
     fs.writeFileSync(path.join(evidence, name + '.stderr'), result.stderr);
     fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify({ file, args, cwd, status: result.status, signal: result.signal ?? null }));
@@ -35,17 +37,22 @@ function run(file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv =
   return result;
 }
 function git(repo: string, args: string[]) { const r = run('git', ['-C', repo, ...args], root); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); }
-const cases = ['legacy', 'recorded-cwd', 'collision', 'recorded-task-collision', 'stopped-record'];
+const cases = ['legacy', 'recorded-cwd', 'collision', 'recorded-task-collision', 'associated-collision', 'recorded-task', 'stopped-record'];
 assert(selected === 'all' || cases.includes(selected));
 let failures = 0;
 for (const name of cases.filter(x => selected === 'all' || x === selected)) {
-  const dir = path.join(root, name), project = path.join(dir, 'project'), home = path.join(dir, 'home'), bin = path.join(dir, 'bin');
+  console.log('AMBIENT dispatch-worktree ' + JSON.stringify({case:name,group,nice:os.getPriority(0),cores:os.cpus().length,load:os.loadavg(),at:new Date().toISOString()}));
+  const dir = path.join(root, group, name), project = path.join(dir, 'project'), home = path.join(dir, 'home'), bin = path.join(dir, 'bin');
   const account = path.join(home, 'sample-account'), stateFile = path.join(project, 'seats/state.json');
-  const canonical = path.join(project, '.wheelhouse-worktrees', seat), legacy = path.join(project, '.wheelhouse-worktrees', 'legacy-topic');
+  const canonical = path.join(project, '.wheelhouse-worktrees', seat), legacy = path.join(project, '.wheelhouse-worktrees', name === 'associated-collision' ? task : 'legacy-topic');
   fs.mkdirSync(project, { recursive: true }); fs.mkdirSync(account, { recursive: true }); fs.mkdirSync(bin);
   // The shell copied runtime once into root/runtime; reuse it without touching source.
   fs.cpSync(path.join(root, 'runtime/seats'), path.join(project, 'seats'), { recursive: true });
-  fs.mkdirSync(path.join(project, 'contracts')); fs.copyFileSync(path.join(here, '../contracts/WORKER.md'), path.join(project, 'contracts/WORKER.md'));
+  for (const [key, file] of [['WHEELHOUSE_DISPATCH_ADAPTER_SOURCE','adapter.ts'],['WHEELHOUSE_DISPATCH_WORKTREE_SOURCE','seat-worktree.ts']]) {
+    const source = process.env[key]; if (source) { assert(fs.statSync(source).isFile()); fs.copyFileSync(source,path.join(project,'seats',file)); }
+  }
+  const roleBrief = fs.readFileSync(process.env.WHEELHOUSE_DISPATCH_BRIEF_SOURCE ?? path.join(here, '../contracts/WORKER.md'),'utf8');
+  fs.mkdirSync(path.join(project, 'contracts')); fs.writeFileSync(path.join(project, 'contracts/WORKER.md'),roleBrief);
   fs.mkdirSync(path.join(project, 'wheelhouse')); fs.writeFileSync(path.join(project, 'wheelhouse/.template-source'), 'seat_push=off\ncleanup=off\nmerge-target=main\n');
   fs.writeFileSync(path.join(account, 'auth.json'), '{"fixture":"synthetic"}\n'); fs.writeFileSync(path.join(account, 'trust.json'), JSON.stringify({ [project]: true }));
   fs.writeFileSync(path.join(bin, 'pi'), stub, { mode: 0o755 });
@@ -68,7 +75,7 @@ for (const name of cases.filter(x => selected === 'all' || x === selected)) {
     const nativeCwd = run('lsof', ['-a', '-p', String(launched.pid), '-d', 'cwd', '-Fpn'], project);
     assert.equal(nativeCwd.status, 0, nativeCwd.stderr); assert(nativeCwd.stdout.split('\n').includes('n' + initial), 'native cwd agrees before dispatch');
     const state = readState(); state.seats[seat].cwd = legacy;
-    if (name === 'recorded-task-collision') state.seats[seat].lastBead = task;
+    if (['recorded-task-collision','associated-collision','recorded-task'].includes(name)) state.seats[seat].lastBead = task;
     if (name === 'stopped-record') state.seats['worker-stopped'] = { pid: null, cwd: legacy, lastBead: 'old-task' };
     fs.writeFileSync(stateFile, JSON.stringify(state));
     const other = path.join(project, '.wheelhouse-worktrees', 'other-task');
@@ -79,7 +86,9 @@ for (const name of cases.filter(x => selected === 'all' || x === selected)) {
     const branch = git(legacy, ['symbolic-ref', '--short', 'HEAD']);
     const commands = fs.readFileSync(path.join(account, 'commands.jsonl'), 'utf8').trim().split('\n').map(x => JSON.parse(x));
     const prompt = commands.filter(x => x.type === 'prompt').at(-1);
-    const named = prompt?.message.match(/^Worktree: (.+)$/m)?.[1] ?? canonical;
+    // The system brief must authorize this context too, not still require the
+    // stale anchor while a lower-priority message names a different path.
+    const named = roleBrief.includes("adapter's dispatch context") ? (prompt?.message.match(/^Worktree: (.+)$/m)?.[1] ?? canonical) : canonical;
     console.log('DISPATCH_WORKTREE ' + JSON.stringify({ case: name, native: result.status, prepared: legacy, named, actualCwd: prompt?.actualCwd ?? null, stateCwd: readState().seats[seat].cwd, branch, canonicalBranch: git(canonical, ['symbolic-ref', '--short', 'HEAD']), other: collision ? other : null, stdout: result.stdout, stderr: result.stderr, listing }));
     if (collision) {
       assert.notEqual(result.status, 0, 'branch occupied elsewhere must refuse, not preserve an unrelated recorded branch');
@@ -91,8 +100,11 @@ for (const name of cases.filter(x => selected === 'all' || x === selected)) {
       assert(prompt, 'dispatch must reach the actual seat');
       assert.equal(named, legacy, 'brief must name the actual adopted worktree, not the canonical anchor');
       assert.equal(prompt.actualCwd, legacy, 'actual worker cwd must match the brief, not merely state.json');
+      const latest = JSON.parse(fs.readFileSync(path.join(account, 'launched.json'), 'utf8'));
+      const afterCwd = run('lsof', ['-a', '-p', String(latest.pid), '-d', 'cwd', '-Fpn'], project);
+      assert.equal(afterCwd.status,0,afterCwd.stderr); assert(afterCwd.stdout.split('\n').includes('n'+named),'native process cwd must match the dispatched brief');
       assert.equal(readState().seats[seat].cwd, legacy);
-      assert.equal(branch, 'fleet/' + task);
+      assert.equal(branch, 'fleet/' + task, 'prepared worktree must be on the task branch');
       assert(listing.includes('worktree ' + named + '\n') && listing.includes('branch refs/heads/fleet/' + task + '\n'));
       assert(prompt.message.includes('Branch: fleet/' + task), 'brief must name the prepared branch');
     }
