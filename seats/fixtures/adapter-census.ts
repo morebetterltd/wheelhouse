@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 const project = process.argv[2], source = path.dirname(import.meta.dir);
@@ -15,6 +16,14 @@ for (const dir of ["drivers", "transports"]) fs.cpSync(path.join(source, dir), p
 if (process.argv[3]) fs.copyFileSync(process.argv[3], path.join(root, "seats/adapter.ts"));
 const evidence = process.env.WHEELHOUSE_CENSUS_EVIDENCE || path.join(root, "census-evidence");
 fs.mkdirSync(evidence, { recursive: true });
+// These records are diagnostic only: never a new PID/signal authority. The
+// caller's retained directory also keeps partial setup if containment kills us.
+const note = (stage: string, fields: Record<string, unknown> = {}) => fs.appendFileSync(path.join(evidence, "progress.jsonl"), JSON.stringify({ at: new Date().toISOString(), stage, ...fields }) + "\n", { mode: 0o600 });
+fs.writeFileSync(path.join(evidence, "source.json"), JSON.stringify({
+  root, platform: process.platform, arch: process.arch, bun: Bun.version,
+  fixtureSha256: createHash("sha256").update(fs.readFileSync(import.meta.path)).digest("hex"),
+  adapterSha256: createHash("sha256").update(fs.readFileSync(path.join(root, "seats/adapter.ts"))).digest("hex"),
+}, null, 2), { mode: 0o600 });
 const realPs = Bun.which("ps"); assert(realPs);
 const bin = path.join(root, "census-bin"); fs.mkdirSync(bin);
 const wrapper = path.join(bin, "ps");
@@ -52,12 +61,12 @@ fs.mkdirSync(home); fs.mkdirSync(account); fs.mkdirSync(path.dirname(log), { rec
 fs.writeFileSync(path.join(root, "seats/seats.json"), JSON.stringify({ seats: { "worker-1": { role: "worker", harness: "pi", worktree: false, model: "fixture", account: { dir: account } } } }));
 // The recorded process and duplicate are siblings, not ancestor/descendant:
 // status must continue to exclude genuine children of a recorded seat.
-const recordedReady = path.join(root, "census-recorded.ready");
+const recordedReady = path.join(evidence, "recorded.ready");
 const recorded = Bun.spawn(["node", path.join(source, "fixtures/adapter-selftest-holder.mjs"), "census-recorded-holder"], {
   cwd: root, env: { ...process.env, HOME: home, ADAPTER_HOLDER_READY: recordedReady, ADAPTER_HOLDER_TITLE: "census-recorded-holder" }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
 });
 const recordedOut = new Response(recorded.stdout).text(), recordedErr = new Response(recorded.stderr).text();
-const ready = path.join(root, "census-holder.ready"), title = `pi --mode rpc census-duplicate ${account} ${root}`;
+const ready = path.join(evidence, "candidate.ready"), title = `pi --mode rpc census-duplicate ${account} ${root}`;
 const peer = Bun.spawn(["node", path.join(source, "fixtures/adapter-selftest-holder.mjs"), title], {
   cwd: root, env: { ...process.env, HOME: home, ADAPTER_HOLDER_READY: ready, ADAPTER_HOLDER_TITLE: title }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
 });
@@ -72,18 +81,22 @@ function fileReady(file: string) {
 const readySignal = fileReady(ready), recordedSignal = fileReady(recordedReady);
 let failures = 0; const results: any[] = [];
 try {
+  note("waiting for live subjects", { recordedPid: recorded.pid, candidatePid: peer.pid });
   const setup = await Promise.race([Promise.all([readySignal.promise, recordedSignal.promise]).then(() => "ready"), peer.exited.then(() => "exit"), recorded.exited.then(() => "exit")]);
   assert.equal(setup, "ready", "both owned siblings must establish real live-process preconditions");
   assert.equal(Number(fs.readFileSync(ready, "utf8")), peer.pid); process.kill(peer.pid, 0);
   assert.equal(Number(fs.readFileSync(recordedReady, "utf8")), recorded.pid); process.kill(recorded.pid, 0);
+  note("live subjects verified");
   const birth = spawnSync(realPs, ["-p", String(recorded.pid), "-o", "lstart="], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  // Retain the actual observer result even if its status/shape assertion fails.
+  fs.writeFileSync(path.join(evidence, "birth.json"), JSON.stringify({ command: [realPs, "-p", String(recorded.pid), "-o", "lstart="], status: birth.status, signal: birth.signal, error: birth.error ? { code: (birth.error as any).code, message: birth.error.message } : null, stdout: birth.stdout, stderr: birth.stderr }));
   assert.equal(birth.status, 0); assert(!birth.error && !birth.signal && !birth.stderr);
   const start = Date.parse(birth.stdout.trim()); assert(Number.isFinite(start));
   const seat = { pid: recorded.pid, startedAt: new Date(start).toISOString(), role: "worker", roleBrief: "fixture", accountDir: account, cwd: root, log, sessionId: "census-session", sessionFile: null, lastBead: "census-bead" };
   fs.writeFileSync(stateFile, JSON.stringify({ seats: { "worker-1": seat } }, null, 2));
-  fs.writeFileSync(path.join(evidence, "birth.json"), JSON.stringify({ command: [realPs, "-p", String(recorded.pid), "-o", "lstart="], status: birth.status, signal: birth.signal, stdout: birth.stdout, stderr: birth.stderr }));
   for (const mode of ["large", "exit23", "empty", "malformed", "stderr"]) {
     const dir = path.join(evidence, mode); fs.mkdirSync(dir);
+    note("running native status", { mode });
     const child = Bun.spawn(["bun", path.join(root, "seats/adapter.ts"), "status"], {
       cwd: root, env: { ...process.env, HOME: home, WHEELHOUSE_SKIP_BD: "1", WHEELHOUSE_CLEANUP: "0", PATH: bin + path.delimiter + process.env.PATH, CENSUS_REAL_PS: realPs, CENSUS_WRAPPER_SCRIPT: wrapperScript, CENSUS_MODE: mode, CENSUS_CASE_DIR: dir, CENSUS_EXPECT_PID: String(peer.pid), WHEELHOUSE_ORPHAN_CONFIRM_MS: "0" },
       stdin: "ignore", stdout: "pipe", stderr: "pipe",
@@ -123,6 +136,7 @@ try {
 
     } catch (error) { result.failure = String(error); failures++; }
     fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(result, null, 2)); results.push(result);
+    note("mode observed", { mode, code, passed: result.failure === null });
     console.log(`${result.failure ? "FAIL" : "PASS"} adapter-census ${mode}: ${result.failure || "captured native records/status honoured; healthy row visible; context and live candidate preserved"}`);
   }
 } finally {
@@ -133,6 +147,7 @@ try {
   if (recorded.exitCode === null) recorded.kill("SIGTERM");
   await Promise.all([peer.exited, peerOut, peerErr, recorded.exited, recordedOut, recordedErr]);
   fs.writeFileSync(path.join(evidence, "results.json"), JSON.stringify(results, null, 2));
+  note("original subjects joined", { assertionsFailed: failures });
 }
 console.log(`adapter-census: ${results.length - failures}/${results.length} passed; actual-capture replay, no elapsed success/failure budget`);
 process.exitCode = failures ? 1 : 0;

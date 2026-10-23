@@ -33,6 +33,9 @@ SUITE_RC=0
 # Tune against the per-suite elapsed seconds retained in each sweep log.
 SUITE_TIMEOUT_S="${WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S:-3600}"
 SUITE_GRACE_S="${WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S:-5}"
+# Failure evidence must outlive the per-suite TMPDIR removed by CLEAN. Nested
+# sweeps inherit the original caller's artifact root, not an outer suite's tmp.
+export WHEELHOUSE_SELFTEST_ARTIFACT_ROOT="${WHEELHOUSE_SELFTEST_ARTIFACT_ROOT:-${TMPDIR:-/tmp}}"
 OWNED_LOCK=""
 ENROLLED=0
 LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$ROOT/seats/selftest-sweep-lock.ts}"
