@@ -221,9 +221,9 @@ async function ownershipCheck(root: string): Promise<void> {
       fs.writeFileSync(file, kind === "count" ? "FRAME\n" : "");
       // Delay is controlled INPUT, not a deadline or pass-on-elapsed assertion.
       const producer = own(["-e", 'const fs=require("node:fs");await Bun.sleep(16000);fs.appendFileSync(process.argv[1],process.argv[2]);', file, kind === "text" ? "LIFECYCLE_READY\n" : "FRAME\n"]);
-      const native = completedCommand("bun", [helper, kind, file, needle, "0", String(holder.child.pid), "2"]);
+      const native = completedCommand("bun", [helper, kind, file, needle, "0", String(producer.child.pid), "2"]);
       const text = fs.readFileSync(file, "utf8"), delivered = kind === "text" ? text.includes(needle) : text.split(needle).length - 1 >= 2;
-      record.cases.push({ kind, input: { file, needle, count: 2 }, native, deliveredAtReturn: delivered, holderAlive: alive(holder.child.pid) });
+      record.cases.push({ kind, input: { file, needle, count: kind === "count" ? 2 : 1, producer: producer.child.pid }, native, deliveredAtReturn: delivered, holderAlive: alive(holder.child.pid) });
       console.error("CAPTURE lifecycle return " + JSON.stringify(record.cases.at(-1)));
       if (!delivered || native.status !== 0) record.failures.push(kind + " wait returned without delivered input/native success");
       if (!delivered && !producer.ended) producer.child.kill("SIGTERM"); // containment AFTER forbidden early return is recorded
