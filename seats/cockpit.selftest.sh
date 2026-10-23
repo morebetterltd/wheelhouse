@@ -76,7 +76,9 @@ if (process.argv.includes("--status")) {
   else console.log(`desk RUNNING pid ${fs.readFileSync(f,"utf8").trim()}`);
   process.exit(0);
 }
-fs.writeFileSync(path.join(run, "desk.port"), `http://127.0.0.1:${process.env.WHEELHOUSE_DESK_PORT || "42042"}/needs\n`);
+const portTmp = path.join(run, `desk.port.${process.pid}.tmp`);
+fs.writeFileSync(portTmp, `http://127.0.0.1:${process.env.WHEELHOUSE_DESK_PORT || "42042"}/needs\n`);
+fs.renameSync(portTmp, path.join(run, "desk.port"));
 setInterval(() => {}, 1000);
 EOF
 cat > "$PROJ/seats/desk-watchdog.sh" <<'EOF'
