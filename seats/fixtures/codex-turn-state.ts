@@ -12,6 +12,7 @@ assert(selected.length && selected.every(x => cases.includes(x)), 'known nonempt
 const root = path.join(parent, 'codex-turn-state'); fs.mkdirSync(root);
 const shim = path.join(source, 'seats/drivers/codex/shim.ts');
 const sourceSha256 = createHash('sha256').update(fs.readFileSync(shim)).digest('hex');
+const fixtureSha256 = createHash('sha256').update(fs.readFileSync(import.meta.path)).digest('hex');
 // Shapes are from the captured native RPC/normalized order, not invented
 // elapsed successes. Every release below belongs to this fixture's owner.
 const server = String.raw`#!/usr/bin/env node
@@ -41,7 +42,7 @@ for (const mode of cases.filter(x => selected.includes(x))) {
   fs.writeFileSync(dir + '/brief', 'isolated turn state fixture');
   fs.writeFileSync(dir + '/bin/codex', server, { mode: 0o755 });
   const log = dir + '/normalized.jsonl', raw = dir + '/raw.jsonl';
-  const input = { mode, sourceSha256, shim, schema: 'captured Codex app-server messages; explicit acknowledgement/terminal release; no elapsed pass condition', server };
+  const input = { mode, sourceSha256, fixtureSha256, shim, schema: 'captured Codex app-server messages; explicit acknowledgement/terminal release; no elapsed pass condition', server };
   fs.writeFileSync(dir + '/input.json', JSON.stringify(input, null, 2));
   const out = fs.openSync(dir + '/stdout', 'wx', 0o600), err = fs.openSync(dir + '/stderr', 'wx', 0o600);
   const argv = [shim, '--log', log, '--raw-log', raw, '--err-log', dir + '/app.stderr', '--account-dir', dir + '/account', '--brief', dir + '/brief', '--model', 'fixture-model', '--cwd', dir + '/cwd', '--actor', 'turn-state-fixture', ...(mode === 'late-resume' ? ['--resume', 'resumed-thread'] : [])];
@@ -50,6 +51,10 @@ for (const mode of cases.filter(x => selected.includes(x))) {
   const result: any = { mode, input, argv, checkpoints: [], failure: null };
   const write = (cmd: any) => { fs.appendFileSync(dir + '/commands.jsonl', JSON.stringify(cmd) + '\n'); child.stdin!.write(JSON.stringify(cmd) + '\n'); };
   const normalized = () => rows(log), native = () => rows(dir + '/native.jsonl'), calls = () => native().filter(x => x.kind === 'receive').map(x => x.record), ends = () => normalized().filter(x => x.type === 'agent_end');
+  const streams = () => Object.fromEntries(Object.entries({ stdout: dir + '/stdout', stderr: dir + '/stderr', appStderr: dir + '/app.stderr', native: dir + '/native.jsonl', normalized: log, raw, commands: dir + '/commands.jsonl' }).map(([name, file]) => {
+    try { return [name, fs.readFileSync(file, 'utf8')]; }
+    catch (e: any) { if (e.code === 'ENOENT') return [name, '']; throw e; }
+  }));
   async function wait(label: string, predicate: () => any) {
     let previous = '';
     for (;;) {
@@ -106,10 +111,11 @@ for (const mode of cases.filter(x => selected.includes(x))) {
     result.failure = { kind: error instanceof assert.AssertionError ? 'behavior' : 'incomplete', message: String(error?.message ?? error) };
     // Preserve the intended wrong world BEFORE owned teardown; nonzero alone
     // cannot get planted-break credit.
-    result.beforeCleanup = { calls: calls(), normalized: normalized(), raw: rows(raw), commands: rows(dir + '/commands.jsonl') };
+    result.beforeCleanup = { calls: calls(), normalized: normalized(), raw: rows(raw), commands: rows(dir + '/commands.jsonl'), native: native(), streams: streams() };
     console.error('CODEX_TURN_BEFORE_CLEANUP ' + JSON.stringify(result));
   } finally {
     if (!closed) child.kill('SIGTERM'); result.nativeClose = await close; fs.closeSync(out); fs.closeSync(err);
+    result.native = native(); result.streams = streams();
     result.calls = calls(); result.normalized = normalized(); result.raw = rows(raw); result.commands = rows(dir + '/commands.jsonl'); result.stdout = fs.readFileSync(dir + '/stdout', 'utf8'); result.stderr = fs.readFileSync(dir + '/stderr', 'utf8'); result.appStderr = fs.existsSync(dir + '/app.stderr') ? fs.readFileSync(dir + '/app.stderr', 'utf8') : '';
     const artifact = process.env.WHEELHOUSE_CODEX_TURN_EVIDENCE; if (artifact) { fs.mkdirSync(artifact, { recursive: true }); fs.writeFileSync(path.join(artifact, mode + '.json'), JSON.stringify(result, null, 2)); }
     results.push(result); console.log('CODEX_TURN_RESULT ' + JSON.stringify(result));
