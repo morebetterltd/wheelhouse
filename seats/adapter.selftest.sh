@@ -1760,6 +1760,11 @@ if [ $RC -eq 0 ] && env TRACE="$FIX/status-ps.calls" node --input-type=module -e
 else fail "status cost: missing seats or repeated process snapshots (rc=$RC): $OUT"; fi
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 
+phase "6e. captured process census — capacity and unavailable observations"
+if bun "$HERE/fixtures/adapter-census.ts" "$FIX/census-cases" "$ADAPTER"; then
+  pass 'captured large census reports real duplicate; failed/invalid census is UNVERIFIED with healthy rows visible'
+else fail 'captured process census lost data or silently guessed absence'; fi
+
 phase "7. host build budget — opt-in PATH shim serializes cargo and allows re-entrant children"
 BUDGET_PROJ="$FIX/host-budget-proj"
 build_proj "$BUDGET_PROJ" budget

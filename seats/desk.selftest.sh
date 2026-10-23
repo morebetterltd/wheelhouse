@@ -15,27 +15,38 @@ cleanup(){ [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; [ -n "$WATCHDOG_PID
 selftest_install_cleanup_traps cleanup
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-desk_fixture_processes(){ ps axww -o pid=,command= | awk -v root="$FIX" '$2 ~ /(^|\/)bun$/ && index($0, root) && index($0, "seats/desk.ts") {print}'; }
+desk_fixture_processes(){
+  local capture rc
+  [ -d "$FIX" ] || return 2
+  capture="$(mktemp "$FIX/desk-census.XXXXXX")" || return 2
+  ps axww -o pid=,command= > "$capture" 2> "$capture.err"; rc=$?
+  printf '%s\n' "$rc" > "$capture.rc"
+  [ "$rc" = 0 ] || { echo "STOP: native desk census failed rc=$rc" >&2; return 2; }
+  awk -v subject="$$" '$1==subject{found=1} END{exit found?0:1}' "$capture" || { echo "STOP: native desk census omitted its live caller" >&2; return 2; }
+  awk -v root="$FIX" '$2 ~ /(^|\/)bun$/ && index($0, root) && index($0, "seats/desk.ts") {print}' "$capture"
+}
 stop_fixture_desks(){
-  local pids=""
-  pids="$(desk_fixture_processes | awk '{print $1}' | tr '\n' ' ')"
-  [ -n "$pids" ] && kill $pids >/dev/null 2>&1 || true
-  sleep 0.3
-  pids="$(desk_fixture_processes | awk '{print $1}' | tr '\n' ' ')"
-  [ -n "$pids" ] && kill -9 $pids >/dev/null 2>&1 || true
+  local owned running pid rc
+  # Signal only jobs allocated by this shell, not numeric occupants adopted
+  # from a later census. Reap the original handles before asserting absence.
+  owned="$(jobs -p)"; running="$(jobs -pr)"
+  [ -z "$running" ] || kill $running >/dev/null 2>&1 || true
+  sleep 0.3 # Fixture TERM grace, not readiness/absence evidence.
+  running="$(jobs -pr)"
+  for pid in $running; do
+    if printf '%s\n' "$owned" | grep -qx "$pid"; then kill -KILL "$pid" 2>/dev/null || true; fi
+  done
+  for pid in $owned; do wait "$pid" 2>/dev/null; rc=$?; printf 'NATIVE_DESK_JOIN pid=%s rc=%s\n' "$pid" "$rc"; done
 }
 assert_no_fixture_desks(){
-  local leaks=""
-  for _ in $(seq 1 30); do
-    leaks="$(desk_fixture_processes)"
-    [ -z "$leaks" ] && break
-    sleep 0.1
-  done
+  local leaks
+  leaks="$(desk_fixture_processes)" || { fail "could not examine native fixture desk census"; return 1; }
   [ -z "$leaks" ] && pass "desk selftest leaves zero fixture seats/desk.ts processes" || fail "fixture seats/desk.ts process survived: $leaks"
 }
 port(){ bun -e 'const s=(await import("node:net")).default.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});'; }
 PROJ="$FIX/proj"; mkdir -p "$PROJ/seats" "$PROJ/wheelhouse"
 selftest_copy_seat_runtime "$PROJ" "$HERE"
+bun "$HERE/fixtures/desk-observation.ts" install "$PROJ" || exit 2
 cat > "$PROJ/wheelhouse/.template-source" <<'EOF'
 namespace=demo
 product-repo=product
@@ -61,7 +72,6 @@ EOF
 cat > "$PROJ/bin/bd" <<'EOF'
 #!/usr/bin/env bash
 set -eu
-[ -n "${WHEELHOUSE_STUB_BD_SLEEP:-}" ] && sleep "$WHEELHOUSE_STUB_BD_SLEEP"
 if [ "${1:-}" = "ready" ]; then printf 'demo-ready\ndemo-dep\n'; exit 0; fi
 if [ "${1:-}" != "list" ]; then exit 1; fi
 status=""; label=""
@@ -97,7 +107,8 @@ cat > "$PROJ/seats/inbox.jsonl" <<'EOF'
 EOF
 P="$(port)"
 (cd "$PROJ" && exec env PATH="$PROJ/bin:$PATH" WHEELHOUSE_DESK_ROOT="$PROJ" WHEELHOUSE_DESK_PORT="$P" bun "$PROJ/seats/desk.ts" > "$FIX/desk.out" 2> "$FIX/desk.err") & PID=$!
-for _ in $(seq 1 50); do [ -s "$PROJ/seats/run/desk.port" ] && curl -fsS "http://127.0.0.1:$P/needs" > "$FIX/needs.html" 2>/dev/null && break; sleep 0.1; done
+MAIN_PID="$PID"
+bun "$HERE/fixtures/desk-observation.ts" http "http://127.0.0.1:$P/needs" "$FIX/needs.html" "$MAIN_PID" || exit 1
 if kill -0 "$PID" 2>/dev/null && grep -q "http://127.0.0.1:$P/needs" "$PROJ/seats/run/desk.port"; then pass "desk starts and writes seats/run/desk.port"; else fail "desk did not start: $(cat "$FIX/desk.err" 2>/dev/null)"; fi
 if bun - "$FIX/needs.html" <<'JS'
 const assert=(await import('node:assert/strict')).default,html=(await import('node:fs')).default.readFileSync(process.argv[2],'utf8');
@@ -110,11 +121,7 @@ then pass "GET /needs keeps answered needs open below unanswered ones and closed
 if grep -q 'A; applies after noon' "$FIX/needs.html" && grep -q 'We order the default' "$FIX/needs.html" && grep -q 'Soup' "$FIX/needs.html" && grep -q 'Please choose' "$FIX/needs.html"; then pass "GET /needs renders options, default, consequence, and thread"; else fail "GET /needs missing need details"; fi
 curl -fsS "http://127.0.0.1:$P/api/needs.json" > "$FIX/needs.json" || fail "GET /api/needs.json failed"
 if grep -q '"id":"need-open"' "$FIX/needs.json" && grep -q '"state":"open"' "$FIX/needs.json"; then pass "GET /api/needs.json returns folded needs JSON"; else fail "GET /api/needs.json missing folded need"; fi
-for _ in $(seq 1 80); do
-  curl -fsS "http://127.0.0.1:$P/api/board.json" > "$FIX/board.json" 2>/dev/null || true
-  grep -q 'Write the guide' "$FIX/board.json" 2>/dev/null && break
-  sleep 0.1
-done
+bun "$HERE/fixtures/desk-observation.ts" board "$PROJ" "http://127.0.0.1:$P/api/board.json" "$FIX/board.json" "$MAIN_PID" || exit 1
 curl -fsS "http://127.0.0.1:$P/board" > "$FIX/board.html" || fail "GET /board failed"
 curl -fsS "http://127.0.0.1:$P/api/board.json" > "$FIX/board.json" || fail "GET /api/board.json failed"
 if bun - "$FIX/board.json" <<'JS'
@@ -143,7 +150,7 @@ else
   mkdir -p "$FIX/preccan/seats" "$FIX/preccan/wheelhouse" "$FIX/preccan/bin"
   cp "$PREC_CAN" "$FIX/preccan/seats/desk.ts"; cp "$NEEDS" "$FIX/preccan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/preccan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/preccan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/preccan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/preccan/seats/"; cp "$PROJ/bin/bd" "$FIX/preccan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/preccan/wheelhouse/.template-source"
   PPREC="$(port)"; (cd "$FIX/preccan" && exec env PATH="$FIX/preccan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/preccan" WHEELHOUSE_DESK_PORT="$PPREC" bun "$FIX/preccan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
-  for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$PPREC/api/board.json" > "$FIX/precedence-canary.json" 2>/dev/null || true; grep -q 'Finished but still in progress' "$FIX/precedence-canary.json" 2>/dev/null && break; sleep 0.1; done
+  bun "$HERE/fixtures/desk-observation.ts" board "$FIX/preccan" "http://127.0.0.1:$PPREC/api/board.json" "$FIX/precedence-canary.json" "$PID" || exit 1
   if bun - "$FIX/precedence-canary.json" <<'JS'
 const assert=(await import('node:assert/strict')).default,data=JSON.parse((await import('node:fs')).default.readFileSync(process.argv[2],'utf8'));
 const cols=Object.fromEntries(data.columns.map(c=>[c.title,c.cards]));
@@ -157,7 +164,7 @@ if grep -q 'Write the guide' "$FIX/board.html" && grep -q 'Build the package' "$
 if selftest_capture_lacks "$FIX/board.html" -Eq -- '<(form|button|input|textarea)([ >])' && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/board")" = 404 ]; then pass "board has no write controls and no POST route"; else fail "board exposed write controls or POST route"; fi
 if selftest_capture_lacks "$FIX/board.html" -Eq -- 'demo-[a-z0-9-]+'; then pass "board HTML hides namespace ids"; else fail "board HTML leaked ids: $(grep -Eo 'demo-[a-z0-9-]+' "$FIX/board.html" | sort -u | tr '\n' ' ')"; fi
 SINCE="2026-09-21T00:00:00Z"; UNTIL="2026-09-22T00:00:00Z"; DIGEST_Q="since=$SINCE&until=$UNTIL"
-for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P/digest?$DIGEST_Q" > "$FIX/digest.html" 2>/dev/null || true; grep -q 'Ship the button' "$FIX/digest.html" 2>/dev/null && break; sleep 0.1; done
+bun "$HERE/fixtures/desk-observation.ts" digest "$PROJ" "http://127.0.0.1:$P/digest?$DIGEST_Q" "$FIX/digest.html" "$MAIN_PID" || exit 1
 curl -fsS "http://127.0.0.1:$P/api/digest.json?$DIGEST_Q" > "$FIX/digest.json" || fail "GET /api/digest.json failed"
 if bun - "$FIX/digest.html" <<'JS'
 const assert=(await import('node:assert/strict')).default,h=(await import('node:fs')).default.readFileSync(process.argv[2],'utf8');
@@ -173,7 +180,7 @@ JS
 then pass "GET /api/digest.json matches digest.ts --json for the same window"; else fail "digest JSON differed: api=$(cat "$FIX/digest.json" 2>/dev/null)"; fi
 HOURS_AT="$(bun -e 'console.log(new Date().toISOString())')"
 printf '{"type":"opened","id":"need-hours","at":"%s","kind":"question","title":"Current hours question","body":"Prove relative windows serve content","options":[],"machine":{"bead":"demo-hours"}}\n' "$HOURS_AT" >> "$PROJ/seats/needs.jsonl"
-for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P/digest?hours=1" > "$FIX/digest-hours.html" 2>/dev/null || true; grep -q 'Current hours question' "$FIX/digest-hours.html" 2>/dev/null && break; sleep 0.1; done
+bun "$HERE/fixtures/desk-observation.ts" digest "$PROJ" "http://127.0.0.1:$P/digest?hours=1" "$FIX/digest-hours.html" "$MAIN_PID" || exit 1
 if grep -q 'Current hours question' "$FIX/digest-hours.html"; then pass "GET /digest?hours=N serves real digest content from a stable relative-window cache key"; else fail "GET /digest?hours=N did not serve current fixture content: $(cat "$FIX/digest-hours.html" 2>/dev/null)"; fi
 if selftest_capture_lacks "$FIX/digest.html" -Eiq -- 'demo-[a-z0-9-]+|bead'; then pass "digest HTML hides namespace ids and the word bead"; else fail "digest HTML leaked ids or bead: $(grep -Eio 'demo-[a-z0-9-]+|bead' "$FIX/digest.html" | sort -u | tr '\n' ' ')"; fi
 if selftest_capture_lacks "$FIX/digest.html" -Eq -- '<(form|button|input|textarea)([ >])' && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/digest")" = 404 ] && [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$P/api/digest.json")" = 404 ]; then pass "digest has no write controls and no POST routes"; else fail "digest exposed write controls or POST routes"; fi
@@ -195,7 +202,7 @@ else
   mkdir -p "$FIX/digestcan/seats" "$FIX/digestcan/wheelhouse" "$FIX/digestcan/bin" "$FIX/digestcan/product"
   cp "$DIGEST_CAN" "$FIX/digestcan/seats/desk.ts"; cp "$NEEDS" "$FIX/digestcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/digestcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/digestcan/seats/needs.jsonl"; cp "$PROJ/seats/inbox.jsonl" "$FIX/digestcan/seats/inbox.jsonl"; cp "$PROJ/seats/seats.json" "$FIX/digestcan/seats/seats.json" 2>/dev/null || true; cp "$PROJ/bin/bd" "$FIX/digestcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/digestcan/wheelhouse/.template-source"; cp -R "$PROJ/product/." "$FIX/digestcan/product/"
   P4="$(port)"; (cd "$FIX/digestcan" && exec env PATH="$FIX/digestcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/digestcan" WHEELHOUSE_DESK_PORT="$P4" bun "$FIX/digestcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
-  for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P4/digest?$DIGEST_Q" > "$FIX/digest-canary.html" 2>/dev/null || true; grep -q 'demo-merged' "$FIX/digest-canary.html" 2>/dev/null && break; sleep 0.1; done
+  bun "$HERE/fixtures/desk-observation.ts" digest "$FIX/digestcan" "http://127.0.0.1:$P4/digest?$DIGEST_Q" "$FIX/digest-canary.html" "$PID" || exit 1
   if grep -q 'demo-merged' "$FIX/digest-canary.html"; then pass "canary: disabling digest id filter leaks demo- in the page"; else fail "canary did not expose digest id leak: $(cat "$FIX/digest-canary.html" 2>/dev/null)"; fi
 fi
 if selftest_capture_lacks "$FIX/needs.html" -q -- 'demo-ab12' && selftest_capture_lacks "$FIX/needs.html" -qi -- 'worker-1\|seat\|bead'; then pass "HTML hides machine bead id and seat jargon"; else fail "HTML leaked machine fields: $(grep -oi 'demo-ab12\|worker-1\|seat\|bead' "$FIX/needs.html" | sort -u | tr '\n' ' ')"; fi
@@ -214,31 +221,11 @@ if command -v lsof >/dev/null 2>&1; then
   LSOF="$(lsof -nP -iTCP:$P -sTCP:LISTEN 2>/dev/null || true)"
   if printf '%s\n' "$LSOF" | grep >/dev/null "127.0.0.1:$P" && ! printf '%s\n' "$LSOF" | grep >/dev/null "\*:$P\|0.0.0.0:$P"; then pass "desk listens on 127.0.0.1 only"; else fail "desk bind was not localhost-only: $LSOF"; fi
 else echo "ok $((PASS+1)) - SKIP lsof not available"; PASS=$((PASS+1)); fi
-SLOW="$FIX/slowproj"; mkdir -p "$SLOW"; cp -R "$PROJ/seats" "$SLOW/seats"; mkdir -p "$SLOW/wheelhouse" "$SLOW/bin"; cp "$PROJ/wheelhouse/.template-source" "$SLOW/wheelhouse/.template-source"; cp "$PROJ/bin/bd" "$SLOW/bin/bd"
-PSLOW="$(port)"; (cd "$SLOW" && exec env PATH="$SLOW/bin:$PATH" WHEELHOUSE_STUB_BD_SLEEP=2 WHEELHOUSE_DESK_BOARD_REFRESH_MS=100 WHEELHOUSE_DESK_ROOT="$SLOW" WHEELHOUSE_DESK_PORT="$PSLOW" bun "$SLOW/seats/desk.ts" >/dev/null 2> "$FIX/slow-desk.err") & SLOW_PID=$!
-for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$PSLOW/board" >/dev/null 2>&1 && break; sleep 0.1; done
-NEEDS_MS="$(bun - "http://127.0.0.1:$PSLOW/needs" "$FIX/slow-needs.html" <<'JS'
-const [url,file]=process.argv.slice(2),start=performance.now(),r=await fetch(url);
-if(!r.ok) throw new Error('HTTP '+r.status); (await import('node:fs')).default.writeFileSync(file,Buffer.from(await r.arrayBuffer())); console.log(Math.floor(performance.now()-start));
-JS
-)"
-if [ "$NEEDS_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd refresh never runs in a request: /needs answers in under 1s and desk survives"; else fail "slow bd blocked /needs or killed desk (ms=$NEEDS_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
-# Let any startup digest build finish so this leg measures the query-window path,
-# not a refresh already in progress from process startup.
-sleep 5
-DIGEST_MS="$(bun - "http://127.0.0.1:$PSLOW/digest?hours=1" "$FIX/slow-digest.html" <<'JS'
-const [url,file]=process.argv.slice(2),start=performance.now(),r=await fetch(url);
-if(!r.ok) throw new Error('HTTP '+r.status); (await import('node:fs')).default.writeFileSync(file,Buffer.from(await r.arrayBuffer())); console.log(Math.floor(performance.now()-start));
-JS
-)"
-if [ "$DIGEST_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd digest window is scheduled off the request path and answers in under 1s"; else fail "slow bd digest window blocked request or killed desk (ms=$DIGEST_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
-NEEDS_DURING_DIGEST_MS="$(bun - "http://127.0.0.1:$PSLOW/needs" "$FIX/slow-needs-during-digest.html" <<'JS'
-const [url,file]=process.argv.slice(2),start=performance.now(),r=await fetch(url);
-if(!r.ok) throw new Error('HTTP '+r.status); (await import('node:fs')).default.writeFileSync(file,Buffer.from(await r.arrayBuffer())); console.log(Math.floor(performance.now()-start));
-JS
-)"
-if [ "$NEEDS_DURING_DIGEST_MS" -lt 1000 ] && kill -0 "$SLOW_PID" 2>/dev/null; then pass "slow bd digest build does not block another desk request"; else fail "slow bd digest build blocked another request or killed desk (ms=$NEEDS_DURING_DIGEST_MS err=$(cat "$FIX/slow-desk.err" 2>/dev/null))"; fi
-kill "$SLOW_PID" 2>/dev/null || true; wait "$SLOW_PID" 2>/dev/null || true
+if bun "$HERE/fixtures/desk-ordering.ts" "$FIX" "$PROJ"; then
+  pass "board refresh, query digest and concurrent needs requests complete independently; all three coupling controls rejected"
+else
+  fail "native desk request/background ordering observations or controls failed"
+fi
 # Desk restart supervision moved to seats/supervisor.selftest.sh; this selftest
 # covers desk behavior only.
 kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; PID=""
@@ -254,7 +241,7 @@ else
   mkdir -p "$FIX/answeredcan/seats" "$FIX/answeredcan/wheelhouse"
   cp "$ANSWERED_CAN" "$FIX/answeredcan/seats/desk.ts"; cp "$NEEDS" "$FIX/answeredcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/answeredcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/answeredcan/seats/needs.jsonl"
   PANS="$(port)"; (cd "$FIX/answeredcan" && exec env WHEELHOUSE_DESK_ROOT="$FIX/answeredcan" WHEELHOUSE_DESK_PORT="$PANS" bun "$FIX/answeredcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
-  for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$PANS/needs" > "$FIX/answered-canary.html" 2>/dev/null && break; sleep 0.1; done
+  bun "$HERE/fixtures/desk-observation.ts" http "http://127.0.0.1:$PANS/needs" "$FIX/answered-canary.html" "$PID" || exit 1
   if selftest_capture_lacks "$FIX/answered-canary.html" -q -- 'action="/api/needs/need-old/message"'; then pass "canary: making answered needs inactive removes controls and is caught"; else fail "canary did not remove answered controls"; fi
   [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
 fi
@@ -267,7 +254,7 @@ JS
 if cmp -s "$PROJ/seats/desk.ts" "$CAN"; then fail "canary: could not make needs page print machine.bead; test proves nothing"; fi
 mkdir -p "$FIX/canproj/seats" "$FIX/canproj/wheelhouse"; cp "$CAN" "$FIX/canproj/seats/desk.ts"; cp "$NEEDS" "$FIX/canproj/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/canproj/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/canproj/seats/needs.jsonl"
 P2="$(port)"; (cd "$FIX/canproj" && exec env WHEELHOUSE_DESK_ROOT="$FIX/canproj" WHEELHOUSE_DESK_PORT="$P2" bun "$FIX/canproj/seats/desk.ts" >/dev/null 2>&1) & PID=$!
-for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$P2/needs" > "$FIX/canary.html" 2>/dev/null && break; sleep 0.1; done
+bun "$HERE/fixtures/desk-observation.ts" http "http://127.0.0.1:$P2/needs" "$FIX/canary.html" "$PID" || exit 1
 if grep -q 'demo-ab12' "$FIX/canary.html"; then pass "canary: rendering machine.bead is caught"; else fail "canary did not expose machine.bead leak"; fi
 [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
 BOARD_CAN="$FIX/board-canary.ts"; cp "$PROJ/seats/desk.ts" "$BOARD_CAN"
@@ -282,7 +269,7 @@ else
   mkdir -p "$FIX/boardcan/seats" "$FIX/boardcan/wheelhouse" "$FIX/boardcan/bin"
   cp "$BOARD_CAN" "$FIX/boardcan/seats/desk.ts"; cp "$NEEDS" "$FIX/boardcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/boardcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/boardcan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/boardcan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/boardcan/seats/"; cp "$PROJ/bin/bd" "$FIX/boardcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/boardcan/wheelhouse/.template-source"
   P3="$(port)"; (cd "$FIX/boardcan" && exec env PATH="$FIX/boardcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/boardcan" WHEELHOUSE_DESK_PORT="$P3" bun "$FIX/boardcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
-  for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$P3/board" > "$FIX/board-canary.html" 2>/dev/null || true; grep -q 'demo-ready' "$FIX/board-canary.html" 2>/dev/null && break; sleep 0.1; done
+  bun "$HERE/fixtures/desk-observation.ts" board "$FIX/boardcan" "http://127.0.0.1:$P3/board" "$FIX/board-canary.html" "$PID" || exit 1
   if grep -q 'demo-ready' "$FIX/board-canary.html"; then pass "canary: a board copy that prints ids is caught"; else fail "canary did not expose board id leak"; fi
   [ -n "$PID" ] && kill "$PID" 2>/dev/null || true; PID=""
 fi

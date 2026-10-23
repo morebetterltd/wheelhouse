@@ -214,7 +214,7 @@ bun - "$ROOT/seats/seats.json" "$ROOT/seats/staffing.json" <<'JS'
 const fs=(await import('node:fs')).default; fs.writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{}},null,2));
 fs.writeFileSync(process.argv[3],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'},'reviewer-rv1':{role:'reviewer',entry:'rv1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{rv1:{at:'2026-01-01T00:00:00Z',detail:'test keeps rv1 unavailable'}}},null,2));
 JS
-MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID0=$!; printf '{"pid":%s,"bead":"other-bead"}\n' "$MPID0" > "$MARKER"
+MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; mkfifo "$MARKER.hold0"; (cd "$FIX" && exec 3<> "$MARKER.hold0" && read -r release <&3) & MPID0=$!; printf '{"pid":%s,"bead":"other-bead"}\n' "$MPID0" > "$MARKER"
 run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
 kill "$MPID0" 2>/dev/null || true; rm -f "$MARKER"
 [ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=reviewer-rv2' <<<"$OUT" && pass 'G4-19 review backlog with no eligible free reviewer adds next reviewer' || fail "no eligible reviewer backlog failed: $OUT"
@@ -232,7 +232,7 @@ const pool={version:1,idle_drop_minutes:0,entries:{rv1:{harness:"codex",provider
 const staffing={version:1,seats:{"reviewer-rv1":{role:"reviewer",entry:"rv1",addedAt:"2026-01-01T00:00:00Z"}}};
 console.log(JSON.stringify(decide(snap, pool, staffing)));
 ')" && grep -q '"kind":"drop-seat"' <<<"$UNIT_DROP" && grep -q '"role":"reviewers"' <<<"$UNIT_DROP" && pass 'G4-19 decide path drops idle reviewer above minimum' || fail "idle reviewer decide path failed: $UNIT_DROP"
-MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID=$!; printf '{"pid":%s,"bead":"review-bead"}\n' "$MPID" > "$MARKER"
+MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; mkfifo "$MARKER.hold"; (cd "$FIX" && exec 3<> "$MARKER.hold" && read -r release <&3) & MPID=$!; printf '{"pid":%s,"bead":"review-bead"}\n' "$MPID" > "$MARKER"
 run env BD_READY_COUNT=0 bun seats/staffing.ts drop reviewer-rv1
 [ $RC -eq 0 ] && grep -q 'drop refused: reviewer-rv1 is busy' <<<"$OUT" && kill "$MPID" 2>/dev/null && rm -f "$MARKER" && pass 'G4-19 reviewer with live verify marker is not dropped' || { kill "$MPID" 2>/dev/null || true; fail "busy reviewer drop failed: $OUT"; }
 run env BD_READY_COUNT=0 bun seats/staffing.ts drop reviewer-rv1

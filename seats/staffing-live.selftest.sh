@@ -66,12 +66,10 @@ JS
 chmod +x "$BIN/pi"
 export HOME="$HOME_FIX" PATH="$BIN:$PATH" OPENAI_API_KEY=fixture-key LIVE_ENV_LOG="$FIX/env.jsonl" WHEELHOUSE_CLEANUP=0 WHEELHOUSE_HERALD_ROOT="$PROJ" WHEELHOUSE_HERALD_INTERVAL_MS=100 WHEELHOUSE_STAFFING_INTERVAL_MS=200
 (cd "$PROJ" && exec bun seats/herald.ts) > "$FIX/herald.out" 2> "$FIX/herald.err" & HERALD_PID=$!
-for _ in $(seq 1 60); do
-  [ -f "$PROJ/seats/staffing.json" ] && COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.keys(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).length)}catch{console.log(0)}' "$PROJ/seats/staffing.json") || COUNT=0
-  [ -f "$PROJ/seats/state.json" ] && SCOUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$PROJ/seats/state.json") || SCOUNT=0
-  [ "$COUNT" = 3 ] && [ "$SCOUNT" = 3 ] && break
-  sleep 0.1
-done
+if ! bun "$HERE/fixtures/staffing-live-ready.ts" growth "$HERALD_PID" "$PROJ"; then
+  fail "herald exited before growth; staffing=$(cat "$PROJ/seats/logs/staffing.log" 2>/dev/null) herald=$(cat "$FIX/herald.err" 2>/dev/null)"
+  exit 1 # No cascade measuring a state file whose creation never completed.
+fi
 LIVE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.keys(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).length)}catch{console.log(0)}' "$PROJ/seats/staffing.json")
 STATE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$PROJ/seats/state.json")
 if [ "$LIVE_COUNT" = 3 ] && [ "$STATE_COUNT" = 3 ] && grep -q 'decision=add-worker' "$PROJ/seats/logs/staffing.log"; then pass "herald staffing clock grows three live workers without commander action"; else fail "staffing clock did not grow workers live=$LIVE_COUNT state=$STATE_COUNT log=$(cat "$PROJ/seats/logs/staffing.log" 2>/dev/null) herald=$(cat "$FIX/herald.err" 2>/dev/null)"; fi
@@ -105,7 +103,7 @@ else
     env HOME="$REAL_HOME" PI_CODING_AGENT_DIR="$agent" ANTHROPIC_API_KEY="sk-selftest-dummy" WHEELHOUSE_TMUX_SOCKET="staffing-live-real-$$" WHEELHOUSE_HERALD_ROOT="$REAL_ROOT" "$REAL_PI" --mode rpc --provider anthropic --model claude-sonnet-4-5 0<> "$fifo" >> "$REAL_RUN/$entry.log" 2>> "$REAL_RUN/$entry.err" &
     pid=$!; REAL_PIDS="$REAL_PIDS $pid"
     seen=""
-    for _ in $(seq 1 40); do seen="$(ps -p "$pid" -o command= 2>/dev/null | sed 's/ *$//')"; [ "$seen" = pi ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
+    if bun "$HERE/fixtures/staffing-live-ready.ts" pi "$pid" "$REAL_ROOT"; then seen=pi; fi
     if ! kill -0 "$pid" 2>/dev/null || [ "$seen" != pi ] || ! lsof -Fn -p "$pid" 2>/dev/null | grep -F >/dev/null "n$fifo"; then ok_real=0; echo "real-pi probe failed for $entry pid=$pid ps=$seen err=$(tail -c 200 "$REAL_RUN/$entry.err" 2>/dev/null)" >&2; fi
   done
   for pid in $REAL_PIDS; do kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
@@ -144,10 +142,10 @@ bun - "$CAN/seats/herald.ts" <<'JS'
 const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8');
 const needle='const launched = launchDetached("staffing", ["bun", "seats/staffing.ts", "check"], 0, STAFFING_OUT_LOG);';
 if(s.split(needle).length!==2) throw new Error('staffing launch canary source changed');
-fs.writeFileSync(p,s.replace(needle,'const launched = false; // canary disables real staffing launch'));
+fs.writeFileSync(p,s.replace(needle,'fs.writeFileSync(path.join(ROOT, "seats/run/staffing-canary-attempt"), "attempt observed\\n"); const launched = false; // canary disables real staffing launch'));
 JS
 (cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" OPENAI_API_KEY=fixture-key LIVE_ENV_LOG="$FIX/canary-env.jsonl" WHEELHOUSE_CLEANUP=0 WHEELHOUSE_HERALD_ROOT="$CAN" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_STAFFING_INTERVAL_MS=50 exec bun seats/herald.ts) > "$FIX/canary-herald.out" 2> "$FIX/canary-herald.err" & CAN_PID=$!
-for _ in $(seq 1 20); do [ -f "$CAN/seats/state.json" ] && break; sleep 0.1; done
+bun "$HERE/fixtures/staffing-live-ready.ts" attempt "$CAN_PID" "$CAN" || { fail "canary never attempted staffing"; exit 1; }
 selftest_stop_herald_child "$CAN_PID"; CAN_PID=""
 CAN_STATE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$CAN/seats/state.json")
 [ "$CAN_STATE_COUNT" = 0 ] && pass "canary: disabling herald staffing launch makes the no-commander growth leg fail" || fail "canary broken herald still grew workers state=$CAN_STATE_COUNT"

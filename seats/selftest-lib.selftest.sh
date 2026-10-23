@@ -12,7 +12,7 @@ pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 
 if bun "$HERE/fixtures/runtime-copy-source.ts" "$HERE" "$FIX"; then
-  pass 'default runtime source ignores empty/planted caller cwd and copies complete bytes in under five seconds'
+  pass 'default runtime source ignores empty/planted caller cwd and completes exact copies after delayed native input'
 else
   fail 'default runtime source depends on caller cwd or incomplete runtime'
 fi

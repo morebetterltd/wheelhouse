@@ -9,7 +9,11 @@ import { instrument, until } from "./verify-readiness";
 
 export function afterResult(done: boolean): void {
   const dir = process.env.WHEELHOUSE_NO_VERDICT_CASE!;
-  if (!fs.existsSync(path.join(dir, "observed.json"))) fs.writeFileSync(path.join(dir, "observed.json"), JSON.stringify({ done }));
+  const file = path.join(dir, "observed.json");
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file + ".new", JSON.stringify({ done }));
+    fs.renameSync(file + ".new", file);
+  }
 }
 
 export function afterRetry(stdout: string, done: boolean, reaping: boolean): void {

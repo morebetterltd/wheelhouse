@@ -564,8 +564,13 @@ never leaves `status` naming the previous bead after the prompt has been sent.
 RPC readiness, state replies, FIFO drain and prompt acknowledgements have no
 elapsed-time failure budget: a live seat with an open pipe may answer late.
 The adapter waits for the matching response, or fails with the seat name and
-pid when the process dies or its pipe closes (EOF). A
-`command:"parse", success:false` response fails immediately when read, before
+pid when the process dies or its pipe closes (EOF). An established seat whose
+response-log path disappears or whose file inode changes during an RPC is refused with
+`response source lost`, seat, pid and path: a live PID/FIFO cannot establish
+that replies remain observable. Each read checks and consumes the same opened
+file descriptor. Fresh launches may still wait for their first log creation;
+source loss does not signal/restart the seat or rewrite its PID/session/bead.
+A `command:"parse", success:false` response fails immediately when read, before
 acknowledgement matching, with `PI_PARSE_ERROR`, seat, pid, pi's error and
 `adapter.ts stop <seat> && adapter.ts resume <seat>`. Pi cannot recover a
 request id from malformed JSON: pending calls observing that transport error
@@ -602,7 +607,45 @@ change to the idle-alert detector, snapshot or state.json schema.
 `WHEELHOUSE_WEDGED_GET_STATE_MS` no longer decide RPC outcomes.
 `WHEELHOUSE_RPC_TIMEOUT_MS` remains a legacy stop/SIGKILL-confirmation setting
 only, not an RPC budget. `adapter-rpc.selftest.sh` covers held replies beyond
-the old logical budgets, live backpressure, death, EOF and partial writes.
+the old logical budgets, live backpressure, death, EOF, partial writes, a missing
+established response log, and removal/inode replacement while a reply is held.
+The loss controls fail on actual forbidden delivery/WAIT events, not a deadline.
+Fleet snapshot graph reads, contract reads and fixture-owner inspection also
+wait for native command completion, not a quiet-machine deadline. The legacy
+`WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS` is no longer an authority to fail a
+still-running graph read. Their stdout/stderr are captured through exclusive
+regular descriptors, then read after exit; host-wide process listings and graph
+bodies cannot overflow a pipe capture buffer or silently become an empty graph.
+Native nonzero exits, signals, spawn errors and non-JSON/empty graph stdout
+remain errors. Cancel a hung command explicitly; the admitted selftest sweep supplies
+test containment. Staffing growth and stop-all busy actors use observed events
+and explicit release, never elapsed startup/turn clocks.
+Status's one whole-host `ps` orphan census uses the same descriptor capture.
+Native errors/signals/nonzero, diagnostics, empty or malformed census output
+produce `UNVERIFIED orphan census` rather than an empty-table inference.
+Healthy recorded seat rows remain visible; an unavailable census neither proves
+absence of extra processes nor changes seat identity/state. Adapter regression
+cases replay actual captured process records beyond the old pipe ceiling and
+exercise native23, empty, malformed and stderr-bearing results.
+An early `verify-cancellation` child exit before idle readiness is not diagnosed
+from its case/signal name. The FAIL line names retained `stdout`, `stderr` and
+`exit.json` outside both cancellation scratch and the per-suite TMPDIR. Files
+are private (0600 in a fresh0700 directory); an initial snapshot is completed
+after owned cleanup and stream EOF. `WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT`
+overrides the destination, otherwise the explicit evidence root or
+`seats/verdicts/verify-cancellation-failures` beside the test is used. Keep that
+root outside temporary trees; storage refusal is reported, never called saved.
+A planted native37 leg deletes its scratch and verifies both streams/exit status
+and the printed FAIL path survive. This preserves the next diagnosis; it does
+not claim a cause or cure for historical early exits whose streams were lost.
+The runtime-source copy regression is test-only, not an install-path timeout.
+It preserves full inventory/byte/sentinel assertions and accepts native completion
+through regular stdout/stderr descriptors. A delayed FIFO input crosses the
+retired5s kill/SLA; elapsed time is diagnostic only. Its named30-minute outer
+resource containment (inside the normal3600s suite containment) reports expected
+inventory and both observed partial copies on expiry or supervisor cancellation,
+then stops only its own spawned copy group. Containment is INCOMPLETE, not a
+claim of incorrect copied bytes.
 `stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
@@ -1301,6 +1344,8 @@ run; to clean it by hand, those pid-stamped dirs are the whole footprint.
 
 The bridge is how a human looks at the fleet: ONE tmux window per project,
 built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. `cockpit.sh` builds or attaches the tmux session, records the commander pane in `seats/run/commander-pane.json`, and starts or verifies `seats/supervisor.sh`. The supervisor is the single loop that keeps the Dispatch Office herald, local needs desk, and declared courier alive, runs the same dead-seat recovery pass cockpit runs every `WHEELHOUSE_SEAT_RECOVERY_SECONDS` (default `60`), schedules the nightly cleanup reaper, and replaces the old per-daemon watchdog scripts. A daemon that crashes three times in five minutes is marked in `seats/run/supervisor.state.json`; the supervisor stops restarting it, appends one `daemon-down` inbox row, opens one human notification need, and waits for `seats/supervisor.sh reset <daemon>`. For opt-in reboot/logout keep-alive, `seats/supervisor.sh install-launchd` writes a macOS LaunchAgent plist and prints the `launchctl bootstrap`/`bootout` commands for a human to run; it never loads or unloads the agent itself. Linux users can run `seats/supervisor.sh print-systemd` and install the printed user unit by hand.
+
+Daemon launchers use observed readiness, not a startup sleep: herald and courier publish their own PID, desk publishes its bound URL, and supervisor publishes its own PID. An observed child exit or launch error is reported as failure. The CLI has a five-second observation ceiling; if the child remains alive without readiness, it returns `still starting: pid …; observed …` (exit 0), not a failure or a claim of readiness. Logs remain in `seats/logs/<daemon>.{out,stderr}.log`. This ceiling does not terminate a starting service. `seats/run/<daemon>.starting.pid` keeps its live launch distinct from readiness: repeated launch commands wait on that same process, and the supervisor reports `STARTING` without launching duplicates. Cache TTLs, refresh cadence, and background-work deadlines are separate policies and unchanged.
 
 The desk is the human-facing page for `seats/needs.ts` and the read-only work board: open `seats/run/desk.port` or run `seats/cockpit.sh --desk` and visit the printed URL. It binds `127.0.0.1` by default; `WHEELHOUSE_DESK_BIND` overrides the bind address and `WHEELHOUSE_DESK_PORT` overrides the port. Without an override, the port is `42000 + fnv1a(namespace) % 1000`, where `namespace=` comes from `wheelhouse/.template-source` and falls back to the install directory name. `/needs` lists open needs first, keeps answered/closed needs as history, and posts answers/messages only through the needs ledger API. `/board` is read-only: it has no form, button, input, or POST route, polls `/api/board.json` every 5 seconds, and hides graph ids in the HTML. Its columns are Ready (`bd ready` ids joined to `bd list --json` titles), In progress (`bd list --status in_progress`, seat from a worker in `seats/state.json` whose `lastBead` matches, else assignee), In review (`bd list --label needs-review`, reviewer `lastBead`, `sent back` when `seats/verdicts/<id>.md` records BOUNCE, else `waiting for a reviewer`), Blocked on you (open needs whose `machine.bead` names work, linking back to `/needs`), and Merged recently (`bd list --status closed` rows closed in the last 48 hours). Dependency-blocked work is omitted. The commander never needs the page — the CLI, graph, and floor remain canonical for command — but the desk is the standing surface for a human who has been asked for an answer or wants the read-only board.
 
