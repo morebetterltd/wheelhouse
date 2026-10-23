@@ -13,6 +13,18 @@ export function completedSpawnSync(file: string, args: string[], options: any = 
   return completedCommand(file, args, { ...nativeOptions, ...policy, encoding });
 }
 
+export function nativeJsonArray(result: any, label: string, required: string[] = []): any[] {
+  const refuse = (reason: string): never => {
+    throw Object.assign(new Error(`${label}: ${reason}; native status=${result.status ?? "unknown"} signal=${result.signal ?? "none"}; stderr=${String(result.stderr ?? "").trim()}`),
+      { status: result.status, signal: result.signal, error: result.error?.message, stdout: result.stdout, stderr: result.stderr });
+  };
+  if (result.error || result.signal || result.status !== 0) refuse(result.error?.message ?? "native command did not complete successfully");
+  let rows: unknown;
+  try { rows = JSON.parse(String(result.stdout ?? "")); } catch (e: any) { refuse(`JSON unavailable: ${e.message}`); }
+  if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || Array.isArray(row) || required.some(key => !(key in row)))) refuse("expected a complete record array");
+  return rows;
+}
+
 export function completedExecFileSync(file: string, args: string[], options: any = {}): any {
   const result = completedSpawnSync(file, args, options);
   if (result.error || result.signal || result.status !== 0) {

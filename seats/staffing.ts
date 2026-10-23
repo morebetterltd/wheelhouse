@@ -14,6 +14,7 @@ const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
 const LOG_FILE = path.join(ROOT, "seats", "logs", "staffing.log");
 const LOCK_FILE = path.join(RUN_DIR, "staffing.lock");
+const STAFFING_STOP_OBSERVE_LIMIT_MS = Number(process.env.WHEELHOUSE_STAFFING_STOP_MS ?? 30000);
 type Role = "workers" | "reviewers";
 type DecisionKind = "add-worker" | "add-reviewer" | "drop-seat" | "nothing";
 export interface Decision { kind: DecisionKind; role?: Role; seat?: string; entry?: string; reason: string; decider: string }
@@ -163,10 +164,10 @@ function applyDrop(root: string, staffing: StaffingFile, d: Decision, snap: Snap
   if (d.role === "reviewers") { unregisterSeat(root, staffing, d.seat); return d; }
   try { stateRunFile(root, d.seat); } catch (e: any) { return { ...d, kind: "nothing", reason: `drop refused: ${e.message}` }; }
   const r = runAdapter(["stop", d.seat]);
-  const deadline = Date.now() + Number(process.env.WHEELHOUSE_STAFFING_STOP_MS ?? 30000);
-  while (Date.now() < deadline) { const rec = readJson(statePath(root))?.seats?.[d.seat]; if (!rec?.pid || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) break; sleep(50); }
+  const deadline = performance.now() + STAFFING_STOP_OBSERVE_LIMIT_MS;
+  while (performance.now() < deadline) { const rec = readJson(statePath(root))?.seats?.[d.seat]; if (!rec?.pid || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) break; sleep(50); }
   const rec = readJson(statePath(root))?.seats?.[d.seat];
-  if (rec?.pid && pidAlive(rec.pid, rec.fifo, rec.startedAt)) return { ...d, kind: "nothing", reason: `drop deferred: ${d.seat} still exiting` };
+  if (rec?.pid && pidAlive(rec.pid, rec.fifo, rec.startedAt)) return { ...d, kind: "nothing", reason: `drop deferred: ${d.seat} still exiting; last observation=${JSON.stringify({pid:rec.pid,startedAt:rec.startedAt,stoppedAt:rec.stoppedAt??null})}; registration retained` };
   try { removeSeatWorktree(root, d.seat); removeState(root, d.seat); } catch (e: any) { return { ...d, kind: "nothing", reason: `drop refused: ${e.message}` }; }
   unregisterSeat(root, staffing, d.seat);
   return r.status === 0 ? d : { ...d, reason: `dropped after stop report: ${r.text || r.status}` };

@@ -33,7 +33,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { completedSpawnSync as spawnSync } from "./native-command";
+import { completedSpawnSync as spawnSync, nativeJsonArray } from "./native-command";
 import { effectiveRoster } from "./roster";
 import { CREDENTIAL_SHAPE_RE } from "./credential-shapes";
 
@@ -67,7 +67,7 @@ export function validateSegment(kind: string, value: string): string {
 
 export function git(root: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): { ok: boolean; out: string; err: string; code: number | null } {
   const r = spawnSync("git", args, { cwd: cwd ?? root, env: env ? { ...process.env, ...env } : process.env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
-  return { ok: r.status === 0, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim(), code: r.status };
+  return { ok: !r.error && !r.signal && r.status === 0, out: (r.stdout ?? "").trim(), err: String(r.stderr || r.error?.message || r.signal || "").trim(), code: r.status ?? null };
 }
 
 export function worktreesDir(root: string): string { return path.join(root, WORKTREES_DIRNAME); }
@@ -127,8 +127,8 @@ function beadStatuses(root: string): Map<string, string> {
   if (process.env.WHEELHOUSE_SKIP_BD === "1" && !process.env.FIXTURE_BD_CLOSED_FILE) return out;
   for (const st of ["open", "in_progress", "blocked", "deferred", "closed"]) {
     const r = spawnSync("bd", ["list", `--status=${st}`, "--json", "--limit", "5000"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000 });
-    if (r.status !== 0 || !r.stdout) continue;
-    try { for (const b of JSON.parse(r.stdout)) if (b?.id) out.set(String(b.id), String(b.status ?? st)); } catch {}
+    try { for (const b of nativeJsonArray(r, `bd list ${st}`, ["id"])) out.set(String(b.id), String(b.status ?? st)); }
+    catch (e: any) { refuse(`cannot verify bead statuses: ${e.message}`); }
   }
   return out;
 }
@@ -220,12 +220,12 @@ export function resolveBase(root: string, beadId: string, explicit?: string | nu
 function beadText(root: string, beadId: string): string {
   if (process.env.WHEELHOUSE_SKIP_BD === "1") return "";
   const r = spawnSync("bd", ["show", beadId, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000 });
-  if (r.status !== 0 || !r.stdout) return "";
   try {
-    const j = JSON.parse(r.stdout);
-    const b = Array.isArray(j) ? j[0] : j;
-    return [b?.title, b?.description, b?.notes, b?.design, b?.body].filter((s) => typeof s === "string").join("\n");
-  } catch { return r.stdout; }
+    const rows = nativeJsonArray(r, `bd show ${beadId}`, ["id"]);
+    if (rows.length !== 1 || rows[0].id !== beadId) refuse(`bd show ${beadId} did not return the requested bead`);
+    const b = rows[0];
+    return [b.title, b.description, b.notes, b.design, b.body].filter((s) => typeof s === "string").join("\n");
+  } catch (e: any) { refuse(`cannot verify bead metadata: ${e.message}`); }
 }
 
 function integrationLineFor(root: string, beadId: string): string | null {
@@ -256,7 +256,7 @@ export function phantomOnlyStatus(statusPorcelain: string): { clean: boolean; ph
 /** Untrimmed `git status --porcelain`: the first line's leading space is part of its XY code. */
 export function porcelainStatus(wt: string): { ok: boolean; out: string; err: string } {
   const r = spawnSync("git", ["-C", wt, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
-  return { ok: r.status === 0, out: r.stdout ?? "", err: (r.stderr ?? "").trim() };
+  return { ok: !r.error && !r.signal && r.status === 0, out: r.stdout ?? "", err: String(r.stderr || r.error?.message || r.signal || "").trim() };
 }
 
 export function ensureSeatLocalExcludes(wt: string): void {
@@ -429,16 +429,13 @@ function installBeadPrefixes(root: string): string[] {
   const out = new Set(env);
   if (process.env.WHEELHOUSE_SKIP_BD !== "1") {
     const r = spawnSync("bd", ["list", "--limit", "20", "--json"], { cwd: root, encoding: "utf8", timeout: 10000 });
-    if (r.status === 0) {
-      try {
-        const rows = JSON.parse(r.stdout || "[]");
-        for (const row of Array.isArray(rows) ? rows : []) {
-          const id = String(row?.id ?? "");
-          const m = id.match(/^(.+)-[a-z0-9]{4}(?:\.\d+)?$/);
-          if (m) out.add(m[1]);
-        }
-      } catch { /* ignore bd output shape drift; explicit env/test fixtures still work */ }
-    }
+    try {
+      for (const row of nativeJsonArray(r, "bd list for public-state guard", ["id"])) {
+        const id = String(row.id);
+        const m = id.match(/^(.+)-[a-z0-9]{4}(?:\.\d+)?$/);
+        if (m) out.add(m[1]);
+      }
+    } catch (e: any) { refuse(`public-state guard cannot verify bead prefixes: ${e.message}`); }
   }
   return Array.from(out).filter((s) => /^[A-Za-z0-9_.-]+$/.test(s));
 }

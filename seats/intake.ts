@@ -9,6 +9,8 @@ import { acquirePidLock, releasePidLock } from "./lock";
 const ROOT = path.resolve(process.env.WHEELHOUSE_INTAKE_ROOT || path.join(import.meta.dir, ".."));
 const LEDGER = path.join(ROOT, "seats", "intake.jsonl");
 const LOCK = path.join(ROOT, "seats", "run", "intake.lock");
+// CLI busy-reporting policy; never expires an owner's lock or starts a write.
+const INTAKE_BUSY_REPORT_MS = 5000;
 export const INTAKE_KINDS = ["goal", "isa-change", "report", "error", "finding"] as const;
 export type IntakeKind = typeof INTAKE_KINDS[number];
 export type Posted = { type: "posted"; id: string; at: string; kind: IntakeKind; source: string; title: string; text: string; ref?: string };
@@ -53,9 +55,9 @@ function append(ev: IntakeEvent): void {
 }
 function write<T>(action: () => T): T {
   let fd: number | null = null;
-  const until = Date.now() + 5000;
+  const until = performance.now() + INTAKE_BUSY_REPORT_MS;
   while ((fd = acquirePidLock(LOCK)) === null) {
-    if (Date.now() >= until) refuse("intake writer busy; retry");
+    if (performance.now() >= until) refuse(`intake writer busy; retry; last observation: acquisition refused at ${LOCK}; no write started and owner left untouched`);
     Bun.sleepSync(10);
   }
   try { return action(); } finally { releasePidLock(LOCK, fd); }

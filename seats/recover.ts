@@ -49,7 +49,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { completedExecFileSync as execFileSync } from "./native-command";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { seatIdentity } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -103,22 +103,15 @@ function readState(): State {
  * By-path lsof is dependable for regular files (session files are), and
  * NOT for FIFOs — which is why seat identity above goes per-pid instead.
  */
-function pidsHoldingFile(file: string): number[] {
-  let out: string;
-  try {
-    out = execFileSync("lsof", ["-Fp", "--", file], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch (e: any) {
-    if (e.code === "ENOENT") die("lsof is not on PATH — recover cannot establish process identity without it");
-    return []; // exit 1: nobody holds it (or the file is gone)
-  }
-  return out
-    .split("\n")
-    .filter((l) => l.startsWith("p"))
-    .map((l) => Number(l.slice(1)))
-    .filter((pid) => Number.isFinite(pid) && pid !== process.pid);
+function pidsHoldingFile(file: string): { holders: number[] | null; reason: string } {
+  const r = spawnSync("lsof", ["-Fp", "--", file], { encoding: "utf8" });
+  if (r.error?.code === "ENOENT") die("lsof is not on PATH — recover cannot establish process identity without it");
+  if (!r.error && !r.signal && r.status === 1 && r.stdout === "" && r.stderr === "") return { holders: [], reason: "" };
+  const unknown = (reason: string) => ({ holders: null, reason: `${reason}; native status=${r.status ?? "unknown"} signal=${r.signal ?? "none"}; ${r.error?.message ?? r.stderr}`.trim() });
+  if (r.error || r.signal || r.status !== 0) return unknown("lsof session-file observation failed");
+  const lines = r.stdout.split("\n").filter(Boolean);
+  if (!lines.length || lines.some(line => !/^p[1-9][0-9]*$/.test(line) || !Number.isSafeInteger(Number(line.slice(1))) || Number(line.slice(1)) > 2147483647)) return unknown("lsof returned no complete holder observation");
+  return { holders: lines.map(line => Number(line.slice(1))).filter(pid => pid !== process.pid), reason: "" };
 }
 
 function classify(rec: SeatRecord): { cls: Cls; detail: string } {
@@ -155,8 +148,9 @@ function sessionAttachment(name: string, rec: SeatRecord, rows: Row[]): string |
       return `seat ${r.name} (pid ${r.rec.pid})`;
     }
   }
-  const holders = pidsHoldingFile(rec.sessionFile);
-  if (holders.length > 0) return `pid ${holders[0]} (holds the session file open)`;
+  const observation = pidsHoldingFile(rec.sessionFile);
+  if (observation.holders === null) return `UNVERIFIED session attachment: ${observation.reason}; resume not authorized`;
+  if (observation.holders.length > 0) return `pid ${observation.holders[0]} (holds the session file open)`;
   return null;
 }
 
@@ -184,7 +178,7 @@ function main(): void {
       if (cls === "DEAD") {
         const attachedBy = sessionAttachment(name, rec, rows); // attach-check
         if (attachedBy) {
-          console.log(`  REFUSED double-resume: session already attached by ${attachedBy}`);
+          console.log(attachedBy.startsWith("UNVERIFIED") ? `  REFUSED resume: ${attachedBy}` : `  REFUSED double-resume: session already attached by ${attachedBy}`);
         } else if (rec.lastBead) {
           console.log(`  resume: bun ${ADAPTER} resume ${name}   # bead ${rec.lastBead}`);
         } else {

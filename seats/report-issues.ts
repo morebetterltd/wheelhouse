@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { completedSpawnSync as spawnSync } from "./native-command";
+import { completedSpawnSync as spawnSync, nativeJsonArray } from "./native-command";
 import { templateValue, repoFromRemote } from "./alerts";
 import { rosterSeatActors } from "./comms";
 import { CREDENTIAL_SHAPE_RE } from "./credential-shapes";
@@ -18,7 +18,7 @@ function stop(msg:string):never{ console.error(`STOP: ${msg}`); process.exit(2);
 function run(bin:string,args:string[],opts:any={}){ return spawnSync(bin,args,{cwd:ROOT,encoding:"utf8",...opts}); }
 function gh(args:string[],opts:any={}){ return spawnSync("gh",args,{cwd:ROOT,encoding:"utf8",...opts}); }
 function bd(args:string[],opts:any={}){ return spawnSync("bd",args,{cwd:ROOT,encoding:"utf8",...opts}); }
-function json<T>(s:string, fallback:T):T{ try{return JSON.parse(s||"") as T}catch{return fallback} }
+function records(result:any,label:string,required:string[]=[]):any[]{ try{return nativeJsonArray(result,label,required)}catch(e:any){stop(e.message)} }
 function ns(){ return templateValue("namespace", ROOT) || path.basename(ROOT); }
 function commit(){ return templateValue("commit", ROOT) || "unknown"; }
 function installed(){ return templateValue("upgraded", ROOT) || templateValue("installed", ROOT) || "unknown-date"; }
@@ -54,8 +54,7 @@ function listTasksForRoute(route:Route, bead?:string):Task[]{
   const rows:any[]=[];
   for(const st of ["open","in_progress"]){
     const r=bd(["list","--label",route.label,"--status",st,"--limit","0","--json"]);
-    if(r.status!==0) stop(`bd list failed for ${route.label}/${st}: ${(r.stderr||r.stdout).trim()}`);
-    rows.push(...json<any[]>(r.stdout,[]).map(x=>({...x,status:st})));
+    rows.push(...records(r,`bd list ${route.label}/${st}`,["id"]).map(x=>({...x,status:st})));
   }
   const seen=new Set<string>(); const out:Task[]=[];
   for(const row of rows){
@@ -66,8 +65,8 @@ function listTasksForRoute(route:Route, bead?:string):Task[]{
   return out;
 }
 function candidates(routes:Route[], bead?:string){ return routes.flatMap(r=>listTasksForRoute(r,bead)); }
-function bdShow(id:string):any{ const r=bd(["show",id,"--json"]); if(r.status!==0) return null; const a=json<any[]>(r.stdout,[]); return Array.isArray(a)?a[0]:a; }
-function comments(id:string):any[]{ const r=bd(["comments",id,"--json"]); if(r.status!==0) return []; return json<any[]>(r.stdout,[]); }
+function bdShow(id:string):any{ const rows=records(bd(["show",id,"--json"]),`bd show ${id}`,["id"]); if(rows.length!==1||rows[0].id!==id) stop(`bd show ${id} did not return the requested task`); return rows[0]; }
+function comments(id:string):any[]{ return records(bd(["comments",id,"--json"]),`bd comments ${id}`); }
 function scrub(body:string):string{
   const script=path.join(SEATS,"evidence-scrub.sh");
   const r=spawnSync("bash",["-c",`. ${JSON.stringify(script)}; scrub_evidence`],{input:body,encoding:"utf8",env:{...process.env, WHEELHOUSE_ROOT:ROOT}});
@@ -85,7 +84,7 @@ function bodyFor(t:Task):string{
   return scrub(parts.join("\n\n"));
 }
 function credentialShaped(body:string){ return new RegExp(CREDENTIAL_SHAPE_RE).test(body); }
-function issueList(repo:string):Issue[]{ const r=gh(["issue","list","-R",repo,"--state","open","--limit","200","--json","number,title,body,url"]); if(r.status!==0) stop(`gh issue list failed for ${repo}`); return json<Issue[]>(r.stdout,[]); }
+function issueList(repo:string):Issue[]{ const r=gh(["issue","list","-R",repo,"--state","open","--limit","200","--json","number,title,body,url"]); return records(r,`gh issue list ${repo}`,["title","url"]); }
 function dedupe(t:Task, issues:Issue[]):string|undefined{ const m=marker(t.id), nt=normTitle(t.title); return issues.find(i=>(i.body||"").includes(m)||normTitle(i.title||"")===nt)?.url; }
 function updateRef(id:string,url:string){ const r=bd(["update",id,"--external-ref",url]); if(r.status!==0) stop(`bd update ${id} --external-ref failed: ${(r.stderr||r.stdout).trim()}`); }
 function createIssue(t:Task, body:string):string{
