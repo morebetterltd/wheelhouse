@@ -5,6 +5,8 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 DESK="$HERE/desk.ts"
 NEEDS="$HERE/needs.ts"
+# Isolated canaries need the digest's native-command reader as well as digest.ts.
+copy_digest_modules(){ cp -f "$PROJ/seats/digest.ts" "$PROJ/seats/completed-command.ts" "$1/"; }
 [ -f "$DESK" ] || { echo "selftest: missing $DESK" >&2; exit 2; }
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-desk-selftest.XXXXXX")" || exit 2
@@ -148,7 +150,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$PREC_CAN"; then
   fail "canary: could not disable board de-duplication; test proves nothing"
 else
   mkdir -p "$FIX/preccan/seats" "$FIX/preccan/wheelhouse" "$FIX/preccan/bin"
-  cp "$PREC_CAN" "$FIX/preccan/seats/desk.ts"; cp "$NEEDS" "$FIX/preccan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/preccan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/preccan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/preccan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/preccan/seats/"; cp "$PROJ/bin/bd" "$FIX/preccan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/preccan/wheelhouse/.template-source"
+  cp "$PREC_CAN" "$FIX/preccan/seats/desk.ts"; cp "$NEEDS" "$FIX/preccan/seats/needs.ts"; copy_digest_modules "$FIX/preccan/seats"; cp "$PROJ/seats/needs.jsonl" "$FIX/preccan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/preccan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/preccan/seats/"; cp "$PROJ/bin/bd" "$FIX/preccan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/preccan/wheelhouse/.template-source"
   PPREC="$(port)"; (cd "$FIX/preccan" && exec env PATH="$FIX/preccan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/preccan" WHEELHOUSE_DESK_PORT="$PPREC" bun "$FIX/preccan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   bun "$HERE/fixtures/desk-observation.ts" board "$FIX/preccan" "http://127.0.0.1:$PPREC/api/board.json" "$FIX/precedence-canary.json" "$PID" || exit 1
   if bun - "$FIX/precedence-canary.json" <<'JS'
@@ -200,7 +202,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$DIGEST_CAN"; then
   fail "canary: could not disable digest id filter; test proves nothing"
 else
   mkdir -p "$FIX/digestcan/seats" "$FIX/digestcan/wheelhouse" "$FIX/digestcan/bin" "$FIX/digestcan/product"
-  cp "$DIGEST_CAN" "$FIX/digestcan/seats/desk.ts"; cp "$NEEDS" "$FIX/digestcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/digestcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/digestcan/seats/needs.jsonl"; cp "$PROJ/seats/inbox.jsonl" "$FIX/digestcan/seats/inbox.jsonl"; cp "$PROJ/seats/seats.json" "$FIX/digestcan/seats/seats.json" 2>/dev/null || true; cp "$PROJ/bin/bd" "$FIX/digestcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/digestcan/wheelhouse/.template-source"; cp -R "$PROJ/product/." "$FIX/digestcan/product/"
+  cp "$DIGEST_CAN" "$FIX/digestcan/seats/desk.ts"; cp "$NEEDS" "$FIX/digestcan/seats/needs.ts"; copy_digest_modules "$FIX/digestcan/seats"; cp "$PROJ/seats/needs.jsonl" "$FIX/digestcan/seats/needs.jsonl"; cp "$PROJ/seats/inbox.jsonl" "$FIX/digestcan/seats/inbox.jsonl"; cp "$PROJ/seats/seats.json" "$FIX/digestcan/seats/seats.json" 2>/dev/null || true; cp "$PROJ/bin/bd" "$FIX/digestcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/digestcan/wheelhouse/.template-source"; cp -R "$PROJ/product/." "$FIX/digestcan/product/"
   P4="$(port)"; (cd "$FIX/digestcan" && exec env PATH="$FIX/digestcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/digestcan" WHEELHOUSE_DESK_PORT="$P4" bun "$FIX/digestcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   bun "$HERE/fixtures/desk-observation.ts" digest "$FIX/digestcan" "http://127.0.0.1:$P4/digest?$DIGEST_Q" "$FIX/digest-canary.html" "$PID" || exit 1
   if grep -q 'demo-merged' "$FIX/digest-canary.html"; then pass "canary: disabling digest id filter leaks demo- in the page"; else fail "canary did not expose digest id leak: $(cat "$FIX/digest-canary.html" 2>/dev/null)"; fi
@@ -239,7 +241,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$ANSWERED_CAN"; then
   fail "canary: could not make answered needs inactive; test proves nothing"
 else
   mkdir -p "$FIX/answeredcan/seats" "$FIX/answeredcan/wheelhouse"
-  cp "$ANSWERED_CAN" "$FIX/answeredcan/seats/desk.ts"; cp "$NEEDS" "$FIX/answeredcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/answeredcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/answeredcan/seats/needs.jsonl"
+  cp "$ANSWERED_CAN" "$FIX/answeredcan/seats/desk.ts"; cp "$NEEDS" "$FIX/answeredcan/seats/needs.ts"; copy_digest_modules "$FIX/answeredcan/seats"; cp "$PROJ/seats/needs.jsonl" "$FIX/answeredcan/seats/needs.jsonl"
   PANS="$(port)"; (cd "$FIX/answeredcan" && exec env WHEELHOUSE_DESK_ROOT="$FIX/answeredcan" WHEELHOUSE_DESK_PORT="$PANS" bun "$FIX/answeredcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   bun "$HERE/fixtures/desk-observation.ts" http "http://127.0.0.1:$PANS/needs" "$FIX/answered-canary.html" "$PID" || exit 1
   if selftest_capture_lacks "$FIX/answered-canary.html" -q -- 'action="/api/needs/need-old/message"'; then pass "canary: making answered needs inactive removes controls and is caught"; else fail "canary did not remove answered controls"; fi
@@ -252,7 +254,7 @@ if(!s.includes(old)) throw new Error('machine-field canary source changed');
 fs.writeFileSync(p,s.replace('<p>${esc(n.opened.body)}</p>','<p>${esc(n.opened.body)}</p><p>${esc(n.opened.machine.bead)}</p>'));
 JS
 if cmp -s "$PROJ/seats/desk.ts" "$CAN"; then fail "canary: could not make needs page print machine.bead; test proves nothing"; fi
-mkdir -p "$FIX/canproj/seats" "$FIX/canproj/wheelhouse"; cp "$CAN" "$FIX/canproj/seats/desk.ts"; cp "$NEEDS" "$FIX/canproj/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/canproj/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/canproj/seats/needs.jsonl"
+mkdir -p "$FIX/canproj/seats" "$FIX/canproj/wheelhouse"; cp "$CAN" "$FIX/canproj/seats/desk.ts"; cp "$NEEDS" "$FIX/canproj/seats/needs.ts"; copy_digest_modules "$FIX/canproj/seats"; cp "$PROJ/seats/needs.jsonl" "$FIX/canproj/seats/needs.jsonl"
 P2="$(port)"; (cd "$FIX/canproj" && exec env WHEELHOUSE_DESK_ROOT="$FIX/canproj" WHEELHOUSE_DESK_PORT="$P2" bun "$FIX/canproj/seats/desk.ts" >/dev/null 2>&1) & PID=$!
 bun "$HERE/fixtures/desk-observation.ts" http "http://127.0.0.1:$P2/needs" "$FIX/canary.html" "$PID" || exit 1
 if grep -q 'demo-ab12' "$FIX/canary.html"; then pass "canary: rendering machine.bead is caught"; else fail "canary did not expose machine.bead leak"; fi
@@ -267,7 +269,7 @@ if cmp -s "$PROJ/seats/desk.ts" "$BOARD_CAN"; then
   fail "canary: could not make board print ids; test proves nothing"
 else
   mkdir -p "$FIX/boardcan/seats" "$FIX/boardcan/wheelhouse" "$FIX/boardcan/bin"
-  cp "$BOARD_CAN" "$FIX/boardcan/seats/desk.ts"; cp "$NEEDS" "$FIX/boardcan/seats/needs.ts"; cp "$PROJ/seats/digest.ts" "$FIX/boardcan/seats/digest.ts"; cp "$PROJ/seats/needs.jsonl" "$FIX/boardcan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/boardcan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/boardcan/seats/"; cp "$PROJ/bin/bd" "$FIX/boardcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/boardcan/wheelhouse/.template-source"
+  cp "$BOARD_CAN" "$FIX/boardcan/seats/desk.ts"; cp "$NEEDS" "$FIX/boardcan/seats/needs.ts"; copy_digest_modules "$FIX/boardcan/seats"; cp "$PROJ/seats/needs.jsonl" "$FIX/boardcan/seats/needs.jsonl"; cp "$PROJ/seats/state.json" "$FIX/boardcan/seats/state.json"; cp -R "$PROJ/seats/verdicts" "$FIX/boardcan/seats/"; cp "$PROJ/bin/bd" "$FIX/boardcan/bin/bd"; cp "$PROJ/wheelhouse/.template-source" "$FIX/boardcan/wheelhouse/.template-source"
   P3="$(port)"; (cd "$FIX/boardcan" && exec env PATH="$FIX/boardcan/bin:$PATH" WHEELHOUSE_DESK_ROOT="$FIX/boardcan" WHEELHOUSE_DESK_PORT="$P3" bun "$FIX/boardcan/seats/desk.ts" >/dev/null 2>&1) & PID=$!
   bun "$HERE/fixtures/desk-observation.ts" board "$FIX/boardcan" "http://127.0.0.1:$P3/board" "$FIX/board-canary.html" "$PID" || exit 1
   if grep -q 'demo-ready' "$FIX/board-canary.html"; then pass "canary: a board copy that prints ids is caught"; else fail "canary did not expose board id leak"; fi
