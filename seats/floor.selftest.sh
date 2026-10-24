@@ -59,13 +59,20 @@ cleanup() {
 }
 selftest_install_cleanup_traps cleanup
 
+# Keep the complete runtime, then select the caller's floor for every fixture.
+# Render, repaint, PTY, derived copies and cockpit all use this installed file.
+install_floor_runtime() {
+  selftest_copy_seat_runtime "$1" "$HERE" || return 2
+  cp -f -- "$FLOOR" "$1/seats/floor.ts" || return 2
+}
+
 # --- fixture -----------------------------------------------------------------
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-floor-selftest.$$.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"   # macOS: /var/... is really /private/var/...
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats/logs" "$FIX/bin"
-selftest_copy_seat_runtime "$PROJ" "$HERE"
+install_floor_runtime "$PROJ" || exit 2
 
 # Stub bd: two ready beads, so idle-with-ready-work has work to point at.
 cat > "$FIX/bin/bd" <<'EOF'
@@ -359,7 +366,7 @@ phase "phase 4: missing pieces degrade with named lines"
 render "$PROJ/seats/floor.ts" --pin nolog   # nolog seat in the spotlight
 [ $RC -eq 0 ] && pass "spotlight on log-less seat exits 0" || fail "crashed on missing log: $OUT"
 has "no event log yet for nolog" && pass "spotlight names the missing log" || fail "no named missing-log line"
-EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats"; selftest_copy_seat_runtime "$EMPTY" "$HERE"
+EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats"; install_floor_runtime "$EMPTY" || exit 2
 render "$EMPTY/seats/floor.ts"
 [ $RC -eq 0 ] && has "no seats" && pass "no roster/state degrades to a named line" || fail "empty project: rc=${RC}: $OUT"
 
