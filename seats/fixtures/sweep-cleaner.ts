@@ -16,7 +16,7 @@ if (mode === "--check-root") process.exit(0);
 const root = input, source = fs.readFileSync(helper, "utf8"), sweep = fs.readFileSync(runner, "utf8");
 const marker = "wheelhouse-selftest-sweep", anchor = marker + "-host", token = "b".repeat(32), sha = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
 let sequence = 0;
-const facts: object[] = [], actors: { child: ChildProcess; done: Promise<{ code: number | null; signal: string | null }>; closed: () => boolean }[] = [];
+const facts: object[] = [], actors: { child: ChildProcess; done: Promise<{ code: number | null; signal: string | null }>; closed: () => boolean; release?: string }[] = [];
 function command(dir: string, argv: string[], env = process.env) {
   const id = String(++sequence).padStart(4, "0"), out = path.join(dir, id + ".stdout"), err = path.join(dir, id + ".stderr");
   const a = fs.openSync(out, "wx", 0o600), b = fs.openSync(err, "wx", 0o600);
@@ -24,7 +24,7 @@ function command(dir: string, argv: string[], env = process.env) {
   try { r = spawnSync(argv[0], argv.slice(1), { cwd: dir, env, stdio: ["ignore", a, b] }); }
   finally { fs.closeSync(a); fs.closeSync(b); }
   const result = { command: argv, status: r.status, signal: r.signal, error: r.error?.message ?? null, stdout: fs.readFileSync(out, "utf8"), stderr: fs.readFileSync(err, "utf8") };
-  fs.writeFileSync(path.join(dir, id + ".native.json"), JSON.stringify(result, null, 2));
+  fs.writeFileSync(path.join(dir, id + ".native.json"), JSON.stringify(result, null, 2), { mode: 0o600 });
   assert.equal(result.error, null); assert.equal(result.signal, null);
   return result;
 }
@@ -33,11 +33,12 @@ function start(dir: string, argv: string[], env: NodeJS.ProcessEnv) {
   let child: ChildProcess;
   try { child = spawn(argv[0], argv.slice(1), { cwd: dir, env, stdio: ["pipe", a, b] }); }
   finally { fs.closeSync(a); fs.closeSync(b); }
+  child.stdin!.on("error", error => { if ((error as any).code !== "EPIPE") throw error; });
   let closed = false;
   const done = new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
     child.once("error", reject); child.once("close", (code, signal) => { closed = true; resolve({ code, signal }); });
   });
-  const actor = { child, done, closed: () => closed }; actors.push(actor); return actor;
+  const actor = { child, done, closed: () => closed, release: env.CLEANER_RELEASE }; actors.push(actor); return actor;
 }
 async function until(check: () => boolean, actor?: ReturnType<typeof start>) {
   const deadline = performance.now() + 300_000;
@@ -80,14 +81,15 @@ function named(original: string, host: string) {
   assert.equal(original.split("const HOST = os.hostname();").length, 2);
   return original.replace("const HOST = os.hostname();", `const HOST = ${JSON.stringify(host)};`);
 }
-async function preservation(kind: "transition" | "supervisor" | "sweep") {
+async function preservation(kind: "transition" | "supervisor" | "sweep" | "sweep-refusal") {
   const dir = path.join(root, kind); fs.mkdirSync(dir); const state = path.join(dir, "state"); fs.mkdirSync(state);
   const lock = path.join(state, "host.lock"), ready = path.join(dir, "ready"), release = path.join(dir, "release"), receipts = path.join(dir, "refresh.jsonl");
   const hasRenewal = source.includes("function renewFiles("), hasHeartbeat = source.includes("}, 60_000);");
   let tested = named(source, "network-before");
   // Same callback/operations, shorter cadence only in this pinned test copy.
   // Receipt is after successful native refresh/inherited transition, not time.
-  if (hasHeartbeat) tested = tested.replace("}, 60_000);", "}, 25);");
+  if (hasHeartbeat) tested = tested.replace("}, 60_000);", "}, 1_000);");
+  if (kind === "sweep-refusal") tested = tested.replace('if (op === "refresh") {', 'if (op === "refresh") { throw new Refused("fixture: refuse renewal");');
   const end = 'else process.exitCode = main();'; assert.equal(tested.split(end).length, 2);
   tested = tested.replace(end, end + `\n    if (process.exitCode === 0 && ["refresh", "inherited"].includes(operation)) fs.appendFileSync(${JSON.stringify(receipts)}, JSON.stringify({operation, pid:process.pid})+"\\n");`);
   const file = path.join(dir, "helper.ts"), after = path.join(dir, "network-after.ts"); fs.writeFileSync(file, tested); fs.writeFileSync(after, named(source, "network-after"));
@@ -108,15 +110,33 @@ async function preservation(kind: "transition" | "supervisor" | "sweep") {
       const from = path.join(path.dirname(runner), name); if (fs.lstatSync(from).isFile()) fs.copyFileSync(from, path.join(seats, name));
     }
     let testSweep = sweep;
-    if (testSweep.includes("slice=60")) testSweep = testSweep.replace("slice=60", "slice=0.05").replace('[ "$remaining" -ge "$slice" ] || slice="$remaining"', ': # fixture fractional slice');
+    if (testSweep.includes("slice=60")) {
+      // macOS Bash 3.2 read -t requires whole seconds. Keep its real FIFO read.
+      testSweep = testSweep.replace("slice=60", "slice=1");
+      const at = 'remaining=$((deadline-SECONDS))', quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+      assert.equal(testSweep.split(at).length, 2);
+      testSweep = testSweep.replace(at, `printf '%s\\n' '{"operation":"watchdog-tick"}' >> ${quote(receipts)}\n    ` + at);
+    }
     fs.writeFileSync(path.join(seats, "selftest-sweep.sh"), testSweep);
     const init = command(dir, ["git", "-C", project, "init", "-q", "-b", "main"], env); assert.equal(init.status, 0, init.stderr);
     const add = command(dir, ["git", "-C", project, "add", "seats"], env); assert.equal(add.status, 0, add.stderr);
-    const suite = path.join(seats, "idle.selftest.sh"); fs.writeFileSync(suite, '#!/usr/bin/env bash\nprintf ready > "$CLEANER_READY"\nwhile [ ! -f "$CLEANER_RELEASE" ]; do sleep 0.02; done\n');
-    actor = start(dir, ["bash", path.join(seats, "selftest-sweep.sh")], { ...env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, CLEANER_READY: ready, CLEANER_RELEASE: release });
+    const suite = path.join(seats, "idle.selftest.sh"); fs.writeFileSync(suite, '#!/usr/bin/env bash\nprintf ready > "$CLEANER_READY"\n' + (kind === "sweep-refusal" ? 'sleep 5\nprintf finished > "$CLEANER_RELEASE"\n' : 'while [ ! -f "$CLEANER_RELEASE" ]; do sleep 0.02; done\n'));
+    actor = start(dir, ["bash", path.join(seats, "selftest-sweep.sh")], { ...env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, CLEANER_READY: ready, CLEANER_RELEASE: release, ...(kind === "sweep-refusal" ? { WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S: "2", WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: "1" } : {}) });
     await until(() => fs.existsSync(ready), actor);
   }
   try {
+    if (kind === "sweep-refusal") {
+      ownerPid = actor.child.pid!;
+      await until(() => actor.closed());
+      const out = fs.readFileSync(path.join(dir, "actor.stdout"), "utf8"), err = fs.readFileSync(path.join(dir, "actor.stderr"), "utf8"), exit = await actor.done;
+      assert.equal(exit.code, 1); assert.equal(exit.signal, null);
+      assert(err.includes("STOP: sweep lock renewal failed"), "RENEWAL_REFUSAL_NOT_OBSERVED");
+      assert(out.includes("timed out after 2s") && err.includes("selftest-sweep: CLEAN "), "RENEWAL_REFUSAL_DISABLED_CONTAINMENT");
+      assert(!fs.existsSync(release), "timed-out payload must not complete normally");
+      facts.push({ kind, nativeSetup: true, actualRefusal: true, nativeExit: 1, deadlineEnforced: true, cleaned: true });
+      console.log("PASS cleaner sweep-refusal: actual renewal refusal retains native timeout and CLEAN");
+      return;
+    }
     const claim = JSON.parse(fs.readFileSync(path.join(lock, marker), "utf8")); ownerPid = claim.pid;
     assert(Number.isInteger(ownerPid)); process.kill(ownerPid, 0);
     owned ||= `${fs.statSync(lock).dev}:${fs.statSync(lock).ino}`;
@@ -145,7 +165,6 @@ async function preservation(kind: "transition" | "supervisor" | "sweep") {
     const bad = command(dir, ["bun", file, "refresh", lock, String(ownerPid), "f".repeat(32), owned], env);
     if (hasRenewal) { assert.equal(bad.status, 2); assert(bad.stderr.includes("cannot refresh a different lock owner")); }
     const now = snapshot(state); for (const name of Object.keys(before)) { assert.equal(now[name].sha, before[name].sha); assert.equal(now[name].ino, before[name].ino); }
-    console.log(`PASS cleaner ${kind}: native find deleted=0; original live holder + two aliases + FIFO preserved`);
   } finally {
     // Release only our own actor, never a PID discovered in another run.
     fs.writeFileSync(release, "release\n"); actor.child.stdin!.end("release\n");
@@ -153,9 +172,11 @@ async function preservation(kind: "transition" | "supervisor" | "sweep") {
     if (fs.existsSync(path.join(lock + ".host", anchor))) {
       if (kind === "transition") { const r = command(dir, ["bun", file, "release", lock, String(ownerPid), "a".repeat(32), owned], env); assert.equal(r.status, 0, r.stderr); }
       const r = command(dir, ["bun", file, "release", lock, String(process.pid), token, ""], env); assert.equal(r.status, 0, r.stderr);
-      assert.equal(exit.code, 0, "healthy actor must complete natively"); assert.equal(exit.signal, null);
+      assert.equal(exit.code, kind === "sweep-refusal" ? 1 : 0, "healthy actor must complete natively"); assert.equal(exit.signal, null);
+      if (kind === "sweep") assert(!fs.readFileSync(path.join(dir, "actor.stderr"), "utf8").includes("invalid timeout specification"));
     }
   }
+  console.log(`PASS cleaner ${kind}: native find deleted=0; original live holder + two aliases + FIFO preserved; actor joined`);
 }
 async function missing() {
   const dir = path.join(root, "missing"); fs.mkdirSync(dir); const lock = path.join(dir, "host.lock");
@@ -166,16 +187,24 @@ async function missing() {
   const refused = command(dir, ["bun", helper, "acquire", lock, String(process.pid), token]);
   assert.equal(refused.status, 2); assert(refused.stderr.includes(file) && refused.stderr.includes("trusted same-machine backup") && refused.stderr.includes("Do not delete a live lock"), "MISSING_HOST_REPAIR_NOT_EXPLAINED");
   assert.deepEqual(snapshotWithoutAnchor(), before); assert(!fs.existsSync(file), "never authenticate leftover aliases by silently recreating the anchor");
-  console.log("PASS cleaner missing: exact anchor + trusted restore named; leftover aliases/holder/FIFO unchanged");
+  const probe = path.join(dir, "legacy.ts"); fs.writeFileSync(probe, `import {legacyHostnameMatches} from ${JSON.stringify(helper)}; console.log(legacyHostnameMatches("unobserved-host"));`);
+  const legacy = command(dir, ["bun", probe], { ...process.env, WHEELHOUSE_SELFTEST_SWEEP_LOCK: lock });
+  assert.equal(legacy.status, 0, "READONLY_MISSING_CACHE_MUST_REMAIN_NO_PROOF"); assert.equal(legacy.stdout, "false\n");
+  assert.deepEqual(snapshotWithoutAnchor(), before);
+  console.log("PASS cleaner missing: exact anchor + trusted restore named; readonly legacy returns no proof; holder/FIFO unchanged");
 }
 let failures = 0;
-for (const kind of ["transition", "supervisor", "sweep"] as const) {
+for (const kind of ["transition", "supervisor", "sweep", "sweep-refusal"] as const) {
   try { await preservation(kind); } catch (e: any) { failures++; console.error("FAIL " + e.message); }
 }
 try { await missing(); } catch (e: any) { failures++; console.error("FAIL " + e.message); }
 for (const forbidden of ["/tmp/wheelhouse-selftest-sweep.lock", "/private/tmp/wheelhouse-selftest-sweep.lock", "/tmp/wheelhouse-selftest-sweep.lock.host"]) {
   const r = command(root, ["bun", import.meta.path, forbidden, helper, runner, "--check-root"]);
   if (r.status !== 2 || !r.stderr.includes("TEST_SUBJECT_OUTSIDE_MARKED_FIXTURE")) { failures++; console.error("FAIL LIVE_PATH_NOT_REFUSED"); }
+}
+for (const actor of actors) {
+  if (!actor.closed()) { if (actor.release) fs.writeFileSync(actor.release, "release\n"); actor.child.stdin!.end("release\n"); }
+  await actor.done;
 }
 assert(actors.every(a => a.closed()), "every test actor joined");
 fs.writeFileSync(path.join(root, "results.json"), JSON.stringify({ failures, actorsJoined: actors.length, facts }, null, 2));
