@@ -140,6 +140,13 @@ if [ "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" != all ]; then
   echo "drift-set selftest: FAIL ($FAILED failure(s))" >&2; exit 1
 fi
 
+phase 'drift continuity across unknown observations'
+if bun "$HERE/fixtures/drift-continuity.ts" "$HERE" "$FIX/drift-continuity" "$ROOT/seats/alerts.ts"; then
+  pass 'unchanged active/pending drift survives failures; real changes and clears re-arm; removals rejected'
+else
+  fail 'drift continuity consumer sequences failed'
+fi
+
 phase 'empty drift set'
 clear_runtime
 WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS=600000 DRIFT_AHEAD=1 run_alert bun seats/alerts.ts check --json

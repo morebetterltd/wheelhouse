@@ -202,8 +202,9 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
   const alerts:Record<string,AlertState>={};
   for(const name of Object.keys(active) as AlertName[]){
     if(name.startsWith("seat-stalled:")&&unverified[name.slice("seat-stalled:".length)]){if(priorAlerts[name])alerts[name]=priorAlerts[name];continue;}
-    // An unavailable observation cannot clear an already-active condition.
-    if((name==="untriaged-github-issues"&&github.untriaged===null&&!github.disabled)||(name==="low-disk"&&disk.freeBytes===null)){ alerts[name]=priorAlerts[name]??alertRow(false,undefined,""); continue; }
+    // Unknown observations cannot clear a last-known condition or reset its
+    // pending hold. A confirmed clean drift result still follows the clear path.
+    if((name==="untriaged-github-issues"&&github.untriaged===null&&!github.disabled)||(name==="low-disk"&&disk.freeBytes===null)||(name==="template-drift"&&drift.status==="check-failed")){ alerts[name]=priorAlerts[name]??alertRow(false,undefined,""); continue; }
     const stored=priorAlerts[name], stream=name.startsWith("seat-stalled:")?seatStreams[name.slice("seat-stalled:".length)]:undefined;
     let was=name==="template-drift"&&stored ? {...stored,signature:priorDriftSignature(stored.signature)} : stored;
     if(stream?.stalled && was?.active && was.signature!==active[name].sig){ if(was.needId) needClose(was.needId); was=undefined; }
