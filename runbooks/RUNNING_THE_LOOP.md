@@ -153,6 +153,8 @@ A BOUNCE lists each defect as its own point: what is wrong, where, and what done
 
 `wheelhouse/INTEGRATOR.md` is the contract and it is short. The operational core: confirm the tip you merged equals the head that was reported, by comparing identifiers rather than by reading command output. A merge that covers less than the reader assumes still prints a genuine diffstat and exits zero.
 
+Its “Review, then verify, then merge” subsection owns the last-before-merge gate and the receipt the pre-push hook demands. Follow that contract rather than restating its checks here.
+
 The same contract carries the claim-move duty: update `wheelhouse/ISA.md`'s Claims with the merge, or state on the bead why no claim moved. Do not duplicate that rule here; this stage points at the contract that owns it.
 
 For a goal branch bead, the merge target is the branch its record names; the tip comparison is unchanged. The daily main-to-goal sync and its SHA go on the epic, and the group PR opens only after the verifier walk. Per-bead work is unchanged. `wheelhouse/INTEGRATOR.md`'s `### Two integration modes` owns the rule.

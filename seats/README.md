@@ -1122,8 +1122,8 @@ The inbox carries the verdict, every row without truncating evidence, and output
 paths. A dispatcher timeout records UNREACHED rows rather than fabricating PASS.
 Default output is `seats/verdicts/walks/<bead>/<stamp>`; use a fresh `--out` under
 the task scratch root for fleet runs. An existing work `walk.json` is never
-overwritten by another pass. W12 will consume these rows for its merge gate;
-that gate and review-before-verify ordering are not implemented here.
+overwritten by another pass. The merge gate below consumes these rows;
+review-before-verify ordering is enforced by the work preflight above.
 
 ### state.json
 
@@ -1174,6 +1174,58 @@ key off `sessionFile` (existence, and a same-file RUNNING match for the
 double-resume refusal) and `lastBead`, never `sessionId`. `verify.ts`
 never reads `sessionId` at all — author/reviewer distinctness there is
 `account.dir`, not the session.
+
+## The merge gate
+
+```bash
+bun seats/merge-gate.ts BEAD-ID BRANCH [--repo PATH] [--walk WALK-JSON]
+```
+
+Run this last before merging. It reads the bead through `contract.ts`, resolves
+`BRANCH^{commit}` as the reviewer does, requires `readReviewRecord`'s completed
+APPROVE at that exact tip, and reads per-work `walk.json`. It never starts a seat,
+runs tests or takes a host lock. Apart from its receipt it is read-only on the
+repositories and graph. Contract/review refusals exit5, usage/unresolved refs1;
+failed or unverified outcomes/malformed walk data exit2; PASS exits0.
+
+The contract decides the required rows: person-on-surface and person-reading
+need PASS; machine outcomes need no walk because their literal evidence was
+already judged in review. The gate prints every outcome in id order, naming each
+machine skip. All-machine contracts with no walk print
+`walk skipped: no outcome names a consumer surface`. Optional machine rows are
+still read: FAIL or UNREACHED on ANY outcome refuses. Missing consumer rows are
+unverified, not PASS. Duplicates, extra ids, missing details, wrong order and
+row/verdict disagreement are malformed. The last line is `MERGE-GATE: PASS` or
+`MERGE-GATE: REFUSED — <reasons>`.
+
+`--walk` selects a root-relative (or absolute) file. Without it, the gate reads
+`seats/verdicts/walks/BEAD-ID/*/walk.json`, newest file mtime first (path breaks
+ties), choosing mode `work`, this bead and the reviewed tip. Foreign/stale files
+are not used; a newer matching failed/malformed walk cannot fall back to an older
+PASS. No matching walk names the unverified consumer outcomes and the command to
+run: `bun seats/walk.ts --work BEAD-ID --branch BRANCH --author <author-seat>`.
+
+Every named invocation atomically replaces
+`seats/verdicts/BEAD-ID.merge-gate.json` with
+`{bead,tip,result,outcomes:[{id,group,required,result,detail}],review:{tip,verdict},walk,at}`.
+`walk` is root-relative or null. Refusals overwrite older PASS; preflight receipts
+can have null tip/review fields. An initial REFUSED invalidates an older PASS even
+if the shared repository resolver stops early. Receipts are local trusted
+metadata, not signed attestations or a historical ledger.
+
+The installed `fleet-pre-push-guard.sh` checks new first-parent bead-naming merge
+commits on the default line and `seats/integration-refs.txt` refs. It requires a
+PASS receipt at each merge's SECOND parent (the work tip), regardless of
+`WHEELHOUSE_INTEGRATOR_PUSH=1`. It finds receipts/config from the guard script's
+install root, including when called from a product repo or linked worktree; it
+does not query the graph or network. It uses `merge-target=` from
+`wheelhouse/.template-source`, otherwise local `refs/remotes/origin/HEAD`.
+If neither identifies the default, non-fleet branch pushes refuse with both local
+fixes: `git remote set-head origin <default-branch>` (no network), or
+`merge-target=<default-branch>` in `wheelhouse/.template-source`. The existing
+fleet-publication clause is unchanged. With a known default, unrelated refs and
+ranges with no new bead-naming merge behave as before. No legacy-receipt exemption
+is implied: a newly published guarded ref checks all its new first-parent merges.
 
 ## Settled seats holding tasks
 

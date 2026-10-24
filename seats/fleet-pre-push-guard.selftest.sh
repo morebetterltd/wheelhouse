@@ -7,6 +7,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(cd "$HERE/.." && pwd -P)"
+GUARD="${1:-$ROOT/seats/fleet-pre-push-guard.sh}"
 FAILED=0
 FIX=""
 pass() { printf 'ok - %s\n' "$*"; }
@@ -27,8 +28,11 @@ printf 'base\n' > "$REPO/file.txt"
 git -C "$REPO" add file.txt && git -C "$REPO" commit -qm base
 git -C "$REPO" remote add origin "$REMOTE"
 git -C "$REPO" push -q -u origin main
+# The guard's default-line fallback is deliberately local, never a remote query.
+git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 mkdir -p "$REPO/seats" "$REPO/.beads/hooks"
-cp "$ROOT/seats/fleet-pre-push-guard.sh" "$REPO/seats/fleet-pre-push-guard.sh"
+cp "$GUARD" "$REPO/seats/fleet-pre-push-guard.sh"
+cp "$(dirname "$GUARD")/merge-gate-receipt.ts" "$REPO/seats/merge-gate-receipt.ts"
 cp "$ROOT/seats/install-fleet-pre-push-guard.sh" "$REPO/seats/install-fleet-pre-push-guard.sh"
 chmod +x "$REPO/seats/fleet-pre-push-guard.sh" "$REPO/seats/install-fleet-pre-push-guard.sh"
 git -C "$REPO" config core.hooksPath .beads/hooks
@@ -117,6 +121,19 @@ elif grep -q 'refusing push to refs/heads/fleet/raw-seat-shell' "$FIX/raw-seat-s
 else
   fail "seat-worktree: raw shell refusal missing: $(cat "$FIX/raw-seat-shell.out")"
 fi
+
+# Real completed review format, generated before any receipt/record fixtures.
+SAMPLE="$FIX/actual-review.md"
+if WHEELHOUSE_REVIEW_RECORD_ONLY=1 WHEELHOUSE_REVIEW_RECORD_SEED_ONLY=1 WHEELHOUSE_REVIEW_RECORD_SEED="$SAMPLE" bash "$HERE/verify.selftest.sh"; then
+  for file in "$HERE/"*.ts "$HERE/"*.sh; do
+    case "$file" in */fleet-pre-push-guard.sh|*/merge-gate-receipt.ts) continue ;; esac
+    cp -f "$file" "$REPO/seats/"
+  done
+  cp -rf "$HERE/drivers" "$HERE/transports" "$REPO/seats/"
+  if bun "$HERE/fixtures/merge-gate-push.ts" "$REPO" "$REMOTE" "$SAMPLE" "$HERE" "$GUARD"; then
+    pass 'merge-gate integration receipt assertions completed'
+  else fail 'merge-gate integration receipt assertions failed'; fi
+else fail 'merge-gate actual review producer setup failed'; fi
 
 if [ "$FAILED" -eq 0 ]; then
   echo 'fleet-pre-push-guard.selftest: PASS'
