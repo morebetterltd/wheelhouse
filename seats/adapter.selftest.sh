@@ -1576,7 +1576,7 @@ PID_BEFORE="$(state_get pid)"
 kill -9 "$PID_BEFORE" 2>/dev/null || true
 wait_exit "$PID_BEFORE"
 RESUME_MARK="$(wc -c < "$LOG" | tr -d ' ')"
-INBOX_MARK="$(bun -e 'const fs=require("fs");const p=process.argv[1];console.log(fs.existsSync(p)?fs.statSync(p).size:0)' "$RUN_PROJ/seats/inbox.jsonl")"
+INBOX_MARK="$(bun -e 'import fs from "node:fs";const p=process.argv[1];console.log(fs.existsSync(p)?fs.statSync(p).size:0)' "$RUN_PROJ/seats/inbox.jsonl")"
 run resume worker-1
 if [ $RC -eq 0 ] && says "resume continuation requested"; then pass "resume supplies the interrupted turn its own continuation"; else fail "resume did not request continuation (rc=$RC): $OUT"; fi
 if wait_for_from "$LOG" "$RESUME_MARK" 'echo: [adapter resume]' && wait_for_from "$LOG" "$RESUME_MARK" '"type":"agent_end"'; then
