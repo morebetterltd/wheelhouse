@@ -112,7 +112,7 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "inher
     if (testSweep.includes("slice=60")) {
       // macOS Bash 3.2 read -t requires whole seconds. Keep its real FIFO read.
       testSweep = testSweep.replace("slice=60", "slice=1");
-      const at = 'remaining=$((deadline-SECONDS))', quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+      const at = '    # Recheck completion/deadline after metadata renewal.', quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
       assert.equal(testSweep.split(at).length, 2);
       testSweep = testSweep.replace(at, `printf '%s\\n' '{"operation":"watchdog-tick"}' >> ${quote(receipts)}\n    ` + at);
     }
