@@ -218,12 +218,51 @@ suite_watchdog(){ (
   trap - EXIT
   trap '' INT TERM HUP
   local root="$1" dir="$2" message=""
-  if read -r -t "$SUITE_TIMEOUT_S" -u 9 message; then
-    [ "$message" = stop ] || exit 0
-  else
-    printf '%s\n' "$SUITE_TIMEOUT_S" > "$dir/timed-out"
-  fi
+  local deadline=$((SECONDS+SUITE_TIMEOUT_S)) remaining slice renewal_rc=0 poll_rc
+  while :; do
+    remaining=$((deadline-SECONDS))
+    if [ "$remaining" -le 0 ]; then
+      # Completion may have arrived during metadata work. Prefer that queued
+      # atomic token to a false expiry. Mac Bash 3.2 read -t0 cannot poll it.
+      message="$(perl -MIO::Select -e '
+        exit 75 unless IO::Select->new(\*STDIN)->can_read(0);
+        $SIG{ALRM}=sub { exit 2 }; alarm 1;
+        my $line=<STDIN>; defined($line) or exit 2; print $line;
+      ' <&9)"; poll_rc=$?
+      if [ "$poll_rc" = 0 ]; then
+        [ "$message" = stop ] || exit "$renewal_rc"
+        break
+      fi
+      [ "$poll_rc" = 75 ] || renewal_rc=2
+      printf '%s\n' "$SUITE_TIMEOUT_S" > "$dir/timed-out"
+      break
+    fi
+    slice=60
+    [ "$remaining" -ge "$slice" ] || slice="$remaining"
+    # Read completion FIRST: short/already-finished suites need no renewal.
+    if read -r -t "$slice" -u 9 message; then
+      [ "$message" = stop ] || exit "$renewal_rc"
+      break
+    fi
+    [ "$SECONDS" -lt "$deadline" ] || continue
+    # Renew only while an idle suite still holds admission. Inherited sweeps
+    # verify the original ancestor/FIFO head; no caller-supplied bypass.
+    if [ "$renewal_rc" = 0 ]; then
+      if [ -n "$OWNED_LOCK" ]; then
+        bun "$LOCK_HELPER" refresh "$LOCK" "$$" "$LOCK_TOKEN" "$OWNED_LOCK" || renewal_rc=2
+      else
+        bun "$LOCK_HELPER" inherited "$LOCK" || renewal_rc=2
+      fi
+      # A renewal refusal must not disable the existing timeout/containment.
+      [ "$renewal_rc" = 0 ] || info 'STOP: sweep lock renewal failed'
+    fi
+    # Recheck completion/deadline after metadata renewal.
+  done
   contain_suite_tree "$root" "$dir"
+  local containment_rc=$?
+  [ "$containment_rc" = 0 ] || renewal_rc=2
+  # Leave a status expression so completion-observer epilogues remain reachable.
+  ( exit "$renewal_rc" )
 ); }
 
 retire_review_group(){
