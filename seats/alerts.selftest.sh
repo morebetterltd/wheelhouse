@@ -365,20 +365,14 @@ if (export PATH="$CLOCK_PATH"; hash -r; ! command -v timeout >/dev/null && ! com
 else
   fail 'herald clock PATH still exposes timeout/gtimeout or lacks helper dependencies'; exit 2
 fi
-rm -f "$ROOT/seats/run/fleet-snapshot.json"; HERALD_OUT="$FIX/herald.out"; start=$(date +%s); (cd "$ROOT" && HOME="$HOME_FIX" PATH="$CLOCK_PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 WHEELHOUSE_HERALD_TMUX_PANE="" with_timeout 3 bun seats/herald.ts --daemon >"$HERALD_OUT" 2>&1) || true; elapsed=$(( $(date +%s) - start ))
-[ -s "$ROOT/seats/run/fleet-snapshot.json" ] && [ "$elapsed" -le 4 ] && pass 'herald launches alerts child and snapshot appears without blocking the scan loop' || fail "herald did not launch alerts child rc? elapsed=$elapsed out=$(cat "$HERALD_OUT" 2>/dev/null)"
-SLOW="$FIX/slow-herald"; cp -R "$ROOT" "$SLOW"; cat > "$SLOW/seats/alerts.ts" <<'TS'
-await new Promise((resolve) => setTimeout(resolve, 2000));
-TS
-SLOW_OUT="$FIX/slow-herald.out"; (cd "$SLOW" && HOME="$HOME_FIX" PATH="$CLOCK_PATH" WHEELHOUSE_ALERTS_ROOT="$SLOW" with_timeout 1 bun seats/herald.ts --once >"$SLOW_OUT" 2>&1); SRC=$?
-[ "$SRC" = 0 ] && pass 'scan loop does not wait for a slow alerts child' || fail "slow alerts child blocked scan rc=$SRC out=$(cat "$SLOW_OUT" 2>/dev/null)"
-BROKEN="$FIX/no-alert-clock"; cp -R "$ROOT" "$BROKEN"; bun - "$BROKEN/seats/herald.ts" <<'JS'
-const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='const clocked = runStaffingClock(state) || runAlertsClock(state);';
-if(s.split(needle).length!==2) throw new Error('alerts clock canary source changed');
-fs.writeFileSync(p,s.replace(needle,'fs.writeFileSync(path.join(ROOT, "seats/run/clock-canary-started"), "started\\n"); const clocked = runStaffingClock(state);'));
-JS
-rm -f "$BROKEN/seats/run/fleet-snapshot.json"; BROKEN_OUT="$FIX/no-alert-clock.out"; (cd "$BROKEN" && HOME="$HOME_FIX" PATH="$CLOCK_PATH" WHEELHOUSE_ALERTS_ROOT="$BROKEN" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 with_timeout 1 bun seats/herald.ts --daemon >"$BROKEN_OUT" 2>&1) || true
-[ -s "$BROKEN/seats/run/clock-canary-started" ] && [ ! -s "$BROKEN/seats/run/fleet-snapshot.json" ] && pass 'canary: removing runAlertsClock makes the herald snapshot leg fail after an actual scan' || fail "canary without runAlertsClock did not scan or still produced a snapshot: $(cat "$BROKEN_OUT" 2>/dev/null)"
+# Native --once close while the child remains explicitly held is the verdict,
+# not elapsed startup time. Controls execute a real child-completion FIFO read
+# and remove the actual alerts clock, each failing at its own observed event.
+if bun "$HERE/fixtures/alerts-clock.ts" "$FIX" "$ROOT" "$BIN" "$HOME_FIX" "$CLOCK_PATH"; then
+  pass 'alerts snapshot and non-blocking scan observed; real blocking/missing-clock removals rejected'
+else
+  fail 'alerts clock scan protocol failed (see native event evidence above)'
+fi
 
 phase 'canary'
 CAN="$FIX/canary"; cp -R "$ROOT" "$CAN"; bun - "$CAN/seats/alerts.ts" <<'JS'
