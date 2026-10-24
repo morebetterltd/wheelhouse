@@ -3,6 +3,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import { acquirePidLock, releasePidLock } from "../lock";
 import conditionWait from './wait-for-condition.cjs';
 const { waitForCondition } = conditionWait;
@@ -17,12 +18,37 @@ const lockFile = path.join(root, "seats/state.lock");
 assert(["ab", "ba"].includes(order));
 const names = order === "ba" ? ["worker-b", "worker-a"] : ["worker-a", "worker-b"];
 console.log(`stop commit order: ${names.join(" then ")}`);
+// Deliberate commit latency holds the second peer past the old incidental 5s
+// RPC-test override. This is a regression input, not an elapsed-time verdict.
+const firstCommitDelayMs = Number(process.env.WHEELHOUSE_ADAPTER_STATE_FIRST_COMMIT_DELAY_MS ?? 6000);
+assert(Number.isSafeInteger(firstCommitDelayMs) && firstCommitDelayMs >= 0 && firstCommitDelayMs <= 10000);
+console.log("ADAPTER_STATE_AMBIENT " + JSON.stringify({ order, nice: os.getPriority(0), cores: os.cpus().length, load: os.loadavg(), firstCommitDelayMs }));
 const peers: ReturnType<typeof Bun.spawn>[] = [];
 const stops: ReturnType<typeof Bun.spawn>[] = [];
 const records: Record<string, any> = {};
 const token = randomUUID();
 const write = (name: string) => fs.writeFileSync(path.join(dir, name), "release\n");
 const read = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));
+function saveEvidence(suffix = "") {
+  const evidence = process.env.WHEELHOUSE_ADAPTER_STATE_EVIDENCE;
+  if (!evidence) return;
+  try {
+    fs.mkdirSync(evidence, { recursive: true });
+    const target = path.join(evidence, order + suffix);
+    fs.mkdirSync(target);
+    const artifacts = path.join(target, "barriers");
+    fs.mkdirSync(artifacts);
+    // Copy only regular diagnostics, never open/copy the live stdin FIFOs.
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      assert(entry.isFile(), `unexpected diagnostic artifact: ${entry.name}`);
+      fs.copyFileSync(path.join(dir, entry.name), path.join(artifacts, entry.name));
+    }
+    if (fs.existsSync(stateFile)) fs.copyFileSync(stateFile, path.join(target, "state.json"));
+  } catch (error) {
+    console.error("ADAPTER_STATE_EVIDENCE_ERROR", suffix, error);
+    process.exitCode = 1;
+  }
+}
 
 // Event barriers decide ordering. This deadline only fails a stuck fixture.
 function bounded<T>(promise: Promise<T>): Promise<T> {
@@ -32,11 +58,29 @@ function bounded<T>(promise: Promise<T>): Promise<T> {
   })]).finally(() => clearTimeout(timer));
 }
 function barrier(name: string, child: ReturnType<typeof Bun.spawn>): Promise<void> {
+  // Regression input: slow receipt delivery to this owner, not the host or
+  // shared predicate. The timer is input; the durable condition is the verdict.
+  const inputDelayMs = name.endsWith(".term") ? Number(process.env.WHEELHOUSE_ADAPTER_STATE_RECEIPT_DELAY_MS ?? 0) : 0;
+  assert(Number.isSafeInteger(inputDelayMs) && inputDelayMs >= 0 && inputDelayMs <= 10000);
+  let receiptEnabled = inputDelayMs === 0, waiting = true;
+  let delayTimer: ReturnType<typeof setTimeout> | undefined;
+  const delivery = inputDelayMs ? new Promise<void>(resolve => {
+    delayTimer = setTimeout(() => {
+      receiptEnabled = true;
+      console.log("ADAPTER_STATE_RECEIPT_DELIVERY_RELEASED " + JSON.stringify({ order, name, inputDelayMs,
+        durablePresent: fs.existsSync(path.join(dir, name)), stopExitCode: child.exitCode }));
+      resolve();
+    }, inputDelayMs);
+  }) : Promise.resolve();
   const observed = waitForCondition({ site: 'adapter-state.barrier', paths: [dir], predicate: () => fs.existsSync(path.join(dir, name)) });
   return bounded(Promise.race([
-    observed.promise,
-    child.exited.then(code => { throw new Error(`${name}: child exited ${code} before barrier`); }),
-  ])).finally(observed.cancel);
+    Promise.all([observed.promise, delivery]).then(() => {}),
+    child.exited.then(code => {
+      if (waiting) console.log("ADAPTER_STATE_BARRIER_EXIT " + JSON.stringify({ order, name, code,
+        durablePresent: fs.existsSync(path.join(dir, name)), receiptEnabled }));
+      throw new Error(`${name}: child exited ${code} before barrier`);
+    }),
+  ])).finally(() => { waiting = false; clearTimeout(delayTimer); observed.cancel(); });
 }
 function native(command: string, args: string[]): string {
   const r = spawnSync(command, args, { encoding: "utf8", env: { ...process.env } });
@@ -44,10 +88,18 @@ function native(command: string, args: string[]): string {
   return r.stdout;
 }
 function spawn(args: string[], cwd: string, label: string) {
-  return Bun.spawn(["bun", ...args], {
-    cwd, env: { ...process.env, WHEELHOUSE_RPC_TIMEOUT_MS: "5000" },
+  const env = { ...process.env,
+    WHEELHOUSE_STATE_WRITE_DELAY_MS: label === `stop-${names[0]}` ? String(firstCommitDelayMs) : "0" };
+  // The second peer intentionally waits for the first stop's commit. Exercise
+  // the unchanged product default, not an incidental RPC-test shutdown grace.
+  delete env.WHEELHOUSE_RPC_TIMEOUT_MS;
+  const child = Bun.spawn(["bun", ...args], {
+    cwd, env,
     stdin: "ignore", stdout: Bun.file(path.join(dir, `${label}.out`)), stderr: Bun.file(path.join(dir, `${label}.err`)),
   });
+  fs.writeFileSync(path.join(dir, `${label}.spawn.json`), JSON.stringify({ pid: child.pid, args, cwd,
+    rpcTimeoutOverride: env.WHEELHOUSE_RPC_TIMEOUT_MS ?? null, stateWriteDelayMs: Number(env.WHEELHOUSE_STATE_WRITE_DELAY_MS) }));
+  return child;
 }
 const failures: string[] = [];
 function check(label: string, body: () => void) {
@@ -98,11 +150,19 @@ try {
   } finally { releasePidLock(lockFile, fd); }
   write(`${names[0]}.release`);
   assert.equal(await bounded(peers[0].exited), 0);
-  assert.equal(await bounded(stops[0].exited), 0, fs.readFileSync(path.join(dir, `stop-${names[0]}.err`), "utf8"));
+  const firstStop = await bounded(stops[0].exited);
+  console.log("ADAPTER_STATE_FIRST_STOP " + JSON.stringify({ order, native: firstStop, stderr: fs.readFileSync(path.join(dir, `stop-${names[0]}.err`), "utf8") }));
+  assert.equal(firstStop, 0, fs.readFileSync(path.join(dir, `stop-${names[0]}.err`), "utf8"));
   assert(!fs.existsSync(path.join(dir, `${names[1]}.release`)), "second stop still held until first commit");
+  const committed = read();
+  console.log("ADAPTER_STATE_COMMIT_SNAPSHOT " + JSON.stringify({ order, first: committed.seats[names[0]].pid, second: committed.seats[names[1]].pid }));
+  assert.equal(committed.seats[names[0]].pid, null, "first stop must have committed before the second release");
+  assert.equal(committed.seats[names[1]].pid, peers[1].pid, "second stop must remain uncommitted until its ordered release");
   write(`${names[1]}.release`);
   assert.equal(await bounded(peers[1].exited), 0);
-  assert.equal(await bounded(stops[1].exited), 0, fs.readFileSync(path.join(dir, `stop-${names[1]}.err`), "utf8"));
+  const secondStop = await bounded(stops[1].exited);
+  console.log("ADAPTER_STATE_SECOND_STOP " + JSON.stringify({ order, native: secondStop, stderr: fs.readFileSync(path.join(dir, `stop-${names[1]}.err`), "utf8") }));
+  assert.equal(secondStop, 0, fs.readFileSync(path.join(dir, `stop-${names[1]}.err`), "utf8"));
   const final = read();
   for (const name of names) {
     check(`${name} keeps its own refreshed cwd`, () => assert.equal(final.seats[name].cwd, path.join(root, name)));
@@ -118,7 +178,10 @@ try {
     process.exitCode = 1;
   } else console.log("adapter-state.selftest: PASS");
 } finally {
+  saveEvidence(".before-cleanup");
   for (const name of names) write(`${name}.release`);
-  await bounded(Promise.all(peers.map(child => child.exited)));
-  await bounded(Promise.all(stops.map(child => child.exited)));
+  try {
+    await bounded(Promise.all(peers.map(child => child.exited)));
+    await bounded(Promise.all(stops.map(child => child.exited)));
+  } finally { saveEvidence(); }
 }
