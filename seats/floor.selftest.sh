@@ -482,7 +482,9 @@ else
       cat "$FIX/floor-$label.stderr" >&2
       return 2
     fi
-    grep -q 'RAIL' "$FIX/floor-$label.capture"
+    # Narrow tmux panes can wrap the rail header into history; the final
+    # status row remains in the viewport and witnesses the same real frame.
+    grep -Fq '[0] STATUS' "$FIX/floor-$label.capture"
   }
   floor_pane_ready() {
     local label="$1" pane
