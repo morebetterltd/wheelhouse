@@ -97,7 +97,7 @@ function structural(lines: string[], start = 0): { text: string; line: number }[
 }
 function sections(lines: string[], file: string, required: readonly string[], start = 0): Record<string, string> {
   const headings = structural(lines, start).flatMap(row => {
-    const m = /^##[ \t]+(.+?)[ \t]*#*[ \t]*$/.exec(row.text);
+    const m = /^ {0,3}##[ \t]+(.+?)[ \t]*#*[ \t]*$/.exec(row.text);
     return m ? [{ name: m[1].trim(), line: row.line }] : [];
   });
   const result: Record<string, string> = {};
@@ -114,9 +114,9 @@ function sections(lines: string[], file: string, required: readonly string[], st
   return result;
 }
 function feature(file: string, slug: string): ManualFeature {
-  const lines = textFile(file).split("\n"), titles = structural(lines).filter(row => /^#[ \t]+\S/.test(row.text));
+  const lines = textFile(file).split("\n"), titles = structural(lines).filter(row => /^ {0,3}#[ \t]+\S/.test(row.text));
   if (titles.length !== 1) fail(file, titles[1]?.line ?? 1, "expected one non-empty H1 feature title");
-  const title = titles[0].text.replace(/^#[ \t]+/, "").replace(/[ \t]+#+[ \t]*$/, "").trim();
+  const title = titles[0].text.replace(/^ {0,3}#[ \t]+/, "").replace(/[ \t]+#+[ \t]*$/, "").trim();
   const body = sections(lines, file, FEATURE_SECTIONS);
   return { slug, title, file, whatItIs: body[FEATURE_SECTIONS[0]], howToGetToIt: body[FEATURE_SECTIONS[1]], howToDriveIt: body[FEATURE_SECTIONS[2]], whatProvesItWorks: body[FEATURE_SECTIONS[3]] };
 }
@@ -135,6 +135,7 @@ export function readManual(repo = ROOT, project?: string): VerificationManual {
   if (!names.length) fail(skills, 1, "no verification manual; run the create-verification skill");
   if (names.length !== 1) fail(skills, 1, "multiple verification manuals; select --project from " + names.map(s => s.slice(7)).join(", "));
   const name = names[0], dir = path.join(skills, name), file = path.join(dir, "SKILL.md"); directory(dir);
+  if (name === "verify-") fail(file, 1, "manual directory needs a project name");
   const lines = textFile(file).split("\n"), fm = frontmatter(lines, file);
   for (const key of ["name", "description", "version"]) if (!fm.values[key]?.trim()) fail(file, fm.locations[key] ?? 1, `missing frontmatter ${key}`);
   if (fm.values.name !== name) fail(file, fm.locations.name, `frontmatter name must equal ${name}`);
@@ -156,7 +157,9 @@ export function readManual(repo = ROOT, project?: string): VerificationManual {
       links.push({ name: relative, line: row.line });
     }
   }
-  const files = fs.readdirSync(map).filter(name => name.endsWith(".md") && name !== "README.md").sort();
+  let files: string[];
+  try { files = fs.readdirSync(map).filter(name => name.endsWith(".md") && name !== "README.md").sort(); }
+  catch (e: any) { return fail(index, 1, `cannot list feature files: ${e.code ?? e.message}`); }
   for (const link of links) if (!files.includes(link.name)) fail(index, link.line, `listed feature file does not exist: ${link.name}`);
   for (const name of files) if (!links.some(link => link.name === name)) fail(index, 1, `feature file is not listed: ${name}`);
   const features = links.map(link => feature(path.join(map, link.name), link.name.slice(0, -3)));
