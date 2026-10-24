@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fold, humanTextGuard } from "./needs";
+import { completedCommand } from "./completed-command";
 
 const DEFAULT_ROOT = fs.existsSync(path.join(process.cwd(), "wheelhouse", ".template-source")) ? process.cwd() : path.join(import.meta.dir, "..");
 const ROOT = path.resolve(process.env.WHEELHOUSE_DIGEST_ROOT || DEFAULT_ROOT);
@@ -31,7 +32,16 @@ function templateValue(k:string){ try{ const m=fs.readFileSync(TEMPLATE_SOURCE,"
 function namespace(){ return templateValue("namespace") || path.basename(ROOT); }
 function readJsonl(file:string):Any[]{ if(!fs.existsSync(file)) return []; return fs.readFileSync(file,"utf8").split(/\r?\n/).filter(Boolean).map((l,i)=>{ try{return JSON.parse(l)}catch(e:any){ return {at:"", title:`parse error line ${i+1}`, detail:e.message}; } }); }
 function run(cmd:string[], cwd=ROOT, opts:{input?:string; timeout?:number; env?:NodeJS.ProcessEnv}={}){ try{ return spawnSync(cmd[0],cmd.slice(1),{cwd,encoding:"utf8",timeout:opts.timeout??BD_TIMEOUT_MS,input:opts.input,env:opts.env}); }catch(e:any){ return {status:127, stdout:"", stderr:String(e?.message||e)} as any; } }
-function bdList(args:string[]):{rows:Any[]; unavailable:boolean}{ const r=run(["bd","list","--json","--limit","0",...args]); if(r.status!==0) return {rows:[], unavailable:true}; try{ const j=JSON.parse(r.stdout||"[]"); return {rows:Array.isArray(j)?j:[], unavailable:false}; }catch{return {rows:[], unavailable:false};} }
+function bdList(args:string[]):{rows:Any[]; unavailable:boolean}{
+  // Host scheduling is not bd availability. Observe the original command's
+  // native completion and captured bytes, without a deadline or retry.
+  let r;
+  try { r=completedCommand("bd",["list","--json","--limit","0",...args],{cwd:ROOT}); }
+  catch { return {rows:[], unavailable:true}; }
+  if(r.status!==0) return {rows:[], unavailable:true};
+  try{ const j=JSON.parse(r.stdout||"[]"); return {rows:Array.isArray(j)?j:[], unavailable:false}; }
+  catch{return {rows:[], unavailable:false};}
+}
 function repoFromRemote(raw:string){ const s=String(raw||"").trim(); let m=s.match(/github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/); return m ? `${m[1]}/${m[2]}` : ""; }
 function productRepo(){ const p=templateValue("product-repo"); return p ? path.resolve(ROOT,p) : ROOT; }
 function defaultBranch(repo:string){ const r=run(["git","symbolic-ref","--short","refs/remotes/origin/HEAD"],repo); return r.status===0 && r.stdout.trim() ? r.stdout.trim() : "main"; }
