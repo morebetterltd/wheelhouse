@@ -319,6 +319,13 @@ JS
   [ $RC -eq 0 ] && [ -s "$ROOT/seats/run/fleet-snapshot.json" ] && [ ! -e "$ROOT/seats/run/alerts.lock" ] && pass "alerts writes a fresh snapshot after an old incomplete lock (${content:-empty})" || fail "incomplete alerts lock blocked snapshot rc=$RC out=$OUT"
 done
 
+phase 'crash-left lock consumer outcomes'
+if bun "$HERE/fixtures/alerts-lock.ts" "$HERE" "$FIX/alerts-lock-cases"; then
+  pass 'O1 stale-lock snapshot publication and O2 real-owner refusal; meaningful removals rejected'
+else
+  fail 'alerts lock consumer outcomes failed'
+fi
+
 phase 'failure and stale lock handling'
 old_at="$(node -e 'console.log(require(process.argv[1]).at)' "$ROOT/seats/run/fleet-snapshot.json")"
 cat > "$BIN/bd" <<'SH'
