@@ -34,14 +34,26 @@ for (const fault of [false, true]) {
   fs.writeFileSync(root + '/bin/bun', '#!/usr/bin/env bash\nexec ' + JSON.stringify(realBun) + ' "$@"\n', { mode: 0o755 });
   fs.writeFileSync(root + '/bin/tmux', '#!/usr/bin/env bash\nif [ "${1:-}" = -L ]; then socket="$2"; shift 2; exec ' + JSON.stringify(realTmux) + ' -S "./$socket.sock" "$@"; fi\nexec ' + JSON.stringify(realTmux) + ' "$@"\n', { mode: 0o755 });
   const recordsFile = root + '/executions.jsonl';
-  const prefix = `import { appendFileSync as recordSelectedSource, readFileSync as readSelectedSource } from 'node:fs';\nimport { createHash as hashSelectedSource } from 'node:crypto';\nrecordSelectedSource(${JSON.stringify(recordsFile)}, JSON.stringify({marker:${JSON.stringify(name)},file:import.meta.file,sha256:hashSelectedSource('sha256').update(readSelectedSource(import.meta.file)).digest('hex'),pid:process.pid,args:process.argv.slice(2),stdinTTY:!!process.stdin.isTTY,stdoutTTY:!!process.stdout.isTTY,tmux:process.env.TMUX||null})+'\\n');\n`;
+  const prefix = `import { appendFileSync as recordSelectedSource, readFileSync as readSelectedSource } from 'node:fs';\nimport { createHash as hashSelectedSource } from 'node:crypto';\nimport { fileURLToPath as selectedSourcePath } from 'node:url';\nrecordSelectedSource(${JSON.stringify(recordsFile)}, JSON.stringify({marker:${JSON.stringify(name)},file:selectedSourcePath(import.meta.url),sha256:hashSelectedSource('sha256').update(readSelectedSource(new URL(import.meta.url))).digest('hex'),pid:process.pid,args:process.argv.slice(2),stdinTTY:!!process.stdin.isTTY,stdoutTTY:!!process.stdout.isTTY,tmux:process.env.TMUX||null})+'\\n');\n`;
   const selected = prefix + (fault ? original.replace(anchor, 'render();\nif (!process.stdin.isTTY) process.exit(0); // planted single-frame interactive product fault\nsetInterval(render, 500);') : original);
   const alternate = root + '/alternate source/requested floor.ts'; fs.writeFileSync(alternate, selected);
   // Absolute source and caller-relative source (both with spaces) are distinct
   // supported invocation configurations. No helper imports are stubbed/removed.
   const argument = fault ? 'alternate source/requested floor.ts' : alternate;
-  const env = { ...process.env, PATH: root + '/bin:' + process.env.PATH, HOME: root + '/home', XDG_CONFIG_HOME: root + '/home/.config', TMPDIR: root + '/tmp', SHELL: '/bin/bash' };
+  // Native macOS Expect overflows its rcfile-path buffer for deeply nested
+  // absolute HOME. A relative private home retains isolation without changing
+  // any assertions, native program, startup flags or resource budgets.
+  const env = { ...process.env, PATH: root + '/bin:' + process.env.PATH, HOME: 'home', XDG_CONFIG_HOME: root + '/home/.config', TMPDIR: root + '/tmp', SHELL: '/bin/bash' };
   delete env.TMUX; delete env.TMUX_PANE;
+  const validityProgram = root + '/runtime/seats/selected-validity.ts';
+  fs.writeFileSync(validityProgram, selected);
+  const validity = completedCommand(realBun, [validityProgram, '--once'], { cwd: root, env });
+  const validityExecutions = fs.existsSync(recordsFile) ? fs.readFileSync(recordsFile, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+  assert.equal(validity.status, 0, 'INCOMPLETE: alternate must import and render with the real runtime BEFORE source selection is measured');
+  assert.equal(validity.signal, null); assert(!validity.error); assert.match(validity.stdout, /no seats/);
+  assert.equal(validityExecutions.length, 1); assert.equal(validityExecutions[0].sha256, sha(selected));
+  const preflight = { code: validity.status, signal: validity.signal, stdout: validity.stdout, stderr: validity.stderr, executions: validityExecutions };
+  fs.unlinkSync(recordsFile); // the direct validity probe is NOT suite-selection evidence
   const out = fs.openSync(root + '/stdout', 'wx'), err = fs.openSync(root + '/stderr', 'wx');
   // Drain native pipes into original byte files. Child close observes stream
   // EOF too, including the suite's asynchronous write-time scrubbers.
@@ -60,6 +72,10 @@ for (const fault of [false, true]) {
   const commands: any[] = [];
   try {
     assert.equal(exit.signal, null, 'source suite must exit natively, not containment');
+    if (!executions.length) {
+      assert.equal(exit.code, 0, 'INCOMPLETE: unmarked default world itself failed before selection could be judged');
+      assert.match(stdout, /floor\.ts works on this machine\./);
+    }
     assert(executions.length, 'REQUESTED_SOURCE_NOT_EXECUTED: suite ignored alternate source');
     assert(executions.every(row => row.marker === name), 'only the requested marker may produce records');
     const main = executions.filter(row => row.file.endsWith('/proj/seats/floor.ts'));
@@ -99,7 +115,7 @@ for (const fault of [false, true]) {
       fs.unlinkSync(file);
     }
   }
-  const result = { name, fault, argument, selectedSha256: sha(selected), executedSelftestSha256: sha(fs.readFileSync(program)), defaultFloorSha256: sha(original), exit, executions, stdout, stderr, failure, cleanupCommands: commands };
+  const result = { name, fault, argument, selectedSha256: sha(selected), executedSelftestSha256: sha(fs.readFileSync(program)), defaultFloorSha256: sha(original), preflight, exit, executions, stdout, stderr, failure, cleanupCommands: commands };
   fs.writeFileSync(root + '/result.json', JSON.stringify(result, null, 2));
   if (evidence) fs.writeFileSync(evidence + '/' + name + '.json', JSON.stringify(result, null, 2), { flag: 'wx' });
   console.log((failure ? 'FAIL' : 'PASS') + ' floor-source ' + name + ': ' + (failure ?? 'native subject selection, runtime imports, all fixture legs and intended oracle verified'));
