@@ -56,11 +56,11 @@ phase(){ printf '\n%s\n' "$*"; }
 
 floor_pin_socket() {
   [ -z "$FLOOR_SOCKET_ID" ] || return 0
-  local actual session_root
+  local actual pane_root
   # A catchable signal may arrive while the first cockpit command returns.
-  # Authenticate that native session's private fixture root before pinning.
-  session_root="$(tmux -L "$SOCK" display-message -p -t '=wh-tfix' '#{session_path}')" || return 2
-  [ "$session_root" = "$PROJ" ] || { echo 'STOP: floor socket session is not this fixture' >&2; return 2; }
+  # Pin the immutable creation path, with a fully qualified native pane target.
+  pane_root="$(tmux -L "$SOCK" display-message -p -t '=wh-tfix:bridge.0' '#{pane_start_path}')" || return 2
+  [ "$pane_root" = "$PROJ" ] || { echo 'STOP: floor socket pane is not this fixture' >&2; return 2; }
   actual="$(tmux -L "$SOCK" display-message -p '#{socket_path}')" || return 2
   case "${actual##*/}" in "$SOCK"|"$SOCK.sock") ;; *) echo 'STOP: unexpected floor socket address' >&2; return 2 ;; esac
   FLOOR_SOCKET_ID="$(bun "$HERE/selftest-floor-socket.ts" pin "$actual")" || return 2
