@@ -83,13 +83,13 @@ function named(original: string, host: string) {
 }
 async function preservation(kind: "transition" | "supervisor" | "sweep" | "inherited" | "sweep-refusal") {
   const dir = path.join(root, kind); fs.mkdirSync(dir); const state = path.join(dir, "state"); fs.mkdirSync(state);
-  const lock = path.join(state, "host.lock"), ready = path.join(dir, "ready"), release = path.join(dir, "release"), receipts = path.join(dir, "refresh.jsonl");
+  const lock = path.join(state, "host.lock"), ready = path.join(dir, "ready"), release = path.join(dir, "release"), receipts = path.join(dir, "refresh.jsonl"), refuse = path.join(dir, "refuse-renewal");
   const hasRenewal = source.includes("function renewFiles("), hasHeartbeat = source.includes("}, 60_000);");
   let tested = named(source, "network-before");
   // Same callback/operations, shorter cadence only in this pinned test copy.
   // Receipt is after successful native refresh/inherited transition, not time.
   if (hasHeartbeat) tested = tested.replace("}, 60_000);", "}, 1_000);");
-  if (kind === "sweep-refusal") tested = tested.replace('if (op === "refresh") {', 'if (op === "refresh") { throw new Refused("fixture: refuse renewal");');
+  if (kind === "sweep-refusal") tested = tested.replace('if (op === "refresh") {', `if (op === "refresh") { if (fs.existsSync(${JSON.stringify(refuse)})) throw new Refused("fixture: refuse renewal");`);
   const end = 'else process.exitCode = main();'; assert.equal(tested.split(end).length, 2);
   tested = tested.replace(end, end + `\n    if (process.exitCode === 0 && ["refresh", "inherited"].includes(operation)) fs.appendFileSync(${JSON.stringify(receipts)}, JSON.stringify({operation, pid:process.pid})+"\\n");`);
   const file = path.join(dir, "helper.ts"), after = path.join(dir, "network-after.ts"); fs.writeFileSync(file, tested); fs.writeFileSync(after, named(source, "network-after"));
@@ -135,6 +135,9 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "inher
   }
   try {
     if (kind === "sweep-refusal") {
+      // Arm only after the complete runtime copy and real payload startup;
+      // setup's own supervisor must never receive this deliberate refusal.
+      fs.writeFileSync(refuse, "armed after ready\n");
       ownerPid = actor.child.pid!;
       const payload = Number(fs.readFileSync(ready, "utf8")); assert(Number.isInteger(payload) && payload > 1);
       const before = command(dir, ["ps", "-ww", "-p", String(payload), "-o", "pid=,uid=,ppid=,pgid=,lstart=,command="], env);
