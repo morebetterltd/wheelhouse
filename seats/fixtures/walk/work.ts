@@ -24,6 +24,7 @@ const ledger = path.join(agent, 'work-invocations.jsonl'); fs.writeFileSync(ledg
 const calls = (directory = agent) => fs.readFileSync(path.join(directory, 'work-invocations.jsonl'), 'utf8').trim().split('\n').filter(Boolean).length;
 const reviewSample = process.env.WHEELHOUSE_REVIEW_RECORD_SAMPLE!; assert(reviewSample && fs.statSync(reviewSample).isFile());
 const reviewerDir = path.join(path.dirname(agent), 'gating-reviewer'); fs.mkdirSync(reviewerDir); fs.writeFileSync(reviewerDir+'/auth.json','{"stub":true}'); fs.writeFileSync(reviewerDir+'/work-invocations.jsonl','');
+roster.seats['REVIEWER-RECORD-SENTINEL']={role:'reviewer',account:{dir:authorDir}}; fs.writeFileSync(rosterFile,JSON.stringify(roster));
 const approval = () => writeReviewFixture(fleet, reviewSample, 'fixture-work', { branch, tip: pin, 'verifier-seat': 'REVIEWER-RECORD-SENTINEL ('+reviewerDir+')' });
 approval();
 const contract = parseContract(fs.readFileSync(fixture, 'utf8')); assert.deepEqual(validateContract(contract, { requireSignal: true }), []);
@@ -111,7 +112,7 @@ leg('ordering reviewer directory alias refused',()=>{
   finally {roster.seats.verifier=structuredClone(originalVerifier);fs.writeFileSync(rosterFile,JSON.stringify(roster));}
 });
 leg('ordering reviewer-role verifier refused',()=>{
-  roster.seats['reviewer-role']={role:'reviewer',account:{dir:reviewerDir}};fs.writeFileSync(rosterFile,JSON.stringify(roster));
+  roster.seats['reviewer-role']={role:'reviewer',account:{dir:agent}};fs.writeFileSync(rosterFile,JSON.stringify(roster));
   const r=run('ordering-role',done,[...common,'--verifier','reviewer-role']);refused(r,5,/role "reviewer", not "verifier"/,true);assert.equal(r.scratchAdds,0);
 });
 leg('ordering exact APPROVE distinct verifier spawns without review context',()=>{

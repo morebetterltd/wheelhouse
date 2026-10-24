@@ -5,7 +5,7 @@ const api = await import(path.join(proj,'seats/verify.ts'));
 const evidence=process.env.WHEELHOUSE_REVIEW_RECORD_EVIDENCE;if(evidence)fs.mkdirSync(evidence,{recursive:true});
 const results:any[]=[];let i=0;const save=(n:string,x:unknown)=>{if(evidence)fs.writeFileSync(evidence+'/'+n+'.json',JSON.stringify(x,null,2),{flag:'wx'});};
 function cli(label:string, verdict:string, extra:string[]=[], env:Record<string,string>={}) {
-  const bead='record-'+label,reply=path.join(proj,label+'.reply');fs.writeFileSync(reply,'VERDICT: '+verdict+'\nPUSH: NOT CONSIDERED\n');
+  const bead='record-'+label,reply=path.join(proj,label+'.reply');fs.writeFileSync(reply,'VERDICT: '+verdict+'\n'+(env.STUB_MOVE_BRANCH_REPO ? 'PUSH: NOT CONSIDERED — branch moved; re-verify at __MOVED__ before publish\n' : 'PUSH: NOT CONSIDERED\n'));
   const r=completedCommand('bun',['seats/verify.ts',bead,'fleet/bead-1','worker-1','reviewer',...extra],{cwd:proj,env:{...process.env,HOME:home,PATH:runPath,STUB_REPLY_FILE:reply,STUB_SWEEP_PROMPT_CHECK:'1',STUB_SWEEP_VERDICT:verdict,...env}});
   const file=proj+'/seats/verdicts/'+bead+'.md',text=fs.existsSync(file)?fs.readFileSync(file,'utf8'):null;
   const row={bead,status:r.status,signal:r.signal,error:r.error?.message??null,stdout:r.stdout,stderr:r.stderr,text};save(label+'-native',row);assert.equal(row.error,null);assert.equal(row.signal,null);assert(!/Cannot find module|ModuleNotFound|SyntaxError/.test(row.stderr),'INCOMPLETE runtime setup');return row;
