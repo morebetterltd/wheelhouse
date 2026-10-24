@@ -24,6 +24,8 @@ const instrumentation = new Map([
 function codeFiles(root: string, relative = ''): string[] {
   return fs.readdirSync(path.join(root, relative), {withFileTypes: true}).sort((a,b)=>a.name.localeCompare(b.name)).flatMap(entry=>{
     const file = path.join(relative, entry.name);
+    // Installed compiler shims/runtime state are not template test source.
+    if(!relative && ['bin','run','logs','verdicts'].includes(entry.name))return[];
     if (entry.isSymbolicLink()) throw new Error(`watch audit: unverifiable source symlink ${file}`);
     if (entry.isDirectory()) return codeFiles(root, file);
     if(!/\.(?:[cm]?js|ts|sh)$/.test(file))return[];

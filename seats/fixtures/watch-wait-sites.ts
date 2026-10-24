@@ -56,7 +56,7 @@ for(const [site,file,inputName] of sites.filter(([site])=>!onlySite||site===only
     // below are real; owner semantics remain covered by the native suites.
     const factory=new Function('waitForCondition','fs','path','dir','input','marker','site',`
       const file=input,name='signal',ready=site==='adapter-rpc.fileSignal'?()=>fs.existsSync(input)&&fs.readFileSync(input,'utf8')==='owned publication\\n':input;
-      const release=input,barrier=dir,agentDir=dir;
+      const release=input,barrier=dir,agentDir=dir,fixture=dir;
       let queued=true,held=false,callbacks=0;
       const done=()=>callbacks++,finish=()=>callbacks++,start=()=>callbacks++,out=()=>callbacks++;
       return {observer:${matches[0]},callbacks:()=>callbacks};
