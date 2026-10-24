@@ -98,6 +98,14 @@ for (const role of ['REVIEWER', 'WORKER', 'BENCH']) await check('contract-' + ro
   assert(!text.includes('<container>/.wheelhouse-runs/<bead-id>'), role + ': no ambiguous container placeholder');
   return { contract: role };
 });
+await check('contract-placeholder-inventory', async () => {
+  const contracts = process.env.WHEELHOUSE_SCRATCH_CONTRACTS || path.join(here,'..','contracts');
+  assert(fs.statSync(contracts).isDirectory());
+  const r = await run('contract-placeholder-inventory','rg',['-n','-F','<container>/.wheelhouse-runs',contracts]);
+  assert.equal(r.code,1,'no contract may retain the ambiguous scratch placeholder: '+r.out+r.err);
+  assert.equal(r.out,''); assert.equal(r.err,'');
+  return {rgCode:r.code,allContracts:true};
+});
 const stray = path.join(path.dirname(root), '.wheelhouse-runs', bead), unrelated = path.join(path.dirname(root), '.wheelhouse-runs', 'other-install-bead');
 const lookalike = path.join(path.dirname(root), '.wheelhouse-runs', bead + '2');
 for (const dir of [stray, unrelated, lookalike]) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'KEEP'), 'foreign KEEP\n'); }
