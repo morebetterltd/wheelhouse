@@ -976,11 +976,17 @@ function accountDirFor(name: string, reject: (message: string) => never = die): 
 /** Shared author-account gate; default reviewer behavior and canary anchor stay intact. */
 export function requireDistinctAccount(authorSeat: string, reviewerSeat: string, accountDir: string,
   reject: (message: string) => never = die, role = "reviewer"): string {
-  const authorDir = canonicalDir(accountDirFor(authorSeat, reject));
+  return requireDifferentAccountDirs(authorSeat, accountDirFor(authorSeat, reject), reviewerSeat, accountDir, reject, role);
+}
+
+/** Compare a recorded account, not a possibly changed live roster entry. */
+export function requireDifferentAccountDirs(authorSeat: string, authorAccountDir: string, reviewerSeat: string, accountDir: string,
+  reject: (message: string) => never = die, role = "reviewer", authorRole = "author"): string {
+  const authorDir = canonicalDir(authorAccountDir);
   const reviewerDir = canonicalDir(accountDir);
   if (authorDir === reviewerDir) { // distinctness-gate
     reject(
-      `${role} seat "${reviewerSeat}" and author seat "${authorSeat}" resolve to the SAME account directory:\n` +
+      `${role} seat "${reviewerSeat}" and ${authorRole} seat "${authorSeat}" resolve to the SAME account directory:\n` +
         `        ${reviewerDir}\n` +
         `      Same directory means same auth.json means same account, and a verdict\n` +
         `      from the author's own account is not a verdict. Nothing was spawned.`
@@ -1038,6 +1044,37 @@ function claudeOauthIsIdentity(configDir: string): boolean {
     return false;
   }
 }
+export interface ReviewRecord {
+  bead: string; branch: string; tip: string; verdict: "APPROVE" | "BOUNCE" | "DISCOVER";
+  push: string; reviewerSeat: string; reviewerDir: string; at: string;
+}
+
+/** Only the completed dispatcher header is a verdict. Output/sweep prose is not. */
+export function readReviewRecord(root: string, beadId: string): ReviewRecord | null {
+  if (!beadId || beadId === "." || beadId === ".." || /[\\/\s'"`]/.test(beadId)) return null;
+  const file = path.join(root, "seats", "verdicts", `${beadId}.md`);
+  let text: string;
+  try { if (!fs.lstatSync(file).isFile()) return null; text = fs.readFileSync(file, "utf8"); } catch { return null; }
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines[0] !== `# Verdict — bead ${beadId}`) return null;
+  const fields = new Map<string, string>();
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue;
+    const m = /^- ([a-z-]+): (.*)$/.exec(line);
+    if (!m) break;
+    const key = m[1] === "verifier-seat" ? "reviewer-seat" : m[1];
+    if (fields.has(key)) return null;
+    fields.set(key, m[2]);
+  }
+  const tip = fields.get("tip"), shown = fields.get("verdict"), seatLine = fields.get("reviewer-seat");
+  const verdict = shown?.split(/\s+/)[0];
+  const seat = seatLine && /^(\S+) \((.+)\)$/.exec(seatLine);
+  if (!tip || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(tip) || !["APPROVE", "BOUNCE", "DISCOVER"].includes(verdict ?? "") || !seat) return null;
+  if (fields.get("bead") !== beadId || !fields.get("branch") || !fields.get("push") || !fields.get("at") || !Number.isFinite(Date.parse(fields.get("at")!))) return null;
+  return { bead: beadId, branch: fields.get("branch")!, tip, verdict: verdict as ReviewRecord["verdict"], push: fields.get("push")!,
+    reviewerSeat: seat[1], reviewerDir: seat[2], at: fields.get("at")! };
+}
+
 function authRouteIdentity(name: string, entry: SeatEntry, authFile: string, harness: HarnessName, accountDir: string): boolean {
   const route = entry.account?.authRoute;
   if (route === "env") {

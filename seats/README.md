@@ -1075,6 +1075,21 @@ from the author's (roster, with retired-seat state fallback), using the same
 shared gate as the reviewer. Same-account and credential refusals exit5;
 usage/unresolved-ref errors exit1.
 
+Review first. `--work` requires the completed dispatcher review record at
+`seats/verdicts/<bead>.md`, read through `readReviewRecord(root, beadId)` from
+`verify.ts`. The reader accepts the writer's `verifier-seat` and `reviewer-seat`
+labels and annotated APPROVE values, but only the dispatcher's completed header,
+not a partial/interim/no-verdict/refused artifact or later quoted output.
+It returns `{bead,branch,tip,verdict,push,reviewerSeat,reviewerDir,at}` or null.
+Missing/invalid review says `review first: bun seats/verify.ts BEAD BRANCH AUTHOR`;
+BOUNCE/DISCOVER are refused; stale APPROVE names both tips and requires re-review.
+All these refusals exit5, notify the inbox, and occur before scratch or harness
+creation. The verifier must also differ canonically from the reviewer directory
+in THAT exact-tip APPROVE record, not a possibly changed roster directory.
+It is not the seat whose APPROVE gates this walk, and never a reviewer-role seat.
+Earlier reviews at other tips are not a historical blacklist; no history file is
+created. Review information stays out of the verifier's prompt and contract.
+
 The product resolver is shared with `verify.ts`: default the install root or
 `wheelhouse/.template-source`'s product-repo, explicit `--repo` resolved from the
 install root. Pin `<ref>^{commit}`, not the author's current checkout. The

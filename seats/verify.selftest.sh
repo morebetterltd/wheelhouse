@@ -689,6 +689,13 @@ VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/reviewer/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/reviewer/cwd.txt"
 
+review_record_suite() {
+  local record_proj="$FIX/review-record-project" seed="${WHEELHOUSE_REVIEW_RECORD_SEED:-$FIX/actual-review.md}"
+  build_proj "$record_proj" review-records "$VERIFY"
+  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/review-records.ts" "$record_proj" "$HOME_FIX" "$RUN_PATH" "$record_proj/seats/verify.ts" "$seed" "${WHEELHOUSE_REVIEW_RECORD_SEED_ONLY:-0}"
+}
+if [ "${WHEELHOUSE_REVIEW_RECORD_ONLY:-0}" = 1 ]; then review_record_suite; exit $?; fi
+
 # Shared by the full suite and focused load repetitions: the same actual CLI,
 # fixture Pi, acknowledged clock generations and verdict/proof assertions.
 progress_past_total() {
@@ -2557,6 +2564,9 @@ EOF
     pass "real: no auth material in the verdict record before fixture deletion"
   else fail "real: a value from the borrowed auth.json appears in seats/verdicts/"; fi
 fi
+
+phase 'completed review records are readable; incomplete runs are not approval'
+if review_record_suite; then pass 'review record ordering reader assertions completed'; else fail 'review record reader regression'; fi
 
 printf '\n'
 if [ $FAILED -eq 0 ]; then

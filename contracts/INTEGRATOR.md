@@ -26,6 +26,12 @@ A goal branch is an integration line, not an unreviewed staging pile. At the goa
 
 A child closes when its reviewed tip is on the goal branch; `wheelhouse/GRAPH.md` owns that close semantics. The epic closes when the last group PR merges to the default line, citing that default-line SHA. Remove the branch from `seats/integration-refs.txt` at that close.
 
+### Review, then verify, then merge
+
+Review first: the reviewer must APPROVE the exact tip. Then dispatch the per-work verifier to prove its outcomes at that same tip, on a verifier-role seat distinct from the author and from the reviewer directory in the APPROVE record that gates this walk. It is not the seat whose APPROVE gates this walk, and never a reviewer-role seat; an earlier review at another tip does not gate the walk. `walk.ts --work` refuses missing, non-APPROVE or stale review records and account/role collisions before creating a scratch worktree or spawning the verifier. This order is enforced by the dispatcher, not left to the commander's discipline.
+
+Next comes W12's merge gate (arrives with the merge gate), then merge and push under their existing authority gates. Approval and verification are pinned to the same identifier; moving the branch requires re-review at the new tip before another work walk. This subsection does not claim W12 is implemented yet.
+
 ### Confirm what you actually integrated
 
 The worker reports a head. Your job is to establish that the head you integrated is that one, by comparing refs rather than by reading output.
