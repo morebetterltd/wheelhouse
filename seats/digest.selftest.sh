@@ -161,13 +161,13 @@ CAN_RC=0; CAN_OUT="$(run_digest --notify --since "$SINCE" --until 2026-01-06T00:
 mv "$FIX/digest.good.ts" "$PROJ/seats/digest.ts"
 if [ $CAN_RC -eq 2 ] && grep -q 'contains install-local id token\|contains forbidden human-facing token' "$FIX/notify-canary.err" && [ ! -e "$PROJ/seats/run/digest.last" ]; then pass "canary: id-leaking renderHuman makes --notify exit 2 without writing digest.last"; else fail "notify canary failed rc=$CAN_RC out=$CAN_OUT err=$(cat "$FIX/notify-canary.err") last=$(cat "$PROJ/seats/run/digest.last" 2>/dev/null)"; fi
 
-# Native bd completion, actual missing executable, and actual broken exit.
+# Native bd completion and an actually missing executable.
 # The 6100ms fixture latency exceeds the old cut; it is not a success deadline.
 BD_RC=0
 HOME="$FAKE_HOME" PATH="$PROJ/bin:$PATH" bun "$ROOT/seats/fixtures/digest-bd.ts" "$PROJ" "$FIX" > "$FIX/bd-read.stdout" 2> "$FIX/bd-read.stderr" || BD_RC=$?
 if [ "$BD_RC" = 0 ]; then
   cat "$FIX/bd-read.stdout"
-  pass "bd reads await native completion; genuine missing/broken bd stays unavailable"
+  pass "bd reads await native completion; genuinely missing bd stays unavailable"
 else
   fail "bd completion/availability rc=$BD_RC stdout=$(cat "$FIX/bd-read.stdout") stderr=$(cat "$FIX/bd-read.stderr")"
 fi

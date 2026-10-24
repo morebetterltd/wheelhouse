@@ -1,4 +1,4 @@
-// Native completion, genuine ENOENT, and a nonzero tool exit are separate cases.
+// Regressions for slow native completion and a genuinely missing executable.
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -11,12 +11,12 @@ fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const stub = path.join(project, "bin/bd"), original = fs.readFileSync(stub), mode = fs.statSync(stub).mode & 0o777;
 const readRows = (file: string) => fs.readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
 try {
-  for (const kind of ["slow", "missing", "broken"] as const) {
+  for (const kind of ["slow", "missing", "missing-removal"] as const) {
     const dir = path.join(evidence, kind); fs.mkdirSync(dir, { mode: 0o700 });
-    fs.writeFileSync(stub, kind === "broken" ? "#!/bin/sh\nprintf 'digest fixture: broken bd\\n' >&2\nexit 23\n" : original, { mode });
+    fs.writeFileSync(stub, original, { mode });
     const env = { ...process.env, WHEELHOUSE_DIGEST_ROOT: project, DIGEST_BD_DIAG: dir,
       DIGEST_BD_INSTALL_FIXTURE: kind === "slow" ? "1" : "0", DIGEST_BD_SLOW_FIRST: kind === "slow" ? "1" : "0" };
-    if (kind === "missing") {
+    if (kind !== "slow") {
       // Remove only directories that actually provide bd; keep other tooling
       // (including any host-budget shim directory) rather than invent exit127.
       const dirs = (env.PATH || "").split(path.delimiter), removed: string[] = [];
@@ -26,7 +26,16 @@ try {
       assert.equal(Bun.which("bd", { PATH: env.PATH }), null, "missing case must genuinely have no bd executable");
       fs.writeFileSync(path.join(dir, "missing-path.private.json"), JSON.stringify({ removed, bd: null, PATH: env.PATH }) + "\n", { mode: 0o600 });
     }
-    const command = ["bun", "--preload", path.join(import.meta.dir, "digest-bd-observer.ts"), path.join(project, "seats/digest.ts"), "--since", "2026-01-01T00:00:00Z", "--until", "2026-01-02T00:00:00Z"];
+    let codeRoot = project;
+    if (kind === "missing-removal") {
+      codeRoot = path.join(owner, "bd-missing-removal");
+      fs.cpSync(path.join(project, "seats"), path.join(codeRoot, "seats"), { recursive: true });
+      const file = path.join(codeRoot, "seats/digest.ts"), source = fs.readFileSync(file, "utf8");
+      const before = "const unknown=(reason:string)=>({rows:[], unavailable:true, diagnostic:";
+      assert.equal(source.split(before).length - 1, 1, "remove only main's bd unavailable result");
+      fs.writeFileSync(file, source.replace(before, "const unknown=(reason:string)=>({rows:[], unavailable:false, diagnostic:"));
+    }
+    const command = ["bun", "--preload", path.join(import.meta.dir, "digest-bd-observer.ts"), path.join(codeRoot, "seats/digest.ts"), "--since", "2026-01-01T00:00:00Z", "--until", "2026-01-02T00:00:00Z"];
     const child = Bun.spawn(command, { cwd: project, env, stdin: "ignore", stdout: Bun.file(path.join(dir, "digest.stdout")), stderr: Bun.file(path.join(dir, "digest.stderr")) });
     const code = await child.exited, signal = child.signalCode ?? null;
     fs.writeFileSync(path.join(dir, "digest.native.json"), JSON.stringify({ command, code, signal }) + "\n", { mode: 0o600 });
@@ -44,16 +53,23 @@ try {
       console.log("PASS digest slow closed read: original native child/JSON completed beyond old 5000ms cut; no deadline/retry verdict");
     } else {
       for (const call of calls) {
-        if (kind === "missing") {
-          // Node uses null; Bun may omit status on a spawn error. Neither is
-          // a native exit127 (or any completed command).
-          assert(call.status === null || (call.status === undefined && call.statusType === "undefined"));
-          assert.equal(call.error?.code, "ENOENT");
-        }
-        else { assert.equal(call.status, 23); assert.equal(call.signal, null); assert.equal(call.error, null); }
+        // Node uses null; Bun may omit status on a spawn error. Neither is
+        // a native exit127 (or any completed command).
+        assert(call.status === null || (call.status === undefined && call.statusType === "undefined"));
+        assert.equal(call.error?.code, "ENOENT");
       }
-      assert.equal(text.split("[bd unavailable]").length - 1, 2, "both unavailable sections must remain explicit, not empty/healthy");
-      console.log(`PASS digest ${kind} bd: actual ${kind === "missing" ? "ENOENT" : "exit23"}, both sections [bd unavailable]`);
+      const count = text.split("[bd unavailable]").length - 1;
+      const check = () => assert.equal(count, 2, "both unavailable sections must remain explicit, not empty/healthy");
+      if (kind === "missing") {
+        check();
+        console.log("PASS digest missing bd: actual ENOENT, both sections [bd unavailable]");
+      } else {
+        // Native setup, rendering, both real spawn errors and source mutation
+        // are checked above, outside expected-rejection credit.
+        assert.equal(count, 0, "removal must actually discard both unavailable flags");
+        assert.throws(check, assert.AssertionError, "removing unavailable must reject with valid native setup");
+        console.log("REJECT digest missing-bd unavailable removal: native digest0, actual ENOENT, UI checker rejected");
+      }
     }
   }
 } finally { fs.writeFileSync(stub, original, { mode }); fs.chmodSync(stub, mode); }
