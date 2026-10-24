@@ -65,6 +65,10 @@ for (const [name, repo, explicit] of [['umbrella-product', product, true], ['sib
   env.SCRATCH_PATH_SWEEP_LEDGER = ledger;
   fs.rmSync(path.join(account, 'prompt.txt'), { force: true });
   const r = await run(name, 'bun', [path.join(root, 'seats/verify.ts'), bead, 'fleet/fixture-ik5b', 'author', 'verifier', ...(explicit ? ['--repo', repo] : [])]);
+  if(evidence) {
+    const logs = path.join(root,'seats/verdicts/sweeps');
+    if(fs.existsSync(logs)) for(const log of fs.readdirSync(logs)) fs.copyFileSync(path.join(logs,log),path.join(evidence,name+'.'+log));
+  }
   assert.equal(r.code, 0, r.err);
   const tip = await run(name + '-source-tip', 'git', ['rev-parse', 'HEAD'], repo); assert.equal(tip.code, 0, tip.err);
   assert.equal(fs.readFileSync(ledger, 'utf8'), tip.out, 'one completed fixture sweep at the exact reviewed tip');
