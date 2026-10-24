@@ -1187,8 +1187,12 @@ reject with the site name. Explicit fixture IPC checkpoints can reconcile the
 same registered predicates, without duplicating their logic.
 
 `watch-wait.selftest.sh` drops notifications under both runtimes and requires a
-real publication after an initially false condition. `watch-wait-audit.selftest.sh`
-refuses direct/aliased watch access outside the helper and narrowly identified
+real publication after an initially false condition. `watch-wait-sites.selftest.sh`
+probes the actual source call expressions with real filesystem conditions, both
+already held and published after initial false; callback counters are unit seams,
+not fabricated native results or RPC frames. Native concurrency regression cases
+retain their real peers, lifecycle pipes and explicit observation checkpoints.
+`watch-wait-audit.selftest.sh` refuses direct/aliased watch access outside the helper and narrowly identified
 notification-suppression instrumentation, including generated code in shell
 stubs. New waits must use the helper, not grow another local watch/poll loop.
 `WHEELHOUSE_CONDITION_DROP_WATCH=1` is the deterministic fixture control: the
