@@ -5,7 +5,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 PIDS=""
-cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; pkill -f "$FIX" >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
+cleanup(){ selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
 selftest_install_cleanup_traps cleanup
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
@@ -54,7 +54,7 @@ function pool(){return JSON.parse(fs.readFileSync(path.join(root,"seats/pool.jso
 function modelFor(seat:string){const p=pool(); const ent=seat.replace(/^worker-/,'').replace(/^reviewer-/,''); const r=p.roles.workers.entries.includes(ent)?p.roles.workers:p.roles.reviewers; return typeof r.model==='string'?r.model:r.model[ent]}
 if(cmd==='spawn'){
  const seat=args[0]; const fifo=path.join(root,"seats/run",`${seat}.stdin`); try{fs.mkfifoSync(fifo)}catch{spawnSync("mkfifo",[fifo])}
- const child=spawn("bash",["-c",`exec 3<>${JSON.stringify(fifo)}; sleep 1000`],{detached:true,stdio:"ignore"}); child.unref();
+ const child=spawn("bash",["-c",`exec 3<>${JSON.stringify(fifo)}; exec sleep 1000`],{detached:true,stdio:"ignore"}); child.unref();
  const wt=path.join(root,".wheelhouse-worktrees",seat); spawnSync("git",["-C",root,"worktree","add","--detach",wt,"HEAD"],{stdio:"ignore"});
  const st=read(path.join(root,"seats/state.json")); st.seats[seat]={pid:child.pid,startedAt:new Date().toISOString(),fifo,log:path.join(root,"seats/logs",`${seat}.jsonl`),cwd:wt}; write(path.join(root,"seats/state.json"),st);
  fs.writeFileSync(path.join(root,"seats/logs",`${seat}.jsonl`),'{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}\n');
@@ -214,7 +214,7 @@ bun - "$ROOT/seats/seats.json" "$ROOT/seats/staffing.json" <<'JS'
 const fs=(await import('node:fs')).default; fs.writeFileSync(process.argv[2],JSON.stringify({version:1,seats:{}},null,2));
 fs.writeFileSync(process.argv[3],JSON.stringify({version:1,seats:{'worker-e1':{role:'worker',entry:'e1',addedAt:'2026-01-01T00:00:00Z'},'reviewer-rv1':{role:'reviewer',entry:'rv1',addedAt:'2026-01-01T00:00:00Z'}},rateLimited:{rv1:{at:'2026-01-01T00:00:00Z',detail:'test keeps rv1 unavailable'}}},null,2));
 JS
-MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID0=$!; printf '{"pid":%s,"bead":"other-bead"}\n' "$MPID0" > "$MARKER"
+MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; mkfifo "$MARKER.hold0"; (cd "$FIX" && exec 3<> "$MARKER.hold0" && read -r release <&3) & MPID0=$!; printf '{"pid":%s,"bead":"other-bead"}\n' "$MPID0" > "$MARKER"
 run env BD_READY_COUNT=0 BD_REVIEW=1 bun seats/staffing.ts check
 kill "$MPID0" 2>/dev/null || true; rm -f "$MARKER"
 [ $RC -eq 0 ] && grep -q 'decision=add-reviewer' <<<"$OUT" && grep -q 'seat=reviewer-rv2' <<<"$OUT" && pass 'G4-19 review backlog with no eligible free reviewer adds next reviewer' || fail "no eligible reviewer backlog failed: $OUT"
@@ -232,7 +232,7 @@ const pool={version:1,idle_drop_minutes:0,entries:{rv1:{harness:"codex",provider
 const staffing={version:1,seats:{"reviewer-rv1":{role:"reviewer",entry:"rv1",addedAt:"2026-01-01T00:00:00Z"}}};
 console.log(JSON.stringify(decide(snap, pool, staffing)));
 ')" && grep -q '"kind":"drop-seat"' <<<"$UNIT_DROP" && grep -q '"role":"reviewers"' <<<"$UNIT_DROP" && pass 'G4-19 decide path drops idle reviewer above minimum' || fail "idle reviewer decide path failed: $UNIT_DROP"
-MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; (sleep 60) & MPID=$!; printf '{"pid":%s,"bead":"review-bead"}\n' "$MPID" > "$MARKER"
+MARKER="$ROOT/seats/run/verify.reviewer-rv1.json"; mkdir -p "$(dirname "$MARKER")"; mkfifo "$MARKER.hold"; (cd "$FIX" && exec 3<> "$MARKER.hold" && read -r release <&3) & MPID=$!; printf '{"pid":%s,"bead":"review-bead"}\n' "$MPID" > "$MARKER"
 run env BD_READY_COUNT=0 bun seats/staffing.ts drop reviewer-rv1
 [ $RC -eq 0 ] && grep -q 'drop refused: reviewer-rv1 is busy' <<<"$OUT" && kill "$MPID" 2>/dev/null && rm -f "$MARKER" && pass 'G4-19 reviewer with live verify marker is not dropped' || { kill "$MPID" 2>/dev/null || true; fail "busy reviewer drop failed: $OUT"; }
 run env BD_READY_COUNT=0 bun seats/staffing.ts drop reviewer-rv1

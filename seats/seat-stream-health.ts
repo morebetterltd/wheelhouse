@@ -3,7 +3,7 @@
 // phase: their duration is not a model-stream deadline.
 import fs from "node:fs";
 import path from "node:path";
-import { pidAlive } from "./seat-activity";
+import { pidAlive, SeatIdentityUnverified } from "./seat-activity";
 export interface StreamSeat { pid?: number | null; fifo?: string; startedAt?: string; stoppedAt?: string; log?: string; lastBead?: string; lastDispatchAt?: string; lastCapacityEvent?: unknown }
 export interface StreamHealth {
   seat: string; bead: string | null; processKey: string; progressKey: string;
@@ -115,9 +115,12 @@ export function seatStreamHealth(root: string, seat: string, rec: StreamSeat, pr
 export function readStreamObservations(root: string): Record<string, StreamHealth> {
   try { return JSON.parse(fs.readFileSync(path.join(root, "seats/run/fleet-snapshot.json"), "utf8")).seatStreams ?? {}; } catch { return {}; }
 }
-export function observeSeatStreams(root: string, prior: Record<string, StreamHealth> = {}, now = Date.now()): Record<string, StreamHealth> {
+export function observeSeatStreams(root: string, prior: Record<string, StreamHealth> = {}, now = Date.now(), onUnverified?: (seat: string, rec: StreamSeat, reason: string) => void): Record<string, StreamHealth> {
   const out: Record<string, StreamHealth> = {};
   let seats: Record<string, StreamSeat>; try { seats = JSON.parse(fs.readFileSync(path.join(root, "seats/state.json"), "utf8")).seats ?? {}; } catch { return out; }
-  for (const [seat, rec] of Object.entries(seats)) { const health = seatStreamHealth(root, seat, rec, prior[seat], now); if (health) out[seat] = health; }
+  for (const [seat, rec] of Object.entries(seats)) {
+    try { const health = seatStreamHealth(root, seat, rec, prior[seat], now); if (health) out[seat] = health; }
+    catch (e) { if (!(e instanceof SeatIdentityUnverified)) throw e; onUnverified?.(seat, rec, e.message); }
+  }
   return out;
 }

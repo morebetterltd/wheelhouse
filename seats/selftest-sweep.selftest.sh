@@ -189,6 +189,12 @@ if [ "${WHEELHOUSE_SELFTEST_SWEEP_TIMING_ONLY:-0}" = 1 ]; then
   [ "$FAILED" = 0 ] || exit 1
   echo 'selftest-sweep.selftest: PASS (timing checks)'; exit 0
 fi
+if bun "$HERE/fixtures/sweep-core.ts" "$HERE" "$FIX" "$SWEEP"; then
+  pass 'core manifest/CLI admission and matching removal controls'
+else fail 'core manifest/CLI regression'; fi
+if bun "$HERE/fixtures/quarantine-sweep.ts" "$HERE" "$FIX" "$SWEEP"; then
+  pass 'quarantine execution, expiry, validation and sensitive removals'
+else fail 'quarantine sweep regression'; fi
 default_tmpdir_leg
 if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
   [ "$FAILED" -eq 0 ] || { echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1; }
@@ -213,20 +219,19 @@ ownership_tests(){
   # Bun exits1 for missing/malformed programs too. Only the helper's reserved
   # held result may retry; missing and broken helpers must fail once, before START.
   for case in missing broken; do
-    local helper="$FIX/$case-helper.ts" calls="$FIX/$case-helper.calls"
+    local helper="$FIX/$case-helper.ts" calls="$FIX/$case-helper.calls" call_count=0
     if [ "$case" = broken ]; then
       printf 'import fs from "node:fs";fs.appendFileSync(process.env.HELPER_CALLS!,"called\\n");process.exit(1);\n' > "$helper"
     fi
     path="$FIX/$case-helper.lock"
-    HELPER_CALLS="$calls" WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$helper" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/$case-helper.out" 2> "$FIX/$case-helper.err" &
-    pid=$!
-    for _ in $(seq 1 40); do kill -0 "$pid" 2>/dev/null || break; sleep 0.05; done
-    kill -TERM "$pid" 2>/dev/null || true
-    wait "$pid"; rc=$?
-    if [ "$rc" = 2 ] && [ ! -e "$path" ] && ! grep -q 'waiting for host-wide lock' "$FIX/$case-helper.err" && ! grep -q 'selftest-sweep: START ' "$FIX/$case-helper.out" && { [ "$case" = missing ] || [ "$(wc -l < "$calls" | tr -d ' ')" = 1 ]; }; then
+    # Judge the runner's own exit, not how much startup work a busy host can
+    # finish in two seconds. The alarm is containment, never a passing result.
+    with_timeout 120 env HELPER_CALLS="$calls" WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$helper" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/$case-helper.out" 2> "$FIX/$case-helper.err"; rc=$?
+    if [ -f "$calls" ]; then call_count="$(wc -l < "$calls" | tr -d ' ')"; fi
+    if [ "$rc" = 2 ] && [ ! -e "$path" ] && ! grep -q 'waiting for host-wide lock' "$FIX/$case-helper.err" && ! grep -q 'selftest-sweep: START ' "$FIX/$case-helper.out" && { [ "$case" = missing ] || [ "$call_count" = 1 ]; }; then
       pass "$case helper fails2 without retry, lock mutation or suite START"
     else
-      fail "$case helper was mistaken for lock-held (rc=$rc)"
+      fail "$case helper was mistaken for lock-held (rc=$rc calls=$call_count)"
     fi
   done
   for case in plain extra nested bad-marker mismatch bad-time other-host link legacy-bad legacy-duplicate; do
@@ -425,13 +430,20 @@ TERM_SUITES="$FIX/term-suites"
 TERM_LOCK="$FIX/term.lock"
 TERM_EVENTS="$FIX/term-events.log"
 TERM_STARTED="$FIX/term-started"
+TERM_RELEASE="$FIX/term-release"
 mkdir -p "$TERM_SUITES"
 cat > "$TERM_SUITES/one.selftest.sh" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf 'one start\n' >> "$TERM_EVENTS"
-: > "$TERM_STARTED"
-( trap 'exit 0' TERM; sleep 1; printf 'child survived\n' >> "$TERM_EVENTS" ) &
+# A census can legitimately take longer than one second before delivering TERM.
+# Hold the child's work until cleanup returns; require its actual TERM receipt,
+# not a race between an arbitrary sleep and native ownership observation.
+( trap 'printf "child TERM\n" >> "$TERM_EVENTS"; exit 0' TERM
+  : > "$TERM_STARTED"
+  while [ ! -f "$TERM_RELEASE" ]; do sleep 0.05; done
+  printf 'child survived\n' >> "$TERM_EVENTS"
+) &
 while :; do sleep 0.05; done
 EOF
 cat > "$TERM_SUITES/two.selftest.sh" <<'EOF'
@@ -440,15 +452,16 @@ set -eu
 printf 'two start\n' >> "$TERM_EVENTS"
 EOF
 chmod +x "$TERM_SUITES"/*.selftest.sh
-TERM_EVENTS="$TERM_EVENTS" TERM_STARTED="$TERM_STARTED" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$TERM_SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$TERM_LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/term.out" 2> "$FIX/term.err" &
+TERM_EVENTS="$TERM_EVENTS" TERM_STARTED="$TERM_STARTED" TERM_RELEASE="$TERM_RELEASE" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$TERM_SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$TERM_LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/term.out" 2> "$FIX/term.err" &
 PID_TERM=$!
 for _ in $(seq 1 100); do [ -f "$TERM_STARTED" ] && break; sleep 0.05; done
 kill -TERM "$PID_TERM" 2>/dev/null || true
 wait "$PID_TERM"; RC_TERM=$?
+: > "$TERM_RELEASE"
 sleep 1.2
 TERM_ORDER="$(tr '\n' '|' < "$TERM_EVENTS" 2>/dev/null || true)"
-if [ "$RC_TERM" -eq 143 ] && [ "$TERM_ORDER" = 'one start|' ] && [ ! -e "$TERM_LOCK" ]; then
-  pass "TERM stops the running fixture suite process group, skips later suites, and releases the lock"
+if [ "$RC_TERM" -eq 143 ] && [ "$TERM_ORDER" = 'one start|child TERM|' ] && [ ! -e "$TERM_LOCK" ]; then
+  pass "TERM reaches the ready child, stops the suite group, skips later suites, and releases the lock"
 else
   fail "TERM did not stop cleanly (rc=$RC_TERM order=$TERM_ORDER lock=$(ls -ld "$TERM_LOCK" 2>/dev/null || true) out=$(cat "$FIX/term.out" 2>/dev/null) err=$(cat "$FIX/term.err" 2>/dev/null))"
 fi

@@ -48,7 +48,7 @@ The main files here:
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
 - `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and review markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
-- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, seatStreams, alerts}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work, silent mid-turn model streams and invalid commander panes open/close human needs through `seats/needs.ts` only.
+- `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, seatStreams, alerts, settledSeats}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work, silent mid-turn model streams and invalid commander panes open/close human needs through `seats/needs.ts` only.
 - `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
@@ -116,6 +116,44 @@ signals and dispatches their ids to the producer, not their embedded
 instructions as commands. Run from the install root, like `needs.ts`; tests or
 isolated callers may set `WHEELHOUSE_INTAKE_ROOT` to a fixture root. No transport
 or channel binding changes are involved.
+
+## ISA claims — direction reaching intake
+
+A human's changed direction goes through the commander into `wheelhouse/ISA.md`:
+their words, dated, in Decisions and the affected claim updated before any work
+depends on it. The commander files nothing from that change. The supervisor runs
+`isa-signals.ts sync` every `WHEELHOUSE_ISA_SYNC_SECONDS` (default 30 seconds)
+when both the script and ISA exist; `isa_signals=off` in
+`wheelhouse/.template-source` disables the tick. Output goes to
+`seats/logs/isa-signals.out.log`.
+
+Run from the install root right after an ISA edit rather than waiting for a tick:
+
+```bash
+bun seats/isa-signals.ts sync
+bun seats/isa-signals.ts status
+# Optional alternate ISA, absolute or relative to the install root:
+bun seats/isa-signals.ts sync --isa wheelhouse/ISA.md
+```
+
+Only `## Claims` through the next `## ` heading is read. New or text-changed
+`- [ ] ID ...` and `- Anti: ID ...` lines become one `isa-change` signal through
+`intake.ts`, source `isa:ID`, ref `ID`, title `ISA claim ID changed`, full line
+as text. An undisposed row with that source and text hash prevents a retry from
+posting it twice. Closed `- [x] ID ...` lines, deletions, Decisions and Goal
+edits post nothing. The producer decides what work a signal warrants; the
+herald's intake wake carries it to the commander to route to that producer.
+
+The **first run only snapshots** existing claims and prints `posted 0`; run it
+before making a direction change when establishing an install/upgrade baseline.
+Subsequent runs print `posted N`. The snapshot `seats/run/isa-claims.json` maps
+IDs to `{open, sha256}` of the complete line without its line ending; `status`
+prints `snapshot N claims` without changing it. The ISA is never written.
+Duplicate IDs, unreadable/invalid state, busy sync locks or intake refusal exit
+2 and do not advance the snapshot; successful sync/status exit 0. A single
+shared PID lock serializes manual and supervisor sync attempts; a busy caller
+can retry. Only the intake CLI writes its ledger. Isolated callers may set
+`WHEELHOUSE_ISA_SIGNALS_ROOT`; intake calls stay rooted at that same install.
 
 ## Needs — what the commander asks of a human
 
@@ -458,6 +496,13 @@ worktree, then to the root. `dispatch` transparently stops and relaunches the
 seat, attached to the same session, when its cwd does not already match the
 seat worktree.
 
+In an umbrella install, `Repo: UMBRELLA` selects the container's Git repository
+before any existing worktree is reused. The field may start a line or follow
+another sentence (`Closes: H7. Repo: UMBRELLA`). If the selected seat worktree
+belongs to the product instead, dispatch refuses before creating or switching
+its branch; prepare an umbrella-owned seat worktree first. It does not silently
+create an empty product branch or repurpose the product worktree.
+
 `probe` runs the rostered account, provider, and model through a one-shot `pi -p --no-session` liveness turn that asks only for `OK`; it does not need or create a bead worktree and writes no bead comment. A successful probe prints `OK`; a provider failure prints pi's stdout/stderr verbatim and exits with pi's status.
 
 ### Silent model streams and long commands
@@ -517,8 +562,13 @@ never leaves `status` naming the previous bead after the prompt has been sent.
 RPC readiness, state replies, FIFO drain and prompt acknowledgements have no
 elapsed-time failure budget: a live seat with an open pipe may answer late.
 The adapter waits for the matching response, or fails with the seat name and
-pid when the process dies or its pipe closes (EOF). A
-`command:"parse", success:false` response fails immediately when read, before
+pid when the process dies or its pipe closes (EOF). An established seat whose
+response-log path disappears or whose file inode changes during an RPC is refused with
+`response source lost`, seat, pid and path: a live PID/FIFO cannot establish
+that replies remain observable. Each read checks and consumes the same opened
+file descriptor. Fresh launches may still wait for their first log creation;
+source loss does not signal/restart the seat or rewrite its PID/session/bead.
+A `command:"parse", success:false` response fails immediately when read, before
 acknowledgement matching, with `PI_PARSE_ERROR`, seat, pid, pi's error and
 `adapter.ts stop <seat> && adapter.ts resume <seat>`. Pi cannot recover a
 request id from malformed JSON: pending calls observing that transport error
@@ -534,14 +584,66 @@ For live seats, status and the cockpit floor share the display-only
 `turn_end`, or `agent_settled`, and `RUNNING` after subsequent turn/tool/message
 work. Transport responses do not restart a turn; silence/age alone never proves
 settlement. Unreadable/unknown activity retains the live `RUNNING` fallback.
-`PARKED`, `STALLED`, `DIED` and `STOPPED` still take precedence. `SETTLED` does
+`UNVERIFIED`, `PARKED`, `STALLED`, `DIED` and `STOPPED` still take precedence.
+`UNVERIFIED` means process identity could not be established (for example,
+`ps`/`lsof` failed, returned an incomplete observation, or the record lacks
+proof). It is **not** death, foreign identity, idle capacity, or permission to
+restart. Status and floor show it explicitly. Stop/resume/spawn/reset/dispatch
+refuse it without signalling or replacing the seat; recovery keeps its FIFO
+and gives no resume/spawn advice. Snapshots still publish: `unverified` names
+uncertain seats with their PID, role and reason; their occupied entries carry
+`identity: UNVERIFIED`, count as busy, and are never free capacity. Alerts report
+`seat-unverified:<name>` without cold/idle/stall/restart advice from that seat;
+healthy peers remain visible. A later failed stream/settlement probe is also
+reported, not allowed to abort the fleet snapshot. Staffing rechecks identity
+before allocating/releasing that entry, and cleanup/prune refuse reclamation. Repair/retry the observer; never clear the
+record or manufacture a matching timestamp to silence the warning. A completed
+start-time mismatch or definite FIFO mismatch remains foreign, as before. `SETTLED` does
 not mean the bead is closed or staffing considers the seat free: it is not a
 change to the idle-alert detector, snapshot or state.json schema.
 `WHEELHOUSE_PROMPT_ACK_MS`, `WHEELHOUSE_FIFO_WRITE_MS` and
 `WHEELHOUSE_WEDGED_GET_STATE_MS` no longer decide RPC outcomes.
 `WHEELHOUSE_RPC_TIMEOUT_MS` remains a legacy stop/SIGKILL-confirmation setting
 only, not an RPC budget. `adapter-rpc.selftest.sh` covers held replies beyond
-the old logical budgets, live backpressure, death, EOF and partial writes.
+the old logical budgets, live backpressure, death, EOF, partial writes, a missing
+established response log, and removal/inode replacement while a reply is held.
+The loss controls fail on actual forbidden delivery/WAIT events, not a deadline.
+Fleet snapshot graph reads, contract reads and fixture-owner inspection also
+wait for native command completion, not a quiet-machine deadline. The legacy
+`WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS` is no longer an authority to fail a
+still-running graph read. Their stdout/stderr are captured through exclusive
+regular descriptors, then read after exit; host-wide process listings and graph
+bodies cannot overflow a pipe capture buffer or silently become an empty graph.
+Native nonzero exits, signals, spawn errors and non-JSON/empty graph stdout
+remain errors. Cancel a hung command explicitly; the admitted selftest sweep supplies
+test containment. Staffing growth and stop-all busy actors use observed events
+and explicit release, never elapsed startup/turn clocks.
+Status's one whole-host `ps` orphan census uses the same descriptor capture.
+Native errors/signals/nonzero, diagnostics, empty or malformed census output
+produce `UNVERIFIED orphan census` rather than an empty-table inference.
+Healthy recorded seat rows remain visible; an unavailable census neither proves
+absence of extra processes nor changes seat identity/state. Adapter regression
+cases replay actual captured process records beyond the old pipe ceiling and
+exercise native23, empty, malformed and stderr-bearing results.
+An early `verify-cancellation` child exit before idle readiness is not diagnosed
+from its case/signal name. The FAIL line names retained `stdout`, `stderr` and
+`exit.json` outside both cancellation scratch and the per-suite TMPDIR. Files
+are private (0600 in a fresh0700 directory); an initial snapshot is completed
+after owned cleanup and stream EOF. `WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT`
+overrides the destination, otherwise the explicit evidence root or
+`seats/verdicts/verify-cancellation-failures` beside the test is used. Keep that
+root outside temporary trees; storage refusal is reported, never called saved.
+A planted native37 leg deletes its scratch and verifies both streams/exit status
+and the printed FAIL path survive. This preserves the next diagnosis; it does
+not claim a cause or cure for historical early exits whose streams were lost.
+The runtime-source copy regression is test-only, not an install-path timeout.
+It preserves full inventory/byte/sentinel assertions and accepts native completion
+through regular stdout/stderr descriptors. A delayed FIFO input crosses the
+retired5s kill/SLA; elapsed time is diagnostic only. Its named30-minute outer
+resource containment (inside the normal3600s suite containment) reports expected
+inventory and both observed partial copies on expiry or supervisor cancellation,
+then stops only its own spawned copy group. Containment is INCOMPLETE, not a
+claim of incorrect copied bytes.
 `stop` is SIGTERM — Pi's graceful path — and deliberately
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
@@ -662,8 +764,13 @@ to the real `bd` binary behind the shim. Bench code must call
 `${WHEELHOUSE_REAL_BD:-bd}` with its own scratch `BEADS_DIR`; bare `bd`
 through `PATH` remains the read-only shim inside the reviewer process.
 
-For **every** review, regardless of the task's wording, `verify.ts` runs
-`bash seats/selftest-sweep.sh` **before** starting the reviewer. It uses a
+### Required review tier
+
+For **every** review, `verify.ts` runs a dispatcher-owned sweep of **the tier the change requires** at the exact reviewed tip **before** starting the reviewer. It records the selected tier and first matching reason, not merely a generic PASS. The default is core, the 35 suites in tracked `seats/selftest-core.list`. Full is required when the paths changed from main's merge base to the tip include `seats/selftest-sweep.sh`, `seats/selftest-lib.sh`, `seats/selftest-sweep-lock.ts`, `seats/selftest-herald.sh`, `seats/python-invocations.ts`, `seats/selftest-core.list`, a full-tier root suite, a fixture not named for a core suite, or `seats/adapter.ts`, `seats/seat-worktree.ts`, `seats/verify.ts`, `seats/heavy-test.sh` or `seats/heavy-test-entry.ts`. Fixture ownership uses the longest known suite name: `adapter-rpc` is full, not the core `adapter` fixture. Shared/unknown fixtures conservatively require full. Deletions and both sides of renames count. The first matching path in sorted order is the reason; otherwise explicit “full sweep passes” or `selftest-sweep.sh` claim wording forces full with reason “Done line”; otherwise core/default. No nightly or quarantine override is implemented by this tier rule.
+
+The command is `bash seats/selftest-sweep.sh --tier core|full`. Its header records `tier=core reason=default` or, for example, `tier=full reason=seats/adapter.ts`. The prompt and verdict name both fields; core coverage also carries the manifest's SHA-256. The historical `## Dispatcher full-sweep result` heading remains for record consumers; the explicit tier below it is the coverage, not the heading. APPROVE still needs integer rc=0, a pinned tip and a retained nonempty regular log; the actual tier must match the dispatcher's choice, and core hash/inventory must match the pinned manifest. A mismatch is INCOMPLETE.
+
+The dispatcher uses a
 separate detached worktree at the pinned tip, waits for the runner's host-wide
 H4 lock without a model-command timeout, and streams output to a unique
 `seats/verdicts/sweeps/<tip>.*.selftest-sweep.log`. The dispatcher initializes
@@ -721,15 +828,15 @@ group which must remain alive.
 
 ### Reuse one passing sweep for a review batch
 
-An integrator can start a separate batch branch at current `main`, merge the candidate tips into it, and obtain **one normal dispatcher full-sweep log at that combined tip**. Then each candidate still gets its own independent review, but can reuse that sweep:
+An integrator can start a separate batch branch at current `main`, merge the candidate tips into it, and obtain **one normal dispatcher log of the required tier at that combined tip**. Then each candidate still gets its own independent review, but can reuse that sweep:
 
 ```bash
 bun seats/verify.ts <bead> <candidate-branch> <author-seat> <reviewer-seat> --batch-sweep /absolute/path/to/the.selftest-sweep.log
 ```
 
-This opt-in flag reads evidence; it never launches another sweep and never silently falls back if the evidence is unsafe. Without it, the existing dispatcher behavior is unchanged. Use the complete log emitted by the normal dispatcher, including its recorded tip, exact `bash seats/selftest-sweep.sh` command, hermetic `WHEELHOUSE_SKIP_REAL_PI=1`, prepared/final tip, outer suite records, passing full-suite summary, `rc=0` and elapsed time. A snippet, filtered pass, red result, incomplete/mismatched envelope or missing log is not reusable. The reader requires a nonempty single-link regular file (not a symlink/FIFO/directory), at most64MiB.
+This opt-in flag reads evidence; it never launches another sweep and never silently falls back if the evidence is unsafe. Without it, the existing dispatcher behavior is unchanged. Use the complete log emitted by the normal dispatcher, including its recorded tip, exact `bash seats/selftest-sweep.sh --tier core|full` command, tier/reason header, hermetic `WHEELHOUSE_SKIP_REAL_PI=1`, prepared/final tip, outer suite records, passing timed summary, `rc=0` and elapsed time. A snippet, filtered pass, red result, incomplete/mismatched envelope or missing log is not reusable. The reader requires a nonempty single-link regular file (not a symlink/FIFO/directory), at most64MiB.
 
-The reviewed commit must be an ancestor of the recorded batch commit. The batch commit's **first-parent chain** must reach current local `refs/heads/main` in the selected branch repository; merely merging main as a second parent does not qualify. The log must be fresh relative to the reviewed commit's committer timestamp (mtime and available birthtime), not future-dated. The full outer suite inventory must match the batch tree. Keep the file unmodified: it is read safely and byte-fingerprinted, and the evidence and current-main ancestry are checked again after review.
+The reviewed commit must be an ancestor of the recorded batch commit. The batch commit's **first-parent chain** must reach current local `refs/heads/main` in the selected branch repository; merely merging main as a second parent does not qualify. The log must be fresh relative to the reviewed commit's committer timestamp (mtime and available birthtime), not future-dated. The outer inventory must match the batch tree: exactly its committed manifest and SHA-256 for core, or every root `seats/*.selftest.sh` for full. A candidate requiring full cannot reuse a core batch; refusal names the path or Done-line rule. A full batch can cover a core candidate; the receipt names the actual batch tier/reason separately from the candidate's required tier/reason. Keep the file unmodified: it is read safely and byte-fingerprinted, and the evidence and current-main ancestry are checked again after review.
 
 The prompt and verdict distinguish the reviewed tip from the **batch tip**, record the log path and SHA-256, and still require the reviewer to cite `rc=0` and that exact log. Reusing a sweep does not reuse a verdict, approve another branch, cover a candidate added later, or prove skipped live-login/provider legs. If main advances outside that batch's first-parent chain, a candidate changes to a tip outside it, or the sweep is red/stale, prepare a new combined tree and obtain new passing evidence. Preserve the decisive output on the bead before citing these machine-local working-copy logs as durable evidence.
 
@@ -929,6 +1036,51 @@ double-resume refusal) and `lastBead`, never `sessionId`. `verify.ts`
 never reads `sessionId` at all — author/reviewer distinctness there is
 `account.dir`, not the session.
 
+## Settled seats holding tasks
+
+`seat-settled.ts` powers a per-worker `seat-settled-task:<seat>` inbox reminder.
+Set `seat-settled-minutes=30` in `wheelhouse/.template-source` (default 30), or
+`WHEELHOUSE_SEAT_SETTLED_MS` in the herald/alerts environment (milliseconds,
+minimum 1000). The next successful herald alert pass, normally every 60 seconds,
+observes these conditions:
+
+- A live worker's own stream has explicitly settled (`agent_end` without
+  `willRetry: true`, or `agent_settled`), and its graph task is still in progress:
+  after no own event **or dispatch** for the period, the row says **check the
+  background work or redispatch**. Check the detached driver's actual exit/report
+  before deciding; this is a reminder, not proof that a background command hung.
+- The settled worker's task has `needs-review`: after no **dispatch** for the
+  period, the row says **seat free for new work**. A background driver marking
+  review-ready does not reset the dispatch clock. Thus a newly finished long
+  task can immediately expose its already-settled, now-free seat.
+- Re-dispatch resets both clocks' eligibility for a full period, even on the same
+  task. A resumed model/tool turn clears the reminder until actual settlement;
+  `turn_end`, RPC replies, and `isStreaming=false` alone do not settle a turn.
+
+Each row names worker, task, last own event/time, and the suggested next action.
+`settledSeats` persists observation keys and legacy first-observed times across
+alert processes; RPC polling does not postpone a reminder. Top-level driver or
+optional `wheelhouse_received_at` receipt timestamps are used, never an
+assistant message's creation timestamp. For in-progress work, unstamped legacy
+events begin a conservative first-observed clock; review-ready seats use the
+retained dispatch clock (or first observation if dispatch time is unavailable).
+Bounded owned regular-log reads and the
+owned rotation archive preserve known settlement without inventing one from
+an assignment or an empty/unreadable log. Repeated checks and log rotation do
+not re-raise an unchanged episode. Review-ready reminders deduplicate by
+dispatch context, not by the count of terminal records; entering review can
+raise the distinct free-for-work message after an earlier background-work reminder.
+
+This is separate from an unfinished-model-stream alarm (`seat-stalled:<seat>`
+when that feature is installed): that alarm watches a mid-turn model stream
+and exempts settled seats and open tool waits. This reminder requires settlement,
+works without that alarm or its logger, defaults to 30 minutes, and creates no
+automatic stop/reset/redispatch or human need. It does not change adapter
+RUNNING/available status or staffing's busy-count policy. Only the commander
+chooses new work after checking the task/run. Configure/install this code in the
+herald's runtime before expecting production notices; a passing fixture is not
+a deployed alert check.
+
 ## Fleet gate reader
 
 `seats/fleet-gate.sh` is optional. New installs do not wire it by default because the Dispatch Office herald and `seats/alerts.ts` now do the action detection off the prompt path and poke only when an alert changes. If an install chooses to keep a `UserPromptSubmit` status line, this script is a sub-second reader: it opens only `seats/run/fleet-snapshot.json`, prints one line with live worker seats, ready count, review backlog count, and active alert names, and exits 0. It does not call `bd`, `gh`, `adapter.ts status`, or scan herald logs.
@@ -1030,7 +1182,7 @@ For the full host sweep, run the locked runner instead of an ad-hoc loop:
 bash seats/selftest-sweep.sh
 ```
 
-It runs `seats/*.selftest.sh` serially and shares one host-wide FIFO with project benches, direct suites, and `verify.ts` reviews. Another seat or install waits indefinitely for admission rather than running heavy work concurrently. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
+It runs the selected tier serially and, for core and full alike, shares one host-wide FIFO with project benches, direct suites, and `verify.ts` reviews; another seat or install waits indefinitely for admission rather than running heavy work concurrently. `bash seats/selftest-sweep.sh --tier core` runs exactly the sorted `seats/selftest-core.list` (35 suites, including the prune deletion-safety split); every other root suite belongs to full by absence. The default is `--tier full`. `WHEELHOUSE_SELFTEST_SWEEP_TIER=core|full` is the environment form; an explicit flag wins. Core ignores `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` so a filter cannot silently weaken its manifest; full retains the pattern override for targeted diagnostics, never reusable full-batch evidence. Missing/unreadable manifests, invalid or duplicate names, empty lists and missing/unreadable suites STOP with exit2 before lock admission. Comments beginning with `#` and blank lines are allowed. The manifest's original bytes, including comments, determine its SHA-256. Tier environment selection does not leak into nested suite fixtures. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
 
 ### Project benches, reviews, and the host pressure brake
 
@@ -1054,9 +1206,11 @@ The command wrapper and source prologue preserve cwd/arguments and supervise rel
 
 All installs must adopt the updated helper, runner, entry and bench prologue; copying `seats/` cannot retroactively lock an old raw bench. Keep the default host lock identical across installs (and independent of TMPDIR); overrides are for isolated fixtures or a coordinated host-wide migration, never a per-install domain. `heavy-test.selftest.sh` copies two scratch installs with different cwd/TMPDIRs, relocates only the common default endpoint under its fixture, and exercises sweep/bench/review contention plus a brake fired mid-run, actual completion, blocked successors and FIFO release. It uses idle payloads, not synthetic CPU pressure.
 
-Immediately after admission the runner prints `selftest-sweep: tier=full suites=<count>` (only `full` exists for now). Each unchanged `selftest-sweep: START <path>` is followed by `selftest-sweep: PASS <path> elapsed=<N>s` or `selftest-sweep: FAIL <path> rc=<rc> elapsed=<N>s`; timeout failures retain their timeout/grace wording and append `elapsed=<N>s`. These are whole seconds around suite launch and teardown, excluding lock wait. The footer is `selftest-sweep: PASS (<N> suite(s), <T>s)` or `selftest-sweep: FAIL (<F> failure(s) of <N> suite(s), <T>s)`, with total admitted sweep seconds (at least the sum of the suites). Reviewer prompts and verdict receipts include the tier, footer total and the slowest five suites' seconds. Batch reuse requires this timed envelope; old timing-free logs must be regenerated, not accepted through a compatibility path.
+Immediately after admission the runner prints `selftest-sweep: tier=full suites=<count>` or `selftest-sweep: tier=core suites=<count> manifest=<sha256>`. Each unchanged `selftest-sweep: START <path>` is followed by `selftest-sweep: PASS <path> elapsed=<N>s` or `selftest-sweep: FAIL <path> rc=<rc> elapsed=<N>s`; timeout failures retain their timeout/grace wording and append `elapsed=<N>s`. These are whole seconds around suite launch and teardown, excluding lock wait. The footer is `selftest-sweep: PASS (<N> suite(s), <T>s)` or `selftest-sweep: FAIL (<F> failure(s) of <N> suite(s), <T>s)`, with total admitted sweep seconds (at least the sum of the suites). Reviewer prompts and verdict receipts include the tier, footer total and the slowest five suites' seconds. Batch reuse requires this timed envelope; old timing-free logs must be regenerated, not accepted through a compatibility path.
 
 Each admitted suite has a **3600-second** deadline (queue wait is not charged). Set `WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S` to a positive whole number of seconds to override it. At expiry the runner records `FAIL ... timed out after Ns`, sends TERM to the isolated suite tree, waits `WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S` (default **5 seconds**), then KILLs remaining owned groups/descendants. Native PID/PPID/PGID/birth records retain ownership across parent exit during grace. The runner reaps its suite and watchdog, continues with the next suite, includes timed-out paths in its summary, and releases its own host lock normally. A deadline is a harness failure, not evidence about the product behavior under test.
+
+A finished suite is checked **before PASS**, even when its body exits successfully. The same native process census and TERM→quiesce→KILL path used for deadlines names surviving processes (`LEAK <suite> pid=... ppid=... pgid=... state=... started=... command=...`) and fails that suite; successful containment does not turn a leak into PASS. Each suite receives a private TMPDIR so a detached child retaining fixture cwd is attributable after its parent exits. Both process and cwd inventories must include the runner itself; incomplete inspection fails, never reports CLEAN. A `CLEAN` receipt means no live owned survivors remain, possibly after containment. Zombies hold no output descriptors. Suites must retain children in their isolated group/tree or private scratch cwd until teardown; daemonizing **and** abandoning both boundaries is unsupported. Shared fixture teardown retains its TERM/KILL cohorts and waits for direct children before removal. `selftest-sweep-processes.selftest.sh` exercises output-holding group/detached children, TERM resistance, failed bodies, explicit reaping, observer failure and fix-removal controls.
 
 Tune the deadline using the per-suite `elapsed=<N>s` numbers retained in the sweep log, not queue-inclusive dispatcher elapsed time or old whole-sweep estimates. `selftest-sweep-timeout.selftest.sh` proves ordinary and TERM-ignoring idle sleep trees time out, the next suite runs, no recorded processes survive, and the released lock can be reused.
 
@@ -1073,6 +1227,16 @@ Source policy runs before lock admission, queue registration or suite START, inc
 Every maintained suite loads `selftest-lib.sh` before fixture work (including the driver suites). Direct Bash launches now queue on that same lock/FIFO automatically. The library re-enters the script or `bash -c` command under the lock helper, preserving arguments, cwd and active shell options; suite traps and `exec` cannot replace the supervisor's release. A gated suite PID owns the token before its body can start: killing its supervisor does not make a still-running suite appear stale. TERM/INT/HUP/QUIT forward to the owned suite group and retain admission through its cleanup; the existing dead-owner protocol recovers an owner after it exits without release. Nested suites reuse a validated token-owned lock/FIFO head only when its owner is their actual ancestor (or their own suite PID), never from an exported bypass flag. Deliberate private fixture lock paths remain separate domains. Install the library and helper together; even shell-only suites now require Bun for admission. Unsupported interactive/stdin-only entry forms fail closed rather than running unlocked.
 
 The library observes the real pressure marker during admission, then replaces the inherited marker path with a nonce-scoped fixture-only path. Otherwise a brake fired during an admitted full sweep could stall its synthetic private-endpoint children until their test liveness guards failed. This does not bypass real admission: a fresh suite waits before reaching the isolation step. Brake-specific fixtures assign their own marker after library load. `fixture-brake.selftest.sh` proves that an admitted family finishes its private fixture while the outer marker stays set, while a fresh private-domain suite still waits.
+
+### Quarantine
+
+`seats/selftest-quarantine.list` ships empty. A suite qualifies only when the owner task records evidence of the same failure on main, or a passing lone rerun **through the sweep runner**. Failures consistently caused by the change stay in the gate. Adding or renewing an exemption is a reviewed change, never an automatic retry policy.
+
+Each non-comment line is `<suite>.selftest.sh <owner-task-id> <deadline YYYY-MM-DD>`; `#` comments are allowed. Names must identify an existing root suite, owners match `[A-Za-z0-9][A-Za-z0-9._-]*`, and deadlines are valid calendar dates **strictly after today in local time**. Duplicate, malformed, missing-suite, unreadable or expired entries STOP with exit2 before admission, naming the line. Today is expired too: remove or renew the row by review to resume sweeps. Older installs without a list have no exemptions.
+
+Quarantine never skips a suite. In its selected tier it records normal PASS or `selftest-sweep: QUARANTINED-FAIL <path> rc=<rc> elapsed=<N>s`, including a nonzero timeout result. Only that suite's failure is exempted; other failures still fail the sweep. Before the footer, the summary prints `selftest-sweep: quarantine: none`, or one `quarantine: <suite> owner=<id> until=<date> result=PASS|FAIL` row per selected entry. Valid entries outside the selected tier are ignored; all configured rows are still validated before admission. The review prompt and verdict retain quarantined failures with owner/deadline. A quarantined failure does not block APPROVE; read it and BOUNCE if it looks caused by this change. Batch reuse checks that coverage against the committed batch-tip list and current expiry, not a caller's uncommitted exemptions.
+
+The alerts snapshot carries `quarantined: {count, names}` for the valid configured list. The snapshot-only fleet-gate line shows `quarantine: <n>` when nonzero, and the herald receives one inbox row whenever the count changes (including clearing it), not a row per polling tick. No provider retry, nightly brake or idle-alert input is changed by quarantine.
 
 Individual suites are still run directly when only a touched surface needs proof:
 
@@ -1093,6 +1257,7 @@ bash seats/adapter.selftest.sh
 bash seats/reset.selftest.sh
 bash seats/verify.selftest.sh
 bash seats/walk.selftest.sh
+bash seats/prune-safety.selftest.sh
 bash seats/prune.selftest.sh
 bash seats/staffing.selftest.sh
 bash seats/staffing-live.selftest.sh
@@ -1107,6 +1272,18 @@ bash seats/cockpit.selftest.sh
 bash seats/supervisor.selftest.sh
 bash seats/herald.selftest.sh
 ```
+
+`prune-safety.selftest.sh` is **core**: enclosing-Git containment, fresh cleanup
+identity/seat-scratch/reviewed-row regressions (including symlink-ancestor
+redirection), reviewed deletion guards, seat/ISA anchors, unavailable lsof,
+symlinks/spaces and interactive checkouts. `prune.selftest.sh` remains **full**:
+classification, active-bench/dry-run behavior, real host-budget auto-prune,
+cleanup policy/integration/concurrency/push/oversized-tree cases, scratch
+allocation measurements and the enclosing-Git harness's five cases/five removal
+controls. Each suite lists its owned phases; both source
+`fixtures/prune-fixture.sh` for fresh scratch installs, graphs, repositories and
+bare origins. Neither repeats the other's assertion phases. Read the runner's
+`elapsed=` field for current timings, not the former whole-suite estimate.
 
 `bash seats/no-tracked-evidence.sh [repo-or-subdirectory]` rejects root
 `evidence/` paths in the Git index or HEAD, including forced adds and staged
@@ -1165,6 +1342,8 @@ run; to clean it by hand, those pid-stamped dirs are the whole footprint.
 
 The bridge is how a human looks at the fleet: ONE tmux window per project,
 built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. `cockpit.sh` builds or attaches the tmux session, records the commander pane in `seats/run/commander-pane.json`, and starts or verifies `seats/supervisor.sh`. The supervisor is the single loop that keeps the Dispatch Office herald, local needs desk, and declared courier alive, runs the same dead-seat recovery pass cockpit runs every `WHEELHOUSE_SEAT_RECOVERY_SECONDS` (default `60`), schedules the nightly cleanup reaper, and replaces the old per-daemon watchdog scripts. A daemon that crashes three times in five minutes is marked in `seats/run/supervisor.state.json`; the supervisor stops restarting it, appends one `daemon-down` inbox row, opens one human notification need, and waits for `seats/supervisor.sh reset <daemon>`. For opt-in reboot/logout keep-alive, `seats/supervisor.sh install-launchd` writes a macOS LaunchAgent plist and prints the `launchctl bootstrap`/`bootout` commands for a human to run; it never loads or unloads the agent itself. Linux users can run `seats/supervisor.sh print-systemd` and install the printed user unit by hand.
+
+Daemon launchers use observed readiness, not a startup sleep: herald and courier publish their own PID, desk publishes its bound URL, and supervisor publishes its own PID. An observed child exit or launch error is reported as failure. The CLI has a five-second observation ceiling; if the child remains alive without readiness, it returns `still starting: pid …; observed …` (exit 0), not a failure or a claim of readiness. Logs remain in `seats/logs/<daemon>.{out,stderr}.log`. This ceiling does not terminate a starting service. `seats/run/<daemon>.starting.pid` keeps its live launch distinct from readiness: repeated launch commands wait on that same process, and the supervisor reports `STARTING` without launching duplicates. Cache TTLs, refresh cadence, and background-work deadlines are separate policies and unchanged.
 
 The desk is the human-facing page for `seats/needs.ts` and the read-only work board: open `seats/run/desk.port` or run `seats/cockpit.sh --desk` and visit the printed URL. It binds `127.0.0.1` by default; `WHEELHOUSE_DESK_BIND` overrides the bind address and `WHEELHOUSE_DESK_PORT` overrides the port. Without an override, the port is `42000 + fnv1a(namespace) % 1000`, where `namespace=` comes from `wheelhouse/.template-source` and falls back to the install directory name. `/needs` lists open needs first, keeps answered/closed needs as history, and posts answers/messages only through the needs ledger API. `/board` is read-only: it has no form, button, input, or POST route, polls `/api/board.json` every 5 seconds, and hides graph ids in the HTML. Its columns are Ready (`bd ready` ids joined to `bd list --json` titles), In progress (`bd list --status in_progress`, seat from a worker in `seats/state.json` whose `lastBead` matches, else assignee), In review (`bd list --label needs-review`, reviewer `lastBead`, `sent back` when `seats/verdicts/<id>.md` records BOUNCE, else `waiting for a reviewer`), Blocked on you (open needs whose `machine.bead` names work, linking back to `/needs`), and Merged recently (`bd list --status closed` rows closed in the last 48 hours). Dependency-blocked work is omitted. The commander never needs the page — the CLI, graph, and floor remain canonical for command — but the desk is the standing surface for a human who has been asked for an answer or wants the read-only board.
 
@@ -1285,9 +1464,10 @@ process's open-file table (`lsof`). Every recorded seat comes back as one of:
 
 | class | meaning |
 |---|---|
-| `RUNNING` | The recorded pid is alive AND holds this seat's FIFO open — so it is our process, whatever its ps line says. |
+| `RUNNING` | The recorded pid is alive AND holds this seat's FIFO open. For records without a FIFO, native start time must match. |
 | `DEAD` | The process is gone, or the pid is alive but does not hold the FIFO (reused/foreign), while the session file is intact. Resumable: if a bead was in flight, the seat line names it and the EXACT resume command is printed beneath. |
 | `STALE` | A state entry with no session artifacts on disk. Nothing to resume; spawn fresh when the seat is needed. |
+| `UNVERIFIED` | Identity inspection is unavailable/incomplete. Keep the PID, FIFO and session; no resume/spawn advice or reclamation. |
 
 Identity is established by file descriptors, never by command lines. Pi
 rewrites its process title: a live seat's ps line is exactly `pi` — no role
@@ -1297,7 +1477,8 @@ anything that greps `ps` for a seat's paths calls every live real seat dead,
 resumes over it, and unlinks the FIFO it is reading. What a live seat cannot
 hide is its open fds: the adapter starts every seat with stdin opened
 read-write on `seats/run/<seat>.stdin`, so a process that holds that FIFO IS
-that seat, and one that does not — whatever its pid or title — is not.
+that seat. A complete descriptor observation that does not hold it proves a
+foreign PID; a failed inspection proves nothing and is UNVERIFIED.
 
 The same mechanism answers the machine-restart story. After a reboot every
 pid in `state.json` is stale, and some of those numbers come back alive as
@@ -1313,20 +1494,21 @@ What recover will and will not do:
 - **It never resumes anything itself.** Resuming is a commander decision;
   recover puts the command and the bead id in front of you and stops. Its
   only writes are FIFO removals under `seats/run/` for seats that are not
-  RUNNING — each one printed — and the adapter recreates a missing FIFO at
+  RUNNING **and not UNVERIFIED** — each one printed — and the adapter recreates a missing FIFO at
   the next spawn or resume, so cleanup never costs you a seat. It does not
   touch `state.json`, spawn `pi`, or call `bd`: recovering must never
   re-dispatch or re-integrate work that already happened, so the tool that
   runs first after an interruption is structurally unable to.
 - **It refuses a double-resume.** If a DEAD seat's session is already
-  attached — another recorded seat RUNNING on the same session file, or any
+  attached — another recorded seat RUNNING or UNVERIFIED on the same session file, or any
   live process holding that file open — recover prints
   `REFUSED double-resume` naming the holder instead of a resume command.
   One session with two writers is corruption with extra steps. (The
   open-file check is best-effort for resumes the state never recorded; the
   state-based check covers everything the adapter did record.)
-- **It requires `lsof`** (present on macOS and virtually every Linux) and
-  STOPs honestly without it rather than guessing identity from `ps`.
+- **FIFO identity requires `lsof`** (present on macOS and virtually every
+  Linux). An unavailable inspection is UNVERIFIED, not a guessed DEAD seat;
+  missing session-attachment tooling STOPs rather than authorizing a resume.
 
 The forced-interruption exercise is `seats/recover.selftest.sh`. Phases 1-5
 and the canaries are hermetic, against a stub `pi` that rewrites its process

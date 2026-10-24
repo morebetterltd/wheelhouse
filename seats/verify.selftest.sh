@@ -32,6 +32,8 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 # phases still decide the exit code.
 #
 # Usage: verify.selftest.sh [path-to-verify.ts]
+# Focused load case: WHEELHOUSE_VERIFY_SELFTEST_CASE=bead-progress-past-total
+# (same setup, CLI and assertions as the full suite; no other phases run).
 #
 # Exit 0 = verify.ts works here. Non-zero = read the FAIL lines: a failure
 # in phases 1-8 or the real leg means verify.ts broke; a canary failure
@@ -501,6 +503,7 @@ SENTINEL='SENTINEL-TOKEN-9c2e'
 build_sweep_fixture() {   # real runner, one tiny tracked fixture suite
   local proj="$1"
   cp -f "$VERIFY_DIR/selftest-sweep.sh" "$proj/seats/selftest-sweep.sh" || exit 2
+  printf 'fixture.selftest.sh\n' > "$proj/seats/selftest-core.list"
   cat > "$proj/seats/fixture.selftest.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -543,7 +546,7 @@ EOF
   build_sweep_fixture "$proj"
   ( cd "$proj" &&
     git init -q -b main &&
-    git add seats/README.md seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add seats/README.md seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
@@ -609,7 +612,7 @@ EOF
   build_sweep_fixture "$umb"
   ( cd "$umb" &&
     git init -q -b main &&
-    git add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
   mkdir -p "$product/seats"
   selftest_copy_seat_runtime "$product" "$VERIFY_DIR"
@@ -617,7 +620,7 @@ EOF
   ( cd "$product" &&
     git init -q -b main &&
     mkdir -p evidence && printf 'product branch evidence\n' > evidence/bench.log &&
-    git add evidence/bench.log seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add evidence/bench.log seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build umbrella product git repo" >&2; exit 2; }
 }
@@ -685,6 +688,27 @@ VDIR="$PROJ/seats/verdicts"
 VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/reviewer/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/reviewer/cwd.txt"
+
+# Shared by the full suite and focused load repetitions: the same actual CLI,
+# fixture Pi, acknowledged clock generations and verdict/proof assertions.
+progress_past_total() {
+  cat > "$REPLY" <<'EOF'
+Finished after quoting the previous review without being reaped mid-run.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED
+EOF
+  WATCHDOG_DIR="$(mktemp -d "$FIX/progress-clock.XXXXXX")"
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" progress bead-progress-past-total fleet/bead-1 worker-1 reviewer --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
+  if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && [ -s "$WATCHDOG_DIR/progress-proof" ]; then
+    pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
+  else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
+}
+if [ -n "${WHEELHOUSE_VERIFY_SELFTEST_CASE:-}" ]; then
+  [ "$WHEELHOUSE_VERIFY_SELFTEST_CASE" = bead-progress-past-total ] || { echo "unknown verify selftest case: $WHEELHOUSE_VERIFY_SELFTEST_CASE" >&2; exit 2; }
+  progress_past_total
+  [ "$FAILED" = 0 ]
+  exit $?
+fi
 
 phase "contract gate: no-outcomes review is refused before harness spawn"
 # The gate-removed negative must reach a normally answering harness, not fail
@@ -804,6 +828,14 @@ if [ $RC -eq 0 ] && grep -q '"WHEELHOUSE_ROOT":"'"$INST_PROJ" "$HOME_FIX/.pi-sea
   pass "installed-layout stub bench receives WHEELHOUSE_REAL_BD and writes only its scratch BEADS_DIR graph"
 else fail "installed layout: machine-local bench did not run with writable scratch bd graph via WHEELHOUSE_ROOT (exit $RC): $OUT env=$(cat "$HOME_FIX/.pi-seats-installed/reviewer/env.json" 2>/dev/null) bench=$(cat "$BENCH_RUN" 2>/dev/null)"; fi
 
+phase "0a1. required core/full tier selection and receipt gates"
+if bun "$HERE/fixtures/verify-tiers.ts" "$VERIFY_DIR" "$FIX" "$PROJ" "$HOME_FIX" "$RUN_PATH"; then
+  pass "tier selection, CLI receipts, core/full batch coverage and sensitive removal controls"
+else fail "core/full review tier regression"; fi
+if bun "$HERE/fixtures/verify-quarantine.ts" "$VERIFY_DIR" "$FIX" "$PROJ" "$HOME_FIX" "$RUN_PATH"; then
+  pass "quarantined failure approval, receipt, policy binding and sensitive controls"
+else fail "quarantine review regression"; fi
+
 phase "0a2. dispatcher-owned full sweep evidence for reviewer"
 SWEEP_PROJ="$FIX/sweep-proj"
 build_proj "$SWEEP_PROJ" sweep "$VERIFY"
@@ -855,7 +887,8 @@ exit "${SWEEP_FIXTURE_RC:-0}"
 SH
 chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
 # Detached evidence runs only committed files: include both runner companions.
-git -C "$SWEEP_PROJ" add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/slowed.selftest.sh
+printf 'slowed.selftest.sh\n' > "$SWEEP_PROJ/seats/selftest-core.list"
+git -C "$SWEEP_PROJ" add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/slowed.selftest.sh
 git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
@@ -952,7 +985,7 @@ JS
   else fail "runner lock refusal recorded a completed review (rc=$RC out=$OUT)"; fi
   NO_SUITE_PROJ="$FIX/no-suite-proj-$variant"
   build_proj "$NO_SUITE_PROJ" "nosuite-$variant" "$VERIFY"
-  ( cd "$NO_SUITE_PROJ" && git rm -q seats/fixture.selftest.sh && git -c user.email=selftest@local -c user.name=selftest commit -q -m no-suite && git branch -f fleet/bead-1 HEAD ) || exit 2
+  ( cd "$NO_SUITE_PROJ" && git checkout -qb no-suite-candidate && git rm -q seats/fixture.selftest.sh && git -c user.email=selftest@local -c user.name=selftest commit -q -m no-suite && git branch -f fleet/bead-1 HEAD ) || exit 2
   RUN_PROJ="$NO_SUITE_PROJ"
   WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_VERDICT=BOUNCE run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-no-suite fleet/bead-1 worker-1
   if [ "$RC" = 1 ] && says 'INCOMPLETE review:' && says 'no runnable seats/*.selftest.sh suites' && [ ! -f "$NO_SUITE_PROJ/seats/verdicts/bead-no-suite.md" ]; then
@@ -960,6 +993,7 @@ JS
   else fail "empty suite inventory recorded a completed review (rc=$RC out=$OUT)"; fi
   NO_RUNNER_PROJ="$FIX/no-runner-proj-$variant"
   build_proj "$NO_RUNNER_PROJ" "no-runner-$variant" "$VERIFY"
+  git -C "$NO_RUNNER_PROJ" checkout -qb no-runner-candidate
   git -C "$NO_RUNNER_PROJ" rm -q seats/selftest-sweep.sh seats/fixture.selftest.sh
   git -C "$NO_RUNNER_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m no-runner
   git -C "$NO_RUNNER_PROJ" branch -f fleet/bead-1 HEAD
@@ -978,9 +1012,9 @@ RECEIPT_CONTROL="$FIX/receipt-control.ts"
 bun - "$VERIFY" "$RECEIPT_CONTROL" <<'JS' || exit 2
 import fs from 'node:fs';import assert from 'node:assert/strict';
 let s=fs.readFileSync(process.argv[2],'utf8');
-const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);';
+const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);';
 assert.equal(s.split(call).length,2);
-s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
+s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
 const start=s.indexOf('      // Setup/spawn/pinning failures are not completed BOUNCE/DISCOVER');
 const end=s.indexOf('      if (sweep.logPath && requireSweepCitation)',start);
 assert(start>0 && end>start);s=s.slice(0,start)+s.slice(end);
@@ -1012,7 +1046,7 @@ else fail "receipt regression negative control was insensitive (exit $CONTROL_RC
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
 cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
-bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep-old.lock" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-sweep-bypassed fleet/bead-1 worker-1
@@ -1309,11 +1343,7 @@ OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIM
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143" && grep -q 'VERDICT: APPROVE' "$VDIR/bead-pi-quoted-verdict.md" 2>/dev/null; then
   pass "pi quoted mid-run verdict is not reaped before agent_end"
 else fail "pi quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
-WATCHDOG_DIR="$(mktemp -d "$FIX/progress-clock.XXXXXX")"
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" progress bead-progress-past-total fleet/bead-1 worker-1 reviewer --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && [ -s "$WATCHDOG_DIR/progress-proof" ]; then
-  pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
-else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
+progress_past_total
 WATCHDOG_DIR="$(mktemp -d "$FIX/silent-readiness.XXXXXX")"
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" silent bead-silent fleet/bead-1 worker-1 reviewer 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && [ -f "$WATCHDOG_DIR/expired-first" ] && says "reviewer emitted no stdout/stderr within" && says "first-output deadline" && says "--first-output-timeout-ms"; then

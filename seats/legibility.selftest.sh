@@ -278,10 +278,11 @@ cat > "$PROJ/seats/fixture.selftest.sh" <<'SH'
 set -eu
 printf 'legibility fixture sweep PASS\n'
 SH
+printf 'fixture.selftest.sh\n' > "$PROJ/seats/selftest-core.list"
 # A git repo: verify.ts resolves branches and reads evidence at the tip.
 ( cd "$PROJ" &&
   git init -q -b main &&
-  git add seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+  git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
   git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
   git branch fleet/bead-rev && git branch fleet/bead-ev ) \
   || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
@@ -300,7 +301,7 @@ assert(record.includes('## Dispatcher full-sweep result'));
 const tip=record.match(/^- tip: ([0-9a-f]+)$/m)?.[1],log=record.match(/^- log: (.+)$/m)?.[1];
 assert(tip&&log);const st=fs.lstatSync(log);assert(st.isFile()&&st.size>0);
 const text=fs.readFileSync(log,'utf8');
-for(const expected of [`tip=${tip}`,`preparedTip=${tip}`,`finalTip=${tip}`,'command=bash seats/selftest-sweep.sh','legibility fixture sweep PASS','selftest-sweep: tier=full suites=1','\nrc=0\n'])assert(text.includes(expected),expected);
+for(const expected of [`tip=${tip}`,`preparedTip=${tip}`,`finalTip=${tip}`,'command=bash seats/selftest-sweep.sh','legibility fixture sweep PASS','selftest-sweep: tier=core suites=1 manifest=','\nrc=0\n'])assert(text.includes(expected),expected);
 assert.match(text,/^selftest-sweep: PASS \(1 suite\(s\), [0-9]+s\)$/m);
 console.log(`fixture dispatcher receipt: rc=0 tip=${tip} suites=1`);
 JS
@@ -315,12 +316,17 @@ state_get(){ env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON
 # that have no adapter path (a 401 in the stream; a verdict file waiting).
 inject_seat() {   # $1 = name, $2 = pid, $3 = lastBead ('' for none)
   env HOME="$HOME_FIX" INJ_STATE="$STATE" INJ_NAME="$1" INJ_PID="$2" INJ_BEAD="${3:-}" INJ_PROJ="$PROJ" bun -e '
-    import fs from "node:fs";
+    import fs from "node:fs"; import {spawnSync} from "node:child_process"; import assert from "node:assert/strict";
     const f = process.env.INJ_STATE;
     const s = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : { seats: {} };
     const n = process.env.INJ_NAME, p = process.env.INJ_PROJ;
+    const pid=Number(process.env.INJ_PID),born=spawnSync("ps",["-p",String(pid),"-o","lstart="],{encoding:"utf8"});
+    console.error("CAPTURE legibility fixture ps "+JSON.stringify({pid,status:born.status,signal:born.signal,stdout:born.stdout,stderr:born.stderr}));
+    let alive=true;try{process.kill(pid,0);}catch(e){if(e.code==="ESRCH")alive=false;else throw e;}
+    if(alive){assert.equal(born.status,0);assert.equal(born.signal,null);assert.equal(born.error,undefined);}
+    const startedAt=alive?new Date(Date.parse(born.stdout.trim())).toISOString():undefined;
     s.seats[n] = {
-      pid: Number(process.env.INJ_PID), startedAt: "2026-08-30T00:00:00Z",
+      pid, startedAt,
       accountDir: process.env.HOME + "/.pi-seats-leg/" + n, role: "worker", roleBrief: "x",
       fifo: p + "/seats/run/" + n + ".stdin", log: p + "/seats/logs/" + n + ".jsonl",
       sessionId: "s-" + n, sessionFile: null,
@@ -579,7 +585,7 @@ fi
 
 # canary 4: cut the adapter's DIED word — a crash must not sail as STOPPED
 SAB4="$PROJ/seats/adapter-sab4.ts"
-sed 's|const died = !alive.*|const died = false;|' "$PROJ/seats/adapter.ts" > "$SAB4"
+sed 's|const died = .*|const died = false;|' "$PROJ/seats/adapter.ts" > "$SAB4"
 if cmp -s "$PROJ/seats/adapter.ts" "$SAB4"; then
   fail "canary 4: sed no longer bites (the died line moved) — fix this test"
 else

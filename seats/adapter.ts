@@ -58,6 +58,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import { checkBeadContract, contractRemedy } from "./contract";
+import { completedCommand } from "./completed-command";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -69,7 +70,7 @@ import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
-import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
+import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath, seatIdentity, SeatIdentityUnverified } from "./seat-activity";
 import { seatTurnDisplay } from "./seat-turn-display";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
@@ -613,19 +614,23 @@ function sleep(ms: number): Promise<void> {
 
 /** Read complete log lines from a byte offset; for old offset=0 callers, tail only. */
 function logLinesFrom(log: string, offset: number, maxBytes = LOG_TAIL_BYTES): { lines: string[]; offset: number; truncated: boolean } {
-  if (!fs.existsSync(log)) return { lines: [], offset, truncated: false };
-  const size = fs.statSync(log).size;
+  let fd: number;
+  try { fd = fs.openSync(log, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); }
+  catch (e: any) {
+    if (e.code === "ENOENT") return { lines: [], offset, truncated: false };
+    throw e;
+  }
+  try { return logLinesFromDescriptor(fd, offset, maxBytes); }
+  finally { fs.closeSync(fd); }
+}
+
+function logLinesFromDescriptor(fd: number, offset: number, maxBytes = LOG_TAIL_BYTES): { lines: string[]; offset: number; truncated: boolean } {
+  const size = fs.fstatSync(fd).size;
   if (size <= offset) return { lines: [], offset, truncated: false };
   const start = offset === 0 && size > maxBytes ? size - maxBytes : offset;
   const truncated = start > offset;
-  const fd = fs.openSync(log, "r");
-  let chunk: Buffer;
-  try {
-    chunk = Buffer.alloc(size - start);
-    fs.readSync(fd, chunk, 0, chunk.length, start);
-  } finally {
-    fs.closeSync(fd);
-  }
+  const chunk = Buffer.alloc(size - start);
+  fs.readSync(fd, chunk, 0, chunk.length, start);
   let text = chunk.toString("utf8");
   let base = start;
   if (truncated) {
@@ -651,12 +656,40 @@ function promptCommand(message: string, streamingBehavior: "followUp" | "steer")
 
 async function rpc(rec: RpcSeat, command: Record<string, unknown>): Promise<any> {
   const id = crypto.randomUUID();
-  let offset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
+  let responseSource: string | undefined;
+  const lost = (reason: string) => new Error(`${rpcSeat(rec)} response source lost: ${JSON.stringify(rec.log)} — ${reason}`);
+  const openResponseSource = (): number | null => {
+    let fd: number;
+    try { fd = fs.openSync(rec.log, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); }
+    catch (e: any) {
+      // A fresh launch may not have created its first log yet. Once observed,
+      // or for an established seat, absence is a lost channel, not latency.
+      if (e.code === "ENOENT" && rec.startedAt === undefined && responseSource === undefined) return null;
+      throw lost(e.code === "ENOENT" ? "path missing" : `cannot open response file (${e.code ?? e.message})`);
+    }
+    try {
+      const st = fs.fstatSync(fd, { bigint: true });
+      if (!st.isFile()) throw lost("response path is not a regular file");
+      const identity = `${st.dev}:${st.ino}`;
+      if (responseSource !== undefined && responseSource !== identity) throw lost(`inode changed (${responseSource} -> ${identity})`);
+      responseSource = identity;
+      return fd;
+    } catch (e) { fs.closeSync(fd); throw e; }
+  };
+  const initial = openResponseSource();
+  let offset = 0;
+  if (initial !== null) {
+    try { offset = fs.fstatSync(initial).size; }
+    finally { fs.closeSync(initial); }
+  }
   await fifoWrite(rec, { ...command, id });
   const phase = `while waiting for ${command.type} response`;
   const progress = rpcProgress(rec, () => `${phase}; pipe open`);
   for (;;) {
-    const r = logLinesFrom(rec.log, offset);
+    const fd = openResponseSource();
+    let r: ReturnType<typeof logLinesFromDescriptor>;
+    try { r = fd === null ? { lines: [], offset, truncated: false } : logLinesFromDescriptor(fd, offset); }
+    finally { if (fd !== null) fs.closeSync(fd); }
     offset = r.offset;
     for (const line of r.lines) {
       let obj: any;
@@ -1593,18 +1626,27 @@ async function cmdSteer(name: string, text: string): Promise<void> {
 interface ProcessRow { pid: number; ppid: number; startMs: number | null; command: string }
 type OpenPathSnapshot = Map<number, string[]>;
 
-function processRows(): Map<number, ProcessRow> {
-  const rows = new Map<number, ProcessRow>();
+type ProcessRowsSnapshot = { rows: Map<number, ProcessRow>; error?: undefined } | { rows: null; error: string };
+
+function processRows(): ProcessRowsSnapshot {
   try {
-    const out = spawnSync("ps", ["axo", "pid=,ppid=,lstart=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout || "";
-    for (const line of out.split(/\n/)) {
+    const result = completedCommand("ps", ["axo", "pid=,ppid=,lstart=,command="]);
+    if (result.error || result.signal || result.status !== 0 || result.stderr.trim()) {
+      return { rows: null, error: `ps exit=${result.status ?? "none"} signal=${result.signal ?? "none"}${result.error ? ` error=${result.error.message}` : ""}${result.stderr ? ` stderr=${JSON.stringify(result.stderr)}` : ""}` };
+    }
+    if (!result.stdout.trim()) return { rows: null, error: "ps returned an empty census" };
+    const rows = new Map<number, ProcessRow>();
+    for (const [index, line] of result.stdout.split(/\n/).entries()) {
+      if (!line.trim()) continue;
       const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$/);
-      if (!m) continue;
+      if (!m) return { rows: null, error: `ps returned a malformed census record at line ${index + 1}` };
       const start = Date.parse(m[3]);
       rows.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), startMs: Number.isFinite(start) ? start : null, command: m[4] || "" });
     }
-  } catch { /* ps should exist; absence only removes an extra status hint */ }
-  return rows;
+    return { rows };
+  } catch (error) {
+    return { rows: null, error: `ps capture failed: ${String(error)}` };
+  }
 }
 
 function isDescendantOf(pid: number, ancestor: number | null | undefined, rows: Map<number, ProcessRow>): boolean {
@@ -1897,7 +1939,9 @@ async function cmdStatus(): Promise<void> {
     return;
   }
   const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
-  const rows = processRows();
+  const census = processRows();
+  if (census.rows === null) console.error(`UNVERIFIED orphan census: ${census.error}; no absence of extra processes inferred; recorded seat rows still reported`);
+  const rows = census.rows;
   const observations = readStreamObservations(ROOT);
   let sawSettled = false;
   for (const name of names) {
@@ -1907,40 +1951,49 @@ async function cmdStatus(): Promise<void> {
     const rec = ownedLog ? await syncCapacityFromLog(name, roster) : state.seats[name];
     if (!rec) continue;
     const bareAlive = barePidAlive(rec.pid);
-    const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
+    let identity = seatIdentity(rec.pid, rec.fifo, rec.startedAt);
+    let alive = identity.kind === "owned";
     // A seat nobody stopped whose pid is gone — or whose pid was reused by a
     // foreign process — DIED. Rendering either as the same calm STOPPED a
     // graceful stop earns would be a failure conflated into a normal state.
-    const died = !alive && rec.pid != null && !rec.stoppedAt;
+    const died = (identity.kind === "gone" || identity.kind === "foreign") && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
-    const stream = ownedLog && alive ? seatStreamHealth(ROOT, name, rec, observations[name]) : null;
+    let stream: ReturnType<typeof seatStreamHealth> = null;
+    try { stream = ownedLog && alive ? seatStreamHealth(ROOT, name, rec, observations[name]) : null; }
+    catch (e) {
+      if (!(e instanceof SeatIdentityUnverified)) throw e;
+      identity = { kind: "unverified", reason: e.message }; alive = false;
+    }
     const stalled = Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log)) || Boolean(stream?.stalled);
     const last = ownedLog ? lastEvent(rec.log) : "-";
     // Status reports observed process/log facts, not a guessed get_state
     // deadline. A live, slow responder is not evidence of a wedged seat.
     const turnDisplay = ownedLog ? seatTurnDisplay(rec.log) : "RUNNING";
-    const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? turnDisplay : died ? "DIED" : "STOPPED";
-    const pid = alive ? `pid ${rec.pid}` : died ? (bareAlive ? `pid ${rec.pid} foreign` : `pid ${rec.pid} gone`) : "stopped";
+    const word = identity.kind === "unverified" ? "UNVERIFIED" : parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? turnDisplay : died ? "DIED" : "STOPPED";
+    const pid = identity.kind === "unverified" ? `pid ${rec.pid} unverified` : alive ? `pid ${rec.pid}` : died ? (bareAlive ? `pid ${rec.pid} foreign` : `pid ${rec.pid} gone`) : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
     const labelText = label ? `  account ${label}` : "";
     const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
     if (agentSettledEvent(last)) sawSettled = true;
     console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${last}${bead}${labelText}`);
-    rotateLogIfSafe(name, rec.log, last);
+    if (identity.kind !== "unverified") rotateLogIfSafe(name, rec.log, last);
+    if (identity.kind === "unverified") {
+      console.log(`${" ".repeat(16)} UNVERIFIED: ${identity.reason}; left untouched — do not restart or reclaim until identity is verified`);
+    }
     if (died) {
-      console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? "is alive but is not this seat (no FIFO/start-time proof)" : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
+      console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? `is alive but is not this seat (${identity.reason})` : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
     if (rec.lastCapacityEvent) {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
       console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
     }
-    if (stalled && rec.lastStalledEvent) {
+    if (identity.kind !== "unverified" && stalled && rec.lastStalledEvent) {
       console.log(`${" ".repeat(16)} STALLED: ${rec.lastStalledEvent.detail}`);
     }
     if (stream?.stalled) console.log(`${" ".repeat(16)} STALLED: no own stream event for ${Math.floor(stream.quietForMs / 1000)}s; last ${stream.lastEvent} at ${stream.lastEventAt}; commander inspect/redispatch (no automatic restart)`);
     else if (stream?.phase === "tool") console.log(`${" ".repeat(16)} TOOL WAIT: ${stream.pendingTools.join(", ")}; last stream event ${stream.lastEventAt}; not a model-stream stall`);
-    for (const orphan of orphanMatchesFor(name, rec, rows, roster[name])) {
+    for (const orphan of identity.kind === "unverified" || rows === null ? [] : orphanMatchesFor(name, rec, rows, roster[name])) {
       if (orphan.fixtureBead) {
         console.log(`${" ".repeat(16)} fixture leak (${orphan.fixtureBead}): pid ${orphan.pid} matches rostered seat ${name} but is running under a .wheelhouse-runs fixture root; reason: ${orphan.reason}; remedy: kill the fixture process and inspect fixture cleanup`);
       } else {

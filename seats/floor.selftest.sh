@@ -179,9 +179,19 @@ cat > "$PROJ/seats/seats.json" <<EOF
 }
 EOF
 
+# The floor now checks seat identity, not just kill(0). Seed actual native birth
+# for our live holder rather than the historical display-only timestamp.
+STARTED_AT="$(bun - "$ME" <<'JS'
+import { spawnSync } from 'node:child_process';
+const r=spawnSync('ps',['-p',process.argv[2],'-o','lstart='],{encoding:'utf8'});
+console.error('CAPTURE floor fixture ps '+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));
+if(r.status!==0||r.error||r.signal)process.exit(2);
+console.log(new Date(Date.parse(r.stdout.trim())).toISOString());
+JS
+)" || exit 2
 seat_rec() { # name pid extra-json
-  printf '"%s":{"pid":%s,"startedAt":"2026-08-29T00:00:00Z","accountDir":"%s","role":"worker","roleBrief":"x","fifo":"%s","log":"%s","sessionId":"s-%s","sessionFile":null%s}' \
-    "$1" "$2" "$FIX/acct/$1" "$PROJ/seats/run/$1.stdin" "$LOGS/$1.jsonl" "$1" "${3:-}"
+  printf '"%s":{"pid":%s,"startedAt":"%s","accountDir":"%s","role":"worker","roleBrief":"x","fifo":"%s","log":"%s","sessionId":"s-%s","sessionFile":null%s}' \
+    "$1" "$2" "$STARTED_AT" "$FIX/acct/$1" "$PROJ/seats/run/$1.stdin" "$LOGS/$1.jsonl" "$1" "${3:-}"
 }
 {
   printf '{"seats":{'
@@ -218,7 +228,7 @@ cat > "$LOGS/transcript.jsonl" <<'EOF'
 {"type":"tool_execution_end","toolCallId":"tc-1","toolName":"read","result":{"content":[{"type":"text","text":"# Fixture title\nbody"}],"isError":false}}
 {"type":"agent_end","messages":[1]}
 EOF
-node -e 'const fs=require("fs"); const [rosterFile,stateFile,fix,log]=process.argv.slice(1); const roster=JSON.parse(fs.readFileSync(rosterFile,"utf8")); roster.seats.transcript={role:"worker",provider:"openai-codex",model:"gpt-5.5",account:{dir:`${fix}/acct/transcript`}}; fs.writeFileSync(rosterFile, JSON.stringify(roster,null,2)+"\n"); const state=JSON.parse(fs.readFileSync(stateFile,"utf8")); state.seats.transcript={pid:Number(process.pid),startedAt:"2026-08-29T00:00:00Z",accountDir:`${fix}/acct/transcript`,role:"worker",roleBrief:"x",fifo:`${fix}/proj/seats/run/transcript.stdin`,log,sessionId:"s-transcript",sessionFile:null}; fs.writeFileSync(stateFile, JSON.stringify(state,null,2)+"\n");' "$PROJ/seats/seats.json" "$PROJ/seats/state.json" "$FIX" "$LOGS/transcript.jsonl"
+node -e 'const fs=require("fs"); const [rosterFile,stateFile,fix,log,pid,startedAt]=process.argv.slice(1); const roster=JSON.parse(fs.readFileSync(rosterFile,"utf8")); roster.seats.transcript={role:"worker",provider:"openai-codex",model:"gpt-5.5",account:{dir:`${fix}/acct/transcript`}}; fs.writeFileSync(rosterFile, JSON.stringify(roster,null,2)+"\n"); const state=JSON.parse(fs.readFileSync(stateFile,"utf8")); state.seats.transcript={pid:Number(pid),startedAt,accountDir:`${fix}/acct/transcript`,role:"worker",roleBrief:"x",fifo:`${fix}/proj/seats/run/transcript.stdin`,log,sessionId:"s-transcript",sessionFile:null}; fs.writeFileSync(stateFile, JSON.stringify(state,null,2)+"\n");' "$PROJ/seats/seats.json" "$PROJ/seats/state.json" "$FIX" "$LOGS/transcript.jsonl" "$ME" "$STARTED_AT"
 
 RUN_PATH="$FIX/bin:$(dirname "$(command -v bun)"):/usr/bin:/bin"
 render() { # floor-file args...
@@ -356,9 +366,21 @@ render "$EMPTY/seats/floor.ts"
 # --- phase 5: interactive repaint is in-place, not append-only ---------------
 phase "phase 5: repaint — repeated frames return home and clear to end"
 CAPTURE_FILE="$FIX/repaint.capture"
-env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$PROJ/seats/floor.ts" > "$CAPTURE_FILE" 2>&1 &
+env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$PROJ/seats/floor.ts" > "$CAPTURE_FILE" 2> "$FIX/repaint.stderr" &
 FLOOR_PID=$!
-sleep 2
+# Native identity inspection makes a frame's cost host-dependent. Observe the
+# second actual repaint; the generous cap contains failure, not correctness.
+if ! bun - "$FLOOR_PID" "$CAPTURE_FILE" <<'JS'
+import fs from 'node:fs';
+const [pid,file]=process.argv.slice(2),deadline=Date.now()+120000;
+while(Date.now()<deadline){
+  if(fs.existsSync(file)&&fs.readFileSync(file,'utf8').split('\x1b[H\x1b[J').length-1>=2)process.exit(0);
+  try{process.kill(Number(pid),0);}catch{process.exit(1);}
+  await Bun.sleep(50);
+}
+process.exit(1);
+JS
+then fail 'floor did not publish a second repaint before exit/safety cap'; fi
 kill "$FLOOR_PID" 2>/dev/null
 wait "$FLOOR_PID" 2>/dev/null
 CAPTURE="$(cat "$CAPTURE_FILE")"

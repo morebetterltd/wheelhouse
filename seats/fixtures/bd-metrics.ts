@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { completedCommand } from "../completed-command";
 const [root, library, bd, lockHelper, runtime] = process.argv.slice(2);
 assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());
 for (const file of [library, bd, lockHelper]) assert(fs.statSync(file).isFile());
@@ -33,7 +34,7 @@ for (const mode of modes) {
   const dir = path.join(root, mode); fs.mkdirSync(dir);
   const raw = path.join(dir, "raw"); fs.mkdirSync(raw); let sequence = 0;
   function command(bin: string, args: string[], cwd = dir) {
-    const r = spawnSync(bin, args, { cwd, encoding: "utf8" });
+    const r = completedCommand(bin, args, { cwd });
     const record = { bin, args, cwd, code: r.status, signal: r.signal, error: r.error?.message, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
     fs.writeFileSync(path.join(raw, String(++sequence) + ".json"), JSON.stringify(record, null, 2));
     if (r.error || r.signal) throw new Error(`${bin} incomplete: ${r.error ?? r.signal}`);
