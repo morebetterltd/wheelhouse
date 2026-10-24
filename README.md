@@ -74,7 +74,10 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 ├── .beads/                      the work graph
 ├── .agents/skills/
 │   ├── intent/                  signal to plain-words what-and-why; SKILL.md and worked examples
-│   └── outcomes/                intent to consumer/surface/check outcomes; SKILL.md and worked contracts
+│   ├── outcomes/                intent to consumer/surface/check outcomes; SKILL.md and worked contracts
+│   ├── create-verification/     write and prove a project manual and complete feature map
+│   ├── maintain-verification/   findings-only source and live audit; no product/manual edits
+│   └── NOTICE-pstack.md         Lauren Tan's MIT notice and pinned source for the adapted skills
 ├── .claude/skills/              symlinks for Claude Code, pointing to .agents/skills/
 ├── seats/                       the seat machinery, at the root because every path it prints is root-relative
 │   ├── seats.json               generated — the roster: role, harness, provider, model, auth route, account dir per seat; never a secret
@@ -124,7 +127,10 @@ That split is the whole design. It means a project's specifics never get tangled
 | | |
 |---|---|
 | `contracts/` | the briefs, copied verbatim at install |
-| `.agents/skills/` | one real copy of each contract-writing skill; `.claude/skills/` holds relative symlinks |
+| `.agents/skills/` | one real copy of each contract-writing and verification skill; `.claude/skills/` holds relative symlinks |
+| `.agents/skills/create-verification/` | generate a project-local five-section verification manual and map every discovered consumer feature |
+| `.agents/skills/maintain-verification/` | one reader loop and live pass, reporting findings without product or manual edits |
+| `.agents/skills/NOTICE-pstack.md` | Lauren Tan's MIT license text, pinned upstream source and dated adaptations for the verification skills |
 | `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the bead-verdict dispatcher, the consumer-surface walk dispatcher, human needs (`needs.ts`), the local desk (`desk.ts`), the optional courier (`courier.ts`), the principal Stop hook (`principal-sentinel.sh`), pruning, the bridge, recovery, and a selftest for each |
 | `generated/` | specimens of what the interview writes — never copied, and drawn from an invented project so they cannot be mistaken for a starting point |
 | `runbooks/` | how to run the loop, the upgrade procedure, and the graduations to take once the loop has proven itself |

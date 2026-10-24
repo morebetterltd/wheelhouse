@@ -50,6 +50,15 @@ run_worker_brief_leg() {
   fi
 }
 
+run_verification_skills_leg() {
+  printf 'placeholder grep selftest: verification skill layout and neutral text\n'
+  if bun "$HERE/fixtures/verification-skills.ts" "$ROOT"; then
+    pass "verification skills, committed relative links and MIT notice are intact"
+  else
+    fail "verification skill tree assertions failed"
+  fi
+}
+
 run_binary_leg() {
   local old rc out
   printf 'placeholder grep selftest: binary evidence fixture\n'
@@ -86,11 +95,12 @@ run_text_leg() {
 }
 
 run_worker_brief_leg
+run_verification_skills_leg
 run_binary_leg
 run_text_leg
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "placeholder-grep.selftest: PASS (3 legs)"
+  echo "placeholder-grep.selftest: PASS (4 legs)"
   exit 0
 fi
 printf 'placeholder-grep.selftest: FAIL (%s failure(s))\n' "$FAILED"
