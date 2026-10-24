@@ -105,10 +105,9 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "sweep
     await until(() => fs.existsSync(ready), actor);
   } else {
     // Complete native runner/runtime, only the callback cadence is shortened.
-    const project = path.join(dir, "project"), seats = path.join(project, "seats"); fs.mkdirSync(project); fs.mkdirSync(seats);
-    for (const name of fs.readdirSync(path.dirname(runner))) {
-      const from = path.join(path.dirname(runner), name); if (fs.lstatSync(from).isFile()) fs.copyFileSync(from, path.join(seats, name));
-    }
+    const project = path.join(dir, "project"), seats = path.join(project, "seats"); fs.mkdirSync(project);
+    const copied = command(dir, ["bash", "-c", '. "$1"; selftest_copy_seat_runtime "$2" "$3" || exit 2', "cleaner-runtime", path.join(path.dirname(runner), "selftest-lib.sh"), project, path.dirname(runner)], env);
+    assert.equal(copied.status, 0, copied.stderr);
     let testSweep = sweep;
     if (testSweep.includes("slice=60")) {
       // macOS Bash 3.2 read -t requires whole seconds. Keep its real FIFO read.
@@ -139,6 +138,11 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "sweep
     }
     const claim = JSON.parse(fs.readFileSync(path.join(lock, marker), "utf8")); ownerPid = claim.pid;
     assert(Number.isInteger(ownerPid)); process.kill(ownerPid, 0);
+    if (kind !== "supervisor") assert.equal(ownerPid, actor.child.pid, "wire holder is the original spawned actor");
+    const identity = command(dir, ["ps", "-ww", "-p", String(ownerPid), "-o", "pid=,uid=,ppid=,lstart=,command="], env);
+    assert.equal(identity.status, 0, identity.stderr); assert.equal(identity.stderr, "");
+    assert(new RegExp(`^\\s*${ownerPid}\\s+${process.getuid()}\\s+`).test(identity.stdout), "native holder identity exists before measuring");
+    if (kind === "supervisor") assert.equal(Number(identity.stdout.trim().split(/\s+/)[2]), actor.child.pid, "supervised holder is the original gated child");
     owned ||= `${fs.statSync(lock).dev}:${fs.statSync(lock).ino}`;
     const waiter = command(dir, ["bun", after, "acquire", lock, String(process.pid), token], env); assert.equal(waiter.status, 75, waiter.stderr);
     const before = snapshot(state); assert.equal(Object.keys(before).length, 9, "3 lock, 3 host (two aliases), 3 FIFO records");
@@ -153,9 +157,12 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "sweep
     }
     const renewed = Object.fromEntries(Object.keys(before).map(name => [name, fs.statSync(path.join(state, name)).mtimeMs]));
     const result = clean(dir, state, clock.reference);
-    process.kill(ownerPid, 0); // The original holder is still live at deletion.
+    process.kill(ownerPid, 0);
+    const identityAfter = command(dir, ["ps", "-ww", "-p", String(ownerPid), "-o", "pid=,uid=,ppid=,lstart=,command="], env);
+    assert.equal(identityAfter.status, 0, identityAfter.stderr); assert.equal(identityAfter.stderr, "");
+    assert.equal(identityAfter.stdout, identity.stdout, "same native PID/UID/parent/birth/command remains alive during cleaner");
     const survived = fs.existsSync(path.join(lock + ".host", anchor));
-    const record = { kind, nativeSetup: true, ownerLiveDuringCleaner: true, clock, selected: result, before, renewed, survived };
+    const record = { kind, nativeSetup: true, ownerLiveDuringCleaner: true, ownerIdentitySha256: sha(identity.stdout), clock, selected: result, before, renewed, survived };
     fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(record, null, 2)); facts.push(record);
     assert(survived, `LIVE_HOST_RECORD_REMOVED ${kind}`);
     const afterClean = snapshot(state);
