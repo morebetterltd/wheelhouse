@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {spawn, spawnSync} from 'node:child_process';
+import conditionWait from './wait-for-condition.cjs';
+const {waitForCondition} = conditionWait;
 const [seats, fixture] = process.argv.slice(2);
 assert(fs.statSync(path.join(fixture, '.wheelhouse-selftest-fixture')).isFile());
 const cwd = path.join(fixture, 'unrelated-cwd');
@@ -68,15 +70,15 @@ const containmentMs = 30 * 60 * 1000;
 const outer = setTimeout(()=>stop(`named runtime-copy outer bound ${containmentMs}ms`),containmentMs);
 const cancellations = (['SIGTERM','SIGINT','SIGHUP','SIGQUIT'] as const).map(signal=>({signal,handler:()=>stop('outer supervisor '+signal)}));
 for(const {signal,handler} of cancellations)process.on(signal,handler);
-const watcher=fs.watch(fixture,()=>{if(fs.existsSync(ready))release();});
+const observed=waitForCondition({site:'runtime-copy-source.ready',paths:[fixture],predicate:()=>fs.existsSync(ready)});
+observed.promise.then(release,error=>stop('readiness observation failed: '+String(error)));
 function release(){
   if(releaseTimer||ended)return;
   releaseTimer=setTimeout(()=>{if(!ended){fs.writeSync(gateFd,'runtime-copy-release\n');inputReleased=true;}},6000);
 }
-if(fs.existsSync(ready))release();
 let result: {status:number|null,signal:NodeJS.Signals|null};
 try { result=await completion; }
-finally { clearTimeout(outer);if(releaseTimer)clearTimeout(releaseTimer);watcher.close();for(const {signal,handler} of cancellations)process.off(signal,handler);fs.closeSync(gateFd);fs.closeSync(outFd);fs.closeSync(errFd); }
+finally { clearTimeout(outer);if(releaseTimer)clearTimeout(releaseTimer);observed.cancel();for(const {signal,handler} of cancellations)process.off(signal,handler);fs.closeSync(gateFd);fs.closeSync(outFd);fs.closeSync(errFd); }
 const stdout=fs.readFileSync(outFile,'utf8'),stderr=fs.readFileSync(errFile,'utf8');
 console.log('CAPTURE runtime source '+JSON.stringify({...result,stdout,stderr,inputReleased,containment:containment??null,copiedSoFar:copiedSoFar()}));
 assert.equal(containment,undefined,'runtime-copy resource containment is INCOMPLETE, not proof of incorrect bytes');

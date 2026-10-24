@@ -5,6 +5,8 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import conditionWait from './wait-for-condition.cjs';
+const { waitForCondition } = conditionWait;
 
 const project = process.argv[2], source = path.dirname(import.meta.dir);
 assert(project && !fs.existsSync(project), "census fixture needs a fresh owned target");
@@ -72,11 +74,7 @@ const peer = Bun.spawn(["node", path.join(source, "fixtures/adapter-selftest-hol
 });
 const peerOut = new Response(peer.stdout).text(), peerErr = new Response(peer.stderr).text();
 function fileReady(file: string) {
-  let resolve: () => void;
-  const promise = new Promise<void>(r => { resolve = r; });
-  const watcher = fs.watch(path.dirname(file), () => { if (fs.existsSync(file)) resolve(); });
-  if (fs.existsSync(file)) resolve!();
-  return { promise, close: () => watcher.close() };
+  return waitForCondition({ site: 'adapter-census.fileReady', paths: [path.dirname(file)], predicate: () => fs.existsSync(file) });
 }
 const readySignal = fileReady(ready), recordedSignal = fileReady(recordedReady);
 let failures = 0; const results: any[] = [];

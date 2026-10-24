@@ -53,6 +53,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -uo pipefail   # deliberately not -e: some cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+export WHEELHOUSE_TEST_CONDITION_HELPER="$HERE/fixtures/wait-for-condition.cjs"
 export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 ADAPTER="${1:-$HERE/adapter.ts}"
 FLOOR="$HERE/floor.ts"
@@ -184,7 +185,6 @@ function handle(cmd) {
       const finish = () => {
         if (done) return;
         done = true; held = false; streaming = false;
-        if (watcher) watcher.close();
         if (wd) fs.writeFileSync(path.join(wd, "touched-by-" + bead), bead + "\n");
         fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message }) + "\n");
         out({ type: "message_end", message: { role: "assistant",
@@ -197,18 +197,22 @@ function handle(cmd) {
         out({ type: "agent_start" });
         if (!barrier) { finish(); return; }
         held = true;
-        const released = () => { if (fs.existsSync(path.join(barrier, "release"))) finish(); };
-        watcher = fs.watch(barrier, released);
-        released();
+        const {waitForCondition} = require(process.env.WHEELHOUSE_TEST_CONDITION_HELPER);
+        watcher = waitForCondition({site:'concurrency.stub.release',paths:[barrier],predicate:()=>{
+          if (!fs.existsSync(path.join(barrier, "release"))) return false;
+          finish(); return true;
+        }});
+        watcher.promise.catch(error => { console.error(error); process.exit(1); });
       };
       if (barrier && process.env.WHEELHOUSE_CONCURRENCY_SERIAL_TURNS && bead === "bead-b") {
         // Real serialization sabotage: B cannot start until A has finished.
         let queued = true;
-        const unqueue = () => {
-          if (queued && fs.existsSync(path.join(barrier, "bead-a.finished"))) { queued = false; watcher.close(); start(); }
-        };
-        watcher = fs.watch(barrier, unqueue);
-        unqueue();
+        const {waitForCondition} = require(process.env.WHEELHOUSE_TEST_CONDITION_HELPER);
+        watcher = waitForCondition({site:'concurrency.stub.unqueue',paths:[barrier],predicate:()=>{
+          if (!queued || !fs.existsSync(path.join(barrier, "bead-a.finished"))) return false;
+          queued = false; start(); return true;
+        }});
+        watcher.promise.catch(error => { console.error(error); process.exit(1); });
       } else start();
       break;
     }

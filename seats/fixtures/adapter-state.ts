@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { acquirePidLock, releasePidLock } from "../lock";
+import conditionWait from './wait-for-condition.cjs';
+const { waitForCondition } = conditionWait;
 
 const [root, order] = process.argv.slice(2);
 assert(fs.statSync(root).isDirectory());
@@ -30,15 +32,11 @@ function bounded<T>(promise: Promise<T>): Promise<T> {
   })]).finally(() => clearTimeout(timer));
 }
 function barrier(name: string, child: ReturnType<typeof Bun.spawn>): Promise<void> {
-  return bounded(new Promise<void>((resolve, reject) => {
-    const check = () => {
-      if (!fs.existsSync(path.join(dir, name))) return;
-      watcher.close(); resolve();
-    };
-    const watcher = fs.watch(dir, check);
-    child.exited.then(code => { watcher.close(); reject(new Error(`${name}: child exited ${code} before barrier`)); });
-    check();
-  }));
+  const observed = waitForCondition({ site: 'adapter-state.barrier', paths: [dir], predicate: () => fs.existsSync(path.join(dir, name)) });
+  return bounded(Promise.race([
+    observed.promise,
+    child.exited.then(code => { throw new Error(`${name}: child exited ${code} before barrier`); }),
+  ])).finally(observed.cancel);
 }
 function native(command: string, args: string[]): string {
   const r = spawnSync(command, args, { encoding: "utf8", env: { ...process.env } });
