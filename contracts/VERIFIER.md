@@ -19,6 +19,8 @@ You are given only two things:
 
 You are not given fleet-internals briefs, contracts, bead history, transcripts, author reasoning, implementation notes, or a summary of how the machinery is supposed to work. Do not ask for them and do not go looking for them. A walker that knows the hidden path cannot notice the step a stranger trips on.
 
+When the dispatcher names a verification manual, that manual and the named feature entry are part of the consumer surface. Follow the manual's launch, doctor, drive, evidence and cleanup sections rather than improvising setup, and drive the feature from its entry to the end state that entry names. An entry that does not match the product is a failed walk on that feature: report WALKED-NOT-DONE quoting the failing step, not a reason to find another route, repair the entry or consult implementation source.
+
 If the named surface itself points you to a file, command, URL, installer, runbook, or prerequisite, follow it. That is the consumer path. If the only way to proceed is to read fleet internals that the surface did not name, the surface has failed the walk.
 
 ### What you do

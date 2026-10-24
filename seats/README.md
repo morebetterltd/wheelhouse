@@ -1030,10 +1030,32 @@ of reaching around the dispatcher.
 ## Walking a consumer surface
 
 ```bash
-bun seats/walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--out <dir>] [--verifier <seat>]
+bun seats/walk.ts <claim-ref> --surface <kind>:<spec> [--repo <product-repo>] [--baseline <sha>] [--out <dir>] [--verifier <seat>]
 ```
 
 One invocation = one verifier walk of one ISA claim against the surface that claim names. `<claim-ref>` is either the quoted claim text or a file containing it. Surface kinds are `install:<readme-or-repo path/URL>`, `upgrade:<runbook path>` with `--baseline <sha>`, and `product:<url-or-command>`. The command spawns one `pi -p --no-session` on the roster's verifier identity with the resolved `VERIFIER.md` walker brief and a prompt containing only the claim text, the surface spec, and consumer setup for that surface. Its one-shot `PATH` uses the same read-only `bd` shim as `verify.ts`. It does not perform the author-account distinctness check from `verify.ts`, because a walk judges a surface, not a diff.
+
+`manual:<feature-slug>` drives a feature from the product's verification manual.
+Use `--repo <product-repo>` (default: the install root). The dispatcher pins the
+repository's HEAD, creates a detached product scratch worktree, and resolves the
+manual through `manual.ts`'s validated read model in that snapshot. A product
+directory inside a larger repository keeps its relative location in the scratch
+tree. Dirty checkout changes do not enter the prompt. The prompt carries the
+scratch manual path, full feature entry (including its headings), and instructions
+to launch, doctor, drive, retain evidence and clean up exactly as written. Unknown
+slugs or invalid manuals refuse with exit5 before spawning a walker. A wrong
+entry is WALKED-NOT-DONE/exit2, quoting its failing step, not an invitation to
+find another route. Manual walks receive caller-owned `RUN_DIR` and
+`EVIDENCE_DIR` under `--out`; use isolated instances/non-production endpoints.
+When a `product:` surface has a manual in the pinned product snapshot, its
+otherwise unchanged instructions add one line naming that manual. Existing
+install/upgrade/product surfaces remain available. W11's future one-verdict-row-
+per-outcome dispatcher will reuse this plumbing; this change does not add those
+rows. Example:
+
+```bash
+bun seats/walk.ts 'Counter reaches two after two increments' --surface manual:counter --repo seats/fixtures/verification/five-features --out <task-scratch>/walk
+```
 
 The transcript is scrubbed through `seats/evidence-scrub.sh` and retained under `--out`; stdout and `walk.json` print the transcript/metadata paths relative to the install root, not as machine-local absolute paths. If `--out` is omitted, it defaults under ignored `seats/verdicts/walks/` for the commander to transcribe into a graph-approved evidence home. The default walker budget is 1800000 ms (30 minutes); override it for one invocation with `WHEELHOUSE_WALK_TIMEOUT_MS=<ms> bun seats/walk.ts ...`. On timeout, `walk.ts` keeps the partial transcript, exits `3`, writes `COULD-NOT-WALK` metadata, and names the phase it was in. Exit codes are `0` for `WALKED-DONE`, `2` for `WALKED-NOT-DONE`, `3` for `COULD-NOT-WALK`, `4` for missing/ambiguous/malformed `VERDICT:` output, and `5` for preflight or credential refusal before any walker spawns.
 

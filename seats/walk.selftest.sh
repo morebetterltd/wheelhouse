@@ -57,6 +57,12 @@ fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.s
 fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null }));
+if (process.env.STUB_WALK_MANUAL_SNAPSHOT) {
+  const cp = require('child_process');
+  const head = cp.spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
+  fs.writeFileSync(path.join(agentDir, 'snapshot.json'), JSON.stringify({ head: head.stdout, status: head.status, stderr: head.stderr, cwd: process.cwd(), manualExists: fs.existsSync('.agents/skills/verify-five-features/SKILL.md'), manualText: fs.readFileSync('.agents/skills/verify-five-features/SKILL.md', 'utf8'), runDir: process.env.RUN_DIR, evidenceDir: process.env.EVIDENCE_DIR }));
+  fs.appendFileSync(path.join(agentDir, 'invocations.jsonl'), JSON.stringify({ pid: process.pid })+'\n');
+}
 const clockDir = process.env.STUB_WALK_CLOCK_DIR;
 if (clockDir) {
   fs.writeFileSync(path.join(clockDir, 'verifier.tmp'), JSON.stringify({pid:process.pid,cwd:process.cwd(),stdin:fs.fstatSync(0).isCharacterDevice()?'ignored':'open-pipe'}));
@@ -225,6 +231,12 @@ run_case couldnot $'blocked __HOME__ __TMP__\nVERDICT: COULD-NOT-WALK — missin
 run_case zero $'no verdict here __HOME__ __TMP__\n' 4 'expected exactly one'
 run_case dedup $'VERDICT: WALKED-DONE\nVERDICT: WALKED-DONE\n__HOME__ __TMP__\n' 0 'VERDICT: WALKED-DONE'
 run_case two $'VERDICT: WALKED-DONE\nVERDICT: COULD-NOT-WALK — duplicate\n__HOME__ __TMP__\n' 4 'expected exactly one'
+
+phase 'manual surfaces use the pinned product snapshot and entry'
+proj="$FIX/proj-manual"; ns="walk-manual"; build_proj "$proj" "$ns"
+if HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/walk/manual.ts" "$proj" "$HOME_FIX/.pi-seats-$ns/verifier" "$HERE/fixtures/verification/five-features"; then
+  pass 'manual surface assertions completed'
+else fail 'manual surface assertions failed'; fi
 
 make_walk_stream_fixture(){
   local harness="$1" source="$2" dest="$3"

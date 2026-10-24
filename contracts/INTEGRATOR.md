@@ -117,6 +117,8 @@ Default project value, to keep the drift-walk integer in a project half the upgr
 walk_cadence_merges: 5
 ```
 
+Claim walks on a project with a verification manual use `manual:<feature-slug>` surfaces and `--repo <product-repo>`. The dispatcher supplies the pinned manual and feature entry; a mismatched entry fails that feature's walk rather than authorizing a different route. This is claim-walk plumbing, not W11's future per-outcome verdict rows.
+
 Override `walk_cadence_merges` here if this install needs a tighter or looser drift-walk rhythm. Name the actual install, upgrade, and product surfaces in `wheelhouse/crew/VERIFIER.md`'s project half so both claim-closing walks and every-N drift walks dispatch against the same list.
 
 ### How a shipped record gets corrected here
