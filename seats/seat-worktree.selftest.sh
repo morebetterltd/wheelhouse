@@ -7,6 +7,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(cd "$HERE/.." && pwd -P)"
+export LIFECYCLE_COMMAND_HELPER="$HERE/completed-command.ts"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2; }
 
 FAILED=0
@@ -97,14 +98,16 @@ if [ ! -e "$REPO/.wheelhouse-worktrees/worker-1/.git" ]; then
 fi
 git -C "$REPO" worktree add -q "$REPO/.wheelhouse-worktrees/closed-old" -b fleet/closed-old main
 if run_bun '
-import { execFileSync } from "node:child_process";
 const { ensureSeatWorktree, seatWorktreeDir } = await import(process.env.MODULE);
 const root = process.env.ROOT_UNDER_TEST;
 const seatTarget = seatWorktreeDir(root, "worker-1");
 const closed = `${root}/.wheelhouse-worktrees/closed-old`;
 const r = ensureSeatWorktree({ root, seat: "worker-1", beadId: "new-bead", base: "main", roster: {"worker-1":{}}, state: { seats: { "worker-1": { pid: null, cwd: closed, lastBead: "closed-old" } } }, seatPush: "off" });
 if (r.target !== seatTarget) throw new Error(`closed legacy target ${r.target} !== ${seatTarget}`);
-const branch = execFileSync("git", ["-C", seatTarget, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" }).trim();
+const native=(await import(process.env.LIFECYCLE_COMMAND_HELPER)).completedCommand("git",["-C",seatTarget,"symbolic-ref","--short","HEAD"]);
+console.error("CAPTURE seat-worktree branch "+JSON.stringify(native));
+if(native.error||native.signal||native.status!==0)throw new Error("native branch observation unavailable");
+const branch = native.stdout.trim();
 if (branch !== "fleet/new-bead") throw new Error(`branch ${branch}`);
 '; then
   pass "closed legacy cwd does not override the new bead's seat worktree"
@@ -147,16 +150,19 @@ EOF
 OUT="$FIX/resolve-base.out"
 if env WHEELHOUSE_SKIP_BD=1 INSTALL="$INSTALL" MODULE="$ROOT/seats/seat-worktree.ts" EXPECT="$STAGING_SHA" bun -e '
 const { ensureSeatWorktree, seatWorktreeDir } = await import(process.env.MODULE);
-const { execFileSync } = await import("node:child_process");
 const install = process.env.INSTALL;
 const result = ensureSeatWorktree({ root: install, beadId: "merge-target-fixture", seat: "worker-1", state: { seats: {} }, roster: { "worker-1": {} }, seatPush: "off" });
 const target = seatWorktreeDir(install, "worker-1");
 if (result.base !== "origin/staging") throw new Error(`base ${result.base}`);
 if (result.target !== target) throw new Error(`target ${result.target}`);
-const head = execFileSync("git", ["-C", target, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const native=(await import(process.env.LIFECYCLE_COMMAND_HELPER)).completedCommand("git",["-C",target,"rev-parse","HEAD"]);
+console.error("CAPTURE seat-worktree merge-target head "+JSON.stringify(native));
+if(native.error||native.signal||native.status!==0)throw new Error("native merge-target observation unavailable");
+const head = native.stdout.trim();
 if (head !== process.env.EXPECT) throw new Error(`HEAD ${head} !== ${process.env.EXPECT}`);
 console.log(JSON.stringify({ base: result.base, head }));
 ' > "$OUT" 2>&1; then
+  cat "$OUT"
   pass "new seat branch starts from wheelhouse/.template-source merge-target before origin/HEAD"
 else
   fail "new seat branch did not start from recorded merge target: $(cat "$OUT" 2>/dev/null)"
@@ -165,16 +171,19 @@ fi
 OUT="$FIX/integration-base.out"
 if env PATH="$BIN:$PATH" INSTALL="$INSTALL" MODULE="$ROOT/seats/seat-worktree.ts" EXPECT="$GOAL_SHA" bun -e '
 const { ensureSeatWorktree, seatWorktreeDir } = await import(process.env.MODULE);
-const { execFileSync } = await import("node:child_process");
 const install = process.env.INSTALL;
 const result = ensureSeatWorktree({ root: install, beadId: "bead-integration", seat: "worker-2", state: { seats: {} }, roster: { "worker-1": {}, "worker-2": {} }, seatPush: "off" });
 const target = seatWorktreeDir(install, "worker-2");
 if (result.base !== "origin/fleet/goal") throw new Error(`base ${result.base}`);
 if (result.target !== target) throw new Error(`target ${result.target}`);
-const head = execFileSync("git", ["-C", target, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const native=(await import(process.env.LIFECYCLE_COMMAND_HELPER)).completedCommand("git",["-C",target,"rev-parse","HEAD"]);
+console.error("CAPTURE seat-worktree Integration head "+JSON.stringify(native));
+if(native.error||native.signal||native.status!==0)throw new Error("native Integration observation unavailable");
+const head = native.stdout.trim();
 if (head !== process.env.EXPECT) throw new Error(`HEAD ${head} !== ${process.env.EXPECT}`);
 console.log(JSON.stringify({ base: result.base, head }));
 ' > "$OUT" 2>&1; then
+  cat "$OUT"
   pass "Integration: fleet/<goal> resolves to origin/fleet/<goal> when only the remote ref exists"
 else
   fail "Integration remote-only goal ref did not resolve before merge-target/origin-HEAD: $(cat "$OUT" 2>/dev/null)"

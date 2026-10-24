@@ -129,6 +129,7 @@ BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
 RUN_PATH="$BIN:$PATH" # Keep inherited host-budget and instrumentation shims.
 SIGNALS="$HERE/fixtures/adapter-selftest-signals.ts"
+export LIFECYCLE_COMMAND_HELPER="$ADAPTER_DIR/completed-command.ts"
 export ADAPTER_SELFTEST_SIGNAL_HELPER="$SIGNALS"
 wait_for() { # file, literal text, optional producer pid
   local producer="${3:-}"
@@ -684,9 +685,13 @@ else fail "stop on dead pid/unread FIFO did not observe the dead process (rc=$RC
 start_holder no-reader "$DEAD_FIFO_PROJ" fixture-no-reader
 NO_READER_PID="$HOLDER_PID"
 env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" PID="$NO_READER_PID" bun -e '
-  import fs from "node:fs"; import path from "node:path"; import cp from "node:child_process";
+  import fs from "node:fs"; import path from "node:path"; import assert from "node:assert/strict";
+  const {completedCommand}=await import(process.env.LIFECYCLE_COMMAND_HELPER);
   const proj = process.env.PROJ, pid = Number(process.env.PID);
-  const live = Date.parse(cp.spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).stdout.trim());
+  const native=completedCommand("ps",["-p",String(pid),"-o","lstart="]);
+  console.error("CAPTURE adapter holder birth "+JSON.stringify({pid,native}));
+  assert.equal(native.status,0);assert.equal(native.signal,null);assert.equal(native.error,undefined);
+  const live = Date.parse(native.stdout.trim());
   const state = { seats: { "worker-1": { pid, startedAt: new Date(live).toISOString(), accountDir: path.join(process.env.HOME, ".pi-seats-deadfifo", "worker-1"), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", "worker-1.stdin"), log: path.join(proj, "seats", "logs", "worker-1.jsonl"), sessionId: "s-noreader", sessionFile: null } } };
   fs.writeFileSync(path.join(proj, "seats", "state.json"), JSON.stringify(state, null, 2)+"\n");
 '
@@ -712,9 +717,13 @@ fs.writeFileSync(file,source.replace(guards[0],''));
 JS
   selftest_copy_seat_runtime "$DEAD_FIFO_PROJ" "$FIX/fifo-mutant-source/seats"
   env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" PID="$NO_READER_PID" bun -e '
-    import fs from "node:fs"; import path from "node:path"; import cp from "node:child_process";
+    import fs from "node:fs"; import path from "node:path"; import assert from "node:assert/strict";
+    const {completedCommand}=await import(process.env.LIFECYCLE_COMMAND_HELPER);
     const proj = process.env.PROJ, pid = Number(process.env.PID);
-    const live = Date.parse(cp.spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).stdout.trim());
+    const native=completedCommand("ps",["-p",String(pid),"-o","lstart="]);
+    console.error("CAPTURE adapter canary holder birth "+JSON.stringify({pid,native}));
+    assert.equal(native.status,0);assert.equal(native.signal,null);assert.equal(native.error,undefined);
+    const live = Date.parse(native.stdout.trim());
     const state = { seats: { "worker-1": { pid, startedAt: new Date(live).toISOString(), accountDir: path.join(process.env.HOME, ".pi-seats-deadfifo", "worker-1"), role: "worker", roleBrief: "x", cwd: proj, fifo: path.join(proj, "seats", "run", "worker-1.stdin"), log: path.join(proj, "seats", "logs", "worker-1.jsonl"), sessionId: "s-noreader", sessionFile: null } } };
     fs.writeFileSync(path.join(proj, "seats", "state.json"), JSON.stringify(state, null, 2)+"\n");
   '

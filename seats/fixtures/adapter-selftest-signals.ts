@@ -1,6 +1,12 @@
-// Event-only adapter.selftest waits: no timer, polling sleep or elapsed budget.
+// Lifecycle ownership: kernel file/exit events, explicit actor release, and
+// native fd/title reconciliation without an elapsed correctness deadline.
+// The admitted suite supplies named outer containment (default3600s); pending
+// observations are printed before blocking so expiry retains what was seen.
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import assert from "node:assert/strict";
+import { completedCommand } from "../completed-command.ts";
 import { dlopen, FFIType as T, ptr, toArrayBuffer } from "bun:ffi";
 
 const darwin = process.platform === "darwin";
@@ -143,11 +149,13 @@ function ready(): void {
     delete process.env.ADAPTER_WAIT_READY;
   }
 }
-function wait(mode: string, file: string, needle: string, offset: number, pid: number): void {
+function wait(mode: string, file: string, needle: string, offset: number, pid: number, count = 1): void {
   validatePid(pid);
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("invalid byte offset");
+  if (mode === "count" && (!needle || !Number.isSafeInteger(count) || count < 1)) throw new Error("invalid event count");
+  let lastSeen: any;
   const match = () => {
-    if (!regular(file)) return false;
+    if (!regular(file)) { lastSeen = { file, present: false }; return false; }
     if (mode === "exists") return true;
     const fd = fs.openSync(file, "r");
     try {
@@ -156,7 +164,8 @@ function wait(mode: string, file: string, needle: string, offset: number, pid: n
       const bytes = Buffer.alloc(size - offset);
       fs.readSync(fd, bytes, 0, bytes.length, offset);
       const text = bytes.toString("utf8");
-      return mode === "regex" ? new RegExp(needle).test(text) : text.includes(needle);
+      lastSeen = { file, size, offset, matches: mode === "count" ? text.split(needle).length - 1 : undefined };
+      return mode === "count" ? lastSeen.matches >= count : mode === "regex" ? new RegExp(needle).test(text) : text.includes(needle);
     } finally { fs.closeSync(fd); }
   };
   for (;;) {
@@ -167,6 +176,7 @@ function wait(mode: string, file: string, needle: string, offset: number, pid: n
       if (match()) return;
       if (w.dead) throw new Error("producer exited before signal: " + file);
       ready();
+      console.error("WAIT lifecycle event " + JSON.stringify({ mode, needle, count, producer: pid, lastSeen, outer: "admitted suite containment (default3600s)" }));
       const event = w.wait();
       if (event !== "file" && event !== "exit") throw new Error("missing kernel wake event");
       if (match()) return;
@@ -181,9 +191,87 @@ if (process.env.ADAPTER_WAIT_AUDIT_DIR) {
   fs.writeFileSync(file, JSON.stringify({ pid: process.pid, mode, args }));
   process.on("exit", () => { try { fs.rmSync(file); } catch {} });
 }
+async function ownershipCheck(root: string): Promise<void> {
+  fs.mkdirSync(root, { recursive: true });
+  const helper = process.env.LIFECYCLE_TEST_HELPER || import.meta.path;
+  const actors: any[] = [], record: any = { platform: process.platform, arch: process.arch, outer: "admitted suite containment (default3600s)", cases: [], failures: [] };
+  const own = (argv: string[]) => {
+    const child = spawn("bun", argv, { cwd: root, stdio: "inherit" });
+    const a: any = { child, ended: false };
+    a.closed = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", (code, signal) => { a.ended = true; a.native = { code, signal }; resolve(); }); });
+    actors.push(a); return a;
+  };
+  const release = path.join(root, "holder.release"), published = path.join(root, "holder.ready"), fifo = path.join(root, "holder.stdin");
+  const mk = completedCommand("mkfifo", [fifo]);
+  console.error("CAPTURE lifecycle mkfifo " + JSON.stringify(mk)); assert.equal(mk.status, 0);
+  const holder = own([helper, "hold", release, published, fifo]);
+  try {
+    while (!fs.existsSync(published) && !holder.ended) await Bun.sleep(50);
+    assert(fs.existsSync(published), "owned holder must publish ready");
+    assert.equal(Number(fs.readFileSync(published, "utf8")), holder.child.pid);
+    record.holder = { pid: holder.child.pid, ready: true };
+    if (holder.ended) throw new Error("published holder exited before owner release");
+    const fd = completedCommand("lsof", ["-Fn", "-p", String(holder.child.pid)]);
+    record.fd = fd;
+    console.error("CAPTURE lifecycle ready FIFO native " + JSON.stringify({ pid: holder.child.pid, expected: fifo, native: fd }));
+    assert.equal(fd.status, 0, "ready holder native fd observation must be available");
+    assert(fd.stdout.split("\n").includes("n" + fifo), "published ready holder must actually hold its FIFO");
+    for (const kind of ["text", "count"]) {
+      const file = path.join(root, kind + ".data"), needle = kind === "text" ? "LIFECYCLE_READY" : "FRAME";
+      fs.writeFileSync(file, kind === "count" ? "FRAME\n" : "");
+      // Delay is controlled INPUT, not a deadline or pass-on-elapsed assertion.
+      const producer = own(["-e", 'const fs=require("node:fs");await Bun.sleep(16000);fs.appendFileSync(process.argv[1],process.argv[2]);', file, kind === "text" ? "LIFECYCLE_READY\n" : "FRAME\n"]);
+      const native = completedCommand("bun", [helper, kind, file, needle, "0", String(producer.child.pid), "2"]);
+      const text = fs.readFileSync(file, "utf8"), delivered = kind === "text" ? text.includes(needle) : text.split(needle).length - 1 >= 2;
+      record.cases.push({ kind, input: { file, needle, count: kind === "count" ? 2 : 1, producer: producer.child.pid }, native, deliveredAtReturn: delivered, holderAlive: alive(holder.child.pid) });
+      console.error("CAPTURE lifecycle return " + JSON.stringify(record.cases.at(-1)));
+      if (!delivered || native.status !== 0) record.failures.push(kind + " wait returned without delivered input/native success");
+      if (!delivered && !producer.ended) producer.child.kill("SIGTERM"); // containment AFTER forbidden early return is recorded
+      await producer.closed;
+    }
+    const dead = own(["-e", "process.exit(37)"]); await dead.closed;
+    const rejected = completedCommand("bun", [helper, "text", path.join(root, "never.data"), "never", "0", String(dead.child.pid)]);
+    record.deadProducer = { input: dead.native, pid: dead.child.pid, native: rejected };
+    assert.equal(dead.native.code, 37);
+    if (rejected.status === 0 || !rejected.stderr.includes("producer exited")) record.failures.push("dead producer did not reject missing input");
+    assert(!holder.ended && alive(holder.child.pid), "published holder exited before owner release");
+    fs.writeFileSync(release, "explicit owner release\n"); await holder.closed;
+    record.holder.released = true; record.holder.native = holder.native;
+    assert.equal(holder.native.code, 0); assert.equal(holder.native.signal, null);
+  } catch (error) { record.failures.push(String(error)); }
+  finally {
+    for (const a of actors) if (!a.ended) a.child.kill("SIGTERM");
+    await Promise.all(actors.map(a => a.closed));
+    record.actorResults = actors.map(a => ({ pid: a.child.pid, ...a.native }));
+    const out = process.env.WHEELHOUSE_LIFECYCLE_EVIDENCE;
+    if (out) { fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out, JSON.stringify(record, null, 2)); }
+    console.error("CAPTURE lifecycle ownership " + JSON.stringify(record));
+  }
+  assert.equal(record.failures.length, 0, record.failures.join("; "));
+  console.log("lifecycle ownership: PASS (explicit FIFO holder release, delayed text/count inputs, native37 producer rejection)");
+}
 try {
-  if (mode === "text" || mode === "regex" || mode === "exists") {
-    wait(mode, path.resolve(args[0]), args[1] ?? "", Number(args[2] ?? 0), Number(args[3] ?? 0));
+  if (mode === "text" || mode === "regex" || mode === "exists" || mode === "count") {
+    wait(mode, path.resolve(args[0]), args[1] ?? "", Number(args[2] ?? 0), Number(args[3] ?? 0), Number(args[4] ?? 1));
+  } else if (mode === "hold") {
+    const [release, published, fifo] = args;
+    const fd = fifo ? fs.openSync(fifo, fs.constants.O_RDWR | fs.constants.O_NONBLOCK) : null;
+    try {
+      fs.writeFileSync(published, String(process.pid) + "\n", { flag: "wx" });
+      wait("exists", path.resolve(release), "", 0, 0);
+    } finally { if (fd !== null) fs.closeSync(fd); }
+  } else if (mode === "fd" || mode === "title") {
+    const pid = Number(args[0]); validatePid(pid); if (!pid) throw new Error("observation needs a live producer");
+    for (;;) {
+      const native = mode === "fd" ? completedCommand("lsof", ["-Fn", "-p", String(pid)]) : completedCommand("ps", ["-p", String(pid), "-o", "command="]);
+      console.error("CAPTURE lifecycle observation " + JSON.stringify({ mode, pid, expected: args[1], native }));
+      if (native.error || native.signal || (native.status !== 0 && native.status !== 1)) throw new Error("UNVERIFIED native lifecycle observation");
+      if (native.status === 0 && (mode === "fd" ? native.stdout.split("\n").includes("n" + args[1]) : native.stdout.trim() === args[1])) break;
+      if (!alive(pid)) throw new Error("producer exited before " + mode + " observation");
+      await Bun.sleep(50); // reconciliation cadence only; the admitted suite owns containment
+    }
+  } else if (mode === "selftest") {
+    await ownershipCheck(path.resolve(args[0]));
   } else if (mode === "exit") {
     const pid = Number(args[0]); validatePid(pid);
     if (!pid) throw new Error("exit wait needs a producer pid");
@@ -191,6 +279,7 @@ try {
     try {
       ready();
       if (!w.dead && alive(pid)) {
+        console.error("WAIT lifecycle exit " + JSON.stringify({ pid, lastSeen: "live producer; kernel EXIT subscribed", outer: "admitted suite containment (default3600s)" }));
         const event = w.wait();
         if (event !== "exit") throw new Error("missing kernel EXIT event");
       }
