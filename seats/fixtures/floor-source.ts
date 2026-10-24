@@ -35,7 +35,9 @@ for (const fault of [false, true]) {
   fs.writeFileSync(root + '/bin/tmux', '#!/usr/bin/env bash\nif [ "${1:-}" = -L ]; then socket="$2"; shift 2; exec ' + JSON.stringify(realTmux) + ' -S "./$socket.sock" "$@"; fi\nexec ' + JSON.stringify(realTmux) + ' "$@"\n', { mode: 0o755 });
   const recordsFile = root + '/executions.jsonl';
   const prefix = `import { appendFileSync as recordSelectedSource, readFileSync as readSelectedSource } from 'node:fs';\nimport { createHash as hashSelectedSource } from 'node:crypto';\nimport { fileURLToPath as selectedSourcePath } from 'node:url';\nrecordSelectedSource(${JSON.stringify(recordsFile)}, JSON.stringify({marker:${JSON.stringify(name)},file:selectedSourcePath(import.meta.url),sha256:hashSelectedSource('sha256').update(readSelectedSource(new URL(import.meta.url))).digest('hex'),pid:process.pid,args:process.argv.slice(2),stdinTTY:!!process.stdin.isTTY,stdoutTTY:!!process.stdout.isTTY,tmux:process.env.TMUX||null})+'\\n');\n`;
-  const selected = prefix + (fault ? original.replace(anchor, 'render();\nif (!process.stdin.isTTY) process.exit(0); // planted single-frame interactive product fault\nsetInterval(render, 500);') : original);
+  const body = fault ? original.replace(anchor, 'render();\nif (!process.stdin.isTTY) process.exit(0); // planted single-frame interactive product fault\nsetInterval(render, 500);') : original;
+  const shebangEnd = body.indexOf('\n') + 1; assert(body.startsWith('#!') && shebangEnd > 0);
+  const selected = body.slice(0, shebangEnd) + prefix + body.slice(shebangEnd);
   const alternate = root + '/alternate source/requested floor.ts'; fs.writeFileSync(alternate, selected);
   // Absolute source and caller-relative source (both with spaces) are distinct
   // supported invocation configurations. No helper imports are stubbed/removed.
