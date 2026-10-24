@@ -24,12 +24,11 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 # checks these tests notice. Each sabotage is guarded with cmp: if the sed
 # no longer bites, the canary says so instead of proving nothing.
 #
-# The last phase is ONE real-pi smoke leg (SKIP-able): a fixture project
-# whose REVIEWER.md brief is a scripted-reply instruction, so one trivial
-# model turn proves the spawn/parse/record plumbing against the real binary.
-# It borrows your login the way adapter.selftest.sh does; no pi, no login,
-# or WHEELHOUSE_SKIP_REAL_PI=1 each print a SKIP line and the hermetic
-# phases still decide the exit code.
+# The last phase uses the real Pi binary with a private loopback model,
+# dummy credentials and isolated resources. It tests spawn/parse/record plus
+# a genuine verdict-free turn (exit5), not live OAuth/provider availability or
+# a real model's instruction following. It never borrows a login or pays for
+# model calls. No pi or WHEELHOUSE_SKIP_REAL_PI=1 prints a SKIP line.
 #
 # Usage: verify.selftest.sh [path-to-verify.ts]
 # Focused load case: WHEELHOUSE_VERIFY_SELFTEST_CASE=bead-progress-past-total
@@ -2481,17 +2480,11 @@ signal_cleanup_case TERM 143 sigterm SIGTERM
 signal_cleanup_case INT 130 sigint SIGINT
 RUN_PROJ="$PROJ"; VDIR="$PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 
-phase "11. real pi — one smoke leg through the actual binary (SKIP-able)"
-REAL_AUTH="$HOME/.pi/agent/auth.json"
-real_auth_is_identity() {
-  [ -f "$REAL_AUTH" ] && [ -n "$(tr -d '{}[:space:]' < "$REAL_AUTH" 2>/dev/null)" ]
-}
+phase "11. real pi — local model spawn/parse/record and stripped-verdict control (SKIP-able)"
 if [ "${WHEELHOUSE_SKIP_REAL_PI:-}" = "1" ]; then
   skip "real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1"
 elif [ -z "$REAL_PI" ]; then
   skip "real-pi leg: no pi on PATH (npm install -g @earendil-works/pi-coding-agent)"
-elif ! real_auth_is_identity; then
-  skip "real-pi leg: $REAL_AUTH missing or empty — run pi, then /login inside the REPL once as yourself"
 else
   RPROJ="$FIX/realproj"
   RHOME="$FIX/realhome"
@@ -2499,63 +2492,17 @@ else
   HOME_SAVE="$HOME_FIX"; HOME_FIX="$RHOME"
   build_proj "$RPROJ" real "$VERIFY"
   HOME_FIX="$HOME_SAVE"
-  # The smoke brief scripts the reply, so one trivial model turn exercises
-  # spawn -> parse -> record against the real binary without a real review.
   cat > "$RPROJ/contracts/REVIEWER.md" <<'EOF'
-SMOKE TEST. Ignore the task in the prompt. Reply with exactly these two
-lines and nothing else, using no tools:
-VERDICT: APPROVE
-PUSH:    NOT CONSIDERED
+SMOKE TEST. This is a local-model CLI protocol fixture, not a live review.
+The controlled model emits the verdict text or its verdict-stripped control.
 EOF
-  # Borrow the real login into the reviewer seat only; it dies with the fixture.
-  RSEAT="$RHOME/.pi-seats-real/reviewer"
-  cp "$REAL_AUTH" "$RSEAT/auth.json" && chmod 600 "$RSEAT/auth.json"
-  [ -f "$HOME/.pi/agent/settings.json" ] && cp "$HOME/.pi/agent/settings.json" "$RSEAT/settings.json"
-  # No --provider/--model pin by default: whatever your login can actually
-  # run. When the working login is NOT pi's default provider, pin both
-  # (always together — see the roster gotcha in README.md):
-  #   WHEELHOUSE_REAL_PI_PROVIDER=... WHEELHOUSE_REAL_PI_MODEL=...
-  env HOME="$RHOME" bun -e '
-    import fs from "node:fs";
-    const f = process.argv[1];
-    const j = JSON.parse(fs.readFileSync(f, "utf8"));
-    const p = process.env.WHEELHOUSE_REAL_PI_PROVIDER, m = process.env.WHEELHOUSE_REAL_PI_MODEL;
-    if (p && m) { j.seats.reviewer.provider = p; j.seats.reviewer.model = m; }
-    else { delete j.seats.reviewer.provider; delete j.seats.reviewer.model; }
-    fs.writeFileSync(f, JSON.stringify(j, null, 2));
-  ' "$RPROJ/seats/seats.json"
-  REAL_PATH="$(dirname "$REAL_PI"):$(dirname "$(command -v bun)"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
-  OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_VERIFY_TIMEOUT_MS=180000 \
-    bun "$RPROJ/seats/verify.ts" smoke-1 fleet/bead-1 worker-1 2>&1)"; RC=$?
-  if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
-    pass "real: one-shot spawn/parse/record round-trips through the real pi"
-  else fail "real: smoke leg exited ${RC}: $OUT"; fi
-  if grep -q "verdict: APPROVE" "$RPROJ/seats/verdicts/smoke-1.md" 2>/dev/null; then
-    pass "real: verdict file recorded"
-  else fail "real: no verdict file from the real leg"; fi
-  # The hermetic no-leak phase proves the rule with a sentinel; the real leg
-  # must hold the same line for the REAL credential, before the fixture (and
-  # the copied auth.json) is deleted: no string value from auth.json may
-  # appear in the verdict record.
-  AUTH_LEAK=0
-  while IFS= read -r tok; do
-    [ -n "$tok" ] || continue
-    if grep -rqF -- "$tok" "$RPROJ/seats/verdicts/" 2>/dev/null; then
-      AUTH_LEAK=1
-    fi
-  done < <("$NODE_BIN" -e '
-    const fs = require("fs");
-    const out = [];
-    const walk = (v) => {
-      if (typeof v === "string") { if (v.length >= 16 && !v.includes("\n")) out.push(v); }
-      else if (v && typeof v === "object") for (const k of Object.keys(v)) walk(v[k]);
-    };
-    walk(JSON.parse(fs.readFileSync(process.argv[1], "utf8")));
-    for (const t of out) process.stdout.write(t + "\n");
-  ' "$RSEAT/auth.json")
-  if [ "$AUTH_LEAK" -eq 0 ]; then
-    pass "real: no auth material in the verdict record before fixture deletion"
-  else fail "real: a value from the borrowed auth.json appears in seats/verdicts/"; fi
+  # Native Pi, never the hermetic pi stub; a separate safe bd fixture keeps
+  # the real dispatcher sweep/receipt gate active without a production graph.
+  if bun "$HERE/fixtures/verify-real-smoke.ts" "$RPROJ" "$RHOME" "$REAL_PI" "$BIN/bd"; then
+    pass 'real: local-model Pi spawn/parse/record and exit5 stripped-verdict control'
+  else
+    fail 'real: local-model Pi smoke failed (native evidence above)'
+  fi
 fi
 
 printf '\n'
