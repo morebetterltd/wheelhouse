@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Two real stop invocations, ordered by peer-owned SIGTERM/release barriers.
+# Real stop invocations with commit latency, ordered by peer-owned barriers.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
@@ -17,4 +17,5 @@ for order in ab ba; do
   cp -f "$ADAPTER" "$PROJ/seats/adapter.ts"
   if HOME="$FIX/home" bun "$HERE/fixtures/adapter-state.ts" "$PROJ" "$order"; then :; else FAILED=1; fi
 done
+if HOME="$FIX/home" bun "$HERE/fixtures/adapter-state-order.ts" "$HERE" "$FIX"; then :; else FAILED=1; fi
 exit "$FAILED"
