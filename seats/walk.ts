@@ -21,13 +21,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
 import { resolveRoleBrief } from "./briefs";
-import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
+import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, requireDistinctAccount, resolveRepoRoot, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool } from "./pool";
 import { liveLineCandidates } from "./final-assistant-message";
 import { readManual, type VerificationManual } from "./manual";
+import { checkBeadContract, contractRemedy, parseContract, type Contract } from "./contract";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -408,7 +409,18 @@ printf '{"maxWidth":${IMAGE_MAX_WIDTH},"maxContextImages":${IMAGE_MAX_CONTEXT},"
   return helper;
 }
 
+function spawnWalker(oneShot: ReturnType<typeof oneShotCommandForHarness>, scratchCwd: string, env: NodeJS.ProcessEnv) {
+  return spawnSync(oneShot.bin, oneShot.args, {
+    cwd: scratchCwd,
+    env,
+    encoding: "utf8",
+    policyTimeoutMs: TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
 function main(): void {
+  if (process.argv.slice(2).includes("--work")) { workMain(process.argv.slice(2)); return; }
   let phase = "parse arguments";
   const argv = process.argv.slice(2);
   const positional: string[] = [];
@@ -532,13 +544,7 @@ function main(): void {
   const oneShotPath = readonlyBdPath(ROOT, `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, scratchCwd);
   const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper,
     ...(surface.kind === "manual" ? { RUN_DIR: path.join(outDir, "runtime"), EVIDENCE_DIR: path.join(outDir, "evidence") } : {}) });
-  const res = spawnSync(oneShot.bin, oneShot.args, {
-    cwd: scratchCwd,
-    env,
-    encoding: "utf8",
-    policyTimeoutMs: TIMEOUT_MS,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const res = spawnWalker(oneShot, scratchCwd, env);
 
   try { fs.unlinkSync(markerFile); } catch {}
   const stdout = res.stdout ?? "";
@@ -577,6 +583,151 @@ function main(): void {
   console.log(parsed.line);
   console.log(`transcript: ${transcriptRel}`);
   console.log(`metadata: ${metaRel}`);
+  process.exit(parsed.verdict === "WALKED-DONE" ? 0 : parsed.verdict === "WALKED-NOT-DONE" ? 2 : 3);
+}
+
+type OutcomeResult = "PASS" | "FAIL" | "UNREACHED";
+interface OutcomeRow { id: string; result: OutcomeResult; detail: string }
+
+function parseWorkRows(stdout: string, harness: HarnessName, contract: Contract): OutcomeRow[] {
+  // Unlike claim verdicts, identical repeated outcome rows are duplicates.
+  const candidates = liveLineCandidates(stdout, harness, "OUTCOME", false);
+  const found = new Map<string, OutcomeRow>();
+  const order: string[] = [];
+  for (const candidate of candidates) {
+    const m = candidate.normalized.match(/^OUTCOME:\s*(O\d+)\s+(PASS|FAIL|UNREACHED)(?:\s*[—-]{1,2}\s*(\S.*))?$/);
+    if (!m) die(`malformed OUTCOME row: ${candidate.normalized}`, 4);
+    const [, id, result, evidence] = m;
+    if (!contract.outcomes.some(outcome => outcome.id === id)) die(`extra OUTCOME row ${id}`, 4);
+    if (found.has(id)) die(`duplicate OUTCOME row ${id}`, 4);
+    if (!evidence?.trim()) die(`OUTCOME ${id} requires evidence detail`, 4);
+    found.set(id, { id, result: result as OutcomeResult, detail: evidence.trim() });
+    order.push(id);
+  }
+  for (const outcome of contract.outcomes) if (!found.has(outcome.id)) die(`missing OUTCOME row ${outcome.id}`, 4);
+  const rows = contract.outcomes.map(outcome => found.get(outcome.id)!);
+  if (order.some((id, i) => id !== rows[i].id)) die("OUTCOME rows must be in contract id order", 4);
+  return rows;
+}
+
+function consistentWorkVerdict(rows: OutcomeRow[], verdict: ReturnType<typeof parseWalkVerdict>): void {
+  const failed = rows.find(row => row.result === "FAIL");
+  const unreached = rows.find(row => row.result === "UNREACHED");
+  const first = failed ?? unreached;
+  const expected = failed ? "WALKED-NOT-DONE" : unreached ? "COULD-NOT-WALK" : "WALKED-DONE";
+  if (verdict.verdict !== expected || (first && !new RegExp(`^${first.id}:\\s*\\S`).test(verdict.detail))) {
+    die(`inconsistent VERDICT: expected ${expected}${first ? ` — ${first.id}: <step or blocker>` : ""}`, 4);
+  }
+}
+
+function workPrompt(contract: Contract, tip: string, manual: VerificationManual | undefined, outDir: string): string {
+  const budget = imageBudget(outDir);
+  const entries = manual ? contract.outcomes.flatMap(outcome => {
+    // A feature slug must be named as its own token, not a substring of another feature.
+    return manual.features.filter(feature => new RegExp(`(?:^|[^a-z0-9-])${feature.slug}(?:$|[^a-z0-9-])`).test(outcome.surface))
+      .map(feature => `Feature entry for ${outcome.id}: ${feature.file}\n${fs.readFileSync(feature.file, "utf8")}`);
+  }) : [];
+  return [
+    `Work under verification. Tip: ${tip}. Your cwd is a checkout of that tip.`,
+    `Intent:`, contract.intent, ``, `Outcomes:`,
+    ...contract.outcomes.flatMap(outcome => [
+      `- ${outcome.id} ${outcome.claim}`,
+      `  consumer: ${outcome.group} — ${outcome.who}`,
+      `  surface: ${outcome.surface}`,
+      `  check: ${outcome.checkKind} — ${outcome.checkHow}`,
+    ]),
+    ``,
+    `For each outcome, go where its consumer meets it (its surface) and make the check that consumer would make: walk means drive the real page, app or CLI session as that person; read means read the artifact top to bottom and run its commands; run means run it and read the literal output. Prove each outcome true or false with your own evidence. You have not been given, and must not go looking for, the author's report, the task's history, or any fleet file; the surfaces and your cwd are the whole world.`,
+    ...(manual ? [`Verification manual (may be used): ${manual.file}`, ...entries,
+      `Follow the manual's launch, doctor, drive, evidence and cleanup. Drive named features from their entries; execute an explicit reach URL/command before driving. A failed reach step is WALKED-NOT-DONE, not permission to find another route or consult implementation source.`] : []),
+    `Caller-provided RUN_DIR: ${path.join(outDir, "runtime")}`,
+    `Caller-provided EVIDENCE_DIR: ${path.join(outDir, "evidence")}`,
+    `Use only isolated test instances, scratch state and non-production ports/sockets. Never stop, replace or modify installed applications or production service definitions. Retain evidence after cleanup.`,
+    `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT). Only resolve a path there when a named outcome surface sends you there.`,
+    `Image budget for screen captures: full-size evidence under ${rootRelative(budget.fullDir)}; in-context JPEGs <=${IMAGE_MAX_WIDTH}px wide, first ${IMAGE_MAX_CONTEXT} only. Use wheelhouse-walk-capture <label> -- <capture-command...>.`,
+    `Retain a full transcript. End with exactly one unfenced OUTCOME row per outcome in id order, each with evidence detail:`,
+    `OUTCOME: O<n> PASS — <what you drove, read or ran and observed>`,
+    `OUTCOME: O<n> FAIL — <quoted failing step>`,
+    `OUTCOME: O<n> UNREACHED — <blocker>`,
+    `Then exactly one unfenced VERDICT line: WALKED-DONE if all PASS; WALKED-NOT-DONE — O<n>: <step> for the first FAIL; otherwise COULD-NOT-WALK — O<n>: <why> for the first UNREACHED. Prefix the closing line with VERDICT:.`,
+  ].join("\n");
+}
+
+function workMain(args: string[]): void {
+  const values = new Map<string, string>();
+  const usage = "usage: walk.ts --work <bead> --branch <ref> --author <seat> [--repo <path>] [--out <dir>] [--verifier <seat>] (no claim-ref, --surface or --baseline)";
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (!["--work", "--branch", "--author", "--repo", "--out", "--verifier"].includes(flag) || values.has(flag)) die(usage);
+    const value = args[++i];
+    if (!value || value.startsWith("--")) die(usage);
+    values.set(flag, value);
+  }
+  if (!["--work", "--branch", "--author"].every(flag => values.has(flag))) die(usage);
+  const bead = validateSegment("bead id", values.get("--work")!);
+  const branch = values.get("--branch")!;
+  const author = validateSegment("seat name", values.get("--author")!);
+  const verifierArg = values.has("--verifier") ? validateSegment("seat name", values.get("--verifier")!) : undefined;
+  setVerifierGateBead(bead, "seats/walk.ts");
+  const checked = checkBeadContract(ROOT, bead);
+  if (checked.errors.length) refuse(contractRemedy(bead, checked.errors));
+  const contract = parseContract(checked.text!);
+  const repoArg = values.get("--repo");
+  const repoRoot = resolveRepoRoot(repoArg);
+  const product = repoArg ? fs.realpathSync(path.resolve(ROOT, expandTilde(repoArg))) : repoRoot;
+  const productSubdirectory = path.relative(repoRoot, product);
+  if (productSubdirectory === ".." || productSubdirectory.startsWith(`..${path.sep}`) || path.isAbsolute(productSubdirectory)) die("product directory is outside repository");
+  let tip: string;
+  try { tip = execFileSync("git", ["rev-parse", "--verify", `${branch}^{commit}`], { cwd: repoRoot, encoding: "utf8" }).trim(); }
+  catch { die(`cannot resolve branch ${JSON.stringify(branch)} to a commit`); }
+  const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  if (!entry.account?.dir) refuse(`verifier seat "${verifierSeat}" has no account.dir`);
+  requireDistinctAccount(author, verifierSeat, entry.account.dir, refuse, "verifier");
+  let harness: HarnessName;
+  try { harness = harnessNameForSeat(verifierSeat, entry); } catch (e: any) { refuse(e.message); }
+  const verifierDir = requireCredential(entry, verifierSeat, harness);
+  const brief = resolveRoleBrief(ROOT, "verifier");
+  sweepStaleScratchWorktrees(repoRoot);
+  const scratchRoot = makeScratchCwd(repoRoot, "verify", tip);
+  const cwd = path.join(scratchRoot, productSubdirectory);
+  if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) refuse(`product directory absent at ${tip}`);
+  let manual: VerificationManual | undefined;
+  try { manual = optionalManual(cwd); } catch (e: any) { refuse(e.message); }
+  const outDir = resolveOutDir(values.get("--out") ?? path.join(DEFAULT_WALKS_DIR, bead, path.basename(defaultOutDir())));
+  const transcriptFile = path.join(outDir, "transcript.txt"), metaFile = path.join(outDir, "walk.json");
+  if (fs.existsSync(metaFile)) refuse("work output already contains walk.json; use a fresh --out directory");
+  const transcriptRel = rootRelative(transcriptFile), metaRel = rootRelative(metaFile);
+  const helperBin = path.join(cwd, ".wheelhouse-walk-bin");
+  const captureHelper = writeCaptureHelper(helperBin, outDir);
+  const prompt = workPrompt(contract, tip!, manual, outDir);
+  const oneShot = oneShotCommandForHarness(harness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
+  const oneShotPath = readonlyBdPath(ROOT, `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, cwd);
+  const env = oneShotEnvForHarness(harness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT,
+    WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper, RUN_DIR: path.join(outDir, "runtime"), EVIDENCE_DIR: path.join(outDir, "evidence") });
+  const markerFile = path.join(ROOT, "seats", "run", `walk.${verifierSeat}.json`);
+  fs.mkdirSync(path.dirname(markerFile), { recursive: true });
+  fs.writeFileSync(markerFile, JSON.stringify({ pid: process.pid, bead, startedAt: new Date().toISOString() }) + "\n");
+  const res = spawnWalker(oneShot, cwd, env);
+  try { fs.unlinkSync(markerFile); } catch {}
+  const stdout = res.stdout ?? "", stderr = res.stderr ?? "";
+  scrubToFile([`$ ${oneShot.display}`, `$ cwd ${cwd}`, `--- stdout ---`, stdout, `--- stderr ---`, stderr].join("\n"), transcriptFile);
+  let rows: OutcomeRow[], parsed: ReturnType<typeof parseWalkVerdict>;
+  if (res.error && (res.error as any).code === "ETIMEDOUT") {
+    const reason = `dispatcher timed out after ${TIMEOUT_MS}ms during run verifier walk`;
+    rows = contract.outcomes.map(outcome => ({ id: outcome.id, result: "UNREACHED", detail: reason }));
+    parsed = { verdict: "COULD-NOT-WALK", detail: `${rows[0].id}: ${reason}`, line: `VERDICT: COULD-NOT-WALK — ${rows[0].id}: ${reason}` };
+  } else {
+    if (res.error || res.status !== 0) refuse(`verifier process failed: ${res.error?.message ?? `exit ${res.status} signal ${res.signal}`}; transcript: ${transcriptRel}`);
+    rows = parseWorkRows(stdout, harness, contract);
+    parsed = parseWalkVerdict(stdout, harness);
+    consistentWorkVerdict(rows, parsed);
+  }
+  const rowLines = rows.map(row => `OUTCOME: ${row.id} ${row.result} — ${row.detail}`);
+  fs.writeFileSync(metaFile, JSON.stringify({ mode: "work", bead, branch, tip: tip!, repo: rootRelative(repoRoot), productSubdirectory,
+    outcomes: rows, verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, transcript: transcriptRel }, null, 2));
+  appendVerifierGateInbox(bead, "settle", `verifier work verdict — ${bead}`,
+    [parsed.line, ...rowLines, `out: ${rootRelative(outDir)}`, `transcript: ${transcriptRel}`, `metadata: ${metaRel}`].join("\n"), "verifier-walk", "seats/walk.ts", Infinity);
+  console.log([...rowLines, parsed.line, `transcript: ${transcriptRel}`, `metadata: ${metaRel}`].join("\n"));
   process.exit(parsed.verdict === "WALKED-DONE" ? 0 : parsed.verdict === "WALKED-NOT-DONE" ? 2 : 3);
 }
 

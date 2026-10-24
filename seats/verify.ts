@@ -427,7 +427,7 @@ function gateInboxId(beadId: string, eventClass: "settle" | "distress", detail: 
     .digest("hex");
 }
 
-export function appendVerifierGateInbox(beadId: string, eventClass: "settle" | "distress", title: string, detail: string, sourceType = "verifier-gate", sourceLog = "seats/verify.ts"): void {
+export function appendVerifierGateInbox(beadId: string, eventClass: "settle" | "distress", title: string, detail: string, sourceType = "verifier-gate", sourceLog = "seats/verify.ts", detailLimit = 1200): void {
   fs.mkdirSync(SEATS_DIR, { recursive: true });
   const row = {
     id: gateInboxId(beadId, eventClass, detail),
@@ -436,7 +436,7 @@ export function appendVerifierGateInbox(beadId: string, eventClass: "settle" | "
     class: eventClass,
     state: eventClass === "distress" ? "failed" : "terminal",
     title,
-    detail: detail.replace(/\s+$/g, "").slice(0, 1200),
+    detail: detail.replace(/\s+$/g, "").slice(0, detailLimit),
     source: { log: sourceLog, offset: 0, type: sourceType },
   };
   fs.appendFileSync(path.join(SEATS_DIR, "inbox.jsonl"), JSON.stringify(row) + "\n");
@@ -757,7 +757,7 @@ function repoArgFromClaim(claim: string): string | undefined {
   return declared;
 }
 
-function resolveRepoRoot(repoArg: string | undefined, claim?: string): string {
+export function resolveRepoRoot(repoArg: string | undefined, claim?: string): string {
   const effectiveRepoArg = repoArg ?? (claim ? repoArgFromClaim(claim) : undefined) ?? defaultRepoArgFromTemplateSource();
   if (!effectiveRepoArg) return ROOT;
   const expanded = expandTilde(effectiveRepoArg);
@@ -956,13 +956,13 @@ function accountLabelSuffix(entry: SeatEntry | undefined): string {
  * is the fallback for a seat that once ran here but left the roster. A seat
  * found in neither is a STOP — distinctness cannot be established against
  * an account nobody can name. */
-function accountDirFor(name: string): string {
+function accountDirFor(name: string, reject: (message: string) => never = die): string {
   const entry = readRoster()[name];
   if (entry) {
     if (entry.external) {
-      die(`seat "${name}" is external — it has no Pi account dir, so account-distinctness cannot be established against it`);
+      reject(`seat "${name}" is external — it has no Pi account dir, so account-distinctness cannot be established against it`);
     }
-    if (!entry.account?.dir) die(`seat "${name}" has no account.dir in seats/seats.json`);
+    if (!entry.account?.dir) reject(`seat "${name}" has no account.dir in seats/seats.json`);
     return entry.account.dir;
   }
   if (fs.existsSync(STATE_FILE)) {
@@ -970,7 +970,23 @@ function accountDirFor(name: string): string {
     const rec = st.seats?.[name];
     if (rec?.accountDir) return rec.accountDir;
   }
-  die(`no seat named "${name}" in seats/seats.json or seats/state.json — cannot establish whose account authored this`);
+  reject(`no seat named "${name}" in seats/seats.json or seats/state.json — cannot establish whose account authored this`);
+}
+
+/** Shared author-account gate; default reviewer behavior and canary anchor stay intact. */
+export function requireDistinctAccount(authorSeat: string, reviewerSeat: string, accountDir: string,
+  reject: (message: string) => never = die, role = "reviewer"): string {
+  const authorDir = canonicalDir(accountDirFor(authorSeat, reject));
+  const reviewerDir = canonicalDir(accountDir);
+  if (authorDir === reviewerDir) { // distinctness-gate
+    reject(
+      `${role} seat "${reviewerSeat}" and author seat "${authorSeat}" resolve to the SAME account directory:\n` +
+        `        ${reviewerDir}\n` +
+        `      Same directory means same auth.json means same account, and a verdict\n` +
+        `      from the author's own account is not a verdict. Nothing was spawned.`
+    );
+  }
+  return reviewerDir;
 }
 
 const PROVIDER_ENV_VARS: Record<string, string> = {
@@ -1725,16 +1741,7 @@ async function main(): Promise<void> {
   if (!entry.account?.dir) die(`reviewer seat "${reviewerSeat}" has no account.dir in seats/seats.json`);
 
   // --- account distinctness, before anything is spawned ---------------------
-  const authorDir = canonicalDir(accountDirFor(authorSeat));
-  const reviewerDir = canonicalDir(entry.account.dir);
-  if (authorDir === reviewerDir) { // distinctness-gate
-    die(
-      `reviewer seat "${reviewerSeat}" and author seat "${authorSeat}" resolve to the SAME account directory:\n` +
-        `        ${reviewerDir}\n` +
-        `      Same directory means same auth.json means same account, and a verdict\n` +
-        `      from the author's own account is not a verdict. Nothing was spawned.`
-    );
-  }
+  const reviewerDir = requireDistinctAccount(authorSeat, reviewerSeat, entry.account.dir);
 
   if (!fs.existsSync(reviewerDir)) {
     die(

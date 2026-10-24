@@ -1052,15 +1052,63 @@ the pinned surface. Manual walks receive caller-owned `RUN_DIR` and
 `EVIDENCE_DIR` under `--out`; use isolated instances/non-production endpoints.
 When a `product:` surface has a manual in the pinned product snapshot, its
 otherwise unchanged instructions add one line naming that manual. Existing
-install/upgrade/product surfaces remain available. W11's future one-verdict-row-
-per-outcome dispatcher will reuse this plumbing; this change does not add those
-rows. Example:
+install/upgrade/product surfaces remain available. Per-work verification below
+reuses this pinned manual/entry plumbing. Example:
 
 ```bash
 bun seats/walk.ts 'Counter reaches two after two increments' --surface manual:counter --repo seats/fixtures/verification/five-features --out <task-scratch>/walk
 ```
 
 The transcript is scrubbed through `seats/evidence-scrub.sh` and retained under `--out`; stdout and `walk.json` print the transcript/metadata paths relative to the install root, not as machine-local absolute paths. If `--out` is omitted, it defaults under ignored `seats/verdicts/walks/` for the commander to transcribe into a graph-approved evidence home. The default walker budget is 1800000 ms (30 minutes); override it for one invocation with `WHEELHOUSE_WALK_TIMEOUT_MS=<ms> bun seats/walk.ts ...`. On timeout, `walk.ts` keeps the partial transcript, exits `3`, writes `COULD-NOT-WALK` metadata, and names the phase it was in. Exit codes are `0` for `WALKED-DONE`, `2` for `WALKED-NOT-DONE`, `3` for `COULD-NOT-WALK`, `4` for missing/ambiguous/malformed `VERDICT:` output, and `5` for preflight or credential refusal before any walker spawns.
+
+### Per-work cold-start verification
+
+```bash
+bun seats/walk.ts --work <bead-id> --branch <ref> --author <author-seat> [--repo <product-repo>] [--out <dir>] [--verifier <seat>]
+```
+
+Do not mix `--work` with a positional claim, `--surface` or `--baseline`.
+`--branch` and `--author` are required. The contract is checked first, before
+account selection or any verifier spawn; missing/invalid contracts refuse5 with
+the contract remedy. The verifier's canonical account directory must differ
+from the author's (roster, with retired-seat state fallback), using the same
+shared gate as the reviewer. Same-account and credential refusals exit5;
+usage/unresolved-ref errors exit1.
+
+The product resolver is shared with `verify.ts`: default the install root or
+`wheelhouse/.template-source`'s product-repo, explicit `--repo` resolved from the
+install root. Pin `<ref>^{commit}`, not the author's current checkout. The
+verifier runs in a detached scratch worktree at that tip; a product subdirectory
+keeps its location inside the tree. Its prompt contains only the contract's
+Intent and reconstructed Outcomes (consumer, surface, check), pinned tip and
+surface setup — no bead title, metadata, comments/history, worker report,
+author identity or branch name. A validated manual is named when present;
+entries for feature slugs named in outcome surfaces are included. Launch,
+doctor, drive, evidence and cleanup come from that snapshot, not live edits.
+
+End with one plain, unfenced row per outcome in id order, then one verdict:
+
+```text
+OUTCOME: O1 PASS — <what was driven, read or run and observed>
+OUTCOME: O2 FAIL — <quoted failing step>
+OUTCOME: O3 UNREACHED — <blocker>
+VERDICT: WALKED-NOT-DONE — O2: <first failed step>
+```
+
+Every row needs evidence. Missing/extra/duplicate rows (including identical
+duplicates), missing details, wrong order and verdict/row disagreement exit4.
+Any FAIL requires WALKED-NOT-DONE naming the first FAIL; otherwise UNREACHED
+requires COULD-NOT-WALK naming the first UNREACHED; all PASS requires WALKED-DONE.
+Verdict exits remain0/2/3. Claim mode keeps its existing single-verdict behavior.
+
+`walk.json` adds `mode: "work"`, `bead`, `branch`, pinned `tip`, root-relative
+`repo`, `outcomes: [{id,result,detail}]`, `verdict`, `line` and `transcript`.
+The inbox carries the verdict, every row without truncating evidence, and output
+paths. A dispatcher timeout records UNREACHED rows rather than fabricating PASS.
+Default output is `seats/verdicts/walks/<bead>/<stamp>`; use a fresh `--out` under
+the task scratch root for fleet runs. An existing work `walk.json` is never
+overwritten by another pass. W12 will consume these rows for its merge gate;
+that gate and review-before-verify ordering are not implemented here.
 
 ### state.json
 
