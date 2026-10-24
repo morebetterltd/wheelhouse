@@ -26,7 +26,7 @@ if (dir && /\/seats\/digest\.ts$/.test(process.argv[1] ?? "")) {
     fs.appendFileSync(path.join(dir, "native.jsonl"), JSON.stringify({
       pid: process.pid, childPid: result.pid, command: [file, ...args], cwd, before, after: new Date().toISOString(),
       options: { timeout: options?.timeout ?? null, encoding: options?.encoding ?? null, stdio: options?.stdio ?? null },
-      status: result.status, signal: result.signal,
+      status: result.status, statusType: typeof result.status, signal: result.signal,
       error: result.error ? { message: result.error.message, code: result.error.code, errno: result.error.errno, syscall: result.error.syscall } : null,
       stdout: data(result.stdout), stderr: data(result.stderr),
     }) + "\n", { mode: 0o600 });

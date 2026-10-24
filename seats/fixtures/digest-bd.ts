@@ -44,7 +44,12 @@ try {
       console.log("PASS digest slow closed read: original native child/JSON completed beyond old 5000ms cut; no deadline/retry verdict");
     } else {
       for (const call of calls) {
-        if (kind === "missing") { assert.equal(call.status, null); assert.equal(call.error?.code, "ENOENT"); }
+        if (kind === "missing") {
+          // Node uses null; Bun may omit status on a spawn error. Neither is
+          // a native exit127 (or any completed command).
+          assert(call.status === null || (call.status === undefined && call.statusType === "undefined"));
+          assert.equal(call.error?.code, "ENOENT");
+        }
         else { assert.equal(call.status, 23); assert.equal(call.signal, null); assert.equal(call.error, null); }
       }
       assert.equal(text.split("[bd unavailable]").length - 1, 2, "both unavailable sections must remain explicit, not empty/healthy");
