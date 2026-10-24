@@ -58,11 +58,29 @@ function bounded<T>(promise: Promise<T>): Promise<T> {
   })]).finally(() => clearTimeout(timer));
 }
 function barrier(name: string, child: ReturnType<typeof Bun.spawn>): Promise<void> {
+  // Regression input: slow receipt delivery to this owner, not the host or
+  // shared predicate. The timer is input; the durable condition is the verdict.
+  const inputDelayMs = name.endsWith(".term") ? Number(process.env.WHEELHOUSE_ADAPTER_STATE_RECEIPT_DELAY_MS ?? 0) : 0;
+  assert(Number.isSafeInteger(inputDelayMs) && inputDelayMs >= 0 && inputDelayMs <= 10000);
+  let receiptEnabled = inputDelayMs === 0, waiting = true;
+  let delayTimer: ReturnType<typeof setTimeout> | undefined;
+  const delivery = inputDelayMs ? new Promise<void>(resolve => {
+    delayTimer = setTimeout(() => {
+      receiptEnabled = true;
+      console.log("ADAPTER_STATE_RECEIPT_DELIVERY_RELEASED " + JSON.stringify({ order, name, inputDelayMs,
+        durablePresent: fs.existsSync(path.join(dir, name)), stopExitCode: child.exitCode }));
+      resolve();
+    }, inputDelayMs);
+  }) : Promise.resolve();
   const observed = waitForCondition({ site: 'adapter-state.barrier', paths: [dir], predicate: () => fs.existsSync(path.join(dir, name)) });
   return bounded(Promise.race([
-    observed.promise,
-    child.exited.then(code => { throw new Error(`${name}: child exited ${code} before barrier`); }),
-  ])).finally(observed.cancel);
+    Promise.all([observed.promise, delivery]).then(() => {}),
+    child.exited.then(code => {
+      if (waiting) console.log("ADAPTER_STATE_BARRIER_EXIT " + JSON.stringify({ order, name, code,
+        durablePresent: fs.existsSync(path.join(dir, name)), receiptEnabled }));
+      throw new Error(`${name}: child exited ${code} before barrier`);
+    }),
+  ])).finally(() => { waiting = false; clearTimeout(delayTimer); observed.cancel(); });
 }
 function native(command: string, args: string[]): string {
   const r = spawnSync(command, args, { encoding: "utf8", env: { ...process.env } });
