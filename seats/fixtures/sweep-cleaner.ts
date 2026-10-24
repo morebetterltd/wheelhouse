@@ -13,7 +13,7 @@ function validateFixture() {
 }
 try { validateFixture(); } catch { console.error("STOP: TEST_SUBJECT_OUTSIDE_MARKED_FIXTURE"); process.exit(2); }
 if (mode === "--check-root") process.exit(0);
-const root = input, source = fs.readFileSync(helper, "utf8"), sweep = fs.readFileSync(runner, "utf8");
+const root = input, source = fs.readFileSync(helper, "utf8").replace(/from "\.\/native-command"/g, `from ${JSON.stringify(path.join(path.dirname(path.resolve(helper)), "native-command"))}`), sweep = fs.readFileSync(runner, "utf8");
 const marker = "wheelhouse-selftest-sweep", anchor = marker + "-host", token = "b".repeat(32), sha = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
 let sequence = 0;
 const facts: object[] = [], actors: { child: ChildProcess; done: Promise<{ code: number | null; signal: string | null }>; closed: () => boolean; release?: string }[] = [];
