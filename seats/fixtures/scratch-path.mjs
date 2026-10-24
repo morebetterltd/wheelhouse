@@ -29,7 +29,6 @@ const writeTool = (name, body) => fs.writeFileSync(path.join(bin, name), '#!/usr
 // bd list's id/status fields were captured from the actual CLI before this
 // fixture was authored. All graph operations here are stubbed, not a real DB.
 writeTool('bd', `import fs from 'node:fs'; import path from 'node:path'; const args=process.argv.slice(2); if(args[0]==='--readonly')args.shift(); if(args[0]==='list')console.log(JSON.stringify(args.includes('--status=closed')?[{id:'${bead}',status:'closed'}]:[])); else if(args[0]==='show')console.log(JSON.stringify([{id:'${bead}',description:fs.readFileSync(process.env.WHEELHOUSE_CONTRACT_FIXTURE,'utf8')}])); else if(args[0]==='comments')console.log('[]'); else if(args[0]==='metrics'&&args[1]==='off')process.exit(0); else if(args[0]==='init'){if(!fs.statSync('.git').isDirectory())throw Error('scratch graph must be primary');fs.mkdirSync('.beads');} else if(args[0]==='where')console.log(JSON.stringify({path:fs.realpathSync('.beads')})); else process.exit(1);`);
-writeTool('lsof', 'process.exit(0);');
 writeTool('xcrun', 'process.exit(1);');
 writeTool('pi', `import fs from 'node:fs'; import path from 'node:path'; const prompt=process.argv.at(-1); if(!fs.existsSync(process.env.SCRATCH_PATH_SWEEP_LEDGER)||!fs.readFileSync(process.env.SCRATCH_PATH_SWEEP_LEDGER,'utf8').trim())throw Error('reviewer reached before fixture sweep completed'); fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR,'prompt.txt'),prompt); fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR,'env-root.txt'),process.env.WHEELHOUSE_ROOT||''); console.log('VERDICT: APPROVE — NOT BENCHED: static prompt fixture only\\nPUSH: NOT CONSIDERED');`);
 const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), TMPDIR: top, PATH: `${bin}:${process.env.PATH}`, WHEELHOUSE_ROOT: path.join(top, 'wrong-inherited-root'), WHEELHOUSE_SKIP_REAL_PI: '1', WHEELHOUSE_CONTRACT_FIXTURE: contractFile };
@@ -58,7 +57,7 @@ for (const [i, repo] of [product, sibling].entries()) {
   }
 }
 const rows = [];
-const check = async (name, fn) => { try { const evidence = await fn(); rows.push({ test: name, passed: true, ...evidence }); } catch(e) { rows.push({ test: name, passed: false, error: String(e) }); } console.log(JSON.stringify(rows.at(-1))); };
+const check = async (name, fn) => { if(process.env.WHEELHOUSE_SCRATCH_PATH_CASE === 'parent' && !name.startsWith('parent-')) return; try { const evidence = await fn(); rows.push({ test: name, passed: true, ...evidence }); } catch(e) { rows.push({ test: name, passed: false, error: String(e) }); } console.log(JSON.stringify(rows.at(-1))); };
 for (const [name, repo, explicit] of [['umbrella-product', product, true], ['sibling-product', sibling, true], ['default-product', product, false]]) await check(name, async () => {
   const ledger = path.join(top, name + '.sweep-ledger');
   assert(!fs.existsSync(ledger), 'fresh case must not inherit another sweep completion');
@@ -74,12 +73,12 @@ for (const [name, repo, explicit] of [['umbrella-product', product, true], ['sib
   assert.equal(fs.readFileSync(ledger, 'utf8'), tip.out, 'one completed fixture sweep at the exact reviewed tip');
   const file = path.join(account, 'prompt.txt'); assert(fs.existsSync(file), 'reviewer actually ran');
   const prompt = fs.readFileSync(file, 'utf8');
+  if(evidence) fs.writeFileSync(path.join(evidence,name+'.prompt.txt'),prompt,{flag:'wx'});
   assert(prompt.includes(`Branch repository: ${repo}`));
   assert.equal(fs.readFileSync(path.join(account, 'env-root.txt'), 'utf8'), root);
   const line = `Scratch root for bead ${bead}: ${expected}`;
   assert(prompt.split('\n').includes(line), `missing exact install scratch root: ${expected}`);
   assert(!prompt.includes(`Scratch root for bead ${bead}: ${path.join(path.dirname(root), '.wheelhouse-runs', bead)}/`));
-  if(evidence) fs.writeFileSync(path.join(evidence,name+'.prompt.txt'),prompt,{flag:'wx'});
   return { code: r.code, stdoutEOF: r.stdoutEOF, stderrEOF: r.stderrEOF, branchRepo: repo, installRoot: root, scratchLine: line, fixtureSweeps: 1, sweepTip: tip.out.trim() };
 });
 await check('worker-dispatch', async () => {
