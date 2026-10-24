@@ -82,7 +82,14 @@ for(const [site,file,inputName] of sites.filter(([site])=>!onlySite||site===only
       const record={...setup,resolved,callbacks:callbacks()};records.push(record);
       fs.writeFileSync(path.join(dir,'result.json'),JSON.stringify(record,null,2)+'\n');
       console.log(`PASS source site ${site} ${phase}: actual condition resolved with watch callbacks suppressed`);
-    } finally {observer.cancel();}
+    } catch(error) {
+      fs.writeFileSync(path.join(dir,'failure.json'),JSON.stringify({name:error.name,message:error.message})+'\n');
+      throw error;
+    } finally {
+      try {observer.cancel();} catch(error) {
+        fs.writeFileSync(path.join(dir,'cleanup-failure.json'),JSON.stringify({name:error.name,message:error.message})+'\n');throw error;
+      }
+    }
   }
 }
 assert(records.length>0,'no source subjects exercised');
