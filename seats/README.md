@@ -1364,6 +1364,20 @@ Preserve the command's exit code and report it beside the pasted output.
 Scrubbing removes private strings; it does not turn fleet notes into product
 content or make a local scratch path durable.
 
+The adapter's census check writes native `ps` bytes, capture/replay/result JSON,
+source hashes and setup progress into a private marked allocation. A failure
+prints its retained location; interruption leaves any records already written.
+The sweep exports `WHEELHOUSE_SELFTEST_ARTIFACT_ROOT` from its original caller's
+`TMPDIR` (or `/tmp`), before replacing `TMPDIR` with disposable per-suite scratch;
+nested sweeps inherit that boundary. For fleet work, set it to the task's owned
+`.wheelhouse-runs/<bead>/` scratch. Default successful census allocations are
+removed; an explicit `WHEELHOUSE_CENSUS_EVIDENCE` keeps successes too. These raw
+process/path records are private diagnostic data, not signal/cleanup authority:
+inspect them in place, publish only scrubbed summaries, and remove retained
+bundles after review. `adapter-census-retention.selftest.sh` checks both outcomes
+through actual canonical CLEAN, including a real captured duplicate deliberately
+suppressed by a consumer fault.
+
 Hermetic — the seat-env, adapter, verify, and walk selftests build seats in a temp HOME with a stub `pi`, and your
 real seats are never touched. Selftests that need template history after being copied into an install read the template clone from `wheelhouse/.template-source`'s `path=`; they must not assume the install repository has template-only commits. The adapter and verify selftests have canary phases that break a copy of
 the thing under test and check the tests notice; if a canary survives, the
