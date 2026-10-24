@@ -473,6 +473,25 @@ elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
   skip "cockpit.sh not found beside floor.ts — leg not run"
 else
   SOCK="whfloor$$"
+  . "$HERE/fixtures/readiness.sh"
+  floor_pane_frame() {
+    local pane="$1" label="$2"
+    # A pane exists before its shell/Bun/imports run. Its own first frame, not
+    # pane count or a sleep, proves the producer ran before we destroy it.
+    if ! tmux -L "$SOCK" capture-pane -p -t "$pane" > "$FIX/floor-$label.capture" 2> "$FIX/floor-$label.stderr"; then
+      cat "$FIX/floor-$label.stderr" >&2
+      return 2
+    fi
+    grep -q 'RAIL' "$FIX/floor-$label.capture"
+  }
+  floor_pane_ready() {
+    local label="$1" pane
+    pane="$(tmux -L "$SOCK" display-message -p -t wh-tfix:bridge.1 '#{pane_id}')" || return 2
+    case "$pane" in %*) ;; *) echo "STOP: no native floor pane for $label" >&2; return 2 ;; esac
+    printf 'WAIT floor %s frame pane=%s\n' "$label" "$pane"
+    # Use the existing enclosing suite containment, not a new startup SLA.
+    fixture_wait "floor $label frame pane=$pane" "" floor_pane_frame "$pane" "$label"
+  }
   crun() {
     RC=0
     out_file="$FIX/cockpit-crun.out"
@@ -487,6 +506,7 @@ else
   [ "$WN" = "bridge" ] && pass "single window named bridge" || fail "windows: $WN"
   PANES="$(tmux -L "$SOCK" list-panes -t wh-tfix:bridge 2>/dev/null | wc -l | tr -d ' ')"
   [ "$PANES" = "2" ] && pass "bridge has exactly 2 panes (commander + floor)" || fail "pane count: $PANES"
+  floor_pane_ready initial || fail "initial floor pane exited before its first frame"
   crun
   [ $RC -eq 0 ] && has "already built" && pass "re-run attaches, never duplicates" || fail "re-run: rc=${RC}: $OUT"
   SESSN="$(tmux -L "$SOCK" list-sessions 2>/dev/null | wc -l | tr -d ' ')"
@@ -498,6 +518,7 @@ else
   [ $RC -eq 0 ] && has "floor pane missing" && pass "re-run notices the missing floor pane" || fail "missing-floor re-run did not say it repaired the pane: rc=${RC}: $OUT"
   PANES="$(tmux -L "$SOCK" list-panes -t wh-tfix:bridge 2>/dev/null | wc -l | tr -d ' ')"
   [ "$PANES" = "2" ] && pass "re-run respawns the floor pane after pane death" || fail "pane count after missing-floor repair: $PANES"
+  floor_pane_ready repaired || fail "repaired floor pane exited before its first frame"
   SESSN="$(tmux -L "$SOCK" list-sessions 2>/dev/null | wc -l | tr -d ' ')"
   [ "$SESSN" = "1" ] && pass "still exactly 1 session after pane repair" || fail "session count after pane repair: $SESSN"
   tmux -L "$SOCK" kill-server 2>/dev/null
