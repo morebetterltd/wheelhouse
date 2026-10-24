@@ -29,7 +29,11 @@ mkdir -p "$BIN"
 cat > "$BIN/bd" <<EOF
 #!/usr/bin/env bash
 if [ "\$1" = "show" ] && [ "\$2" = "bead-integration" ]; then
-  printf '%s\n' '{"id":"bead-integration","description":"Integration: fleet/goal\\n"}'
+  printf '%s\n' '[{"id":"bead-integration","description":"Integration: fleet/goal\\n"}]'
+  exit 0
+fi
+if [ "\$1" = "show" ]; then
+  node -e 'console.log(JSON.stringify([{id:process.argv[1],description:"",status:"open"}]))' "\$2"
   exit 0
 fi
 if [ "\$1" = "list" ]; then
@@ -41,6 +45,7 @@ fi
 printf '{}\n'
 EOF
 chmod +x "$BIN/bd"
+printf '[]\n' > "$FIX/closed.json"
 
 if bash "$HERE/seat-path-safety.selftest.sh" "$ROOT" worktree; then
   pass "invalid seat names and outside worktree aliases leave data and registration intact"

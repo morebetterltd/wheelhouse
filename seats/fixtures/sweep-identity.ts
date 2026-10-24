@@ -16,6 +16,8 @@ assert.equal(createHash("sha1").update(`blob ${oldBytes.length}\0`).update(oldBy
 assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());
 assert(fs.statSync(helper).isFile()); assert(fs.statSync(runner).isFile());
 const source = fs.readFileSync(helper, "utf8"), marker = "wheelhouse-selftest-sweep", anchor = marker + "-queue";
+function copyCaptureDependencies(dir: string) { for (const name of ["native-command.ts", "completed-command.ts"]) fs.copyFileSync(path.join(path.dirname(helper), name), path.join(dir, name)); }
+copyCaptureDependencies(root);
 const tokenA = "a".repeat(32), tokenB = "b".repeat(32), results: object[] = [];
 // These three legs vary the reported network name, not hardware availability.
 // Capture/drain one real native provider to close, then replay those exact
@@ -218,6 +220,7 @@ async function supervisedNetwork(dir: string) {
   } finally { if (!closed) child.kill("SIGTERM"); await done; fs.writeFileSync(path.join(dir, "supervisor.out"), out); fs.writeFileSync(path.join(dir, "supervisor.err"), err); }
 }
 async function hostnameOnlyMutant(dir: string) {
+  copyCaptureDependencies(dir);
   const before = helpers.get("network-before")!, after = helpers.get("network-after")!;
   const named = fs.readFileSync(after, "utf8"), needle = "return hostNames.has(marker.hostname);";
   assert.equal(named.split(needle).length, 2);
@@ -226,7 +229,7 @@ async function hostnameOnlyMutant(dir: string) {
   const owned = acquired(dir, before), stamp = path.join(dir, "ran");
   try {
     const result = mode(dir, "supervise", ["bash", "-c", 'printf "ran\\n" > "$1"', "fixture", stamp], mutant);
-    assert.equal(result.status, 2, "hostname-only matcher must break cross-name admission");
+    assert.equal(result.status, 2, "hostname-only matcher must break cross-name admission; native stderr=" + result.stderr);
     const diagnostics = result.stderr.split("\n").filter(x => x.startsWith("SELFTEST_LOCK_REFUSAL ")).map(x => JSON.parse(x.slice("SELFTEST_LOCK_REFUSAL ".length)));
     assert(diagnostics.some(x => x.operation === "acquire" && x.reason === "marker host identity is not this host" && x.host.identitySource !== "hostname" && x.host.identityFailures.length === 0), "reject the actual lost-alias proof with valid captured hardware identity, not an unrelated setup error");
     assert(!fs.existsSync(stamp), "broken matcher must not admit the payload");
@@ -238,6 +241,7 @@ async function identityAvailability(dir: string, kind: "path" | "missing" | "err
   const cacheFile = path.join(lock + ".host", marker + "-host");
   const cache = fs.existsSync(cacheFile) ? { bytes: fs.readFileSync(cacheFile), ino: fs.statSync(cacheFile).ino } : undefined;
   let file = helper, env = process.env;
+  copyCaptureDependencies(dir);
   if (kind === "path") {
     const bin = path.join(dir, "minimal-bin"); fs.mkdirSync(bin); fs.symlinkSync(fs.realpathSync(process.execPath), path.join(bin, "bun"));
     const shims = (process.env.PATH ?? "").split(path.delimiter).filter(p => p.endsWith("/seats/bin"));

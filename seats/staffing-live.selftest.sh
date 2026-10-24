@@ -34,7 +34,17 @@ JSON
 cat > "$BIN/bd" <<'SH'
 #!/usr/bin/env bash
 if [ "$1 $2" = "ready --json" ]; then printf '[{"id":"ready-1","title":"Synthetic ready 1","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"ready-2","title":"Synthetic ready 2","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"ready-3","title":"Synthetic ready 3","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"ready-4","title":"Synthetic ready 4","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]\n'; exit 0; fi
-if [ "$1" = show ]; then cat "$WHEELHOUSE_CONTRACT_FIXTURE"; exit 0; fi
+if [ "$1" = show ]; then
+  case " $* " in
+    *" --json "*) node - "$2" "$WHEELHOUSE_CONTRACT_FIXTURE" <<'BDJSON'
+const fs = require('node:fs');
+process.stdout.write(JSON.stringify([{id:process.argv[2],title:'Staffing fixture',status:'open',description:fs.readFileSync(process.argv[3],'utf8')}])+'\n');
+BDJSON
+      ;;
+    *) cat "$WHEELHOUSE_CONTRACT_FIXTURE" ;;
+  esac
+  exit 0
+fi
 if [ "$1" = list ]; then printf '[{"id":"task-a","title":"Synthetic task A","status":"open","assignee":"worker-e1","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]\n'; exit 0; fi
 exit 0
 SH

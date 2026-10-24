@@ -49,7 +49,7 @@ function killGroup(pid:number,signal:NodeJS.Signals="SIGTERM"){
 }
 async function child(dir:string){
   const {kind,bin,args,options}=JSON.parse(fs.readFileSync(path.join(dir,"request.json"),"utf8"));
-  const {timeout,...opts}=options; // Only an explicit controller expiry advances this clock.
+  const {policyTimeoutMs:timeout,...opts}=options; // Only an explicit controller expiry advances this clock.
   put(dir,"armed",JSON.stringify({kind,budget:timeout}));
   const proc=spawn(bin,args,{...opts,env:process.env,detached:true});
   let stdout="",stderr="",expired=false;

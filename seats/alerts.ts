@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync, nativeJsonArray } from "./native-command";
 import { readQuarantine } from "./quarantine";
 import { fleetSnapshot, readyWorkNobodyOnIt, hasUnverifiedWorkers, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
@@ -50,11 +50,46 @@ export function needCounts(root=ROOT){
 function heraldInfo(){ const pid=Number((readText(path.join(RUN,"herald.pid"))||"").trim()); const target=readJson(path.join(RUN,"herald.target.json")); return { pid:Number.isFinite(pid)?pid:null, alive:Number.isFinite(pid)?pidAlive(pid):false, target:target??null }; }
 function readText(f:string):string|null{ try{return fs.readFileSync(f,"utf8")}catch{return null} }
 function capacitySeats(){ const state=readJson(path.join(SEATS,"state.json"))?.seats??{}; return Object.entries<any>(state).filter(([,r])=>r?.lastCapacityEvent).map(([n])=>n).sort(); }
-function diskInfo(){ const thresholdBytes=Math.floor(gbValue("alert-low-disk-gb",10)*1024*1024*1024); let freeBytes:null|number=null; try{ const s=(fs as any).statfsSync(ROOT); freeBytes=Number(s.bavail??s.bfree)*Number(s.bsize); }catch{ const r=spawnSync("df",["-k",ROOT],{encoding:"utf8"}); const cols=r.stdout.trim().split(/\n/).pop()?.split(/\s+/); if(cols?.[3]) freeBytes=Number(cols[3])*1024; } return {freeBytes, thresholdBytes}; }
+function diskInfo(){
+  const thresholdBytes=Math.floor(gbValue("alert-low-disk-gb",10)*1024*1024*1024);
+  let freeBytes:number|null=null, unavailable:string|undefined;
+  try{ const s=fs.statfsSync(ROOT), n=Number(s.bavail??s.bfree)*Number(s.bsize); if(Number.isFinite(n)&&n>=0) freeBytes=n; }catch{}
+  if(freeBytes===null){
+    const r=spawnSync("df",["-Pk",ROOT],{encoding:"utf8"});
+    if(r.error||r.signal||r.status!==0) unavailable=`native df unavailable (${r.status??r.signal??r.error?.message}): ${String(r.stderr??"").trim()}`;
+    else { const lines=r.stdout.trim().split(/\n/), cols=lines.at(-1)?.split(/\s+/), n=Number(cols?.[3])*1024; if(lines.length>=2&&Number.isFinite(n)&&n>=0) freeBytes=n; else unavailable="native df returned no parseable filesystem record"; }
+  }
+  return {freeBytes,thresholdBytes,...(unavailable?{unavailable}:{})};
+}
 export function repoFromRemote(s:string){ return s.replace(/.*github\.com[:/]/,"").replace(/\.git$/,""); }
-function githubIssueRepos(){ const raw=templateValue("github-issue-repos"); if(raw) return raw.split(/[,;]/).map(s=>s.trim()).filter(Boolean); try{ const url=spawnSync("git",["remote","get-url","origin"],{cwd:ROOT,encoding:"utf8"}).stdout.trim(); return url?[repoFromRemote(url)]:[]; }catch{return []} }
+function githubIssueRepos(){ const raw=templateValue("github-issue-repos"); if(raw) return raw.split(/[,;]/).map(s=>s.trim()).filter(Boolean); try{ const r=spawnSync("git",["remote","get-url","origin"],{cwd:ROOT,encoding:"utf8"}); if(r.error||r.signal||r.status!==0) return []; const url=r.stdout.trim(); return url?[repoFromRemote(url)]:[]; }catch{return []} }
 function stringArray(raw:string){ return raw.split(/[,;]/).map(s=>s.trim()).filter(Boolean); }
-function githubInfo(){ const watch=templateValue("github-issue-watch"); const repos=githubIssueRepos(); if(["off","false","disabled","none","0"].includes(watch)) return {untriaged:null,repos}; if(spawnSync("gh",["--version"],{stdio:"ignore"}).status!==0) return {untriaged:null,repos}; const include=new Set(stringArray(templateValue("github-issue-include-labels"))); const exclude=new Set(stringArray(templateValue("github-issue-exclude-labels"))); const author=templateValue("github-issue-author"); const traced=(spawnSync("bd",["list","--status","open","--limit","0","--json"],{cwd:ROOT,encoding:"utf8"}).stdout||"")+"\n"+(spawnSync("bd",["list","--status","in_progress","--limit","0","--json"],{cwd:ROOT,encoding:"utf8"}).stdout||"")+"\n"+(spawnSync("bd",["list","--status","deferred","--limit","0","--json"],{cwd:ROOT,encoding:"utf8"}).stdout||""); const out:string[]=[]; for(const repo of repos){ const r=spawnSync("gh",["issue","list","-R",repo,"--state","open","--limit","100","--json","url,labels,author"],{encoding:"utf8",timeout:30000}); if(r.status!==0) return {untriaged:null,repos}; let issues:any[]=[]; try{issues=JSON.parse(r.stdout||"[]")}catch{} for(const issue of issues){ const labels=(issue.labels||[]).map((l:any)=>typeof l==="string"?l:l?.name).filter(Boolean); if(author&&issue.author?.login!==author) continue; if(include.size&&!labels.some((l:string)=>include.has(l))) continue; if(labels.some((l:string)=>exclude.has(l))) continue; if(issue.url&&!traced.includes(issue.url)) out.push(issue.url); } } return {untriaged:out.sort(),repos}; }
+function githubInfo():{untriaged:string[]|null;repos:string[];disabled?:boolean;unavailable?:string}{
+  const watch=templateValue("github-issue-watch"), repos=githubIssueRepos();
+  if(["off","false","disabled","none","0"].includes(watch)) return {untriaged:null,repos,disabled:true};
+  const unknown=(unavailable:string)=>({untriaged:null,repos,unavailable});
+  if(!repos.length) return unknown("GitHub repositories could not be observed");
+  const version=spawnSync("gh",["--version"],{encoding:"utf8"});
+  if(version.error||version.signal||version.status!==0) return unknown(`native gh unavailable: ${version.error?.message??version.stderr??version.status}`);
+  const include=new Set(stringArray(templateValue("github-issue-include-labels"))), exclude=new Set(stringArray(templateValue("github-issue-exclude-labels"))), author=templateValue("github-issue-author");
+  try{
+    const traced:string[]=[];
+    for(const status of ["open","in_progress","deferred"]){ const r=spawnSync("bd",["list","--status",status,"--limit","0","--json"],{cwd:ROOT,encoding:"utf8"}); traced.push(JSON.stringify(nativeJsonArray(r,`bd issue traces ${status}`,["id"]))); }
+    const trace=traced.join("\n"), out:string[]=[];
+    for(const repo of repos){
+      const r=spawnSync("gh",["issue","list","-R",repo,"--state","open","--limit","100","--json","url,labels,author"],{encoding:"utf8"});
+      for(const issue of nativeJsonArray(r,`gh issue list ${repo}`,["url","labels","author"])){
+        if(!Array.isArray(issue.labels)) return unknown("gh issue labels were not an array");
+        const labels=issue.labels.map((l:any)=>typeof l==="string"?l:l?.name).filter(Boolean);
+        if(author&&issue.author?.login!==author) continue;
+        if(include.size&&!labels.some((l:string)=>include.has(l))) continue;
+        if(labels.some((l:string)=>exclude.has(l))) continue;
+        if(issue.url&&!trace.includes(issue.url)) out.push(issue.url);
+      }
+    }
+    return {untriaged:out.sort(),repos};
+  }catch(e:any){ return unknown(e.message); }
+}
 function driftInfo(){
   const script=path.join(SEATS,"template-drift.sh");
   const failed=(reason:string, result:any={})=>({status:"check-failed",reason,error:reason,modified:[],localOnly:[],missing:[],aheadBy:null,...result});
@@ -167,6 +202,8 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
   const alerts:Record<string,AlertState>={};
   for(const name of Object.keys(active) as AlertName[]){
     if(name.startsWith("seat-stalled:")&&unverified[name.slice("seat-stalled:".length)]){if(priorAlerts[name])alerts[name]=priorAlerts[name];continue;}
+    // An unavailable observation cannot clear an already-active condition.
+    if((name==="untriaged-github-issues"&&github.untriaged===null&&!github.disabled)||(name==="low-disk"&&disk.freeBytes===null)){ alerts[name]=priorAlerts[name]??alertRow(false,undefined,""); continue; }
     const stored=priorAlerts[name], stream=name.startsWith("seat-stalled:")?seatStreams[name.slice("seat-stalled:".length)]:undefined;
     let was=name==="template-drift"&&stored ? {...stored,signature:priorDriftSignature(stored.signature)} : stored;
     if(stream?.stalled && was?.active && was.signature!==active[name].sig){ if(was.needId) needClose(was.needId); was=undefined; }

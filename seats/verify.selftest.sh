@@ -546,7 +546,7 @@ EOF
   build_sweep_fixture "$proj"
   ( cd "$proj" &&
     git init -q -b main &&
-    git add seats/README.md seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add seats/README.md seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/native-command.ts seats/completed-command.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
@@ -612,7 +612,7 @@ EOF
   build_sweep_fixture "$umb"
   ( cd "$umb" &&
     git init -q -b main &&
-    git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/native-command.ts seats/completed-command.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
   mkdir -p "$product/seats"
   selftest_copy_seat_runtime "$product" "$VERIFY_DIR"
@@ -620,7 +620,7 @@ EOF
   ( cd "$product" &&
     git init -q -b main &&
     mkdir -p evidence && printf 'product branch evidence\n' > evidence/bench.log &&
-    git add evidence/bench.log seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add evidence/bench.log seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/native-command.ts seats/completed-command.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build umbrella product git repo" >&2; exit 2; }
 }
@@ -888,7 +888,7 @@ SH
 chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
 # Detached evidence runs only committed files: include both runner companions.
 printf 'slowed.selftest.sh\n' > "$SWEEP_PROJ/seats/selftest-core.list"
-git -C "$SWEEP_PROJ" add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/slowed.selftest.sh
+git -C "$SWEEP_PROJ" add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/native-command.ts seats/completed-command.ts seats/python-invocations.ts seats/slowed.selftest.sh
 git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"

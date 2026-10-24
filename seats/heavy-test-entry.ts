@@ -2,7 +2,8 @@
 // The supervised real review PID (not this forwarding proxy) owns the lock.
 import path from "node:path";
 import os from "node:os";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 
 export async function heavyTestEntry(source: string, main: () => Promise<void>): Promise<void> {
   const helper = process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER || path.join(import.meta.dir, "selftest-sweep-lock.ts");

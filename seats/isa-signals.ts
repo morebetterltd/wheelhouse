@@ -3,7 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { acquirePidLock, releasePidLock } from "./lock";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_ISA_SIGNALS_ROOT || path.join(import.meta.dir, ".."));

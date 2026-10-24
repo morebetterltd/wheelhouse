@@ -10,7 +10,7 @@ assert(fs.statSync(path.join(source,"seats/recover.ts")).isFile());
 assert(fs.statSync(path.join(root,".wheelhouse-selftest-fixture")).isFile());
 const project=path.join(root,"project"),seats=path.join(project,"seats"),fifo=path.join(seats,"run/worker-dead.stdin");
 fs.mkdirSync(path.dirname(fifo),{recursive:true});
-for(const file of ["recover.ts","seat-activity.ts"])fs.copyFileSync(path.join(source,"seats",file),path.join(seats,file));
+for(const file of ["recover.ts","seat-activity.ts","native-command.ts","completed-command.ts"])fs.copyFileSync(path.join(source,"seats",file),path.join(seats,file));
 const preload=path.join(root,"guard.mjs");
 fs.writeFileSync(preload,`
 import * as nativeFs from 'node:fs';

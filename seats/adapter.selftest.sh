@@ -363,7 +363,18 @@ cat > "$BIN/bd" <<'BDSTUB'
 case "$1" in
   ready) printf '[{"id":"fixture-ready"}]\n' ;;
   show)
-    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then cat "$STUB_BD_SHOW_FILE"; else cat "$WHEELHOUSE_CONTRACT_FIXTURE"; fi ;;
+    source="$WHEELHOUSE_CONTRACT_FIXTURE"
+    if [ -n "${STUB_BD_SHOW_FILE:-}" ] && [ -f "$STUB_BD_SHOW_FILE" ]; then source="$STUB_BD_SHOW_FILE"; fi
+    case " $* " in
+      *" --json "*)
+        node - "$2" "$source" <<'BDJSON'
+const fs = require('node:fs');
+const [id, file] = process.argv.slice(2);
+process.stdout.write(JSON.stringify([{ id, title: 'Adapter protocol fixture', status: 'open', description: fs.readFileSync(file, 'utf8') }]) + '\n');
+BDJSON
+        ;;
+      *) cat "$source" ;;
+    esac ;;
   list)
     status=""
     for a in "$@"; do case "$a" in --status=*) status="${a#--status=}" ;; esac; done

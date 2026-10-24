@@ -1174,6 +1174,33 @@ Reviewed scan files are install-bound: TSV starts with a `# wheelhouse-prune-sca
 
 `seats/integration-refs.txt` is install-owned configuration, like `seats/host-budget.json`. It lists extra integration refs one per line; blank lines and `#` comments are allowed. Matching is exact on the branch name (`fleet/goal-x` also matches a containing ref such as `origin/fleet/goal-x`) and does not widen `fleet/` prefixes. A listed ref is itself never pruned as a stale branch. When a commander creates a goal branch, they add that branch here so closed work merged to the goal branch can be pruned before the goal reaches `main`.
 
+## Native command observations
+
+Audited synchronous command readers use `native-command.ts` and the shared
+`completed-command.ts`: wait for native completion and read separate regular-file
+stdout/stderr captures, rather than a pipe's default `maxBuffer` or a short CLI
+clock. Legacy `timeout`/`maxBuffer` options do not impose a bound in the Node-shaped
+adapters. Explicit outer policies use `policyTimeoutMs` instead; the walk model
+budget remains configurable and the custom window-list policy defaults to two
+minutes. Policy expiry is a failed/unknown observation, never empty success.
+The original text helper still defaults to UTF-8; `{encoding:null}` requests
+Buffers, and optional stdin supports strings, Buffers and typed-array views.
+
+New seat records capture the original child's kernel birth before readiness.
+An unavailable birth observer records no synthetic timestamp, retains the
+PID/FIFO and a diagnostic, and does not relax the existing two-second identity
+tolerance or restamp old records. Other positive FIFO identity proof still works.
+Prune waits for a complete matching state response from declared RPC seats;
+a two-minute observation policy reports the last offset/source/PID and defers
+prune if it expires. Cwd-only records remain anchors, not invented RPC seats.
+Digest and issue-publication readers reject malformed/unavailable command data.
+Unavailable GitHub-watch/disk observations do not clear prior active conditions;
+unverified session-file holders do not authorize a second resume.
+
+`native-observation.selftest.sh` exercises real native emitters, delayed readiness,
+unknown observations and meaningful feature-removal copies. It is part of the
+unfiltered sweep, alongside the helper's stdin/binary regression suite.
+
 ## Proving it still works
 
 Selftests register their teardown with `selftest_install_cleanup_traps cleanup` from `selftest-lib.sh` (a trusted shell command string is also accepted). The callback must return, not `exit`: it runs once, in the owning shell so it can reap its children, on normal EXIT and on INT/TERM. Signals exit 130/143 instead of resuming the script against a removed fixture; repeated signals are ignored during teardown. The sweep likewise drains its current suite group and releases its lock only from EXIT. `bash seats/selftest-signals.selftest.sh` checks both signal paths, normal exits, re-entrant signals, fixture removal and child reaping; `--old-trap` deliberately restores the returning trap in the fixture and must fail.
