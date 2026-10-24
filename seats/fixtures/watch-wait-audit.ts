@@ -2,6 +2,7 @@
 // condition helper. Includes generated JS in shell here-docs/template strings;
 // deliberately not a general parser or a regex over a CLI's rendered view.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
@@ -26,7 +27,14 @@ function codeFiles(root: string, relative = ''): string[] {
     const file = path.join(relative, entry.name);
     // Installed compiler shims/runtime state are not template test source.
     if(!relative && ['bin','run','logs','verdicts'].includes(entry.name))return[];
-    if (entry.isSymbolicLink()) throw new Error(`watch audit: unverifiable source symlink ${file}`);
+    // A link resolving inside the audited tree is audited at its target; any other link cannot be verified.
+    if (entry.isSymbolicLink()) {
+      let target = "";
+      try { target = fs.realpathSync(path.join(root, file)); } catch {}
+      const base = fs.realpathSync(root);
+      if (target && target.startsWith(base + path.sep)) return [];
+      throw new Error(`watch audit: unverifiable source symlink ${file}`);
+    }
     if (entry.isDirectory()) return codeFiles(root, file);
     if(!/\.(?:[cm]?js|ts|sh)$/.test(file))return[];
     assert(entry.isFile(),`watch audit: non-regular source subject ${file}`);
@@ -61,7 +69,7 @@ if (import.meta.main) {
   const [root, scratch] = process.argv.slice(2);
   const result = auditDirectory(root);
   console.log(`PASS watch wait audit (${result.files} source files; one shared watcher owner)`);
-  fs.cpSync(root, scratch, {recursive: true});
+  fs.cpSync(root, scratch, {recursive: true, verbatimSymlinks: true});
   const file = path.join(scratch, 'fixtures/planted-watch-only.mjs');
   const access = ['fs', name].join('.');
   const bodies=[
@@ -77,4 +85,15 @@ if (import.meta.main) {
       'planted wait-only watcher was silently accepted');
     console.log(`PASS planted watch wait ${index+1} rejected at its actual source file/line`);
   }
+  fs.rmSync(file);
+  for (const [label, target] of [["outside the tree", os.tmpdir()], ["dangling", path.join(scratch, "missing-target")]]) {
+    const link = path.join(scratch, "fixtures/planted-link");
+    fs.symlinkSync(target, link); assert(fs.lstatSync(link).isSymbolicLink()); // setup OUTSIDE the rejection assertion
+    assert.throws(()=>auditDirectory(scratch), error=>error instanceof Error && error.message.includes("unverifiable source symlink fixtures/planted-link"),
+      `symlink ${label} was silently accepted`);
+    fs.rmSync(link);
+    console.log(`PASS planted symlink ${label} rejected`);
+  }
+  assert.equal(auditDirectory(scratch).files, result.files, "in-tree link must be skipped, not counted or refused");
+  console.log("PASS in-tree symlink audited at its target, not refused");
 }
