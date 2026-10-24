@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 # Hermetic intake CLI checks; instruction-bearing input is only fixture data.
 set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
@@ -14,8 +15,12 @@ exit 0
 STUB
 chmod +x "$FIX/bin/bd"
 : > "$FIX/bd-calls"
-PATH="$FIX/bin:$PATH" INTAKE_BD_CALLS="$FIX/bd-calls" node - "${1:-$SCRIPT_DIR/intake.ts}" "$FIX" <<'JS'
-const fs=require('fs'),path=require('path'),cp=require('child_process'),assert=require('assert');
+PATH="$FIX/bin:$PATH" INTAKE_BD_CALLS="$FIX/bd-calls" bun - "${1:-$SCRIPT_DIR/intake.ts}" "$FIX" <<'JS'
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert';
+import * as nativeCP from 'node:child_process';
+const cp={...nativeCP,...await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
 const [source,fix]=process.argv.slice(2),root=path.join(fix,'project'),ledger=path.join(root,'seats/intake.jsonl');
 const env={...process.env,WHEELHOUSE_INTAKE_ROOT:root,BEADS_ACTOR:'fixture-producer',USER:'fixture-user'};
 let passed=0,failed=0;

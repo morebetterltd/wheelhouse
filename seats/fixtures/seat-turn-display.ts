@@ -38,7 +38,7 @@ function observe(root: string, test: Case) {
   const log=path.join(root,'seats/logs/fixture.jsonl');fs.writeFileSync(log,test.events.map(e=>JSON.stringify(e)).join('\n')+'\n');
   fs.writeFileSync(path.join(root,'seats/state.json'),JSON.stringify({seats:{fixture:{pid:test.stopped?null:test.dead?999999999:process.pid,startedAt,role:'worker',log,lastBead:'still-open-bead',...(test.stopped?{stoppedAt:new Date().toISOString()}:{}),...(test.stalled?{lastStalledEvent:{detail:'fixture stalled'}}:{})}}}));
   const env={...process.env,NO_COLOR:'1',COLUMNS:'240',LINES:'40',PATH:path.join(root,'bin')+path.delimiter+process.env.PATH};
-  const run=(file:string,args:string[])=>{const r=spawnSync('bun',[path.join(root,'seats',file),...args],{cwd:root,env,encoding:'utf8',timeout:20000});assert.equal(r.error,undefined);assert.equal(r.signal,null);assert.equal(r.status,0,r.stdout+r.stderr);return r.stdout;};
+  const run=(file:string,args:string[])=>{const r=spawnSync('bun',[path.join(root,'seats',file),...args],{cwd:root,env,encoding:'utf8'});assert.equal(r.error,undefined);assert.equal(r.signal,null);assert.equal(r.status,0,r.stdout+r.stderr);return r.stdout;};
   const status=run('adapter.ts',['status']);
   const before=fs.readFileSync(path.join(root,'seats/state.json'));
   const floor=run('floor.ts',['--once','--pin','0']);

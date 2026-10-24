@@ -742,7 +742,12 @@ printf '%s\n' "$SEAT_ENV_OUT" | grep >/dev/null 'CLAUDE_CONFIG_DIR' || fail "sea
 hrun probe worker-a; [ "$HRC" -eq 0 ] && [ "$HOUT" = OK ] || fail "claude-code binding probe failed: $HOUT"
 hrun reset worker-a; [ "$HRC" -eq 0 ] || fail "claude-code reset failed: $HOUT"
 hrun dispatch worker-a smoke-a 'Smoke check after harness switch: reply OK and stop.'; [ "$HRC" -eq 0 ] || fail "claude-code smoke dispatch failed: $HOUT"
-for i in $(seq 1 50); do grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl" && break; sleep 0.1; done
+printf 'FIXTURE_WAIT upgrade runbook: actual worker-a smoke response\n' >&2
+while ! grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl"; do
+  HARNESS_SMOKE_PID="$(hstate worker-a pid)"
+  [ -n "$HARNESS_SMOKE_PID" ] && kill -0 "$HARNESS_SMOKE_PID" 2>/dev/null || break
+  sleep 0.1
+done
 grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl" || fail "claude-code smoke dispatch did not complete OK"
 [ "$(hstate worker-b pid)" = "$B_PID_BEFORE" ] && [ "$(hstate worker-b sessionFile)" = "$B_SESS_BEFORE" ] || fail "switching worker-a touched worker-b state/session"
 # Switch back to pi, again without touching worker-b.

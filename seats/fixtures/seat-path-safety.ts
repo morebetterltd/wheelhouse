@@ -24,7 +24,7 @@ specs.push(
 const cases = specs.filter(s => selected === "all" || s.group === selected);
 assert(cases.length);
 function run(command: string, args: string[], cwd: string, env = process.env) {
-  const r = spawnSync(command, args, {cwd,env,encoding:"utf8",timeout:30000,maxBuffer:4*1024*1024});
+  const r = spawnSync(command, args, {cwd,env,encoding:"utf8"});
   return {command:[command,...args],code:r.status,signal:r.signal,error:r.error?.message??null,out:r.stdout??"",err:r.stderr??""};
 }
 function snap(file: string): any {

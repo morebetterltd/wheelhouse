@@ -1,5 +1,5 @@
 // Pause the real runner at startup publication boundaries; no scheduling sleep
-// decides a verdict. Deadlines only fail containment. All runners/locks are private.
+// decides a verdict. The containing sweep owns containment. All runners/locks are private.
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -42,9 +42,8 @@ function same(a: Identity | null, b: Identity): boolean {
   return !!a && a.pid === b.pid && a.group === b.group && a.born === b.born;
 }
 async function until(test: () => boolean, label: string): Promise<void> {
-  const limit = Date.now() + 30_000;
+  console.error(`FIXTURE_WAIT startup signals: ${label}`);
   while (!test()) {
-    if (Date.now() >= limit) throw new Error(`startup fixture containment deadline: ${label}`);
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }

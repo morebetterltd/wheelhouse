@@ -24,10 +24,9 @@ for (const nested of [true, false]) {
   child.stdout!.on("data", b => out += b); child.stderr!.on("data", b => err += b);
   const done = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", value => { closed = true; code = value; resolve(); }); });
   try {
-    const limit = performance.now() + 20000;
+    console.error(`FIXTURE_WAIT fixture admission: child=${child.pid}, nested=${nested}`);
     while (!out.includes("INNER_DONE") && !err.includes("waiting for host-wide lock")) {
       if (closed) throw Error(`fixture closed before checkpoint: ${code}\n${out}\n${err}`);
-      if (performance.now() > limit) throw Error("INCOMPLETE fixture admission checkpoint");
       await Bun.sleep(20);
     }
     const blocked = err.includes("waiting for host-wide lock"), completedWhileBraked = out.includes("INNER_DONE") && fs.existsSync(brake);

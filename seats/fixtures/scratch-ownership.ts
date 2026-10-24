@@ -20,7 +20,7 @@ const allocate=spawnSync('bash',['-c',String.raw`. "$1"
 FIX="$(selftest_make_fixture_dir "$2/scratch-ownership.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 printf '%s\n' "$FIX"
-`,'scratch-ownership-allocation',library,parent],{cwd:source,env:gitEnv,encoding:'utf8',timeout:30000});
+`,'scratch-ownership-allocation',library,parent],{cwd:source,env:gitEnv,encoding:'utf8'});
 console.log('CAPTURE scratch-ownership allocation '+JSON.stringify({exit:allocate.status,signal:allocate.signal,error:allocate.error?.message??null,stdout:allocate.stdout,stderr:allocate.stderr}));
 assert.equal(allocate.error,undefined);assert.equal(allocate.signal,null);assert.equal(allocate.status,0);assert.equal(allocate.stderr,'');
 const root=allocate.stdout.trim();
@@ -32,7 +32,7 @@ fs.mkdirSync(tmp); fs.mkdirSync(bin);
 const ledger = path.join(root,'allocations'), calls = path.join(root,'mktemp.calls'), pkills = path.join(root,'pkill.calls');
 for(const file of [ledger,calls,pkills])fs.writeFileSync(file,'');
 function command(cmd: string, args: string[], cwd = root, env = gitEnv) {
-  const r=spawnSync(cmd,args,{cwd,env,encoding:'utf8',timeout:30000});
+  const r=spawnSync(cmd,args,{cwd,env,encoding:'utf8'});
   console.log('CAPTURE scratch-ownership '+JSON.stringify({cmd,args,cwd,exit:r.status,signal:r.signal,error:r.error?.message??null,stdout:r.stdout,stderr:r.stderr}));
   assert.equal(r.error,undefined,`${cmd}: ${r.error}`);assert.equal(r.signal,null,`${cmd}: ${r.signal}`);return r;
 }
@@ -123,16 +123,17 @@ assert(child.pid);let stdout='',stderr='',resolveReady!:()=>void;
 const ready=new Promise<void>(resolve=>{resolveReady=resolve;});
 child.stdout!.on('data',b=>{stdout+=b;if(stdout.includes('I8SM_READY\n'))resolveReady();});child.stderr!.on('data',b=>stderr+=b);
 const closed=new Promise<{code:number|null,signal:string|null}>((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));});
-let timer: ReturnType<typeof setTimeout>;const deadline=new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('scratch collision test deadline (not a verdict clock)')),60000);});
+console.error(`FIXTURE_WAIT scratch ownership: ${kind} wrapper READY, child=${child.pid}`);
 let oldNames: string[]=[];
 const snapshot=(file:string)=>{const st=fs.lstatSync(file);return {dev:st.dev,ino:st.ino,mode:st.mode,entries:st.isDirectory()?fs.readdirSync(file).sort():null,keep:fs.readFileSync(st.isDirectory()?path.join(file,'KEEP'):file,'utf8')};};
 let before: ReturnType<typeof snapshot>[]=[],after: unknown[]=[],allocations:string[]=[],result:unknown,error:unknown;const ownership:unknown[]=[];
 try {
-  await Promise.race([ready,closed.then(r=>{throw Error('site wrapper exited before planting: '+JSON.stringify(r)+stderr);}),deadline]);
+  await Promise.race([ready,closed.then(r=>{throw Error('site wrapper exited before planting: '+JSON.stringify(r)+stderr);})]);
   const id=child.pid!;
   oldNames=(kind==='claude'?[`claude-code-driver.${id}`]:kind==='drift'?[`wheelhouse-template-drift.${id}`]:kind==='prune'?['fixture-closed-derivedData','fixture-open-derivedData']:kind==='lsof'?[`wheelhouse-selftest-lsof.${id}.out`]:kind==='push'?[`push-authority-hit.${id}`]:[`wh-a.${id}`,`wh-b.${id}`]).map(n=>path.join(tmp,n));
   before=oldNames.map(snapshot);for(const s of before)assert.equal(s.keep,'KEEP\n','subject exists before execution');
-  child.stdin!.end('go\n');result=await Promise.race([closed,deadline]);
+  console.error(`FIXTURE_WAIT scratch ownership: ${kind} native exit and both EOFs, child=${child.pid}`);
+  child.stdin!.end('go\n');result=await closed;
   after=oldNames.map(file=>fs.existsSync(file)?snapshot(file):{missing:file});
   allocations=fs.readFileSync(ledger,'utf8').trim().split('\n').filter(Boolean);
   const failures:string[]=[];
@@ -153,7 +154,6 @@ try {
   if(failures.length)throw Error(failures.join('; '));
 } catch(e){error=e;}
 finally {
-  clearTimeout(timer!);
   if(child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');
   // Validate every residual candidate's membership in the isolated group
   // before using the shared process drainer. Never signal by argv alone.

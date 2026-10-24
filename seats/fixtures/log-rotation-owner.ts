@@ -15,7 +15,7 @@ const unfinished = '{"type":"agent_start"}\n';
 let failures = 0;
 
 function run(command: string, args: string[], cwd: string, env = process.env) {
-  const r = spawnSync(command, args, {cwd, env, encoding: "utf8", timeout: 15000});
+  const r = spawnSync(command, args, {cwd, env, encoding: "utf8"});
   return {code: r.status, signal: r.signal, error: r.error?.message ?? null, stdout: r.stdout ?? "", stderr: r.stderr ?? ""};
 }
 function snapshot(file: string): unknown {

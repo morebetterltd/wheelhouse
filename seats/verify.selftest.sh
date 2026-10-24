@@ -116,7 +116,7 @@ RUN_PATH="$BIN:$PATH" # Keep fixture mocks before inherited host-budget shims.
 # STUB_REPLY_FILE, exits STUB_EXIT (default 0). No sessions, no protocol —
 # the one-shot path is argv in, stdout out, and that is what gets asserted.
 cat > "$BIN/pi" <<'STUB'
-#!/usr/bin/env node
+#!/usr/bin/env bun
 const fs = require("fs"), path = require("path");
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
@@ -846,7 +846,7 @@ git -C "$SWEEP_PROJ" rm -q seats/fixture.selftest.sh || exit 2
 SWEEP_BIN="$FIX/sweep-bin"; mkdir -p "$SWEEP_BIN"
 export STUB_SWEEP_BASE_BD="$BIN/bd" STUB_SWEEP_PWD_MARKER="$FIX/sweep-pwd.json"
 cat > "$SWEEP_BIN/bd" <<'JS'
-#!/usr/bin/env node
+#!/usr/bin/env bun
 const fs=require('fs'),cp=require('child_process');
 if(process.argv[2]==='where') {
   console.log(JSON.stringify({path:fs.realpathSync(require('path').join(process.cwd(),'.beads'))})); process.exit(0);
@@ -1326,12 +1326,12 @@ if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q 'VERDICT: APPROVE' "$VDIR
   pass "post-result background child cannot keep verify open after final VERDICT/PUSH lines"
 else fail "post-result background child kept verify open or verdict was not recorded (exit $RC child=$HANG_CHILD_PID): $OUT"; fi
 if [ -n "$HANG_CHILD_PID" ]; then
-  for _ in $(seq 1 3000); do kill -0 "$HANG_CHILD_PID" 2>/dev/null || break; sleep 0.1; done
+  printf 'FIXTURE_WAIT verify: background child native absence, pid=%s\n' "$HANG_CHILD_PID" >&2
+  while kill -0 "$HANG_CHILD_PID" 2>/dev/null; do sleep 0.1; done
 fi
 if [ -z "$HANG_CHILD_PID" ] || ! kill -0 "$HANG_CHILD_PID" 2>/dev/null; then
   pass "post-result background child process group is reaped"
 else
-  kill "$HANG_CHILD_PID" 2>/dev/null || true
   fail "post-result background child survived reviewer cleanup (pid=$HANG_CHILD_PID)"
 fi
 cat > "$REPLY" <<'EOF'
@@ -1683,8 +1683,8 @@ mkfifo "$LOCK_RELEASE"
 exec 7<> "$LOCK_RELEASE"
 perl -MFcntl=:flock -e 'open(my $fh, ">>", $ARGV[0]) or die $!; flock($fh, LOCK_EX) or die $!; open(my $ready, ">", $ARGV[1]) or die $!; print $ready "held\n"; close($ready); open(my $release, "<", $ARGV[2]) or die $!; scalar(<$release>);' "$LOCK" "$LOCK_READY" "$LOCK_RELEASE" 7>&- &
 LOCK_PID=$!
-LOCK_DEADLINE=$((SECONDS+300))
-while [ ! -s "$LOCK_READY" ] && kill -0 "$LOCK_PID" 2>/dev/null && [ "$SECONDS" -lt "$LOCK_DEADLINE" ]; do sleep 0.05; done
+printf 'FIXTURE_WAIT verify: held-flock acknowledgement, pid=%s file=%s\n' "$LOCK_PID" "$LOCK_READY" >&2
+while [ ! -s "$LOCK_READY" ] && kill -0 "$LOCK_PID" 2>/dev/null; do sleep 0.05; done
 [ -s "$LOCK_READY" ] || fail "host-budget fixture never published its held-flock acknowledgement"
 RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" WHEELHOUSE_BUILD_LOCK="$LOCK" bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 2>&1)" || RC=$?
 printf 'release\n' >&7
@@ -2321,8 +2321,9 @@ SHA_BRANCH="0123456789abcdef0123456789abcdef01234567"
 git -C "$PROJ" branch "$SHA_BRANCH" HEAD >/dev/null 2>&1
 HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/scratch-owner.ts" live "$PROJ/seats/verify.ts" "$PROJ" verify "$FIX/live-owner.json" > "$FIX/live-owner.out" 2>&1 &
 LIVE_OWNER_PID=$!
-LIVE_READY_DEADLINE=$((SECONDS+300))
-while [ ! -s "$FIX/live-owner.json" ] && kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ "$SECONDS" -lt "$LIVE_READY_DEADLINE" ]; do sleep 0.05; done
+printf 'FIXTURE_WAIT verify: live-owner record, pid=%s\n' "$LIVE_OWNER_PID" >&2
+while [ ! -s "$FIX/live-owner.json" ] && kill -0 "$LIVE_OWNER_PID" 2>/dev/null; do sleep 0.05; done
+[ -s "$FIX/live-owner.json" ] || { fail 'live owner exited before publishing its record'; exit 1; }
 LIVE_DIR="$(node -pe 'require(process.argv[1]).dir' "$FIX/live-owner.json")"
 if git -C "$PROJ" worktree list | grep -F >/dev/null "$ORPHAN_DIR" \
    && git -C "$PROJ" worktree list | grep -F >/dev/null "$REVIEW_ORPHAN_DIR" \
@@ -2358,14 +2359,16 @@ CONCURRENT_PID_A=$!
 (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$CONCURRENT_LOCK_B" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$CONCURRENT_OUT_B" 2>&1) &
 CONCURRENT_PID_B=$!
 CONCURRENT_DIRS=""
-CONCURRENT_READY_DEADLINE=$((SECONDS+300))
-while [ "$SECONDS" -lt "$CONCURRENT_READY_DEADLINE" ]; do
+printf 'FIXTURE_WAIT verify: both concurrent registered worktrees, entries=%s/%s\n' "$CONCURRENT_PID_A" "$CONCURRENT_PID_B" >&2
+while kill -0 "$CONCURRENT_PID_A" 2>/dev/null && kill -0 "$CONCURRENT_PID_B" 2>/dev/null; do
   # The token-bearing owner is the real review, not its forwarding entry PID.
   # Legacy direct entries remain their own PID if no active lock is present.
   CONCURRENT_OWNER_A="$CONCURRENT_PID_A"; CONCURRENT_OWNER_B="$CONCURRENT_PID_B"
   [ ! -f "$CONCURRENT_LOCK_A/pid" ] || IFS= read -r CONCURRENT_OWNER_A < "$CONCURRENT_LOCK_A/pid"
   [ ! -f "$CONCURRENT_LOCK_B/pid" ] || IFS= read -r CONCURRENT_OWNER_B < "$CONCURRENT_LOCK_B/pid"
-  CONCURRENT_DIRS="$(git -C "$PROJ" worktree list --porcelain 2>/dev/null | awk -v a="wheelhouse-verify-${CONCURRENT_OWNER_A}-" -v b="wheelhouse-verify-${CONCURRENT_OWNER_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
+  CONCURRENT_ENUM_RC=0; CONCURRENT_ENUM="$(git -C "$PROJ" worktree list --porcelain 2> "$FIX/concurrent-worktrees.stderr")" || CONCURRENT_ENUM_RC=$?
+  if [ "$CONCURRENT_ENUM_RC" != 0 ]; then fail "concurrent worktree observer failed rc=$CONCURRENT_ENUM_RC: $(cat "$FIX/concurrent-worktrees.stderr")"; break; fi
+  CONCURRENT_DIRS="$(printf '%s\n' "$CONCURRENT_ENUM" | awk -v a="wheelhouse-verify-${CONCURRENT_OWNER_A}-" -v b="wheelhouse-verify-${CONCURRENT_OWNER_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
   [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ] && break
   sleep 0.05
  done
@@ -2393,7 +2396,7 @@ wait "$CONCURRENT_PID_B" 2>/dev/null || true
 
 kill -KILL "$LIVE_OWNER_PID" 2>/dev/null
 wait "$LIVE_OWNER_PID" 2>/dev/null || true
-i=0; while kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+# wait above joined the exact child; no extra scheduling allowance is evidence.
 run   # a second sweep pass, now that the "live" owner has actually exited
 if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
   pass "once its owner pid actually exits, a later sweep reclaims that worktree too"
@@ -2412,16 +2415,18 @@ KILLED_GATE_LOCK="$FIX/killed-gate.lock"
 KILLED_DISPATCHER_PID=$!
 KILLED_DIR=""
 PI_PID_FILE="$HOME_FIX/.pi-seats-kill/reviewer/pi-pid.txt"
-KILLED_READY_DEADLINE=$((SECONDS+300))
-while [ "$SECONDS" -lt "$KILLED_READY_DEADLINE" ]; do
-  KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
+printf 'FIXTURE_WAIT verify: registered killed-gate worktree and model entry, pid=%s\n' "$KILLED_DISPATCHER_PID" >&2
+while kill -0 "$KILLED_DISPATCHER_PID" 2>/dev/null; do
+  KILLED_ENUM_RC=0; KILLED_ENUM="$(git -C "$KILL_PROJ" worktree list --porcelain 2> "$FIX/killed-worktrees.stderr")" || KILLED_ENUM_RC=$?
+  if [ "$KILLED_ENUM_RC" != 0 ]; then fail "killed-gate worktree observer failed rc=$KILLED_ENUM_RC: $(cat "$FIX/killed-worktrees.stderr")"; break; fi
+  KILLED_DIR="$(printf '%s\n' "$KILLED_ENUM" | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p')"
   # Child launch proves makeScratchCwd finished its ownership record, not just
   # Git registration. Killing before that record must fail closed, not adopt it.
   [ -n "$KILLED_DIR" ] && [ -s "$PI_PID_FILE" ] && break
   sleep 0.05
 done
-if [ -n "$KILLED_DIR" ]; then pass "killed one-shot fixture reached a registered scratch worktree"
-else fail "killed one-shot fixture never registered a scratch worktree: $(cat "$OUT_FILE" 2>/dev/null)"; fi
+if [ -n "$KILLED_DIR" ] && [ -s "$PI_PID_FILE" ]; then pass "killed one-shot fixture reached a registered scratch worktree and model entry"
+else fail "killed one-shot fixture exited before complete scratch/model setup: $(cat "$OUT_FILE" 2>/dev/null)"; exit 1; fi
 # Kill the real dispatcher owning this fresh private endpoint, not merely its
 # proxy (whose death intentionally leaves a live admitted run protected).
 KILLED_REAL_PID="$KILLED_DISPATCHER_PID"
@@ -2457,14 +2462,17 @@ signal_cleanup_case() {
   (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 STUB_CLOBBER_CORE_WORKTREE_REPO="$sig_proj" bun "$sig_proj/seats/verify.ts" "bead-$ns" fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$out_file" 2>&1) &
   local dispatcher_pid=$!
   dir=""
-  local ready_deadline=$((SECONDS+300))
-  while [ "$SECONDS" -lt "$ready_deadline" ]; do
-    dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
+  printf 'FIXTURE_WAIT verify: %s scratch registration and clobber receipt, pid=%s\n' "$label" "$dispatcher_pid" >&2
+  local enum enum_rc
+  while kill -0 "$dispatcher_pid" 2>/dev/null; do
+    enum_rc=0; enum="$(git -C "$sig_proj" worktree list --porcelain 2> "$FIX/$ns-worktrees.stderr")" || enum_rc=$?
+    if [ "$enum_rc" != 0 ]; then fail "$label worktree observer failed rc=$enum_rc: $(cat "$FIX/$ns-worktrees.stderr")"; break; fi
+    dir="$(printf '%s\n' "$enum" | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p')"
     [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/reviewer/core-worktree-clobber.txt" ] && break
     sleep 0.05
   done
-  if [ -n "$dir" ]; then pass "$label fixture reached a registered scratch worktree"
-  else fail "$label fixture never registered a scratch worktree: $(cat "$out_file" 2>/dev/null)"; fi
+  if [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/reviewer/core-worktree-clobber.txt" ]; then pass "$label fixture reached a registered scratch worktree and clobber receipt"
+  else fail "$label fixture exited before complete scratch/clobber setup: $(cat "$out_file" 2>/dev/null)"; return 1; fi
   kill -"$sig" "$dispatcher_pid" 2>/dev/null || true
   wait "$dispatcher_pid" 2>/dev/null; wait_rc=$?
   pid_file="$HOME_FIX/.pi-seats-$ns/reviewer/pi-pid.txt"

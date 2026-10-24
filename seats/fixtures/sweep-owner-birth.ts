@@ -70,7 +70,7 @@ printf 'release\\n' >&7
 finish_current_suite done
 exit "$observed_rc"
 `);
-const r = spawnSync('bash', [module], { env: { ...process.env, BIRTH_CASE: dir, WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: '1' }, encoding: 'utf8', timeout: 30000 });
+const r = spawnSync('bash', [module], { env: { ...process.env, BIRTH_CASE: dir, WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: '1' }, encoding: 'utf8' });
 fs.writeFileSync(path.join(dir, 'out'), r.stdout ?? ''); fs.writeFileSync(path.join(dir, 'err'), r.stderr ?? ''); fs.writeFileSync(path.join(dir, 'rc'), String(r.status) + '\n');
 assert.ifError(r.error); assert.equal(r.signal, null);
 const native = fs.readFileSync(path.join(dir, 'native-owner'), 'utf8'), padded = fs.readFileSync(path.join(dir, 'padded-owner'), 'utf8');
@@ -80,7 +80,7 @@ assert.equal(r.status, 0, 'owner birth whitespace must preserve live identity');
 assert(r.stdout.includes('OWNER_BIRTH rc=0 survivors=1'), 'live child was not examined');
 console.log('PASS owner-birth-whitespace: native identity values unchanged, live census accepted date padding');
 if (!removed) {
-  const c = spawnSync('bun', [import.meta.path, root, seats, '--removed'], { env: process.env, encoding: 'utf8', timeout: 60000 });
+  const c = spawnSync('bun', [import.meta.path, root, seats, '--removed'], { env: process.env, encoding: 'utf8' });
   assert.ifError(c.error); assert.equal(c.signal, null); assert.equal(c.status, 1);
   assert.match(c.stderr, /AssertionError: owner birth whitespace must preserve live identity/);
   assert(c.stdout.includes('OWNER_BIRTH rc=2 survivors=0'));

@@ -19,10 +19,10 @@ function run(source: string) {
     else if (["drivers", "transports"].includes(name)) fs.cpSync(file, path.join(runtime, name), { recursive: true });
   }
   fs.mkdirSync(path.join(runtime, "fixtures"));
-  fs.copyFileSync(path.join(seats, "fixtures/prune-fixture.sh"), path.join(runtime, "fixtures/prune-fixture.sh"));
+  for (const file of ["prune-fixture.sh", "fixture-command.cjs"]) fs.copyFileSync(path.join(seats, "fixtures", file), path.join(runtime, "fixtures", file));
   fs.writeFileSync(path.join(runtime, "prune-safety.selftest.sh"), source); fs.copyFileSync(prune, path.join(runtime, "prune.ts"));
   const env = { ...process.env, WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK_ONLY: "1", WHEELHOUSE_PRUNE_NESTED_GIT_LEAK_CHECK: "0" };
-  const result = spawnSync("bash", [path.join(runtime, "prune-safety.selftest.sh")], { env, encoding: "utf8", timeout: 90000 });
+  const result = spawnSync("bash", [path.join(runtime, "prune-safety.selftest.sh")], { env, encoding: "utf8" });
   assert(!result.error, String(result.error)); assert.equal(result.signal, null);
   fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ status: result.status, stdout: result.stdout, stderr: result.stderr }, null, 2));
   return result;

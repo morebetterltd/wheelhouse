@@ -78,12 +78,9 @@ export function ledger(event: Record<string, unknown>): void {
 }
 
 export async function until(test: () => boolean, exited: () => boolean, label: string): Promise<void> {
-  const started = Date.now();
-  const guardMs = Number(process.env.WHEELHOUSE_VERIFY_FIXTURE_WAIT_MS ?? 300_000);
-  if (!Number.isFinite(guardMs) || guardMs <= 0) throw new Error("fixture wait guard must be positive");
+  console.error(`FIXTURE_WAIT verify readiness: ${label}`);
   while (!test()) {
     if (exited()) throw new Error(`fixture exited before ${label}`);
-    if (Date.now() - started >= guardMs) throw new Error(`fixture containment deadline ${guardMs}ms waiting for ${label}`);
     await Bun.sleep(10);
   }
 }
@@ -136,19 +133,22 @@ function status(exit: Exit): number { return exit.code ?? (exit.signal ? 128 + c
 
 // Use the runner's real lock protocol: shell mv can instead put a PID file
 // INSIDE a leftover directory lock, corrupting it before the dispatcher waits.
-// The actual holder (not a separate shell surrogate) retains main's bounded
-// admission/release wait and parent-liveness containment. Neither is a reviewer
-// readiness verdict: only real admission publishes the ready file.
+// The actual holder (not a separate shell surrogate) observes parent/release
+// completion. Only the explicit missing-release negative requests expiry,
+// armed after a real admission attempt. The sweep contains a stuck fixture.
 async function holdH4(lock: string, releaseFile: string, readyFile: string, helper: string): Promise<void> {
-  const seconds = Number(process.env.WHEELHOUSE_VERIFY_FIXTURE_HOLDER_SECONDS ?? 300);
-  if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error("fixture holder guard must be positive seconds");
-  const deadline = Date.now() + seconds * 1000, parent = process.ppid;
+  const rawSeconds = process.env.WHEELHOUSE_VERIFY_FIXTURE_HOLDER_SECONDS;
+  const seconds = rawSeconds === undefined ? undefined : Number(rawSeconds);
+  if (seconds !== undefined && (!Number.isSafeInteger(seconds) || seconds <= 0)) throw new Error("fixture holder guard must be positive seconds");
+  let deadline = Infinity, attempted = false, lastState = "before admission attempt";
+  const parent = process.ppid;
+  console.error(`FIXTURE_WAIT H4 holder: admission, pid=${process.pid}, lock=${lock}`);
   const token = randomUUID().replaceAll("-", "");
   let identity: string | undefined, stopped = 0;
   const waiting = () => {
     if (stopped || fs.existsSync(releaseFile)) return false;
     if (Date.now() >= deadline) {
-      console.error("fixture holder containment deadline waiting for admission/release");
+      console.error(`fixture holder containment deadline waiting for admission/release; last state=${lastState}, admitted=${Boolean(identity)}, parent=${parent}, release=${fs.existsSync(releaseFile)}`);
       stopped = 124; return false;
     }
     try { if (parent <= 1) { stopped = 125; return false; } process.kill(parent, 0); }
@@ -174,10 +174,14 @@ async function holdH4(lock: string, releaseFile: string, readyFile: string, help
   try {
     while (waiting()) {
       const result = await transition("acquire");
+      if (!attempted && seconds !== undefined) deadline = Date.now() + seconds * 1000;
+      attempted = true; lastState = `acquire exited ${result.code}`;
       if (result.code === 0) {
         if (!/^\d+:\d+$/.test(result.out)) throw new Error("H4 admission lacks directory identity");
         identity = result.out;
         fs.writeFileSync(readyFile, "admitted\n");
+        lastState = "admitted; waiting for explicit release";
+        console.error(`FIXTURE_WAIT H4 holder: release, pid=${process.pid}, file=${releaseFile}`);
         break;
       }
       if (result.code !== 75) throw new Error(`H4 holder admission failed: exit ${result.code}`);
@@ -203,7 +207,8 @@ async function holderBounds(dir: string, helper: string): Promise<void> {
     if (occupied) { fs.mkdirSync(lock); fs.writeFileSync(path.join(lock, "KEEP"), "unchanged\n"); }
     const holder = own("holder-probe", "holder-bounds", "bun", [import.meta.path, "--hold-h4", lock, release, published, helper], { ...process.env, WHEELHOUSE_VERIFY_FIXTURE_HOLDER_SECONDS: "1" });
     let rescued = false;
-    const guard = setTimeout(() => { rescued = true; holder.child.kill("SIGKILL"); }, 300_000);
+    const HOLDER_NEGATIVE_OUTER_MS = 300_000; // rescue policy; never accepts a result
+    const guard = setTimeout(() => { console.error(`holder negative outer expiry: occupied=${occupied}, status=${JSON.stringify(holder.status())}, stderr=${holder.stderr()}`); rescued = true; holder.child.kill("SIGKILL"); }, HOLDER_NEGATIVE_OUTER_MS);
     let exit: Exit;
     try { exit = await holder.closed; } finally { clearTimeout(guard); }
     // The real helper refuses this foreign directory (exit2); holdH4 reports

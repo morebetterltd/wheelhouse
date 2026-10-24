@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import conditionWait from './wait-for-condition.cjs';
 const {waitForCondition} = conditionWait;
@@ -33,6 +33,11 @@ if (process.argv[2] === 'peer') {
     if (name === 'worker-a' && mode === 'child-exit') process.exit(23);
   });
 } else {
+  // Only the controller imports the Bun-backed capture adapter. Copied peers
+  // and native IPC/observer subjects remain pure-JS Node processes.
+  const { spawnSync } = await import('./fixture-command.cjs');
+  const nativeNode = process.env.WHEELHOUSE_CONCURRENCY_NATIVE_NODE;
+  assert(nativeNode && fs.statSync(nativeNode).isFile(), 'native Node observer executable must be supplied');
   const [rootArg, barrierSource, supervisorSource, observerSource] = process.argv.slice(2);
   const root = path.resolve(rootArg);
   let fixture = path.dirname(root);
@@ -74,7 +79,7 @@ if (process.argv[2] === 'peer') {
         fs.mkdirSync(accountDir); fs.writeFileSync(log, '');
         const made = spawnSync('mkfifo', [fifo], { encoding: 'utf8' }); assert.equal(made.status, 0, made.stderr); assert(fs.lstatSync(fifo).isFIFO());
         const ready = deferred(), go = deferred(); const fd = fs.openSync(fifo, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
-        const child = spawn(process.execPath, [supervisor, 'peer', name, mode, barrier], {
+        const child = spawn(nativeNode, [supervisor, 'peer', name, mode, barrier], {
           env: { ...process.env, PI_CODING_AGENT_DIR: accountDir, WHEELHOUSE_CONCURRENCY_STUB_SCRIPT: peerScript }, stdio: [fd, 'pipe', 'pipe'],
         }); fs.closeSync(fd);
         rows.set(name, []);
@@ -89,7 +94,7 @@ if (process.argv[2] === 'peer') {
       }
       fs.writeFileSync(path.join(project, 'seats/state.json'), JSON.stringify(state));
       const armed = deferred(), checkpoint = deferred();
-      const child = spawn(process.execPath, ['--import', observerSource, barrierSource, project, barrier], {
+      const child = spawn(nativeNode, ['--import', observerSource, barrierSource, project, barrier], {
         env: { ...process.env, WHEELHOUSE_BARRIER_OBSERVE: observe }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       });
       controller = track(child, project);

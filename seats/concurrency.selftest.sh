@@ -116,7 +116,7 @@ mkdir -p "$HOME_FIX" "$BIN"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
 
 barrier_regression() {
-  "$NODE_BIN" "$HERE/fixtures/concurrency-barrier-regression.mjs" "$FIX/barrier-regression" \
+  WHEELHOUSE_CONCURRENCY_NATIVE_NODE="$NODE_BIN" bun "$HERE/fixtures/concurrency-barrier-regression.mjs" "$FIX/barrier-regression" \
     "$HERE/fixtures/concurrency-barrier.cjs" "$HERE/fixtures/concurrency-stub-supervisor.cjs" \
     "$HERE/fixtures/concurrency-barrier-observer.mjs"
 }

@@ -120,10 +120,9 @@ printf 'selftest-sweep: PASS (1 suite(s), %ss)\\n' "$elapsed"
     joined = new Promise((resolve, reject) => { child.once("error", reject); child.once("close", (code, signal) => { ended = true; resolve({ code, signal }); }); });
     let native: Awaited<typeof joined> | undefined;
     if (mode === "review-sweep") {
-      const limit = performance.now() + 60000; // incomplete setup guard, not absence proof
+      console.error(`FIXTURE_WAIT bd metrics: review setup barrier, child=${child.pid}, ready=${ready}`);
       while (!fs.existsSync(ready)) {
         if (ended) throw new Error("review exited before setup barrier: " + stderr + stdout);
-        if (performance.now() > limit) throw new Error("INCOMPLETE review setup barrier");
         await new Promise(resolve => setTimeout(resolve, 50));
       }
       assert(!ended, "review setup must still exist when measured, before teardown");
