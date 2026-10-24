@@ -8,7 +8,7 @@ import { completedCommand } from '../completed-command';
 const [source, fixture] = process.argv.slice(2);
 assert(fs.statSync(fixture + '/.wheelhouse-selftest-fixture').isFile());
 const realTmux = Bun.which('tmux'), realNode = Bun.which('node'); assert(realTmux && realNode && Bun.which('expect'));
-const modes = ['pass', 'fail', 'TERM', 'INT', 'HUP', 'TERM-early', 'preexisting', 'replacement', 'natural'];
+const modes = ['pass', 'fail', 'TERM', 'INT', 'HUP', 'TERM-early', 'preexisting', 'replacement', 'legacy-address', 'natural'];
 const selected = process.env.WHEELHOUSE_FLOOR_CLEANUP_CASES?.split(',') ?? modes;
 assert(selected.length && selected.every(x => modes.includes(x)));
 const evidence = process.env.WHEELHOUSE_FLOOR_CLEANUP_EVIDENCE;
@@ -20,7 +20,7 @@ const q = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 // Native argv/status/stdout/stderr are retained. No tmux response is emulated.
 const wrapper = String.raw`#!/usr/bin/env node
 const fs=require('node:fs'),cp=require('node:child_process'),dir=process.env.FLOOR_CLEANUP_OBSERVER,args=process.argv.slice(2),native=[...args];
-if(native[0]==='-L')native.splice(0,2,'-S','./tmux-'+process.getuid()+'/'+native[1]);
+if(native[0]==='-L')native.splice(0,2,'-S',process.env.FLOOR_CLEANUP_ADDRESS==='legacy'?'./'+native[1]+'.sock':'./tmux-'+process.getuid()+'/'+native[1]);
 const fds=['stdout','stderr'].map(x=>fs.openSync(dir+'/commands/'+process.pid+'.'+x,'wx'));
 const r=cp.spawnSync(process.env.FLOOR_CLEANUP_REAL_TMUX,native,{stdio:['ignore',...fds]});fds.forEach(fd=>fs.closeSync(fd));
 const data={args,nativeArgs:native,code:r.status,signal:r.signal,error:r.error?String(r.error):null,stdout:fs.readFileSync(dir+'/commands/'+process.pid+'.stdout','utf8'),stderr:fs.readFileSync(dir+'/commands/'+process.pid+'.stderr','utf8')};
@@ -45,10 +45,11 @@ if(args[0]==='-L'&&checkpoint&&r.status===0&&!fs.existsSync(dir+'/ready.json')){
 `;
 function socket(file: string) { try { const s = fs.lstatSync(file); return { exists: true, socket: s.isSocket(), symlink: s.isSymbolicLink(), dev: s.dev, ino: s.ino, uid: s.uid }; } catch (e: any) { if (e.code === 'ENOENT') return { exists: false }; throw e; } }
 function live(pid: number) { try { process.kill(pid, 0); return true; } catch (e: any) { if (e.code === 'ESRCH') return false; throw e; } }
-let world = '';
+let world = '', legacyAddress = false;
+const address = (sock: string) => legacyAddress ? './' + sock + '.sock' : './tmux-' + process.getuid!() + '/' + sock;
 function command(file: string, args: string[]) { const r = completedCommand(file, args, { cwd: world }); const x = { file, args, code: r.status, signal: r.signal, error: r.error ? String(r.error) : null, stdout: r.stdout, stderr: r.stderr }; fs.appendFileSync(world + '/observer.jsonl', JSON.stringify(x) + '\n'); return x; }
-function tmux(sock: string, args: string[]) { return command(realTmux!, ['-S', './tmux-' + process.getuid!() + '/' + sock, ...args]); }
-const endpoint = (sock: string) => world + '/tmux-' + process.getuid!() + '/' + sock;
+function tmux(sock: string, args: string[]) { return command(realTmux!, ['-S', address(sock), ...args]); }
+const endpoint = (sock: string) => path.resolve(world, address(sock));
 function identity(pid: number) { return command('ps', ['-ww', '-p', String(pid), '-o', 'pid=,ppid=,uid=,lstart=,command=']); }
 function snapshot(sock: string) { const r = tmux(sock, ['display-message', '-p', '#{pid}']); assert.equal(r.code, 0); assert.equal(r.signal, null); assert.equal(r.error, null); assert.match(r.stdout, /^[1-9][0-9]*\n$/); const pid = Number(r.stdout.trim()), state = socket(endpoint(sock)); assert(state.exists && state.socket && !state.symlink); assert.equal(state.uid, process.getuid!()); const nativeIdentity = identity(pid); assert.equal(nativeIdentity.code, 0); const sessions = tmux(sock, ['list-sessions', '-F', '#{session_id}:#{session_name}']); assert.equal(sessions.code, 0); return { sock, file: endpoint(sock), pid, state, nativeIdentity, sessions }; }
 function actor(tag: string, action: string, peer = '', defer = false) {
@@ -73,7 +74,7 @@ function actor(tag: string, action: string, peer = '', defer = false) {
   // floor's intentionally minimal RUN_PATH omits the host Node directory.
   fs.writeFileSync(dir + '/bin/tmux', '#!' + realNode + wrapper.slice(wrapper.indexOf('\n')), { mode: 0o755 });
   const out = fs.openSync(dir + '/stdout', 'wx'), err = fs.openSync(dir + '/stderr', 'wx');
-  const env = { ...process.env, PATH: dir + '/bin:' + process.env.PATH, TMUX_TMPDIR: world, TMPDIR: dir + '/tmp', HOME: tag + '/home', XDG_CONFIG_HOME: dir + '/home/.config', SHELL: '/bin/bash', FLOOR_CLEANUP_OBSERVER: dir, FLOOR_CLEANUP_REAL_TMUX: realTmux!, FLOOR_CLEANUP_PEER: peer, FLOOR_CLEANUP_ACTION: action };
+  const env = { ...process.env, PATH: dir + '/bin:' + process.env.PATH, TMUX_TMPDIR: world, TMPDIR: dir + '/tmp', HOME: tag + '/home', XDG_CONFIG_HOME: dir + '/home/.config', SHELL: '/bin/bash', FLOOR_CLEANUP_OBSERVER: dir, FLOOR_CLEANUP_REAL_TMUX: realTmux!, FLOOR_CLEANUP_PEER: peer, FLOOR_CLEANUP_ACTION: action, FLOOR_CLEANUP_ADDRESS: legacyAddress ? 'legacy' : 'native-namespace' };
   delete env.TMUX; delete env.TMUX_PANE;
   const child = spawn('/bin/bash', ['-c', 'IFS= read -r permit || exit 2; exec /bin/bash ' + q(program)], { cwd: world, env, stdio: ['pipe', 'pipe', 'pipe'] });
   const write = (fd: number, bytes: Buffer) => { let n = 0; while (n < bytes.length) n += fs.writeSync(fd, bytes, n, bytes.length - n); };
@@ -91,6 +92,7 @@ function ownedIdentity(a: Actor) { const r = identity(a.child.pid!); assert.equa
 function commands(a: Actor) { return fs.readdirSync(a.dir + '/commands').filter(x => x.endsWith('.json')).map(x => JSON.parse(fs.readFileSync(a.dir + '/commands/' + x, 'utf8'))); }
 const results: any[] = [];
 for (const mode of modes.filter(m => selected.includes(m))) {
+  legacyAddress = mode === 'legacy-address';
   world = fixture + '/' + mode; fs.mkdirSync(world); fs.mkdirSync(world + '/tmux-' + process.getuid!(), { mode: 0o700 });
   let peer: Actor | null = null, subject: Actor | null = null; const owned: any[] = []; const result: any = { mode, failure: null };
   try {
@@ -121,7 +123,7 @@ for (const mode of modes.filter(m => selected.includes(m))) {
       assert.deepEqual(result.exit, { code: 2, signal: null }); assert.match(result.stderr, /identity changed; preserving replacement/);
       assert(!result.subjectAfter.alive, 'OWN_RETIRED_SERVER_REMAINS');
     }
-    else { assert.deepEqual(result.exit, { code: ({ pass: 0, natural: 0, fail: 1, TERM: 143, INT: 130, HUP: 129, 'TERM-early': 143 } as any)[mode], signal: null }); if (mode === 'pass' || mode === 'natural') assert.match(result.stdout, /floor\.ts works on this machine\./); if (mode === 'fail') assert.match(result.stdout, /FAIL\s+fixture: planted floor feature assertion/); assert(!result.subjectAfter.alive && result.subjectAfter.native.code === 1, 'OWN_SERVER_REMAINS'); assert(!result.subjectAfter.state.exists, 'OWN_SOCKET_REMAINS'); }
+    else { assert.deepEqual(result.exit, { code: ({ pass: 0, 'legacy-address': 0, natural: 0, fail: 1, TERM: 143, INT: 130, HUP: 129, 'TERM-early': 143 } as any)[mode], signal: null }); if (mode === 'pass' || mode === 'legacy-address' || mode === 'natural') assert.match(result.stdout, /floor\.ts works on this machine\./); if (mode === 'fail') assert.match(result.stdout, /FAIL\s+fixture: planted floor feature assertion/); assert(!result.subjectAfter.alive && result.subjectAfter.native.code === 1, 'OWN_SERVER_REMAINS'); assert(!result.subjectAfter.state.exists, 'OWN_SOCKET_REMAINS'); }
   } catch (e: any) { result.failure = { kind: e instanceof assert.AssertionError && !String(e.message).startsWith('INCOMPLETE') ? 'behavior' : 'incomplete', message: String(e.message ?? e) }; console.error('FLOOR_CLEANUP_BEFORE_RESCUE ' + JSON.stringify(result)); }
   finally {
     if (subject) result.subjectJoin = await stop(subject); if (peer) result.peerJoin = await stop(peer);
