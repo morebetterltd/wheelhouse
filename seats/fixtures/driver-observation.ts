@@ -51,7 +51,7 @@ const commandState=path.join(root,'active-command.json');
 const diagnostics=spawn(process.execPath,['-e',String.raw`
 const fs=require('node:fs'),path=require('node:path'),root=process.argv[1];let previous='';
 function scan(){try{const file=path.join(root,'active-command.json');if(!fs.existsSync(file))return;const input=JSON.parse(fs.readFileSync(file,'utf8'));const last={...input,stdoutLastBytes:fs.readFileSync(input.stdoutFile,'utf8').slice(-4096),stderrLastBytes:fs.readFileSync(input.stderrFile,'utf8').slice(-4096)};const text=JSON.stringify(last);if(text!==previous){console.error('DRIVER_COMMAND_LAST_STATE '+text);previous=text;}}catch(e){console.error('DRIVER_COMMAND_LAST_STATE_UNVERIFIED '+String(e));}}
-const watch=fs.watch(root,scan);scan();process.stdin.resume();process.stdin.on('end',()=>{scan();watch.close();process.exit(0);});
+const poll=setInterval(scan,100);scan();process.stdin.resume();process.stdin.on('end',()=>{scan();clearInterval(poll);process.exit(0);});
 `,root],{cwd:root,stdio:['pipe','inherit','inherit']});
 const diagnosticsClosed=new Promise<any>((resolve,reject)=>{diagnostics.once('error',reject);diagnostics.once('close',(code,signal)=>resolve({code,signal}));});
 // Exercise the actual shell test gates, not a model of their assertions.
