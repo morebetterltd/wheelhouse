@@ -23,7 +23,7 @@ const owner = import.meta.path.endsWith("/herald.ts") ? fixtureOwner(`${import.m
 if (process.env.WHEELHOUSE_DAEMON_EXIT_IMMEDIATELY === "1") { console.error("synthetic crash"); process.exit(42); }
 const role = import.meta.path.split("/").pop()!.replace(/\.ts$/, "");
 if (role === "herald" || role === "courier") fs.writeFileSync(`${import.meta.dir}/run/${role}.pid`, `${process.pid}\n`);
-if (role === "desk") fs.writeFileSync(`${import.meta.dir}/run/desk.port`, "http://127.0.0.1:0/needs\n");
+if (role === "desk") { const portFile = `${import.meta.dir}/run/desk.port`, tmp = `${portFile}.${process.pid}.tmp`; fs.writeFileSync(tmp, "http://127.0.0.1:0/needs\n"); fs.renameSync(tmp, portFile); }
 setInterval(() => { if (!fixtureOwnerAlive(owner)) process.exit(0); }, 100);
 TS
 done

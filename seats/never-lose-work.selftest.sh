@@ -111,8 +111,9 @@ git -C "$PROD" push -q origin main
 
 # (d) occupied: clean and merged, but a live process sits inside
 wt_add "$D_ID"; merge_main "$D_ID"; git -C "$PROD" push -q origin "fleet/$D_ID"
-( cd "$WTS/$D_ID" && exec sleep 1000 ) >/dev/null 2>&1 &
+( cd "$WTS/$D_ID" && exec bun "$HERE/fixtures/adapter-selftest-signals.ts" hold "$FIX/occupied.release" "$FIX/occupied.ready" ) >/dev/null 2>&1 &
 SLEEP_PID=$!
+bun "$HERE/fixtures/adapter-selftest-signals.ts" exists "$FIX/occupied.ready" '' 0 "$SLEEP_PID" || exit 2
 
 # (e) plain merged and pushed; (f) closed but never merged
 wt_add "$E_ID"; merge_main "$E_ID"; git -C "$PROD" push -q origin "fleet/$E_ID"
@@ -169,6 +170,10 @@ tail -1 "$FIX/cleanup2.out" | grep >/dev/null 'cleanup done removed=0 kept=3 byt
 [ -d "$WTS/$A_ID" ] && [ -d "$WTS/$D_ID" ] && [ -d "$WTS/$F_ID" ] && pass 'real-change, occupied and unmerged worktrees survive the nightly run' || fail 'a kept worktree vanished on the second run'
 [ "$(git -C "$PROD" for-each-ref --format='%(refname:short)' refs/heads/fleet | sort)" = "$BRANCHES_BEFORE" ] && pass 'branch refs unchanged after the nightly run' || fail 'branch refs changed on the second run'
 
+printf 'explicit owner release\n' > "$FIX/occupied.release"
+wait "$SLEEP_PID"; HOLDER_RC=$?; SLEEP_PID=""
+printf 'CAPTURE occupied holder native exit=%s after owner release\n' "$HOLDER_RC"
+[ "$HOLDER_RC" = 0 ] || fail 'owned occupied holder did not complete on release'
 if [ "$FAILED" -eq 0 ]; then
   echo 'never-lose-work.selftest: PASS'
   exit 0

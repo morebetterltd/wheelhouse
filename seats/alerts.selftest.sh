@@ -266,11 +266,12 @@ JS
   else fail "drift $mode classification/detail failed rc=$RC out=$OUT"; fi
  done
 cat > "$FIX/drift-spawn-error.mjs" <<'JS'
-import * as cp from 'node:child_process';import {mock} from 'bun:test';
+import fs from 'node:fs';import * as cp from 'node:child_process';import {mock} from 'bun:test';
 const original={...cp};
 const spawnSync=(cmd,args,options)=>{
   if(cmd==='bash'&&args?.[0]?.endsWith('/template-drift.sh')){
     if(options?.timeout!==undefined)throw new Error('drift spawn still has a fixed timeout');
+    if(typeof options?.stdio?.[2]==='number')fs.writeSync(options.stdio[2],'fixture partial stderr');
     return {status:null,signal:null,error:Object.assign(new Error('fixture spawn error ETIMEDOUT'),{code:'ETIMEDOUT'}),stdout:'',stderr:'fixture partial stderr'};
   }
   return original.spawnSync(cmd,args,options);

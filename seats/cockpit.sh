@@ -156,7 +156,14 @@ if [ "${WHEELHOUSE_COCKPIT_DAEMONS:-1}" != "0" ]; then
   ensure_herald
   ensure_supervisor
 fi
-DESK_URL="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
+DESK_URL="$(bun -e '
+import fs from "node:fs";const file=process.argv[1];let raw;
+try { raw=fs.readFileSync(file,"utf8").trim(); }
+catch(e) { if(e.code==="ENOENT") process.exit(0); console.error(e.stack||e.message||String(e)); process.exit(1); }
+try { const u=new URL(raw); if(!raw.startsWith("http://")||u.protocol!=="http:"||u.pathname!=="/needs"||u.username||u.password||u.search||u.hash) throw Error("not a desk URL"); }
+catch { console.error("Invalid desk.port: expected a complete http://host[:port]/needs URL ("+file+")"); process.exit(1); }
+console.log(raw);
+' "$HERE/run/desk.port")" || exit "$?"
 export DESK_URL
 
 attach() {

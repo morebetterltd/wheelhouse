@@ -83,7 +83,8 @@ import { checkBeadContract, contractRemedy, parseContract, repoDeclarations } fr
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
 import { resolveRoleBrief } from "./briefs";
 import { parseQuarantine, type QuarantineEntry } from "./quarantine";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";

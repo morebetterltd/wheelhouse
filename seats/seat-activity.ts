@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
-import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { type SpawnSyncReturns } from "node:child_process";
+import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
 import * as path from "node:path";
 
 export function barePidAlive(pid: number | null | undefined): boolean {
@@ -56,7 +57,7 @@ function fifoHasReader(fifo: string): boolean {
   }
 }
 
-function inspectProcessStart(pid: number): { ms: number | null; reason: string } {
+export function inspectProcessStart(pid: number): { ms: number | null; reason: string } {
   let r: SpawnSyncReturns<string>;
   try { r = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
   catch (e: any) { return { ms: null, reason: `ps could not verify pid ${pid}: ${e.message}` }; }

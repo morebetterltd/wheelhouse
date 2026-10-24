@@ -99,6 +99,7 @@ copy_installed_selftest() {
   cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$dest/upgrade-runbook.selftest.sh"
   cp "$ROOT/seats/selftest-lib.sh" "$dest/selftest-lib.sh"
   cp "$ROOT/seats/selftest-sweep-lock.ts" "$dest/selftest-sweep-lock.ts"
+  cp "$ROOT/seats/native-command.ts" "$ROOT/seats/completed-command.ts" "$dest/"
 }
 
 cache_recovery_tests() {
@@ -167,6 +168,7 @@ GITSTUB
     cp -f "$helper" "$install/seats/upgrade-runbook.selftest.sh"
     cp -f "$ROOT/seats/selftest-lib.sh" "$install/seats/selftest-lib.sh"
     cp -f "$ROOT/seats/selftest-sweep-lock.ts" "$install/seats/selftest-sweep-lock.ts"
+    cp -f "$ROOT/seats/native-command.ts" "$ROOT/seats/completed-command.ts" "$install/seats/"
     value=1234567; target=main; expected=1; needle='STOP:'
     case "$name" in
       helper-*) expected=42 ;;

@@ -34,7 +34,17 @@ JSON
 cat > "$BIN/bd" <<'SH'
 #!/usr/bin/env bash
 if [ "$1 $2" = "ready --json" ]; then printf '[{"id":"ready-1","title":"Synthetic ready 1","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"ready-2","title":"Synthetic ready 2","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"ready-3","title":"Synthetic ready 3","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"ready-4","title":"Synthetic ready 4","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]\n'; exit 0; fi
-if [ "$1" = show ]; then cat "$WHEELHOUSE_CONTRACT_FIXTURE"; exit 0; fi
+if [ "$1" = show ]; then
+  case " $* " in
+    *" --json "*) node - "$2" "$WHEELHOUSE_CONTRACT_FIXTURE" <<'BDJSON'
+const fs = require('node:fs');
+process.stdout.write(JSON.stringify([{id:process.argv[2],title:'Staffing fixture',status:'open',description:fs.readFileSync(process.argv[3],'utf8')}])+'\n');
+BDJSON
+      ;;
+    *) cat "$WHEELHOUSE_CONTRACT_FIXTURE" ;;
+  esac
+  exit 0
+fi
 if [ "$1" = list ]; then printf '[{"id":"task-a","title":"Synthetic task A","status":"open","assignee":"worker-e1","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]\n'; exit 0; fi
 exit 0
 SH
@@ -73,8 +83,8 @@ fi
 LIVE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.keys(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).length)}catch{console.log(0)}' "$PROJ/seats/staffing.json")
 STATE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$PROJ/seats/state.json")
 if [ "$LIVE_COUNT" = 3 ] && [ "$STATE_COUNT" = 3 ] && grep -q 'decision=add-worker' "$PROJ/seats/logs/staffing.log"; then pass "herald staffing clock grows three live workers without commander action"; else fail "staffing clock did not grow workers live=$LIVE_COUNT state=$STATE_COUNT log=$(cat "$PROJ/seats/logs/staffing.log" 2>/dev/null) herald=$(cat "$FIX/herald.err" 2>/dev/null)"; fi
-if bun - "$FIX/env.jsonl" "$PROJ/seats/state.json" "$PROJ/seats/staffing.json" "$PROJ/seats/pool.json" <<'JS'
-const fs=(await import('node:fs')).default,path=(await import('node:path')).default,assert=(await import('node:assert/strict')).default,{spawnSync}=(await import('node:child_process')).default;
+if LIFECYCLE_COMMAND_HELPER="$HERE/completed-command.ts" bun - "$FIX/env.jsonl" "$PROJ/seats/state.json" "$PROJ/seats/staffing.json" "$PROJ/seats/pool.json" <<'JS'
+const fs=(await import('node:fs')).default,path=(await import('node:path')).default,assert=(await import('node:assert/strict')).default,{completedCommand}=await import(process.env.LIFECYCLE_COMMAND_HELPER);
 const [rowsFile,stateFile,staffFile,poolFile]=process.argv.slice(2),read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
 const rows=fs.readFileSync(rowsFile,'utf8').split('\n').filter(Boolean).map(JSON.parse);
 const byPid=new Map(rows.map(r=>[Number(r.pid),r])),state=read(stateFile).seats,staff=read(staffFile).seats,pool=read(poolFile).entries;
@@ -83,7 +93,8 @@ for(const seat of Object.keys(staff).filter(s=>s.startsWith('worker-')).sort()) 
  const entry=staff[seat].entry,pid=Number(state[seat].pid),expected=directory(pool[entry].account.dir),row=byPid.get(pid);
  assert.ok(row,'missing env row for pid '+pid+' seat '+seat);
  const actual=directory(row.PI_CODING_AGENT_DIR); assert.equal(actual,expected,seat+' pid '+pid+' account');
- const opened=spawnSync('lsof',['-Fn','-p',String(pid)],{encoding:'utf8'});
+ const opened=completedCommand('lsof',['-Fn','-p',String(pid)]);
+ console.error('CAPTURE staffing-live native FIFO observation '+JSON.stringify({pid,expected:state[seat].fifo,native:opened}));
  assert.ok(opened.status===0&&opened.stdout.includes('n'+state[seat].fifo),seat+' pid '+pid+' does not hold fifo '+state[seat].fifo+'; '+opened.stderr);
  checked.push(seat+' pid='+pid+' entry='+entry+' dir='+actual);
 }

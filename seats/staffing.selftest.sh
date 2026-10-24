@@ -5,7 +5,14 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 PIDS=""
-cleanup(){ selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
+cleanup(){
+  # The stub's callers may intentionally suppress streams; retain real native
+  # fixture outcomes before deleting the fixture, including successful calls.
+  if [ -n "${ROOT:-}" ] && [ -f "$ROOT/native-commands.jsonl" ]; then
+    while IFS= read -r record; do printf 'CAPTURE staffing native %s\n' "$record" >&2; done < "$ROOT/native-commands.jsonl"
+  fi
+  selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"
+}
 selftest_install_cleanup_traps cleanup
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
@@ -20,6 +27,16 @@ cat > "$ROOT/seats/pool.json" <<'JSON'
 {"version":1,"idle_drop_minutes":30,"entries":{"e1":{"harness":"codex","provider":"openai","models":["m1"],"account":{"dir":"~/.pi-seats-staff/e1","authRoute":"env"}},"e2":{"harness":"codex","provider":"openai","models":["m2"],"account":{"dir":"~/.pi-seats-staff/e2","authRoute":"env"}},"e3":{"harness":"codex","provider":"openai","models":["m3"],"account":{"dir":"~/.pi-seats-staff/e3","authRoute":"env"}},"e4":{"harness":"codex","provider":"openai","models":["m4"],"account":{"dir":"~/.pi-seats-staff/e4","authRoute":"env"}},"rv1":{"harness":"codex","provider":"openai","models":["vr"],"account":{"dir":"~/.pi-seats-staff/rv1","authRoute":"env"}},"rv2":{"harness":"codex","provider":"openai","models":["vr2"],"account":{"dir":"~/.pi-seats-staff/rv2","authRoute":"env"}}},"roles":{"workers":{"min":1,"max":4,"entries":["e1","e2","e3","e4"],"model":{"e1":"m1","e2":"m2","e3":"m3","e4":"m4"}},"reviewers":{"min":0,"max":2,"entries":["rv1","rv2"],"model":{"rv1":"vr","rv2":"vr2"}}}}
 JSON
 ( cd "$ROOT" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats wheelhouse && git commit -q -m base )
+# Simulated remote-known base for intended SAFE removals, not a push/network
+# operation. The unpublished-tip refusal below creates its own descendant tip.
+if ! bun - "$HERE/completed-command.ts" "$ROOT" <<'JS'
+const {completedCommand}=await import(process.argv[2]);
+const argv=['-C',process.argv[3],'update-ref','refs/remotes/fixture/main','HEAD'];
+const native=completedCommand('git',argv);
+console.log('CAPTURE staffing synthetic remote ref '+JSON.stringify({argv,native}));
+if(native.error||native.signal||native.status!==0)throw new Error('fixture remote-tracking input allocation failed');
+JS
+then fail 'fixture remote-tracking input setup failed'; fi
 cat > "$BIN/bd" <<'SH'
 #!/usr/bin/env bash
 ready_count="${BD_READY_COUNT:-0}"
@@ -44,19 +61,44 @@ fi
 echo unexpected bd "$@" >&2; exit 9
 SH
 chmod +x "$BIN/bd"
+export LIFECYCLE_SIGNAL_HELPER="$HERE/fixtures/adapter-selftest-signals.ts"
 cat > "$ROOT/seats/adapter.ts" <<'BUN'
 #!/usr/bin/env bun
-import * as fs from "node:fs"; import * as path from "node:path"; import { spawnSync, spawn } from "node:child_process";
+import * as fs from "node:fs"; import * as path from "node:path"; import { spawn } from "node:child_process";
+import {completedCommand} from "./completed-command.ts";
 const root=path.resolve(import.meta.dir,".."); const [cmd,...args]=process.argv.slice(2); const log=path.join(root,"adapter-argv.log"); fs.appendFileSync(log, JSON.stringify(process.argv.slice(2))+"\n");
 function read(file:string){try{return JSON.parse(fs.readFileSync(file,"utf8"))}catch{return {seats:{}}}}
 function write(file:string,j:any){fs.mkdirSync(path.dirname(file),{recursive:true}); fs.writeFileSync(file,JSON.stringify(j,null,2)+"\n")}
 function pool(){return JSON.parse(fs.readFileSync(path.join(root,"seats/pool.json"),"utf8"))}
 function modelFor(seat:string){const p=pool(); const ent=seat.replace(/^worker-/,'').replace(/^reviewer-/,''); const r=p.roles.workers.entries.includes(ent)?p.roles.workers:p.roles.reviewers; return typeof r.model==='string'?r.model:r.model[ent]}
 if(cmd==='spawn'){
- const seat=args[0]; const fifo=path.join(root,"seats/run",`${seat}.stdin`); try{fs.mkfifoSync(fifo)}catch{spawnSync("mkfifo",[fifo])}
- const child=spawn("bash",["-c",`exec 3<>${JSON.stringify(fifo)}; exec sleep 1000`],{detached:true,stdio:"ignore"}); child.unref();
- const wt=path.join(root,".wheelhouse-worktrees",seat); spawnSync("git",["-C",root,"worktree","add","--detach",wt,"HEAD"],{stdio:"ignore"});
- const st=read(path.join(root,"seats/state.json")); st.seats[seat]={pid:child.pid,startedAt:new Date().toISOString(),fifo,log:path.join(root,"seats/logs",`${seat}.jsonl`),cwd:wt}; write(path.join(root,"seats/state.json"),st);
+ const seat=args[0]; const fifo=path.join(root,"seats/run",`${seat}.stdin`);
+ if(!fs.existsSync(fifo)){const made=completedCommand("mkfifo",[fifo]);fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'mkfifo',fifo,native:made})+"\n");console.error('CAPTURE staffing FIFO '+JSON.stringify(made));if(made.status!==0)throw new Error('fixture FIFO allocation failed');}
+ if(!fs.statSync(fifo).isFIFO())throw new Error('fixture FIFO is not a FIFO');
+ const actor=fs.mkdtempSync(path.join(root,"seats/run/holder-")),signals=process.env.LIFECYCLE_SIGNAL_HELPER!;
+ const child=spawn("bun",[signals,"hold",actor+"/release",actor+"/ready",fifo],{detached:true,stdio:"ignore"}); child.unref();
+ const ready=completedCommand("bun",[signals,"exists",actor+"/ready","","0",String(child.pid)]);
+ fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'holder-ready',pid:child.pid,fifo,native:ready})+"\n");
+ console.error('CAPTURE staffing holder readiness '+JSON.stringify({pid:child.pid,fifo,native:ready}));
+ if(ready.status!==0)throw new Error('fixture holder exited before FIFO readiness');
+ const born=completedCommand("ps",["-p",String(child.pid),"-o","lstart="]);
+ fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'birth',pid:child.pid,native:born})+"\n");
+ console.error('CAPTURE staffing holder native birth '+JSON.stringify(born));
+ if(born.error||born.signal||born.status!==0)throw new Error('fixture holder birth unavailable');
+ const startedAt=new Date(Date.parse(born.stdout.trim())).toISOString();
+ const wt=path.join(root,".wheelhouse-worktrees",seat);
+ if(!fs.existsSync(wt)){
+  // This fixture deliberately removes worktree directories between policy
+  // scenarios. Complete its registry reset too, rather than ignoring add128.
+  const pruned=completedCommand("git",["-C",root,"worktree","prune","--expire","now"]);
+  fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'prune',wt,native:pruned})+"\n");
+  if(pruned.error||pruned.signal||pruned.status!==0)throw new Error('fixture worktree registry reset failed');
+  const added=completedCommand("git",["-C",root,"worktree","add","--detach",wt,"HEAD"]);
+  fs.appendFileSync(path.join(root,"native-commands.jsonl"),JSON.stringify({step:'add',wt,native:added})+"\n");
+  console.error('CAPTURE staffing worktree allocation '+JSON.stringify(added));
+  if(added.error||added.signal||added.status!==0)throw new Error('fixture worktree allocation failed');
+ }
+ const st=read(path.join(root,"seats/state.json")); st.seats[seat]={pid:child.pid,startedAt,fifo,log:path.join(root,"seats/logs",`${seat}.jsonl`),cwd:wt}; write(path.join(root,"seats/state.json"),st);
  fs.writeFileSync(path.join(root,"seats/logs",`${seat}.jsonl`),'{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}\n');
  fs.appendFileSync(path.join(root,"spawn-models.log"),`${seat} ${modelFor(seat)}\n`); process.exit(0);
 }
@@ -164,7 +206,22 @@ const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.rea
 j.seats={'worker-e1':{role:'worker',entry:'e1'},'worker-e2':{role:'worker',entry:'e2'},'worker-e3':{role:'worker',entry:'e3'}};
 fs.writeFileSync(p,JSON.stringify(j));
 JS
-(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/adapter.ts spawn worker-e3 >/dev/null 2>&1)
+run bun seats/adapter.ts spawn worker-e3
+[ $RC -eq 0 ] || fail "shrink holder setup failed rc=$RC out=$OUT"
+if ! bun - "$HERE/completed-command.ts" "$ROOT" <<'JS'
+const fs=(await import('node:fs')).default,assert=(await import('node:assert/strict')).default;
+const {completedCommand}=await import(process.argv[2]),root=process.argv[3];
+const state=JSON.parse(fs.readFileSync(root+'/seats/state.json','utf8'));
+for(const seat of ['worker-e1','worker-e2','worker-e3']){
+ const wt=root+'/.wheelhouse-worktrees/'+seat,rec=state.seats[seat];
+ assert(rec?.pid&&fs.statSync(wt).isDirectory(),'real shrink worktree/state prerequisite '+seat);
+ process.kill(rec.pid,0);
+ const native=completedCommand('git',['-C',wt,'rev-parse','--verify','HEAD']);
+ console.log('CAPTURE staffing shrink prerequisite '+JSON.stringify({seat,pid:rec.pid,wt,native}));
+ assert(!native.error&&!native.signal&&native.status===0&&/^[a-f0-9]{40}\s*$/.test(native.stdout),'native worktree HEAD prerequisite');
+}
+JS
+then fail 'real shrink fixture setup failed before drop'; fi
 run env BD_READY_COUNT=0 bun seats/staffing.ts check
 if bun - "$ROOT/seats/state.json" <<'JS'
 (await import('node:assert/strict')).default.ok(!Object.hasOwn(JSON.parse((await import('node:fs')).default.readFileSync(process.argv[2],'utf8')).seats,'worker-e1'));
@@ -242,8 +299,35 @@ git -C "$ROOT" worktree add --detach "$ROOT/.wheelhouse-worktrees/worker-dirty" 
 printf 'dirty\n' > "$ROOT/.wheelhouse-worktrees/worker-dirty/local.txt"
 if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e 'import { removeSeatWorktree } from "./seats/seat-worktree.ts"; try { removeSeatWorktree(process.cwd(), "worker-dirty"); process.exit(1); } catch (e) { if (!String(e.message).includes("real changes")) process.exit(2); }'); then pass 'drop worktree removal refuses dirty worktrees'; else fail 'dirty worktree refusal failed'; fi
 git -C "$ROOT/.wheelhouse-worktrees/worker-dirty" reset --hard >/dev/null 2>&1; git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-dirty" >/dev/null 2>&1
-git -C "$ROOT" worktree add --detach "$ROOT/.wheelhouse-worktrees/worker-unpushed" HEAD >/dev/null 2>&1
-if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" env -u WHEELHOUSE_SEAT_PUSH bun -e 'import { removeSeatWorktree } from "./seats/seat-worktree.ts"; try { removeSeatWorktree(process.cwd(), "worker-unpushed"); process.exit(1); } catch (e) { if (!String(e.message).includes("not on a remote")) process.exit(2); }'); then pass 'drop worktree removal refuses unpushed tips by default seat_push=on'; else fail 'default unpushed-tip refusal failed'; fi
+if ! bun - "$HERE/completed-command.ts" "$ROOT" <<'JS'
+const fs=(await import('node:fs')).default,assert=(await import('node:assert/strict')).default;
+const {completedCommand}=await import(process.argv[2]),root=process.argv[3],wt=root+'/.wheelhouse-worktrees/worker-unpushed';
+for(const argv of [['-C',root,'worktree','add','--detach',wt,'HEAD'],['-C',wt,'commit','--allow-empty','-m','fixture unpublished descendant']]){
+ const native=completedCommand('git',argv);
+ console.log('CAPTURE staffing unpublished setup '+JSON.stringify({argv,native}));
+ assert(!native.error&&!native.signal&&native.status===0,'native unpublished worktree setup');
+}
+assert(fs.statSync(wt).isDirectory(),'unpublished worktree must really exist');
+const tip=completedCommand('git',['-C',wt,'rev-parse','--verify','HEAD']);
+assert(!tip.error&&!tip.signal&&tip.status===0&&/^[a-f0-9]{40}\s*$/.test(tip.stdout));
+const refs=completedCommand('git',['-C',root,'branch','-r','--contains',tip.stdout.trim()]);
+console.log('CAPTURE staffing unpublished premise '+JSON.stringify({wt,tip,refs}));
+assert(!refs.error&&!refs.signal&&refs.status===0&&refs.stdout.trim()==='','actual descendant must NOT be on a remote');
+JS
+then fail 'unpublished worktree setup failed before guard check'; fi
+if (cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" env -u WHEELHOUSE_SEAT_PUSH bun - <<'JS'
+import { removeSeatWorktree } from './seats/seat-worktree.ts';
+import {completedCommand} from './seats/completed-command.ts';
+const fs=(await import('node:fs')).default,assert=(await import('node:assert/strict')).default;
+const wt=process.cwd()+'/.wheelhouse-worktrees/worker-unpushed';
+const before=completedCommand('git',['-C',wt,'rev-parse','--verify','HEAD']);
+assert(!before.error&&!before.signal&&before.status===0,'healthy guard check setup');
+let refused=false;try{removeSeatWorktree(process.cwd(),'worker-unpushed');}catch(e){if(!String(e.message).includes('not on a remote'))throw e;refused=true;}
+const exists=fs.existsSync(wt),after=exists?completedCommand('git',['-C',wt,'rev-parse','--verify','HEAD']):null;
+console.log('CAPTURE staffing unpublished guard '+JSON.stringify({before,refused,exists,after}));
+assert(refused&&exists&&after&&!after.error&&!after.signal&&after.status===0&&after.stdout===before.stdout,'unpublished-tip guard must preserve actual worktree and tip');
+JS
+); then pass 'drop worktree removal refuses unpushed tips by default seat_push=on'; else fail 'default unpushed-tip refusal failed'; fi
 git -C "$ROOT" worktree remove --force "$ROOT/.wheelhouse-worktrees/worker-unpushed" >/dev/null 2>&1
 # log line fields/reasons.
 LOG_LINES=$(wc -l < "$ROOT/seats/logs/staffing.log" | tr -d ' ')

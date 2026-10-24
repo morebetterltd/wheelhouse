@@ -40,8 +40,8 @@
  *   resume   <seat>                    respawn attached to the recorded session
  *   reset    <seat>                    stop, discard the session, respawn cold
  *
- * A worker seat's process cwd is its OWN persistent worktree,
- * `.wheelhouse-worktrees/<seat-name>`, by construction and not by prompt
+ * A worker seat's process cwd is its OWN persistent worktree (normally
+ * `.wheelhouse-worktrees/<seat-name>`, or an adopted legacy path), by construction and not by prompt
  * discipline: spawn with a bead id, or dispatch, prepares that worktree on
  * `fleet/<bead-id>` (seats/seat-worktree.ts: create it under the seats+2
  * cap, push the previous bead's branch first, refuse real uncommitted
@@ -55,14 +55,15 @@
  * moment its bead closes.
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import * as crypto from "node:crypto";
 import { checkBeadContract, contractRemedy } from "./contract";
 import { completedCommand } from "./completed-command";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { completedExecFileSync as execFileSync } from "./native-command";
 import { resolveRoleBrief } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
@@ -70,7 +71,7 @@ import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
-import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath, seatIdentity, SeatIdentityUnverified } from "./seat-activity";
+import { agentSettledEvent, barePidAlive, eventTimeIso, inspectProcessStart, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath, seatIdentity, SeatIdentityUnverified } from "./seat-activity";
 import { seatTurnDisplay } from "./seat-turn-display";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
@@ -120,7 +121,7 @@ function seatCwdFor(name: string, entry: SeatEntry): string {
 }
 
 /** Prepare the seat's worktree on the bead's branch (create, push-gate,
- * switch) and return the cwd to launch or dispatch into. Refusals are loud
+ * switch) and return the cwd/branch binding to launch or dispatch into. Refusals are loud
  * STOPs that leave the seat exactly as it was; plain-words notes land in
  * the seat's event log so "push failed" is readable where the seat's
  * history is. */
@@ -147,20 +148,23 @@ function seatPushSetting(): SeatPushSetting { return setting("seat_push", ["on",
 function seatWorktreesSetting(): SeatWorktreesSetting { return setting("seat_worktrees", ["per-seat", "per-task"] as const, "per-seat"); }
 function cleanupSetting(): CleanupSetting { return setting("cleanup", ["on", "off", "report"] as const, "on"); }
 
-function prepareSeatCwd(name: string, entry: SeatEntry, beadId: string, base: string | null): string {
-  if (!seatUsesWorktree(entry)) return ROOT;
+type PreparedSeatCwd = { cwd: string; branch: string | null };
+
+function prepareSeatCwd(name: string, entry: SeatEntry, beadId: string, base: string | null): PreparedSeatCwd {
+  if (!seatUsesWorktree(entry)) return { cwd: ROOT, branch: null };
   const state = readState();
   const rec = state.seats[name];
   if (seatWorktreesSetting() === "per-task") {
     console.log(`seat ${name}: seat_worktrees=per-task; adapter will not create, move, or switch worktrees`);
-    return rec?.cwd ?? ROOT;
+    return { cwd: rec?.cwd ?? ROOT, branch: null };
   }
   const note = (line: string) => {
     console.log(line);
     if (rec?.log) appendSeatLog(rec.log, { type: "wheelhouse_note", seat: name, bead: beadId, message: line, at: new Date().toISOString() });
   };
   try {
-    return ensureSeatWorktree({ root: ROOT, seat: name, beadId, base, roster: parseRosterFile(), state, note, seatPush: seatPushSetting() }).target;
+    const prepared = ensureSeatWorktree({ root: ROOT, seat: name, beadId, base, roster: parseRosterFile(), state, note, seatPush: seatPushSetting() });
+    return { cwd: prepared.target, branch: prepared.branch };
   } catch (e: any) {
     if (e instanceof SeatWorktreeError) die(e.message);
     throw e;
@@ -946,6 +950,22 @@ function requirePiModelPin(name: string, entry: SeatEntry): void {
   }
 }
 
+function spawnedBirth(child: ReturnType<typeof spawn>): { startedAt: string; birthUnverified?: string } {
+  const observation = child.pid ? inspectProcessStart(child.pid) : { ms: null, reason: "spawn returned no child pid" };
+  const reason = child.exitCode != null || child.signalCode != null
+    ? "original child exited during birth observation"
+    : observation.reason;
+  if (observation.ms === null || reason) {
+    // Refuse the timestamp capture, not an independently observed FIFO proof.
+    // Retain the live record; never restamp, classify it dead/foreign, or signal
+    // a numeric occupant merely because the birth observer was unavailable.
+    const detail = reason || "native child birth unavailable";
+    console.error(`UNVERIFIED native birth for spawned pid ${child.pid}: ${detail}; no timestamp fallback recorded`);
+    return { startedAt: "", birthUnverified: detail };
+  }
+  return { startedAt: new Date(observation.ms).toISOString() };
+}
+
 async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
   requirePiModelPin(name, entry);
   requireCwdDir(cwd);
@@ -966,6 +986,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   requireLaunchCredential(name, entry, accountDir, authFile, labelSuffix);
 
   const brief = roleBriefPath(entry.role);
+  const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
   fs.mkdirSync(RUN_DIR, { recursive: true });
   fs.mkdirSync(LOG_DIR, { recursive: true });
   const fifo = path.join(RUN_DIR, `${name}.stdin`);
@@ -1000,6 +1021,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   });
   child.unref();
   const pid = child.pid!;
+  const birth = spawnedBirth(child);
 
   // Ask the seat who it is. This doubles as the readiness gate: pi answers
   // get_state only once its session exists, and the answer carries the
@@ -1036,11 +1058,12 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
 
   const record: SeatRecord = {
     pid,
-    startedAt: new Date().toISOString(),
+    ...birth,
     accountDir,
     ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
     roleBrief: brief,
+    roleBriefHash,
     cwd: requestedCwd,
     fifo,
     log,
@@ -1154,6 +1177,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   const child = spawn("bash", ["-c", shellCmd], { cwd, env: claudeChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" });
   child.unref();
   const pid = child.pid!;
+  const birth = spawnedBirth(child);
 
   const probe = { fifo, log, pid };
   let st: any;
@@ -1174,7 +1198,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   const liveCwd = processCwd(pid);
   const record: SeatRecord = {
     pid,
-    startedAt: new Date().toISOString(),
+    ...birth,
     accountDir,
     ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
@@ -1248,11 +1272,11 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
   const shellCmd = `exec ${q(process.execPath)} ${args.map(q).join(" ")} 0<> ${q(fifo)} 2>> ${q(errLog)}`;
   const child = spawn("bash", ["-c", shellCmd], { cwd, env: codexChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" }); child.unref();
-  const pid = child.pid!, probe = { fifo, log, pid }; let st: any;
+  const pid = child.pid!, birth = spawnedBirth(child), probe = { fifo, log, pid }; let st: any;
   try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
-  const record: SeatRecord = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
+  const record: SeatRecord = { pid, ...birth, accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
   await recordLaunchedSeat(name, record); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`); console.log(`  events -> ${log}`);
 }
 function codexProbe(name: string, entry: SeatEntry): void {
@@ -1296,7 +1320,7 @@ function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatD
 // enforcement belongs to dispatch, not to this preparation-only command.
 async function cmdSpawn(name: string, beadId?: string, base: string | null = null): Promise<void> {
   const entry = requireSeat(name);
-  const cwd = beadId ? prepareSeatCwd(name, entry, beadId, base) : ROOT;
+  const cwd = beadId ? prepareSeatCwd(name, entry, beadId, base).cwd : ROOT;
   await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, cwd);
   if (beadId) await writeState((state) => {
     if (state.seats[name]) state.seats[name].lastBead = beadId;
@@ -1510,6 +1534,17 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
   }
 
+  // A live session can still hold the pre-upgrade canonical-path brief. Do
+  // not send an authoritative legacy path beneath stale system instructions,
+  // or infer freshness for an older Pi record that has no loaded-brief hash.
+  if (rosterEntry && seatUsesWorktree(entry()) && seatWorktreesSetting() === "per-seat") {
+    const brief = roleBriefPath(entry().role);
+    const currentHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+    if (rec.roleBriefHash !== currentHash) {
+      die(`seat "${name}" brief changed; reset instead of resume before dispatch (loaded brief hash ${rec.roleBriefHash ?? "unknown"}, current ${currentHash}). Seat anchor ${seatCwdFor(name, entry())}; recorded worktree ${rec.cwd ?? ROOT}. No prompt sent; this dispatch has not discarded the session.`);
+    }
+  }
+
   // Prepare scratch before launching or prompting the worker. A legacy run
   // without a creation record remains unowned: dispatch never adopts it.
   const scratch = prepareTaskScratch(ROOT, beadId);
@@ -1519,7 +1554,14 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   // cwd change (fresh session, relaunch), never as "same place as before".
   const recordedCwd = rec.cwd ?? ROOT;
   const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
-  const targetCwd = rosterEntry ? prepareSeatCwd(name, entry(), beadId, base) : (rec.cwd ?? ROOT);
+  // state.json can outlive a launcher or be stale after legacy adoption. The
+  // live process, not its recorded cwd, decides whether relaunch is required.
+  const actualCwd = alive && !forcedStop ? processCwd(rec.pid!) : null;
+  if (alive && !forcedStop && rosterEntry && seatUsesWorktree(entry()) && !actualCwd) {
+    die(`cannot determine native cwd for seat ${name} pid ${rec.pid}; refusing dispatch before preparing its worktree`);
+  }
+  const prepared = rosterEntry ? prepareSeatCwd(name, entry(), beadId, base) : { cwd: rec.cwd ?? ROOT, branch: null };
+  const targetCwd = prepared.cwd;
   rec = readState().seats[name];
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     if (forcedStop && recordedCwdExists) {
@@ -1532,7 +1574,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
       await driverForSeat(name, entry(), "adapter dispatch").launch(name, entry(), null, targetCwd);
     }
     rec = requireRunning(name);
-  } else if (!recordedCwdExists || !samePath(rec.cwd, targetCwd)) {
+  } else if (!recordedCwdExists || !samePath(actualCwd ?? rec.cwd, targetCwd)) {
     // Construction, not prompt discipline: a seat whose cwd is not the
     // target gets stopped and relaunched attached to its own session,
     // rooted in its worktree, before the prompt goes anywhere near it.
@@ -1551,9 +1593,21 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
     rec = requireRunning(name);
   }
+  let dispatchContext = "";
+  if (prepared.branch) {
+    const branch = completedCommand("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: targetCwd });
+    if (branch.error || branch.signal || branch.status !== 0 || branch.stderr || branch.stdout.trim() !== prepared.branch) {
+      die(`cannot dispatch ${beadId}: worktree ${targetCwd} must be on ${prepared.branch}, observed ${branch.stdout.trim() || "no branch"}${branch.stderr ? ` (${branch.stderr.trim()})` : ""}`);
+    }
+    const liveCwd = processCwd(rec.pid!);
+    if (!liveCwd || !samePath(liveCwd, targetCwd)) {
+      die(`cannot dispatch ${beadId}: seat ${name} native cwd ${liveCwd ?? "unknown"} differs from prepared worktree ${targetCwd}`);
+    }
+    dispatchContext = `Dispatch context (adapter-authoritative):\nWorktree: ${targetCwd}\nBranch: ${prepared.branch}\nUse this worktree, not an inferred seat-name path.\n\n`;
+  }
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
-  const promptText = `Bead ${beadId}\n\n${text}`;
+  const promptText = `Bead ${beadId}\n\n${dispatchContext}${text}`;
   await writeState((state) => {
     state.seats[name].lastBead = beadId;
     state.seats[name].lastDispatchAt = new Date().toISOString();

@@ -71,6 +71,7 @@ selftest_copy_seat_runtime "$PROJ" "$HERE"
 cat > "$FIX/bin/bd" <<'EOF'
 #!/bin/sh
 [ "$1" = "ready" ] || exit 1
+case " $* " in *" --json "*) printf '[{"id":"wh-001","title":"first waiting bead","status":"open"},{"id":"wh-002","title":"second waiting bead","status":"open"}]\n'; exit 0 ;; esac
 echo "wh-001  P2  ready  first waiting bead"
 echo "wh-002  P2  ready  second waiting bead"
 EOF
@@ -368,19 +369,11 @@ phase "phase 5: repaint — repeated frames return home and clear to end"
 CAPTURE_FILE="$FIX/repaint.capture"
 env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$PROJ/seats/floor.ts" > "$CAPTURE_FILE" 2> "$FIX/repaint.stderr" &
 FLOOR_PID=$!
-# Native identity inspection makes a frame's cost host-dependent. Observe the
-# second actual repaint; the generous cap contains failure, not correctness.
-if ! bun - "$FLOOR_PID" "$CAPTURE_FILE" <<'JS'
-import fs from 'node:fs';
-const [pid,file]=process.argv.slice(2),deadline=Date.now()+120000;
-while(Date.now()<deadline){
-  if(fs.existsSync(file)&&fs.readFileSync(file,'utf8').split('\x1b[H\x1b[J').length-1>=2)process.exit(0);
-  try{process.kill(Number(pid),0);}catch{process.exit(1);}
-  await Bun.sleep(50);
-}
-process.exit(1);
-JS
-then fail 'floor did not publish a second repaint before exit/safety cap'; fi
+# Observe the actual second repaint; the admitted suite owns named3600s
+# containment, with the helper's last count/file/producer printed before wait.
+if ! bun "$HERE/fixtures/adapter-selftest-signals.ts" count "$CAPTURE_FILE" $'\033[H\033[J' 0 "$FLOOR_PID" 2; then
+  fail 'floor producer exited before its second repaint'
+fi
 kill "$FLOOR_PID" 2>/dev/null
 wait "$FLOOR_PID" 2>/dev/null
 CAPTURE="$(cat "$CAPTURE_FILE")"
@@ -400,17 +393,46 @@ phase "phase 6: interactive keys — q keeps the pane alive by returning to over
 if ! command -v expect >/dev/null 2>&1; then
   skip "expect not on PATH — q key pty leg not run"
 else
-  QCAP="$FIX/q.expect"
-  env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" expect > "$QCAP" 2>&1 <<EOF
-set timeout 5
-spawn bun "$PROJ/seats/floor.ts"
-expect "RAIL"
+  QCAP="$FIX/q.expect"; QSCRIPT="$FIX/q.exp"
+  cat > "$QSCRIPT" <<EOF
+# Named outer PTY resource containment, not a startup/repaint SLA.
+set timeout 1800
+fconfigure stdout -buffering none
+spawn bun "$PROJ/seats/floor.ts" --pin 1
+# Bind the timeout to the spawned PTY, not the caller's closed stdin.
+expect_before timeout { puts stderr "INCOMPLETE floor PTY outer30min bound; last_seen=\$expect_out(buffer)"; exit 124 }
+puts stderr "WAIT floor PTY SPOTLIGHT"
+# Expect's multiline pattern list is significant: a one-line brace block
+# is a single literal glob, not separate pattern/action pairs.
+expect {
+  "SPOTLIGHT" {}
+  eof { puts stderr "FAIL floor exited before SPOTLIGHT"; exit 1 }
+}
 send "q"
-expect "OVERVIEW"
+puts stderr "WAIT floor PTY OVERVIEW after q"
+expect {
+  "OVERVIEW" {}
+  eof { puts stderr "FAIL floor exited before OVERVIEW"; exit 1 }
+}
+send "1"
+puts stderr "WAIT floor PTY SPOTLIGHT after return key (q must not exit)"
+expect {
+  "SPOTLIGHT" {}
+  eof { puts stderr "FAIL q exited instead of keeping floor alive"; exit 1 }
+}
 send "\003"
 expect eof
 EOF
-  QRC=$?
+  QRC=0
+  env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun - "$HERE/completed-command.ts" "$QSCRIPT" "$QCAP" <<'JS' || QRC=$?
+import fs from 'node:fs';
+const [module,script,capture]=process.argv.slice(2),{completedCommand}=await import(module);
+const native=completedCommand('expect',[script]);
+fs.writeFileSync(capture,native.stdout);fs.writeFileSync(capture+'.stderr',native.stderr);
+console.log('CAPTURE floor PTY native '+JSON.stringify(native));
+process.exit(native.error||native.signal||native.status===null?1:native.status);
+JS
+  printf 'CAPTURE floor PTY harness exit=%s\n' "$QRC"
   if [ $QRC -eq 0 ]; then pass "q changes the live floor to OVERVIEW before Ctrl-C exits"
   else fail "q did not reach OVERVIEW in the live floor: $(cat "$QCAP")"; fi
 fi

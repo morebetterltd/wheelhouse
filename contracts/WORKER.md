@@ -12,7 +12,7 @@ The bead's stated outcome is verifiably true in your worktree, committed on a br
 
 ### Constraints
 
-- Work ONLY in your seat's worktree (`.wheelhouse-worktrees/<seat>`), on the branch the adapter checked out for this bead. Never edit the live checkout. The adapter prepares that worktree at dispatch — one persistent worktree per seat, switched to `fleet/<bead-id>` before you arrive — so you do not create one; you confirm you are on that branch (see *Evidence* below) and work.
+- Work ONLY in the exact worktree and branch named in the adapter's dispatch context. Normally the path is `.wheelhouse-worktrees/<seat>`, but an adopted legacy worktree may remain at a different path: do not infer the path from your seat name or switch to a stale anchor. Never edit the live checkout. The adapter prepares that worktree at dispatch — one persistent worktree per seat, normally switched to `fleet/<bead-id>` before you arrive — so you do not create one; confirm the named path and branch (see *Evidence* below) and work.
 - NEVER push to any remote. NEVER merge. The branch waits for review; the installed pre-push guard refuses `refs/heads/fleet/*` pushes from seat shells.
 - One bead in flight. The graph is the single source of work state.
 - Stay on the bead. Adjacent problems you notice become new bead suggestions in your report, not edits.

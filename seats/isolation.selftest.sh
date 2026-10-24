@@ -331,13 +331,10 @@ says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 STATE_A="$PROJA/seats/state.json"
 LOG_A="$PROJA/seats/logs/worker-a.jsonl"
 astate_get() { env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE_A','utf8'));const v=s.seats['worker-a']?.['$1'];if(v!=null)console.log(v)"; }
-wait_for_from() {   # $1 = file, $2 = byte offset, $3 = substring, $4 = seconds
-  local i=0 max=$((${4:-10} * 10))
-  while [ $i -lt $max ]; do
-    [ -f "$1" ] && tail -c +"$(($2 + 1))" "$1" 2>/dev/null | grep >/dev/null "$3" && return 0
-    sleep 0.1; i=$((i + 1))
-  done
-  return 1
+wait_for_from() {   # file, byte offset, regex; legacy seconds is not a verdict
+  local producer="$(astate_get pid)"
+  [ -n "$producer" ] || { echo 'missing isolation fixture producer' >&2; return 1; }
+  bun "$HERE/fixtures/adapter-selftest-signals.ts" regex "$1" "$3" "$2" "$producer"
 }
 log_mark() { [ -f "$LOG_A" ] && wc -c < "$LOG_A" | tr -d ' ' || echo 0; }
 
