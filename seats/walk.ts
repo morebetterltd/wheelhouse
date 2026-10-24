@@ -247,6 +247,7 @@ function buildSurfaceInstructions(kind: string, spec: string, baseline: string |
       `Feature entry: ${feature.file}`,
       `Launch, doctor, drive and clean up exactly as the manual says; drive this feature from its entry; the end state the entry names is what proves it. If the entry does not lead where it says, the verdict is WALKED-NOT-DONE quoting the step.`,
       `First perform the entry's How to get to it step, then its How to drive it steps; a failed reach step is not permission to try later or alternate routes.`,
+      `When How to get to it names an explicit URL or command, execute that named reach step; do not replace it with navigation or another route. A working alternative does not excuse an incorrect entry.`,
       `Follow the manual's Evidence section too. Do not repair the entry, consult implementation source, or discover a substitute route when the entry disagrees with the product.`,
       `Caller-provided RUN_DIR: ${path.join(outDir, "runtime")}`,
       `Caller-provided EVIDENCE_DIR: ${path.join(outDir, "evidence")}`,

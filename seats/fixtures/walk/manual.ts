@@ -41,7 +41,7 @@ await leg('manual prompt carries manual path and entry', () => {
   assert(snapshot.manualExists); assert.equal(snapshot.manualText, originalSkill); assert.notEqual(snapshot.cwd, product); assert.equal(path.basename(snapshot.cwd), 'product');
   assert(prompt.includes(path.join(snapshot.cwd, rel, 'SKILL.md'))); assert(prompt.includes(originalCounter)); assert(prompt.includes('## How to get to it'));
   assert(!prompt.includes('/dirty-checkout-route')); assert(!prompt.includes('DIRTY_MANUAL_MUST_NOT_ENTER_WALK'));
-  assert(prompt.includes('WALKED-NOT-DONE quoting the step')); assert(prompt.includes('failed reach step is not permission'));
+  assert(prompt.includes('WALKED-NOT-DONE quoting the step')); assert(prompt.includes('failed reach step is not permission')); assert(prompt.includes('do not replace it with navigation or another route'));
   assert.equal(snapshot.runDir, path.join(r.out, 'runtime')); assert.equal(snapshot.evidenceDir, path.join(r.out, 'evidence'));
   const metadata = JSON.parse(fs.readFileSync(path.join(r.out, 'walk.json'), 'utf8')); assert.equal(metadata.tip, pin); assert.equal(metadata.feature, 'counter'); assert.equal(metadata.productSubdirectory, 'product');
   assert(!fs.existsSync(snapshot.cwd), 'scratch product is removed after dispatcher exit');
@@ -50,7 +50,8 @@ await leg('manual prompt carries manual path and entry', () => {
   // A separate product Git root exercises the --repo case, not just a subdirectory.
   const standalone = path.join(fleet, 'standalone'); fs.cpSync(reference, standalone, { recursive: true, verbatimSymlinks: true });
   git(['-C', standalone, 'init', '-q', '-b', 'main']); git(['-C', standalone, 'add', '.']); git(['-C', standalone, '-c', 'user.name=selftest', '-c', 'user.email=selftest@local', 'commit', '-qm', 'standalone oracle']);
-  const separate = walk('home', 'VERDICT: WALKED-DONE\n', 'standalone', 'manual', standalone); assert.equal(separate.status, 0); const c = capture('standalone'); assert(c.snapshot.manualExists); assert.equal(path.basename(c.snapshot.cwd).startsWith('wheelhouse-review-'), true);
+  const standalonePin = git(['-C', standalone, 'rev-parse', 'HEAD']);
+  const separate = walk('home', 'VERDICT: WALKED-DONE\n', 'standalone', 'manual', standalone); assert.equal(separate.status, 0); const c = capture('standalone'); assert.equal(c.snapshot.head.trim(), standalonePin); assert(c.snapshot.manualExists); assert.equal(path.basename(c.snapshot.cwd).startsWith('wheelhouse-review-'), true);
 });
 await leg('unknown manual slug refused', () => {
   const before = fs.readFileSync(path.join(agent, 'invocations.jsonl'), 'utf8');
@@ -64,7 +65,8 @@ await leg('wrong manual entry exits 2 and reaches inbox', () => {
   const verdict = 'VERDICT: WALKED-NOT-DONE — step: GET /countr returned 404';
   const r = walk('counter', verdict + '\n', 'wrong'); assert.equal(r.status, 2, r.stderr); assert(r.stdout.includes(verdict));
   const c = capture('wrong'); assert(c.prompt.includes(wrong)); assert(c.prompt.includes('GET /countr')); assert(c.prompt.includes('not permission to try later or alternate routes'));
-  const rows = fs.readFileSync(path.join(fleet, 'seats/inbox.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const inbox = path.join(fleet, 'seats/inbox.jsonl'); assert(fs.existsSync(inbox), 'completed verdict must create an inbox row');
+  const rows = fs.readFileSync(inbox, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   const row = rows.find(row => row.source.type === 'verifier-walk' && row.detail.includes(verdict)); assert(row, 'inbox must carry full failed step'); save('wrong-inbox', row);
   assert.equal(JSON.parse(fs.readFileSync(path.join(r.out, 'walk.json'), 'utf8')).verdict, 'WALKED-NOT-DONE');
 });

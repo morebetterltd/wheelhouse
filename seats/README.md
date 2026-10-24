@@ -1045,7 +1045,10 @@ scratch manual path, full feature entry (including its headings), and instructio
 to launch, doctor, drive, retain evidence and clean up exactly as written. Unknown
 slugs or invalid manuals refuse with exit5 before spawning a walker. A wrong
 entry is WALKED-NOT-DONE/exit2, quoting its failing step, not an invitation to
-find another route. Manual walks receive caller-owned `RUN_DIR` and
+find another route. Execute an explicitly named reach URL/command even when
+navigation offers an alternative. For a deliberate wrong-entry walk, commit the
+edited entry in the owned scratch repository first: uncommitted edits are not
+the pinned surface. Manual walks receive caller-owned `RUN_DIR` and
 `EVIDENCE_DIR` under `--out`; use isolated instances/non-production endpoints.
 When a `product:` surface has a manual in the pinned product snapshot, its
 otherwise unchanged instructions add one line naming that manual. Existing
