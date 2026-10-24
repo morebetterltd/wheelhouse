@@ -5,7 +5,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 const [root, seats] = process.argv.slice(2);
 assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());
-const original = fs.readFileSync(path.join(seats, "selftest-sweep-lock.ts"), "utf8");
+// Copies of the lock module run from fixture folders, so its one relative import points back at the real helper.
+const lockSource = fs.readFileSync(path.join(seats, "selftest-sweep-lock.ts"), "utf8"), relativeImport = 'from "./native-command";';
+assert.equal(lockSource.split(relativeImport).length, 2, relativeImport);
+const original = lockSource.replace(relativeImport, `from ${JSON.stringify(path.join(seats, "native-command.ts"))};`);
 const replace = (s: string, a: string, b: string) => { assert.equal(s.split(a).length, 2, a); return s.replace(a, b); };
 async function run(file: string, args: string[]) {
   const child = spawn(file, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -28,8 +31,8 @@ if (process.platform === "darwin") {
 const data = path.join(root, "native.raw"); fs.writeFileSync(data, raw, { mode: 0o600 });
 const options = { encoding: "utf8" as const, timeout: 5000, maxBuffer: 1024 * 1024 };
 const hook = replace(original,
-  'import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";',
-  'import { execFileSync as nativeExecFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";\nfunction execFileSync(...args: any[]): any { (nativeExecFileSync as any)(...args); return ""; }');
+  'import { execFileSync, spawn, type ChildProcess } from "node:child_process";',
+  'import { execFileSync as nativeExecFileSync, spawn, type ChildProcess } from "node:child_process";\nfunction execFileSync(...args: any[]): any { (nativeExecFileSync as any)(...args); return ""; }');
 async function moduleCopy(name: string, source: string) {
   const file = path.join(root, name + ".ts"); fs.writeFileSync(file, source); return await import(file);
 }

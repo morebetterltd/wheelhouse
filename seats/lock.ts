@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { pidAlive } from "./seat-activity";
 
 const INCOMPLETE_LOCK_GRACE_MS = 1000;

@@ -21,7 +21,8 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
 import { StringDecoder } from "node:string_decoder";
 import { acquirePidLock, releasePidLock } from "./lock";
 import { fixtureOwner, fixtureOwnerAlive } from "./herald-owner";

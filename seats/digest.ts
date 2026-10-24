@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { fold, humanTextGuard } from "./needs";
 
 const DEFAULT_ROOT = fs.existsSync(path.join(process.cwd(), "wheelhouse", ".template-source")) ? process.cwd() : path.join(import.meta.dir, "..");
@@ -15,7 +15,6 @@ const DIGEST_LAST = path.join(RUN, "digest.last");
 const DESK_PORT = path.join(RUN, "desk.port");
 const VERDICTS = path.join(SEATS, "verdicts");
 const ALERTS_LOG = path.join(SEATS, "logs", "alerts.log");
-const BD_TIMEOUT_MS = 5000;
 
 type Any = Record<string, any>;
 export type Digest = { window:{since:string;until:string}; namespace:string; seats:{role:string;provider:string;model:string}[]; shipped:Any[]; blocked:Any[]; cleared:Any[]; inReview:Any[]; sentBack:Any[]; failed:{summary:{events:number;stillFailing:number};items:Any[]}; alerts:Any[] };
@@ -30,8 +29,17 @@ function short(s:any){ return String(s||"").slice(0,7); }
 function templateValue(k:string){ try{ const m=fs.readFileSync(TEMPLATE_SOURCE,"utf8").match(new RegExp(`^${k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}=(.*)$`,"m")); return m ? m[1].trim() : ""; }catch{return "";} }
 function namespace(){ return templateValue("namespace") || path.basename(ROOT); }
 function readJsonl(file:string):Any[]{ if(!fs.existsSync(file)) return []; return fs.readFileSync(file,"utf8").split(/\r?\n/).filter(Boolean).map((l,i)=>{ try{return JSON.parse(l)}catch(e:any){ return {at:"", title:`parse error line ${i+1}`, detail:e.message}; } }); }
-function run(cmd:string[], cwd=ROOT, opts:{input?:string; timeout?:number; env?:NodeJS.ProcessEnv}={}){ try{ return spawnSync(cmd[0],cmd.slice(1),{cwd,encoding:"utf8",timeout:opts.timeout??BD_TIMEOUT_MS,input:opts.input,env:opts.env}); }catch(e:any){ return {status:127, stdout:"", stderr:String(e?.message||e)} as any; } }
-function bdList(args:string[]):{rows:Any[]; unavailable:boolean}{ const r=run(["bd","list","--json","--limit","0",...args]); if(r.status!==0) return {rows:[], unavailable:true}; try{ const j=JSON.parse(r.stdout||"[]"); return {rows:Array.isArray(j)?j:[], unavailable:false}; }catch{return {rows:[], unavailable:false};} }
+function run(cmd:string[], cwd=ROOT, opts:{input?:string; env?:NodeJS.ProcessEnv}={}){ try{ return spawnSync(cmd[0],cmd.slice(1),{cwd,encoding:"utf8",input:opts.input,env:opts.env}); }catch(e:any){ return {status:127, stdout:"", stderr:String(e?.message||e)} as any; } }
+function bdList(args:string[]):{rows:Any[]; unavailable:boolean; diagnostic?:Any}{
+  const r=run(["bd","list","--json","--limit","0",...args]);
+  const unknown=(reason:string)=>({rows:[], unavailable:true, diagnostic:{reason,status:r.status??null,signal:r.signal??null,error:r.error?.message??null,stdout:r.stdout??"",stderr:r.stderr??""}});
+  if(r.error||r.signal||r.status!==0) return unknown("native bd list did not complete successfully");
+  try{
+    const rows=JSON.parse(r.stdout);
+    if(!Array.isArray(rows)||rows.some(row=>!row||typeof row!=="object"||Array.isArray(row))) return unknown("bd list did not return an issue array");
+    return {rows, unavailable:false};
+  }catch(e:any){ return unknown(`bd list JSON unavailable: ${e.message}`); }
+}
 function repoFromRemote(raw:string){ const s=String(raw||"").trim(); let m=s.match(/github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/); return m ? `${m[1]}/${m[2]}` : ""; }
 function productRepo(){ const p=templateValue("product-repo"); return p ? path.resolve(ROOT,p) : ROOT; }
 function defaultBranch(repo:string){ const r=run(["git","symbolic-ref","--short","refs/remotes/origin/HEAD"],repo); return r.status===0 && r.stdout.trim() ? r.stdout.trim() : "main"; }
@@ -99,7 +107,7 @@ export function buildDigest(sinceIso:string, untilIso:string):Digest{
   for(const [title,rows] of anomalies){ rows.sort((a,b)=>parseTime(closedAt(a))-parseTime(closedAt(b))); if(rows.length>=3 && parseTime(closedAt(rows.at(-1)))-parseTime(closedAt(rows[0]))<=5*60000) failedItems.push({kind:"bulk-close",title,count:rows.length,at:closedAt(rows[0]),until:closedAt(rows.at(-1))}); }
   const alerts=[...inbox.filter(r=>String(r.class||"")==="alert"&&inWindow(r.at,since,until)).map(r=>({at:r.at,title:r.title,detail:detail(r)}))];
   if(fs.existsSync(ALERTS_LOG)) for(const l of fs.readFileSync(ALERTS_LOG,"utf8").split(/\r?\n/).filter(Boolean)){ const m=l.match(/^(\S+)/); if(m&&inWindow(m[1],since,until)) alerts.push({at:m[1],title:l}); }
-  return scrubAccountLabelsDeep({window:{since:sinceIso,until:untilIso},namespace:namespace(),seats:seatsLine(),shipped:closed.unavailable?[{unavailable:true}]:shipped,blocked,cleared,inReview:review.unavailable?[{unavailable:true}]:inReview,sentBack,failed:{summary:{events:failedItems.length,stillFailing:failedItems.filter(i=>i.kind==="stop"&&!i.recovered).length},items:failedItems},alerts});
+  return scrubAccountLabelsDeep({window:{since:sinceIso,until:untilIso},namespace:namespace(),seats:seatsLine(),shipped:closed.unavailable?[{unavailable:true,diagnostic:closed.diagnostic}]:shipped,blocked,cleared,inReview:review.unavailable?[{unavailable:true,diagnostic:review.diagnostic}]:inReview,sentBack,failed:{summary:{events:failedItems.length,stillFailing:failedItems.filter(i=>i.kind==="stop"&&!i.recovered).length},items:failedItems},alerts});
 }
 function escapeRegExp(s:string){ return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
 function scrubLocalPaths(s:string){ let out=String(s||""); for(const p of [os.homedir(),ROOT].filter(Boolean).sort((a,b)=>b.length-a.length)){ out=out.split(p).join("[local-path]"); } return out; }
@@ -119,13 +127,16 @@ export function renderHuman(d:Digest){ const out=md(d,true); for(const line of o
 function readDigestLast(): string { try { return fs.readFileSync(DIGEST_LAST, "utf8").trim(); } catch { return ""; } }
 function writeAtomic(file:string, data:string){ fs.mkdirSync(path.dirname(file),{recursive:true}); const tmp=`${file}.tmp.${process.pid}`; fs.writeFileSync(tmp,data); fs.renameSync(tmp,file); }
 function deskDigestUrl(): string {
+  let raw: string;
+  try { raw = fs.readFileSync(DESK_PORT, "utf8").trim(); }
+  catch (e: any) { if (e.code === "ENOENT") return ""; throw e; }
+  let u: URL;
   try {
-    const raw=fs.readFileSync(DESK_PORT,"utf8").trim();
-    if(!raw) return "";
-    const u=new URL(raw);
-    u.pathname="/digest"; u.search=""; u.hash="";
-    return u.toString();
-  } catch { return ""; }
+    u = new URL(raw);
+    if (!raw.startsWith("http://") || u.protocol !== "http:" || u.pathname !== "/needs" || u.username || u.password || u.search || u.hash) throw Error("not a desk URL");
+  } catch { throw Error(`Invalid desk.port: expected a complete http://host[:port]/needs URL (${DESK_PORT})`); }
+  u.pathname = "/digest";
+  return u.toString();
 }
 function windowArgs(useDigestLast=false){ const rawUntil=arg("--until"), rawSince=arg("--since"), rawHours=arg("--hours"); const until=rawUntil ? new Date(rawUntil) : new Date(); let since: Date; if(rawSince) since=new Date(rawSince); else if(rawHours!==undefined) since=new Date(until.getTime()-Number(rawHours)*3600000); else if(useDigestLast) { const last=readDigestLast(); since=last ? new Date(last) : new Date(until.getTime()-24*3600000); } else since=new Date(until.getTime()-24*3600000); try { until.toISOString(); since.toISOString(); } catch { throw new Error("invalid digest window"); } return { since, until }; }
 function notifyTitle(until:Date){ return `Fleet digest — ${until.toLocaleDateString(undefined,{month:"short",day:"2-digit",year:"numeric"})}`; }
@@ -134,7 +145,7 @@ function notifyDigest(d:Digest): number {
   const title=notifyTitle(new Date(d.window.until));
   const body=notifyBody(d);
   const source=`digest:${d.window.until}`;
-  const r=run(["bun","seats/needs.ts","open","--kind","notify","--source",source,"--title",title,"--body",body],ROOT,{timeout:BD_TIMEOUT_MS,env:{...process.env,WHEELHOUSE_NEEDS_ROOT:ROOT}});
+  const r=run(["bun","seats/needs.ts","open","--kind","notify","--source",source,"--title",title,"--body",body],ROOT,{env:{...process.env,WHEELHOUSE_NEEDS_ROOT:ROOT}});
   if(r.status!==0){ process.stderr.write(r.stderr||r.stdout||"needs.ts open failed\n"); return 2; }
   process.stdout.write(String(r.stdout||"").trim()+"\n");
   writeAtomic(DIGEST_LAST, d.window.until+"\n");

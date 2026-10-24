@@ -14,14 +14,25 @@ fs.mkdirSync(run, { recursive: true }); fs.mkdirSync(logs, { recursive: true });
 function text(file: string) { try { return fs.readFileSync(file, "utf8").trim(); } catch (e: any) { if (e.code === "ENOENT") return ""; throw e; } }
 function pid(file = pidFile) { const raw = text(file); return /^[1-9][0-9]*$/.test(raw) && Number.isSafeInteger(Number(raw)) ? Number(raw) : 0; }
 function alive(value: number) { if (!value) return false; try { process.kill(value, 0); return true; } catch (e: any) { if (e.code === "ESRCH") return false; if (e.code === "EPERM") return true; throw e; } }
+function deskPort() {
+  let raw: string;
+  try { raw = fs.readFileSync(portFile, "utf8").trim(); }
+  catch (e: any) { if (e.code === "ENOENT") return ""; throw e; }
+  try {
+    const u = new URL(raw);
+    if (!raw.startsWith("http://") || u.protocol !== "http:" || u.pathname !== "/needs" || u.username || u.password || u.search || u.hash) throw Error("not a desk URL");
+  } catch { throw Error(`Invalid desk.port: expected a complete http://host[:port]/needs URL (${portFile})`); }
+  return raw;
+}
 function observation() {
-  const published = pid(), url = name === "desk" ? text(portFile) : "";
-  let portReady = name !== "desk";
-  if (name === "desk" && url) { try { const u = new URL(url); portReady = u.protocol === "http:" && u.pathname === "/needs"; } catch {} }
-  return { published, url, ready: alive(published) && portReady };
+  const published = pid(), url = name === "desk" ? deskPort() : "";
+  return { published, url, ready: alive(published) && (name !== "desk" || !!url) };
 }
 function retireStarting(value: number) { if (pid(startingFile) === value) fs.rmSync(startingFile, { force: true }); }
 let child: ReturnType<typeof Bun.spawn> | undefined, exited: { code: number; signal: string | null } | undefined;
+// Validate an existing port before a stale-PID restart can remove it. Corrupt
+// publication is an error, not evidence that no desk has published.
+if (name === "desk") deskPort();
 const published = pid(), pending = pid(startingFile);
 const prior = alive(published) ? published : (pending || published), existing = alive(prior);
 if (!existing) {

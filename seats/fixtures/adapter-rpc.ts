@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as net from "node:net";
 import assert from "node:assert/strict";
+import conditionWait from './wait-for-condition.cjs';
+const { waitForCondition } = conditionWait;
 
 const root = path.resolve(process.argv[2]);
 const runtime = path.join(root, "runtime/seats");
@@ -18,11 +20,7 @@ const evidence = process.env.WHEELHOUSE_RPC_EVIDENCE;
 if (evidence) fs.mkdirSync(evidence, { recursive: true });
 
 function fileSignal(file: string, ready = () => fs.existsSync(file)) {
-  let resolve: () => void;
-  const promise = new Promise<void>(r => { resolve = r; });
-  const watcher = fs.watch(path.dirname(file), () => { if (ready()) resolve(); });
-  if (ready()) resolve!();
-  return { promise, close: () => watcher.close() };
+  return waitForCondition({ site: 'adapter-rpc.fileSignal', paths: [path.dirname(file)], predicate: ready });
 }
 
 for (const kind of cases) {

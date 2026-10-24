@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
 import { resolveRoleBrief } from "./briefs";
 import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
@@ -34,6 +34,7 @@ const ROSTER_FILE = path.join(SEATS_DIR, "seats.json");
 const SCRUB = path.join(SEATS_DIR, "evidence-scrub.sh");
 const DEFAULT_WALKS_DIR = path.join(SEATS_DIR, "verdicts", "walks");
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_WALK_TIMEOUT_MS || 1800000);
+const WINDOW_LIST_POLICY_MS = Number(process.env.WHEELHOUSE_WALK_WINDOW_LIST_TIMEOUT_MS || 120000);
 const IMAGE_MAX_WIDTH = Number(process.env.WHEELHOUSE_WALK_IMAGE_MAX_WIDTH || 1000);
 const IMAGE_MAX_CONTEXT = Number(process.env.WHEELHOUSE_WALK_IMAGE_MAX_CONTEXT || 3);
 const IMAGE_QUALITY = Number(process.env.WHEELHOUSE_WALK_IMAGE_JPEG_QUALITY || 75);
@@ -199,8 +200,8 @@ function readWindowList(): any[] | string {
   }
   const cmd = process.env.WHEELHOUSE_WALK_WINDOW_LIST_COMMAND;
   if (cmd) {
-    const res = spawnSync("bash", ["-lc", cmd], { encoding: "utf8", timeout: Number(process.env.WHEELHOUSE_WALK_WINDOW_LIST_TIMEOUT_MS || 5000), maxBuffer: 1024 * 1024 });
-    if (res.error) return `window-list command failed (${cmd}): ${res.error.message}`;
+    const res = spawnSync("bash", ["-lc", cmd], { encoding: "utf8", policyTimeoutMs: WINDOW_LIST_POLICY_MS });
+    if (res.error) return `window-list command failed (${cmd}): ${res.error.message}; last stdout tail=${String(res.stdout ?? "").slice(-1000)}; last stderr tail=${String(res.stderr ?? "").slice(-1000)}`;
     if (res.status !== 0) return `window-list command failed (${cmd}): exit ${res.status}${res.stderr ? `: ${String(res.stderr).trim()}` : ""}`;
     const out = String(res.stdout ?? "").trim();
     if (!out) return `window-list command failed (${cmd}): empty output`;
@@ -481,8 +482,7 @@ function main(): void {
     cwd: scratchCwd,
     env,
     encoding: "utf8",
-    timeout: TIMEOUT_MS,
-    maxBuffer: 64 * 1024 * 1024,
+    policyTimeoutMs: TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
   });
 

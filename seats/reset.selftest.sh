@@ -82,9 +82,8 @@ RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):/usr/bin:
 # The stub pi: same RPC shape as adapter.selftest.sh's stub, plus a real
 # `streaming` flag so get_state's isStreaming answers honestly instead of
 # always false — reset's mid-turn refusal has nothing to check otherwise. A
-# prompt containing SLOW keeps `streaming` true for 1.5s so reset has a
-# mid-turn to land in, the same trick adapter.selftest.sh's stub uses for
-# steer.
+# SLOW publishes a held-turn event and stays streaming until this test
+# explicitly releases it (or deliberately resets/kills the owned actor).
 cat > "$BIN/pi" <<STUB
 #!/usr/bin/env node
 const fs = require("fs"), path = require("path"), crypto = require("crypto");
@@ -128,7 +127,15 @@ function handle(cmd) {
         out({ type: "agent_end", messages: [] });
         streaming = false;
       };
-      if (/SLOW/.test(cmd.message)) setTimeout(finish, 1500); else finish();
+      if (/SLOW/.test(cmd.message)) {
+        const release = path.join(agentDir, sessionId + ".release");
+        fs.rmSync(release, {force:true});
+        const check = () => { if (fs.existsSync(release)) { clearInterval(poll); finish(); } };
+        // Re-check the release file itself; a file event alone can be lost on a loaded host.
+        const poll = setInterval(check, 10);
+        fs.writeFileSync(path.join(agentDir, sessionId + ".held"), String(process.pid));
+        check();
+      } else finish();
       break;
     }
     default:
@@ -200,36 +207,45 @@ LOG="$PROJ/seats/logs/worker-1.jsonl"
 ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
 state_get() { env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$STATE','utf8'));const v=s.seats['worker-1']?.['$1'];if(v!=null)console.log(v)"; }
 
-wait_for() {   # $1 = file, $2 = substring, $3 = seconds
-  local i=0 max=$((${3:-10} * 10))
-  while [ $i -lt $max ]; do
-    [ -f "$1" ] && grep -q "$2" "$1" 2>/dev/null && return 0
-    sleep 0.1; i=$((i + 1))
-  done
-  return 1
+wait_for() {   # file, regex; containing suite supplies resource containment
+  local producer="$(state_get pid)"
+  [ -n "$producer" ] || { echo 'missing reset fixture producer' >&2; return 1; }
+  bun "$HERE/fixtures/adapter-selftest-signals.ts" regex "$1" "$2" 0 "$producer"
 }
 
 # --- the reset checks, parameterized so the canary can reuse them -----------
 check_reset_midturn_refused() {   # $1 = label
-  local label="$1" pid_before sess_before
+  local label="$1" pid_before sess_before release held
+  MIDTURN_SETUP=0; MIDTURN_GUARD_FAILURE=0
   run spawn worker-1
   [ $RC -eq 0 ] || { fail "${label}: setup spawn failed (exit $RC): $OUT"; return; }
   run dispatch worker-1 bead-x "SLOW long think"
   [ $RC -eq 0 ] || { fail "${label}: setup dispatch failed (exit $RC): $OUT"; return; }
-  wait_for "$LOG" '"agent_start"' 5 >/dev/null
   pid_before="$(state_get pid)"
   sess_before="$(state_get sessionFile)"
+  held="${ARGV%argv.json}$(basename "$sess_before" .jsonl).held"
+  release="${held%.held}.release"
+  if ! bun "$HERE/fixtures/adapter-selftest-signals.ts" exists "$held" '' 0 "$pid_before" || [ "$(cat "$held")" != "$pid_before" ] || ! kill -0 "$pid_before" 2>/dev/null; then
+    fail "${label}: no authenticated live held-turn precondition"; return
+  fi
+  MIDTURN_SETUP=1
   run reset worker-1
+  MIDTURN_NATIVE_RC=$RC; MIDTURN_NATIVE_OUT="$OUT"
   if [ $RC -ne 0 ] && says "mid-turn"; then
     pass "${label}: reset refuses a seat that is mid-turn"
-  else fail "${label}: reset did not refuse a mid-turn seat (exit $RC): $OUT"; fi
+  else MIDTURN_GUARD_FAILURE=1; fail "${label}: reset did not refuse a mid-turn seat (exit $RC): $OUT"; fi
   if [ "$(state_get pid)" = "$pid_before" ] && kill -0 "$pid_before" 2>/dev/null; then
     pass "${label}: the seat is left running untouched by a refused reset"
   else fail "${label}: a refused reset still touched the running seat (pid was $pid_before, now $(state_get pid))"; fi
   if [ "$(state_get sessionFile)" = "$sess_before" ]; then
     pass "${label}: session record is unchanged by a refused reset"
   else fail "${label}: a refused reset still changed the recorded session"; fi
-  wait_for "$LOG" 'echo: Bead bead-x' 5 >/dev/null   # let the slow turn finish
+  printf 'explicit turn release\n' > "$release"
+  # A destructive canary already replaced/killed the old actor: do not wait
+  # for an impossible old-session completion after proving that wrong world.
+  if [ "$(state_get pid)" = "$pid_before" ] && kill -0 "$pid_before" 2>/dev/null; then
+    wait_for "$LOG" 'echo: Bead bead-x' >/dev/null || fail "${label}: released turn producer exited"
+  fi
   run stop worker-1
 }
 
@@ -299,8 +315,9 @@ else
   RUN_PROJ="$CAN"; STATE="$CAN/seats/state.json"; LOG="$CAN/seats/logs/worker-1.jsonl"
   ARGV="$HOME_FIX/.pi-seats-can-a/worker-1/argv.json"
   CANARY_FAILED_BEFORE=$FAILED
-  check_reset_midturn_refused "canary" > /dev/null 2>&1
-  if [ $FAILED -gt $CANARY_FAILED_BEFORE ]; then
+  check_reset_midturn_refused "canary" > "$FIX/reset-canary.out" 2>&1
+  cat "$FIX/reset-canary.out"
+  if [ "$MIDTURN_SETUP" = 1 ] && [ "$MIDTURN_GUARD_FAILURE" = 1 ] && [ "$MIDTURN_NATIVE_RC" = 0 ] && [ $FAILED -gt $CANARY_FAILED_BEFORE ]; then
     FAILED=$CANARY_FAILED_BEFORE
     pass "canary: a reset with its mid-turn refusal cut is caught"
   else

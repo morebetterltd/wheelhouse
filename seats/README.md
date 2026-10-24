@@ -347,6 +347,8 @@ Each seat entry:
 
 Claude Code seats launch in measured-safe unattended mode: `--permission-mode acceptEdits --permission-prompts none` plus the roster's `allowedTools` list and optional `disallowedTools` list. The same lists are passed to claude-code one-shot reviewer/walk gates, so a reviewer with a bench allowlist can actually run that bench. A project section may deliberately opt a seat up to a broader Claude Code permission mode, but this fleet did not probe broader modes for production use, and the template default does not ship one. Verify any narrow `allowedTools` allowlist against the exact redirected/write forms the seat will use: Claude Code 2.1.273 denies `Bash(printf *)` for `printf x > file` without explaining that the redirect defeated the prefix rule.
 
+Driver completion is observed, not inferred from a quiet-host clock. Claude prompt acknowledgements wait for the actual session-file path while the shim continues processing stream events and `get_state`; an unpublished file remains pending rather than acknowledging a null continuity key after two seconds. The old `WHEELHOUSE_CLAUDE_SESSION_LOCATE_MS` cutoff is no longer used. Codex RPCs remain pending until their matching native reply or app-server exit, rather than synthesizing a 120-second timeout. Both shims retain the separate `WHEELHOUSE_{CLAUDE,CODEX}_STOP_GRACE_MS` shutdown policy (default 500ms); these waits do not authorize signaling any foreign process. `seats/driver-observation.selftest.sh` exercises native held publications/replies, explicit mid-turn release gates, complete-record input boundaries, and corresponding removal controls.
+
 Codex harness notes: the driver runs a resident `codex app-server` shim under `CODEX_HOME=<account.dir>` (unless `authRoute=default` is explicitly used for evidence), strips provider API keys from the child environment, injects the role brief via `developerInstructions`, and normalizes app-server events to the same Pi-shaped seat log. Measured Codex issues: current starts may print a harmless stale-model-cache line (`ERROR codex_models_manager::cache ... missing field base_instructions`) to stderr, and an unauthenticated `CODEX_HOME` can spend about 45 seconds retrying 401s before failing; `codexProbe` runs `codex login status` first for exactly this reason, so a dead login fails fast with a named cause before real work.
 
 Two gotchas about `provider` + `model`. The set of valid model ids depends on
@@ -1172,9 +1174,62 @@ Reviewed scan files are install-bound: TSV starts with a `# wheelhouse-prune-sca
 
 `seats/integration-refs.txt` is install-owned configuration, like `seats/host-budget.json`. It lists extra integration refs one per line; blank lines and `#` comments are allowed. Matching is exact on the branch name (`fleet/goal-x` also matches a containing ref such as `origin/fleet/goal-x`) and does not widen `fleet/` prefixes. A listed ref is itself never pruned as a stale branch. When a commander creates a goal branch, they add that branch here so closed work merged to the goal branch can be pruned before the goal reaches `main`.
 
+## Native command observations
+
+Audited synchronous command readers use `native-command.ts` and the shared
+`completed-command.ts`: wait for native completion and read separate regular-file
+stdout/stderr captures, rather than a pipe's default `maxBuffer` or a short CLI
+clock. Legacy `timeout`/`maxBuffer` options do not impose a bound in the Node-shaped
+adapters. Explicit outer policies use `policyTimeoutMs` instead; the walk model
+budget remains configurable and the custom window-list policy defaults to two
+minutes. Policy expiry is a failed/unknown observation, never empty success.
+The original text helper still defaults to UTF-8; `{encoding:null}` requests
+Buffers, and optional stdin supports strings, Buffers and typed-array views.
+
+New seat records capture the original child's kernel birth before readiness.
+An unavailable birth observer records no synthetic timestamp, retains the
+PID/FIFO and a diagnostic, and does not relax the existing two-second identity
+tolerance or restamp old records. Other positive FIFO identity proof still works.
+Prune waits for a complete matching state response from declared RPC seats;
+a two-minute observation policy reports the last offset/source/PID and defers
+prune if it expires. Cwd-only records remain anchors, not invented RPC seats.
+Digest and issue-publication readers reject malformed/unavailable command data.
+Unavailable GitHub-watch/disk observations do not clear prior active conditions;
+unverified session-file holders do not authorize a second resume.
+
+`native-observation.selftest.sh` exercises real native emitters, delayed readiness,
+unknown observations and meaningful feature-removal copies. It is part of the
+unfiltered sweep, alongside the helper's stdin/binary regression suite.
+
 ## Proving it still works
 
 Selftests register their teardown with `selftest_install_cleanup_traps cleanup` from `selftest-lib.sh` (a trusted shell command string is also accepted). The callback must return, not `exit`: it runs once, in the owning shell so it can reap its children, on normal EXIT and on INT/TERM. Signals exit 130/143 instead of resuming the script against a removed fixture; repeated signals are ignored during teardown. The sweep likewise drains its current suite group and releases its lock only from EXIT. `bash seats/selftest-signals.selftest.sh` checks both signal paths, normal exits, re-entrant signals, fixture removal and child reaping; `--old-trap` deliberately restores the returning trap in the fixture and must fail.
+
+Test file/state waits use `fixtures/wait-for-condition.cjs`, shared by Bun,
+Node, CJS/MJS fixtures and the Node stubs embedded in shell suites. Supply a
+named `site`, synchronous `predicate` and optional watched `paths`. The helper
+checks immediately and reconciles the actual condition every50ms (existing
+20ms observation cadences may be retained); notifications are advisory. The
+cadence never decides success or failure. Owners cancel a losing race; resolved
+or cancelled observations retire their timer/watch resources. Predicate errors
+reject with the site name. Explicit fixture IPC checkpoints can reconcile the
+same registered predicates, without duplicating their logic.
+
+`watch-wait.selftest.sh` drops notifications under both runtimes and requires a
+real publication after an initially false condition. `watch-wait-sites.selftest.sh`
+probes the actual source call expressions with real filesystem conditions, both
+already held and published after initial false; callback counters are unit seams,
+not fabricated native results or RPC frames. Native concurrency regression cases
+retain their real peers, lifecycle pipes and explicit observation checkpoints.
+`watch-wait-audit.selftest.sh` refuses direct/aliased watch access outside the helper and narrowly identified
+notification-suppression instrumentation, including generated code in shell
+stubs. New waits must use the helper, not grow another local watch/poll loop.
+`WHEELHOUSE_CONDITION_DROP_WATCH=1` is the deterministic fixture control: the
+helper suppresses watch callbacks but still inspects real conditions. The unit
+also replaces the watch backend entirely. `WHEELHOUSE_CONDITION_TRACE`, when
+used for verification, points at a private capture outside the watched
+directories; it records observations, not authority
+to signal or clean up the historical PIDs it contains.
 
 For the full host sweep, run the locked runner instead of an ad-hoc loop:
 

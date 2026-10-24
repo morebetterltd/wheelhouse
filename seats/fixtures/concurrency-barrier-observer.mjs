@@ -1,12 +1,12 @@
 // Deterministic fixture instrumentation, loaded by Node --import (never eval).
 import fs from 'node:fs';
-const nativeWatch = fs.watch, nativeWatchFile = fs.watchFile, write = fs.writeSync;
-const reconciliations = [];
+import conditionWait from './wait-for-condition.cjs';
+const nativeWatch = fs.watch, write = fs.writeSync;
 let probes = 0, injected = false, readySent = false;
 function ready() {
   if (readySent) return;
   readySent = true;
-  setImmediate(() => process.send?.({ type: 'armed', reconciliations: reconciliations.length }));
+  setImmediate(() => process.send?.({ type: 'armed', reconciliations: conditionWait.pendingConditions() }));
 }
 fs.watch = function(target, ...args) {
   if (process.env.WHEELHOUSE_BARRIER_OBSERVE === 'arm-race' && !injected && String(target).endsWith('worker-a.jsonl')) {
@@ -20,11 +20,6 @@ fs.watch = function(target, ...args) {
   }
   return nativeWatch.call(this, target, ...args);
 };
-fs.watchFile = function(target, ...args) {
-  const listener = args.find(arg => typeof arg === 'function');
-  if (listener) reconciliations.push(listener);
-  return nativeWatchFile.call(this, target, ...args);
-};
 fs.writeSync = function(...args) {
   const result = write.apply(this, args);
   try { if (JSON.parse(String(args[1])).type === 'barrier_probe' && ++probes === 2) ready(); } catch {}
@@ -37,8 +32,8 @@ process.on('message', message => {
   // registered by the actual barrier, not a substitute implementation of it.
   // A barrier with no reconciliation stays pending and fails the parent's
   // assertion immediately after this IPC response, without a timeout verdict.
-  for (const listener of reconciliations) listener();
-  process.send?.({ type: 'checkpoint', exitCode: process.exitCode ?? null, reconciliations: reconciliations.length });
+  const reconciliations = conditionWait.reconcileConditions();
+  process.send?.({ type: 'checkpoint', exitCode: process.exitCode ?? null, reconciliations });
 });
 // Instrumentation must not keep an otherwise completed barrier alive.
 process.channel?.unref();

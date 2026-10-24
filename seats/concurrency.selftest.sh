@@ -53,6 +53,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -uo pipefail   # deliberately not -e: some cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+export WHEELHOUSE_TEST_CONDITION_HELPER="$HERE/fixtures/wait-for-condition.cjs"
 export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 ADAPTER="${1:-$HERE/adapter.ts}"
 FLOOR="$HERE/floor.ts"
@@ -184,7 +185,6 @@ function handle(cmd) {
       const finish = () => {
         if (done) return;
         done = true; held = false; streaming = false;
-        if (watcher) watcher.close();
         if (wd) fs.writeFileSync(path.join(wd, "touched-by-" + bead), bead + "\n");
         fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message }) + "\n");
         out({ type: "message_end", message: { role: "assistant",
@@ -197,18 +197,22 @@ function handle(cmd) {
         out({ type: "agent_start" });
         if (!barrier) { finish(); return; }
         held = true;
-        const released = () => { if (fs.existsSync(path.join(barrier, "release"))) finish(); };
-        watcher = fs.watch(barrier, released);
-        released();
+        const {waitForCondition} = require(process.env.WHEELHOUSE_TEST_CONDITION_HELPER);
+        watcher = waitForCondition({site:'concurrency.stub.release',paths:[barrier],predicate:()=>{
+          if (!fs.existsSync(path.join(barrier, "release"))) return false;
+          finish(); return true;
+        }});
+        watcher.promise.catch(error => { console.error(error); process.exit(1); });
       };
       if (barrier && process.env.WHEELHOUSE_CONCURRENCY_SERIAL_TURNS && bead === "bead-b") {
         // Real serialization sabotage: B cannot start until A has finished.
         let queued = true;
-        const unqueue = () => {
-          if (queued && fs.existsSync(path.join(barrier, "bead-a.finished"))) { queued = false; watcher.close(); start(); }
-        };
-        watcher = fs.watch(barrier, unqueue);
-        unqueue();
+        const {waitForCondition} = require(process.env.WHEELHOUSE_TEST_CONDITION_HELPER);
+        watcher = waitForCondition({site:'concurrency.stub.unqueue',paths:[barrier],predicate:()=>{
+          if (!queued || !fs.existsSync(path.join(barrier, "bead-a.finished"))) return false;
+          queued = false; start(); return true;
+        }});
+        watcher.promise.catch(error => { console.error(error); process.exit(1); });
       } else start();
       break;
     }
@@ -279,14 +283,20 @@ says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 state_get() {   # $1 = seat, $2 = field  (reads $RUN_PROJ's state.json)
   env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$RUN_PROJ/seats/state.json','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"
 }
-wait_for() {   # $1 = file, $2 = substring, $3 = seconds
-  local i=0 max=$((${3:-10} * 10))
-  while [ $i -lt $max ]; do
-    [ -f "$1" ] && grep -q "$2" "$1" 2>/dev/null && return 0
-    sleep 0.1; i=$((i + 1))
-  done
-  return 1
+wait_for() {   # file, regex; legacy seconds argument is not a verdict
+  local seat producer
+  seat="$(basename "$1" .jsonl)"
+  producer="$(state_get "$seat" pid)"
+  [ -n "$producer" ] || { echo "missing producer for $1" >&2; return 1; }
+  bun "$HERE/fixtures/adapter-selftest-signals.ts" regex "$1" "$2" 0 "$producer"
 }
+
+phase "0. owned lifecycle events reject premature completion"
+if bun "$HERE/fixtures/adapter-selftest-signals.ts" selftest "$FIX/lifecycle"; then
+  pass 'lifecycle waits consume actual delayed text/count and owned FIFO release'
+else
+  fail 'lifecycle ownership regression'
+fi
 
 LOG_A="$PROJ/seats/logs/worker-a.jsonl"
 LOG_B="$PROJ/seats/logs/worker-b.jsonl"
@@ -297,20 +307,22 @@ LOG_B="$PROJ/seats/logs/worker-b.jsonl"
 # asserts log/worktree isolation. $1 = label. Each worker seat works in its
 # own adapter-made worktree, .wheelhouse-worktrees/<seat>, on fleet/<bead>.
 run_two_seat_exercise() {
-  local label="$1"
+  local label="$1" turn_logs_ok=0
+  EXERCISE_SETUP=0; EXERCISE_SHARED_LOG=0
   local wta="$RUN_PROJ/.wheelhouse-worktrees/worker-a" wtb="$RUN_PROJ/.wheelhouse-worktrees/worker-b"
   local la="$RUN_PROJ/seats/logs/worker-a.jsonl" lb="$RUN_PROJ/seats/logs/worker-b.jsonl"
 
   run spawn worker-a
-  [ $RC -eq 0 ] && pass "${label}: worker-a spawns" || fail "${label}: worker-a spawn exited ${RC}: $OUT"
+  if [ $RC -eq 0 ]; then pass "${label}: worker-a spawns"; else fail "${label}: worker-a spawn exited ${RC}: $OUT"; return; fi
   run spawn worker-b
-  [ $RC -eq 0 ] && pass "${label}: worker-b spawns" || fail "${label}: worker-b spawn exited ${RC}: $OUT"
+  if [ $RC -eq 0 ]; then pass "${label}: worker-b spawns"; else fail "${label}: worker-b spawn exited ${RC}: $OUT"; return; fi
 
   local fa fb
   fa="$(state_get worker-a fifo)"; fb="$(state_get worker-b fifo)"
   if [ -n "$fa" ] && [ -n "$fb" ] && [ "$fa" != "$fb" ] && [ -p "$fa" ] && [ -p "$fb" ]; then
     pass "${label}: each seat has its OWN FIFO ($(basename "$fa"), $(basename "$fb"))"
-  else fail "${label}: FIFOs missing or shared (a=$fa b=$fb)"; fi
+    EXERCISE_SETUP=1
+  else fail "${label}: FIFOs missing or shared (a=$fa b=$fb)"; return; fi
 
   # Each accepted turn waits for OUR release file, never a guessed duration.
   # Probe acknowledgements are ordered after prompts in each seat's FIFO.
@@ -335,15 +347,22 @@ run_two_seat_exercise() {
   if grep -q '"agent_start"' "$la" 2>/dev/null && ! grep -q '"agent_end"' "$la" 2>/dev/null \
      && grep -q '"agent_start"' "$lb" 2>/dev/null && ! grep -q '"agent_end"' "$lb" 2>/dev/null; then
     pass "${label}: both turns in flight at the same moment (agent_start seen, no agent_end yet, both logs)"
+    turn_logs_ok=1
   else fail "${label}: could not observe both turns in flight simultaneously"; fi
+  if [ "$EXERCISE_SETUP" = 1 ] && [ "$(state_get worker-a log)" = "$(state_get worker-b log)" ] && [ -s "$(state_get worker-a log)" ]; then
+    EXERCISE_SHARED_LOG=1
+    printf 'MEASUREMENT shared-log wrong world: both healthy seat records point to %s\n' "$(state_get worker-a log)"
+  fi
   run status
   if says "worker-a" && says "worker-b" && [ "$(printf '%s\n' "$OUT" | grep -c RUNNING)" -ge 2 ]; then
     pass "${label}: status shows both seats RUNNING"
   else fail "${label}: status does not show two RUNNING seats: $OUT"; fi
 
   touch "$barrier/release"
-  wait_for "$la" '"agent_end"' 15 && pass "${label}: worker-a's turn finished" || fail "${label}: no agent_end in worker-a's log"
-  wait_for "$lb" '"agent_end"' 15 && pass "${label}: worker-b's turn finished" || fail "${label}: no agent_end in worker-b's log"
+  if [ "$turn_logs_ok" = 1 ]; then
+    wait_for "$la" '"agent_end"' 15 && pass "${label}: worker-a's turn finished" || fail "${label}: no agent_end in worker-a's log"
+    wait_for "$lb" '"agent_end"' 15 && pass "${label}: worker-b's turn finished" || fail "${label}: no agent_end in worker-b's log"
+  fi # A barrier-acknowledged wrong log was already measured, not a time budget.
 
   # Log isolation — and, through it, FIFO isolation: each dispatch was
   # written to one FIFO, so its echo landing only in that seat's log is the
@@ -452,8 +471,9 @@ if cmp -s "$ADAPTER" "$CAN_A/seats/adapter.ts"; then
 else
   CANARY_FAILED_BEFORE=$FAILED
   RUN_PROJ="$CAN_A"
-  run_two_seat_exercise "canary" > /dev/null 2>&1
-  if [ $FAILED -gt $CANARY_FAILED_BEFORE ]; then
+  run_two_seat_exercise "canary" > "$FIX/shared-log-canary.out" 2>&1
+  cat "$FIX/shared-log-canary.out"
+  if [ "$EXERCISE_SETUP" = 1 ] && [ "$EXERCISE_SHARED_LOG" = 1 ] && [ $FAILED -gt $CANARY_FAILED_BEFORE ]; then
     FAILED=$CANARY_FAILED_BEFORE
     pass "canary: an adapter that merges both seats into one log is caught"
   else
@@ -568,8 +588,8 @@ EOF
   rrun dispatch worker-b real-b "Reply with exactly the text REAL-CONC-BRAVO and nothing else. Use no tools."
   [ $RC -eq 0 ] && pass "real: bead real-b dispatched (worker-a's turn already ended at that moment: $A_DONE_AT_B_DISPATCH)" \
                 || fail "real: dispatch b exited ${RC}: $OUT"
-  wait_for "$RLOG_A" '"agent_end"' 180 && pass "real: worker-a agent_end captured" || fail "real: no agent_end for worker-a — tail: $(tail -c 300 "$RLOG_A" 2>/dev/null)"
-  wait_for "$RLOG_B" '"agent_end"' 180 && pass "real: worker-b agent_end captured" || fail "real: no agent_end for worker-b — tail: $(tail -c 300 "$RLOG_B" 2>/dev/null)"
+  RUN_PROJ="$RPROJ" wait_for "$RLOG_A" '"agent_end"' 180 && pass "real: worker-a agent_end captured" || fail "real: no agent_end for worker-a — tail: $(tail -c 300 "$RLOG_A" 2>/dev/null)"
+  RUN_PROJ="$RPROJ" wait_for "$RLOG_B" '"agent_end"' 180 && pass "real: worker-b agent_end captured" || fail "real: no agent_end for worker-b — tail: $(tail -c 300 "$RLOG_B" 2>/dev/null)"
   if grep -q 'REAL-CONC-ALPHA' "$RLOG_A" 2>/dev/null && ! grep -q 'REAL-CONC-ALPHA' "$RLOG_B" 2>/dev/null \
      && grep -q 'REAL-CONC-BRAVO' "$RLOG_B" 2>/dev/null && ! grep -q 'REAL-CONC-BRAVO' "$RLOG_A" 2>/dev/null; then
     pass "real: logs are disjoint — each seat's turn landed only in its own log"

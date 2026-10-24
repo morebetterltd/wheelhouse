@@ -270,7 +270,7 @@ done
 
 # Every review must run the dispatcher gate. Track the actual runner and its
 # companions plus one tiny suite; an empty fixture tip is not an exemption.
-for f in selftest-sweep.sh selftest-sweep-lock.ts python-invocations.ts heavy-test.sh; do
+for f in selftest-sweep.sh selftest-sweep-lock.ts native-command.ts completed-command.ts python-invocations.ts heavy-test.sh; do
   cp -f "$SRC/$f" "$PROJ/seats/$f" || exit 2
 done
 cat > "$PROJ/seats/fixture.selftest.sh" <<'SH'
@@ -282,7 +282,7 @@ printf 'fixture.selftest.sh\n' > "$PROJ/seats/selftest-core.list"
 # A git repo: verify.ts resolves branches and reads evidence at the tip.
 ( cd "$PROJ" &&
   git init -q -b main &&
-  git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+  git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/native-command.ts seats/completed-command.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
   git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
   git branch fleet/bead-rev && git branch fleet/bead-ev ) \
   || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
@@ -406,7 +406,7 @@ arun spawn d-seat
 arun dispatch d-seat bead-d "hello"
 DPID="$(state_get d-seat pid)"
 kill -9 "$DPID" 2>/dev/null
-sleep 0.3
+bun "$HERE/fixtures/adapter-selftest-signals.ts" exit "$DPID" || fail 'native d-seat exit observation unavailable'
 if ! kill -0 "$DPID" 2>/dev/null; then pass "d-seat pid $DPID SIGKILLed"
 else fail "could not kill d-seat pid $DPID"; fi
 render

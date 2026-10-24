@@ -4,6 +4,8 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import conditionWait from './wait-for-condition.cjs';
+const {waitForCondition} = conditionWait;
 
 if (process.argv[2] === 'peer') {
   const [name, mode, barrier] = process.argv.slice(3);
@@ -12,9 +14,10 @@ if (process.argv[2] === 'peer') {
   if (held) out({ type: 'agent_start' });
   out({ type: 'fixture_ready' });
   // This is actual serialization: B cannot enter a turn until A finishes.
-  if (!held) fs.watch(barrier, () => {
-    if (!held && fs.existsSync(path.join(barrier, 'bead-a.finished'))) { held = true; out({ type: 'agent_start' }); }
-  });
+  if (!held) waitForCondition({site:'concurrency-regression.serialized',paths:[barrier],predicate:()=>{
+    if (held || !fs.existsSync(path.join(barrier, 'bead-a.finished'))) return false;
+    held = true; out({ type: 'agent_start' }); return true;
+  }}).promise.catch(error=>{console.error(error);process.exit(1);});
   readline.createInterface({ input: process.stdin }).on('line', line => {
     const command = JSON.parse(line);
     if (command.type === 'fixture_stop') process.exit(0);
@@ -41,6 +44,7 @@ if (process.argv[2] === 'peer') {
   fs.mkdirSync(root);
   const peerScript = path.join(root, 'peer.mjs'), supervisor = path.join(root, 'supervisor.cjs');
   fs.copyFileSync(fileURLToPath(import.meta.url), peerScript); fs.copyFileSync(supervisorSource, supervisor);
+  fs.copyFileSync(new URL('./wait-for-condition.cjs', import.meta.url), path.join(root, 'wait-for-condition.cjs'));
   const deferred = () => { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; };
   function command(fifo, value) {
     const fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
@@ -101,12 +105,8 @@ if (process.argv[2] === 'peer') {
       if (mode === 'child-exit') await peers[0].close;
       if (mode === 'output-eof') {
         const history = path.join(peers[0].accountDir, `stub-launch.${peers[0].child.pid}.json`);
-        await new Promise(resolve => {
-          const observe = () => {
-            if (JSON.parse(fs.readFileSync(history)).stdoutClosed) { fs.unwatchFile(history, observe); resolve(); }
-          };
-          fs.watchFile(history, { interval: 20 }, observe); observe();
-        });
+        await waitForCondition({site:'concurrency-regression.output-eof',paths:[history],interval:20,
+          predicate:()=>JSON.parse(fs.readFileSync(history)).stdoutClosed}).promise;
       }
       // Peer go acknowledgements mean the terminal/probe records are already
       // persisted. Ask the observer to run only reconciliation callbacks the
