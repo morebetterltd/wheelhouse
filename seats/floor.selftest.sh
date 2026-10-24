@@ -45,17 +45,49 @@ exec > >("$SCRUB") 2> >("$SCRUB" >&2)
 FAILED=0
 FIX=""
 SOCK=""
+FLOOR_SOCKET_CLAIMED=0
+FLOOR_SOCKET_PATH=""
+FLOOR_SOCKET_ID=""
 
 pass() { printf '  ok    %s\n' "$*"; }
 fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
+floor_pin_socket() {
+  [ -z "$FLOOR_SOCKET_ID" ] || return 0
+  local actual session_root
+  # A catchable signal may arrive while the first cockpit command returns.
+  # Authenticate that native session's private fixture root before pinning.
+  session_root="$(tmux -L "$SOCK" display-message -p -t '=wh-tfix' '#{session_path}')" || return 2
+  [ "$session_root" = "$PROJ" ] || { echo 'STOP: floor socket session is not this fixture' >&2; return 2; }
+  actual="$(tmux -L "$SOCK" display-message -p '#{socket_path}')" || return 2
+  case "${actual##*/}" in "$SOCK"|"$SOCK.sock") ;; *) echo 'STOP: unexpected floor socket address' >&2; return 2 ;; esac
+  FLOOR_SOCKET_ID="$(bun "$HERE/selftest-floor-socket.ts" pin "$actual")" || return 2
+  FLOOR_SOCKET_PATH="$actual"
+}
 cleanup() {
-  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
-  if [ -n "$SOCK" ]; then tmux -L "$SOCK" kill-server 2>/dev/null; fi
-  [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
-  return 0
+  local cleanup_rc=0 socket_stopped=0
+  if [ "$FLOOR_SOCKET_CLAIMED" = 1 ]; then
+    floor_pin_socket || cleanup_rc=2
+    if [ -n "$FLOOR_SOCKET_ID" ] && bun "$HERE/selftest-floor-socket.ts" check "$FLOOR_SOCKET_PATH" "$FLOOR_SOCKET_ID"; then
+      if tmux -S "$FLOOR_SOCKET_PATH" kill-server > "$FIX/floor-stop.stdout" 2> "$FIX/floor-stop.stderr"; then
+        socket_stopped=1
+      else
+        cat "$FIX/floor-stop.stderr" >&2
+        cleanup_rc=2
+      fi
+    else
+      cleanup_rc=2
+    fi
+  fi
+  # Never hand an unclaimed/replaced address to shared socket-based cleanup.
+  selftest_cleanup_fixture_processes "${FIX:-}" || cleanup_rc=1
+  if [ "$socket_stopped" = 1 ]; then
+    bun "$HERE/selftest-floor-socket.ts" unlink "$FLOOR_SOCKET_PATH" "$FLOOR_SOCKET_ID" || cleanup_rc=2
+  fi
+  [ -z "$FIX" ] || selftest_remove_fixture_dir "$FIX" || cleanup_rc=1
+  return "$cleanup_rc"
 }
 selftest_install_cleanup_traps cleanup
 
@@ -466,10 +498,15 @@ elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
   skip "cockpit.sh not found beside floor.ts — leg not run"
 else
   SOCK="whfloor$$"
+  SOCKET_BASE="$(cd "${TMUX_TMPDIR:-/tmp}" && pwd -P)" || exit 2
+  FLOOR_SOCKET_PATH="$SOCKET_BASE/tmux-$(id -u)/$SOCK"
+  bun "$HERE/selftest-floor-socket.ts" absent "$FLOOR_SOCKET_PATH" || exit 2
+  FLOOR_SOCKET_CLAIMED=1
   crun() {
     RC=0
     out_file="$FIX/cockpit-crun.out"
     env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" WHEELHOUSE_COCKPIT_DAEMONS=0 WHEELHOUSE_COCKPIT_RECOVERY=0 TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null > "$out_file" 2>&1 || RC=$?
+    floor_pin_socket || exit 2
     OUT="$(cat "$out_file" 2>/dev/null || true)"
   }
   crun
@@ -493,8 +530,7 @@ else
   [ "$PANES" = "2" ] && pass "re-run respawns the floor pane after pane death" || fail "pane count after missing-floor repair: $PANES"
   SESSN="$(tmux -L "$SOCK" list-sessions 2>/dev/null | wc -l | tr -d ' ')"
   [ "$SESSN" = "1" ] && pass "still exactly 1 session after pane repair" || fail "session count after pane repair: $SESSN"
-  tmux -L "$SOCK" kill-server 2>/dev/null
-  SOCK=""
+  # EXIT owns server retirement and exact-inode unlink on every exit path.
 fi
 
 printf '\n'
