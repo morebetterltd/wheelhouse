@@ -37,8 +37,11 @@ for (const order of ["ab", "ba"]) {
   fs.mkdirSync(fixtures);
   fs.writeFileSync(path.join(fixtures, "adapter-state.ts"), fixture.replace(release, reversed));
   fs.writeFileSync(path.join(fixtures, "adapter-state-peer.ts"), peer.replace(term, earlyTerm));
-  // Preserve the shared observer verbatim; never bring back local watch loops.
-  fs.copyFileSync(path.join(here, "fixtures/wait-for-condition.cjs"), path.join(fixtures, "wait-for-condition.cjs"));
+  // Copy every sibling helper the two fixtures import (the shared observer among
+  // them) verbatim, so a new shared import cannot go missing in this copy.
+  for (const source of [fixture, peer]) for (const [, name] of source.matchAll(/from ["']\.\/([^"']+)["']/g)) {
+    if (!fs.existsSync(path.join(fixtures, name))) fs.copyFileSync(path.join(here, "fixtures", name), path.join(fixtures, name));
+  }
   const env = { ...process.env, WHEELHOUSE_ADAPTER_STATE_FIRST_COMMIT_DELAY_MS: "0" };
   if (env.WHEELHOUSE_ADAPTER_STATE_EVIDENCE) env.WHEELHOUSE_ADAPTER_STATE_EVIDENCE = path.join(env.WHEELHOUSE_ADAPTER_STATE_EVIDENCE, "order-control-" + order);
   const result = completedCommand("bun", [path.join(fixtures, "adapter-state.ts"), project, order], { env });
