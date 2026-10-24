@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
@@ -111,7 +112,7 @@ cp -f "$PRUNE" "$REVIEWED/seats/prune.ts"
 cat > "$FIX/reviewed-rows.ts" <<'TS'
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from "node:child_process";const { spawnSync } = await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE);
 const base = process.argv[2];
 if (!fs.existsSync(path.join(path.dirname(base), '.wheelhouse-selftest-fixture'))) throw new Error('missing fresh fixture marker');
 let failures = 0;

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync } from "./fixture-command.cjs";
 const [root, seats, here] = process.argv.slice(2);
 const runner = path.join(seats, 'selftest-sweep.sh'), lib = path.join(seats, 'selftest-lib.sh');
 const source = fs.readFileSync(runner, 'utf8'), library = fs.readFileSync(lib, 'utf8');

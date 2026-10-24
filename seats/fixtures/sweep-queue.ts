@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import assert from "node:assert/strict";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const [root, runner, helper] = process.argv.slice(2);
 assert(fs.statSync(path.join(root, ".wheelhouse-selftest-fixture")).isFile());

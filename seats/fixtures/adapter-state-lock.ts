@@ -2,7 +2,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const [source, root] = process.argv.slice(2);
 assert.ok(source && fs.statSync(source).isFile(), "adapter source must exist");

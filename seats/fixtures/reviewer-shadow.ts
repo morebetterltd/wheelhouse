@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync, execFileSync } from "node:child_process";
+import { spawnSync, execFileSync } from "./fixture-command.cjs";
 import { createHash } from "node:crypto";
 const [template, home] = process.argv.slice(2), base = path.join(path.dirname(template), "shadow-cases");
 assert(fs.statSync(path.join(path.dirname(template), ".wheelhouse-selftest-fixture")).isFile());

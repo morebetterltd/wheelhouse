@@ -3,7 +3,7 @@
 "use strict";
 const fs = require("node:fs");
 const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
+const { spawnSync } = require("./fixture-command.cjs");
 const columns = "pid=,ppid=,pgid=,stat=,lstart=,comm=";
 
 function readProcess(pid, run = spawnSync) {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import {spawnSync} from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const [runtimeArg, parentArg, only = "all"] = process.argv.slice(2);
 const runtime = fs.realpathSync(runtimeArg), parent = fs.realpathSync(parentArg);

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 // Each new test case must reject removal of its corresponding fix. Copies are
 // beneath the enclosing selftest allocation; never mutate the source checkout.
 type Mutation = [test: string, file: string, before: string, after: string];

@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import {spawn, spawnSync} from 'node:child_process';
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 // Run the REAL site after a pipe acknowledgement lets us inspect a planted
 // old name. No elapsed time decides success; the deadline only fails a hang.

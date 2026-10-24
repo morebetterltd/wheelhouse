@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import { randomUUID } from "node:crypto";
 
 const [here, parent, driverArg] = process.argv.slice(2);

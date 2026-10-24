@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import {spawnSync} from 'node:child_process';
+import { spawnSync } from "./fixture-command.cjs";
 const [root,bead,code,mode,beforeFile,outputFile]=process.argv.slice(2);
 for(const repo of [root,path.join(root,'template')])assert(fs.statSync(path.join(repo,'.git')).isDirectory());
 function git(repo,args){const r=spawnSync('git',['-C',repo,...args],{encoding:'utf8'});assert(!r.error,String(r.error));assert.equal(r.signal,null);return r;}

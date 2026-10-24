@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import { createRequire } from 'node:module';
 import { own } from './verify-readiness';
 const [here, root, ...args] = process.argv.slice(2);

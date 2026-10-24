@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 # Native daemon/signal regressions, isolated roots, no providers or installed services.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
@@ -49,7 +50,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
-import {spawnSync} from 'node:child_process';
+const { spawnSync } = await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE);
 const [here,rawBase,recordReader]=process.argv.slice(2),base=fs.realpathSync(rawBase);
 const {waitForOwnerAllocationRecord}=await import(recordReader);
 const {captureAllocation,signalObservedChild}=await import(path.join(here,'fixtures/herald-child-identity.ts'));

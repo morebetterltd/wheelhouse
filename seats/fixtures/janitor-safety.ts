@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 const [verify, cases] = process.argv.slice(2);
 assert.ok(verify && fs.statSync(verify).isFile());
 assert.ok(cases && fs.statSync(cases).isDirectory());

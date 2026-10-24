@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
@@ -130,7 +131,7 @@ if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) require(process.env.WHEELHOUSE_TES
 // export reaching this one-shot process.
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, WHEELHOUSE_REAL_BD: process.env.WHEELHOUSE_REAL_BD ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
 if (process.env.STUB_GIT_INIT_REPO) {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const repo = process.env.STUB_GIT_INIT_REPO;
   const cleanEnv = { ...process.env };
   delete cleanEnv.GIT_DIR; delete cleanEnv.GIT_WORK_TREE; delete cleanEnv.GIT_INDEX_FILE;
@@ -146,7 +147,7 @@ if (process.env.STUB_GIT_INIT_REPO) {
   fs.writeFileSync(path.join(agentDir, "git-init-check.json"), JSON.stringify({ before, after, initStatus: init.status, initStderr: init.stderr ?? "", gitDir: process.env.GIT_DIR ?? null, gitWorkTree: process.env.GIT_WORK_TREE ?? null }, null, 2));
 }
 if (process.env.STUB_CLOBBER_CORE_WORKTREE_REPO) {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const cleanEnv = { ...process.env };
   delete cleanEnv.GIT_DIR; delete cleanEnv.GIT_WORK_TREE; delete cleanEnv.GIT_INDEX_FILE;
   cp.spawnSync("git", ["-C", process.env.STUB_CLOBBER_CORE_WORKTREE_REPO, "config", "--local", "core.worktree", process.cwd()], { env: cleanEnv });
@@ -169,7 +170,7 @@ if (watchdogDir) {
   }
 }
 if (process.env.STUB_RUN_BENCH === "1") {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const outDir = path.join(process.cwd(), "bench-out");
   fs.mkdirSync(outDir, { recursive: true });
   const bench = path.join(process.env.WHEELHOUSE_ROOT || "", "wheelhouse", "crew", "bench.sh");
@@ -200,7 +201,7 @@ if (process.env.STUB_SOURCE_CHECK === "1") {
   }
 }
 if (process.env.STUB_CANONICAL_WRITE_REPO) {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const repo = process.env.STUB_CANONICAL_WRITE_REPO;
   let status = "not-run";
   try {
@@ -212,7 +213,7 @@ if (process.env.STUB_CANONICAL_WRITE_REPO) {
   fs.writeFileSync(path.join(agentDir, "canonical-write-attempt.txt"), `repo=${repo}\nstatus=${status}\ncwd=${process.cwd()}\nGIT_WORK_TREE=${process.env.GIT_WORK_TREE ?? ""}\n`);
 }
 if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const started = Date.now();
   const grep = cp.spawnSync("grep", ["-R", "--", "wheelhouse-selftest-never-match", "seats"], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const elapsedMs = Date.now() - started;
@@ -227,7 +228,7 @@ if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
   }, null, 2));
 }
 if (process.env.STUB_BD_READONLY_CHECK === "1") {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const readonlyInstall = path.join(path.dirname(process.cwd()), "readonly-install");
   fs.mkdirSync(path.join(readonlyInstall, ".beads"), { recursive: true });
   const cases = [
@@ -249,10 +250,10 @@ if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
   let logText = "", ok = false;
   try { logText = fs.readFileSync(log, "utf8"); ok = rc === "0" && logText.includes("fixture sweep PASS") && logText.includes("scratch bd create ok"); } catch (e) { logText = `read failed: ${e.message}`; }
   fs.writeFileSync(path.join(agentDir, "sweep-prompt-check.json"), JSON.stringify({ rc, log, ok, logText }, null, 2));
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const readonly = cp.spawnSync("bd", ["create", "reviewer must not write"], { encoding: "utf8" });
   if (!log) {
-    const attempted = cp.spawnSync("bash", ["seats/selftest-sweep.sh"], { timeout: 150, encoding: "utf8" });
+    const attempted = require("node:child_process").spawnSync("bash", ["seats/selftest-sweep.sh"], { timeout: 150, encoding: "utf8" });
     process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : "BOUNCE"}\nPUSH: NOT CONSIDERED\n`}})+"\n");
     process.exit(0);
   }
@@ -263,7 +264,7 @@ if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
   process.exit(0);
 }
 if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const scratchGraph = path.join(process.cwd(), "bd-scratch");
   const siblingInstall = path.join(path.dirname(process.cwd()), "sibling-install");
   const arbitraryCwd = path.join(path.dirname(process.cwd()), "arbitrary-cwd");
@@ -296,7 +297,7 @@ if (process.env.STUB_MUTATE_BATCH_LOG) {
   fs.writeFileSync(file, after);
 }
 if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const repo = process.env.STUB_MOVE_BRANCH_REPO;
   const branch = process.env.STUB_MOVE_BRANCH;
   const gitEnv = { ...process.env };
@@ -349,7 +350,7 @@ if (process.env.STUB_SILENT === "1") {
   }
 } else if (process.env.STUB_HANG_CHILD_AFTER_RESULT === "1") {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const child = cp.spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] });
   fs.writeFileSync(path.join(agentDir, "hanging-child-pid.txt"), String(child.pid));
   if (streamRequested) {
@@ -847,7 +848,7 @@ SWEEP_BIN="$FIX/sweep-bin"; mkdir -p "$SWEEP_BIN"
 export STUB_SWEEP_BASE_BD="$BIN/bd" STUB_SWEEP_PWD_MARKER="$FIX/sweep-pwd.json"
 cat > "$SWEEP_BIN/bd" <<'JS'
 #!/usr/bin/env bun
-const fs=require('fs'),cp=require('child_process');
+const fs=require('fs'),cp={...require('node:child_process'),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
 if(process.argv[2]==='where') {
   console.log(JSON.stringify({path:fs.realpathSync(require('path').join(process.cwd(),'.beads'))})); process.exit(0);
 }
@@ -858,7 +859,7 @@ if(process.argv[2]==='init') {
   if(pwd!==cwd || !primary) { console.error('scratch bd init requires an isolated primary repo and consistent PWD'); process.exit(73); }
   fs.writeFileSync(process.env.STUB_SWEEP_PWD_MARKER,JSON.stringify({cwd,pwd,primary}));
 }
-const r=cp.spawnSync(process.env.STUB_SWEEP_BASE_BD,process.argv.slice(2),{stdio:'inherit',env:process.env});
+const r=require('node:child_process').spawnSync(process.env.STUB_SWEEP_BASE_BD,process.argv.slice(2),{stdio:'inherit',env:process.env});
 if(r.status===0 && process.argv[2]==='init' && process.env.STUB_SWEEP_MUTATE_SETUP==='1') {
   cp.execFileSync('git',['-c','user.name=selftest','-c','user.email=selftest@local','commit','--allow-empty','-qm','bad sweep setup'],{cwd:require('path').dirname(process.cwd())});
 }

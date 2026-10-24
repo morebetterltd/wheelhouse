@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync } from "./fixture-command.cjs";
 import assert from 'node:assert/strict';
 
 // Reference outputs were captured from the original runtime before porting.

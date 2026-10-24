@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const root = process.argv[2], seats = path.join(root, "seats"), bin = path.join(root, "bin");
 for (const p of [bin, path.join(seats, "run"), path.join(seats, "logs"), path.join(root, "wheelhouse")]) fs.mkdirSync(p, { recursive: true });

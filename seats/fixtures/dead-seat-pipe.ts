@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as assert from 'node:assert/strict';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import conditionWait from './wait-for-condition.cjs';
 const { waitForCondition } = conditionWait;
 

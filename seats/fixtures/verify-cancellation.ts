@@ -5,7 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 const root = path.resolve(process.argv[2]), runtime = path.join(root, "runtime/seats");
 function retainChildDiagnostics(saved: string | undefined, name: string, stdout: string, stderr: string, child: any): string | undefined {
   const base = path.resolve(process.env.WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT || process.env.WHEELHOUSE_VERIFY_CANCEL_EVIDENCE || path.join(path.dirname(import.meta.dir), "verdicts/verify-cancellation-failures"));

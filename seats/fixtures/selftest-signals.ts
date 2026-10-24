@@ -1,14 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync as nativeSpawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import { createInterface } from 'node:readline';
 
 // Proxy the real lock helper, recording actual releases, not idempotent results.
 if (['release', 'acquire', 'inherited'].includes(process.argv[2])) {
   const args = process.argv.slice(2);
   if (args[0] === 'release') fs.appendFileSync(process.env.SIGNAL_RELEASES!, 'release\n');
-  const r = spawnSync('bun', [process.env.SIGNAL_REAL_LOCK_HELPER!, ...args], { stdio: 'inherit' });
+  const r = nativeSpawnSync('bun', [process.env.SIGNAL_REAL_LOCK_HELPER!, ...args], { stdio: 'inherit' });
   if (r.error) throw r.error;
   process.exit(r.status ?? 2);
 }
