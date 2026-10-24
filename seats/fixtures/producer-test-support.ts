@@ -6,7 +6,7 @@ export function copyRuntime(source: string, root: string) {
   for (const f of fs.readdirSync(source, { withFileTypes: true })) {
     if (f.isFile() && /\.(?:ts|[cm]?js|sh)$/.test(f.name) && !f.name.endsWith(".selftest.sh")) fs.copyFileSync(path.join(source, f.name), path.join(dest, f.name));
   }
-  if (fs.existsSync(path.join(source, "drivers"))) fs.cpSync(path.join(source, "drivers"), path.join(dest, "drivers"), { recursive: true });
+  for (const child of ["drivers", "transports"]) if (fs.existsSync(path.join(source, child))) fs.cpSync(path.join(source, child), path.join(dest, child), { recursive: true });
   return dest;
 }
 export async function run(file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env) {
