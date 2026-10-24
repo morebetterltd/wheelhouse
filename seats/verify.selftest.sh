@@ -2404,6 +2404,11 @@ if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ ! -d "$L
 else fail "the formerly-live worktree was not reclaimed after its owner pid died: $(git -C "$PROJ" worktree list)"; fi
 
 phase "10b. killed one-shot — reaper leaves no scratch worktree or SHA branch"
+OWN_OBSERVER="$HERE/fixtures/verify-own-worktree.ts"
+OWN_CONTROL="$FIX/own-worktree-control"; mkdir -p "$OWN_CONTROL"
+if bun "$HERE/fixtures/verify-own-worktree-controls.ts" "$OWN_CONTROL"; then
+  pass "own-worktree observer ignores a native foreign Git128 and rejects its own failures/removals"
+else fail "own-worktree observer regression controls failed"; exit 1; fi
 KILL_PROJ="$FIX/proj-kill"
 build_proj "$KILL_PROJ" kill "$VERIFY"
 RUN_PROJ="$KILL_PROJ"; VDIR="$KILL_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-kill/reviewer/argv.json"
@@ -2414,24 +2419,28 @@ KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
 KILLED_GATE_LOCK="$FIX/killed-gate.lock"
 (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$KILLED_GATE_LOCK" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
 KILLED_DISPATCHER_PID=$!
-KILLED_DIR=""
+KILLED_DIR=""; KILLED_ADMIN=""
 PI_PID_FILE="$HOME_FIX/.pi-seats-kill/reviewer/pi-pid.txt"
+KILLED_CWD_FILE="$HOME_FIX/.pi-seats-kill/reviewer/cwd.txt"
 printf 'FIXTURE_WAIT verify: registered killed-gate worktree and model entry, pid=%s\n' "$KILLED_DISPATCHER_PID" >&2
 while kill -0 "$KILLED_DISPATCHER_PID" 2>/dev/null; do
-  KILLED_ENUM_RC=0; KILLED_ENUM="$(git -C "$KILL_PROJ" worktree list --porcelain 2> "$FIX/killed-worktrees.stderr")" || KILLED_ENUM_RC=$?
-  if [ "$KILLED_ENUM_RC" != 0 ]; then fail "killed-gate worktree observer failed rc=$KILLED_ENUM_RC: $(cat "$FIX/killed-worktrees.stderr")"; break; fi
-  KILLED_DIR="$(printf '%s\n' "$KILLED_ENUM" | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p')"
-  # Child launch proves makeScratchCwd finished its ownership record, not just
-  # Git registration. Killing before that record must fail closed, not adopt it.
-  [ -n "$KILLED_DIR" ] && [ -s "$PI_PID_FILE" ] && break
+  # The model's own cwd receipt proves launch followed makeScratchCwd's owner
+  # publication. Never enumerate another review's mutable Git admin files.
+  if [ -s "$PI_PID_FILE" ] && [ -s "$KILLED_CWD_FILE" ]; then
+    IFS= read -r KILLED_DIR < "$KILLED_CWD_FILE"
+    KILLED_REAL_PID="$KILLED_DISPATCHER_PID"
+    [ ! -f "$KILLED_GATE_LOCK/pid" ] || IFS= read -r KILLED_REAL_PID < "$KILLED_GATE_LOCK/pid"
+    if ! KILLED_ADMIN="$(bun "$OWN_OBSERVER" registered "$KILL_PROJ" "$KILLED_DIR" "$KILLED_REAL_PID" 2> "$FIX/killed-worktrees.stderr")"; then
+      fail "killed-gate own-worktree observer failed: $(cat "$FIX/killed-worktrees.stderr")"; exit 1
+    fi
+    break
+  fi
   sleep 0.05
 done
-if [ -n "$KILLED_DIR" ] && [ -s "$PI_PID_FILE" ]; then pass "killed one-shot fixture reached a registered scratch worktree and model entry"
+if [ -n "$KILLED_DIR" ] && [ -n "$KILLED_ADMIN" ] && [ -s "$PI_PID_FILE" ]; then pass "killed one-shot fixture reached its own registered scratch worktree and model entry"
 else fail "killed one-shot fixture exited before complete scratch/model setup: $(cat "$OUT_FILE" 2>/dev/null)"; exit 1; fi
 # Kill the real dispatcher owning this fresh private endpoint, not merely its
 # proxy (whose death intentionally leaves a live admitted run protected).
-KILLED_REAL_PID="$KILLED_DISPATCHER_PID"
-[ ! -f "$KILLED_GATE_LOCK/pid" ] || IFS= read -r KILLED_REAL_PID < "$KILLED_GATE_LOCK/pid"
 case "$KILLED_DIR" in
   */wheelhouse-verify-"$KILLED_REAL_PID"-*)
     kill -9 "$KILLED_REAL_PID" 2>/dev/null || true ;;
@@ -2443,12 +2452,10 @@ wait "$KILLED_DISPATCHER_PID" 2>/dev/null || true
 
 if [ -s "$PI_PID_FILE" ]; then kill "$(cat "$PI_PID_FILE")" 2>/dev/null || true; fi
 run   # sweep the killed run's scratch worktree and stale SHA branch
-if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -F >/dev/null "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
-  pass "killed one-shot scratch worktree was reclaimed by the reaper pass"
-else fail "killed one-shot scratch survived: dir=$KILLED_DIR list=$(git -C "$KILL_PROJ" worktree list)"; fi
-if ! git -C "$KILL_PROJ" show-ref --verify --quiet "refs/heads/$KILL_SHA_BRANCH"; then
-  pass "killed one-shot reaper pass removed the stale SHA-named branch"
-else fail "killed one-shot stale SHA branch survived"; fi
+if bun "$OWN_OBSERVER" reaped "$KILL_PROJ" "$KILLED_DIR" "$KILLED_ADMIN" "$KILL_SHA_BRANCH" 2> "$FIX/killed-reaped.stderr"; then
+  pass "killed one-shot own scratch directory and registration were reclaimed by the reaper pass"
+  pass "killed one-shot reaper pass removed the stale SHA-named branch (native Git status1)"
+else fail "killed one-shot own-resource cleanup failed: $(cat "$FIX/killed-reaped.stderr")"; fi
 if [ "$(core_worktree_snapshot "$KILL_PROJ")" = "$KILL_CORE_WORKTREE_BEFORE" ]; then
   pass "killed verify run leaves product repo core.worktree byte-identical"
 else fail "killed verify changed core.worktree: before=$KILL_CORE_WORKTREE_BEFORE after=$(core_worktree_snapshot "$KILL_PROJ")"; fi
