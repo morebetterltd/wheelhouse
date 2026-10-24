@@ -130,8 +130,9 @@ function handle(cmd) {
       if (/SLOW/.test(cmd.message)) {
         const release = path.join(agentDir, sessionId + ".release");
         fs.rmSync(release, {force:true});
-        const check = () => { if (fs.existsSync(release)) { watcher.close(); finish(); } };
-        const watcher = fs.watch(agentDir, check);
+        const check = () => { if (fs.existsSync(release)) { clearInterval(poll); finish(); } };
+        // Re-check the release file itself; a file event alone can be lost on a loaded host.
+        const poll = setInterval(check, 10);
         fs.writeFileSync(path.join(agentDir, sessionId + ".held"), String(process.pid));
         check();
       } else finish();
