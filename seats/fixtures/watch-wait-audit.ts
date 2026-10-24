@@ -10,7 +10,7 @@ const helper = 'fixtures/wait-for-condition.cjs';
 const name = 'wa' + 'tch';
 const accessPattern = new RegExp('\\.\\s*' + name + '(?:File)?\\b|\\b[A-Za-z_$][\\w$]*\\s*\\[\\s*[\'\"]' + name + '(?:File)?[\'\"]\\s*\\]');
 const barePattern = new RegExp('\\b' + name + '(?:File)?\\s*\\(');
-const importPattern = new RegExp('\\b(?:import|const|let|var)\\s*\\{[^}]*\\b' + name + '(?:File)?\\b[^}]*\\}\\s*(?:from\\s*[\'\"](?:node:)?fs[\'\"]|=\\s*require\\s*\\(\\s*[\'\"](?:node:)?fs[\'\"])', 's');
+const importPattern = new RegExp('\\b(?:import|const|let|var)\\s*\\{[^}]*\\b' + name + '(?:File)?\\b[^}]*\\}', 's');
 const instrumentation = new Map([
   ['fixtures/concurrency-barrier-observer.mjs', [
     new RegExp('^const nativeWatch = fs\\.' + name + ', write = fs\\.writeSync;$'),
@@ -26,7 +26,9 @@ function codeFiles(root: string, relative = ''): string[] {
     const file = path.join(relative, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`watch audit: unverifiable source symlink ${file}`);
     if (entry.isDirectory()) return codeFiles(root, file);
-    return /\.(?:[cm]?js|ts|sh)$/.test(file) ? [file] : [];
+    if(!/\.(?:[cm]?js|ts|sh)$/.test(file))return[];
+    assert(entry.isFile(),`watch audit: non-regular source subject ${file}`);
+    return[file];
   });
 }
 export function auditDirectory(root: string): {files: number; helper: string} {
@@ -40,14 +42,12 @@ export function auditDirectory(root: string): {files: number; helper: string} {
     if (file === helper) continue;
     const text = fs.readFileSync(path.join(root, file), 'utf8');
     const lines = text.split(/\r?\n/);
-    for (const [index, line] of lines.entries()) {
+    // Match the stored source, including accesses split across lines. Use the
+    // originating line only for diagnostics and narrowly approved hook lines.
+    for (const pattern of [accessPattern,barePattern]) for (const match of text.matchAll(new RegExp(pattern.source,'g'))) {
+      const index=text.slice(0,match.index).split('\n').length-1,line=lines[index];
       if (/^\s*(?:#|\/\/)/.test(line)) continue;
-      // Reject references as well as calls: renamed fs namespaces, aliases and
-      // computed literal access must not become an unnoticed watch-only wait.
-      const access = accessPattern.test(line);
-      const bare = barePattern.test(line);
-      if (!access && !bare) continue;
-      const allowed = instrumentation.get(file)?.some(pattern=>pattern.test(line));
+      const allowed=instrumentation.get(file)?.some(pattern=>pattern.test(line));
       assert(allowed, `${file}:${index + 1}: bare filesystem watch outside ${helper}; use waitForCondition with an actual predicate`);
     }
     assert(!importPattern.test(text),
@@ -61,11 +61,18 @@ if (import.meta.main) {
   console.log(`PASS watch wait audit (${result.files} source files; one shared watcher owner)`);
   fs.cpSync(root, scratch, {recursive: true});
   const file = path.join(scratch, 'fixtures/planted-watch-only.mjs');
-  const access = ['fs', 'watch'].join('.');
-  fs.writeFileSync(file, `import fs from 'node:fs';\nawait new Promise(resolve => ${access}(process.argv[2], resolve));\n`);
-  assert(fs.statSync(file).isFile()); // setup OUTSIDE the rejection assertion
-  assert.throws(()=>auditDirectory(scratch), error=>error instanceof Error &&
-    error.message.includes('fixtures/planted-watch-only.mjs:2: bare filesystem watch'),
-    'planted wait-only watcher was silently accepted');
-  console.log('PASS planted bare watch wait rejected at its actual source file/line');
+  const access = ['fs', name].join('.');
+  const bodies=[
+    `import fs from 'node:fs';\nawait new Promise(resolve => ${access}(process.argv[2], resolve));\n`,
+    `import {${name} as subscribe} from 'node:fs';\nawait new Promise(resolve => subscribe(process.argv[2],resolve));\n`,
+    `import fs from 'node:fs';\nconst {${name}:subscribe}=fs;\nawait new Promise(resolve=>subscribe(process.argv[2],resolve));\n`,
+    `import fs from 'node:fs';\nconst subscribe=fs.\n${name};\nawait new Promise(resolve=>subscribe(process.argv[2],resolve));\n`,
+  ];
+  for(const [index,body] of bodies.entries()) {
+    fs.writeFileSync(file,body);assert(fs.statSync(file).isFile()); // setup OUTSIDE the rejection assertion
+    assert.throws(()=>auditDirectory(scratch), error=>error instanceof Error &&
+      error.message.includes('fixtures/planted-watch-only.mjs') && /bare filesystem watch|aliased filesystem-watch import/.test(error.message),
+      'planted wait-only watcher was silently accepted');
+    console.log(`PASS planted watch wait ${index+1} rejected at its actual source file/line`);
+  }
 }
