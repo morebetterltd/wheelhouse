@@ -15,6 +15,7 @@ const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { 
 git("init", "-q", "-b", "main"); git("config", "user.name", "fixture"); git("config", "user.email", "fixture@example.invalid");
 fs.mkdirSync(path.join(repo, "seats"));
 fs.writeFileSync(path.join(repo, "seats/slowed.selftest.sh"), "#!/usr/bin/env bash\nsleep 1\n");
+fs.writeFileSync(path.join(repo, "seats/selftest-core.list"), "slowed.selftest.sh\n");
 git("add", "."); git("commit", "-qm", "base");
 git("checkout", "-qb", "candidate"); fs.writeFileSync(path.join(repo, "candidate"), "candidate\n"); git("add", "."); git("commit", "-qm", "candidate"); const reviewed = git("rev-parse", "HEAD");
 git("checkout", "-q", "main"); fs.writeFileSync(path.join(repo, "main-change"), "main\n"); git("add", "."); git("commit", "-qm", "main"); const main = git("rev-parse", "HEAD");

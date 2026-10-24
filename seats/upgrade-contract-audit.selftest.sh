@@ -39,7 +39,10 @@ grep -q 'contract.ts audit' "$FIX/step7.sh" || fail 'missing audit'
 grep -q 'bd list' "$FIX/step7.sh" || fail 'missing later sweep'
 eval "$(selftest_scratch_graph "$FIX/install")"
 cd "$FIX/install"
-mkdir -p seats
+# Step 7 follows the recorded upgrade in step 6. Supply its install metadata;
+# omit isa_signals so the real policy migration still has to append its default.
+mkdir -p seats wheelhouse
+printf 'path=%s\ncommit=%s\n' "$ROOT" "$BASELINE" > wheelhouse/.template-source
 # Step 3 ships all runtime modules, not contract.ts alone: intake also needs
 # credential-shapes, lock and seat-activity. Keep this install-shaped fixture
 # aligned with that copy without importing source-worktree runtime state.

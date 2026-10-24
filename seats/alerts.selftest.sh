@@ -160,6 +160,35 @@ clear_runtime; WHEELHOUSE_ALERT_INTERVAL_MS= run_alert bun seats/alerts.ts check
 clear_runtime; WHEELHOUSE_ALERT_INTERVAL_MS=0 run_alert bun seats/alerts.ts check --json; zero_interval="$(node -e 'console.log(require(process.argv[1]).intervalMs)' "$ROOT/seats/run/fleet-snapshot.json")"
 [ $RC -eq 0 ] && [ "$zero_interval" = 0 ] && pass 'explicit zero WHEELHOUSE_ALERT_INTERVAL_MS is honoured in snapshot' || fail "zero interval rc=$RC interval=$zero_interval out=$OUT"
 
+phase 'quarantine count transitions'
+clear_runtime
+for name in quarantine-a quarantine-b quarantine-c; do printf 'exit 0\n' > "$ROOT/seats/$name.selftest.sh"; done
+printf 'quarantine-a.selftest.sh owner-a 2099-12-31\nquarantine-b.selftest.sh owner-b 2099-12-31\n' > "$ROOT/seats/selftest-quarantine.list"
+run_alert bun seats/alerts.ts check --json
+if [ "$RC" = 0 ] && node - "$ROOT" <<'JS'
+const fs=require('fs'),a=require('assert/strict'),r=process.argv[2],s=JSON.parse(fs.readFileSync(r+'/seats/run/fleet-snapshot.json','utf8')),rows=fs.readFileSync(r+'/seats/inbox.jsonl','utf8').trim().split('\n').map(JSON.parse);a.deepEqual(s.quarantined,{count:2,names:['quarantine-a.selftest.sh','quarantine-b.selftest.sh']});a.equal(rows.length,1);a.equal(rows[0].source.name,'quarantine');a(rows[0].detail.includes('count=2'));
+JS
+then pass 'real snapshot names/count and one herald row at first nonzero quarantine'; else fail "quarantine snapshot transition: $OUT"; fi
+run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 1 ] && pass 'unchanged quarantine poll is quiet' || fail 'duplicate quarantine row'
+printf 'quarantine-a.selftest.sh owner-a 2099-12-31\n' > "$ROOT/seats/selftest-quarantine.list"
+run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 2 ] && pass 'quarantine shrink emits one row' || fail 'quarantine shrink row missing'
+printf '# cleared\n' > "$ROOT/seats/selftest-quarantine.list"
+run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 3 ] && pass 'quarantine clear emits one row' || fail 'quarantine clear row missing'
+cp -f "$ROOT/seats/alerts.ts" "$FIX/quarantine-alerts-source.ts"
+bun - "$ROOT/seats/alerts.ts" <<'JS'
+import fs from 'node:fs';const f=process.argv[2],s=fs.readFileSync(f,'utf8'),a='if(quarantined.count!==(prior?.quarantined?.count??0))';if(s.split(a).length!==2)throw Error('quarantine count guard changed');fs.writeFileSync(f,s.replace(a,'if(false)'));
+JS
+[ "$?" = 0 ] || exit 2
+clear_runtime
+printf 'quarantine-a.selftest.sh owner-a 2099-12-31\n' > "$ROOT/seats/selftest-quarantine.list"
+run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 0 ] && pass 'canary: removing count notification loses the required inbox row' || fail 'quarantine count canary insensitive'
+cp -f "$FIX/quarantine-alerts-source.ts" "$ROOT/seats/alerts.ts"
+rm -f "$ROOT/seats/selftest-quarantine.list" "$ROOT"/seats/quarantine-*.selftest.sh
+clear_runtime
 phase 'transition table, thresholds, clears'
 clear_runtime; BD_READY=1 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && active idle-fleet-ready-work && active cold-seats-ready-work && [ "$(inbox_count)" = 2 ] && pass 'ready work fires idle-fleet and cold-seats once' || fail "ready/cold failed rc=$RC out=$OUT inbox=$(inbox_count)"
@@ -184,10 +213,11 @@ for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done
 printf '{"status":"ok"}\n' > "$ROOT/seats/run/herald.target.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared commander-pane-invalid' "$ROOT/seats/logs/alerts.log" && [ "$(need_closed_count)" = 1 ] && pass 'commander-pane-invalid clear closes its need' || fail "pane close failed: $(cat "$ROOT/seats/needs.jsonl" 2>/dev/null)"
 
-clear_runtime; printf '{"seats":{"worker-a":{"pid":%s,"log":"%s","lastCapacityEvent":{"at":"2026-01-01T00:00:00Z","detail":"synthetic"}}}}\n' $$ "$ROOT/seats/logs/worker-a.jsonl" > "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
+ME_STARTED="$(bun -e 'import {spawnSync} from "node:child_process";const r=spawnSync("ps",["-p",process.argv[1],"-o","lstart="],{encoding:"utf8"});console.error("CAPTURE alerts fixture ps "+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));if(r.status!==0||r.error||r.signal)process.exit(2);console.log(new Date(Date.parse(r.stdout.trim())).toISOString());' "$$")" || exit 2
+clear_runtime; printf '{"seats":{"worker-a":{"pid":%s,"startedAt":"%s","log":"%s","lastCapacityEvent":{"at":"2026-01-01T00:00:00Z","detail":"synthetic"}}}}\n' $$ "$ME_STARTED" "$ROOT/seats/logs/worker-a.jsonl" > "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && active capacity-events && pass 'capacity-events fires when state carries lastCapacityEvent' || fail "capacity failed rc=$RC out=$OUT"
 for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done; [ "$(inbox_count)" = 1 ] && pass 'capacity-events stays quiet over 3 active runs' || fail "capacity not quiet"
-node -e 'const fs=require("fs"), f=process.argv[1]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.seats["worker-b"]={pid:process.pid,log:"x",lastCapacityEvent:{at:"2026-01-01T00:00:00Z",detail:"synthetic"}}; fs.writeFileSync(f,JSON.stringify(j));' "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
+node -e 'const fs=require("fs"), f=process.argv[1]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.seats["worker-b"]={pid:null,log:"x",lastCapacityEvent:{at:"2026-01-01T00:00:00Z",detail:"synthetic"}}; fs.writeFileSync(f,JSON.stringify(j));' "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
 [ "$(inbox_count)" = 2 ] && pass 'capacity-events fires again when the set changes' || fail "capacity set change did not fire"
 printf '{"seats":{}}\n' > "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared capacity-events' "$ROOT/seats/logs/alerts.log" && pass 'capacity-events clears' || fail "capacity clear failed"

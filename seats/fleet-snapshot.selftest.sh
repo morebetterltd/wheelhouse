@@ -5,11 +5,19 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-fleet-snapshot.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 PIDS=""
-cleanup(){ [ -n "$PIDS" ] && kill $PIDS >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
+# These FIFO holders have no RPC reader; adapter stop-all would wait for a
+# get_state reply forever. Reap our actual exec'd sleeps directly instead.
+cleanup(){
+  [ -z "$PIDS" ] || kill $PIDS >/dev/null 2>&1 || true
+  for pid in $PIDS; do wait "$pid" 2>/dev/null || true; done
+  selftest_remove_fixture_dir "$FIX"
+}
 selftest_install_cleanup_traps cleanup
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
-export WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS="${WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS:-120000}"
+# The suite, not each bd command, owns containment. An inherited legacy bd
+# timeout must not turn a delayed native response into a false graph failure.
+bun "$HERE/fixtures/completed-command.ts" "$HERE/completed-command.ts" "$FIX" || exit 1
 ROOT="$FIX/proj"; BIN="$FIX/bin"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/contracts" "$BIN" "$FIX/home/.pi-seats-snap/worker" "$FIX/home/.pi-seats-snap/reviewer"
 printf 'namespace=snap\n' > "$ROOT/wheelhouse/.template-source"
 printf '# Synthetic ISA\n' > "$ROOT/wheelhouse/ISA.md"
@@ -23,6 +31,8 @@ JSON
 cat > "$BIN/bd" <<'SH'
 #!/usr/bin/env bash
 [ "${BD_FAIL:-}" = 1 ] && { echo fixture bd failure >&2; exit 7; }
+[ "${BD_EMPTY:-}" != 1 ] || exit 0
+[ "${BD_DELAY:-}" != 1 ] || sleep 1
 case "$1 $2" in
   "ready --json") cat "$BD_FIX/ready.json" ;;
   "list --json") cat "$BD_FIX/list.json" ;;
@@ -47,7 +57,7 @@ EOF
 write_graph
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.readyCount!==3||s.chainedCount!==1||s.ready.find(r=>r.id==="ready-b")?.chained!==true||s.ready.find(r=>r.id==="ready-c")?.chained!==false||s.overlapCount!==2||s.reviewBacklog.length!==2||s.workers.live.length!==0||s.reviewers.live.length!==1||s.reviewers.busy!==0) process.exit(1)' && pass 'table row 1: empty graph counts ready, open-dependent chaining, overlap, backlog, reviewers' || fail "empty snapshot wrong rc=$RC out=$OUT"
 (cd "$ROOT" && HOME="$FIX/home" PATH="$BIN:$PATH" BD_FIX="$ROOT" bun -e 'import { fleetSnapshot, readyWorkNobodyOnIt } from "./seats/fleet-snapshot.ts"; if(!readyWorkNobodyOnIt(fleetSnapshot(process.cwd()))) process.exit(1);') && pass 'readyWorkNobodyOnIt true when ready exists and no worker is busy' || fail 'readyWorkNobodyOnIt true row failed'
-FIFO="$ROOT/seats/run/worker-1.stdin"; mkfifo "$FIFO"; (exec 3<>"$FIFO"; sleep 1000) & PIDS="$PIDS $!"; WPID=$!
+FIFO="$ROOT/seats/run/worker-1.stdin"; mkfifo "$FIFO"; (cd "$FIX" && exec 3<>"$FIFO" && exec sleep 1000) & PIDS="$PIDS $!"; WPID=$!
 printf '%s\n' '{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}' > "$ROOT/seats/logs/worker-1.jsonl"
 cat > "$ROOT/seats/state.json" <<JSON
 {"seats":{"worker-1":{"pid":$WPID,"startedAt":"2026-01-01T00:00:00Z","fifo":"$FIFO","log":"$ROOT/seats/logs/worker-1.jsonl","lastBead":"busy-bead"}}}
@@ -68,6 +78,9 @@ run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileS
 cp "$ROOT/ready.json" "$ROOT/ready.saved.json"; printf '[]\n' > "$ROOT/ready.json"
 run_snap; [ $RC -eq 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.readyCount!==0||s.chainedCount!==0||s.overlapCount!==0) process.exit(1)' && pass 'table row 6: empty ready graph counts zero without hiding backlog' || fail "empty-ready row wrong rc=$RC out=$OUT"
 cp "$ROOT/ready.saved.json" "$ROOT/ready.json"
+WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS=1 BD_DELAY=1 run_snap
+[ "$RC" = 0 ] && assert_js 'const s=JSON.parse(require("fs").readFileSync(0,"utf8")); if(s.readyCount!==3)process.exit(1)' && pass 'native bd completion wins over legacy1ms clock, without a retry' || fail "delayed bd completion failed rc=$RC out=$OUT"
+BD_EMPTY=1 run_snap; [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'did not return JSON' && pass 'empty native stdout is not silently an empty graph' || fail "empty stdout became a snapshot rc=$RC out=$OUT"
 BD_FAIL=1 run_snap; [ $RC -eq 2 ] && printf '%s\n' "$OUT" | grep >/dev/null 'STOP: bd ready --json failed' && pass 'bd non-zero is STOP, not a zero snapshot' || fail "bd failure behavior wrong rc=$RC out=$OUT"
 DEFS="$(rg -n 'function readyWorkNobodyOnIt' "$HERE" -g '*.ts' | wc -l | tr -d ' ')"; [ "$DEFS" = 1 ] && pass 'grep finds exactly one readyWorkNobodyOnIt definition under seats/' || fail "definition count=$DEFS"
 BROKEN="$ROOT/seats/fleet-snapshot-broken.ts"; cp "$ROOT/seats/fleet-snapshot.ts" "$BROKEN"; bun - "$BROKEN" <<'JS'

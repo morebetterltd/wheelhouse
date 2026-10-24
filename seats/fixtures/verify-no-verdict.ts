@@ -9,7 +9,11 @@ import { instrument, until } from "./verify-readiness";
 
 export function afterResult(done: boolean): void {
   const dir = process.env.WHEELHOUSE_NO_VERDICT_CASE!;
-  if (!fs.existsSync(path.join(dir, "observed.json"))) fs.writeFileSync(path.join(dir, "observed.json"), JSON.stringify({ done }));
+  const file = path.join(dir, "observed.json");
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file + ".new", JSON.stringify({ done }));
+    fs.renameSync(file + ".new", file);
+  }
 }
 
 export function afterRetry(stdout: string, done: boolean, reaping: boolean): void {
@@ -88,6 +92,7 @@ async function test(): Promise<void> {
     fs.mkdirSync(dir); fs.mkdirSync(proj); fs.mkdirSync(bin); fs.mkdirSync(path.join(proj, "contracts"));
     fs.cpSync(runtime, path.join(proj, "seats"), { recursive: true });
     fs.writeFileSync(path.join(proj, "seats/verify.ts"), code);
+    fs.writeFileSync(path.join(proj, "seats/selftest-core.list"), "fixture.selftest.sh\n");
     fs.writeFileSync(path.join(proj, "seats/fixture.selftest.sh"), "#!/usr/bin/env bash\nset -eu\nprintf 'no-verdict fixture sweep PASS\\n'\n");
     fs.writeFileSync(path.join(proj, "contracts/REVIEWER.md"), "# Reviewer\nReview this local fixture.\n");
     const author = path.join(dir, "author"), reviewer = path.join(dir, "reviewer"); fs.mkdirSync(author); fs.mkdirSync(reviewer);

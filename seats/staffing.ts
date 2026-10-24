@@ -115,6 +115,8 @@ function invalidSeatDecision(d: Decision): Decision | null {
 function applyAdd(root: string, pool: Pool, staffing: StaffingFile, d: Decision): Decision {
   const invalid = invalidSeatDecision(d); if (invalid) return invalid;
   if (!d.role || !d.seat || !d.entry) return d;
+  const existing = readJson(statePath(root))?.seats?.[d.seat];
+  if (existing?.pid) pidAlive(existing.pid, existing.fifo, existing.startedAt);
   registerSeat(root, staffing, d.role, d.seat, d.entry);
   if (d.role === "reviewers") return d;
   const r = runAdapter(["spawn", d.seat]);
@@ -154,6 +156,10 @@ function applyDrop(root: string, staffing: StaffingFile, d: Decision, snap: Snap
   if (!d.seat) return d;
   const live = [...snap.workers.live, ...snap.reviewers.live].find((s) => s.name === d.seat);
   if (live?.busy) return { ...d, kind: "nothing", reason: `drop refused: ${d.seat} is busy` };
+  // Snapshot reporting must not abort for uncertainty, but lifecycle must
+  // still recheck this exact record before freeing even a reviewer entry.
+  const before = readJson(statePath(root))?.seats?.[d.seat];
+  if (before?.pid) pidAlive(before.pid, before.fifo, before.startedAt);
   if (d.role === "reviewers") { unregisterSeat(root, staffing, d.seat); return d; }
   try { stateRunFile(root, d.seat); } catch (e: any) { return { ...d, kind: "nothing", reason: `drop refused: ${e.message}` }; }
   const r = runAdapter(["stop", d.seat]);

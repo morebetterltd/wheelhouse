@@ -18,6 +18,7 @@ BRIDGE_GUARD="$HERE/bridge-guard.sh"
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-cockpit-selftest.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
+. "$HERE/fixtures/readiness.sh"
 . "$HERE/selftest-herald.sh"
 selftest_bind_herald_owner "$FIX" || exit 2
 SOCK="wheelhouse-cockpit-selftest.$$"
@@ -26,6 +27,7 @@ FAIL=0
 cleanup() {
   tmux -L "$SOCK" kill-server >/dev/null 2>&1 || true
   selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
+  [ -z "${LEGACY_WD:-}" ] || wait "$LEGACY_WD" 2>/dev/null || true
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true
   pids=""
   for pid_file in "$FIX"/project/seats/run/*.pid; do
@@ -106,6 +108,7 @@ if (process.argv.includes("--status")) {
   process.exit(0);
 }
 fs.mkdirSync(run, { recursive: true });
+fs.writeFileSync(path.join(run, "courier.pid"), `${process.pid}\n`);
 fs.writeFileSync(path.join(run, "courier.started"), "yes\n");
 setInterval(() => {}, 1000);
 EOF
@@ -145,19 +148,26 @@ else
   fail "bad TMPDIR canary failed (rc=$CANARY_RC sentinel=$([ -f "$CANARY_CWD/sentinel.txt" ] && echo present || echo missing) out=$CANARY_OUT)"
 fi
 
+attached_width(){ [ "$(window_width)" = 152 ]; }
+clients_detached(){
+  local clients
+  clients="$(tmux -L "$SOCK" list-clients -t wh-ratio -F '#{client_tty}' 2> "$FIX/client-census.err")" || return 2
+  [ -z "$clients" ]
+}
 attach_at_152() {
   # Drive a real tmux client of a known size instead of relying on the tool
   # shell's pseudo-terminal timing. The inner cockpit session still sees a
   # client attach; the outer fixture session pins that client's TTY to 152x40.
   local client_sock="${SOCK}-client"
   tmux -L "$client_sock" kill-server >/dev/null 2>&1 || true
+  tmux -L "$SOCK" set-hook -a -t wh-ratio client-attached "run-shell 'tmux -L $SOCK wait-for -S cockpit-attached'" || return 1
   tmux -L "$client_sock" new-session -d -x 152 -y 40 -s wh-client -c "$PROJ" "tmux -L '$SOCK' attach-session -t wh-ratio" > "$FIX/client.out" 2> "$FIX/client.err" || return 1
-  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    [ "$(pane_count)" = 2 ] && [ "$(window_width)" = 152 ] && break
-    sleep 0.1
-  done
+  # A native hook queued after the production sizing hook acknowledges its
+  # completion. No elapsed pause stands in for the attached client's layout.
+  fixture_wait "attached client width 152" "" attached_width || return 1
+  tmux -L "$SOCK" wait-for cockpit-attached || return 1
   tmux -L "$client_sock" kill-server >/dev/null 2>&1 || true
-  sleep 0.1
+  fixture_wait "native client detach" "" clients_detached || return 1
 }
 
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" "$PROJ/seats/cockpit.sh" --status > "$FIX/bad-flag.out" 2>&1
@@ -194,10 +204,8 @@ kill "$HERALD_ONLY_PID" 2>/dev/null || true
 rm -f "$PROJ/seats/run/herald.pid"
 
 WHEELHOUSE_TMUX_SOCKET="$SOCK" tmux -L "$SOCK" new-session -d -s wh-pane -n bridge -c "$PROJ" "$PROJ/seats/cockpit.sh --pane-commander"
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  [ -s "$PROJ/seats/run/commander-pane.json" ] && break
-  sleep 0.1
-done
+PANE_PID="$(tmux -L "$SOCK" display-message -p -t wh-pane:bridge.0 '#{pane_pid}')"
+fixture_wait_json "$PROJ/seats/run/commander-pane.json" "$PANE_PID" || exit 1
 POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
 PANE0="$(tmux -L "$SOCK" list-panes -t wh-pane:bridge -F '#{pane_id}' | sed -n '1p')"
 RECORDED_PANE="$(node -e 'const fs=require("fs"); const f=process.argv[1]; try { console.log(JSON.parse(fs.readFileSync(f,"utf8")).paneId || "") } catch { console.log("") }' "$PROJ/seats/run/commander-pane.json")"
@@ -210,7 +218,7 @@ fi
 tmux -L "$SOCK" kill-session -t wh-pane >/dev/null 2>&1 || true
 rm -f "$PROJ/seats/run/commander-inbox-poll.pid"
 
-( cd "$PROJ" && with_timeout 5 bash -c 'bash seats/cockpit.sh --herald piped | cat' ) > "$FIX/herald-piped.out" 2>&1
+( cd "$PROJ" && bash -c 'set -o pipefail; bash seats/cockpit.sh --herald piped | cat' ) > "$FIX/herald-piped.out" 2>&1
 PIPED_RC=$?
 PIPED_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 PIPED_LINES="$(wc -l < "$FIX/herald-piped.out" | tr -d ' ')"
@@ -233,7 +241,7 @@ fi
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_DESK_PORT=42321 "$PROJ/seats/cockpit.sh" --desk > "$FIX/desk-again.out" 2>&1
 if grep -q 'desk already running: pid' "$FIX/desk-again.out"; then pass "cockpit --desk reports already running"; else fail "cockpit --desk did not report already running: $(cat "$FIX/desk-again.out" 2>/dev/null)"; fi
 kill "$DESK_ONLY_PID" 2>/dev/null || true
-sleep 0.2
+fixture_wait_exit "$DESK_ONLY_PID" || exit 1
 PATH="/usr/bin:/bin:$(dirname "$(command -v bun)")" WHEELHOUSE_DESK_PORT=42321 "$PROJ/seats/cockpit.sh" --desk > "$FIX/desk-restart.out" 2>&1
 DESK_RESTART_PID="$(cat "$PROJ/seats/run/desk.pid" 2>/dev/null || true)"
 if grep -q 'desk dead: pid' "$FIX/desk-restart.out" && grep -q 'desk started: pid' "$FIX/desk-restart.out" && [ -n "$DESK_RESTART_PID" ] && kill -0 "$DESK_RESTART_PID" 2>/dev/null; then
@@ -357,9 +365,10 @@ if [ -n "$SUPERVISOR_PID" ] && kill -0 "$SUPERVISOR_PID" 2>/dev/null && grep -Eq
 else
   fail "cockpit did not start/verify supervisor (pid=${SUPERVISOR_PID:-none} out=$(cat "$FIX/cockpit.out" 2>/dev/null))"
 fi
-(sleep 1000) & LEGACY_WD=$!
+(cd "$FIX" && exec tail -f /dev/null) & LEGACY_WD=$!
 printf '%s\n' "$LEGACY_WD" > "$PROJ/seats/run/desk-watchdog.pid"
 run_cockpit
+if grep -q 'legacy desk watchdog stopped: pid' "$FIX/cockpit.out"; then wait "$LEGACY_WD" 2>/dev/null || true; fi
 if ! kill -0 "$LEGACY_WD" 2>/dev/null && grep -q 'legacy desk watchdog stopped: pid' "$FIX/cockpit.out"; then
   pass "cockpit re-run stops a fixture legacy watchdog once"
 else
@@ -391,11 +400,9 @@ else
 fi
 
 HOOK_BEFORE_WINDOWS="$(tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | wc -l | tr -d ' ')"
-tmux -L "$SOCK" split-window -h -t 'wh-ratio:bridge.0' 'sleep 1000' >/dev/null 2>&1 || fail "fixture split into bridge failed"
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-  [ "$(pane_count)" = 2 ] && [ "$(tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | wc -l | tr -d ' ')" -gt "$HOOK_BEFORE_WINDOWS" ] && break
-  sleep 0.1
-done
+tmux -L "$SOCK" set-hook -a -t wh-ratio after-split-window "run-shell 'tmux -L $SOCK wait-for -S cockpit-split-observed'"
+tmux -L "$SOCK" split-window -h -t 'wh-ratio:bridge.0' 'exec tail -f /dev/null' >/dev/null 2>&1 || fail "fixture split into bridge failed"
+tmux -L "$SOCK" wait-for cockpit-split-observed || fail "native split hook did not complete"
 HOOK_AFTER_WINDOWS="$(tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | wc -l | tr -d ' ')"
 if [ "$(pane_count)" = 2 ] && [ "$HOOK_AFTER_WINDOWS" -gt "$HOOK_BEFORE_WINDOWS" ] && tmux -L "$SOCK" list-windows -t wh-ratio -F '#{window_name}' | grep >/dev/null '^agent-'; then
   pass "bridge guard moves a third bridge pane into its own window"
@@ -442,6 +449,8 @@ if grep -q 'bridge built: session wh-nomouse' "$FIX/cockpit-nomouse.out" && [ "$
 else
   fail "mouse opt-out options wrong: out=$(cat "$FIX/cockpit-nomouse.out" 2>/dev/null) mouse=$(opt_value wh-nomouse mouse 2>/dev/null || true) history=$(opt_value wh-nomouse history-limit 2>/dev/null || true)"
 fi
+
+if bun "$HERE/fixtures/cockpit-attachment.ts" "$FIX" "$HERE"; then pass "real client sizing completion and missing-sizing control"; else fail "native client sizing observation/control failed"; fi
 
 if [ $FAIL -eq 0 ]; then
   echo "cockpit.selftest: PASS ($PASS checks)"

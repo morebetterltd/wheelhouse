@@ -694,7 +694,17 @@ perl -0pe 's/fs\.constants\.O_WRONLY \| fs\.constants\.O_NONBLOCK/fs.constants.O
 if ! cmp -s "$ADAPTER" "$BROKEN_ADAPTER"; then
   selftest_copy_seat_runtime "$FIX/fifo-mutant-source" "$ADAPTER_DIR"
   bun -e 'import fs from "node:fs";fs.copyFileSync(process.argv[1],process.argv[2]);' "$BROKEN_ADAPTER" "$FIX/fifo-mutant-source/seats/adapter.ts"
-  perl -0pi -e 's/\n  if \(fifo && fs\.existsSync\(fifo\) && !fifoHasReader\(fifo\)\) return false;//' "$FIX/fifo-mutant-source/seats/seat-activity.ts"
+  bun - "$FIX/fifo-mutant-source/seats/seat-activity.ts" <<'JS'
+import fs from 'node:fs'; import assert from 'node:assert/strict';
+const file=process.argv[2], source=fs.readFileSync(file,'utf8');
+const guards=[
+  '  if (fifo && fs.existsSync(fifo) && !fifoHasReader(fifo)) return false;',
+  '  if (fifo && fs.existsSync(fifo) && !fifoHasReader(fifo)) return { kind: "foreign", reason: "seat FIFO has no reader" };',
+].filter(guard=>source.includes(guard));
+assert.equal(guards.length,1,'blocking-open canary must remove the actual reader guard');
+assert.equal(source.split(guards[0]).length,2,'reader guard must be unique');
+fs.writeFileSync(file,source.replace(guards[0],''));
+JS
   selftest_copy_seat_runtime "$DEAD_FIFO_PROJ" "$FIX/fifo-mutant-source/seats"
   env HOME="$HOME_FIX" PROJ="$DEAD_FIFO_PROJ" PID="$NO_READER_PID" bun -e '
     import fs from "node:fs"; import path from "node:path"; import cp from "node:child_process";
@@ -1749,6 +1759,11 @@ RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$PS_TRACE_BIN:$RUN_PATH" 
 if [ $RC -eq 0 ] && env TRACE="$FIX/status-ps.calls" node --input-type=module -e 'import fs from "node:fs";import assert from "node:assert/strict";const lines=fs.readFileSync(process.env.TRACE,"utf8").trim().split("\n");assert.equal(lines.filter(l=>l==="axo pid=,ppid=,lstart=,command=").length,1);' && says cost-1 && says cost-2 && says cost-3 && says cost-4 && says cost-5 && says cost-6; then pass 'status cost: six seats rendered from one process snapshot, without an elapsed-time gate'
 else fail "status cost: missing seats or repeated process snapshots (rc=$RC): $OUT"; fi
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"
+
+phase "6e. captured process census — capacity and unavailable observations"
+if bun "$HERE/fixtures/adapter-census.ts" "$FIX/census-cases" "$ADAPTER"; then
+  pass 'captured large census reports real duplicate; failed/invalid census is UNVERIFIED with healthy rows visible'
+else fail 'captured process census lost data or silently guessed absence'; fi
 
 phase "7. host build budget — opt-in PATH shim serializes cargo and allows re-entrant children"
 BUDGET_PROJ="$FIX/host-budget-proj"

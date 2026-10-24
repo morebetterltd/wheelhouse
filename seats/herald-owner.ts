@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedCommand } from "./completed-command";
 
 type Owner = { pid: number; started: string } | null;
 // A temp-looking path or state.json PID is not ownership evidence. Only an
@@ -20,7 +20,7 @@ export function fixtureOwner(root: string): Owner {
 export function fixtureOwnerAlive(owner: Owner): boolean {
   if (!owner) return true;
   try { process.kill(owner.pid, 0); } catch { return false; }
-  const r = spawnSync("ps", ["-p", String(owner.pid), "-o", "lstart=,stat="], { encoding: "utf8", timeout: 2000 });
+  const r = completedCommand("ps", ["-p", String(owner.pid), "-o", "lstart=,stat="]);
   const fields = (r.stdout ?? "").trim().split(/\s+/);
   const stat = fields.pop() ?? "";
   return r.status === 0 && !stat.startsWith("Z") && fields.join(" ") === owner.started;

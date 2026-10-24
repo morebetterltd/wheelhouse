@@ -91,7 +91,7 @@ function instrument(removed: boolean): string {
   ps -p "$START_WATCH_PID" -o pid=,pgid=,lstart= >> "$START_IDENTITIES"
   startup_fixture_point watchdog-forked
   WATCHDOG_PID=$START_WATCH_PID`);
-  replace('  local root="$1" dir="$2" message=""\n', '  local root="$1" dir="$2" message=""\n  printf "read\\n" >> "$START_READS"\n');
+  replace('  trap \'\' INT TERM HUP\n  local root="$1" dir="$2" message=""\n', '  trap \'\' INT TERM HUP\n  local root="$1" dir="$2" message=""\n  printf "read\\n" >> "$START_READS"\n');
   replace('  if [ "$mode" = stop ]; then printf \'stop\\n\' >&9; fi', '  if [ "$mode" = stop ]; then printf "stop\\n" >> "$START_STOPS"; printf \'stop\\n\' >&9; fi');
   replace('interrupt_sweep(){\n  local rc="$1"\n', 'interrupt_sweep(){\n  local rc="$1"\n  printf "%s\\n" "$rc" >> "$START_SIGNALS"\n');
   return s;

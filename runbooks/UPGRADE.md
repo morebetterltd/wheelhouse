@@ -50,6 +50,7 @@ Then write the file:
   echo "seat_push=on"
   echo "seat_worktrees=per-seat"
   echo "cleanup=on"
+  echo "isa_signals=on"
 } > wheelhouse/.template-source
 ```
 
@@ -618,6 +619,26 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 - every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install;
 - the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
 - installs predating `github-report=` have no line, which the publisher reads as off; append `github-report=off` and `github-report-routes=` to `wheelhouse/.template-source` so the record is explicit, and point at `BOOTSTRAP.md`'s publishing question if the principal wants it on.
+
+### Carry ISA direction changes to the producer
+
+The copied supervisor syncs changed open claims from `wheelhouse/ISA.md` into
+`isa-change` intake signals every 30 seconds. Make the install policy explicit
+without overriding an existing opt-out:
+
+```bash
+grep -q '^isa_signals=' wheelhouse/.template-source \
+  || printf '\nisa_signals=on\n' >> wheelhouse/.template-source
+```
+
+`isa_signals=off` disables the tick. The first `bun seats/isa-signals.ts sync`
+only snapshots existing claims, avoiding an upgrade flood; subsequent changed
+or new open claims reach the producer through `seats/intake.jsonl`. Hand-merge
+the matching direction-first paragraph from `generated/CLAUDE.md.example`:
+the commander records the human's words, dated, in ISA Decisions and updates
+the affected claim before work depends on it, then syncs that claim to intake;
+the producer defines the work, not the commander. See `seats/README.md`, **ISA
+claims — direction reaching intake**, for the manual sync and status commands.
 
 ### Dispatch refuses work that is not a contract
 
