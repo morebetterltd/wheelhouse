@@ -83,7 +83,7 @@ function named(original: string, host: string) {
 }
 async function preservation(kind: "transition" | "supervisor" | "sweep" | "inherited" | "sweep-refusal") {
   const dir = path.join(root, kind); fs.mkdirSync(dir); const state = path.join(dir, "state"); fs.mkdirSync(state);
-  const lock = path.join(state, "host.lock"), ready = path.join(dir, "ready"), release = path.join(dir, "release"), receipts = path.join(dir, "refresh.jsonl"), refuse = path.join(dir, "refuse-renewal");
+  const lock = path.join(state, "host.lock"), ready = path.join(dir, "ready"), release = path.join(dir, "release"), held = path.join(dir, "payload-held"), completed = path.join(dir, "payload-completed"), receipts = path.join(dir, "refresh.jsonl"), refuse = path.join(dir, "refuse-renewal");
   const hasRenewal = source.includes("function renewFiles("), hasHeartbeat = source.includes("}, 60_000);");
   let tested = named(source, "network-before");
   // Same callback/operations, shorter cadence only in this pinned test copy.
@@ -119,7 +119,7 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "inher
     fs.writeFileSync(path.join(seats, "selftest-sweep.sh"), testSweep);
     const init = command(dir, ["git", "-C", project, "init", "-q", "-b", "main"], env); assert.equal(init.status, 0, init.stderr);
     const add = command(dir, ["git", "-C", project, "add", "seats"], env); assert.equal(add.status, 0, add.stderr);
-    const suite = path.join(seats, "idle.selftest.sh"); fs.writeFileSync(suite, '#!/usr/bin/env bash\nprintf "%s\\n" "$$" > "$CLEANER_READY"\n' + (kind === "sweep-refusal" ? 'sleep 5\nprintf finished > "$CLEANER_RELEASE"\n' : 'while [ ! -f "$CLEANER_RELEASE" ]; do sleep 0.02; done\n'));
+    const suite = path.join(seats, "idle.selftest.sh"); fs.writeFileSync(suite, '#!/usr/bin/env bash\nprintf "%s\\n" "$$" > "$CLEANER_READY"\n' + (kind === "sweep-refusal" ? 'while [ ! -f "$CLEANER_RELEASE" ]; do\n  [ -f "$CLEANER_HELD" ] || printf "%s\\n" "$$" > "$CLEANER_HELD"\n  sleep 0.02\ndone\nprintf finished > "$CLEANER_COMPLETED"\n' : 'while [ ! -f "$CLEANER_RELEASE" ]; do sleep 0.02; done\n'));
     let argv = ["bash", path.join(seats, "selftest-sweep.sh")];
     if (kind === "inherited") {
       // Isolate the inherited-watchdog path: its outer supervisor deliberately
@@ -130,14 +130,18 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "inher
       const outerFile = path.join(dir, "outer-no-heartbeat.ts"); fs.writeFileSync(outerFile, outer);
       argv = ["bun", outerFile, "supervise", lock, ...argv];
     }
-    actor = start(dir, argv, { ...env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, CLEANER_READY: ready, CLEANER_RELEASE: release, ...(kind === "sweep-refusal" ? { WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S: "2", WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: "1" } : {}) });
+    actor = start(dir, argv, { ...env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, CLEANER_READY: ready, CLEANER_RELEASE: release, CLEANER_HELD: held, CLEANER_COMPLETED: completed, ...(kind === "sweep-refusal" ? { WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S: "2", WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: "1" } : {}) });
     await until(() => fs.existsSync(ready), actor);
   }
   try {
     if (kind === "sweep-refusal") {
-      // Arm only after the complete runtime copy and real payload startup;
-      // setup's own supervisor must never receive this deliberate refusal.
-      fs.writeFileSync(refuse, "armed after ready\n");
+      // Observe entry into the hold, not a duration that can expire while a
+      // delayed watchdog renews. Only finally grants release, AFTER grading.
+      await until(() => fs.existsSync(held), actor);
+      assert.equal(fs.readFileSync(held, "utf8"), fs.readFileSync(ready, "utf8"));
+      assert(!fs.existsSync(release), "payload release must not precede deadline grading");
+      // Setup's own supervisor must never receive this deliberate refusal.
+      fs.writeFileSync(refuse, "armed after observed payload hold\n");
       ownerPid = actor.child.pid!;
       const payload = Number(fs.readFileSync(ready, "utf8")); assert(Number.isInteger(payload) && payload > 1);
       const before = command(dir, ["ps", "-ww", "-p", String(payload), "-o", "pid=,uid=,ppid=,pgid=,lstart=,command="], env);
@@ -149,7 +153,7 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "inher
       const rows = census.stdout.trim().split("\n").map(line => { const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line); assert(m, "complete native group census row"); return { pid: Number(m[1]), group: Number(m[2]), state: m[3] }; });
       assert(rows.some(row => row.pid === process.pid), "census includes this controller before measuring absence");
       const survivors = rows.filter(row => row.group === payload && !row.state.startsWith("Z"));
-      const record = { kind, nativeSetup: true, actualRefusal: err.includes("STOP: sweep lock renewal failed"), nativeExit: exit.code, deadlineEnforced: out.includes("timed out after 2s"), liveCohort: survivors.length, cleaned: survivors.length === 0, payloadCompletedNormally: fs.existsSync(release) };
+      const record = { kind, nativeSetup: true, actualRefusal: err.includes("STOP: sweep lock renewal failed"), nativeExit: exit.code, deadlineEnforced: out.includes("timed out after 2s"), liveCohort: survivors.length, cleaned: survivors.length === 0, payloadHeld: fs.existsSync(held), releaseGrantedBeforeExit: fs.existsSync(release), payloadCompletedNormally: fs.existsSync(completed) };
       fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(record, null, 2)); facts.push(record);
       console.log("MEASUREMENT cleaner sweep-refusal " + JSON.stringify(record));
       assert.equal(exit.code, 1); assert.equal(exit.signal, null);
@@ -157,6 +161,7 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "inher
       // A known renewal error truthfully suppresses CLEAN/green; independently
       // observe the real deadline and native cohort instead of requiring CLEAN.
       assert(record.deadlineEnforced && record.cleaned, "RENEWAL_REFUSAL_DISABLED_CONTAINMENT");
+      assert(record.payloadHeld && !record.releaseGrantedBeforeExit, "payload hold must remain unreleased through deadline grading");
       assert(!record.payloadCompletedNormally, "timed-out payload must not complete normally");
       console.log("PASS cleaner sweep-refusal: actual refusal retains native timeout; live cohort=0");
       return;
