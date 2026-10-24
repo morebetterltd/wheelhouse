@@ -8,7 +8,7 @@ import { completedCommand } from '../completed-command';
 const [source, fixture] = process.argv.slice(2);
 assert(fs.statSync(fixture + '/.wheelhouse-selftest-fixture').isFile());
 const realTmux = Bun.which('tmux'), realNode = Bun.which('node'); assert(realTmux && realNode && Bun.which('expect'));
-const modes = ['pass', 'fail', 'TERM', 'INT', 'HUP', 'preexisting'];
+const modes = ['pass', 'fail', 'TERM', 'INT', 'HUP', 'TERM-early', 'preexisting'];
 const selected = process.env.WHEELHOUSE_FLOOR_CLEANUP_CASES?.split(',') ?? modes;
 assert(selected.length && selected.every(x => modes.includes(x)));
 const evidence = process.env.WHEELHOUSE_FLOOR_CLEANUP_EVIDENCE;
@@ -26,7 +26,7 @@ const r=cp.spawnSync(process.env.FLOOR_CLEANUP_REAL_TMUX,native,{stdio:['ignore'
 const data={args,nativeArgs:native,code:r.status,signal:r.signal,error:r.error?String(r.error):null,stdout:fs.readFileSync(dir+'/commands/'+process.pid+'.stdout','utf8'),stderr:fs.readFileSync(dir+'/commands/'+process.pid+'.stderr','utf8')};
 fs.writeFileSync(dir+'/commands/'+process.pid+'.json',JSON.stringify(data));process.stdout.write(data.stdout);process.stderr.write(data.stderr);
 function finish(){process.exit(r.error||r.signal||r.status===null?2:r.status);}
-if(args[0]==='-L'&&args[2]==='list-windows'&&r.status===0&&!fs.existsSync(dir+'/ready.json')){
+if(args[0]==='-L'&&args[2]===(process.env.FLOOR_CLEANUP_ACTION==='TERM-early'?'new-session':'list-windows')&&r.status===0&&!fs.existsSync(dir+'/ready.json')){
  fs.writeFileSync(dir+'/ready.json.tmp',JSON.stringify(data));fs.renameSync(dir+'/ready.json.tmp',dir+'/ready.json');
  const timer=setInterval(()=>{if(fs.existsSync(dir+'/release')){clearInterval(timer);finish();}},25);
 }else finish();
@@ -53,18 +53,21 @@ function actor(tag: string, action: string, peer = '', defer = false) {
   // floor's intentionally minimal RUN_PATH omits the host Node directory.
   fs.writeFileSync(dir + '/bin/tmux', '#!' + realNode + wrapper.slice(wrapper.indexOf('\n')), { mode: 0o755 });
   const out = fs.openSync(dir + '/stdout', 'wx'), err = fs.openSync(dir + '/stderr', 'wx');
-  const env = { ...process.env, PATH: dir + '/bin:' + process.env.PATH, TMUX_TMPDIR: world, TMPDIR: dir + '/tmp', HOME: tag + '/home', XDG_CONFIG_HOME: dir + '/home/.config', SHELL: '/bin/bash', FLOOR_CLEANUP_OBSERVER: dir, FLOOR_CLEANUP_REAL_TMUX: realTmux!, FLOOR_CLEANUP_PEER: peer };
+  const env = { ...process.env, PATH: dir + '/bin:' + process.env.PATH, TMUX_TMPDIR: world, TMPDIR: dir + '/tmp', HOME: tag + '/home', XDG_CONFIG_HOME: dir + '/home/.config', SHELL: '/bin/bash', FLOOR_CLEANUP_OBSERVER: dir, FLOOR_CLEANUP_REAL_TMUX: realTmux!, FLOOR_CLEANUP_PEER: peer, FLOOR_CLEANUP_ACTION: action };
   delete env.TMUX; delete env.TMUX_PANE;
-  const child = spawn('/bin/bash', ['-c', 'IFS= read -r permit || exit 2; exec /bin/bash ' + q(program)], { cwd: world, env, stdio: ['pipe', out, err] });
+  const child = spawn('/bin/bash', ['-c', 'IFS= read -r permit || exit 2; exec /bin/bash ' + q(program)], { cwd: world, env, stdio: ['pipe', 'pipe', 'pipe'] });
+  const write = (fd: number, bytes: Buffer) => { let n = 0; while (n < bytes.length) n += fs.writeSync(fd, bytes, n, bytes.length - n); };
+  child.stdout!.on('data', bytes => write(out, bytes)); child.stderr!.on('data', bytes => write(err, bytes));
   assert(child.pid && child.pid > 1); const sock = 'whfloor' + child.pid; assert(!socket(endpoint(sock)).exists, 'INCOMPLETE: fixture allocation met a preexisting endpoint');
   let closed: any = null; const exited = new Promise<any>((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => { closed = { code, signal }; fs.closeSync(out); fs.closeSync(err); resolve(closed); }); });
   const authorize = () => child.stdin!.end('owner authorizes execution\n'); if (!defer) authorize();
-  return { child, dir, sock, programSha256: sha(body), exited, authorize, get closed() { return closed; }, release() { fs.writeFileSync(dir + '/release', 'release real native return\n'); } };
+  return { child, dir, sock, action, programSha256: sha(body), exited, authorize, get closed() { return closed; }, release() { fs.writeFileSync(dir + '/release', 'release real native return\n'); } };
 }
 type Actor = ReturnType<typeof actor>;
 async function until(a: Actor, label: string, predicate: () => boolean) { let last = ''; for (;;) { if (predicate()) return; const state = JSON.stringify({ label, pid: a.child.pid, closed: a.closed, ready: fs.existsSync(a.dir + '/ready.json') }); if (last !== state) { console.error('FLOOR_CLEANUP_WAIT ' + state); last = state; } assert(!a.closed, 'INCOMPLETE: original floor suite exited before ' + label); await Bun.sleep(25); } }
-async function ready(a: Actor) { await until(a, 'native two-pane server', () => fs.existsSync(a.dir + '/ready.json')); const r = JSON.parse(fs.readFileSync(a.dir + '/ready.json', 'utf8')); assert.equal(r.code, 0); assert.equal(r.args[1], a.sock); const s = snapshot(a.sock), panes = tmux(a.sock, ['list-panes', '-t', 'wh-tfix:bridge', '-F', '#{pane_id}']); assert.equal(panes.code, 0); assert.equal(panes.stdout.trim().split('\n').length, 2); return s; }
-async function stop(a: Actor) { if (!a.closed) { const before = identity(a.child.pid!); assert.equal(before.code, 0); assert(before.stdout.includes(a.dir + '/runtime/seats/floor.selftest.sh')); assert(a.child.kill('SIGTERM')); a.release(); } return a.exited; }
+async function ready(a: Actor) { await until(a, 'native server creation', () => fs.existsSync(a.dir + '/ready.json')); const r = JSON.parse(fs.readFileSync(a.dir + '/ready.json', 'utf8')); assert.equal(r.code, 0); assert.equal(r.args[1], a.sock); const s = snapshot(a.sock), panes = tmux(a.sock, ['list-panes', '-t', 'wh-tfix:bridge', '-F', '#{pane_id}']); assert.equal(panes.code, 0); assert.equal(panes.stdout.trim().split('\n').length, a.action === 'TERM-early' ? 1 : 2); return s; }
+async function stop(a: Actor) { if (!a.closed) { const before = ownedIdentity(a); assert.equal(ownedIdentity(a).stdout, before.stdout); assert(a.child.kill('SIGTERM')); a.release(); } return a.exited; }
+function ownedIdentity(a: Actor) { const r = identity(a.child.pid!); assert.equal(r.code, 0); assert.equal(r.signal, null); assert.equal(r.stderr, ''); assert.match(r.stdout, new RegExp('^\\s*' + a.child.pid + '\\s+' + process.pid + '\\s+' + process.getuid!() + '\\s+')); assert(r.stdout.includes(a.dir + '/runtime/seats/floor.selftest.sh')); return r; }
 function commands(a: Actor) { return fs.readdirSync(a.dir + '/commands').filter(x => x.endsWith('.json')).map(x => JSON.parse(fs.readFileSync(a.dir + '/commands/' + x, 'utf8'))); }
 const results: any[] = [];
 for (const mode of modes.filter(m => selected.includes(m))) {
@@ -74,14 +77,14 @@ for (const mode of modes.filter(m => selected.includes(m))) {
     peer = actor('peer', 'peer'); result.peerBefore = await ready(peer); owned.push(result.peerBefore);
     subject = actor('subject', mode, peer.sock, mode === 'preexisting'); result.programSha256 = subject.programSha256;
     if (mode === 'preexisting') { const native = tmux(subject.sock, ['new-session', '-d', '-s', 'foreign', '-c', world, 'exec sleep 3600']); assert.equal(native.code, 0); result.subjectBefore = snapshot(subject.sock); owned.push(result.subjectBefore); subject.authorize(); await until(subject, 'refusal or adoption', () => !!subject!.closed || fs.existsSync(subject!.dir + '/ready.json')); result.adopted = fs.existsSync(subject.dir + '/ready.json'); if (result.adopted) subject.release(); }
-    else { result.subjectBefore = await ready(subject); owned.push(result.subjectBefore); result.ownerBefore = identity(subject.child.pid!); assert.equal(result.ownerBefore.code, 0); if (['TERM', 'INT', 'HUP'].includes(mode)) assert(subject.child.kill(('SIG' + mode) as NodeJS.Signals)); subject.release(); }
+    else { result.subjectBefore = await ready(subject); owned.push(result.subjectBefore); result.ownerBefore = ownedIdentity(subject); assert.equal(ownedIdentity(subject).stdout, result.ownerBefore.stdout); if (['TERM', 'INT', 'HUP', 'TERM-early'].includes(mode)) assert(subject.child.kill(('SIG' + mode.split('-')[0]) as NodeJS.Signals)); subject.release(); }
     result.exit = await subject.exited; result.stdout = fs.readFileSync(subject.dir + '/stdout', 'utf8'); result.stderr = fs.readFileSync(subject.dir + '/stderr', 'utf8');
     // Both worlds are inspected before any harness rescue, even for a red.
     result.peerAfter = { alive: live(result.peerBefore.pid), state: socket(result.peerBefore.file), native: tmux(peer.sock, ['has-session']), identity: identity(result.peerBefore.pid) };
     result.subjectAfter = { alive: live(result.subjectBefore.pid), state: socket(result.subjectBefore.file), native: tmux(subject.sock, ['has-session']), identity: identity(result.subjectBefore.pid) };
     assert(!peer.closed && live(peer.child.pid!), 'PEER_OWNER_CHANGED'); assert(result.peerAfter.alive && result.peerAfter.native.code === 0, 'PEER_SERVER_CHANGED'); assert.deepEqual(result.peerAfter.state, result.peerBefore.state, 'PEER_SOCKET_CHANGED'); assert.equal(result.peerAfter.identity.stdout, result.peerBefore.nativeIdentity.stdout, 'PEER_IDENTITY_CHANGED');
     if (mode === 'preexisting') { assert.equal(result.adopted, false, 'PREEXISTING_ENDPOINT_ADOPTED'); assert.deepEqual(result.exit, { code: 2, signal: null }); assert.match(result.stderr, /refuses preexisting tmux endpoint/); assert(result.subjectAfter.alive && result.subjectAfter.native.code === 0, 'PREEXISTING_SERVER_CHANGED'); assert.deepEqual(result.subjectAfter.state, result.subjectBefore.state, 'PREEXISTING_SOCKET_CHANGED'); }
-    else { assert.deepEqual(result.exit, { code: ({ pass: 0, fail: 1, TERM: 143, INT: 130, HUP: 129 } as any)[mode], signal: null }); if (mode === 'pass') assert.match(result.stdout, /floor\.ts works on this machine\./); if (mode === 'fail') assert.match(result.stdout, /FAIL\s+fixture: planted floor feature assertion/); assert(!result.subjectAfter.alive && result.subjectAfter.native.code === 1, 'OWN_SERVER_REMAINS'); assert(!result.subjectAfter.state.exists, 'OWN_SOCKET_REMAINS'); }
+    else { assert.deepEqual(result.exit, { code: ({ pass: 0, fail: 1, TERM: 143, INT: 130, HUP: 129, 'TERM-early': 143 } as any)[mode], signal: null }); if (mode === 'pass') assert.match(result.stdout, /floor\.ts works on this machine\./); if (mode === 'fail') assert.match(result.stdout, /FAIL\s+fixture: planted floor feature assertion/); assert(!result.subjectAfter.alive && result.subjectAfter.native.code === 1, 'OWN_SERVER_REMAINS'); assert(!result.subjectAfter.state.exists, 'OWN_SOCKET_REMAINS'); }
   } catch (e: any) { result.failure = { kind: e instanceof assert.AssertionError && !String(e.message).startsWith('INCOMPLETE') ? 'behavior' : 'incomplete', message: String(e.message ?? e) }; console.error('FLOOR_CLEANUP_BEFORE_RESCUE ' + JSON.stringify(result)); }
   finally {
     if (subject) result.subjectJoin = await stop(subject); if (peer) result.peerJoin = await stop(peer);
