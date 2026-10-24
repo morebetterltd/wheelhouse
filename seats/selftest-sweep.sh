@@ -214,13 +214,34 @@ suite_watchdog(){ (
   # This asynchronous child must never run the parent's lock-release traps.
   trap - EXIT
   trap '' INT TERM HUP
-  local root="$1" dir="$2" message=""
-  if read -r -t "$SUITE_TIMEOUT_S" -u 9 message; then
-    [ "$message" = stop ] || exit 0
-  else
-    printf '%s\n' "$SUITE_TIMEOUT_S" > "$dir/timed-out"
-  fi
-  contain_suite_tree "$root" "$dir"
+  local root="$1" dir="$2" message="" deadline=$((SECONDS+SUITE_TIMEOUT_S)) remaining slice renewal_rc=0
+  while :; do
+    # A direct sweep owns its own admission; an inherited sweep is renewed by
+    # its outer heavy-test supervisor. Keep old cache aliases and live FIFO
+    # records safe from age-based tmp cleanup during a single long suite too.
+    if [ "$renewal_rc" = 0 ]; then
+      if [ -n "$OWNED_LOCK" ]; then
+        bun "$LOCK_HELPER" refresh "$LOCK" "$$" "$LOCK_TOKEN" "$OWNED_LOCK" || renewal_rc=2
+      else
+        bun "$LOCK_HELPER" inherited "$LOCK" || renewal_rc=2
+      fi
+      # A renewal refusal must not disable the existing timeout/containment.
+      [ "$renewal_rc" = 0 ] || info 'STOP: sweep lock renewal failed'
+    fi
+    remaining=$((deadline-SECONDS))
+    if [ "$remaining" -le 0 ]; then
+      printf '%s\n' "$SUITE_TIMEOUT_S" > "$dir/timed-out"
+      break
+    fi
+    slice=60
+    [ "$remaining" -ge "$slice" ] || slice="$remaining"
+    if read -r -t "$slice" -u 9 message; then
+      [ "$message" = stop ] || exit "$renewal_rc"
+      break
+    fi
+  done
+  contain_suite_tree "$root" "$dir" || exit 2
+  exit "$renewal_rc"
 ); }
 
 retire_review_group(){

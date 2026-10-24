@@ -339,15 +339,46 @@ function publish(parent: number, name: string, pid: number, token: string) {
   return publishDirectory(parent, name, [["pid", `${pid}\n`], ["started", `${started}\n`], [MARKER, JSON.stringify(marker) + "\n"]]);
 }
 
-function cachedHostNames(fd: number, expectedId: string): Set<string> {
-  const record = JSON.parse(readFile(fd, HOST_RECORD)[0]);
+// tmp_cleaner ignores live holders: atime alone is not protection on every
+// filesystem. Renew all validated members, including old aliases and waiters.
+// Pin every identity before changing metadata; never rewrite bytes or follow
+// a replacement/symlink/hardlink into somebody else's file.
+function renewFiles(directory: number, members: Record<string, string>) {
+  const opened: number[] = [];
+  try {
+    for (const [name, identity] of Object.entries(members)) {
+      const fd = openAt(directory, name); opened.push(fd);
+      const st = fs.fstatSync(fd);
+      if (id(fd) !== identity || !st.isFile() || st.nlink !== 1 || st.uid !== process.getuid()) throw new Refused(`cannot renew changed or foreign ${name}`);
+    }
+    const now = new Date();
+    for (const fd of opened) fs.futimesSync(fd, now, now);
+  } finally { for (const fd of opened) fs.closeSync(fd); }
+}
+function renewLock(parent: number, name: string, snapshot: Snapshot) {
+  if (!snapshot.members) return; // Never modify legacy pid-only wire records.
+  const fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+  try {
+    if (id(fd) !== snapshot.identity) throw new Refused("lock changed before renewal");
+    renewFiles(fd, snapshot.members);
+  } finally { fs.closeSync(fd); }
+}
+function cachedHostNames(fd: number, expectedId: string, members: Record<string, string> = {}): Set<string> {
+  let anchor: [string, string];
+  try { anchor = readFile(fd, HOST_RECORD); }
+  catch (e: any) {
+    if (e.errno !== 2) throw e;
+    throw new Refused(`missing host record ${descriptorPaths.get(fd)}/${HOST_RECORD}; restore this file from a trusted same-machine backup (see seats/README.md: Missing sweep host record). Do not delete a live lock or recreate the anchor from unauthenticated aliases`);
+  }
+  const record = JSON.parse(anchor[0]);
+  members[HOST_RECORD] = anchor[1];
   if (!record || JSON.stringify(Object.keys(record).sort()) !== JSON.stringify(["hostId", "kind", "version"]) || record.kind !== HOST_RECORD || record.version !== 1 || record.hostId !== expectedId) throw new Refused("foreign or invalid stable host cache");
   const names = new Set<string>(), digest = (s: string) => createHash("sha256").update(s).digest("hex");
   for (const member of entries(fd)) {
     if (member === HOST_RECORD) continue;
-    const raw = readFile(fd, member)[0], hostname = raw.slice(0, -1);
+    const [raw, identity] = readFile(fd, member), hostname = raw.slice(0, -1);
     if (!/^[0-9a-f]{64}$/.test(member) || !hostname || raw !== hostname + "\n" || /[\r\n\0]/.test(hostname) || digest(hostname) !== member) throw new Refused("invalid cached hostname");
-    names.add(hostname);
+    names.add(hostname); members[member] = identity;
   }
   return names;
 }
@@ -366,7 +397,7 @@ function hostCache(parent: number, lockName: string): Set<string> {
     fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
   }
   try {
-    const names = cachedHostNames(fd, hostId!);
+    const members: Record<string, string> = {}, names = cachedHostNames(fd, hostId!, members);
     if (!names.has(HOST)) {
       // Stage an alias outside the visible cache; atomic exclusive publication
       // under the same parent flock. Never overwrite a foreign cache member.
@@ -374,7 +405,7 @@ function hostCache(parent: number, lockName: string): Set<string> {
       const template = z(".sweep-host.XXXXXX"), out = native.symbols.mkstemp(template) as number;
       if (out < 0) throw new Refused("cannot create hostname alias");
       const temporary = template.toString().split("\0")[0], identity = id(out);
-      try { fs.writeFileSync(out, HOST + "\n"); renameExclusive(parent, temporary, digest(HOST), fd); }
+      try { fs.writeFileSync(out, HOST + "\n"); renameExclusive(parent, temporary, digest(HOST), fd); members[digest(HOST)] = identity; }
       finally {
         fs.closeSync(out);
         let leftover = -1;
@@ -384,6 +415,7 @@ function hostCache(parent: number, lockName: string): Set<string> {
       }
       names.add(HOST);
     }
+    renewFiles(fd, members);
     return names;
   } finally { fs.closeSync(fd); }
 }
@@ -446,6 +478,13 @@ function tickets(fd: number): Ticket[] {
   }
   if (new Set(result.map(t => String(t.sequence))).size !== result.length) throw new Refused("duplicate queue sequence");
   return result; // Fixed-width sequence names from entries() are arrival order.
+}
+function renewQueue(fd: number, current: Ticket[]) {
+  const anchor = queueMarkers.get(fd), again = readFile(fd, QUEUE);
+  if (!anchor || anchor[0] !== again[0] || anchor[1] !== again[1]) throw new Refused("queue marker changed before renewal");
+  const members = { [QUEUE]: anchor[1] };
+  for (const ticket of current) if (alive(ticket.pid)) members[ticket.name] = ticket.identity;
+  renewFiles(fd, members);
 }
 function removeTicket(fd: number, ticket: Ticket) {
   const [raw, identity] = readFile(fd, ticket.name);
@@ -510,7 +549,7 @@ function parentFd(lock: string): number {
 }
 function main(): number {
   const [op, lock, pidText, token, owned] = process.argv.slice(2);
-  if (!["acquire", "release"].includes(op)) throw new Refused("unknown operation");
+  if (!["acquire", "release", "refresh"].includes(op)) throw new Refused("unknown operation");
   const name = path.basename(lock), pid = Number(pidText);
   if (!path.isAbsolute(lock) || ["", ".", ".."].includes(name) || !validPid(pid) || !/^[0-9a-f]{32}$/.test(token)) throw new Refused("invalid lock path/pid/token");
   primitives();
@@ -540,6 +579,18 @@ function main(): number {
       } finally { fs.closeSync(queue); }
       return 0;
     }
+    if (op === "refresh") {
+      const snapshot = inspect(parent, name);
+      if (!owned || snapshot.identity !== owned || snapshot.marker.pid !== pid || snapshot.marker.token !== token || !alive(pid)) throw new Refused("cannot refresh a different lock owner");
+      const queue = queueFd(parent, `${name}.queue`, false);
+      if (queue === null) throw new Refused("cannot refresh without FIFO ownership");
+      try {
+        const current = tickets(queue);
+        if (current[0]?.pid !== pid || current[0]?.token !== token) throw new Refused("cannot refresh a different FIFO head");
+        renewQueue(queue, current); renewLock(parent, name, snapshot);
+      } finally { fs.closeSync(queue); }
+      return 0;
+    }
     let snapshot: Snapshot | null;
     try { snapshot = inspect(parent, name); }
     catch (e: any) { if (e.errno !== 2) throw e; snapshot = null; }
@@ -551,6 +602,8 @@ function main(): number {
         console.error(`selftest-sweep: removing stale lock ${lock} held by dead pid ${snapshot.marker.pid}`);
         removeValidated(parent, name, snapshot); snapshot = null;
       }
+      renewQueue(queue, current);
+      if (snapshot) renewLock(parent, name, snapshot);
       if (snapshot?.marker.pid === pid && snapshot.marker.token === token && current[0].token === token) {
         console.log(snapshot.identity); return 0; // Idempotent admission of this owner.
       }
@@ -645,6 +698,7 @@ function ancestorOwnsLock(lock: string): boolean {
       const first = tickets(queue)[0];
       if (!first || first.pid !== snapshot.marker.pid || first.token !== snapshot.marker.token) throw new Refused("inherited lock does not match FIFO head");
       if (JSON.stringify(inspect(parent, path.basename(lock))) !== JSON.stringify(snapshot)) throw new Refused("inherited lock changed during ancestry check");
+      renewQueue(queue, tickets(queue)); renewLock(parent, path.basename(lock), snapshot);
       return true;
     } finally { fs.closeSync(queue); }
   } catch (e) { diagnose(e, parent, path.basename(lock)); throw e; }
@@ -670,7 +724,7 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
     const handler = () => { console.error(`heavy-test: KILLED by signal ${os.constants.signals[signal]}`); interrupted = signal; forward(signal); };
     handlers.set(signal, handler); process.on(signal, handler);
   }
-  let code = 2;
+  let code = 2, renewal: ReturnType<typeof setInterval> | undefined, renewalFailed = false;
   // fd3 gates exec, not the suite's stdin. Bash keeps this PID across exec.
   child = spawn(command[0], ["-c", 'IFS= read -r admission <&3 || exit 2; [ "$admission" = admitted ] || exit 2; exec 3<&-; exec "$@"', "selftest-admission-gate", ...command], { stdio: ["inherit", "inherit", "inherit", "pipe"], detached: true });
   const gate = child.stdio[3] as import("node:stream").Writable;
@@ -707,12 +761,23 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
       await Bun.sleep(pause * 1000);
     }
     if (!interrupted) {
+      // One minute is well inside tmp_cleaner's three-day horizon, even for
+      // one long payload with no nested admissions. No environment override.
+      renewal = setInterval(() => {
+        const result = transition("refresh");
+        if (result.stderr) process.stderr.write(result.stderr);
+        if (result.error || result.status !== 0 || result.signal) {
+          renewalFailed = true; clearInterval(renewal);
+          console.error("STOP: suite lock renewal failed");
+        }
+      }, 60_000);
       gate.end("admitted\n");
       const result = await done;
       if (spawnError) throw spawnError;
-      code = result.code ?? (result.signal ? 128 + os.constants.signals[result.signal] : 2);
+      code = renewalFailed ? 2 : result.code ?? (result.signal ? 128 + os.constants.signals[result.signal] : 2);
     }
   } finally {
+    clearInterval(renewal);
     gate?.destroy();
     if (!closed) {
       // No payload was admitted: closing fd3 is the gate's exit instruction.
