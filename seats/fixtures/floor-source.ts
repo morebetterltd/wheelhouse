@@ -49,6 +49,10 @@ for (const fault of [false, true]) {
   fs.writeFileSync(validityProgram, selected);
   const validity = completedCommand(realBun, [validityProgram, '--once'], { cwd: root, env });
   const validityExecutions = fs.existsSync(recordsFile) ? fs.readFileSync(recordsFile, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+  const validityCapture = { args: [realBun, validityProgram, '--once'], code: validity.status, signal: validity.signal, error: validity.error ? String(validity.error) : null, stdout: validity.stdout, stderr: validity.stderr, executions: validityExecutions };
+  fs.writeFileSync(root + '/preflight.json', JSON.stringify(validityCapture, null, 2));
+  if (evidence) { fs.mkdirSync(evidence + '/preflight', { recursive: true }); fs.writeFileSync(evidence + '/preflight/' + name + '.json', JSON.stringify(validityCapture, null, 2), { flag: 'wx' }); }
+  console.log('FLOOR_SOURCE_PREFLIGHT ' + JSON.stringify(validityCapture));
   assert.equal(validity.status, 0, 'INCOMPLETE: alternate must import and render with the real runtime BEFORE source selection is measured');
   assert.equal(validity.signal, null); assert(!validity.error); assert.match(validity.stdout, /no seats/);
   assert.equal(validityExecutions.length, 1); assert.equal(validityExecutions[0].sha256, sha(selected));
