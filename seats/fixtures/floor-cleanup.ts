@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { completedCommand } from '../completed-command';
 const [source, fixture] = process.argv.slice(2);
 assert(fs.statSync(fixture + '/.wheelhouse-selftest-fixture').isFile());
-const realTmux = Bun.which('tmux'); assert(realTmux && Bun.which('expect'));
+const realTmux = Bun.which('tmux'), realNode = Bun.which('node'); assert(realTmux && realNode && Bun.which('expect'));
 const modes = ['pass', 'fail', 'TERM', 'INT', 'HUP', 'preexisting'];
 const selected = process.env.WHEELHOUSE_FLOOR_CLEANUP_CASES?.split(',') ?? modes;
 assert(selected.length && selected.every(x => modes.includes(x)));
@@ -50,7 +50,8 @@ function actor(tag: string, action: string, peer = '', defer = false) {
   if (process.env.WHEELHOUSE_FLOOR_CLEANUP_SUBJECT && action !== 'peer') fs.copyFileSync(process.env.WHEELHOUSE_FLOOR_CLEANUP_SUBJECT, program);
   let body = fs.readFileSync(program, 'utf8');
   if (action === 'fail') { const anchor = '  WN="$(tmux -L "$SOCK" list-windows'; assert.equal(body.split(anchor).length, 2); body = body.replace(anchor, () => '  fail "fixture: planted floor feature assertion after real server setup"\n' + anchor); fs.writeFileSync(program, body); }
-  fs.writeFileSync(dir + '/bin/tmux', wrapper, { mode: 0o755 });
+  // floor's intentionally minimal RUN_PATH omits the host Node directory.
+  fs.writeFileSync(dir + '/bin/tmux', '#!' + realNode + wrapper.slice(wrapper.indexOf('\n')), { mode: 0o755 });
   const out = fs.openSync(dir + '/stdout', 'wx'), err = fs.openSync(dir + '/stderr', 'wx');
   const env = { ...process.env, PATH: dir + '/bin:' + process.env.PATH, TMUX_TMPDIR: world, TMPDIR: dir + '/tmp', HOME: tag + '/home', XDG_CONFIG_HOME: dir + '/home/.config', SHELL: '/bin/bash', FLOOR_CLEANUP_OBSERVER: dir, FLOOR_CLEANUP_REAL_TMUX: realTmux!, FLOOR_CLEANUP_PEER: peer };
   delete env.TMUX; delete env.TMUX_PANE;
@@ -81,15 +82,17 @@ for (const mode of modes.filter(m => selected.includes(m))) {
     assert(!peer.closed && live(peer.child.pid!), 'PEER_OWNER_CHANGED'); assert(result.peerAfter.alive && result.peerAfter.native.code === 0, 'PEER_SERVER_CHANGED'); assert.deepEqual(result.peerAfter.state, result.peerBefore.state, 'PEER_SOCKET_CHANGED'); assert.equal(result.peerAfter.identity.stdout, result.peerBefore.nativeIdentity.stdout, 'PEER_IDENTITY_CHANGED');
     if (mode === 'preexisting') { assert.equal(result.adopted, false, 'PREEXISTING_ENDPOINT_ADOPTED'); assert.deepEqual(result.exit, { code: 2, signal: null }); assert.match(result.stderr, /refuses preexisting tmux endpoint/); assert(result.subjectAfter.alive && result.subjectAfter.native.code === 0, 'PREEXISTING_SERVER_CHANGED'); assert.deepEqual(result.subjectAfter.state, result.subjectBefore.state, 'PREEXISTING_SOCKET_CHANGED'); }
     else { assert.deepEqual(result.exit, { code: ({ pass: 0, fail: 1, TERM: 143, INT: 130, HUP: 129 } as any)[mode], signal: null }); if (mode === 'pass') assert.match(result.stdout, /floor\.ts works on this machine\./); if (mode === 'fail') assert.match(result.stdout, /FAIL\s+fixture: planted floor feature assertion/); assert(!result.subjectAfter.alive && result.subjectAfter.native.code === 1, 'OWN_SERVER_REMAINS'); assert(!result.subjectAfter.state.exists, 'OWN_SOCKET_REMAINS'); }
-  } catch (e: any) { result.failure = { kind: e instanceof assert.AssertionError ? 'behavior' : 'incomplete', message: String(e.message ?? e) }; console.error('FLOOR_CLEANUP_BEFORE_RESCUE ' + JSON.stringify(result)); }
+  } catch (e: any) { result.failure = { kind: e instanceof assert.AssertionError && !String(e.message).startsWith('INCOMPLETE') ? 'behavior' : 'incomplete', message: String(e.message ?? e) }; console.error('FLOOR_CLEANUP_BEFORE_RESCUE ' + JSON.stringify(result)); }
   finally {
     if (subject) result.subjectJoin = await stop(subject); if (peer) result.peerJoin = await stop(peer);
     result.rescue = [];
     for (const x of owned) { const state = socket(x.file); if (state.exists) { assert.deepEqual(state, x.state, 'rescue refuses unknown replacement'); const kill = tmux(x.sock, ['kill-server']); const after = socket(x.file); if (after.exists) { assert.deepEqual(after, x.state); fs.unlinkSync(x.file); } result.rescue.push({ sock: x.sock, kill, exactInodeUnlinked: after.exists }); } while (live(x.pid)) await Bun.sleep(25); }
-    if (subject) result.subjectCommands = commands(subject); if (peer) result.peerCommands = commands(peer);
+    if (subject) { result.subjectCommands = commands(subject); result.stdout = fs.readFileSync(subject.dir + '/stdout', 'utf8'); result.stderr = fs.readFileSync(subject.dir + '/stderr', 'utf8'); }
+    if (peer) { result.peerCommands = commands(peer); result.peerStdout = fs.readFileSync(peer.dir + '/stdout', 'utf8'); result.peerStderr = fs.readFileSync(peer.dir + '/stderr', 'utf8'); }
     fs.writeFileSync(world + '/result.json', JSON.stringify(result, null, 2)); if (evidence) fs.writeFileSync(evidence + '/' + mode + '.json', JSON.stringify(result, null, 2), { flag: 'wx' }); results.push(result);
     console.log('FLOOR_CLEANUP_RESULT ' + JSON.stringify(result));
   }
+  if (result.failure?.kind === 'incomplete') break;
 }
 console.log(`floor-cleanup: ${results.filter(x => !x.failure).length}/${results.length} native modes; peer and owned state checked before rescue`);
 if (results.some(x => x.failure)) process.exitCode = 1;

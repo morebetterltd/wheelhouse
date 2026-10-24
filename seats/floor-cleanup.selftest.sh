@@ -2,8 +2,8 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
-if ! command -v tmux >/dev/null 2>&1 || ! command -v expect >/dev/null 2>&1; then
-  echo 'floor-cleanup: SKIP native tmux and Expect required'
+if ! command -v tmux >/dev/null 2>&1 || ! command -v expect >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
+  echo 'floor-cleanup: SKIP native tmux, Expect and Node required'
   exit 0
 fi
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-floor-cleanup.XXXXXX")" || exit 2
