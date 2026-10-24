@@ -40,7 +40,8 @@ async function scenario(name: string, opts: any, source = implementation) {
   fs.writeFileSync(path.join(dir, "wheelhouse/.template-source"), `alert-low-disk-gb=10\ngithub-issue-watch=off\n${opts.config ?? ""}`);
   fs.writeFileSync(path.join(seats, "template-drift.sh"), '#!/usr/bin/env bash\nprintf \'{"modified":[],"localOnly":[],"missing":[],"aheadBy":0}\\n\'\n');
   fs.symlinkSync(bun, path.join(bin, "bun")); fs.symlinkSync(bash, path.join(bin, "bash"));
-  fs.writeFileSync(path.join(bin, "bd"), `#!/usr/bin/env bun\nconst fs=require('fs');fs.appendFileSync(${JSON.stringify(path.join(dir, "bd-calls.jsonl"))},JSON.stringify(process.argv.slice(2))+'\\n');console.log(${JSON.stringify(opts.ready ? '[{"id":"ready-fixture","title":"fixture"}]' : '[]')});\n`, { mode: 0o755 });
+  const readyPayload=JSON.stringify(opts.ready ? '[{"id":"ready-fixture","title":"fixture"}]' : '[]');
+  fs.writeFileSync(path.join(bin, "bd"), `#!/usr/bin/env bun\nconst fs=require('fs');fs.appendFileSync(${JSON.stringify(path.join(dir, "bd-calls.jsonl"))},JSON.stringify(process.argv.slice(2))+'\\n');console.log(${readyPayload});\n`, { mode: 0o755 });
   const response = path.join(dir, "response.jsonl"), calls = path.join(dir, "docker-calls.jsonl");
   let text = capture;
   if (opts.size) text = rows.map(r => JSON.stringify(r.Type === "Build Cache" ? { ...r, Size: opts.size } : r)).join("\n") + "\n";
