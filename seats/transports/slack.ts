@@ -28,6 +28,14 @@ function allowedFrom(root: string): Set<string> {
 function log(root: string, line: string){ const dir=path.join(root,"seats","logs"); fs.mkdirSync(dir,{recursive:true}); fs.appendFileSync(path.join(dir,"courier.out.log"), `${new Date().toISOString()} ${line}\n`); }
 function slackRefs(): Map<string,string> { const m=new Map<string,string>(); for(const ev of readEvents() as any[]){ if(ev?.type==="sent" && ev.transport==="slack" && typeof ev.id==="string" && typeof ev.ref==="string") m.set(ev.id, ev.ref); } return m; }
 function needByThreadTs(): Map<string,string> { const m=new Map<string,string>(); for(const [id,ref] of slackRefs()) { const parts=ref.split(":"); const ts=parts[parts.length-1]; if(ts) m.set(ts,id); } return m; }
+// Slack's formatting docs define only these three display-equivalent entities.
+// Decode once (on both sides): do not strip mrkdwn/whitespace or recursively
+// turn literal double-encoded entities into different message content.
+// https://docs.slack.dev/messaging/formatting-message-text/#escaping-text
+function comparisonText(text: string): string {
+  const decoded: Record<string, string> = { amp: "&", lt: "<", gt: ">" };
+  return text.replace(/&(amp|lt|gt);/g, (_, entity) => decoded[entity]);
+}
 function abortMs(): number { const n=Number(process.env.WHEELHOUSE_SLACK_FETCH_ABORT_MS || "10000"); return Number.isFinite(n) && n > 0 ? n : 10000; }
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, label: string): Promise<Response> {
   const ctrl = new AbortController();
@@ -74,13 +82,16 @@ export class SlackTransport implements NeedTransport, ChannelTransport {
     const parts = ref.split(":");
     const ts = parts.pop() || ref;
     const threadTs = parts.length > 1 ? parts.pop() : undefined;
+    if (parts.length > 1 || (parts[0] && parts[0] !== destination)) return false;
     const method = threadTs ? "conversations.replies" : "conversations.history";
     const body:any = { channel:destination, limit:20 };
     if (threadTs) body.ts = threadTs;
     else { body.latest = ts; body.inclusive = true; }
     const json = await this.call(method, body);
     const messages:any[] = json.messages || [];
-    return messages.some(m => String(m.ts) === String(ts) && (text === undefined || String(m.text ?? "") === text));
+    return messages.some(m => String(m.ts) === String(ts) &&
+      (m.channel === undefined || String(m.channel) === destination) &&
+      (text === undefined || comparisonText(String(m.text ?? "")) === comparisonText(text)));
   }
   async confirm(ts: string, threadTs?: string): Promise<void> {
     const ok = await this.readBack(this.channel, threadTs ? `${this.channel}:${threadTs}:${ts}` : `${this.channel}:${ts}`, undefined as any);
