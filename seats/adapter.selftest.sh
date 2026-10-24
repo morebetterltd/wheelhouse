@@ -1978,6 +1978,11 @@ LEG_PROJ="$FIX/legacy-proj"
 build_proj "$LEG_PROJ" legacy
 RUN_PROJ="$LEG_PROJ"; STATE="$LEG_PROJ/seats/state.json"; LOG="$LEG_PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-legacy/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-legacy/worker-1/cwd.txt"
 LEG_WTS="$LEG_PROJ/.wheelhouse-worktrees"
+# These seeds test legacy worktree directories with a current-format known
+# brief. The dedicated dispatch-worktree fixture tests pre-hash Pi records.
+stamp_legacy_brief_hash() {
+  env STATE="$STATE" BRIEF="$LEG_PROJ/contracts/WORKER.md" SEAT="$1" bun -e 'import fs from "node:fs"; import crypto from "node:crypto"; const f=process.env.STATE,s=JSON.parse(fs.readFileSync(f,"utf8")); if(!s.seats[process.env.SEAT])throw new Error("missing fixture seat"); s.seats[process.env.SEAT].roleBriefHash=crypto.createHash("sha256").update(fs.readFileSync(process.env.BRIEF)).digest("hex"); fs.writeFileSync(f,JSON.stringify(s,null,2)+"\n");'
+}
 mkdir -p "$LEG_WTS" "$LEG_PROJ/seats/logs"
 env HOME="$HOME_FIX" PROJ="$LEG_PROJ" bun -e 'import fs from "node:fs"; const p=process.env.PROJ+"/seats/seats.json"; const r=JSON.parse(fs.readFileSync(p,"utf8")); for (const n of ["worker-2","worker-3"]) r.seats[n]={role:"worker",provider:"anthropic",model:"stub-model-1:high",account:{dir:`~/.pi-seats-legacy/${n}`}}; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 for s in worker-2 worker-3; do mkdir -p "$HOME_FIX/.pi-seats-legacy/$s"; printf '{\n  "%s": true\n}\n' "$LEG_PROJ" > "$HOME_FIX/.pi-seats-legacy/$s/trust.json"; printf '{"stub":"%s"}\n' "$SENTINEL" > "$HOME_FIX/.pi-seats-legacy/$s/auth.json"; done
@@ -1994,11 +1999,13 @@ if [ $RC -eq 0 ] && [ "$(wt_branch "$(seat_wt "$LEG_PROJ" worker-2)")" = "fleet/
   pass "legacy worktrees: closed-bead legacy directories do not count against the dispatch cap"
 else fail "legacy worktrees: worker-2 dispatch was blocked by closed legacy dirs (exit $RC): $OUT"; fi
 env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/open-bead" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"open-bead",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+stamp_legacy_brief_hash worker-1 || exit 2
 run dispatch worker-1 open-bead "same legacy bead again"
 if [ $RC -eq 0 ] && { [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$LEG_PROJ" worker-1)" ] || [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$LEG_WTS/open-bead" ]; } && [ "$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")" = "fleet/open-bead" ]; then
   pass "legacy worktrees: redispatching the open bead reuses or adopts its legacy worktree"
 else fail "legacy worktrees: open legacy bead was not reused/adopted (exit $RC cwd=$(cat "$CWD_FILE" 2>/dev/null) branch=$(wt_branch "$(cat "$CWD_FILE" 2>/dev/null)")): $OUT"; fi
 env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/closed-1" SESSION="$LEG_SESSION" LOG="$LOG" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-1"]={pid:null,cwd:process.env.CWD,lastBead:"closed-1",sessionFile:process.env.SESSION,sessionId:"legacy-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+stamp_legacy_brief_hash worker-1 || exit 2
 run dispatch worker-1 closed-override "closed legacy cwd must not override the seat worktree"
 if [ $RC -eq 0 ] && [ "$(cat "$CWD_FILE" 2>/dev/null)" = "$(seat_wt "$LEG_PROJ" worker-1)" ] && [ "$(wt_branch "$(seat_wt "$LEG_PROJ" worker-1)")" = "fleet/closed-override" ]; then
   pass "legacy worktrees: a recorded cwd for a closed bead does not override the new bead's seat worktree"
@@ -2014,6 +2021,7 @@ else fail "legacy worktrees: missing legacy cwd resume did not refuse safely (ex
 fgit -C "$LEG_PROJ" worktree add -q "$LEG_WTS/odd-bead" -b fleet/ootb-sync-20260924 main
 ODD_SESSION="$HOME_FIX/.pi-seats-legacy/worker-3/sessions/odd-session.jsonl"; mkdir -p "$(dirname "$ODD_SESSION")"; printf '{"type":"session"}\n' > "$ODD_SESSION"
 env HOME="$HOME_FIX" STATE="$STATE" CWD="$LEG_WTS/odd-bead" SESSION="$ODD_SESSION" LOG="$LEG_PROJ/seats/logs/worker-3.jsonl" bun -e 'import fs from "node:fs"; const f=process.env.STATE; const s=JSON.parse(fs.readFileSync(f,"utf8")); s.seats["worker-3"]={pid:null,cwd:process.env.CWD,lastBead:"odd-bead",sessionFile:process.env.SESSION,sessionId:"odd-session",log:process.env.LOG}; fs.writeFileSync(f, JSON.stringify(s,null,2)+"\n")'
+stamp_legacy_brief_hash worker-3 || exit 2
 run dispatch worker-3 odd-bead "nonstandard branch legacy bead"
 if [ $RC -eq 0 ] && [ "$(wt_branch "$(cat "$HOME_FIX/.pi-seats-legacy/worker-3/cwd.txt" 2>/dev/null)")" = "fleet/ootb-sync-20260924" ]; then
   pass "legacy worktrees: a bead on a non-fleet/bead branch keeps its existing branch"
