@@ -31,10 +31,39 @@ for (const fault of [false, true]) {
   // RUN_PATH deliberately retains the Bun directory. Keep native tmux on that
   // same private directory, translating ONLY -L addresses to owned relative -S
   // endpoints: Darwin's absolute AF_UNIX path limit is shorter than task roots.
-  fs.writeFileSync(root + '/bin/bun', '#!/usr/bin/env bash\nexec ' + JSON.stringify(realBun) + ' "$@"\n', { mode: 0o755 });
-  fs.writeFileSync(root + '/bin/tmux', '#!/usr/bin/env bash\nif [ "${1:-}" = -L ]; then socket="$2"; shift 2; exec ' + JSON.stringify(realTmux) + ' -S "./$socket.sock" "$@"; fi\nexec ' + JSON.stringify(realTmux) + ' "$@"\n', { mode: 0o755 });
+  // Hold only native floor-pane launches, not render/PTY/validity producers.
+  // split-window returns after the launcher is held; capture-pane releases that
+  // exact pane. A pane-count-only test therefore kills a healthy producer
+  // before it can execute, deterministically, without manufacturing host load.
+  const gate = root + '/pane-launch'; fs.mkdirSync(gate);
+  fs.writeFileSync(root + '/bin/bun', `#!/usr/bin/env bash
+if [ -n "\${TMUX:-}" ] && [ "\${1##*/}" = floor.ts ]; then
+  printf '%s\\n' "$$" > ${JSON.stringify(gate)}/entered-"$TMUX_PANE"
+  while [ ! -f ${JSON.stringify(gate)}/release-"$TMUX_PANE" ]; do sleep 0.05; done
+fi
+exec ${JSON.stringify(realBun)} "$@"
+`, { mode: 0o755 });
+  fs.writeFileSync(root + '/bin/tmux', `#!/usr/bin/env bash
+if [ "\${1:-}" = -L ]; then socket="$2"; shift 2; set -- -S "./$socket.sock" "$@"; fi
+if [ "\${1:-}" = -S ] && [ "\${3:-}" = capture-pane ]; then
+  socket="$2"; args=("$@"); target=""
+  while [ "$#" -gt 0 ]; do if [ "$1" = -t ]; then target="$2"; break; fi; shift; done
+  pane="$(${JSON.stringify(realTmux)} -S "$socket" display-message -p -t "$target" '#{pane_id}')" || exit 2
+  : > ${JSON.stringify(gate)}/release-"$pane"
+  set -- "\${args[@]}"
+fi
+${JSON.stringify(realTmux)} "$@"; rc=$?
+[ "$rc" = 0 ] || exit "$rc"
+if [ "\${1:-}" = -S ] && [ "\${3:-}" = split-window ]; then
+  pane="$(${JSON.stringify(realTmux)} -S "$2" display-message -p -t wh-tfix:bridge.1 '#{pane_id}')" || exit 2
+  while [ ! -f ${JSON.stringify(gate)}/entered-"$pane" ]; do
+    ${JSON.stringify(realTmux)} -S "$2" capture-pane -p -t "$pane" >/dev/null || exit 2
+    sleep 0.05
+  done
+fi
+`, { mode: 0o755 });
   const recordsFile = root + '/executions.jsonl';
-  const prefix = `import { appendFileSync as recordSelectedSource, readFileSync as readSelectedSource } from 'node:fs';\nimport { createHash as hashSelectedSource } from 'node:crypto';\nimport { fileURLToPath as selectedSourcePath } from 'node:url';\nrecordSelectedSource(${JSON.stringify(recordsFile)}, JSON.stringify({marker:${JSON.stringify(name)},file:selectedSourcePath(import.meta.url),sha256:hashSelectedSource('sha256').update(readSelectedSource(new URL(import.meta.url))).digest('hex'),pid:process.pid,args:process.argv.slice(2),stdinTTY:!!process.stdin.isTTY,stdoutTTY:!!process.stdout.isTTY,tmux:process.env.TMUX||null})+'\\n');\n`;
+  const prefix = `import { appendFileSync as recordSelectedSource, readFileSync as readSelectedSource } from 'node:fs';\nimport { createHash as hashSelectedSource } from 'node:crypto';\nimport { fileURLToPath as selectedSourcePath } from 'node:url';\nrecordSelectedSource(${JSON.stringify(recordsFile)}, JSON.stringify({marker:${JSON.stringify(name)},file:selectedSourcePath(import.meta.url),sha256:hashSelectedSource('sha256').update(readSelectedSource(new URL(import.meta.url))).digest('hex'),pid:process.pid,args:process.argv.slice(2),stdinTTY:!!process.stdin.isTTY,stdoutTTY:!!process.stdout.isTTY,tmux:process.env.TMUX||null,pane:process.env.TMUX_PANE||null})+'\\n');\n`;
   const body = fault ? original.replace(anchor, 'render();\nif (!process.stdin.isTTY) process.exit(0); // planted single-frame interactive product fault\nsetInterval(render, 500);') : original;
   const shebangEnd = body.indexOf('\n') + 1; assert(body.startsWith('#!') && shebangEnd > 0);
   const selected = body.slice(0, shebangEnd) + prefix + body.slice(shebangEnd);
@@ -73,6 +102,8 @@ for (const fault of [false, true]) {
   fs.closeSync(out); fs.closeSync(err);
   const stdout = fs.readFileSync(root + '/stdout', 'utf8'), stderr = fs.readFileSync(root + '/stderr', 'utf8');
   const executions = fs.existsSync(recordsFile) ? fs.readFileSync(recordsFile, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+  const launchGates = fs.readdirSync(gate).filter(file => file.startsWith('entered-')).map(file => ({ pane: file.slice('entered-'.length), pid: Number(fs.readFileSync(gate + '/' + file, 'utf8')), released: fs.existsSync(gate + '/release-' + file.slice('entered-'.length)) }));
+  console.log('FLOOR_SOURCE_PANE_LAUNCH ' + JSON.stringify({ name, launchGates, executed: executions.filter(row => row.tmux).map(row => ({ pane: row.pane, pid: row.pid })) }));
   const expectedCanary = (needle: string) => sha(selected.split('\n').filter(line => !line.includes(needle)).join('\n'));
   let failure: string | null = null;
   const commands: any[] = [];
@@ -90,7 +121,11 @@ for (const fault of [false, true]) {
     assert(empty.some(row => row.args.includes('--once')), 'EMPTY_SOURCE_NOT_EXECUTED');
     assert(main.some(row => !row.args.includes('--once') && !row.stdinTTY && !row.tmux), 'REPAINT_SOURCE_NOT_EXECUTED');
     assert(main.some(row => !row.args.includes('--once') && row.stdinTTY && !row.tmux), 'PTY_SOURCE_NOT_EXECUTED');
-    assert(main.filter(row => row.stdinTTY && row.tmux).length >= 2, 'TMUX_SOURCE_NOT_EXECUTED: initial and repaired panes');
+    const panes = main.filter(row => row.stdinTTY && row.tmux);
+    assert.equal(launchGates.length, 2, 'INCOMPLETE: both native floor launchers must enter the private hold');
+    assert.equal(panes.length, 2, 'TMUX_SOURCE_NOT_EXECUTED: initial and repaired panes');
+    assert.equal(new Set(panes.map(row => row.pane)).size, 2, 'initial and repaired panes must be distinct');
+    for (const held of launchGates) assert(held.released && panes.some(row => row.pane === held.pane && row.pid === held.pid), 'each held native producer must execute in its own observed pane');
     for (const row of [...main, ...empty]) assert.equal(row.sha256, sha(selected), 'installed requested source bytes');
     for (const [file, needle] of [['floor-sab1.ts', 'PROCESS GONE'], ['floor-sab2.ts', 'no event log yet']]) {
       const rows = executions.filter(row => row.file.endsWith('/' + file));
@@ -103,7 +138,7 @@ for (const fault of [false, true]) {
     assert(!/  FAIL /.test(beforeFault), 'all pre-fault feature assertions healthy');
     assert.equal(exit.code, fault ? 1 : 0, fault ? 'ONE_FRAME_FAULT_NOT_REJECTED' : 'marked alternate preserves default behavior');
     if (fault) {
-      assert.match(stdout, /FAIL\s+floor did not publish a second repaint before exit\/safety cap/);
+      assert.match(stdout, /FAIL\s+floor (?:did not publish a second repaint before exit\/safety cap|producer exited before its second repaint)/);
       assert.match(stdout, /FAIL\s+multi-frame capture did not show repeated in-place repaint sequences \(count=1\)/);
     } else assert.match(stdout, /floor\.ts works on this machine\./);
   } catch (error) { failure = String(error); failures++; }
@@ -121,7 +156,7 @@ for (const fault of [false, true]) {
       fs.unlinkSync(file);
     }
   }
-  const result = { name, fault, argument, selectedSha256: sha(selected), executedSelftestSha256: sha(fs.readFileSync(program)), defaultFloorSha256: sha(original), preflight, exit, executions, stdout, stderr, failure, cleanupCommands: commands };
+  const result = { name, fault, argument, selectedSha256: sha(selected), executedSelftestSha256: sha(fs.readFileSync(program)), defaultFloorSha256: sha(original), preflight, exit, executions, launchGates, stdout, stderr, failure, cleanupCommands: commands };
   fs.writeFileSync(root + '/result.json', JSON.stringify(result, null, 2));
   if (evidence) fs.writeFileSync(evidence + '/' + name + '.json', JSON.stringify(result, null, 2), { flag: 'wx' });
   console.log((failure ? 'FAIL' : 'PASS') + ' floor-source ' + name + ': ' + (failure ?? 'native subject selection, runtime imports, all fixture legs and intended oracle verified'));
