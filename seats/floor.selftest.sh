@@ -499,7 +499,8 @@ elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
 else
   SOCK="whfloor$$"
   SOCKET_BASE="$(cd "${TMUX_TMPDIR:-/tmp}" && pwd -P)" || exit 2
-  FLOOR_SOCKET_PATH="$SOCKET_BASE/tmux-$(id -u)/$SOCK"
+  FLOOR_SOCKET_UID="$(id -u)" || exit 2
+  FLOOR_SOCKET_PATH="$SOCKET_BASE/tmux-$FLOOR_SOCKET_UID/$SOCK"
   bun "$HERE/selftest-floor-socket.ts" absent "$FLOOR_SOCKET_PATH" || exit 2
   FLOOR_SOCKET_CLAIMED=1
   crun() {
