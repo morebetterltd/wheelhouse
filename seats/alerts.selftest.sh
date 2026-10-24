@@ -62,6 +62,18 @@ case "${GH_UNTRIAGED:-0}" in
 esac
 SH
 chmod +x "$BIN/gh"
+# Every alerts/clock/canary child shadows Docker, even on a host with Docker.
+# This is the recorded aggregate fixture, not a daemon or prune delegation.
+export WHEELHOUSE_ALERTS_DOCKER_CAPTURE="$HERE/fixtures/docker-system-df.jsonl"
+cat > "$BIN/docker" <<'JS'
+#!/usr/bin/env bun
+const fs=require('fs'),args=process.argv.slice(2);
+if(JSON.stringify(args)!==JSON.stringify(['system','df','--format','{{json .}}'])){console.error('forbidden fixture docker call');process.exit(91);}
+const capture=fs.readFileSync(process.env.WHEELHOUSE_ALERTS_DOCKER_CAPTURE,'utf8');
+if(process.env.WHEELHOUSE_DOCKER_PRESSURE_EVIDENCE)fs.writeFileSync(process.env.WHEELHOUSE_DOCKER_PRESSURE_EVIDENCE+'/docker-default-'+process.pid+'.json',JSON.stringify({pid:process.pid,ppid:process.ppid,args,capture}));
+process.stdout.write(capture);
+JS
+chmod +x "$BIN/docker"
 run_alert(){ OUT="$(cd "$ROOT" && env HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" "$@" 2>&1)"; RC=$?;
   if [ "$RC" = 0 ] && [ -f "$ROOT/seats/inbox.jsonl" ]; then
     node --input-type=module - "$ROOT" <<'JS' || fail 'every herald alert row must name its condition and retain concrete detail'
@@ -132,6 +144,11 @@ drift_set_cases(){
     [ "$FAILED" = 0 ] && pass 'changed drift set starts a fresh hold and re-raises exactly once; returning old set gets a new hold'
   fi
 }
+phase 'Docker cache pressure — recorded JSONL, synthetic variations, no real daemon'
+if bun "$HERE/fixtures/docker-cache-pressure.ts" "$ROOT/seats/alerts.ts" "$FIX/docker-cases"; then
+  pass 'Docker cache-pressure and unavailable-Docker consumer cases pass'
+else fail 'Docker cache-pressure fixture failed'; fi
+
 phase 'drift file-set design'
 case "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" in all|same|changed) ;; *) echo 'invalid drift test case' >&2; exit 2;; esac
 drift_set_cases
