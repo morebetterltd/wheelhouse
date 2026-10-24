@@ -81,7 +81,7 @@ function named(original: string, host: string) {
   assert.equal(original.split("const HOST = os.hostname();").length, 2);
   return original.replace("const HOST = os.hostname();", `const HOST = ${JSON.stringify(host)};`);
 }
-async function preservation(kind: "transition" | "supervisor" | "sweep" | "sweep-refusal") {
+async function preservation(kind: "transition" | "supervisor" | "sweep" | "inherited" | "sweep-refusal") {
   const dir = path.join(root, kind); fs.mkdirSync(dir); const state = path.join(dir, "state"); fs.mkdirSync(state);
   const lock = path.join(state, "host.lock"), ready = path.join(dir, "ready"), release = path.join(dir, "release"), receipts = path.join(dir, "refresh.jsonl");
   const hasRenewal = source.includes("function renewFiles("), hasHeartbeat = source.includes("}, 60_000);");
@@ -119,30 +119,52 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "sweep
     fs.writeFileSync(path.join(seats, "selftest-sweep.sh"), testSweep);
     const init = command(dir, ["git", "-C", project, "init", "-q", "-b", "main"], env); assert.equal(init.status, 0, init.stderr);
     const add = command(dir, ["git", "-C", project, "add", "seats"], env); assert.equal(add.status, 0, add.stderr);
-    const suite = path.join(seats, "idle.selftest.sh"); fs.writeFileSync(suite, '#!/usr/bin/env bash\nprintf ready > "$CLEANER_READY"\n' + (kind === "sweep-refusal" ? 'sleep 5\nprintf finished > "$CLEANER_RELEASE"\n' : 'while [ ! -f "$CLEANER_RELEASE" ]; do sleep 0.02; done\n'));
-    actor = start(dir, ["bash", path.join(seats, "selftest-sweep.sh")], { ...env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, CLEANER_READY: ready, CLEANER_RELEASE: release, ...(kind === "sweep-refusal" ? { WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S: "2", WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: "1" } : {}) });
+    const suite = path.join(seats, "idle.selftest.sh"); fs.writeFileSync(suite, '#!/usr/bin/env bash\nprintf "%s\\n" "$$" > "$CLEANER_READY"\n' + (kind === "sweep-refusal" ? 'sleep 5\nprintf finished > "$CLEANER_RELEASE"\n' : 'while [ ! -f "$CLEANER_RELEASE" ]; do sleep 0.02; done\n'));
+    let argv = ["bash", path.join(seats, "selftest-sweep.sh")];
+    if (kind === "inherited") {
+      // Isolate the inherited-watchdog path: its outer supervisor deliberately
+      // has no heartbeat, so it cannot conceal a missing inherited renewal.
+      let outer = named(source, "network-before");
+      const first = outer.indexOf("      renewal = setInterval(() => {"), last = outer.indexOf('      gate.end("admitted\\n");', first);
+      if (first >= 0) { assert(last > first); outer = outer.slice(0, first) + outer.slice(last); }
+      const outerFile = path.join(dir, "outer-no-heartbeat.ts"); fs.writeFileSync(outerFile, outer);
+      argv = ["bun", outerFile, "supervise", lock, ...argv];
+    }
+    actor = start(dir, argv, { ...env, WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, CLEANER_READY: ready, CLEANER_RELEASE: release, ...(kind === "sweep-refusal" ? { WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S: "2", WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: "1" } : {}) });
     await until(() => fs.existsSync(ready), actor);
   }
   try {
     if (kind === "sweep-refusal") {
       ownerPid = actor.child.pid!;
+      const payload = Number(fs.readFileSync(ready, "utf8")); assert(Number.isInteger(payload) && payload > 1);
+      const before = command(dir, ["ps", "-ww", "-p", String(payload), "-o", "pid=,uid=,ppid=,pgid=,lstart=,command="], env);
+      assert.equal(before.status, 0, before.stderr); assert.equal(before.stderr, "");
+      assert.equal(Number(before.stdout.trim().split(/\s+/)[3]), payload, "actual isolated payload group exists");
       await until(() => actor.closed());
       const out = fs.readFileSync(path.join(dir, "actor.stdout"), "utf8"), err = fs.readFileSync(path.join(dir, "actor.stderr"), "utf8"), exit = await actor.done;
+      const census = command(dir, ["ps", "-ww", "-axo", "pid=,pgid=,stat="], env); assert.equal(census.status, 0); assert.equal(census.stderr, "");
+      const rows = census.stdout.trim().split("\n").map(line => { const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line); assert(m, "complete native group census row"); return { pid: Number(m[1]), group: Number(m[2]), state: m[3] }; });
+      assert(rows.some(row => row.pid === process.pid), "census includes this controller before measuring absence");
+      const survivors = rows.filter(row => row.group === payload && !row.state.startsWith("Z"));
+      const record = { kind, nativeSetup: true, actualRefusal: err.includes("STOP: sweep lock renewal failed"), nativeExit: exit.code, deadlineEnforced: out.includes("timed out after 2s"), liveCohort: survivors.length, cleaned: survivors.length === 0, payloadCompletedNormally: fs.existsSync(release) };
+      fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(record, null, 2)); facts.push(record);
+      console.log("MEASUREMENT cleaner sweep-refusal " + JSON.stringify(record));
       assert.equal(exit.code, 1); assert.equal(exit.signal, null);
-      assert(err.includes("STOP: sweep lock renewal failed"), "RENEWAL_REFUSAL_NOT_OBSERVED");
-      assert(out.includes("timed out after 2s") && err.includes("selftest-sweep: CLEAN "), "RENEWAL_REFUSAL_DISABLED_CONTAINMENT");
-      assert(!fs.existsSync(release), "timed-out payload must not complete normally");
-      facts.push({ kind, nativeSetup: true, actualRefusal: true, nativeExit: 1, deadlineEnforced: true, cleaned: true });
-      console.log("PASS cleaner sweep-refusal: actual renewal refusal retains native timeout and CLEAN");
+      assert(record.actualRefusal, "RENEWAL_REFUSAL_NOT_OBSERVED");
+      // A known renewal error truthfully suppresses CLEAN/green; independently
+      // observe the real deadline and native cohort instead of requiring CLEAN.
+      assert(record.deadlineEnforced && record.cleaned, "RENEWAL_REFUSAL_DISABLED_CONTAINMENT");
+      assert(!record.payloadCompletedNormally, "timed-out payload must not complete normally");
+      console.log("PASS cleaner sweep-refusal: actual refusal retains native timeout; live cohort=0");
       return;
     }
     const claim = JSON.parse(fs.readFileSync(path.join(lock, marker), "utf8")); ownerPid = claim.pid;
     assert(Number.isInteger(ownerPid)); process.kill(ownerPid, 0);
-    if (kind !== "supervisor") assert.equal(ownerPid, actor.child.pid, "wire holder is the original spawned actor");
+    if (kind !== "supervisor" && kind !== "inherited") assert.equal(ownerPid, actor.child.pid, "wire holder is the original spawned actor");
     const identity = command(dir, ["ps", "-ww", "-p", String(ownerPid), "-o", "pid=,uid=,ppid=,lstart=,command="], env);
     assert.equal(identity.status, 0, identity.stderr); assert.equal(identity.stderr, "");
     assert(new RegExp(`^\\s*${ownerPid}\\s+${process.getuid()}\\s+`).test(identity.stdout), "native holder identity exists before measuring");
-    if (kind === "supervisor") assert.equal(Number(identity.stdout.trim().split(/\s+/)[2]), actor.child.pid, "supervised holder is the original gated child");
+    if (kind === "supervisor" || kind === "inherited") assert.equal(Number(identity.stdout.trim().split(/\s+/)[2]), actor.child.pid, "supervised holder is the original gated child");
     owned ||= `${fs.statSync(lock).dev}:${fs.statSync(lock).ino}`;
     const waiter = command(dir, ["bun", after, "acquire", lock, String(process.pid), token], env); assert.equal(waiter.status, 75, waiter.stderr);
     const before = snapshot(state); assert.equal(Object.keys(before).length, 9, "3 lock, 3 host (two aliases), 3 FIFO records");
@@ -152,7 +174,7 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "sweep
       // A live waiter admission must renew the original holder, old aliases,
       // and preexisting FIFO tickets without changing their identities/bytes.
       if (hasRenewal) { const r = command(dir, ["bun", after, "acquire", lock, String(process.pid), token], env); assert.equal(r.status, 75, r.stderr); }
-    } else if ((kind === "supervisor" && hasHeartbeat) || (kind === "sweep" && sweep.includes("slice=60"))) {
+    } else if ((kind === "supervisor" && hasHeartbeat) || (["sweep", "inherited"].includes(kind) && sweep.includes("slice=60"))) {
       await until(() => fs.existsSync(receipts) && fs.statSync(receipts).size > receiptOffset, actor);
     }
     const renewed = Object.fromEntries(Object.keys(before).map(name => [name, fs.statSync(path.join(state, name)).mtimeMs]));
@@ -201,7 +223,7 @@ async function missing() {
   console.log("PASS cleaner missing: exact anchor + trusted restore named; readonly legacy returns no proof; holder/FIFO unchanged");
 }
 let failures = 0;
-for (const kind of ["transition", "supervisor", "sweep", "sweep-refusal"] as const) {
+for (const kind of ["transition", "supervisor", "sweep", "inherited", "sweep-refusal"] as const) {
   try { await preservation(kind); } catch (e: any) { failures++; console.error("FAIL " + e.message); }
 }
 try { await missing(); } catch (e: any) { failures++; console.error("FAIL " + e.message); }
