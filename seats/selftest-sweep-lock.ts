@@ -368,7 +368,7 @@ function cachedHostNames(fd: number, expectedId: string, members: Record<string,
   try { anchor = readFile(fd, HOST_RECORD); }
   catch (e: any) {
     if (e.errno !== 2) throw e;
-    throw new Refused(`missing host record ${descriptorPaths.get(fd)}/${HOST_RECORD}; restore this file from a trusted same-machine backup (see seats/README.md: Missing sweep host record). Do not delete a live lock or recreate the anchor from unauthenticated aliases`);
+    throw Object.assign(new Refused(`missing host record ${descriptorPaths.get(fd)}/${HOST_RECORD}; restore this file from a trusted same-machine backup (see seats/README.md: Missing sweep host record). Do not delete a live lock or recreate the anchor from unauthenticated aliases`), { errno: 2 });
   }
   const record = JSON.parse(anchor[0]);
   members[HOST_RECORD] = anchor[1];
