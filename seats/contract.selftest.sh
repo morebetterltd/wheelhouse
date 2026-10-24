@@ -88,6 +88,10 @@ if [ "$RC" = 1 ] && grep -Fq "$INVALID_ID: O1: surface: missing" <<<"$OUT" && ! 
 RC=0; OUT="$(env -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE WHEELHOUSE_CONTRACT_ROOT="$FIX/graph" bun "$CONTRACT" check "$VALID_ID" 2>&1)" || RC=$?
 [ "$RC" = 0 ] && pass 'read real bd show JSON from overridden root' || fail "bd JSON check rc=$RC: $OUT"
 
+if bun "$HERE/fixtures/producer-stamps.ts" "$CONTRACT" "$FIX/producer-stamps" "$FIX/graph" "$HERE/.."; then
+  pass 'producer stamps: default shared gate, real graph labels, pseudo-header boundary, versions and removals'
+else fail 'producer stamp consumer cases failed'; fi
+
 mkdir -p "$FIX/bin"
 printf '#!/bin/sh\necho fixture-bd-unavailable >&2\nexit 7\n' > "$FIX/bin/bd"; chmod +x "$FIX/bin/bd"
 RC=0; OUT="$(env -u WHEELHOUSE_CONTRACT_FIXTURE WHEELHOUSE_SKIP_BD=1 bun "$CONTRACT" check unreadable-bead 2>&1)" || RC=$?

@@ -1102,7 +1102,9 @@ Until the herald writes the first snapshot it prints `🚢 FLEET: no snapshot ye
 
 ## Work contract shape gate
 
-`seats/contract.ts` parses the plain-text grammar in `wheelhouse/GRAPH.md`, **Every bead is a contract**. Every outcome names its consumer, surface and that consumer's check: person-on-surface → walk, person-reading → read, machine → run. Outcomes have sequential ids from O1; Intent is non-blank and precedes Outcomes. Signal is required at dispatch/review; Skills enforcement arrives separately.
+`seats/contract.ts` parses the plain-text grammar in `wheelhouse/GRAPH.md`, **Every bead is a contract**. Every outcome names its consumer, surface and that consumer's check: person-on-surface → walk, person-reading → read, machine → run. Outcomes have sequential ids from O1; Intent is non-blank and precedes Outcomes. Signal and Skills are required at dispatch/review. The producer's assembled brief carries both installed skill bodies and versions on Pi, Claude Code and Codex; missing or malformed skills STOP before launch. Contracts carry `Skills: intent@<version> outcomes@<version>`, both non-empty and once each. A differing installed version prints `WARN: contract written with intent@X, installed intent@Y` (and likewise outcomes), without refusing an older contract. Missing installed skills do not add a worker gate, but producer assembly requires both files. The stamp records declared versions, not proof that a model followed the skills.
+
+Only a bead labelled `wheelhouse-bootstrap` or `wheelhouse-smoke` may use the literal `Skills: install-procedure carve-out`. Labels come from `bd show --json`, never bead prose. Only under explicit `WHEELHOUSE_SKIP_BD=1` may the fixture's first line be `labels: wheelhouse-bootstrap` or `labels: wheelhouse-smoke` to supply that authority; a later line or normal-bd fallback file cannot. Producer brief hashes include the skill bodies and versions, so a changed or unknown loaded producer brief requires reset instead of resume/dispatch; no stale session is silently discarded.
 
 ```bash
 bun seats/contract.ts check <bead-id>
