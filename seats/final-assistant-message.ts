@@ -105,7 +105,7 @@ export function dedupeCandidates(candidates: FinalLineCandidate[]): FinalLineCan
   return out;
 }
 
-export function liveLineCandidates(stdout: string, harness: HarnessName, tag: string): FinalLineCandidate[] {
+export function liveLineCandidates(stdout: string, harness: HarnessName, tag: string, deduplicate = true): FinalLineCandidate[] {
   const out: FinalLineCandidate[] = [];
   let inFence = false;
   const lines = finalAssistantMessageLines(stdout, harness);
@@ -122,5 +122,5 @@ export function liveLineCandidates(stdout: string, harness: HarnessName, tag: st
     const normalized = trimmed.replace(/^(>\s*)+/, "").trim();
     if (re.test(normalized)) out.push({ line, normalized, lineNumber: i + 1 });
   }
-  return dedupeCandidates(out);
+  return deduplicate ? dedupeCandidates(out) : out;
 }

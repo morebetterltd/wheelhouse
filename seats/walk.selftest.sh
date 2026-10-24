@@ -63,6 +63,7 @@ if (process.env.STUB_WALK_MANUAL_SNAPSHOT) {
   fs.writeFileSync(path.join(agentDir, 'snapshot.json'), JSON.stringify({ head: head.stdout, status: head.status, stderr: head.stderr, cwd: process.cwd(), manualExists: fs.existsSync('.agents/skills/verify-five-features/SKILL.md'), manualText: fs.readFileSync('.agents/skills/verify-five-features/SKILL.md', 'utf8'), runDir: process.env.RUN_DIR, evidenceDir: process.env.EVIDENCE_DIR }));
   fs.appendFileSync(path.join(agentDir, 'invocations.jsonl'), JSON.stringify({ pid: process.pid })+'\n');
 }
+if (process.env.STUB_WORK_WALK_SNAPSHOT) require(process.env.STUB_WORK_WALK_SNAPSHOT).record(process.cwd(), agentDir);
 const clockDir = process.env.STUB_WALK_CLOCK_DIR;
 if (clockDir) {
   fs.writeFileSync(path.join(clockDir, 'verifier.tmp'), JSON.stringify({pid:process.pid,cwd:process.cwd(),stdin:fs.fstatSync(0).isCharacterDevice()?'ignored':'open-pipe'}));
@@ -107,6 +108,7 @@ fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.s
 fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || null }));
+if (process.env.STUB_WORK_WALK_SNAPSHOT) require(process.env.STUB_WORK_WALK_SNAPSHOT).record(process.cwd(), agentDir);
 if (process.env.STUB_STREAM_FILE) {
   process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, 'utf8'));
   process.exit(Number(process.env.STUB_EXIT || 0));
@@ -124,6 +126,7 @@ fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.s
 fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null, CODEX_HOME: process.env.CODEX_HOME || null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || null }));
+if (process.env.STUB_WORK_WALK_SNAPSHOT) require(process.env.STUB_WORK_WALK_SNAPSHOT).record(process.cwd(), agentDir);
 if (process.env.STUB_STREAM_FILE) {
   process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, 'utf8'));
   process.exit(Number(process.env.STUB_EXIT || 0));
@@ -167,6 +170,14 @@ EOF
   ( cd "$proj" && git init -q -b main && [ "$(git rev-parse --show-toplevel)" = "$(pwd -P)" ] && git -c user.email=selftest@local -c user.name=selftest commit -q --allow-empty -m base ) \
     || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
+
+run_work_fixture(){
+  local proj="$FIX/proj-work" ns="walk-work"
+  build_proj "$proj" "$ns"
+  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/walk/work.ts" "$proj" "$HOME_FIX/.pi-seats-$ns/verifier" "$HERE/fixtures/contracts/work-walk.md" "$HERE/fixtures/verification/five-features" "$HERE/fixtures/walk/work-snapshot.cjs"
+}
+# Focused removal controls use the exact same setup/driver/assertions as default.
+if [ "${WHEELHOUSE_WALK_WORK_ONLY:-0}" = 1 ]; then run_work_fixture; exit $?; fi
 
 run_clocked(){
   local mode="$1"; shift
@@ -237,6 +248,9 @@ proj="$FIX/proj-manual"; ns="walk-manual"; build_proj "$proj" "$ns"
 if HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/walk/manual.ts" "$proj" "$HOME_FIX/.pi-seats-$ns/verifier" "$HERE/fixtures/verification/five-features"; then
   pass 'manual surface assertions completed'
 else fail 'manual surface assertions failed'; fi
+
+phase 'per-work cold contract and outcome rows'
+if run_work_fixture; then pass 'per-work assertions completed'; else fail 'per-work assertions failed'; fi
 
 make_walk_stream_fixture(){
   local harness="$1" source="$2" dest="$3"
