@@ -219,7 +219,7 @@ async function missing() {
   const refused = command(dir, ["bun", helper, "acquire", lock, String(process.pid), token]);
   assert.equal(refused.status, 2); assert(refused.stderr.includes(file) && refused.stderr.includes("trusted same-machine backup") && refused.stderr.includes("Do not delete a live lock"), "MISSING_HOST_REPAIR_NOT_EXPLAINED");
   assert.deepEqual(snapshotWithoutAnchor(), before); assert(!fs.existsSync(file), "never authenticate leftover aliases by silently recreating the anchor");
-  const probe = path.join(dir, "legacy.ts"); fs.writeFileSync(probe, `import {legacyHostnameMatches} from ${JSON.stringify(helper)}; console.log(legacyHostnameMatches("unobserved-host"));`);
+  const probe = path.join(dir, "legacy.ts"); fs.writeFileSync(probe, `import fs from "node:fs"; import {legacyHostnameMatches, stableHostIdentity} from ${JSON.stringify(helper)}; const identity=stableHostIdentity(); if(identity.source==="hostname") throw new Error("INCOMPLETE: readonly native hardware identity unavailable"); fs.writeFileSync(${JSON.stringify(path.join(dir, "legacy-identity.json"))}, JSON.stringify({source:identity.source})); console.log(legacyHostnameMatches("unobserved-host"));`);
   const legacy = command(dir, ["bun", probe], { ...process.env, WHEELHOUSE_SELFTEST_SWEEP_LOCK: lock });
   assert.equal(legacy.status, 0, "READONLY_MISSING_CACHE_MUST_REMAIN_NO_PROOF"); assert.equal(legacy.stdout, "false\n");
   assert.deepEqual(snapshotWithoutAnchor(), before);
