@@ -44,6 +44,7 @@ The main files here:
   `--no-event-timeout-ms` / `WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS`.
 - `prune.ts` — scan/cleanup/prune: `cleanup` is the automatic never-lose-work reaper the adapter runs on bead close and `seats/supervisor.sh` schedules nightly fleet-wide; `scan` plus `prune --from-file` is the reviewed exceptions path a person drives, dry-run by default. `wheelhouse/.template-source` may set `cleanup=off` or `cleanup=report` for installs whose authority forbids automatic deletion.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
+- `manual.ts` — read-only verification-manual checker and feature/evidence reader; see "Verification manual" below.
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
@@ -57,6 +58,43 @@ REPL or by an operator placing an api_key entry; it never enters git. The
 roster is safe to commit precisely because it records only names, paths,
 optional non-secret human labels, and optional auth-route names; the moment a
 credential appears in it, that stops being true.
+
+## Verification manual
+
+A product's manual is `.agents/skills/verify-<project>/SKILL.md`, with a matching
+compatibility skills symlink and a complete `features/README.md` index. Runnable
+manuals have exactly Launch, Doctor, Drive, Evidence and Cleanup H2 sections, in
+that order. Each indexed feature has a title and the four H2s What it is, How to
+get to it, How to drive it and What proves it works. Fenced/commented examples
+are not structural headings or feature entries. Frontmatter uses scalar fields
+(or a quoted/folded/block description): name, description and semantic version.
+A `surface: none` manual needs no runnable sections and has an empty feature map.
+
+```bash
+bun seats/manual.ts check --repo <product-repo> [--project <name>]
+bun seats/manual.ts features --repo <product-repo> [--project <name>] --json
+bun seats/manual.ts evidence <feature> --repo <product-repo> --dir <retained-evidence>
+bun seats/manual.ts lint-contract --file <contract>
+```
+
+`check` prints `manual ok: N features`; format/missing/ambiguous errors exit2 and
+name a file and line. Several manuals require `--project`. The default repository
+is `WHEELHOUSE_MANUAL_ROOT` or the parent of this script's directory; an explicit
+relative `--repo` is relative to the caller. `features --json` returns an array
+with slug, title, file and the four section texts (`whatItIs`, `howToGetToIt`,
+`howToDriveIt`, `whatProvesItWorks`). Code consumers import `readManual()` and its
+`VerificationManual` / `ManualFeature` types instead of re-parsing markdown.
+
+`evidence` checks that a mapped feature's directory contains a regular file; it
+does not judge that file's truth or accept a symlink as a regular file. The
+reserved `lint-contract` command prints `not yet` and exits2; its implementation
+belongs to later work. These commands never launch or edit a product.
+
+`seats/fixtures/verification/five-features/` is the dependency-free HTTP fixture
+and hand-written format oracle. Its README and manual describe five public
+journeys, isolated launch, response/exit-status evidence and PID-owned cleanup.
+`manual.selftest.sh` exercises the seven required checker legs; the fixture's
+live HTTP proof uses its own isolated instance, never an installed service.
 
 ## Intake — signals reaching the producer
 
