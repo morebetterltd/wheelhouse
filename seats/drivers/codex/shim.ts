@@ -21,7 +21,13 @@ let capacityErrorEmitted = false;
 const env: NodeJS.ProcessEnv = { ...process.env, ...(defaultLogin ? {} : { CODEX_HOME: accountDir }), BEADS_ACTOR: actor };
 delete env.OPENAI_API_KEY; delete env.ANTHROPIC_API_KEY; delete env.ANTHROPIC_AUTH_TOKEN;
 const child = spawn("codex", ["app-server"], { cwd, env, stdio: ["pipe", "pipe", fs.openSync(errLog, "a")] });
-function sendRpc(method: string, params: any, timeoutMs = 120000): Promise<any> { const id = rpcId++; child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"); return new Promise((resolve) => { rpcPending.set(id, resolve); setTimeout(() => { if (rpcPending.has(id)) { rpcPending.delete(id); resolve({ error: { message: `timeout ${method}` } }); } }, timeoutMs); }); }
+// A live app-server RPC ends on its matching native reply or child exit,
+// never because the host took longer than a guessed completion budget.
+function sendRpc(method: string, params: any): Promise<any> {
+  const id = rpcId++;
+  child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+  return new Promise((resolve) => { rpcPending.set(id, resolve); });
+}
 function notify(method: string, params?: any) { child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, ...(params ? { params } : {}) }) + "\n"); }
 function response(id: any, success: boolean, data?: any, error?: string) { appendJson(log, { type: "response", id, success, ...(success ? { data } : { error }) }); }
 function state(extra: any = {}) { return { isStreaming: streaming, sessionId: threadId || null, sessionFile, model: resolvedModel, ...extra }; }
