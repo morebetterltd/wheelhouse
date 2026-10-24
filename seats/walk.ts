@@ -10,7 +10,7 @@
  * author reasoning enter the turn.
  *
  * Usage: bun seats/walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>]
- *          [--out <dir>] [--verifier <seat>]
+ *          [--repo <product-repo>] [--out <dir>] [--verifier <seat>]
  *
  * Exit: 0 WALKED-DONE | 2 WALKED-NOT-DONE | 3 COULD-NOT-WALK |
  *       4 malformed/missing verdict | 5 credential/preflight refusal | 1 other.
@@ -27,6 +27,7 @@ import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, typ
 import { effectiveRoster } from "./roster";
 import { hasPool } from "./pool";
 import { liveLineCandidates } from "./final-assistant-message";
+import { readManual, type VerificationManual } from "./manual";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -147,7 +148,7 @@ function parseSurface(raw: string | undefined, baseline: string | undefined): { 
   if (idx <= 0 || idx === raw.length - 1) die(`--surface must be <kind>:<spec>, got ${JSON.stringify(raw)}`);
   const kind = raw.slice(0, idx);
   const spec = raw.slice(idx + 1);
-  if (!["install", "upgrade", "product"].includes(kind)) die(`unsupported surface kind "${kind}" — expected install, upgrade, or product`);
+  if (!["install", "upgrade", "product", "manual"].includes(kind)) die(`unsupported surface kind "${kind}" — expected install, upgrade, product, or manual`);
   if (kind === "upgrade" && !baseline) die("upgrade:<runbook> requires --baseline <sha>");
   if (kind !== "upgrade" && baseline) die("--baseline is only valid with upgrade:<runbook>");
   return { kind, spec };
@@ -228,7 +229,33 @@ function checkGuiGuard(surface: { kind: string; spec: string }): GuiGuardResult 
   return { mode: "window-list", target, ok: true };
 }
 
-function buildSurfaceInstructions(kind: string, spec: string, baseline: string | undefined, workspaceRel: string): string[] {
+function optionalManual(repo: string): VerificationManual | undefined {
+  const skills = path.join(repo, ".agents", "skills");
+  try {
+    if (!fs.readdirSync(skills).some(name => name.startsWith("verify-") && fs.existsSync(path.join(skills, name, "SKILL.md")))) return undefined;
+  } catch (e: any) { if (e.code === "ENOENT") return undefined; throw e; }
+  return readManual(repo);
+}
+
+function buildSurfaceInstructions(kind: string, spec: string, baseline: string | undefined, workspaceRel: string, manual: VerificationManual | undefined, outDir: string): string[] {
+  if (kind === "manual") {
+    const feature = manual!.features.find(feature => feature.slug === spec);
+    if (!feature) refuse(`unknown manual feature slug "${spec}" in ${manual!.file}`);
+    return [
+      `Surface kind: manual`,
+      `Verification manual: ${manual!.file}`,
+      `Feature entry: ${feature.file}`,
+      `Launch, doctor, drive and clean up exactly as the manual says; drive this feature from its entry; the end state the entry names is what proves it. If the entry does not lead where it says, the verdict is WALKED-NOT-DONE quoting the step.`,
+      `First perform the entry's How to get to it step, then its How to drive it steps; a failed reach step is not permission to try later or alternate routes.`,
+      `When How to get to it names an explicit URL or command, execute that named reach step; do not replace it with navigation or another route. A working alternative does not excuse an incorrect entry.`,
+      `Follow the manual's Evidence section too. Do not repair the entry, consult implementation source, or discover a substitute route when the entry disagrees with the product.`,
+      `Caller-provided RUN_DIR: ${path.join(outDir, "runtime")}`,
+      `Caller-provided EVIDENCE_DIR: ${path.join(outDir, "evidence")}`,
+      `Use only an isolated test instance with scratch state and a non-production port/socket; leave installed applications and production services untouched. Retain evidence after cleanup.`,
+      `Full feature entry follows:`,
+      fs.readFileSync(feature.file, "utf8"),
+    ];
+  }
   if (kind === "install") {
     return [
       `Surface kind: install`,
@@ -249,6 +276,7 @@ function buildSurfaceInstructions(kind: string, spec: string, baseline: string |
   return [
     `Surface kind: product`,
     `Product surface: ${spec}`,
+    ...(manual ? [`Verification manual (may be used): ${manual.file}`] : []),
     `Consumer setup: open the URL or run the command exactly as a consumer/operator would, without reading implementation internals unless the surface itself instructs you to. For product:gui:<target> surfaces, the dispatcher preflights the target window with a window-list guard before the walk begins; if it is not frontmost and unobscured the walk records COULD-NOT-WALK instead of sending host GUI input into the wrong window.`,
   ];
 }
@@ -388,6 +416,7 @@ function main(): void {
   let baseline: string | undefined;
   let outArg: string | undefined;
   let verifierArg: string | undefined;
+  let repoArg: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -395,11 +424,15 @@ function main(): void {
     else if (a === "--baseline") baseline = argv[++i];
     else if (a === "--out") outArg = argv[++i];
     else if (a === "--verifier") verifierArg = validateSegment("seat name", argv[++i] ?? "");
+    else if (a === "--repo") {
+      repoArg = argv[++i];
+      if (!repoArg || repoArg.startsWith("--")) die("--repo requires a product repository path");
+    }
     else positional.push(a);
   }
   const claimRef = positional[0];
   if (!claimRef || positional.length !== 1) {
-    die("usage: walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--out <dir>] [--verifier <seat>]");
+    die("usage: walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--repo <product-repo>] [--out <dir>] [--verifier <seat>]");
   }
   setVerifierGateBead(claimRef, "seats/walk.ts");
   phase = "read claim and surface";
@@ -425,8 +458,27 @@ function main(): void {
     process.exit(3);
   }
 
+  phase = "prepare pinned product workspace";
+  let repo: string, gitRoot: string, tip: string;
+  try {
+    repo = fs.realpathSync(path.resolve(repoArg ?? ROOT));
+    gitRoot = fs.realpathSync(execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" }).trim());
+    tip = execFileSync("git", ["rev-parse", "HEAD^{commit}"], { cwd: gitRoot, encoding: "utf8" }).trim();
+  } catch (e: any) { refuse(`cannot pin product repository: ${e.message}`); }
+  const productSubdirectory = path.relative(gitRoot, repo);
+  if (productSubdirectory === ".." || productSubdirectory.startsWith(`..${path.sep}`) || path.isAbsolute(productSubdirectory)) refuse("product repository is outside its Git root");
+  sweepStaleScratchWorktrees(gitRoot);
+  const scratchRoot = makeScratchCwd(gitRoot, "review", tip);
+  const scratchCwd = path.join(scratchRoot, productSubdirectory);
+  if (!fs.existsSync(scratchCwd) || !fs.statSync(scratchCwd).isDirectory()) refuse(`product directory is absent at pinned tip ${tip}`);
+  let manual: VerificationManual | undefined;
+  try {
+    manual = surface.kind === "manual" ? readManual(scratchCwd) : surface.kind === "product" ? optionalManual(scratchCwd) : undefined;
+  } catch (e: any) { refuse(e.message); }
+  const surfaceInstructions = buildSurfaceInstructions(surface.kind, surface.spec, baseline,
+    surface.kind === "install" ? "consumer-product" : surface.kind === "upgrade" ? "consumer-upgrade" : ".", manual, outDir);
+
   phase = "prepare verifier seat";
-  sweepStaleScratchWorktrees(ROOT);
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
   let verifierHarness: ReturnType<typeof harnessNameForSeat>;
   try {
@@ -443,7 +495,6 @@ function main(): void {
   }
 
   phase = "prepare scratch workspace";
-  const scratchCwd = makeScratchCwd(ROOT, "review");
   const helperBin = path.join(scratchCwd, ".wheelhouse-walk-bin");
   const captureHelper = writeCaptureHelper(helperBin, outDir);
   let workspaceRel = ".";
@@ -461,7 +512,9 @@ function main(): void {
     `Claim under verifier walk:`,
     claim,
     ``,
-    ...buildSurfaceInstructions(surface.kind, surface.spec, baseline, workspaceRel),
+    ...surfaceInstructions,
+    `Product repository pinned tip: ${tip}`,
+    `Your cwd is the pinned scratch product directory. Manual/entry paths above refer to that snapshot, not the fleet checkout.`,
     ``,
     `Walk only the surface named above. Do not read fleet internals, bead history, ISA files, seat logs, author transcripts, or implementation notes unless the named surface itself sends you there.`,
     `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT). If the named surface sends you to a wheelhouse/ path that is not present in your scratch cwd, resolve it under WHEELHOUSE_ROOT.`,
@@ -477,7 +530,8 @@ function main(): void {
   fs.mkdirSync(path.dirname(markerFile), { recursive: true });
   fs.writeFileSync(markerFile, JSON.stringify({ pid: process.pid, bead: claimRef, startedAt: new Date().toISOString() }, null, 2) + "\n");
   const oneShotPath = readonlyBdPath(ROOT, `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, scratchCwd);
-  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper });
+  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper,
+    ...(surface.kind === "manual" ? { RUN_DIR: path.join(outDir, "runtime"), EVIDENCE_DIR: path.join(outDir, "evidence") } : {}) });
   const res = spawnSync(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
     env,
@@ -515,7 +569,9 @@ function main(): void {
   }
 
   const parsed = parseWalkVerdict(stdout, verifierHarness);
-  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel, guiGuard, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
+  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, repo: rootRelative(repo), tip, productSubdirectory,
+    ...(manual ? { manual: path.relative(scratchCwd, manual.file), feature: surface.kind === "manual" ? surface.spec : undefined } : {}),
+    transcript: transcriptRel, guiGuard, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
 
   appendWalkVerdictInbox(claimRef, parsed.line, parsed.detail, outDir, transcriptRel, metaRel);
   console.log(parsed.line);
