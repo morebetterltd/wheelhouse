@@ -1583,26 +1583,37 @@ else fail "reset failure left cwd/session claim behind (exit $RC cwd=$(state_get
 RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1.jsonl"; ARGV="$HOME_FIX/.pi-seats-alpha/worker-1/argv.json"; CWD_FILE="$HOME_FIX/.pi-seats-alpha/worker-1/cwd.txt"
 run stop worker-1
 
-phase "6a. resume after mid-tool death surfaces a stalled seat and herald row"
+phase "6a. resume after mid-tool death continues without an outside steer"
 run resume worker-1 >/dev/null 2>&1
 run dispatch worker-1 bead-y "MIDTOOL sleep until killed"
 if [ $RC -eq 0 ]; then pass "mid-tool setup: dispatch exits 0"; else fail "mid-tool setup: dispatch failed (rc=$RC): $OUT"; fi
 wait_for "$LOG" '"type":"tool_execution_start"'
 if grep -q '"type":"tool_execution_start"' "$LOG"; then pass "mid-tool setup: log records unfinished tool start"; else fail "mid-tool setup: no tool_execution_start in log"; fi
-# Seed herald's cursor before the resume appends the synthetic stalled settle row;
-# first sight starts at EOF by design, so this makes the later row observable.
+# Seed herald's cursor before resume; only real continued-turn settlement,
+# not a synthetic stalled settle event, should produce the later inbox row.
 env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/herald.ts" --once >/dev/null 2>&1
 PID_BEFORE="$(state_get pid)"
 kill -9 "$PID_BEFORE" 2>/dev/null || true
 wait_exit "$PID_BEFORE"
+RESUME_MARK="$(wc -c < "$LOG" | tr -d ' ')"
+INBOX_MARK="$(bun -e 'import fs from "node:fs";const p=process.argv[1];console.log(fs.existsSync(p)?fs.statSync(p).size:0)' "$RUN_PROJ/seats/inbox.jsonl")"
 run resume worker-1
-if [ $RC -eq 0 ] && says "STALLED" && says "cut off during a tool call"; then pass "resume detects the unfinished tool call and marks the seat STALLED"; else fail "resume did not surface mid-tool cutoff (rc=$RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "resume continuation requested"; then pass "resume supplies the interrupted turn its own continuation"; else fail "resume did not request continuation (rc=$RC): $OUT"; fi
+if wait_for_from "$LOG" "$RESUME_MARK" 'echo: [adapter resume]' && wait_for_from "$LOG" "$RESUME_MARK" '"type":"agent_end"'; then
+  pass "resumed mid-tool turn produces new own output and agent_end without outside steer"
+else fail "resumed mid-tool turn did not actually continue"; fi
 run status
-if [ $RC -eq 0 ] && says "STALLED" && says "last-event agent_settled"; then pass "status renders resumed mid-tool cutoff as STALLED, not RUNNING"; else fail "status did not render STALLED after mid-tool resume (rc=$RC): $OUT"; fi
+if [ $RC -eq 0 ] && says "SETTLED" && ! says "STALLED"; then pass "actual resumed progress/settlement clears pending status"; else fail "status did not confirm resumed progress (rc=$RC): $OUT"; fi
 RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$RUN_PROJ/seats/herald.ts" --once 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && grep -q '"class":"settle"' "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null && grep -q '"state":"stalled"' "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null; then
-  pass "herald appends a settle/stalled inbox row for the resumed cutoff"
-else fail "herald did not append settle/stalled row (rc=$RC out=$OUT inbox=$(cat "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null))"; fi
+if [ $RC -eq 0 ] && bun - "$RUN_PROJ/seats/inbox.jsonl" "$INBOX_MARK" <<'JS'
+import fs from 'node:fs';
+const [file,offset]=process.argv.slice(2);
+const rows=fs.readFileSync(file).subarray(Number(offset)).toString('utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line));
+process.exit(rows.some(row=>row.class==='settle'&&row.state==='terminal')?0:1);
+JS
+then
+  pass "herald observes real resumed settlement past its prior cursor"
+else fail "herald did not observe resumed settlement (rc=$RC out=$OUT inbox=$(cat "$RUN_PROJ/seats/inbox.jsonl" 2>/dev/null))"; fi
 run stop worker-1 >/dev/null 2>&1
 
 phase "6b. pruned cwd — dispatch and plain resume fall back visibly"

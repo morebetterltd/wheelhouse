@@ -650,7 +650,18 @@ claim of incorrect copied bytes.
 never escalates to SIGKILL: a seat that ignores SIGTERM is worth looking at,
 not shooting. The session survives a stop, and `resume` respawns the seat
 attached to it (`--session`), rooted back in the same cwd it was running in,
-so the context it built up comes back warm. `stop-all` is the end-of-day form:
+so the context it built up comes back warm. If its log records an interrupted
+model/tool turn (including streamed thinking or `toolcall_start`, not just an
+executing tool), `resume` also supplies one adapter-generated continuation. It
+uses the idle-aware prompt/steer route and tells the seat to inspect actual
+results/live processes rather than blindly repeat interrupted work. A completed
+turn stays settled: resume is not a fresh assignment. Until actual own stream
+progress beyond readiness, acknowledgements and replayed starts is observed,
+`status` reports the resumed continuation as `STALLED`, not plain `RUNNING`.
+Session, cwd and assigned bead are preserved; this is neither a reset nor an
+automatic restart/retry on a quiet-time deadline.
+
+`stop-all` is the end-of-day form:
 it walks the roster, SIGTERMs only seats that answer `get_state` as idle,
 prints one outcome line per rostered local seat, and reports mid-turn seats as
 `BUSY ... NOT stopped` rather than interrupting them. That matters because a

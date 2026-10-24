@@ -351,6 +351,7 @@ interface SeatRecord {
   lastCapacityCleared?: { at: string; logOffset: number };
   lastStalledEvent?: { at: string; detail: string };
   lastLaunchFailure?: { at: string; detail: string };
+  resumeContinuation?: { at: string; pid: number; startedAt: string; logIdentity: string; offset: number };
 }
 
 interface State {
@@ -1416,9 +1417,9 @@ async function cmdResume(name: string): Promise<void> {
     await driverForSeat(name, entry, "adapter resume").launch(name, entry, null, fallbackCwd);
     return;
   }
-  const wasMidTool = logHasUnfinishedToolCall(rec.log);
+  const interrupted = !rec.lastCapacityEvent && logHasInterruptedTurn(rec.log);
   await driverForSeat(name, entry, "adapter resume").launch(name, entry, rec.sessionFile, resumeCwd);
-  if (wasMidTool) await markSeatStalledAfterResume(name, rec.lastBead);
+  if (interrupted) await continueResumedTurn(name);
 }
 
 /**
@@ -1615,6 +1616,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
     delete state.seats[name].lastCapacityCleared;
     delete state.seats[name].lastStalledEvent; // a new dispatch supersedes a prior resumed-cutoff stall
+    delete state.seats[name].resumeContinuation;
   });
   let resp: any;
   try {
@@ -1831,22 +1833,40 @@ function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, Proce
 
 function seatIdleByLog(rec: SeatRecord): boolean { return agentSettledEvent(lastEvent(rec.log)); }
 
-function logHasUnfinishedToolCall(log: string): boolean {
+function logHasInterruptedTurn(log: string): boolean {
   try {
-    const r = logLinesFrom(log, 0);
-    let lastToolStart = -1;
-    let lastToolEndOrSettle = -1;
-    for (let i = 0; i < r.lines.length; i++) {
+    let active = false;
+    for (const line of logLinesFrom(log, 0).lines) {
       try {
-        const obj = JSON.parse(r.lines[i]);
-        if (obj?.type === "tool_execution_start") lastToolStart = i;
-        if (obj?.type === "tool_execution_end" || agentSettledEvent(obj?.type)) lastToolEndOrSettle = i;
-      } catch { /* skip */ }
+        const ev = JSON.parse(line);
+        if (ev.type === "agent_start" || ev.type === "turn_start") active = true;
+        else if (ev.type === "agent_end") active = ev.willRetry === true;
+        else if (ev.type === "agent_settled") active = ev.state === "stalled";
+        else if (/^(message_start|message_update|message_end|tool_execution_start|tool_execution_update|tool_execution_end|stream_activity)$/.test(ev.type)) active = true;
+      } catch { /* partial/malformed rows are not observed lifecycle boundaries */ }
     }
-    return lastToolStart >= 0 && lastToolStart > lastToolEndOrSettle;
-  } catch {
-    return false;
+    return active;
+  } catch { return false; }
+}
+
+function resumeHasProgress(name: string, rec: SeatRecord): boolean {
+  const pending = rec.resumeContinuation;
+  if (!pending || pending.pid !== rec.pid || pending.startedAt !== rec.startedAt) return false;
+  const st = ownedSeatLog(name, rec.log);
+  if (!st || `${st.dev}:${st.ino}` !== pending.logIdentity || st.size < pending.offset) return false;
+  for (const line of logLinesFrom(rec.log, pending.offset).lines) {
+    try {
+      const ev = JSON.parse(line);
+      // Readiness/queue acknowledgements, user echoes, agent/turn starts and
+      // replayed thinking/toolcall starts do not prove that work continued.
+      if (ev.type === "stream_activity" && ev.sourceType === "message_update") return true;
+      if (/^tool_execution_(start|update|end)$/.test(ev.type)) return true;
+      if (ev.type === "message_update" && /^(text_delta|thinking_delta|toolcall_delta|toolcall_end)$/.test(ev.assistantMessageEvent?.type ?? "")) return true;
+      if (ev.type === "message_end" && ev.message?.role === "assistant") return true;
+      if (ev.type === "agent_end" || ev.type === "turn_end" || (ev.type === "agent_settled" && ev.state !== "stalled")) return true;
+    } catch { /* incomplete rows are not progress */ }
   }
+  return false;
 }
 
 function appendSeatLog(log: string, obj: any): void {
@@ -1854,17 +1874,21 @@ function appendSeatLog(log: string, obj: any): void {
   fs.appendFileSync(log, `${JSON.stringify(obj)}\n`);
 }
 
-async function markSeatStalledAfterResume(name: string, bead: string | undefined): Promise<void> {
-  const at = new Date().toISOString();
-  const detail = `resume detected prior turn was cut off during a tool call${bead ? ` for bead ${bead}` : ""}; commander must redispatch or reset`;
-  const rec = await writeState((state) => {
-    const rec = state.seats[name];
-    if (rec) rec.lastStalledEvent = { at, detail };
-    return rec;
+async function continueResumedTurn(name: string): Promise<void> {
+  const rec = readState().seats[name], st = rec && ownedSeatLog(name, rec.log);
+  if (!rec?.pid || !st) die(`seat ${name}: cannot verify resumed log; continuation not sent`);
+  const pending = { at: new Date().toISOString(), pid: rec.pid, startedAt: rec.startedAt, logIdentity: `${st.dev}:${st.ino}`, offset: st.size };
+  await writeState((state) => {
+    const current = state.seats[name];
+    if (!current || !sameSeatProcess(current, rec)) throw new Error(`seat ${name}: resumed process changed before continuation`);
+    current.resumeContinuation = pending;
   });
-  if (!rec) return;
-  appendSeatLog(rec.log, { type: "agent_settled", state: "stalled", message: detail, bead: bead ?? null, at });
-  console.log(`seat ${name}: STALLED — ${detail}`);
+  // This is transport metadata, not a fabricated model/settlement event.
+  appendSeatLog(rec.log, { type: "resume_continuation", state: "requested", at: pending.at });
+  // Raw Pi steer only queues on an idle session. Reuse the idle-aware path:
+  // prompt when idle, steer when active, preserving session/cwd/assignment.
+  await cmdSteer(name, "[adapter resume] Your previous turn was interrupted. Continue the existing task in this recorded session. First inspect actual tool results and any still-running processes; do not blindly repeat, restart or cancel work. If the task already finished, report that rather than doing it again.");
+  console.log(`seat ${name}: resume continuation requested; own stream progress not yet confirmed`);
 }
 
 function logLastStalledEvent(log: string): boolean {
@@ -1873,6 +1897,7 @@ function logLastStalledEvent(log: string): boolean {
     for (let i = r.lines.length - 1; i >= 0; i--) {
       try {
         const obj = JSON.parse(r.lines[i]);
+        if (obj?.type === "resume_continuation") return false; // its process-bound pending state owns the verdict
         if (obj?.type === "agent_settled" && obj?.state === "stalled") return true;
         if (obj?.type === "agent_end" || obj?.type === "turn_end" || obj?.type === "tool_execution_end") return false;
       } catch { /* skip */ }
@@ -2002,7 +2027,7 @@ async function cmdStatus(): Promise<void> {
     const ownedLog = ownedSeatLog(name, state.seats[name]?.log);
     // Invalid log records are not read either: lastEvent opens its argument,
     // so allowing a FIFO here could hang status before the rotation guard.
-    const rec = ownedLog ? await syncCapacityFromLog(name, roster) : state.seats[name];
+    let rec = ownedLog ? await syncCapacityFromLog(name, roster) : state.seats[name];
     if (!rec) continue;
     const bareAlive = barePidAlive(rec.pid);
     let identity = seatIdentity(rec.pid, rec.fifo, rec.startedAt);
@@ -2018,7 +2043,17 @@ async function cmdStatus(): Promise<void> {
       if (!(e instanceof SeatIdentityUnverified)) throw e;
       identity = { kind: "unverified", reason: e.message }; alive = false;
     }
-    const stalled = Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log)) || Boolean(stream?.stalled);
+    if (ownedLog && alive && rec.resumeContinuation && resumeHasProgress(name, rec)) {
+      const observed = rec;
+      const continued = await writeState((current) => {
+        const live = current.seats[name];
+        if (!live || !sameSeatProcess(live, observed) || JSON.stringify(live.resumeContinuation) !== JSON.stringify(observed.resumeContinuation)) return null;
+        delete live.resumeContinuation;
+        return live;
+      });
+      if (continued) rec = continued;
+    }
+    const stalled = Boolean(rec.resumeContinuation) || Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log)) || Boolean(stream?.stalled);
     const last = ownedLog ? lastEvent(rec.log) : "-";
     // Status reports observed process/log facts, not a guessed get_state
     // deadline. A live, slow responder is not evidence of a wedged seat.
@@ -2042,6 +2077,7 @@ async function cmdStatus(): Promise<void> {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
       console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
     }
+    if (alive && rec.resumeContinuation) console.log(`${" ".repeat(16)} STALLED: resumed interrupted turn awaiting own stream progress; readiness/acknowledgements/replayed starts are not progress (no automatic restart)`);
     if (identity.kind !== "unverified" && stalled && rec.lastStalledEvent) {
       console.log(`${" ".repeat(16)} STALLED: ${rec.lastStalledEvent.detail}`);
     }
