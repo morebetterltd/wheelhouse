@@ -890,6 +890,12 @@ else
   fi
 fi
 
+if bun "$SCRIPT_DIR/fixtures/herald-heartbeat.ts" "$FIX" "$SCRIPT_DIR"; then
+  pass "completed-scan heartbeat, tmux hold, write budget and real removal controls"
+else
+  fail "heartbeat consumer/controls failed"
+fi
+
 if [ $FAIL -eq 0 ]; then
   echo "herald.selftest: PASS ($PASS checks)"
   exit 0
