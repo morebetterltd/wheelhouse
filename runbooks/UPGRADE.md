@@ -684,7 +684,7 @@ Each listed open or in_progress bead needs its `Intent:` and `Outcomes:` section
 
 For **each listed open task**, post a signal after the audit (substitute its title and id; the angle brackets are placeholders, not shell syntax):
 
-```bash
+```text
 bun seats/intake.ts post --kind finding --source upgrade --title "<bead title>" --ref <bead-id>
 ```
 
