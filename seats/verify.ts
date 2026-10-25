@@ -1288,10 +1288,10 @@ function manualReviewContext(root: string, tip: string, contract: Contract): Man
   // + NUL records includes deleted paths and both sides of an in-tree rename.
   const files = tierGit(root, "diff", "--name-only", "--no-renames", "-z", base, tip, "--", ":(glob).agents/skills/verify-*/**")
     .toString().split("\0").filter(Boolean).sort();
-  const outcomes = contract.outcomes.filter(o =>
-    /(?:^|[\/\s`"'(])features\/[^\s`"')]+/.test(o.surface) ||
-    /(?:^|[\/\s`"'(])verify-[^/\s`"'()]+\/SKILL\.md(?=$|[\s`"'),;])/.test(o.surface)
-  ).map(({ id, surface }) => ({ id, surface }));
+  const featureSurface = /(?:^|[\/\s`"'(])features\/[^\s`"')]+/;
+  const skillSurface = /(?:^|[\/\s`"'(])verify-[^/\s`"'()]+\/SKILL\.md(?=$|[\s`"'),;])/;
+  const outcomes = contract.outcomes.filter(o => featureSurface.test(o.surface) || skillSurface.test(o.surface))
+    .map(({ id, surface }) => ({ id, surface }));
   return { base, baseRef, files, outcomes };
 }
 function manualScopeLists(context: ManualReviewContext): string[] {
