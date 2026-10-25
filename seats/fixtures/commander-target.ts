@@ -7,7 +7,7 @@ let owned=false;for(let d=path.resolve(base);;d=path.dirname(d)){if(fs.existsSyn
 const oracle=(k:string)=>'COMMANDER_TARGET_ORACLE '+k;
 if(!kind){
  fs.mkdirSync(base);const records:any[]=[];
- for(const [k,m] of [['file-none','none'],['env-none','none'],['file-other','none'],['reused','none'],['scan','none'],['namespace','none'],['file-none','no-validation'],['env-none','no-validation'],['file-other','no-validation'],['scan','no-scan'],['scan','no-scan-or-validation']]){
+ for(const [k,m] of [['file-none','none'],['env-none','none'],['file-other','none'],['reused','none'],['scan','none'],['namespace','none'],['file-none','no-validation'],['env-none','no-validation'],['file-other','no-validation'],['reused','no-validation'],['scan','no-scan'],['scan','no-scan-or-validation'],['namespace','no-preference']]){
   const dir=path.join(base,k+'-'+m),x=command('bun',[import.meta.path,here,dir,fake,k,m]);
   fs.writeFileSync(dir+'.stdout',x.stdout);fs.writeFileSync(dir+'.stderr',x.stderr);
   if(process.env.WHEELHOUSE_QJGW_EVIDENCE){const out=path.join(process.env.WHEELHOUSE_QJGW_EVIDENCE,'target-attempts');fs.mkdirSync(out,{recursive:true});save(path.join(out,k+'-'+m+'.native.json'),{status:x.status,signal:x.signal,error:x.error?.message??null,stdout:x.stdout,stderr:x.stderr});if(fs.existsSync(path.join(dir,'runs.json')))fs.copyFileSync(path.join(dir,'runs.json'),path.join(out,k+'-'+m+'.runs.json'));}
@@ -17,13 +17,13 @@ if(!kind){
   if(m==='none')assert.equal(x.status,0,x.stderr);else{
    assert.equal(x.status,1,x.stderr);assert(x.stderr.includes('AssertionError')&&x.stderr.includes(oracle(k)),x.stderr);assert.notEqual(rec.beforeHash,rec.afterHash);
    if(m==='no-scan'){assert.equal(rec.target.status,'not-commander');assert.equal(rec.sends,'');}
-   else assert.equal(rec.sends,`-t ${k==='scan'?'%10':'%12'} check the fleet inbox Enter\n`);
+   else assert.equal(rec.sends,`-t ${k==='scan'?'%10':k==='namespace'?'%20':'%12'} check the fleet inbox Enter\n`);
    console.log(`REJECT commander ${k}/${m}: actual CLI0; case1 at ${oracle(k)}`);
   }
  }
  save(path.join(base,'result.json'),records);
  if(process.env.WHEELHOUSE_QJGW_EVIDENCE){const out=path.join(process.env.WHEELHOUSE_QJGW_EVIDENCE,'targets');fs.mkdirSync(out,{recursive:true});for(const ent of fs.readdirSync(base,{withFileTypes:true})){if(ent.isFile())fs.copyFileSync(path.join(base,ent.name),path.join(out,ent.name));else fs.copyFileSync(path.join(base,ent.name,'result.json'),path.join(out,ent.name+'.json'));}}
- console.log('commander-target: PASS (6 cases; 5 actual guard controls; scan re-validation retained)');
+ console.log('commander-target: PASS (6 cases; 7 actual guard controls; scan re-validation retained)');
 }else{
  fs.mkdirSync(base);const root=path.join(base,'project'),bin=path.join(base,'bin');fs.mkdirSync(bin);fs.copyFileSync(fake,path.join(bin,'tmux'));fs.chmodSync(path.join(bin,'tmux'),0o700);
  const copy=command('bash',['-c','. "$1/selftest-lib.sh"; selftest_copy_seat_runtime "$2" "$1"','copy',here,root]);assert.equal(copy.status,0,copy.stderr);assert(!copy.error&&!copy.signal);
@@ -31,7 +31,8 @@ if(!kind){
  function remove(needle:string){assert.equal(after.split(needle).length,2,'unique real source guard');after=after.replace(needle,'');}
  if(mutation==='no-validation'||mutation==='no-scan-or-validation')remove('    if (mark !== realpathMaybe(ROOT)) return { target, resolvedBy, status: "not-commander", reason: `not-commander mark=${mark || "-"}`, checkedAt };\n');
  if(mutation==='no-scan'||mutation==='no-scan-or-validation')remove('r[2] === realpathMaybe(ROOT) && ');
- assert(['none','no-validation','no-scan','no-scan-or-validation'].includes(mutation));fs.writeFileSync(file,after);
+ if(mutation==='no-preference'){const n='rows.find((r) => r[1].toLowerCase() === want) ?? rows[0]';assert.equal(after.split(n).length,2);after=after.replace(n,'rows[0]');}
+ assert(['none','no-validation','no-scan','no-scan-or-validation','no-preference'].includes(mutation));fs.writeFileSync(file,after);
  for(const d of ['seats/run','seats/logs','wheelhouse'])fs.mkdirSync(path.join(root,d),{recursive:true});
  // These cases judge targeting, not scheduling: leave both optional clocks
  // not due so a copied alerts.ts cannot launch incidental graph/tool reads.
