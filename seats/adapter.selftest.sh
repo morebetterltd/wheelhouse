@@ -507,6 +507,7 @@ LIFETIME_EVIDENCE="${WHEELHOUSE_ADAPTER_LIFETIME_EVIDENCE:-}"
 LIFETIME_EVIDENCE_OWNED=0
 if [ -z "$LIFETIME_EVIDENCE" ]; then
   LIFETIME_EVIDENCE="$(selftest_make_fixture_dir "${WHEELHOUSE_SELFTEST_ARTIFACT_ROOT:-$TMPDIR}/wheelhouse-adapter-lifetime.XXXXXX")" || exit 2
+  selftest_isolate_git "$LIFETIME_EVIDENCE" || exit 2
   LIFETIME_EVIDENCE_OWNED=1
 fi
 if bun "$HERE/fixtures/adapter-lifetime.ts" run "$HERE" "$ADAPTER" "$FIX/lifetime-cases" "$LIFETIME_EVIDENCE"; then
