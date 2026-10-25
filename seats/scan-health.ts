@@ -81,10 +81,20 @@ function diagnostics(root: string, hb: any, now: number): string {
   const lastWake = wake && Number.isFinite(Date.parse(wake.at)) ? `${wake.outcome} ${seconds(now - Date.parse(wake.at))}s ago` : "none";
   const streams = json(path.join(root, "seats/state.json"))?.seats || {};
   const events = Object.entries(streams).slice(0, 32).map(([seat, value]: [string, any]) => {
-    const line = value?.log ? tail(value.log).split("; ").pop() : "";
-    try { const ev = JSON.parse(line || "{}"); return `${seat} last event ${ev.type || "unknown"}`; } catch { return `${seat} last event unknown`; }
+    const line = value?.log ? tail(path.resolve(root, value.log)).split("; ").pop() : "";
+    try {
+      const ev = JSON.parse(line || "{}");
+      const phase = ev.type === "tool_execution_start" ? "tool wait" : ["message_start", "message_update"].includes(ev.type) ? "model" : "unknown";
+      return `${seat} ${phase} (last event ${ev.type || "unknown"})`;
+    } catch { return `${seat} last event unknown`; }
   }).join(", ");
-  return `undrained rows ${hb?.undrainedRows ?? "unknown"} · last wake ${lastWake}${streams && events ? " · " + events : ""}`;
+  let lag = "unknown";
+  try {
+    const first = text(path.join(root, "seats/inbox.jsonl"), 65536, hb?.drainCursor || 0).split("\n").find(line => line.trim());
+    const at = first ? Date.parse(JSON.parse(first).at) : NaN;
+    if (Number.isFinite(at)) lag = `${seconds(now - at)}s`;
+  } catch { /* diagnostic only, never grounds for a restart */ }
+  return `undrained rows ${hb?.undrainedRows ?? "unknown"} · last wake ${lastWake} · inbox lag ${lag}${streams && events ? " · " + events : ""}`;
 }
 export function scanHealth(root: string, now = scanClock()) {
   const run = path.join(root, "seats/run"), limit = scanStallMs(root), heraldPid = pid(path.join(run, "herald.pid"));

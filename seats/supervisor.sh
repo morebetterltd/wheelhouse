@@ -25,7 +25,7 @@ append_alert(){
   if [ -f "$SEATS/inbox.jsonl" ] && grep -q "\"id\":\"$id\"" "$SEATS/inbox.jsonl" 2>/dev/null; then return 0; fi
   title="$d keeps dying"; body="$detail
 Restart after fixing: seats/supervisor.sh reset $d"
-  printf '{"id":"%s","at":"%s","seat":"supervisor","class":"daemon-down","state":"failed","title":%s,"detail":%s}\n' "$id" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(json_string "$title")" "$(json_string "$body")" >> "$SEATS/inbox.jsonl"
+  printf '{"id":"%s","at":"%s","seat":"supervisor","class":"daemon-down","state":"failed","title":%s,"detail":%s}\n' "$id" "$(now_iso)" "$(json_string "$title")" "$(json_string "$body")" >> "$SEATS/inbox.jsonl"
   if command -v bun >/dev/null 2>&1 && [ -f "$SEATS/needs.ts" ]; then
     (cd "$ROOT" && bun seats/needs.ts open --kind notify --source "supervisor:$d" --title "$title" --body "The $d service stopped repeatedly, so related fleet updates may stop flowing. Check the last stderr lines, fix the service, then run: seats/supervisor.sh reset $d" >/dev/null 2>&1) || true
   fi
