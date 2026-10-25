@@ -49,6 +49,7 @@ run_herald_with_tmux() {
   WHEELHOUSE_HERALD_POKE_STABILITY_MS="${WHEELHOUSE_HERALD_POKE_STABILITY_MS:-20}" \
   WHEELHOUSE_HERALD_POKE_COOLDOWN_MS="${WHEELHOUSE_HERALD_POKE_COOLDOWN_MS:-500}" \
   WHEELHOUSE_HERALD_POKE_ESCALATE_MS="${WHEELHOUSE_HERALD_POKE_ESCALATE_MS:-500}" \
+  FAKE_TMUX_PANE_STAMPS="$(printf 'wh-demo:bridge.0\t%s' "$PROJ")" \
   WHEELHOUSE_HERALD_TMUX_SESSION=wh-demo WHEELHOUSE_HERALD_TMUX_PANE=wh-demo:bridge.0 PATH="$FIX/bin:$PATH" bun "$ROOT/seats/herald.ts" --once
 }
 run_herald_resolving_tmux() {
@@ -82,6 +83,15 @@ cat > "$FIX/bin/tmux" <<'EOF'
 set -u
 if [ "${1:-}" = "-L" ]; then shift 2; fi
 cmd="${1:-}"; shift || true
+pane_path(){
+  if [ -n "${FAKE_TMUX_MISSING_PANES:-}" ] && printf '%s\n' "$FAKE_TMUX_MISSING_PANES" | grep -xF >/dev/null "$target"; then return 1; fi
+  if [ -n "${FAKE_TMUX_PANE_PATHS:-}" ]; then
+    found="$(printf '%s\n' "$FAKE_TMUX_PANE_PATHS" | awk -v t="$target" -F '\t' '$1==t && !found++ {print substr($0, index($0,$2))}')"
+    [ -z "$found" ] || { printf '%s\n' "$found"; return; }
+  fi
+  printf '%s\n' "${FAKE_TMUX_PANE_PATH:-${WHEELHOUSE_HERALD_ROOT:-$PWD}}"
+}
+pane_mark(){ printf '%s\n' "${FAKE_TMUX_PANE_STAMPS:-}" | awk -v t="$target" -F '\t' '$1==t && !found++ {print substr($0, index($0,$2))}'; }
 case "$cmd" in
   display-message)
     fmt="${*: -1}"
@@ -90,13 +100,12 @@ case "$cmd" in
     for a in "$@"; do [ "$prev" = "-t" ] && target="$a"; prev="$a"; done
     case "$fmt" in
       '#{pane_current_command}') printf '%s\n' "${FAKE_TMUX_COMMAND:-claude}" ;;
-      '#{pane_current_path}')
-        if [ -n "${FAKE_TMUX_MISSING_PANES:-}" ] && printf '%s\n' "$FAKE_TMUX_MISSING_PANES" | grep -xF >/dev/null "$target"; then exit 1; fi
-        if [ -n "${FAKE_TMUX_PANE_PATHS:-}" ]; then
-          found="$(printf '%s\n' "$FAKE_TMUX_PANE_PATHS" | awk -v t="$target" -F '\t' '$1==t && !found++ {print substr($0, index($0,$2))}')"
-          [ -n "$found" ] && { printf '%s\n' "$found"; exit 0; }
-        fi
-        printf '%s\n' "${FAKE_TMUX_PANE_PATH:-${WHEELHOUSE_HERALD_ROOT:-$PWD}}" ;;
+      '#{pane_current_path}') pane_path ;;
+      '#{pane_current_path}	#{@wheelhouse_commander}')
+        p="$(pane_path)" || exit $?; printf '%s\t%s\n' "$p" "$(pane_mark)" ;;
+      '#{@wheelhouse_commander}') pane_mark ;;
+      '#{pane_id}') printf '%s\n' "$target" ;;
+      '#{session_name}') printf '%s\n' "${FAKE_TMUX_SESSION:-wh-demo}" ;;
       *) printf '%s\n' "${FAKE_TMUX_COMMAND:-claude}" ;;
     esac ;;
   capture-pane)
@@ -141,6 +150,12 @@ esac
 EOF
 chmod +x "$FIX/bin/bd"
 SEND_LOG="$FIX/send-keys.log"
+if bun "$SCRIPT_DIR/fixtures/commander-target.ts" "$SCRIPT_DIR" "$FIX/commander-target" "$FIX/bin/tmux"; then
+  pass 'claimed commander identity across all sources, fallback, headless surfaces and actual guard removals'
+else
+  fail 'commander identity consumer cases failed'
+fi
+if bun "$SCRIPT_DIR/fixtures/commander-docs.ts" "$ROOT"; then pass 'commander mark/claim/refusal/upgrade documentation and removals'; else fail 'commander documentation failed'; fi
 
 printf '%s\n' '{"type":"agent_end","messages":["rename retry settle"],"timestamp":"2026-09-10T00:00:00Z"}' > "$PROJ/seats/logs/rename-retry.jsonl"
 seed_log_cursor rename-retry.jsonl 0
@@ -441,24 +456,24 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run
 printf '{"paneId":"%%99","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic commander file target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_PATHS="$(printf '%%99\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%99\t%s' "$PROJ")" FAKE_TMUX_PANE_PATHS="$(printf '%%99\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -qx -- '-t %99 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "cockpit-file"' "$PROJ/seats/run/herald.target.json"; then pass "env unset with commander-pane.json resolves target and sends poke"
 else fail "commander-pane.json target did not poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic scan target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-PANES="$(printf '%%10\twh-other\tbridge\t0\t%s\n%%11\twh-Project\tbridge\t0\t%s\n%%12\twh-Project\tbridge\t1\t%s' "$PROJ" "$PROJ" "$PROJ")"
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%11\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "scan"' "$PROJ/seats/run/herald.target.json"; then pass "scan resolves case-different bridge pane 0 and sends poke"
+PANES="$(printf '%%10\twh-other\t%s\t%s\n%%11\twh-Project\t%s\t%s\n%%12\twh-Project\t\t%s' "$PROJ" "$PROJ" "$PROJ" "$PROJ" "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%11\t%s' "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%11\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "scan"' "$PROJ/seats/run/herald.target.json"; then pass "scan resolves a marked pane in the case-different preferred session and sends poke"
 else fail "scan target did not poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 mkdir -p "$PROJ/wheelhouse"; printf 'namespace=fixture-ns\n' > "$PROJ/wheelhouse/.template-source"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic namespace scan target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-PANES="$(printf '%%20\twh-project\tbridge\t0\t%s\n%%21\twh-fixture-ns\tbridge\t0\t%s' "$PROJ" "$PROJ")"
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%20\t%s\n%%21\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+PANES="$(printf '%%20\twh-project\t%s\t%s\n%%21\twh-Fixture-NS\t%s\t%s' "$PROJ" "$PROJ" "$PROJ" "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%20\t%s\n%%21\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%20\t%s\n%%21\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -qx -- '-t %21 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"target": "%21"' "$PROJ/seats/run/herald.target.json"; then pass "scan prefers .template-source namespace over directory basename"
 else fail "namespace scan did not prefer namespace session (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 rm -f "$PROJ/wheelhouse/.template-source"
@@ -467,7 +482,7 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run
 printf '{"paneId":"%%88","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic wrong root target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s' "$FIX/outside")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%88\t%s' "$PROJ")" FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s' "$FIX/outside")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
 LAST_POKED="$(node -e 'const fs=require("fs"); const f=process.argv[1]; const s=fs.existsSync(f)?JSON.parse(fs.readFileSync(f,"utf8")):{}; console.log(s.lastPokedInboxSize===undefined?"unset":s.lastPokedInboxSize)' "$PROJ/seats/herald.state.json")"
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke refused .*reason=wrong-root .*target=%88 .*resolvedBy=cockpit-file' "$POKE_LOG" && grep -q '"status": "wrong-root"' "$PROJ/seats/run/herald.target.json" && [ "$LAST_POKED" = unset ]; then pass "wrong-root target is refused without send or lastPokedInboxSize"
 else fail "wrong-root target was not refused safely (rc=$RC out=$OUT sends=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
@@ -476,17 +491,19 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run
 printf '{"paneId":"%%88","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic stale commander file target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-PANES="$(printf '%%11\twh-project\tbridge\t0\t%s' "$PROJ")"
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s\n%%11\t%s' "$FIX/outside" "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+PANES="$(printf '%%11\twh-project\t%s\t%s' "$PROJ" "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%88\t%s\n%%11\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s\n%%11\t%s' "$FIX/outside" "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "scan"' "$PROJ/seats/run/herald.target.json"; then pass "stale commander-pane.json falls through to pane scan"
 else fail "stale commander-pane.json did not fall through to scan (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic target appears later"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-RC1=0; OUT1="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_MISSING_PANES='%77' FAKE_TMUX_PANES="$(printf '%%77\twh-demo\tbridge\t0\t%s' "$PROJ")" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC1=$?
-RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_MISSING_PANES='%77' FAKE_TMUX_PANES="$(printf '%%77\twh-demo\tbridge\t0\t%s' "$PROJ")" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC2=$?
-RC3=0; OUT3="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANES="$(printf '%%77\twh-demo\tbridge\t0\t%s' "$PROJ")" FAKE_TMUX_PANE_PATHS="$(printf '%%77\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC3=$?
+MISSING_SCAN="$(printf '%%77\twh-demo\t%s\t%s' "$PROJ" "$PROJ")"
+MISSING_STAMP="$(printf '%%77\t%s' "$PROJ")"
+RC1=0; OUT1="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$MISSING_STAMP" FAKE_TMUX_MISSING_PANES='%77' FAKE_TMUX_PANES="$MISSING_SCAN" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC1=$?
+RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$MISSING_STAMP" FAKE_TMUX_MISSING_PANES='%77' FAKE_TMUX_PANES="$MISSING_SCAN" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC2=$?
+RC3=0; OUT3="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$MISSING_STAMP" FAKE_TMUX_PANES="$MISSING_SCAN" FAKE_TMUX_PANE_PATHS="$(printf '%%77\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC3=$?
 if [ $RC1 -eq 0 ] && [ $RC2 -eq 0 ] && [ $RC3 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && [ "$(grep -c 'poke refused .*reason=missing' "$POKE_LOG" 2>/dev/null || echo 0)" = 1 ] && ! grep -q 'poke escalated' "$POKE_LOG"; then pass "missing target is refused once and pending poke sends as soon as pane appears"
 else fail "missing target retry failed (rc=$RC1/$RC2/$RC3 out=$OUT1/$OUT2/$OUT3 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 

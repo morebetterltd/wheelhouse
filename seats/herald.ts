@@ -616,8 +616,9 @@ function tmuxArgs(args: string[]): string[] {
   return TMUX_SOCKET ? ["-L", TMUX_SOCKET, ...args] : args;
 }
 
-function tmuxOutput(args: string[]): string {
-  return execFileSync("tmux", tmuxArgs(args), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+function tmuxOutput(args: string[], trim = true): string {
+  const out = execFileSync("tmux", tmuxArgs(args), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return trim ? out.trim() : out.replace(/\r?\n$/, "");
 }
 
 function logPoke(outcome: string, detail = ""): void {
@@ -626,7 +627,7 @@ function logPoke(outcome: string, detail = ""): void {
   fs.appendFileSync(HERALD_OUT_LOG, `${new Date().toISOString()} poke ${outcome}${suffix}\n`);
 }
 
-type TargetStatus = "ok" | "missing" | "wrong-root" | "no-tmux";
+type TargetStatus = "ok" | "missing" | "wrong-root" | "not-commander" | "no-tmux";
 type ResolvedBy = "env" | "cockpit-file" | "scan";
 interface CommanderTarget { target: string; resolvedBy: ResolvedBy; status: TargetStatus; reason?: string; checkedAt: string }
 
@@ -655,8 +656,9 @@ function writeTarget(next: CommanderTarget): void {
 function validateTarget(target: string, resolvedBy: ResolvedBy): CommanderTarget {
   const checkedAt = new Date().toISOString();
   try {
-    const panePath = tmuxOutput(["display-message", "-p", "-t", target, "#{pane_current_path}"]);
+    const [panePath, mark = ""] = tmuxOutput(["display-message", "-p", "-t", target, "#{pane_current_path}\t#{@wheelhouse_commander}"], false).split("\t");
     if (!pathUnderRoot(panePath)) return { target, resolvedBy, status: "wrong-root", reason: "wrong-root", checkedAt };
+    if (mark !== realpathMaybe(ROOT)) return { target, resolvedBy, status: "not-commander", reason: `not-commander mark=${mark || "-"}`, checkedAt };
     return { target, resolvedBy, status: "ok", checkedAt };
   } catch (e: any) {
     const reason: TargetStatus = e?.code === "ENOENT" ? "no-tmux" : "missing";
@@ -682,9 +684,9 @@ function projectNamespace(): string {
 
 function scanCommanderPane(): { target: string; resolvedBy: ResolvedBy } | null {
   let out = "";
-  try { out = tmuxOutput(["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_index}\t#{pane_current_path}"]); }
+  try { out = tmuxOutput(["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{@wheelhouse_commander}\t#{pane_current_path}"], false); }
   catch { return null; }
-  const rows = out.split(/\r?\n/).map((line) => line.split("\t")).filter((r) => r.length >= 5 && r[2] === "bridge" && r[3] === "0" && pathUnderRoot(r.slice(4).join("\t")));
+  const rows = out.split(/\r?\n/).map((line) => line.split("\t")).filter((r) => r.length >= 4 && r[2] === realpathMaybe(ROOT) && pathUnderRoot(r.slice(3).join("\t")));
   if (rows.length === 0) return null;
   const want = `wh-${projectNamespace()}`.toLowerCase();
   const preferred = rows.find((r) => r[1].toLowerCase() === want) ?? rows[0];

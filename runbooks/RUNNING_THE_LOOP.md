@@ -21,7 +21,7 @@ So when you read a stage below, the question is never "was that passed along cor
 
 ## What the machinery does without you
 
-- The herald aims itself at the commander pane through `seats/run/commander-pane.json`; `seats/run/herald.target.json` records how it resolved and validated the target.
+- The herald aims at a claimed commander, never merely a pane in this project: cockpit sets the pane option `@wheelhouse_commander` to the install's physical root and refreshes `seats/run/commander-pane.json` on each build/re-run. A commander outside cockpit runs `seats/cockpit.sh --claim-commander` inside its pane once (or passes a pane argument). Overrides, saved IDs and scans must all carry that mark and be under the root; scans prefer the namespace session, not a bridge position. `seats/run/herald.target.json` and `herald.ts --status` expose `not-commander` for unmarked/foreign-marked panes. The refusal is logged once per change and raised as commander-pane-invalid with the pane named; inbox collection and draining continue. This requires tmux 3.0+.
 - The supervisor keeps the herald, desk, and declared courier alive; `seats/run/supervisor.state.json` records crash-loop holds, and `seats/logs/supervisor.out.log` / `.stderr.log` hold the run output.
 - The supervisor runs dead-seat recovery on its tick; recovery decisions are appended to `seats/logs/cockpit-recovery.log` and seat logs.
 - The supervisor syncs changed open claims from `wheelhouse/ISA.md` into `isa-change` rows in `seats/intake.jsonl` for the producer every 30 seconds (unless `isa_signals=off`); the first run only snapshots. After a direction edit, the commander can run `bun seats/isa-signals.ts sync` immediately, before work depends on it. Output is in `seats/logs/isa-signals.out.log`.

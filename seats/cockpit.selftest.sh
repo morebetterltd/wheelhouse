@@ -68,11 +68,25 @@ cleanup() {
   return "$cleanup_rc"
 }
 selftest_install_cleanup_traps cleanup
-# A recycled PID may meet a historical endpoint. Do not adopt, kill or unlink
-# it. Register cleanup first, but claim names only after both are absent.
-SOCKET_BASE="$(cd "${TMUX_TMPDIR:-/tmp}" && pwd -P)" || exit 2
-SOCKET_UID="$(id -u)" || exit 2
-SOCKET_DIR="$SOCKET_BASE/tmux-$SOCKET_UID"
+# Keep every endpoint under owned scratch. Relative -S addresses avoid
+# Darwin's short AF_UNIX path limit beneath long per-task TMPDIR paths.
+SOCKET_DIR="$FIX/tmux-sockets"
+SOCKET_BIN="$FIX/socket-bin"
+mkdir -p "$SOCKET_DIR" "$SOCKET_BIN" "$FIX/home"
+export WHEELHOUSE_TEST_REAL_TMUX="$(command -v tmux)" WHEELHOUSE_TEST_TMUX_DIR="$SOCKET_DIR"
+cat > "$SOCKET_BIN/tmux" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -L ]; then
+  socket="$2"; shift 2
+  cd "$WHEELHOUSE_TEST_TMUX_DIR" || exit 2
+  exec "$WHEELHOUSE_TEST_REAL_TMUX" -f /dev/null -S "./$socket" "$@"
+fi
+exec "$WHEELHOUSE_TEST_REAL_TMUX" "$@"
+SH
+chmod +x "$SOCKET_BIN/tmux"
+export PATH="$SOCKET_BIN:$PATH" HOME="$FIX/home" SHELL=/bin/bash
+# Never adopt, kill or unlink an existing endpoint.
+
 for socket_path in "$SOCKET_DIR/$SOCK" "$SOCKET_DIR/$CLIENT_SOCK"; do
   if [ -e "$socket_path" ] || [ -L "$socket_path" ]; then
     echo "STOP: cockpit selftest refuses preexisting tmux endpoint: $socket_path" >&2
@@ -247,8 +261,9 @@ POLL_PID="$(cat "$PROJ/seats/run/commander-inbox-poll.pid" 2>/dev/null || true)"
 PANE0="$(tmux -L "$SOCK" list-panes -t wh-pane:bridge -F '#{pane_id}' | sed -n '1p')"
 RECORDED_PANE="$(node -e 'const fs=require("fs"); const f=process.argv[1]; try { console.log(JSON.parse(fs.readFileSync(f,"utf8")).paneId || "") } catch { console.log("") }' "$PROJ/seats/run/commander-pane.json")"
 PANE_TEXT="$(tmux -L "$SOCK" capture-pane -p -t wh-pane:bridge.0 -S -80 2>/dev/null || true)"
-if [ -n "$PANE0" ] && [ "$RECORDED_PANE" = "$PANE0" ] && [ -z "$POLL_PID" ] && ! printf '%s\n' "$PANE_TEXT" | grep >/dev/null 'commander-inbox-poll'; then
-  pass "cockpit --pane-commander records pane target and does not start retired commander poll"
+PANE_MARK="$(tmux -L "$SOCK" show-options -p -v -t "$PANE0" @wheelhouse_commander 2>/dev/null || true)"
+if [ "$PANE_MARK" = "$(cd "$PROJ" && pwd -P)" ] && [ -n "$PANE0" ] && [ "$RECORDED_PANE" = "$PANE0" ] && [ -z "$POLL_PID" ] && ! printf '%s\n' "$PANE_TEXT" | grep >/dev/null 'commander-inbox-poll'; then
+  pass "cockpit --pane-commander marks and records pane target and does not start retired commander poll"
 else
   fail "cockpit --pane-commander poll retirement failed (pid=${POLL_PID:-none} pane0=${PANE0:-none} recorded=${RECORDED_PANE:-none} text=$PANE_TEXT file=$(cat "$PROJ/seats/run/commander-pane.json" 2>/dev/null || echo missing))"
 fi
@@ -486,6 +501,8 @@ if grep -q 'bridge built: session wh-nomouse' "$FIX/cockpit-nomouse.out" && [ "$
 else
   fail "mouse opt-out options wrong: out=$(cat "$FIX/cockpit-nomouse.out" 2>/dev/null) mouse=$(opt_value wh-nomouse mouse 2>/dev/null || true) history=$(opt_value wh-nomouse history-limit 2>/dev/null || true)"
 fi
+
+if bun "$HERE/fixtures/commander-claim.ts" "$HERE" "$FIX/commander-claims"; then pass "commander mark/record build, re-run, external claim and real removal"; else fail "commander mark/record consumer cases failed"; fi
 
 if bun "$HERE/fixtures/cockpit-attachment.ts" "$FIX" "$HERE"; then pass "real client sizing completion and missing-sizing control"; else fail "native client sizing observation/control failed"; fi
 
