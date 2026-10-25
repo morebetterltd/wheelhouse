@@ -277,6 +277,11 @@ ext_row "$EWTS/$BIG_ID" | grep >/dev/null '"category":"merged-worktree"' && pass
 OUT=$(ext_cleanup --bead "$BIG_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ ! -e "$EWTS/$BIG_ID" ] && ! ext_registered "$EWTS/$BIG_ID" && pass 'oversized worktree removed by cleanup' || fail "oversized cleanup rc=$RC: $OUT"
 
+phase 'Misplaced parent scratch is visible but never removed'
+if WHEELHOUSE_SCRATCH_PATH_CASE=parent bash "$HERE/scratch-path.selftest.sh" "$(dirname "$PRUNE")"; then
+  pass 'parent scratch report and reviewed/automatic no-deletion proof'
+else fail 'parent scratch report/no-deletion regression'; fi
+
 if [ "$FAILED" -eq 0 ]; then
   echo 'prune.selftest: PASS'
   exit 0

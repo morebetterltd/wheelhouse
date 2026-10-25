@@ -11,6 +11,21 @@ function templateBriefPath(root: string, role: string): string {
   return path.join(root, "contracts", `${role.toUpperCase()}.md`);
 }
 
+// The dispatcher supplies the install, never a product, parent or worktree.
+export function scratchPromptLines(root: string, beadId: string): string[] {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(beadId)) throw new Error(`invalid scratch bead id: ${beadId}`);
+  const installRoot = path.resolve(root);
+  return [
+    `Install root (WHEELHOUSE_ROOT): ${installRoot}`,
+    `Scratch root for bead ${beadId}: ${path.join(installRoot, ".wheelhouse-runs", beadId)}${path.sep}`,
+    `Put all ad-hoc builds, review output, simulator artifacts and other bead scratch under that exact scratch root. Use the supplied install root (WHEELHOUSE_ROOT); do not infer it from the install's parent, a selected product repository or your worktree.`,
+  ];
+}
+
+export function workerDispatchPrompt(root: string, beadId: string, text: string): string {
+  return [`Bead ${beadId}`, "", ...scratchPromptLines(root, beadId), "", text].join("\n");
+}
+
 export function resolveRoleBrief(root: string, role: string): string {
   const installed = installedBriefPath(root, role);
   if (fs.existsSync(installed)) return installed;
