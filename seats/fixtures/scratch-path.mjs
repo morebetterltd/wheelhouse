@@ -17,7 +17,7 @@ fs.cpSync(seats, path.join(root, 'seats'), { recursive: true });
 const evidence = process.env.WHEELHOUSE_SCRATCH_PATH_EVIDENCE;
 if (evidence) fs.mkdirSync(evidence, { recursive: true });
 const contract = 'Intent:\nA reviewer sees the exact install scratch path without inferring a parent or product.\n\nOutcomes:\n- O1 The assembled prompt names the path.\n  consumer: machine — the prompt probe\n  surface: literal prompt output\n  check: run — inspect the exact path line\n';
-const contractFile = path.join(top, 'contract.md'); fs.writeFileSync(contractFile, 'Signal: isa-gap: W13\n' + contract);
+const contractFile = path.join(top, 'contract.md'); fs.writeFileSync(contractFile, 'Signal: isa-gap: W13\nSkills: intent@1.0.0 outcomes@1.0.0\n' + contract);
 fs.writeFileSync(path.join(account, 'auth.json'), '{"fixture":"not-a-credential"}\n');
 fs.writeFileSync(path.join(root, 'wheelhouse/crew/REVIEWER.md'), 'Static fixture prompt review.\n');
 fs.writeFileSync(path.join(root, 'wheelhouse/.template-source'), 'product-repo=product\n');
