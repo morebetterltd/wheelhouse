@@ -17,7 +17,7 @@ async function scenario(name:string,fn:(c:any)=>Promise<void>){
  if(mode==='wrong-inbox')helperSource=replace(helperSource,'  const heraldAgeMs = matching ? now - Date.parse(hb.at) : 0;','  const heraldAgeMs = matching ? now - Date.parse(JSON.parse(fs.readFileSync(path.join(root,"seats/inbox.jsonl"),"utf8").split("\\n")[0]).at) : 0;');
  if(mode==='blank-zero')helperSource=replace(helperSource,'  return setting && Number.isFinite(Number(setting)) && Number(setting) >= 0 ? Number(setting) * 60000 : 300000;','  return Number(setting || 0) * 60000;');
  fs.writeFileSync(script,scriptSource);fs.writeFileSync(helper,helperSource);
- fs.writeFileSync(path.join(root,'seats/daemons.sh'),`pid_alive(){ [ -n "${'${1:-}'}" ] && kill -0 "$1" 2>/dev/null; }
+ fs.writeFileSync(path.join(root,'seats/daemons.sh'),`pid_alive(){ [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
 daemon_alive(){ if [ "$1" != herald ]; then return 0; fi; p="$(cat "$WHEELHOUSE_DAEMONS_ROOT/seats/run/herald.pid" 2>/dev/null)"; pid_alive "$p" || return 1; case "$(ps -p "$p" -o stat=)" in *Z*) return 1;; esac; }
 daemon_starting(){ return 1; }
 principal_channel_declared(){ return 1; }
