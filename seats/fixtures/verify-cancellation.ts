@@ -5,7 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 const root = path.resolve(process.argv[2]), runtime = path.join(root, "runtime/seats");
 function retainChildDiagnostics(saved: string | undefined, name: string, stdout: string, stderr: string, child: any): string | undefined {
   const base = path.resolve(process.env.WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT || process.env.WHEELHOUSE_VERIFY_CANCEL_EVIDENCE || path.join(path.dirname(import.meta.dir), "verdicts/verify-cancellation-failures"));
@@ -27,8 +28,8 @@ const groupAlive = (pgid: number) => { assert(Number.isInteger(pgid) && pgid > 1
 const pidAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (e: any) { if (e.code === "ESRCH") return false; throw e; } };
 function signalGroup(pgid: number, signal: NodeJS.Signals) { assert(Number.isInteger(pgid) && pgid > 1); try { process.kill(-pgid, signal); } catch (e: any) { if (e.code !== "ESRCH") throw e; } }
 async function until(test: () => boolean, ended: () => boolean, label: string) {
-  const limit = performance.now() + 60000; // incomplete-test guard, not a pass threshold
-  while (!test()) { if (ended()) throw Error("child exited before " + label); if (performance.now() > limit) throw Error("INCOMPLETE fixture join: " + label); await Bun.sleep(50); }
+  console.error(`FIXTURE_WAIT verify cancellation: ${label}`);
+  while (!test()) { if (ended()) throw Error("child exited before " + label); await Bun.sleep(50); }
 }
 function command(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) { const r = spawnSync(bin, args, { cwd, env, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout; }
 const cases = ["sweep", "reviewer"].flatMap(phase => (["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase, signal })));

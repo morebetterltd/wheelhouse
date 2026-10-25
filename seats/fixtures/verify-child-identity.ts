@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import { createRequire } from 'node:module';
 import { own } from './verify-readiness';
 const [here, root, ...args] = process.argv.slice(2);
@@ -12,9 +13,21 @@ const stubFile = option('--stub') ?? path.join(here, 'verify.selftest.sh');
 const helper = createRequire(import.meta.url)(helperFile);
 const cases = ['publication', 'gone', 'zombie', 'reused', 'live', 'regrouped', 'model', 'preload', 'incomplete'];
 assert(!selected || cases.includes(selected));
-async function until(test: () => boolean, label: string) {
-  const end = performance.now() + 30000;
-  while (!test()) { assert(performance.now() < end, `containment guard: ${label}`); await Bun.sleep(10); }
+function expectSuccessfulClose(child: ReturnType<typeof spawn>, stderr: () => string) {
+  const closed = new Promise<void>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      // Throwing out of this callback would leave the promise pending.
+      try { assert.equal(code, 0, stderr()); assert.equal(signal, null); resolve(); }
+      catch (error) { reject(error); }
+    });
+  });
+  void closed.catch(() => {}); // observe rejection before readiness/finally joins
+  return closed;
+}
+async function until(test: () => boolean, label: string, ended: () => boolean = () => false) {
+  console.error(`FIXTURE_WAIT child identity: ${label}`);
+  while (!test()) { assert(!ended(), `child exited before ${label}`); await Bun.sleep(10); }
 }
 async function held(dir: string, zombie = false, blockPublication = false) {
   fs.mkdirSync(dir);
@@ -36,23 +49,23 @@ while(!-e "$dir/release"){
 }
 `, dir, zombie ? '1' : '0', blockPublication ? '1' : '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = ''; child.stderr.on('data', b => stderr += b); child.stdout.resume();
-  const closed = new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => { assert.equal(code, 0, stderr); assert.equal(signal, null); resolve(); }); });
+  const closed = expectSuccessfulClose(child, () => stderr);
   const stop = async () => { fs.writeFileSync(path.join(dir, 'publish'), 'publish\n'); fs.writeFileSync(path.join(dir, 'release'), 'release\n'); fs.writeFileSync(path.join(dir, 'reap'), 'reap\n'); await closed; };
   try {
     if (blockPublication) {
-      await until(() => fs.existsSync(path.join(dir, 'pid-opened')), 'child PID stage opened');
+      await until(() => fs.existsSync(path.join(dir, 'pid-opened')), 'child PID stage opened', () => child.exitCode !== null || child.signalCode !== null);
       assert(!fs.existsSync(path.join(dir, 'pid')), 'partial child PID file exposed before publication');
       assert.equal(fs.readFileSync(path.join(dir, 'pid.pending'), 'utf8'), '', 'writer must still be held before PID bytes');
       console.log(JSON.stringify({ event: 'pid-publication-held', childPid: child.pid, published: false, stageBytes: 0 }));
       fs.writeFileSync(path.join(dir, 'publish'), 'publish\n');
     }
-    await until(() => fs.existsSync(path.join(dir, 'pid')), 'real child readiness');
+    await until(() => fs.existsSync(path.join(dir, 'pid')), 'real child readiness', () => child.exitCode !== null || child.signalCode !== null);
     const text = fs.readFileSync(path.join(dir, 'pid'), 'utf8');
     assert.match(text, /^[1-9][0-9]*\n$/, 'published child PID must be complete');
     const pid = Number(text);
     const initial = helper.readProcess(pid); assert.equal(initial.kind, 'present', 'native live subject');
     assert(!initial.identity.state.startsWith('Z'));
-    return { pid, initial, stop, release: () => fs.writeFileSync(path.join(dir, 'release'), 'release\n') };
+    return { pid, initial, stop, exited: () => child.exitCode !== null || child.signalCode !== null, release: () => fs.writeFileSync(path.join(dir, 'release'), 'release\n') };
   } catch (e) { await stop(); throw e; }
 }
 for (const name of cases.filter(x => !selected || x === selected)) {
@@ -66,7 +79,7 @@ for (const name of cases.filter(x => !selected || x === selected)) {
           assert.doesNotThrow(() => helper.assertNoSurvivors([helper.inspect(old.initial.identity)]), 'gone must not fail');
         } else if (name === 'zombie') {
           old.release(); let observed: any;
-          await until(() => { observed = helper.readProcess(old.pid); return observed.kind === 'present' && observed.identity.state.startsWith('Z'); }, 'native unreaped zombie');
+          await until(() => { observed = helper.readProcess(old.pid); return observed.kind === 'present' && observed.identity.state.startsWith('Z'); }, 'native unreaped zombie', old.exited);
           assert.equal(observed.identity.started, old.initial.identity.started);
           console.log(JSON.stringify({ name, recorded: old.initial, observed }));
           assert.doesNotThrow(() => helper.assertNoSurvivors([helper.inspect(old.initial.identity)]), 'zombie must not fail');
@@ -87,7 +100,7 @@ for (const name of cases.filter(x => !selected || x === selected)) {
         } else {
           if (name === 'regrouped') {
             fs.writeFileSync(path.join(dir, 'old/regroup'), 'regroup\n');
-            await until(() => fs.existsSync(path.join(dir, 'old/regrouped')), 'real group change');
+            await until(() => fs.existsSync(path.join(dir, 'old/regrouped')), 'real group change', old.exited);
             assert.notEqual(helper.readProcess(old.pid).identity.pgid, old.initial.identity.pgid);
           }
           const check = helper.inspect(old.initial.identity); console.log(JSON.stringify({ name, check }));
@@ -101,16 +114,20 @@ for (const name of cases.filter(x => !selected || x === selected)) {
       const ledger = path.join(dir, 'ledger'), agent = path.join(dir, 'agent'), reply = path.join(dir, 'reply');
       fs.writeFileSync(ledger, ''); fs.writeFileSync(reply, 'ready\nVERDICT: APPROVE\n');
       const originalTZ = process.env.TZ; process.env.TZ = 'UTC';
-      const child = spawn('node', [file, '--mode', 'json'], { env: { ...process.env, TZ: 'Pacific/Honolulu', PI_CODING_AGENT_DIR: agent, STUB_REPLY_FILE: reply, WHEELHOUSE_TEST_WATCHDOG_DIR: dir, WHEELHOUSE_TEST_CHILD_LEDGER: ledger, WHEELHOUSE_TEST_CHILD_IDENTITY: helperFile }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn('bun', [file, '--mode', 'json'], { env: { ...process.env, TZ: 'Pacific/Honolulu', PI_CODING_AGENT_DIR: agent, STUB_REPLY_FILE: reply, WHEELHOUSE_TEST_WATCHDOG_DIR: dir, WHEELHOUSE_TEST_CHILD_LEDGER: ledger, WHEELHOUSE_TEST_CHILD_IDENTITY: helperFile }, stdio: ['ignore', 'pipe', 'pipe'] });
       let stderr = ''; child.stderr.on('data', b => stderr += b); child.stdout.resume();
-      const closed = new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => { assert.equal(code, 0, stderr); assert.equal(signal, null); resolve(); }); });
+      const closed = expectSuccessfulClose(child, () => stderr);
       try {
-        await until(() => fs.existsSync(path.join(dir, 'ready')), 'Node model payload readiness');
+        await until(() => fs.existsSync(path.join(dir, 'ready')), 'Bun model payload readiness', () => child.exitCode !== null || child.signalCode !== null);
         const row = JSON.parse(fs.readFileSync(ledger, 'utf8').trim());
         assert.equal(row.identity?.pid, child.pid, 'model missing native identity');
         assert.equal(helper.inspect(row.identity).verdict, 'surviving', 'model timezone must preserve birth');
         console.log(JSON.stringify({ name, row, beforePayloadRelease: true }));
-      } finally { fs.writeFileSync(path.join(dir, 'release'), 'release\n'); await closed; if (originalTZ === undefined) delete process.env.TZ; else process.env.TZ = originalTZ; }
+      } finally {
+        fs.writeFileSync(path.join(dir, 'release'), 'release\n');
+        try { await closed; }
+        finally { if (originalTZ === undefined) delete process.env.TZ; else process.env.TZ = originalTZ; }
+      }
     } else if (name === 'preload') {
       const ledger = path.join(dir, 'ledger'); fs.writeFileSync(ledger, '');
       process.env.WHEELHOUSE_TEST_CHILD_LEDGER = ledger; process.env.WHEELHOUSE_TEST_CHILD_IDENTITY = helperFile;
@@ -146,13 +163,16 @@ if (!selected) {
   ];
   for (const v of variants) {
     const file = path.join(root, v.name + '.cjs'), stubCopy = path.join(root, v.name + '.sh'), fixtureCopy = path.join(root, v.name + '.ts');
-    fs.writeFileSync(file, v.code ?? source); fs.writeFileSync(stubCopy, v.stub ?? stub);
+    const commandModule = path.join(here, 'fixtures/fixture-command.cjs');
+    const helperSource = (v.code ?? source).replace(/require\(['"]\.\/fixture-command\.cjs['"]\)/, 'require(' + JSON.stringify(commandModule) + ')');
+    fs.writeFileSync(file, helperSource); fs.writeFileSync(stubCopy, v.stub ?? stub);
     if (v.fixture) {
-      const relocated = v.fixture.replace(/^import \{ own \} from .*;$/m, 'import { own } from ' + JSON.stringify(path.join(here, 'fixtures/verify-readiness.ts')) + ';');
+      const relocated = v.fixture.replace(/^import \{ own \} from .*;$/m, 'import { own } from ' + JSON.stringify(path.join(here, 'fixtures/verify-readiness.ts')) + ';')
+        .replace(/^import \{ spawnSync \} from ["']\.\/fixture-command\.cjs["'];$/m, 'import { spawnSync } from ' + JSON.stringify(commandModule) + ';');
       assert.notEqual(relocated, v.fixture, 'fixture control import relocated');
       fs.writeFileSync(fixtureCopy, relocated);
     }
-    const r = spawnSync('bun', [v.fixture ? fixtureCopy : import.meta.path, here, root, '--case=' + v.mode, '--helper=' + file, '--stub=' + stubCopy], { env: { ...process.env, IDENTITY_CASE_TAG: v.name }, encoding: 'utf8', timeout: 60000 });
+    const r = spawnSync('bun', [v.fixture ? fixtureCopy : import.meta.path, here, root, '--case=' + v.mode, '--helper=' + file, '--stub=' + stubCopy], { env: { ...process.env, IDENTITY_CASE_TAG: v.name }, encoding: 'utf8' });
     fs.writeFileSync(path.join(root, v.name + '.stdout'), r.stdout ?? ''); fs.writeFileSync(path.join(root, v.name + '.stderr'), r.stderr ?? '');
     assert.ifError(r.error); assert.equal(r.signal, null); assert.equal(r.status, 1, v.name);
     assert(r.stderr.includes('CASE_ASSERTION ' + v.mode)); assert(r.stderr.includes('AssertionError')); assert(r.stderr.includes(v.message), r.stderr);

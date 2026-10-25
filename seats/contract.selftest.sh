@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
@@ -15,6 +16,10 @@ export GIT_CEILING_DIRECTORIES="$FIX"
 FAILED=0
 pass(){ echo "PASS $*"; }
 fail(){ echo "FAIL $*"; FAILED=$((FAILED+1)); }
+mkdir -p "$FIX/fixture-command"
+if bun "$HERE/fixtures/fixture-command-regression.ts" "$FIX/fixture-command"; then
+  pass 'fixture command return/throw compatibility and meaningful removals'
+else fail 'fixture command compatibility regression'; fi
 leg(){
   local name="$1" expected="$2" error="$3" out rc=0
   out="$(bun "$CONTRACT" check --file "$HERE/fixtures/contracts/$name.md" 2>&1)" || rc=$?
@@ -118,8 +123,12 @@ POSTED_ID="$(WHEELHOUSE_INTAKE_ROOT="$FIX/graph" bun "$HERE/intake.ts" post --ki
 case "$POSTED_ID" in sig-????) ;; *) echo 'STOP: intake post did not return an id'; exit 2;; esac
 sed "s/$POSTED_ID/sig-abcd/g" "$FIX/graph/seats/intake.jsonl" > "$FIX/posted.jsonl"
 cp -f "$FIX/posted.jsonl" "$FIX/graph/seats/intake.jsonl"
-CONTRACT="$CONTRACT" HERE="$HERE" FIX="$FIX" node - <<'JS'
-const fs=require('fs'),path=require('path'),cp=require('child_process'),assert=require('assert');
+CONTRACT="$CONTRACT" HERE="$HERE" FIX="$FIX" bun - <<'JS'
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert';
+import * as nativeCP from 'node:child_process';
+const cp={...nativeCP,...await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
 const {CONTRACT,HERE,FIX}=process.env,root=path.join(FIX,'graph'),ledger=path.join(root,'seats/intake.jsonl');
 const valid=fs.readFileSync(path.join(HERE,'fixtures/contracts/valid.md'),'utf8');
 const env={...process.env,WHEELHOUSE_CONTRACT_ROOT:root};delete env.WHEELHOUSE_SKIP_BD;delete env.WHEELHOUSE_CONTRACT_FIXTURE;delete env.WHEELHOUSE_INTAKE_FIXTURE;

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 // Runtime under test is a selftest-owned copy, never the installed seats.
 const [root, selected = "all"] = process.argv.slice(2), seats = path.join(root, "seats");
 const { eventLogFilter } = await import(path.join(seats, "seat-event-log.ts"));

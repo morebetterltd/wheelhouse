@@ -252,7 +252,7 @@ for mode in occupied-line occupied-inline; do
   cp -f "$UMB/seats/state.json" "$FIX/$mode-before.json"
   RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/adapter.ts" dispatch worker-1 "$bead" "must not prepare a product branch" 2>&1)" || RC=$?
   printf '%s\n' "$OUT" > "$FIX/$mode-output.txt"
-  if HOME="$HOME_FIX" node "$HERE/fixtures/dispatch-repo.mjs" "$UMB" "$bead" "$RC" "$mode" "$FIX/$mode-before.json" "$FIX/$mode-output.txt"; then
+  if HOME="$HOME_FIX" bun "$HERE/fixtures/dispatch-repo.mjs" "$UMB" "$bead" "$RC" "$mode" "$FIX/$mode-before.json" "$FIX/$mode-output.txt"; then
     pass "$mode declaration refuses a product target before creating or switching a branch"
   else fail "$mode declaration was not safely refused: $OUT"; fi
 done
@@ -272,7 +272,7 @@ if [ "$RC" = 0 ]; then pass "fresh umbrella fixture seat spawns"; else fail "fre
 write_repo_claim fresh-inline bead-umbrella-inline
 check_repo_claim bead-umbrella-inline || exit 1
 RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/adapter.ts" dispatch worker-2 bead-umbrella-inline "prepare umbrella, not product" 2>&1)" || RC=$?
-if HOME="$HOME_FIX" node "$HERE/fixtures/dispatch-repo.mjs" "$UMB" bead-umbrella-inline "$RC" fresh-inline unused unused; then
+if HOME="$HOME_FIX" bun "$HERE/fixtures/dispatch-repo.mjs" "$UMB" bead-umbrella-inline "$RC" fresh-inline unused unused; then
   pass "inline Repo: UMBRELLA prepares the fresh worktree in umbrella only"
 else fail "inline declaration prepared the wrong repository: $OUT"; fi
 

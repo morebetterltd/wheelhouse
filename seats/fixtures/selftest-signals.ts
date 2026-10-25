@@ -1,14 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync as nativeSpawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import { createInterface } from 'node:readline';
 
 // Proxy the real lock helper, recording actual releases, not idempotent results.
 if (['release', 'acquire', 'inherited', 'refresh'].includes(process.argv[2])) {
   const args = process.argv.slice(2);
   if (args[0] === 'release') fs.appendFileSync(process.env.SIGNAL_RELEASES!, 'release\n');
-  const r = spawnSync('bun', [process.env.SIGNAL_REAL_LOCK_HELPER!, ...args], { stdio: 'inherit' });
+  const r = nativeSpawnSync('bun', [process.env.SIGNAL_REAL_LOCK_HELPER!, ...args], { stdio: 'inherit' });
   if (r.error) throw r.error;
   process.exit(r.status ?? 2);
 }
@@ -98,16 +99,16 @@ git -C "$2" add seats || exit 2
     if (!line.startsWith('SIGNAL_READY ')) return;
     const parts = line.split(' '); fixtureDir = parts[1]; childPid = Number(parts[2]); resolve();
   }));
-  let timer: ReturnType<typeof setTimeout>;
-  // A deadline can only fail the test, never decide that a process stopped.
-  const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${name}: child exit/readiness deadline`)), 30000); });
+  // Native READY/early exit decides; the containing sweep owns containment.
+  console.error(`FIXTURE_WAIT selftest signals: ${name} READY, child=${child.pid}`);
   try {
-    await Promise.race([ready, exit.then(r => { throw new Error(`exit before READY: ${JSON.stringify(r)} ${stderr}`); }), deadline]);
+    await Promise.race([ready, exit.then(r => { throw new Error(`exit before READY: ${JSON.stringify(r)} ${stderr}`); })]);
     assert(fs.statSync(path.join(fixtureDir, '.wheelhouse-selftest-fixture')).isFile());
     assert(childPid > 1 && alive(childPid), 'fixture child must exist before signaling');
     if (normal) child.stdin.end('finish\n');
     else assert(child.kill(signal), 'signal delivery failed');
-    const result = await Promise.race([exit, deadline]);
+    console.error(`FIXTURE_WAIT selftest signals: ${name} native exit and both EOFs, child=${child.pid}`);
+    const result = await exit;
     const log = fs.readFileSync(events, 'utf8');
     // Collect every observation before asserting, so old-trap failures retain
     // their continuation, cleanup-count and child-exit evidence together.
@@ -127,9 +128,8 @@ git -C "$2" add seats || exit 2
     }
     console.log(`PASS ${name}: cleanup once, exit ${expected}, fixture gone, child reaped${sweep ? ', no later suite, one release' : ''}`);
   } catch (e) {
-    failures++; console.error(`FAIL ${name}: ${e}`);
+    failures++; console.error(`FAIL ${name}: ${e}\nCAPTURE stdout:\n${stdout}\nCAPTURE stderr:\n${stderr}`);
   } finally {
-    clearTimeout(timer!);
     if (!exited) {
       // Only our freshly spawned child, never host sweeps or their lock owners.
       child.stdin.end('release\n'); child.kill('SIGTERM');

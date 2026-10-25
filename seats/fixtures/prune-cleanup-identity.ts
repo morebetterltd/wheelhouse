@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import { recordCleanupScratch, SCRATCH_MARKER } from "../cleanup-identity";
 
 const [base, source, prune, mode = "fixed"] = process.argv.slice(2);

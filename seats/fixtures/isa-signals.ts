@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import assert from "node:assert/strict";
 
 const [root, bridge] = process.argv.slice(2);

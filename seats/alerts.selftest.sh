@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 set -uo pipefail
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
@@ -220,7 +221,7 @@ for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done
 printf '{"status":"ok"}\n' > "$ROOT/seats/run/herald.target.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared commander-pane-invalid' "$ROOT/seats/logs/alerts.log" && [ "$(need_closed_count)" = 1 ] && pass 'commander-pane-invalid clear closes its need' || fail "pane close failed: $(cat "$ROOT/seats/needs.jsonl" 2>/dev/null)"
 
-ME_STARTED="$(bun -e 'import {spawnSync} from "node:child_process";const r=spawnSync("ps",["-p",process.argv[1],"-o","lstart="],{encoding:"utf8"});console.error("CAPTURE alerts fixture ps "+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));if(r.status!==0||r.error||r.signal)process.exit(2);console.log(new Date(Date.parse(r.stdout.trim())).toISOString());' "$$")" || exit 2
+ME_STARTED="$(bun -e 'const { spawnSync } = await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE);const r=spawnSync("ps",["-p",process.argv[1],"-o","lstart="],{encoding:"utf8"});console.error("CAPTURE alerts fixture ps "+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));if(r.status!==0||r.error||r.signal)process.exit(2);console.log(new Date(Date.parse(r.stdout.trim())).toISOString());' "$$")" || exit 2
 clear_runtime; printf '{"seats":{"worker-a":{"pid":%s,"startedAt":"%s","log":"%s","lastCapacityEvent":{"at":"2026-01-01T00:00:00Z","detail":"synthetic"}}}}\n' $$ "$ME_STARTED" "$ROOT/seats/logs/worker-a.jsonl" > "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && active capacity-events && pass 'capacity-events fires when state carries lastCapacityEvent' || fail "capacity failed rc=$RC out=$OUT"
 for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done; [ "$(inbox_count)" = 1 ] && pass 'capacity-events stays quiet over 3 active runs' || fail "capacity not quiet"

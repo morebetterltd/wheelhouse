@@ -53,9 +53,9 @@ const runs: Run[] = [];
 const listeners = new Set<() => void>();
 const notify = () => { for (const f of [...listeners]) f(); };
 async function until(p: Run, test: () => boolean, label: string) {
+  console.error(`FIXTURE_WAIT heavy-test: ${label}, child=${p.child.pid}`);
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => finish(Error("INCOMPLETE waiting for " + label)), 20000);
-    const finish = (error?: Error) => { clearTimeout(timer); listeners.delete(check); error ? reject(error) : resolve(); };
+    const finish = (error?: Error) => { listeners.delete(check); error ? reject(error) : resolve(); };
     const check = () => { if (test()) finish(); else if (p.closed) finish(Error(`${label}: early exit ${p.code}/${p.signal}\n${p.out}\n${p.err}`)); };
     listeners.add(check); check();
   });

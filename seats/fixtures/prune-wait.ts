@@ -3,7 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import { recordCleanupScratch } from "../cleanup-identity";
 const [base, source, prune, clock, mode = "fixed"] = process.argv.slice(2);
 assert(["fixed", "removed"].includes(mode), "unknown prune wait fixture mode");

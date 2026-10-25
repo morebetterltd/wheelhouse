@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "./fixture-command.cjs";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 const [here, root, baseProject, home, runPath] = process.argv.slice(2);

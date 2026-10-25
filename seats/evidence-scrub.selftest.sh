@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
@@ -50,7 +51,7 @@ if bun - "$SCRUB" "$FIX" <<'JS'
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import {spawnSync} from 'node:child_process';
+const { spawnSync } = await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE);
 const [scrub,root]=process.argv.slice(2);
 assert(fs.statSync(scrub).isFile());
 assert(fs.statSync(path.join(root,'.wheelhouse-selftest-fixture')).isFile());
