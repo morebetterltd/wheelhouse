@@ -33,7 +33,9 @@ if(!kind){
  if(mutation==='no-scan'||mutation==='no-scan-or-validation')remove('r[2] === realpathMaybe(ROOT) && ');
  assert(['none','no-validation','no-scan','no-scan-or-validation'].includes(mutation));fs.writeFileSync(file,after);
  for(const d of ['seats/run','seats/logs','wheelhouse'])fs.mkdirSync(path.join(root,d),{recursive:true});
- fs.writeFileSync(path.join(root,'seats/logs/worker.jsonl'),'{"type":"agent_end","messages":["identity fixture new event"]}\n');fs.writeFileSync(path.join(root,'seats/herald.state.json'),JSON.stringify({logs:{'seats/logs/worker.jsonl':{offset:0}}}));
+ // These cases judge targeting, not scheduling: leave both optional clocks
+ // not due so a copied alerts.ts cannot launch incidental graph/tool reads.
+ fs.writeFileSync(path.join(root,'seats/logs/worker.jsonl'),'{"type":"agent_end","messages":["identity fixture new event"]}\n');fs.writeFileSync(path.join(root,'seats/herald.state.json'),JSON.stringify({logs:{'seats/logs/worker.jsonl':{offset:0}},alerts:{lastCheckAt:'2999-01-01T00:00:00Z'},staffing:{lastCheckAt:'2999-01-01T00:00:00Z'}}));
  const record=['file-none','file-other','reused'].includes(kind);if(record)save(path.join(root,'seats/run/commander-pane.json'),{paneId:'%12',root});
  let panes='',stamps='',expected='%22';
  if(['reused','scan','env-none'].includes(kind)){
