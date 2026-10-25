@@ -33,6 +33,10 @@ async function until(test: () => boolean, ended: () => boolean, label: string) {
 function command(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) { const r = spawnSync(bin, args, { cwd, env, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout; }
 const cases = ["sweep", "reviewer"].flatMap(phase => (["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase, signal })));
 cases.push({ phase: "reviewer-orphan", signal: "SIGTERM" });
+// An interrupted sweep is itself terminal, even if its groups retired before
+// close. Also cover the commander's simultaneous dispatcher+runner TERM path.
+cases.push({ phase: "sweep-interrupted", signal: "SIGTERM" });
+cases.push({ phase: "sweep-both", signal: "SIGTERM" });
 cases.push(...(["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase: "sweep-stubborn", signal })));
 cases.push({ phase: "sweep-stubborn-long-grace", signal: "SIGTERM" });
 cases.push({ phase: "sweep-stubborn-runner-killed", signal: "SIGTERM" });
@@ -164,7 +168,17 @@ esac
     const runnerKilled = phase.startsWith("sweep-stubborn-runner-killed");
     if (runnerKilled) signalGroup(runnerGroup, "SIGKILL");
     // Signal ONLY the direct dispatcher we started, not its entire group.
-    child.kill(signal);
+    if (phase === "sweep-interrupted") {
+      process.kill(runnerPid, signal);
+      await until(() => ended || fs.existsSync(path.join(dir, "pi-entered")), () => false, "interrupted sweep exit / forbidden reviewer start");
+      // Fix-removed containment only, AFTER retaining the forbidden launch.
+      if (!ended) child.kill(signal);
+    } else {
+      child.kill(signal);
+      if (phase === "sweep-both") {
+        try { process.kill(runnerPid, signal); } catch (e: any) { if (e.code !== "ESRCH") throw e; }
+      }
+    }
     await until(() => ended, () => false, "cancelled dispatcher exit"); const result = await closed;
     const survivors = [rolePid, sleepPid, runnerPid].filter((x): x is number => !!x).filter(pidAlive);
     const listing = command("git", ["worktree", "list", "--porcelain"], project, env), scratchGone = scratch.every(p => !fs.existsSync(p) && !listing.includes("worktree " + p + "\n"));
@@ -181,8 +195,8 @@ esac
     }
     const absent = !fs.existsSync(physicalLock); let admitted = false;
     if (absent) { const token = crypto.randomUUID().replace(/-/g, ""), r = spawnSync("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "acquire", physicalLock, String(process.pid), token, ""], { cwd: project, env, encoding: "utf8" }); admitted = r.status === 0; if (admitted) command("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "release", physicalLock, String(process.pid), token, r.stdout.trim()], project, env); }
-    measurement = { ...result, phase, runnerKilled, requestedSignal: signal, recordedGroup: roleGroup, publishedGroups, runnerPid, runnerGroup, survivors, ownedGroupsGone: !groupAlive(roleGroup) && !groupAlive(runnerGroup), reportedClean: err.includes("owned groups stopped, locks released, scratch removed"), lockRequested: targetLock, physicalLock, releasedPaths, replacementUntouched, lockRefusal: err.includes("SELFTEST_LOCK_REFUSAL"), runnerGrace: phase === "sweep-stubborn-long-grace" ? 120 : 5, scratchGone, lockAbsent: absent, lockAdmitted: admitted, foreignAlive: groupAlive(canaryGroup), foreignSignals: fs.existsSync(path.join(dir, "foreign.signals")) ? fs.readFileSync(path.join(dir, "foreign.signals"), "utf8") : "", handlerReturned: fs.existsSync(path.join(dir, "handler-returned")), stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded, reviewerStarted: fs.existsSync(path.join(dir, "reviewer.pid")) };
-    assert.equal(result.code, signal === "SIGTERM" ? 143 : signal === "SIGINT" ? 130 : 129); assert.equal(result.signal, null); assert(measurement.stdoutEOF && measurement.stderrEOF); assert.deepEqual(survivors, []); assert(measurement.ownedGroupsGone, "all owned groups must be empty before clean stop"); if (phase.startsWith("sweep-stubborn")) assert(publishedGroups.includes(roleGroup), "real runner must publish suite group ownership before payload"); assert(!measurement.lockRefusal, err); assert(scratchGone && (replacement ? replacementUntouched && !absent : absent && admitted)); assert(measurement.foreignAlive && !measurement.foreignSignals); assert.equal(measurement.reviewerStarted, !phase.startsWith("sweep")); if (signal !== "SIGHUP") assert(measurement.handlerReturned, "production handler must return while asynchronous teardown joins children"); assert(err.includes("owned groups stopped, locks released, scratch removed"), err);
+    measurement = { ...result, phase, runnerKilled, requestedSignal: signal, recordedGroup: roleGroup, publishedGroups, runnerPid, runnerGroup, survivors, ownedGroupsGone: !groupAlive(roleGroup) && !groupAlive(runnerGroup), reportedClean: err.includes("owned groups stopped, locks released, scratch removed"), lockRequested: targetLock, physicalLock, releasedPaths, replacementUntouched, lockRefusal: err.includes("SELFTEST_LOCK_REFUSAL"), runnerGrace: phase === "sweep-stubborn-long-grace" ? 120 : 5, scratchGone, lockAbsent: absent, lockAdmitted: admitted, foreignAlive: groupAlive(canaryGroup), foreignSignals: fs.existsSync(path.join(dir, "foreign.signals")) ? fs.readFileSync(path.join(dir, "foreign.signals"), "utf8") : "", handlerReturned: fs.existsSync(path.join(dir, "handler-returned")), stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded, reviewerStarted: fs.existsSync(path.join(dir, "pi-entered")) || fs.existsSync(path.join(dir, "reviewer.pid")) };
+    assert.equal(result.code, signal === "SIGTERM" ? 143 : signal === "SIGINT" ? 130 : 129); assert.equal(result.signal, null); assert(measurement.stdoutEOF && measurement.stderrEOF); assert.deepEqual(survivors, []); assert(measurement.ownedGroupsGone, "all owned groups must be empty before clean stop"); if (phase.startsWith("sweep-stubborn")) assert(publishedGroups.includes(roleGroup), "real runner must publish suite group ownership before payload"); assert(!measurement.lockRefusal, err); assert(scratchGone && (replacement ? replacementUntouched && !absent : absent && admitted)); assert(measurement.foreignAlive && !measurement.foreignSignals); assert.equal(measurement.reviewerStarted, !phase.startsWith("sweep")); if (signal !== "SIGHUP" && phase !== "sweep-interrupted") assert(measurement.handlerReturned, "production handler must return while asynchronous teardown joins children"); assert(err.includes("owned groups stopped, locks released, scratch removed"), err);
     console.log("PASS " + name + " " + JSON.stringify(measurement));
   } catch (e: any) { failure = e.stack ?? String(e); failureMessage = e.message; }
   finally {
