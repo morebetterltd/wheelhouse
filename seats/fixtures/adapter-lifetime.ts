@@ -1,5 +1,5 @@
-// Regression only: 2026-10-23's leak does not reproduce on main727c391.
-// Exercise the real adapter suite/stub under the real sweep; never production seats.
+// Guard detached adapter-fixture pipelines across normal/deadline teardown.
+// Exercise the existing adapter suite/stub under the sweep; never production seats.
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -87,6 +87,7 @@ if (mode === 'gate') {
   const s = snapshot(), leader = s.rows.find(r => r.pid === launches[0].pid), suite = s.rows.find(r => r.pid === Number(suitePid));
   assert(leader && suite); assert.equal(leader.ppid, 1, 'seat did not survive launching shell');
   assert.equal(leader.pgid, leader.pid, 'production detach lost'); assert.equal(suite.pgid, suite.pid);
+  assert.notEqual(leader.pgid, suite.pgid, 'stub must escape its launching suite group');
   assert(leader.command.includes(root) && under(leader.cwd, root));
   const members = s.rows.filter(r => r.pgid === leader.pgid);
   assert(members.length >= 2 && members.every(r => r.command.includes(root) || under(r.cwd, root)));
@@ -174,7 +175,7 @@ git -C "$2" add seats || exit 2
       } else assert(!caught, caught?.message);
     } catch (error: any) { failures++; record.failure = String(error); console.error(`FAIL adapter lifetime ${name}: ${error}`); }
     finally {
-      published.cancel(); record.stdout = stdout; record.stderr = stderr;
+      published.cancel(); record.stdout = stdout; record.stderr = stderr; keep(name, record);
       // A control is never permission to leave its actors behind. Every group
       // signal rechecks cached native PID/PGID/birth/argv; unknown is refused.
       if (receipt) {
