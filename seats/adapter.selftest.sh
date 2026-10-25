@@ -92,6 +92,9 @@ selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+# Nested lifetime cases need only the existing stub/builders below. Keep the
+# regression cheap and avoid recursively running this suite's unrelated legs.
+if [ -z "${WHEELHOUSE_ADAPTER_LIFETIME_CHILD:-}" ] && [ "${WHEELHOUSE_ADAPTER_LIFETIME_ONLY:-0}" != 1 ]; then
 phase "0. shared status/floor turn display (display only, not alert policy)"
 selftest_copy_seat_runtime "$FIX/turn-display-runtime" "$ADAPTER_DIR" || exit 2
 if bun "$HERE/fixtures/seat-turn-display.ts" "$FIX/turn-display-runtime/seats" "$FIX/turn-display"; then
@@ -110,6 +113,7 @@ if bun "$HERE/fixtures/log-rotation-owner.ts" "$FIX/log-rotation-runtime" "$FIX"
   pass "status refuses outside, aliased, linked and nonregular logs/archives without touching KEEP"
 else
   fail "status log-rotation ownership regression"
+fi
 fi
 # Dispatch must pass the real contract gate too (fleet/producer enables it).
 export WHEELHOUSE_CONTRACT_FIXTURE="$FIX/dispatch-contract.md"
@@ -163,6 +167,7 @@ start_holder() { # name, cwd, process title, optional stdin FIFO, ignore TERM
   wait_exists "$ready" "$HOLDER_PID" && kill -0 "$HOLDER_PID" 2>/dev/null || { fail "holder $1 exited before its live-process precondition"; return 1; }
 }
 
+if [ -z "${WHEELHOUSE_ADAPTER_LIFETIME_CHILD:-}" ] && [ "${WHEELHOUSE_ADAPTER_LIFETIME_ONLY:-0}" != 1 ]; then
 phase "0. fixture cleanup catches cwd-only descendants"
 CWD_ONLY_DIR="$FIX/cwd-only-holder"
 mkdir -p "$CWD_ONLY_DIR"
@@ -177,6 +182,7 @@ else
   kill "$CWD_ONLY_PID" >/dev/null 2>&1 || true
 fi
 
+fi
 # The stub pi: a long-lived RPC process. It records argv, honours
 # PI_CODING_AGENT_DIR, answers get_state/prompt/steer, appends to a session
 # file, resumes one via --session, and dies cleanly on SIGTERM. A prompt
@@ -489,6 +495,27 @@ build_proj "$PROJ" alpha
 run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_LEAK_BEAD_PREFIX=demo FIXTURE_BD_CLOSED_FILE="${FIXTURE_BD_CLOSED_FILE:-}" bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
+
+if [ -n "${WHEELHOUSE_ADAPTER_LIFETIME_CHILD:-}" ]; then
+  [ "$WHEELHOUSE_ADAPTER_LIFETIME_CHILD" != deadline ] || trap '' TERM
+  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/adapter-lifetime.ts" child \
+    "$FIX" "$PROJ" "$WHEELHOUSE_ADAPTER_LIFETIME_READY" "$WHEELHOUSE_ADAPTER_LIFETIME_CHILD" "$$"
+  exit $?
+fi
+phase "0. adapter lifetime — normal/deadline survivor checks and two-layer removal controls"
+LIFETIME_EVIDENCE="${WHEELHOUSE_ADAPTER_LIFETIME_EVIDENCE:-}"
+LIFETIME_EVIDENCE_OWNED=0
+if [ -z "$LIFETIME_EVIDENCE" ]; then
+  LIFETIME_EVIDENCE="$(selftest_make_fixture_dir "${WHEELHOUSE_SELFTEST_ARTIFACT_ROOT:-$TMPDIR}/wheelhouse-adapter-lifetime.XXXXXX")" || exit 2
+  LIFETIME_EVIDENCE_OWNED=1
+fi
+if bun "$HERE/fixtures/adapter-lifetime.ts" run "$HERE" "$ADAPTER" "$FIX/lifetime-cases" "$LIFETIME_EVIDENCE"; then
+  pass 'adapter lifetime: no argv/cwd survivors after normal/deadline; both defences removed reports detached stub; production detach retained'
+  [ "$LIFETIME_EVIDENCE_OWNED" != 1 ] || selftest_remove_fixture_dir "$LIFETIME_EVIDENCE" || exit 2
+else
+  fail "adapter lifetime regression; native evidence retained at $LIFETIME_EVIDENCE"
+fi
+if [ "${WHEELHOUSE_ADAPTER_LIFETIME_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 
 phase "contract gate: no-surface dispatch is refused before any side effect"
 REFUSE_PROJ="$FIX/contract-refusal"
