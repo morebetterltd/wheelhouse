@@ -52,9 +52,9 @@ function signalGroup(before: Row, signal: NodeJS.Signals) {
   assert.notEqual(row.pgid, s.rows.find(r => r.pid === process.pid)!.pgid, 'refuse caller group');
   process.kill(-row.pgid, signal); return true;
 }
-function publication(file: string, producer?: number) {
+function publication(file: string, producer?: number, eligible: () => boolean = () => true) {
   return waitForCondition({ site: 'adapter-lifetime.publication', paths: [path.dirname(file)], predicate: () => {
-    if (fs.existsSync(file)) return true;
+    if (fs.existsSync(file) && eligible()) return true;
     if (producer) { try { process.kill(producer, 0); } catch (e: any) { if (e.code === 'ESRCH') throw Error('producer exited before publication'); throw e; } }
     return false;
   } });
@@ -141,19 +141,22 @@ cp -f "$3/adapter.selftest.sh" "$2/seats/adapter.selftest.sh" || exit 2
   const state = path.join(project, 'seats/state.json');
   assert(!fs.existsSync(state) || !JSON.parse(fs.readFileSync(state, 'utf8')).seats?.['worker-1'], 'canary unexpectedly recorded seat');
   const publisher = s.rows.find(r => r.pid === process.pid)!;
-  assert(publisher && publisher.pgid === suite.pgid && under(publisher.cwd, root));
+  assert(publisher && publisher.pgid === suite.pgid && (publisher.command.includes(root) || under(publisher.cwd, root)), JSON.stringify({ publisher, suite, root }));
   const receipt: Receipt = { root, stateDir: path.dirname(process.env.TMPDIR!), leader, suite, publisher, members, launch };
   const guardian = Number(process.env.WHEELHOUSE_ADAPTER_LIFETIME_GUARDIAN);
   assert(Number.isInteger(guardian) && guardian > 1);
   if (finish === 'deadline') process.on('SIGTERM', () => {});
-  process.on('SIGUSR1', reconcileConditions);
-  const acknowledged = publication(ready + '.ack', guardian);
+  let notified = false;
+  const acknowledge = () => { notified = true; reconcileConditions(); };
+  process.on('SIGUSR1', acknowledge);
+  const acknowledged = publication(ready + '.ack', guardian, () => notified);
   try {
     fs.writeFileSync(ready + '.native.json', JSON.stringify(s, null, 2));
     fs.writeFileSync(ready, JSON.stringify(receipt, null, 2), { flag: 'wx' });
     console.log(`ADAPTER_LIFETIME_READY ${ready}`);
     await acknowledged.promise;
-  } finally { acknowledged.cancel(); process.off('SIGUSR1', reconcileConditions); }
+  } finally { acknowledged.cancel(); process.off('SIGUSR1', acknowledge); }
+  fs.writeFileSync(ready + '.released', String(process.pid), { flag: 'wx', mode: 0o600 });
   if (finish === 'deadline') setInterval(() => {}, 1000); // real sweep deadline owns this deliberately idle fixture
 } else if (mode === 'run') {
   const [here, adapterSource, root, evidence] = args;
@@ -185,7 +188,7 @@ git -C "$2" add seats || exit 2
     }
     fs.writeFileSync(suiteFile, suite);
     let runner = replaceOnce(runnerSource, '  local deadline=$((SECONDS+SUITE_TIMEOUT_S)) remaining slice renewal_rc=0 poll_rc',
-      `  bun ${quote(helper)} gate ${quote(ready + '.ack')} "$root" || exit 2\n  local deadline=$((SECONDS+SUITE_TIMEOUT_S)) remaining slice renewal_rc=0 poll_rc`);
+      `  bun ${quote(helper)} gate ${quote(ready + '.released')} "$root" || exit 2\n  local deadline=$((SECONDS+SUITE_TIMEOUT_S)) remaining slice renewal_rc=0 poll_rc`);
     if (broken) runner = replaceOnce(runner, 'signal_suite_tree(){', 'signal_suite_tree(){\n  SUITE_TREE_QUIESCENT=1; SUITE_SURVIVORS=0; return 0 # removal: ALL group/cwd containment disabled');
     fs.writeFileSync(runnerFile, runner);
     keep(name + '.sources', { suite, runner, readinessGateOnly: true, broken, finish });
@@ -221,7 +224,7 @@ git -C "$2" add seats || exit 2
       const live = snapshot();
       for (const actor of [receipt!.publisher, receipt!.leader]) {
         const current = live.rows.find(r => r.pid === actor.pid); assert(current, 'owned actor gone before acknowledgement');
-        sameIdentity(current, actor); assert(under(current.cwd, receipt!.root));
+        sameIdentity(current, actor); assert(current.command.includes(receipt!.root) || under(current.cwd, receipt!.root));
       }
       record.beforeAcknowledgement = live;
       fs.writeFileSync(ready + '.ack', 'observed live\n', { flag: 'wx', mode: 0o600 });
@@ -237,6 +240,7 @@ git -C "$2" add seats || exit 2
       }
       result = await closed; record.result = result; record.stdoutEOF = child.stdout.readableEnded; record.stderrEOF = child.stderr.readableEnded;
       assert(record.stdoutEOF && record.stderrEOF); assert.equal(readyCheckpoints, 1, 'one owned publication checkpoint required');
+      assert.equal(fs.readFileSync(ready + '.released', 'utf8'), String(receipt!.publisher.pid), 'publisher must observe owner acknowledgement before return/deadline');
       assert.equal(result.signal, null); assert.equal(result.code, finish === 'normal' ? 0 : 1, stdout + stderr);
       if (finish === 'deadline') assert(stdout.includes('timed out after 1s'), 'not a real sweep deadline');
       assert(stderr.includes('selftest-sweep: CLEAN '), 'runner never reached completed containment check');
