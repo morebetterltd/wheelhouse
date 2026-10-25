@@ -1,5 +1,6 @@
 Trace: ISA F2 W12 machine-only merge gate.
 Signal: isa-gap: W12
+Skills: intent@1.0.0 outcomes@1.0.0
 
 Intent:
 Pure machinery can merge on reviewed literal evidence without inventing a consumer walk.

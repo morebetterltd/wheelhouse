@@ -1,11 +1,12 @@
 import fs from 'node:fs';import path from 'node:path';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';
 import {completedCommand} from '../completed-command';import {reviewFixture} from './review-record-template';
-import {contractRemedy,parseContract,validateContract} from '../contract';
+import {checkBeadContract,contractRemedy} from '../contract';
 const [proj,sampleFile,source,here]=process.argv.slice(2),sample=fs.readFileSync(sampleFile,'utf8'),bead='fixture-work',branch='fleet/fixture-work';
 const e=process.env.WHEELHOUSE_MERGE_GATE_EVIDENCE;if(e)fs.mkdirSync(e,{recursive:true});const save=(n:string,v:any)=>{if(e)fs.writeFileSync(path.join(e,n+'.json'),JSON.stringify(v,null,2),{flag:'wx'});};
 const git=completedCommand('git',['rev-parse',branch],{cwd:proj});assert.equal(git.status,0);const tip=git.stdout.trim();const dir=proj+'/seats/verdicts',folder=dir+'/walks/'+bead;fs.mkdirSync(dir,{recursive:true});
 if(e)fs.writeFileSync(e+'/actual-review-sample.md',sample,{flag:'wx'});
 const mixed=here+'/fixtures/contracts/merge-gate.md',machine=here+'/fixtures/contracts/merge-gate-machine-only.md',noContract=here+'/fixtures/contracts/no-outcomes.md';
+function expectedGateErrors(contract:string){const saved={skip:process.env.WHEELHOUSE_SKIP_BD,fixture:process.env.WHEELHOUSE_CONTRACT_FIXTURE};process.env.WHEELHOUSE_SKIP_BD='1';process.env.WHEELHOUSE_CONTRACT_FIXTURE=contract;try{return checkBeadContract(proj,bead).errors;}finally{for(const [k,v] of [['WHEELHOUSE_SKIP_BD',saved.skip],['WHEELHOUSE_CONTRACT_FIXTURE',saved.fixture]] as const){if(v===undefined)delete process.env[k];else process.env[k]=v;}}}
 const row=(id:string,result='PASS',detail='observed '+id)=>({id,result,detail}),all=[row('O1'),row('O2'),row('O3')];
 // Shape captured from the actual work-mode walk.json, before constructing these mutations.
 function walk(rows:any[]=all,extra:any={}){const first=rows.find(r=>r.result==='FAIL')??rows.find(r=>r.result==='UNREACHED'),verdict=first?.result==='FAIL'?'WALKED-NOT-DONE':first?'COULD-NOT-WALK':'WALKED-DONE',detail=first?first.id+': '+first.detail:'';return {mode:'work',bead,branch,tip,repo:'.',productSubdirectory:'',outcomes:rows,verdict,detail,line:'VERDICT: '+verdict+(detail?' — '+detail:''),transcript:'walk/transcript.txt',...extra};}
@@ -18,7 +19,7 @@ const refuse=(x:any,id:string,detail:string)=>{assert.equal(x.status,2,x.stderr+
 leg('merge gate all rows PASS and machine skipped by name',()=>{put(walk());const x=cli('all-pass');assert.equal(x.status,0,x.stderr+x.stdout);assert.match(x.stdout,/O1 person-on-surface: walked PASS — observed O1/);assert.match(x.stdout,/O2 machine: skipped \(no consumer surface\)/);assert.match(x.stdout,/O3 person-reading: walked PASS — observed O3/);assert.equal(x.stdout.split('\n').filter((l:string)=>l.startsWith('MERGE-GATE:')).length,1);assert(x.stdout.endsWith('MERGE-GATE: PASS\n'));});
 leg('merge gate surface-only PASS rows',()=>{put(walk([all[0],all[2]]));assert.equal(cli('surface-only').status,0);});
 leg('merge gate machine-only APPROVE without walk',()=>{const x=cli('machine-only',{contract:machine,args:[]});assert.equal(x.status,0,x.stdout+x.stderr);assert.match(x.stdout,/walk skipped: no outcome names a consumer surface/);assert.equal(x.receipt.walk,null);assert(x.receipt.outcomes.every((o:any)=>o.required===false&&o.result==='SKIPPED'));});
-leg('merge gate invalid contract remedy',()=>{const x=cli('invalid-contract',{contract:noContract,args:[]});assert.equal(x.status,5);const errors=validateContract(parseContract(fs.readFileSync(noContract,'utf8')),{requireSignal:true}).map(e=>`${bead}: ${e}`);assert.equal(x.stderr,contractRemedy(bead,errors)+'\n');});
+leg('merge gate invalid contract remedy',()=>{const x=cli('invalid-contract',{contract:noContract,args:[]});assert.equal(x.status,5);const errors=expectedGateErrors(noContract);assert.equal(x.stderr,contractRemedy(bead,errors)+'\n');});
 leg('merge gate stale APPROVE names both tips',()=>{put(walk());review({tip:'0'.repeat(40)});const x=cli('stale-review');assert.equal(x.status,5);assert(x.stderr.includes(tip)&&x.stderr.includes('0'.repeat(40)));assert.match(x.stderr,/review first/);});
 leg('merge gate BOUNCE review first',()=>{put(walk());review({verdict:'BOUNCE'});const x=cli('bounce');assert.equal(x.status,5);assert.match(x.stderr,/BOUNCE.*review first/);});
 leg('merge gate missing review first',()=>{put(walk());fs.unlinkSync(reviewFile);const x=cli('missing-review');assert.equal(x.status,5);assert.match(x.stderr,/review first/);});
