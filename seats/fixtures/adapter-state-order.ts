@@ -95,7 +95,7 @@ for (const { order, lateReceipt, label } of cases) {
     if (!fs.existsSync(path.join(fixtures, name))) fs.copyFileSync(path.join(here, "fixtures", name), path.join(fixtures, name));
   }
   const env = { ...process.env, WHEELHOUSE_ADAPTER_STATE_FIRST_COMMIT_DELAY_MS: "0",
-    WHEELHOUSE_ADAPTER_STATE_RECEIPT_DELAY_MS: "0" };
+    WHEELHOUSE_ADAPTER_STATE_RECEIPT_DELAY_MS: "0", WHEELHOUSE_ADAPTER_STATE_ORDER_CONTROL: "1" };
   if (env.WHEELHOUSE_ADAPTER_STATE_EVIDENCE) env.WHEELHOUSE_ADAPTER_STATE_EVIDENCE = path.join(env.WHEELHOUSE_ADAPTER_STATE_EVIDENCE, "order-control-" + label);
   const result = completedCommand("bun", [path.join(fixtures, "adapter-state.ts"), project, order], { env });
   if (process.env.WHEELHOUSE_ADAPTER_STATE_EVIDENCE) {
