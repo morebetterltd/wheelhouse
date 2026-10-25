@@ -8,6 +8,8 @@ The commander is a Claude Code session — yours. The producer may be its subage
 
 This repo is the template. It ships the contracts those roles share, the seat machinery they run on, worked examples, and a bootstrap procedure that installs the whole thing into a project by interviewing you about that project.
 
+The intent and outcomes skills ship with the template and install at the root under `.agents/skills/`, with relative compatibility links under `.claude/skills/`.
+
 Two paths:
 
 - **Fresh project, no wheelhouse yet:** go to [Install](#install).

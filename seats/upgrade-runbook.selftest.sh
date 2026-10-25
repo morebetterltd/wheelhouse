@@ -81,7 +81,7 @@ TEMPLATE=$(template_root)
 if [ "${WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY:-0}" = 1 ]; then printf '%s\n' "$TEMPLATE"; exit 0; fi
 # Source/cache-only probes use tiny repositories and do not consume BASELINE.
 # Refuse a missing baseline before allocating fixtures or running any cases.
-if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then
+if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && [ "${WHEELHOUSE_UPGRADE_SKILLS_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then
   printf 'STOP: upgrade selftest baseline "%s" is missing from template history; fetch complete public history or set WHEELHOUSE_UPGRADE_SELFTEST_BASELINE to an available old-install commit\n' "$BASELINE" >&2
   exit 2
 fi
@@ -332,6 +332,17 @@ producer_migration_tests() (
   done
 )
 
+skills_tests() {
+  mkdir -p "$TMP/skills fixture"
+  bun "$TEMPLATE/seats/fixtures/upgrade-skills.ts" "$TEMPLATE" "$TMP/skills fixture" || fail "printed skills recipes or owner signal command failed"
+  pass "skills recipes: fresh upgrade, repeat, refusal, install, integrity and owner command (bash/zsh)"
+}
+if [ "${WHEELHOUSE_UPGRADE_SKILLS_ONLY:-0}" = 1 ]; then
+  skills_tests
+  echo "upgrade-runbook.selftest: PASS (skills only; no adapter leg)"
+  exit 0
+fi
+
 if [ "${WHEELHOUSE_UPGRADE_PRODUCER_ONLY:-0}" = 1 ]; then
   producer_migration_tests
   echo "upgrade-runbook.selftest: PASS (producer migration only: ${WHEELHOUSE_UPGRADE_PRODUCER_CASE:-all}; no adapter leg)"
@@ -339,6 +350,7 @@ if [ "${WHEELHOUSE_UPGRADE_PRODUCER_ONLY:-0}" = 1 ]; then
 fi
 # Installed history fixtures may resolve a source predating this migration.
 if [ "$TEMPLATE" = "$ROOT" ]; then
+  skills_tests
   bun "$ROOT/seats/fixtures/upgrade-baseline.ts" "$ROOT" "$TMP"
   pass "default baseline is public old-install shape; missing baseline refuses before fixture setup (negative controls detected)"
   cache_recovery_tests

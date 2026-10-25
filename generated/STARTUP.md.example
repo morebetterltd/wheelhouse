@@ -56,6 +56,14 @@ The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id
 
 Speak backlog items to the commander in plain language. It files them as described tasks in the graph; the fleet claims them; workers report done on the task record with comments and the `needs-review` label without closing; the reviewer gates branches with bench evidence; and only the commander/integrator closes after merge per this project's merge policy. Work decomposed from the ISA Goal lands on its goal branch and closes there; only the outcome-group PR touches main. Commander prose keeps using human task, intent, and outcome names rather than `bead`, bare namespace ids, or mannered filler. Before the first ISA claim closes on a consumer surface, run the verifier walker with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out .wheelhouse-runs/<task>/<surface-walk> --verifier verifier` and post the scrubbed walk transcript and verdict on the task before citing them in the claim (the local output is a git-excluded working copy, not something to commit), or write `Not walked:` on the claim.
 
+Any script, hook or person hands this factory a signal with one command: `bun seats/intake.ts post --kind <goal|isa-change|report|error|finding> --source <name> --title <one line> --text <body>`. Each call adds one row to seats/intake.jsonl and does nothing else; the producer reads it from there.
+
+```bash
+bun seats/intake.ts post --kind <goal|isa-change|report|error|finding> --source <name> --title <one line> --text <body>
+```
+
+Replace the placeholders with values: choose one kind and quote multiword title/body arguments. The contract-writing skills live at `.agents/skills/intent/SKILL.md` and `.agents/skills/outcomes/SKILL.md`.
+
 ## Shutdown
 
 The end-of-day ritual, in order (`wheelhouse/runbooks/RUNNING_THE_LOOP.md`,
