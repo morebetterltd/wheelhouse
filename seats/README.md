@@ -99,7 +99,8 @@ changes/aliases, route parameters and semantic equivalence are not inferred.
 URLs use path/query/fragment; `screen:`/`command:` values and mapped slugs are
 also recognized. Reuse the mapped feature's slug for changed reach; new path
 segments become a hyphenated slug. Multiple consumers of one changed feature
-owe one entry. Relative factory files and reader artifacts owe none. Map
+owe one entry. Relative factory files and artifacts named as files owe none;
+a reader consumer group alone never exempts a product locator. Map
 outcomes use the selected manual's `.agents/skills/verify-<project>/features/<slug>.md`
 (or `features/<slug>.md`) with a machine/run check. No-surface launch rules,
 proving a future entry live and review scope enforcement belong to other passes.

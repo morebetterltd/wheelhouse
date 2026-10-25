@@ -68,6 +68,9 @@ try {
   const proofRepo = path.join(root, "proof-prefix-map"); fs.cpSync(reference, proofRepo, { recursive: true, verbatimSymlinks: true });
   const proofFile = path.join(proofRepo, ".agents/skills/verify-five-features/features/counter.md"); fs.writeFileSync(proofFile, fs.readFileSync(proofFile, "utf8").replaceAll("Counter = 2", "Counter = 20"));
   const proofPrefix = spec("proof-prefix-is-not-coverage", texts[2], 1, 0, 2, "missing map outcome for counter"); proofPrefix.repo = proofRepo;
+  const readerText = texts[0].replace("consumer: person-on-surface", "consumer: person-reading").replace("check: walk", "check: read");
+  const readerProduct = spec("reader-product-route", readerText, 1, 1);
+  const readerMissing = spec("reader-product-missing-map", readerText.split("- O2 ")[0], 1, 0, 2, "missing map outcome for reports");
   for (const s of specs) await grade(s);
   const falseNeed = mutant("need-off", "const requiresMap = !covered || proofChanged;", "const requiresMap = false;"); await grade(missing, falseNeed, "uncovered-ignored", 0);
   const allNeed = mutant("need-on", "const requiresMap = !covered || proofChanged;", "const requiresMap = true;"); await grade(extra, allNeed, "covered-always-needs-map", 0);
@@ -82,5 +85,7 @@ try {
   const substring = mutant("substring-coverage", '  const haystack = normalized(text), needle = normalized(literal), token = /[a-z0-9_/#?&=.%:+-]/;', '  return normalized(text).includes(normalized(literal));\n  const haystack = normalized(text), needle = normalized(literal), token = /[a-z0-9_/#?&=.%:+-]/;');
   await grade(prefix, substring, "locator-prefix-accepted", 0); await grade(proofPrefix, substring, "proof-prefix-accepted", 0);
   const noDedupe = mutant("dedupe-off", 'needed.set(feature?.slug ?? reference.slug,', 'needed.set((feature?.slug ?? reference.slug) + outcome.id,'); await grade(duplicateConsumers, noDedupe, "same-feature-not-deduplicated", 2);
-  console.log(`map contract checks: ${specs.length} cases, 4 contract examples, 12 actual-source failing removals`);
+  const skipReader = mutant("reader-skip", '    const reference = productReference(surface, manual); if (!reference) continue;', '    if (outcome.group === "person-reading") continue;\n    const reference = productReference(surface, manual); if (!reference) continue;');
+  await grade(readerProduct, skipReader, "reader-product-wrongly-exempt", 2); await grade(readerMissing, skipReader, "reader-product-ungated", 0);
+  console.log(`map contract checks: ${specs.length} cases, 4 contract examples, 14 actual-source failing removals`);
 } finally { save(); }

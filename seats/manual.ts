@@ -216,9 +216,8 @@ export function lintContract(text: string, manual: VerificationManual): MapContr
     const surface = outcome.surface.replace(/`/g, "").replace(/^\.\//, "");
     const map = /^(?:\.agents\/skills\/verify-([^/]+)\/)?features\/([^/\s]+)\.md$/.exec(surface);
     if (map) { provided.push({ slug: map[2], id: outcome.id, project: map[1], validConsumer: outcome.group === "machine" && outcome.checkKind === "run" }); continue; }
-    // Reading an artifact or naming a relative factory/source file is not a
-    // product journey. Absolute paths/URLs and explicit tokens remain heuristic.
-    if (outcome.group === "person-reading") continue;
+    // Relative factory/source files are not product locators. Consumer group
+    // alone must never suppress a named product route, screen or command.
     const reference = productReference(surface, manual); if (!reference) continue;
     const covering = manual.features.find(feature => containsLiteral(feature.howToGetToIt, reference.reach));
     const feature = covering ?? manual.features.find(feature => feature.slug === reference.stem);
