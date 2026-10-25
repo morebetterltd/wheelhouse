@@ -9,12 +9,13 @@ if(mode==='launch'){
 }else if(mode==='serve'){
  const native=completedCommand('ps',['-p',String(process.pid),'-o','pid=,ppid=,pgid=,stat=,lstart=,command='],{env:{...process.env,LC_ALL:'C'}});assert.equal(native.status,0);assert(!native.error&&!native.signal);assert.equal(native.stderr,'');const cols=native.stdout.trim().split(/\s+/);assert.equal(Number(cols[0]),process.pid);assert.equal(Number(cols[2]),process.pid);
  fs.appendFileSync(path.join(run,'actors.jsonl'),JSON.stringify({pid:process.pid,role,birth:cols.slice(4,9).join(' '),command:cols.slice(9).join(' '),native})+'\n');
+ const trace=(phase:string,data:any={})=>{if(process.env.SCAN_HEALTH_TRACE)fs.appendFileSync(process.env.SCAN_HEALTH_TRACE,JSON.stringify({phase,pid:process.pid,role,...data})+'\n');};
  const startedAt=process.env.WHEELHOUSE_SUPERVISOR_NOW||new Date().toISOString();let version='';
  const publish=(data:any={})=>{if(role==='herald'){const f=path.join(run,'herald.heartbeat.json'),tmp=f+'.'+process.pid+'.tmp';fs.writeFileSync(tmp,JSON.stringify({pid:process.pid,startedAt,at:startedAt,scanCount:1,inboxBytes:0,drainCursor:0,undrainedRows:0,lastPoke:null,alertsLastLaunchAt:null,...data})+'\n');fs.renameSync(tmp,f);}};
  process.on('SIGTERM',()=>{fs.appendFileSync(path.join(run,'actor-signals.jsonl'),JSON.stringify({pid:process.pid,signal:'SIGTERM'})+'\n');if(process.env.SCAN_ACTOR_IGNORE_TERM!=='1')process.exit(0);});
  const watcher=fs.watch(run,()=>{
   if(fs.existsSync(path.join(run,`${role}.${process.pid}.stop`))){watcher.close();process.exit(0);}
-  const f=path.join(run,'herald-control.json');if(role!=='herald'||!fs.existsSync(f))return;let c:any;try{c=JSON.parse(fs.readFileSync(f,'utf8'));}catch{return;}if(c.version===version)return;version=c.version;publish(c.facts);fs.writeFileSync(path.join(run,'herald-refreshed.json'),JSON.stringify({version,pid:process.pid})+'\n');
+  const f=path.join(run,'herald-control.json');if(role!=='herald'||!fs.existsSync(f))return;let c:any;try{c=JSON.parse(fs.readFileSync(f,'utf8'));}catch{return;}if(c.version===version)return;version=c.version;trace('actor-refresh',{version});publish(c.facts);fs.writeFileSync(path.join(run,'herald-refreshed.json'),JSON.stringify({version,pid:process.pid})+'\n');
  });
- publish();fs.writeFileSync(pidFile,String(process.pid)+'\n');
+ publish();fs.writeFileSync(pidFile,String(process.pid)+'\n');trace('actor-ready');
 }else throw Error('unknown owned service mode');
