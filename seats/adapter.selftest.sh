@@ -510,7 +510,9 @@ if [ -z "$LIFETIME_EVIDENCE" ]; then
   selftest_isolate_git "$LIFETIME_EVIDENCE" || exit 2
   LIFETIME_EVIDENCE_OWNED=1
 fi
-if bun "$HERE/fixtures/adapter-lifetime.ts" run "$HERE" "$ADAPTER" "$FIX/lifetime-cases" "$LIFETIME_EVIDENCE"; then
+LIFETIME_MODE=review
+[ "${WHEELHOUSE_ADAPTER_LIFETIME_REVIEW_CHILD:-0}" != 1 ] || LIFETIME_MODE=run
+if bun "$HERE/fixtures/adapter-lifetime.ts" "$LIFETIME_MODE" "$HERE" "$ADAPTER" "$FIX/lifetime-cases" "$LIFETIME_EVIDENCE"; then
   pass 'adapter lifetime: no argv/cwd survivors after normal/deadline; both defences removed reports detached stub; production detach retained'
   [ "$LIFETIME_EVIDENCE_OWNED" != 1 ] || selftest_remove_fixture_dir "$LIFETIME_EVIDENCE" || exit 2
 else
