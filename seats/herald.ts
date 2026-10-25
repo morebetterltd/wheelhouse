@@ -1073,7 +1073,12 @@ function deliver(options: DeliveryOptions = {}): void {
   try {
     const size = fs.statSync(INBOX).size;
     const prior = readDrainCursor(), offset = prior > size ? 0 : prior;
-    if (offset === size) return;
+    if (offset === size) {
+      // Empty truncation has no rows to emit, but the backwards reset must
+      // persist so the next empty hook can take the no-Bun fast path.
+      if (prior > size) fs.writeFileSync(DRAIN_CURSOR, `${offset}\n`);
+      return;
+    }
     const fd = fs.openSync(INBOX, "r"), buffer = Buffer.alloc(size - offset);
     let length = 0;
     try {
