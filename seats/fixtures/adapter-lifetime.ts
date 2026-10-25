@@ -135,7 +135,9 @@ git -C "$2" add seats || exit 2
     keep(name + '.sources', { suite, runner, readinessGateOnly: true, broken, finish });
     const env = { ...process.env, HOME: path.join(dir, 'home'), TMPDIR: path.join(dir, 'tmp'),
       WHEELHOUSE_ADAPTER_LIFETIME_CHILD: finish, WHEELHOUSE_ADAPTER_LIFETIME_READY: ready,
-      WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S: '1', WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: '1',
+      // Normal completion keeps the canonical budget: teardown itself may
+      // legitimately take >1s. Only the deadline case arms the short timer.
+      WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S: finish === 'deadline' ? '1' : '3600', WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: '1',
       WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suiteFile };
     // Only one selected suite, inherited real host admission. No private lock override.
     const child = spawn('bash', [runnerFile], { env, stdio: ['ignore', 'pipe', 'pipe'] });
