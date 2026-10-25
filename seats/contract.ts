@@ -242,10 +242,19 @@ function contractErrors(root: string, text: string, requireSignal: boolean, labe
   }
   return errors;
 }
+/** Keep the gate strict; an upgrade refusal must name the producer repair, not
+ * invite a blind stamp append. Both dispatch/review and CLI checks use this. */
+function withSkillsRepair(errors: string[], target: readonly string[]): string[] {
+  if (!errors.some(error => error.startsWith("contract: Skills:"))) return errors;
+  const quote = (arg: string) => /^[A-Za-z0-9_./-]+$/.test(arg) ? arg : "'" + arg.replaceAll("'", "'\\''") + "'";
+  const command = "bun seats/contract.ts check " + target.map(quote).join(" ");
+  const repair = "two-skill upgrade fix: ask the producer to revalidate Intent: and Outcomes: with both installed skills; set one top-level Skills: intent@<version> outcomes@<version> using the versions shown in its fresh assembled brief; do not merely append outcomes@. Upgrade path: wheelhouse/runbooks/UPGRADE.md#two-skill-contract-gate (template: runbooks/UPGRADE.md#two-skill-contract-gate). Recheck: " + command;
+  return errors.map(error => error.startsWith("contract: Skills:") ? `${error}; ${repair}` : error);
+}
 export function checkBeadContract(root: string, beadId: string, options: { requireSignal?: boolean; requireSkills?: boolean } = {}): { text: string | null; errors: string[]; unreadable: boolean } {
   const read = readBeadText(root, beadId);
   return read.error !== null ? { text: null, errors: [`${beadId}: contract: unreadable: ${read.error}`], unreadable: true }
-    : { text: read.text, errors: contractErrors(root, read.text, options.requireSignal ?? true, read.labels, options.requireSkills ?? REQUIRE_SKILLS).map(e => `${beadId}: ${e}`), unreadable: false };
+    : { text: read.text, errors: withSkillsRepair(contractErrors(root, read.text, options.requireSignal ?? true, read.labels, options.requireSkills ?? REQUIRE_SKILLS), [beadId]).map(e => `${beadId}: ${e}`), unreadable: false };
 }
 
 /** Shared read-only Repo: grammar: paths/lists, NAME (path/), TEMPLATE., UMBRELLA. */
@@ -339,7 +348,8 @@ export function traceContract(root: string, target: string): string {
   return lines.join("\n");
 }
 export function contractRemedy(beadId: string, errors: string[]): string {
-  return `${beadId} is not a contract: ${errors.join("; ")} — fix: write Signal:, Skills:, Intent: and Outcomes: per wheelhouse/GRAPH.md (Every bead is a contract) and dispatch again`;
+  const suffix = errors.some(error => error.includes("two-skill upgrade fix:")) ? "" : " — fix: write Signal:, Skills:, Intent: and Outcomes: per wheelhouse/GRAPH.md (Every bead is a contract) and dispatch again";
+  return `${beadId} is not a contract: ${errors.join("; ")}${suffix}`;
 }
 
 function cli(): number {
@@ -355,7 +365,7 @@ function cli(): number {
     if (args[0] === "--file" && args.length === 2) {
       const read = fixtureText(args[1]);
       if (read.error !== null) { console.error(`${args[1]}: contract: unreadable: ${read.error}`); return 3; }
-      const errors = contractErrors(ROOT, read.text, true, read.labels);
+      const errors = withSkillsRepair(contractErrors(ROOT, read.text, true, read.labels), ["--file", args[1]]);
       for (const e of errors) console.error(`${args[1]}: ${e}`);
       return errors.length ? 2 : 0;
     }
