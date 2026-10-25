@@ -62,10 +62,10 @@ function checkMissing(code?: string) {
   assert(!result.stderr.includes("mktemp"), "fixture allocation ran before refusal");
   assert(!fs.existsSync(noAllocation), "refusal must leave allocation root absent");
 }
-const early = observeMissing(source, false);
+const early = observeMissing(source);
 assert.ifError(early.error); assert.equal(early.status, 2, early.stdout + early.stderr);
 assert.equal(early.stdout, "");
-assert(early.stderr.includes(`STOP: upgrade selftest baseline "${absent}"`) || (early.stderr.includes("STOP:") && early.stderr.includes(noAllocation)), "earlier refusal must name the missing baseline or bad TMPDIR");
+assert(early.stderr.includes(`STOP: upgrade selftest baseline "${absent}" is missing from template history`), early.stderr);
 assert(!fs.existsSync(noAllocation), "earlier refusal must not allocate anything");
 checkMissing();
 console.log(`PASS missing baseline: exit=2 names ${absent}, gives remedy, no fixture setup`);
