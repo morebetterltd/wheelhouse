@@ -52,7 +52,7 @@ async function test(){
   {name:'both-flags',reply:positive(),want:1,preflight:true,offender:'--batch-sweep',extra:['--batch-sweep','not-a-sweep']},
   {name:'bad-contract',reply:positive(),want:6,preflight:true,offender:ids.b},
   {name:'same-account',reply:positive(),want:1,preflight:true,offender:ids.b},
-  {name:'unnamed-merge',reply:positive(),want:1,preflight:true,offender:'merge'},
+  {name:'unnamed-merge',reply:positive().split('\n').filter(s=>!s.startsWith('CANDIDATE: '+ids.b)).join('\n'),want:1,preflight:true,offender:'merge',authors:ids.a+'=author-a'},
   {name:'main-outside',reply:positive(),want:1,preflight:true,offender:'first-parent'},
   {name:'duplicate-merge',reply:positive().split('\n').filter(s=>!s.startsWith('CANDIDATE: '+ids.b)).join('\n'),want:1,preflight:true,offender:ids.a,authors:ids.a+'=author-a'},
   {name:'failed-sweep-approve',reply:positive('BOUNCE'),want:1,output:true,offender:'failed full sweep',calls:1},
