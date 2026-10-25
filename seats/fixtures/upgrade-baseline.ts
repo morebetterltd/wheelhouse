@@ -32,6 +32,7 @@ assert(!fs.existsSync(noAllocation));
 const env = { ...process.env, TMPDIR: noAllocation, WHEELHOUSE_UPGRADE_SELFTEST_BASELINE: absent,
   WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY: "0", WHEELHOUSE_UPGRADE_CACHE_ONLY: "0" };
 const admissionTmp = path.join(scratch, "baseline-admission-tmp"); fs.mkdirSync(admissionTmp);
+const admissionReceipt = path.join(scratch, "baseline-admission-tmp.receipt");
 let lastMissingResult: any;
 function observeMissing(code = source, isolateAdmission = true) {
   // Admission itself now observes native commands through private files. Give
@@ -39,8 +40,17 @@ function observeMissing(code = source, isolateAdmission = true) {
   // TMPDIR before the baseline guard and fixture allocation. No bypass token.
   const anchor = '. "$SELFTEST_LIB"';
   assert.equal(code.split(anchor).length, 2);
-  if (isolateAdmission) code = code.replace(anchor, () => `saved_baseline_tmp=$TMPDIR; export TMPDIR=${JSON.stringify(admissionTmp)}; ${anchor}; export TMPDIR="$saved_baseline_tmp"`);
-  return lastMissingResult = spawnSync("bash", ["-c", code, suite], { cwd: root, env, encoding: "utf8" });
+  fs.rmSync(admissionReceipt, { force: true });
+  const observed = `printf '%s\\n' "$TMPDIR" > ${JSON.stringify(admissionReceipt)}; ${anchor}`;
+  code = code.replace(anchor, () => isolateAdmission
+    ? `saved_baseline_tmp=$TMPDIR; export TMPDIR=${JSON.stringify(admissionTmp)}; ${observed}; export TMPDIR="$saved_baseline_tmp"`
+    : observed);
+  lastMissingResult = spawnSync("bash", ["-c", code, suite], { cwd: root, env, encoding: "utf8" });
+  assert.ifError(lastMissingResult.error); assert.equal(lastMissingResult.signal ?? null, null);
+  assert(fs.existsSync(admissionReceipt), "real admission boundary must be reached");
+  assert.equal(fs.readFileSync(admissionReceipt, "utf8"), admissionTmp + "\n",
+    "BASELINE_ADMISSION_ORACLE: supply native admission capture scratch before restoring invalid allocator TMPDIR");
+  return lastMissingResult;
 }
 function checkMissing(code?: string) {
   const result = observeMissing(code);

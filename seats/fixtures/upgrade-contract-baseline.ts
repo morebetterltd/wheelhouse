@@ -35,11 +35,21 @@ const noAllocation = path.join(scratch, "must-not-allocate");
 assert(!fs.existsSync(noAllocation));
 const missingSource = source.replace(`BASELINE=${baseline}`, `BASELINE=${absent}`);
 const admissionTmp = path.join(scratch, "audit-admission-tmp"); fs.mkdirSync(admissionTmp);
+const admissionReceipt = path.join(scratch, "audit-admission-tmp.receipt");
 let lastMissingResult: any;
 function observeMissing(code: string, isolateAdmission = true) {
   const anchor = '. "$HERE/selftest-lib.sh"'; assert.equal(code.split(anchor).length, 2);
-  if (isolateAdmission) code = code.replace(anchor, () => `saved_baseline_tmp=$TMPDIR; export TMPDIR=${JSON.stringify(admissionTmp)}; ${anchor}; export TMPDIR="$saved_baseline_tmp"`);
-  return lastMissingResult = spawnSync("bash", ["-c", code, suite], { cwd: root, env: { ...process.env, TMPDIR: noAllocation }, encoding: "utf8" });
+  fs.rmSync(admissionReceipt, { force: true });
+  const observed = `printf '%s\\n' "$TMPDIR" > ${JSON.stringify(admissionReceipt)}; ${anchor}`;
+  code = code.replace(anchor, () => isolateAdmission
+    ? `saved_baseline_tmp=$TMPDIR; export TMPDIR=${JSON.stringify(admissionTmp)}; ${observed}; export TMPDIR="$saved_baseline_tmp"`
+    : observed);
+  lastMissingResult = spawnSync("bash", ["-c", code, suite], { cwd: root, env: { ...process.env, TMPDIR: noAllocation }, encoding: "utf8" });
+  assert.ifError(lastMissingResult.error); assert.equal(lastMissingResult.signal ?? null, null);
+  assert(fs.existsSync(admissionReceipt), "real admission boundary must be reached");
+  assert.equal(fs.readFileSync(admissionReceipt, "utf8"), admissionTmp + "\n",
+    "BASELINE_ADMISSION_ORACLE: supply native admission capture scratch before restoring invalid allocator TMPDIR");
+  return lastMissingResult;
 }
 function checkMissing(code: string) {
   const result = observeMissing(code);
