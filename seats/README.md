@@ -877,6 +877,29 @@ suites at 5-second and 120-second runner grace, a KILLed runner, a TERM-ignoring
 reviewer, a same-group orphan, and an unrelated same-cwd process in a different
 group which must remain alive.
 
+### Review an entire batch once
+
+For one reviewer judgment over the batch and its candidates, start the batch from current local `main`, then merge each `fleet/BEAD` tip with a bead-naming subject (one merge per bead). Run:
+
+```text
+bun seats/verify.ts BATCH-TASK BATCH-BRANCH AUTHOR REVIEWER --candidates BEAD-A=AUTHOR-A,BEAD-B=AUTHOR-B [--repo PRODUCT-REPO]
+```
+
+`--candidates` must match the branch repository's new first-parent bead merges exactly; it cannot be combined with `--batch-sweep`. Candidate tips are the immutable second parents, not wherever fleet branches now point. Every candidate contract and author account is checked before sweep/model spawn. One dispatcher sweep at the batch tip uses the strictest tier required by the batch task or any candidate. The reviewer sees every validated claim and `main..candidate-tip` range, and must cite the actual sweep rc/log and emit, above the closing VERDICT/PUSH lines and outside fences:
+
+```text
+CANDIDATE: BEAD-A APPROVE — evidence for this candidate
+CANDIDATE: BEAD-B APPROVE — evidence for this candidate
+VERDICT: APPROVE
+PUSH: APPROVE origin — verified: batch range and publication authority
+```
+
+Exactly one plain CANDIDATE line per derived bead: no duplicates, missing or outside-batch ids, malformed lines, bullets or blockquotes. An overall APPROVE over any BOUNCE/DISCOVER refuses the whole answer, leaving no new verdict records. Batch BOUNCE can record one candidate APPROVE and another BOUNCE, but no candidate APPROVE can borrow a failed sweep. The existing refused-output/corrective-attempt path applies; it never repeats the sweep.
+
+The batch task gets its usual record at the batch tip; each candidate gets the same writer's record at its merged tip, with its own author/verdict, the identical batch PUSH text, `batch-task`, `batch-branch`, `batch-tip`, `batch-merge` headers, actual sweep tier/reason/log and its own required tier/reason. These are working copies, not new signed authority or evidence homes. Inspect each candidate's verdict and pin; batch approval never proves a person-checked outcome.
+
+Order: batch review → `walk.ts --work` for each candidate with person-on-surface/person-reading outcomes at its recorded merged tip (pass that tip to `--branch` if its fleet branch moved) → `merge-gate.ts` per candidate at that tip → fast-forward and push. Machine-only candidates pass the gate on APPROVE alone; bounced or unwalked work still refuses. The next subsection is the alternative shape: separate candidate reviews sharing only one sweep.
+
 ### Reuse one passing sweep for a review batch
 
 An integrator can start a separate batch branch at current `main`, merge the candidate tips into it, and obtain **one normal dispatcher log of the required tier at that combined tip**. Then each candidate still gets its own independent review, but can reuse that sweep:
@@ -1213,6 +1236,8 @@ can have null tip/review fields. An initial REFUSED invalidates an older PASS ev
 if the shared repository resolver stops early. Receipts are local trusted
 metadata, not signed attestations or a historical ledger.
 
+A fast-forward batch push does not hide its constituent merges: the guard checks each candidate's second-parent work tip, so use the `--candidates` batch-verdict procedure above to produce per-candidate review records, complete required walks, then run each merge gate for its own PASS receipt.
+
 The installed `fleet-pre-push-guard.sh` checks new first-parent bead-naming merge
 commits on the default line and `seats/integration-refs.txt` refs. It requires a
 PASS receipt at each merge's SECOND parent (the work tip), regardless of
@@ -1426,7 +1451,7 @@ For the full host sweep, run the locked runner instead of an ad-hoc loop:
 bash seats/selftest-sweep.sh
 ```
 
-It runs the selected tier serially and, for core and full alike, shares one host-wide FIFO with project benches, direct suites, and `verify.ts` reviews; another seat or install waits indefinitely for admission rather than running heavy work concurrently. `bash seats/selftest-sweep.sh --tier core` runs exactly the sorted `seats/selftest-core.list` (35 suites, including the prune deletion-safety split); every other root suite belongs to full by absence. The default is `--tier full`. `WHEELHOUSE_SELFTEST_SWEEP_TIER=core|full` is the environment form; an explicit flag wins. Core ignores `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` so a filter cannot silently weaken its manifest; full retains the pattern override for targeted diagnostics, never reusable full-batch evidence. Missing/unreadable manifests, invalid or duplicate names, empty lists and missing/unreadable suites STOP with exit2 before lock admission. Comments beginning with `#` and blank lines are allowed. The manifest's original bytes, including comments, determine its SHA-256. Tier environment selection does not leak into nested suite fixtures. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
+It runs the selected tier serially and, for core and full alike, shares one host-wide FIFO with project benches, direct suites, and `verify.ts` reviews; another seat or install waits indefinitely for admission rather than running heavy work concurrently. `bash seats/selftest-sweep.sh --tier core` runs exactly the sorted `seats/selftest-core.list` (36 suites, including the prune deletion-safety split); every other root suite belongs to full by absence. The default is `--tier full`. `WHEELHOUSE_SELFTEST_SWEEP_TIER=core|full` is the environment form; an explicit flag wins. Core ignores `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` so a filter cannot silently weaken its manifest; full retains the pattern override for targeted diagnostics, never reusable full-batch evidence. Missing/unreadable manifests, invalid or duplicate names, empty lists and missing/unreadable suites STOP with exit2 before lock admission. Comments beginning with `#` and blank lines are allowed. The manifest's original bytes, including comments, determine its SHA-256. Tier environment selection does not leak into nested suite fixtures. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
 
 ### Project benches, reviews, and the host pressure brake
 

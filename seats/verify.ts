@@ -2,7 +2,7 @@
 /**
  * verify.ts — commander-facing dispatch of the EPHEMERAL reviewer pass.
  *
- * One invocation = one verdict. It spawns a one-shot `pi -p --no-session`
+ * One invocation = one review (and per-candidate records with --candidates). It spawns a one-shot `pi -p --no-session`
  * on the REVIEWER seat's own agent directory, with the REVIEWER crew brief
  * appended to the system prompt, hands it the bead claim and the branch's
  * tip SHA, and parses the single `VERDICT:` and `PUSH:` lines out of what comes back.
@@ -57,6 +57,7 @@
  *          [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]]
  *          [--timeout-ms <ms>] [--first-output-timeout-ms <ms>]
  *          [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]
+ *          [--candidates <bead>=<author-seat>[,<bead>=<author-seat>...]]
  *
  * Timeout knobs are liveness watchdogs, not a wall-clock cap on the whole
  * reviewer turn. --first-output-timeout-ms bounds silence before the first
@@ -1328,6 +1329,92 @@ export function chooseSweepTier(root: string, tip: string, claim: string): Sweep
   if (claimRequiresSweepCitation(claim)) return { tier: "full", reason: "Done line", manifest };
   return { tier: "core", reason: "default", manifest };
 }
+interface BatchCandidate {
+  bead: string; author: string; merge: string; tip: string; claim: string; choice: SweepChoice;
+}
+interface BatchCandidates { main: string; candidates: BatchCandidate[] }
+interface CandidateVerdict { verdict: ReviewRecord["verdict"]; shown: string }
+
+function candidateAuthors(raw: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const item of raw.split(",")) {
+    const pair = item.split("=");
+    if (pair.length !== 2 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(pair[0]) || !pair[1]) die(`invalid --candidates entry ${JSON.stringify(item)}; expected <bead>=<author-seat>`);
+    validateSegment("candidate author seat", pair[1]);
+    if (out.has(pair[0])) die(`duplicate --candidates bead ${pair[0]}`);
+    out.set(pair[0], pair[1]);
+  }
+  return out;
+}
+
+// The same first-parent merge subjects/SECOND parents the pre-push guard
+// consumes, from the selected PRODUCT repository and immutable batch tip.
+function deriveBatchCandidates(repoRoot: string, tip: string, authors: Map<string, string>): BatchCandidates {
+  const main = tierGit(repoRoot, "rev-parse", "--verify", "refs/heads/main^{commit}").toString().trim();
+  if (!tierGit(repoRoot, "rev-list", "--first-parent", tip).toString().trim().split("\n").includes(main)) die("--candidates batch first-parent chain does not reach current refs/heads/main");
+  const merges = tierGit(repoRoot, "rev-list", "--first-parent", "--merges", tip, `^${main}`).toString().trim().split("\n").filter(Boolean).reverse();
+  const found = new Map<string, { bead: string; merge: string; tip: string }>();
+  for (const merge of merges) {
+    // Real Git %H/NUL/%P/NUL/%s output captured before constructing this reader.
+    const fields = tierGit(repoRoot, "show", "-s", "--format=%H%x00%P%x00%s", merge).toString().replace(/\n$/, "").split("\0");
+    const bead = fields[2]?.match(/fleet\/([A-Za-z0-9][A-Za-z0-9._-]*)/)?.[1];
+    const second = fields[1]?.split(" ")[1];
+    if (fields.length !== 3 || fields[0] !== merge || !second || !bead) die(`--candidates merge ${merge} names no candidate bead/second parent: ${JSON.stringify(fields[2])}`);
+    if (found.has(bead)) die(`--candidates bead ${bead} occurs in multiple merges (${found.get(bead)!.merge}, ${merge}); one per-bead record cannot cover two merged tips`);
+    found.set(bead, { bead, merge, tip: second });
+  }
+  const missing = [...found.keys()].filter(id => !authors.has(id));
+  const unknown = [...authors.keys()].filter(id => !found.has(id));
+  if (missing.length || unknown.length || !found.size) die(`--candidates set differs from batch merges; missing: ${missing.join(", ") || "none"}; outside batch: ${unknown.join(", ") || "none"}`);
+  const candidates = [...found.values()].map(c => {
+    const checked = checkBeadContract(ROOT, c.bead);
+    refuseUncontractedReview(c.bead, checked.errors);
+    const claim = [beadClaim(c.bead), "", "Parsed work contract (validated before reviewer spawn):", JSON.stringify(parseContract(checked.text ?? ""), null, 2)].join("\n");
+    return { ...c, author: authors.get(c.bead)!, claim, choice: chooseSweepTier(repoRoot, c.tip, claim) };
+  });
+  return { main, candidates };
+}
+
+function candidatePromptLines(batch: BatchCandidates, ownChoice: SweepChoice): string[] {
+  return ["", "This one review judges the batch AND every merge-derived candidate below.",
+    `Batch task required tier: ${ownChoice.tier}; reason: ${ownChoice.reason}`,
+    ...batch.candidates.flatMap(c => ["", `Candidate bead: ${c.bead}`, `Candidate author seat: ${c.author} (account-distinctness asserted before spawn)`,
+      `Candidate merge: ${c.merge}`, `Candidate tip: ${c.tip}`, `Candidate review range: ${batch.main}..${c.tip}`,
+      `Candidate required tier: ${c.choice.tier}; reason: ${c.choice.reason}`, c.claim]),
+    "", "Judge EACH candidate's claim against its own pinned range, not merely the combined checkout or a moved fleet branch.",
+    "Above the closing VERDICT and PUSH lines, outside code fences, emit exactly one plain-text line per candidate:",
+    "CANDIDATE: <bead-id> APPROVE | BOUNCE | DISCOVER [— <annotation>]",
+    "Use only the derived ids above, with no duplicates, bullets or blockquotes. An overall APPROVE requires every candidate APPROVE.",
+    "An overall BOUNCE may retain APPROVE for an unaffected candidate, but an APPROVE still requires a passing dispatcher sweep."];
+}
+
+function parseCandidateVerdicts(stdout: string, harness: HarnessName, batch: BatchCandidates, verdict: string, closingLine: number): Map<string, CandidateVerdict> {
+  const expected = new Set(batch.candidates.map(c => c.bead)), out = new Map<string, CandidateVerdict>();
+  let fence = "", width = 0;
+  const lines = finalAssistantText(stdout, harness).split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i], trimmed = line.trim(), marker = trimmed.match(/^(`{3,}|~{3,})/);
+    if (marker) {
+      if (!fence) { fence = marker[1][0]; width = marker[1].length; }
+      else if (marker[1][0] === fence && marker[1].length >= width && !trimmed.slice(marker[1].length).trim()) fence = "";
+      continue;
+    }
+    if (fence || !/^(?:>\s*)*CANDIDATE(?:\s|:|$)/.test(trimmed)) continue;
+    const m = /^CANDIDATE:\s+([A-Za-z0-9][A-Za-z0-9._-]*)\s+((APPROVE|BOUNCE|DISCOVER)(?:\s+[—-]\s+\S.*)?)\s*$/.exec(line);
+    if (!m) throw new Error(`malformed CANDIDATE line ${i + 1}: ${JSON.stringify(line)}; expected plain CANDIDATE: <bead-id> APPROVE | BOUNCE | DISCOVER [— annotation]`);
+    const [, id, shown, value] = m;
+    if (!expected.has(id)) throw new Error(`CANDIDATE ${id} is outside the batch`);
+    if (out.has(id)) throw new Error(`duplicate CANDIDATE line for ${id}`);
+    if (i + 1 >= closingLine) throw new Error(`CANDIDATE ${id} must precede closing VERDICT/PUSH lines`);
+    out.set(id, { verdict: value as CandidateVerdict["verdict"], shown: shown.trimEnd() });
+  }
+  const missing = [...expected].filter(id => !out.has(id));
+  if (missing.length) throw new Error(`missing CANDIDATE line for ${missing.join(", ")}`);
+  const adverse = [...out].filter(([, v]) => v.verdict !== "APPROVE").map(([id]) => id);
+  if (verdict === "APPROVE" && adverse.length) throw new Error(`VERDICT APPROVE contradicts non-APPROVE CANDIDATE ${adverse.join(", ")}`);
+  return out;
+}
+
 interface SuiteTiming { suite: string; seconds: number; quarantined?: boolean }
 interface QuarantineResult extends QuarantineEntry { result: "PASS" | "FAIL" }
 interface SweepTimings { tier: SweepTier; manifest?: string; tierLine: string; footer: string; totalSeconds: number; suites: SuiteTiming[]; slowest: SuiteTiming[]; quarantine: QuarantineResult[] }
@@ -1705,6 +1792,7 @@ async function main(): Promise<void> {
   let firstOutputTimeoutArg: string | undefined;
   let noEventTimeoutArg: string | undefined;
   let batchSweepArg: string | undefined;
+  let candidatesArg: string | undefined;
   let promotionArg: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -1715,6 +1803,10 @@ async function main(): Promise<void> {
     } else if (argv[i] === "--repo") {
       repoArg = argv[++i];
       if (!repoArg) die("--repo requires <path-to-branch-repo>");
+    } else if (argv[i] === "--candidates") {
+      if (candidatesArg !== undefined) die("--candidates may be supplied only once");
+      candidatesArg = argv[++i];
+      if (!candidatesArg || candidatesArg.startsWith("--")) die("--candidates requires <bead>=<author-seat>[,<bead>=<author-seat>...]");
     } else if (argv[i] === "--batch-sweep") {
       if (batchSweepArg !== undefined) die("--batch-sweep may be supplied only once");
       batchSweepArg = argv[++i];
@@ -1736,11 +1828,12 @@ async function main(): Promise<void> {
       positional.push(argv[i]);
     }
   }
+  if (candidatesArg !== undefined && batchSweepArg !== undefined) die("--candidates cannot be combined with --batch-sweep: one dispatcher sweep source per review");
   const earlyRepoRoot = resolveRepoRoot(repoArg);
   sweepStaleScratchWorktrees(earlyRepoRoot);
   const [beadId, branch, authorSeat, reviewerArg] = positional;
   if (!beadId || !branch || !authorSeat) {
-    die("usage: verify.ts <bead-id> <branch> <author-seat> [reviewer-seat] [--fallback-promotion <comment-id>] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log>]  # timeout knobs are stall watchdogs, not a wall-clock cap");
+    die("usage: verify.ts <bead-id> <branch> <author-seat> [reviewer-seat] [--fallback-promotion <comment-id>] [--repo <path-to-branch-repo>] [--evidence <path>[,<path>...]] [--timeout-ms <ms>] [--first-output-timeout-ms <ms>] [--no-event-timeout-ms <ms>] [--batch-sweep <passing-full-sweep-log> | --candidates <bead>=<author-seat>[,...]]  # timeout knobs are stall watchdogs, not a wall-clock cap");
   }
   setVerifierGateBead(beadId);
   validateSegment("bead id", beadId);
@@ -1748,6 +1841,8 @@ async function main(): Promise<void> {
   if (reviewerArg) validateSegment("seat name", reviewerArg);
   if (promotionArg && !reviewerArg) die("--fallback-promotion requires an explicit reviewer-seat; automatic selection never promotes a shadow");
   if (promotionArg) validateSegment("promotion comment id", promotionArg);
+  const candidateSeats = candidatesArg === undefined ? undefined : candidateAuthors(candidatesArg);
+  if (candidateSeats?.has(beadId)) die(`--candidates cannot include its batch task ${beadId}`);
   const contract = checkBeadContract(ROOT, beadId);
   refuseUncontractedReview(beadId, contract.errors); // contract-gate: before reviewer identity or harness spawn
   const claim = [
@@ -1814,6 +1909,10 @@ async function main(): Promise<void> {
     die(`branch "${branch}" does not resolve to a commit in ${repoRoot} — nothing to verify`);
   }
 
+  const batchCandidates = candidateSeats ? deriveBatchCandidates(repoRoot, tip, candidateSeats) : undefined;
+  for (const c of batchCandidates?.candidates ?? []) requireDistinctAccount(c.author, reviewerSeat, entry.account.dir,
+    message => die(`candidate ${c.bead}: ${message}`));
+
   const promotion = promotionArg ? readFallbackPromotion(beadId, reviewerSeat, tip, promotionArg) : undefined;
 
   // --- evidence floor checks, against the SHA the verdict is about ----------
@@ -1833,7 +1932,11 @@ async function main(): Promise<void> {
           `be delivered — the dispatcher will refuse it as malformed.`,
         ];
 
-  const sourceDeclarations = parseSourceDeclarations(claim, repoRoot);
+  const sourcePaths = new Set<string>();
+  const sourceDeclarations = [claim, ...(batchCandidates?.candidates.map(c => c.claim) ?? [])]
+    .flatMap(text => parseSourceDeclarations(text, repoRoot)).filter(decl => {
+      if (sourcePaths.has(decl.absolute)) return false; sourcePaths.add(decl.absolute); return true;
+    });
 
   // cwd is a throwaway scratch worktree, not ROOT and not a bead's
   // worktree — construction closing the confused-writer hazard, still
@@ -1854,9 +1957,10 @@ async function main(): Promise<void> {
   const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
-  const selectedTier = chooseSweepTier(repoRoot, tip, claim);
+  const ownTier = chooseSweepTier(repoRoot, tip, claim);
+  const selectedTier = [ownTier, ...(batchCandidates?.candidates.map(c => c.choice) ?? [])].find(c => c.tier === "full") ?? ownTier;
   const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);
-  const requireSweepCitation = !!sweep.batch || claimRequiresSweepCitation(claim);
+  const requireSweepCitation = !!batchCandidates || !!sweep.batch || claimRequiresSweepCitation(claim);
   const sweepPrompt = sweepPromptLines(sweep, requireSweepCitation);
 
   // --- the one-shot ---------------------------------------------------------
@@ -1871,6 +1975,7 @@ async function main(): Promise<void> {
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
     claim,
+    ...(batchCandidates ? candidatePromptLines(batchCandidates, ownTier) : []),
     ...(promotion ? [
       `Referenced per-outage promotion: bead ${beadId}, comment ${promotion.commentId}, recorded actor ${promotion.author}, reviewer ${reviewerSeat}, tip ${tip}.`,
       `This is a FALLBACK GATE, not a SHADOW verdict. The full REVIEWER.md contract and all ordinary evidence/account/sweep gates still apply.`,
@@ -2037,6 +2142,12 @@ async function main(): Promise<void> {
       const annotatedVerdictShown = verdictLines[0].normalized.replace(/^VERDICT:\s*/, "");
       const verdictShown = movedVerdictShown || (ordinaryMatch?.[2] ? annotatedVerdictShown : verdict);
       const benchGapNotes = benchGapNotices(notBenched);
+      let candidateVerdicts = new Map<string, CandidateVerdict>();
+      if (batchCandidates) {
+        try { candidateVerdicts = parseCandidateVerdicts(stdout, reviewerHarness, batchCandidates, verdict, Math.min(verdictLines[0].lineNumber, pushLines[0].lineNumber)); }
+        catch (error: any) { refuse(error.message); }
+      }
+      const anyApproved = verdict === "APPROVE" || [...candidateVerdicts.values()].some(v => v.verdict === "APPROVE");
 
       // An APPROVE over a missing, empty, or mistyped artifact the bead requires
       // is a defect in the verdict, not a judgment — same family as the NOT
@@ -2066,7 +2177,7 @@ async function main(): Promise<void> {
       }
       // Fail closed before publishing authority, even if execution is ever
       // bypassed again. NOT BENCHED cannot waive a missing/failed receipt.
-      if (verdict === "APPROVE") {
+      if (anyApproved) {
         let receiptExists = false;
         try { const st = fs.lstatSync(sweep.logPath!); receiptExists = st.isFile() && st.size > 0; } catch {}
         if (!Number.isInteger(sweep.rc) || sweep.tip !== tip || !receiptExists) {
@@ -2087,16 +2198,26 @@ async function main(): Promise<void> {
 
       // --- record, then report --------------------------------------------------
       fs.mkdirSync(VERDICTS_DIR, { recursive: true });
-      const verdictFile = path.join(VERDICTS_DIR, `${beadId}.md`);
+      const subjects = [{ bead: beadId, branch, tip, author: authorSeat, shown: verdictShown, verdict, sweep, headers: [] as string[] },
+        ...(batchCandidates?.candidates.map(c => {
+          const result = candidateVerdicts.get(c.bead)!;
+          return { bead: c.bead, branch: `fleet/${c.bead}`, tip: c.tip, author: c.author, shown: result.shown, verdict: result.verdict,
+            sweep: { ...sweep, requiredChoice: c.choice },
+            headers: [`- batch-task: ${beadId}`, `- batch-branch: ${branch}`, `- batch-tip: ${tip}`, `- batch-merge: ${c.merge}`] };
+        }) ?? [])];
+      for (const subject of subjects) {
+      const sweep = subject.sweep;
+      const verdictFile = path.join(VERDICTS_DIR, `${subject.bead}.md`);
       const record = [
-        `# Verdict — bead ${beadId}`,
+        `# Verdict — bead ${subject.bead}`,
         ``,
-        `- bead: ${beadId}`,
-        `- branch: ${branch}`,
+        `- bead: ${subject.bead}`,
+        `- branch: ${subject.branch}`,
         `- branch-repo: ${repoRoot}`,
-        `- tip: ${tip}`,
-        `- author-seat: ${authorSeat}`,
+        `- tip: ${subject.tip}`,
+        `- author-seat: ${subject.author}`,
         `- verifier-seat: ${reviewerSeat} (${reviewerDir})`,
+        ...subject.headers,
         ...(promotion ? [
           `- fallback-promotion-comment: ${promotion.commentId}`,
           `- fallback-promotion-actor: ${promotion.author}`,
@@ -2104,14 +2225,14 @@ async function main(): Promise<void> {
           `- fallback-distinct-account-basis: ${promotion.distinctAccountBasis}`,
         ] : []),
         `- at: ${new Date().toISOString()}`,
-        `- verdict: ${verdictShown}`,
+        `- verdict: ${subject.shown}`,
         `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
         ...benchGapNotes.map((note) => `- ${note}`),
         ...refusedOutputs.map((file) => `- refused-output (not a verdict): ${path.relative(ROOT, file)}`),
         ``,
         `> Working copy only. Evidence the graph can cite lives on the bead —`,
         `> transcribe the decisive extract there before citing this verdict.`,
-        verdict === "DISCOVER"
+        subject.verdict === "DISCOVER"
           ? `> DISCOVER: proposal recorded below for the commander; no beads were filed.`
           : ``,
         ...(evidence.length > 0
@@ -2158,6 +2279,8 @@ async function main(): Promise<void> {
         ``,
       ].join("\n");
       fs.writeFileSync(verdictFile, record); // verdict-write
+      }
+      const verdictFile = path.join(VERDICTS_DIR, `${beadId}.md`);
       appendVerifierGateInbox(
         beadId,
         "settle",
