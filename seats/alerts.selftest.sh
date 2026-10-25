@@ -132,6 +132,13 @@ drift_set_cases(){
     [ "$FAILED" = 0 ] && pass 'changed drift set starts a fresh hold and re-raises exactly once; returning old set gets a new hold'
   fi
 }
+phase 'numeric alert settings'
+if bun "$HERE/fixtures/alert-values.ts" "$HERE" "$FIX/alert-values" "$ROOT/seats/alerts.ts"; then
+  pass 'missing/blank numeric defaults, explicit values and finite validation; actual reader removals rejected'
+else
+  fail 'numeric alert setting consumer cases failed'
+fi
+
 phase 'drift file-set design'
 case "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" in all|same|changed) ;; *) echo 'invalid drift test case' >&2; exit 2;; esac
 drift_set_cases
