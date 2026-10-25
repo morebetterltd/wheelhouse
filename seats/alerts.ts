@@ -28,8 +28,8 @@ function readJson(file:string):any{ try { return JSON.parse(fs.readFileSync(file
 function writeAtomic(file:string, data:string){ fs.mkdirSync(path.dirname(file),{recursive:true}); const tmp=`${file}.tmp.${process.pid}`; fs.writeFileSync(tmp,data); fs.renameSync(tmp,file); }
 function appendLog(s:string){ fs.mkdirSync(LOGS,{recursive:true}); fs.appendFileSync(ALERT_LOG, `${now()} ${s}\n`); }
 export function templateValue(key:string, root=ROOT):string{ try { const m=fs.readFileSync(path.join(root,"wheelhouse",".template-source"),"utf8").match(new RegExp(`^${key}=(.*)$`,"m")); return m?.[1]?.trim() ?? ""; } catch { return ""; } }
-function minutesValue(key:string, def:number):number{ const n=Number(templateValue(key)); return Number.isFinite(n) ? n : def; }
-function gbValue(key:string, def:number):number{ const n=Number(templateValue(key)); return Number.isFinite(n) ? n : def; }
+function minutesValue(key:string, def:number):number{ const raw=templateValue(key); if(raw==="") return def; const n=Number(raw); return Number.isFinite(n) ? n : def; }
+function gbValue(key:string, def:number):number{ const raw=templateValue(key); if(raw==="") return def; const n=Number(raw); return Number.isFinite(n) ? n : def; }
 function acquireLock():number|null{ return acquirePidLock(LOCK); }
 function releaseLock(fd:number|null){ releasePidLock(LOCK, fd); }
 function intervalMs(){ const raw=process.env.WHEELHOUSE_ALERT_INTERVAL_MS; if(raw===undefined||raw.trim()==="") return DEFAULT_INTERVAL_MS; const n=Number(raw); return Number.isFinite(n)&&n>=0?Math.floor(n):DEFAULT_INTERVAL_MS; }
