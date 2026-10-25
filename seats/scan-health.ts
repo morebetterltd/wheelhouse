@@ -24,7 +24,7 @@ function atomic(file: string, value: unknown): void {
 function pid(file: string): number { const s = text(file, 64).trim(); return /^[1-9]\d*$/.test(s) && Number.isSafeInteger(Number(s)) && Number(s) > 1 ? Number(s) : 0; }
 function alive(n: number): boolean {
   if (n <= 1) return false;
-  try { process.kill(n, 0); return true; } catch (e: any) { if (e.code === "ESRCH" || e.code === "EPERM") return false; throw e; }
+  try { process.kill(n, 0); return true; } catch (e: any) { if (e.code === "ESRCH") return false; if (e.code === "EPERM") return true; throw e; }
 }
 export function scanClock(): number {
   const raw = process.env.WHEELHOUSE_SUPERVISOR_NOW;
