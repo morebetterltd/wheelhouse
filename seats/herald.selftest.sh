@@ -83,6 +83,7 @@ cat > "$FIX/bin/tmux" <<'EOF'
 set -u
 if [ "${1:-}" = "-L" ]; then shift 2; fi
 cmd="${1:-}"; shift || true
+[ -z "${FAKE_TMUX_CALLS_LOG:-}" ] || printf '%s\n' "$cmd" >> "$FAKE_TMUX_CALLS_LOG"
 pane_path(){
   if [ -n "${FAKE_TMUX_MISSING_PANES:-}" ] && printf '%s\n' "$FAKE_TMUX_MISSING_PANES" | grep -xF >/dev/null "$target"; then return 1; fi
   if [ -n "${FAKE_TMUX_PANE_PATHS:-}" ]; then
@@ -149,6 +150,9 @@ case "$cmd" in
 esac
 EOF
 chmod +x "$FIX/bin/bd"
+# Non-poke collection/daemon legs resolve targets too. Keep EVERY tmux
+# request on this fake, even when the worker inherited a live TMUX value.
+export PATH="$FIX/bin:$PATH" FAKE_TMUX_CALLS_LOG="$FIX/all-fake-tmux-calls.log"
 SEND_LOG="$FIX/send-keys.log"
 if bun "$SCRIPT_DIR/fixtures/commander-target.ts" "$SCRIPT_DIR" "$FIX/commander-target" "$FIX/bin/tmux"; then
   pass 'claimed commander identity across all sources, fallback, headless surfaces and actual guard removals'
@@ -905,6 +909,10 @@ else
     fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
     selftest_stop_herald_child "$ROOT_GONE_PID"
   fi
+fi
+
+if [ -n "${WHEELHOUSE_QJGW_EVIDENCE:-}" ] && [ -f "$FAKE_TMUX_CALLS_LOG" ]; then
+  cp -f "$FAKE_TMUX_CALLS_LOG" "$WHEELHOUSE_QJGW_EVIDENCE/all-fake-tmux-calls.log"
 fi
 
 if [ $FAIL -eq 0 ]; then
