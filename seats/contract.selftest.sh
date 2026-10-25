@@ -24,6 +24,9 @@ outcomes_skill_leg(){
   local rc=0
   bun "$HERE/fixtures/outcomes-skill.ts" "$HERE/.." "$CONTRACT" "$FIX/outcomes" || rc=$?
   [ "$rc" = 0 ] && pass 'outcomes skill examples and consumer/check mismatch' || fail "outcomes skill examples and consumer/check mismatch (exit $rc)"
+  rc=0
+  bun "$HERE/fixtures/map-contracts.ts" "$HERE/manual.ts" "$CONTRACT" "$FIX/map-contracts" "$HERE/.." || rc=$?
+  [ "$rc" = 0 ] && pass 'map outcomes examples 1/1, 1/1, 0/0, 0/0 and meaningful removals' || fail "map outcomes examples (exit $rc)"
 }
 if [ "${WHEELHOUSE_OUTCOMES_SKILL_ONLY:-0}" = 1 ]; then
   outcomes_skill_leg

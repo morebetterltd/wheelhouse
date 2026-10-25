@@ -74,7 +74,7 @@ A `surface: none` manual needs no runnable sections and has an empty feature map
 bun seats/manual.ts check --repo <product-repo> [--project <name>]
 bun seats/manual.ts features --repo <product-repo> [--project <name>] --json
 bun seats/manual.ts evidence <feature> --repo <product-repo> --dir <retained-evidence>
-bun seats/manual.ts lint-contract --file <contract>
+bun seats/manual.ts lint-contract --file <contract> --repo <product-repo> [--project <name>]
 ```
 
 `check` prints `manual ok: N features`; format/missing/ambiguous errors exit2 and
@@ -87,8 +87,23 @@ with slug, title, file and the four section texts (`whatItIs`, `howToGetToIt`,
 
 `evidence` checks that a mapped feature's directory contains a regular file; it
 does not judge that file's truth or accept a symlink as a regular file. The
-reserved `lint-contract` command prints `not yet` and exits2; its implementation
-belongs to later work. These commands never launch or edit a product.
+`lint-contract` parses the shared contract grammar and prints `map outcomes:
+expected N, found N`; exit0 means the needed/provided feature-slug sets match,
+not that unbuilt work is proven. Exit2 names the first missing, gratuitous,
+duplicate or wrong-project entry. It is a drafting heuristic: compare the FULL
+proposed product locator with the current reach, never a work-type label or a
+prefix of the proposed locator. A moved control can name `/counter#actions`;
+an end-state-only change can name `/counter; proof: Counter = 3`. The optional
+proof suffix is a literal comparison with `whatProvesItWorks`. Prose-only
+changes/aliases, route parameters and semantic equivalence are not inferred.
+URLs use path/query/fragment; `screen:`/`command:` values and mapped slugs are
+also recognized. Reuse the mapped feature's slug for changed reach; new path
+segments become a hyphenated slug. Multiple consumers of one changed feature
+owe one entry. Relative factory files and reader artifacts owe none. Map
+outcomes use the selected manual's `.agents/skills/verify-<project>/features/<slug>.md`
+(or `features/<slug>.md`) with a machine/run check. No-surface launch rules,
+proving a future entry live and review scope enforcement belong to other passes.
+These commands never launch or edit a product.
 
 `seats/fixtures/verification/five-features/` is the dependency-free HTTP fixture
 and hand-written format oracle. Its README and manual describe five public

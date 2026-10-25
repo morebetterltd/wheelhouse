@@ -45,7 +45,7 @@ await leg('reference manual', () => {
   const malformed = copy('frontmatter'), file = malformed + '/' + relativeManual + '/SKILL.md';
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('version: 1.0.0', 'version: not-a-version'));
   const bad = run(['check'], malformed); assert.equal(bad.code, 2); assert.match(bad.stderr, /SKILL\.md:\d+:.*version/);
-  const reserved = run(['lint-contract', '--file', path.join(fixture, 'not-read')], empty); assert.equal(reserved.code, 2); assert.equal(reserved.stderr, 'not yet\n');
+  const missingFile = run(['lint-contract']); assert.equal(missingFile.code, 2); assert.match(missingFile.stderr, /usage: manual.ts lint-contract --file/); assert.match(missingFile.stderr, /heuristic:/);
 });
 await leg('missing Doctor refused', () => {
   const repo = copy('missing-doctor'), file = repo + '/' + relativeManual + '/SKILL.md';
