@@ -10,7 +10,8 @@ if(!kind){
  for(const [k,m] of [['file-none','none'],['env-none','none'],['file-other','none'],['reused','none'],['scan','none'],['namespace','none'],['file-none','no-validation'],['env-none','no-validation'],['file-other','no-validation'],['scan','no-scan'],['scan','no-scan-or-validation']]){
   const dir=path.join(base,k+'-'+m),x=command('bun',[import.meta.path,here,dir,fake,k,m]);
   fs.writeFileSync(dir+'.stdout',x.stdout);fs.writeFileSync(dir+'.stderr',x.stderr);
-  assert.equal(x.signal,null);assert(!x.error);const rec=JSON.parse(fs.readFileSync(path.join(dir,'result.json'),'utf8'));rec.caseNative={status:x.status,signal:x.signal,error:x.error?.message??null};records.push(rec);
+  if(process.env.WHEELHOUSE_QJGW_EVIDENCE){const out=path.join(process.env.WHEELHOUSE_QJGW_EVIDENCE,'target-attempts');fs.mkdirSync(out,{recursive:true});save(path.join(out,k+'-'+m+'.native.json'),{status:x.status,signal:x.signal,error:x.error?.message??null,stdout:x.stdout,stderr:x.stderr});}
+  assert.equal(x.signal,null);assert(!x.error);assert(fs.existsSync(path.join(dir,'result.json')),x.stdout+x.stderr);const rec=JSON.parse(fs.readFileSync(path.join(dir,'result.json'),'utf8'));rec.caseNative={status:x.status,signal:x.signal,error:x.error?.message??null};records.push(rec);
   assert(rec.runs.every((r:any)=>r.status===0&&!r.signal&&!r.error),'setup and actual CLI completions required');
   console.log('CAPTURE commander '+JSON.stringify(rec));
   if(m==='none')assert.equal(x.status,0,x.stderr);else{
