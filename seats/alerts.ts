@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFile } from "node:child_process";
 import { completedSpawnSync as spawnSync, nativeJsonArray } from "./native-command";
 import { readQuarantine } from "./quarantine";
 import { fleetSnapshot, readyWorkNobodyOnIt, hasUnverifiedWorkers, type Snapshot } from "./fleet-snapshot";
@@ -61,14 +62,41 @@ function diskInfo(){
   }
   return {freeBytes,thresholdBytes,...(unavailable?{unavailable}:{})};
 }
-function dockerCacheInfo(){
+// Every sourced selftest exports a fixture nonce, including suites that invoke
+// alerts indirectly. Never resolve host PATH there without an explicit fixture.
+function fixtureDocker(executable:string):string|null {
+  try {
+    if(!path.isAbsolute(executable)) return null;
+    const root=fs.realpathSync(ROOT), actual=fs.realpathSync(executable);
+    if(actual!==executable||!actual.startsWith(root+path.sep)||!fs.statSync(actual).isFile()) return null;
+    return actual;
+  } catch { return null; }
+}
+function dockerCommand(executable:string):Promise<any> {
+  return new Promise(resolve=>{
+    let output:any, native:any;
+    const finish=()=>{ if(output&&native) resolve({...native,...output,error:typeof output.error?.code==="string"?output.error:undefined}); };
+    // This optional host probe has its own budget, not a deadline on drift,
+    // graph reads or the shared native-command observer. Kill only this client.
+    const child=execFile(executable,["system","df","--format","{{json .}}"],{
+      cwd:ROOT,encoding:"utf8",timeout:5000,killSignal:"SIGKILL",maxBuffer:65536,
+    },(error,stdout,stderr)=>{ output={error,stdout,stderr}; finish(); });
+    child.stdin?.end();
+    child.once("close",(status,signal)=>{ native={status,signal}; finish(); });
+  });
+}
+async function dockerCacheInfo(){
   const raw=templateValue("alert-docker-build-cache-gib");
   const value=raw===""?10:Number(raw), gib=Number.isFinite(value)&&value>=0&&value*1024**3<=Number.MAX_SAFE_INTEGER?value:10;
   const thresholdBytes=Math.floor(gib*1024**3);
-  const unavailable=(reason:string,r?:any)=>({status:"unavailable",cacheBytes:null,cacheSize:null,thresholdBytes,reason,...(r?{exitCode:r.status,signal:r.signal,stdout:r.stdout??"",stderr:r.stderr??""}:{})});
+  const unavailable=(reason:string,r?:any)=>({status:"unavailable",cacheBytes:null,cacheSize:null,thresholdBytes,reason,...(r?{exitCode:r.status,signal:r.signal,errorCode:r.error?.code??null,error:r.error?.message??null,stdout:r.stdout??"",stderr:r.stderr??""}:{})});
   if(thresholdBytes===0) return {status:"disabled",cacheBytes:null,cacheSize:null,thresholdBytes};
-  if(!Bun.which("docker")) return unavailable("docker not on PATH");
-  let r; try { r=spawnSync("docker",["system","df","--format","{{json .}}"],{encoding:"utf8"}); }
+  const selftest=process.env.WHEELHOUSE_SELFTEST_FIXTURE_NONCE!==undefined;
+  const fixture=process.env.WHEELHOUSE_ALERTS_FIXTURE_DOCKER;
+  if(selftest&&!fixture) return {status:"disabled",cacheBytes:null,cacheSize:null,thresholdBytes,reason:"Docker probe off in selftests without an explicit fixture"};
+  const dockerBin=selftest?fixtureDocker(fixture!):Bun.which("docker");
+  if(!dockerBin) return unavailable("docker not on PATH or fixture executable unavailable");
+  let r; try { r=await dockerCommand(dockerBin); }
   catch { return unavailable("docker observation unavailable"); }
   if(r.error||r.signal||r.status!==0) return unavailable("docker observation did not complete successfully",r);
   let rows:any[]; try { rows=r.stdout.trim().split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line)); }
@@ -191,7 +219,7 @@ function settledTaskAlerts(observations:Record<string,SettledSeat>, prior:Record
   }
 }
 
-export function buildSnapshot(root=ROOT):SnapshotFile{
+export async function buildSnapshot(root=ROOT):Promise<SnapshotFile>{
   const entries=readQuarantine(root); const quarantined={count:entries.length,names:entries.map(e=>e.suite)};
   const prior=readJson(SNAP) as SnapshotFile|null; const priorAlerts=prior?.alerts??{}; const snap=fleetSnapshot(root);
   const unverified=snap.unverified??={};
@@ -200,7 +228,7 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
     unverified[seat]={pid:rec.pid??null,role:worker?"worker":reviewer?"reviewer":rec.role??unverified[seat]?.role??"unknown",status:"UNVERIFIED",reason};
     for(const entry of [worker,reviewer]) if(entry){entry.busy=true;entry.identity="UNVERIFIED";}
   };
-  const settledSeats=observeSettledSeats(root,snap.workers.live,prior?.settledSeats,Date.now(),unknown); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const docker=dockerCacheInfo(); const github=githubInfo(); const drift=driftInfo();
+  const settledSeats=observeSettledSeats(root,snap.workers.live,prior?.settledSeats,Date.now(),unknown); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const docker=await dockerCacheInfo(); const github=githubInfo(); const drift=driftInfo();
   const seatStreams=observeSeatStreams(root,prior?.seatStreams??{},Date.now(),unknown);
   for(const seat of Object.keys(unverified)){delete seatStreams[seat];delete settledSeats[seat];}
   snap.workers.busy=snap.workers.live.filter(w=>w.busy).length;snap.workers.idle=snap.workers.live.length-snap.workers.busy;
@@ -243,5 +271,5 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
   settledTaskAlerts(settledSeats,priorAlerts,alerts,unverified);
   return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,docker,github,drift,quarantined,seatStreams,alerts,settledSeats};
 }
-export function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }
-if(import.meta.main){ const [cmd,...rest]=process.argv.slice(2); if(cmd==="check") check(rest.includes("--json")); else { console.error("usage: alerts.ts check [--json]"); process.exit(2); } }
+export async function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=await buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }
+if(import.meta.main){ const [cmd,...rest]=process.argv.slice(2); if(cmd==="check") await check(rest.includes("--json")); else { console.error("usage: alerts.ts check [--json]"); process.exit(2); } }

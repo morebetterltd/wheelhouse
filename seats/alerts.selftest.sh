@@ -62,8 +62,9 @@ case "${GH_UNTRIAGED:-0}" in
 esac
 SH
 chmod +x "$BIN/gh"
-# Every alerts/clock/canary child shadows Docker, even on a host with Docker.
-# This is the recorded aggregate fixture, not a daemon or prune delegation.
+# Defense in depth only: generic alerts/clock/canary children have no Docker
+# opt-in and must not execute even this stub. Pressure cases opt in locally.
+# This is a recorded fixture, never a daemon or prune delegation.
 export WHEELHOUSE_ALERTS_DOCKER_CAPTURE="$HERE/fixtures/docker-system-df.jsonl"
 cat > "$BIN/docker" <<'JS'
 #!/usr/bin/env bun
@@ -144,6 +145,11 @@ drift_set_cases(){
     [ "$FAILED" = 0 ] && pass 'changed drift set starts a fresh hold and re-raises exactly once; returning old set gets a new hold'
   fi
 }
+phase 'Docker fixture isolation and bounded optional observation'
+if bun "$HERE/fixtures/alerts-docker-isolation.ts" "$ROOT/seats/alerts.ts" "$FIX/docker-isolation"; then
+  pass 'alerts fixtures never resolve host Docker; expired/oversize observations stay unknown'
+else fail 'Docker isolation fixture failed'; fi
+
 phase 'Docker cache pressure — recorded JSONL, synthetic variations, no real daemon'
 if bun "$HERE/fixtures/docker-cache-pressure.ts" "$ROOT/seats/alerts.ts" "$FIX/docker-cases"; then
   pass 'Docker cache-pressure and unavailable-Docker consumer cases pass'

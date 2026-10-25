@@ -51,8 +51,8 @@ async function scenario(name: string, opts: any, source = implementation) {
   // Host space is ample by explicit input; never depend on this Mac's free disk.
   const preload = path.join(dir, "host-space.cjs");
   fs.writeFileSync(preload, "const fs=require('node:fs');fs.statfsSync=()=>({bavail:33*1024**3,bsize:1});\n");
-  const env = { ...process.env, HOME: path.join(dir, "home"), PATH: bin, WHEELHOUSE_ALERTS_ROOT: dir };
   const dockerFile=path.join(bin,"docker"), dockerScript=opts.absent?"":fs.readFileSync(dockerFile,"utf8");
+  const env = { ...process.env, HOME: path.join(dir, "home"), PATH: bin, WHEELHOUSE_ALERTS_ROOT: dir, WHEELHOUSE_ALERTS_FIXTURE_DOCKER: dockerFile };
   const observations: any[] = [];
   const rec: any = { name, opts, source, sourceText: fs.readFileSync(source,"utf8"), response: text, observations, attempts: [] }; records.push(rec);
   for (let i = 0; i < (opts.repeats ?? 1); i++) {
@@ -92,11 +92,11 @@ try {
     const controls:any[]=[
       ["forget-unavailable", '||(name==="docker-cache-pressure"&&docker.status==="unavailable")', '', {size:"19.5GB",alert:true,repeats:6,lifecycle:true}],
       ["ignore-clear", 'on:docker.status==="ok"&&docker.cacheBytes!==null&&docker.cacheBytes>=docker.thresholdBytes', 'on:priorAlerts["docker-cache-pressure"]?.active||(docker.status==="ok"&&docker.cacheBytes!==null&&docker.cacheBytes>=docker.thresholdBytes)', {size:"19.5GB",alert:true,repeats:6,lifecycle:true}],
-      ["remove-observation", "const docker=dockerCacheInfo();", 'const docker={status:"unavailable",cacheBytes:null,cacheSize:null,thresholdBytes:0};', {size:"19.5GB",alert:true}],
+      ["remove-observation", "const docker=await dockerCacheInfo();", 'const docker={status:"unavailable",cacheBytes:null,cacheSize:null,thresholdBytes:0};', {size:"19.5GB",alert:true}],
       ["always-pressure", "docker.cacheBytes>=docker.thresholdBytes", "true", {}],
       ["binary-docker-units", "GB:1000**3", "GB:1024**3", {size:"10GB"}],
       ["ignore-threshold", 'const raw=templateValue("alert-docker-build-cache-gib");', 'const raw="";', {size:"19.5GB",config:"alert-docker-build-cache-gib=20\n"}],
-      ["fatal-absence", 'if(!Bun.which("docker")) return unavailable("docker not on PATH");', 'if(!Bun.which("docker")) throw Error("planted fatal absence");', {absent:true,ready:true}],
+      ["fatal-absence", 'if(!dockerBin) return unavailable("docker not on PATH or fixture executable unavailable");', 'if(!dockerBin) throw Error("planted fatal absence");', {absent:true,ready:true}],
       ["fatal-daemon", 'if(r.error||r.signal||r.status!==0) return unavailable("docker observation did not complete successfully",r);', 'if(r.error||r.signal||r.status!==0) throw Error("planted fatal daemon failure");', {daemon:true,ready:true}],
       ["parse-failed-command", 'if(r.error||r.signal||r.status!==0) return unavailable("docker observation did not complete successfully",r);', 'if(r.error||r.signal) return unavailable("docker observation did not complete successfully",r);', {size:"19.5GB",exit:7,ready:true}],
       ["fatal-malformed", 'catch { return unavailable("invalid Docker JSONL",r); }', 'catch { throw Error("planted fatal malformed JSONL"); }', {malformed:true,ready:true}],
