@@ -49,10 +49,12 @@ async function scenario(name: string, harness: string, focus = "all", mutation?:
   function snapshot() { return { state: stateBytes(), launches: launches().length, session: state()?.sessionFile ? fs.readFileSync(state().sessionFile, "utf8") : null }; }
   try {
     rec.phase = "spawn"; code(await invoke(["spawn", "producer"]), 0, "initial native spawn", true);
+    // A shim's get_state can precede its native child's startup. A real prompt
+    // delivery joins that child's published session before argv/RPC inspection.
+    rec.phase = "initial-dispatch"; code(await invoke(["dispatch", "producer", "initial", "fixture producer turn"]), 0, "valid initial dispatch", true);
     rec.phase = "payload"; rec.delivered = delivered(); save(); assert.equal(rec.delivered, expected(project), `${tag} ${name}: full native harness skill payload`);
     if (focus === "all") assert.equal(state().roleBriefHash, hash(expected(project)), `${tag} ${name}: loaded assembled hash`);
     if (focus === "payload") return;
-    rec.phase = "initial-dispatch"; code(await invoke(["dispatch", "producer", "initial", "fixture producer turn"]), 0, "valid initial dispatch", true);
     if (focus === "all" || focus === "unstamped") {
       rec.phase = "unstamped"; const before = snapshot(), r = await invoke(["dispatch", "producer", "unstamped", "must not arrive"], { WHEELHOUSE_CONTRACT_FIXTURE: unstamped, WHEELHOUSE_DISPATCH_FORCE: "1" }); rec.unstamped = { before, after: snapshot(), native: r }; save();
       code(r, 1, "unstamped forced dispatch refusal"); assert(r.stderr.includes("Skills: missing"), `${tag} ${name}: stamp refusal names field`); assert.deepEqual(rec.unstamped.after, before, `${tag} ${name}: refusal changes no state/session/launch`);
