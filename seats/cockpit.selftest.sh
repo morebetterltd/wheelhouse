@@ -24,6 +24,7 @@ selftest_bind_herald_owner "$FIX" || exit 2
 SOCK="wheelhouse-cockpit-selftest.$$"
 CLIENT_SOCK="${SOCK}-client"
 SOCKET_DIR=""
+SOCKET_DIR_OWNED=0
 SOCKETS_OWNED=0
 PASS=0
 FAIL=0
@@ -64,15 +65,30 @@ cleanup() {
       fi
     done
   fi
+  if [ "$SOCKET_DIR_OWNED" = 1 ]; then
+    # Never recursively remove a socket directory or delete foreign entries.
+    rmdir "$SOCKET_DIR" || cleanup_rc=1
+  fi
   selftest_remove_fixture_dir "$FIX" || cleanup_rc=1
   return "$cleanup_rc"
 }
 selftest_install_cleanup_traps cleanup
 # Keep every endpoint under owned scratch. Relative -S addresses avoid
 # Darwin's short AF_UNIX path limit beneath long per-task TMPDIR paths.
-SOCKET_DIR="$FIX/tmux-sockets"
+# The still-live exec PID reserves the names before launch, so the cleanup
+# observer can plant a real preexisting endpoint without guessing mktemp output.
+SOCKET_BASE="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || exit 2
+SOCKET_DIR="$SOCKET_BASE/wheelhouse-cockpit-sockets.$$"
 SOCKET_BIN="$FIX/socket-bin"
-mkdir -p "$SOCKET_DIR" "$SOCKET_BIN" "$FIX/home"
+mkdir -p "$SOCKET_BIN" "$FIX/home"
+if [ -L "$SOCKET_DIR" ] || { [ -e "$SOCKET_DIR" ] && [ ! -d "$SOCKET_DIR" ]; }; then
+  echo "STOP: cockpit selftest refuses unexpected socket directory: $SOCKET_DIR" >&2
+  exit 2
+fi
+if [ ! -d "$SOCKET_DIR" ]; then
+  mkdir "$SOCKET_DIR" || exit 2
+  SOCKET_DIR_OWNED=1
+fi
 export WHEELHOUSE_TEST_REAL_TMUX="$(command -v tmux)" WHEELHOUSE_TEST_TMUX_DIR="$SOCKET_DIR"
 cat > "$SOCKET_BIN/tmux" <<'SH'
 #!/usr/bin/env bash
