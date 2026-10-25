@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { completedCommand } from '../../completed-command';
 import { parseContract, validateContract } from '../../contract';
+import { writeReviewFixture } from '../review-record-template';
 const [fleet, agent, fixture, reference, snapshotHelper] = process.argv.slice(2);
 const evidence = process.env.WHEELHOUSE_WORK_WALK_EVIDENCE;
 if (evidence) fs.mkdirSync(evidence, { recursive: true });
@@ -20,20 +21,30 @@ const author = 'AUTHOR-SEAT-SENTINEL', rosterFile = path.join(fleet, 'seats/seat
 const authorDir = path.join(path.dirname(agent), 'author'); fs.mkdirSync(authorDir); roster.seats[author] = { role: 'worker', account: { dir: authorDir } };
 const originalVerifier = structuredClone(roster.seats.verifier); fs.writeFileSync(rosterFile, JSON.stringify(roster));
 const ledger = path.join(agent, 'work-invocations.jsonl'); fs.writeFileSync(ledger, '');
-const calls = () => fs.readFileSync(ledger, 'utf8').trim().split('\n').filter(Boolean).length;
+const calls = (directory = agent) => fs.readFileSync(path.join(directory, 'work-invocations.jsonl'), 'utf8').trim().split('\n').filter(Boolean).length;
+const reviewSample = process.env.WHEELHOUSE_REVIEW_RECORD_SAMPLE!; assert(reviewSample && fs.statSync(reviewSample).isFile());
+const reviewerDir = path.join(path.dirname(agent), 'gating-reviewer'); fs.mkdirSync(reviewerDir); fs.writeFileSync(reviewerDir+'/auth.json','{"stub":true}'); fs.writeFileSync(reviewerDir+'/work-invocations.jsonl','');
+roster.seats['REVIEWER-RECORD-SENTINEL']={role:'reviewer',account:{dir:authorDir}}; fs.writeFileSync(rosterFile,JSON.stringify(roster));
+const approval = () => writeReviewFixture(fleet, reviewSample, 'fixture-work', { branch, tip: pin, 'verifier-seat': 'REVIEWER-RECORD-SENTINEL ('+reviewerDir+')' });
+approval();
 const contract = parseContract(fs.readFileSync(fixture, 'utf8')); assert.deepEqual(validateContract(contract, { requireSignal: true }), []);
 const passRows = ['OUTCOME: O1 PASS — GET /counter read back two', 'OUTCOME: O2 PASS — README names five features', 'OUTCOME: O3 PASS — GET /health returned {"ok":true}'];
 const done = [...passRows, 'VERDICT: WALKED-DONE'].join('\n') + '\n';
 const common = ['--work', 'fixture-work', '--branch', branch, '--author', author, '--repo', product];
 function run(name: string, reply: string, args = common, contractFile = fixture, extraEnv: Record<string, string> = {}) {
   const out = path.join(fleet, 'out-work-' + name), cli = ['seats/walk.ts', ...args, '--out', out];
-  const before = calls();
+  const selected = roster.seats.verifier.account.dir.replace(/^~/, process.env.HOME!);
+  const before = calls(selected);
+  const trace = path.join(fleet, 'trace-'+name+'.jsonl'); fs.writeFileSync(trace, '');
   const x = completedCommand('bun', cli, { cwd: fleet, env: { ...process.env, WHEELHOUSE_SKIP_BD: '1', WHEELHOUSE_CONTRACT_FIXTURE: contractFile,
-    STUB_REPLY: reply, STUB_WORK_WALK_SNAPSHOT: snapshotHelper, ...extraEnv } });
-  const row: any = { name, args: cli, status: x.status, signal: x.signal, error: x.error?.message ?? null, stdout: x.stdout, stderr: x.stderr, invoked: calls() - before };
+    STUB_REPLY: reply, STUB_WORK_WALK_SNAPSHOT: snapshotHelper, GIT_TRACE2_EVENT: trace, ...extraEnv } });
+  const row: any = { name, args: cli, status: x.status, signal: x.signal, error: x.error?.message ?? null, stdout: x.stdout, stderr: x.stderr, invoked: calls(selected) - before };
+  const events = fs.readFileSync(trace,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
+  row.gitStarts = events.filter(event=>event.event==='start').map(event=>event.argv);
+  row.scratchAdds = row.gitStarts.filter(argv=>Array.isArray(argv) && argv.some((arg,i)=>arg==='worktree' && argv[i+1]==='add')).length;
   if (row.invoked) {
-    row.prompt = fs.readFileSync(path.join(agent, 'prompt.txt'), 'utf8'); row.argv = JSON.parse(fs.readFileSync(path.join(agent, 'argv.json'), 'utf8'));
-    row.snapshot = JSON.parse(fs.readFileSync(path.join(agent, 'work-snapshot.json'), 'utf8'));
+    row.prompt = fs.readFileSync(path.join(selected, 'prompt.txt'), 'utf8'); row.argv = JSON.parse(fs.readFileSync(path.join(selected, 'argv.json'), 'utf8'));
+    row.snapshot = JSON.parse(fs.readFileSync(path.join(selected, 'work-snapshot.json'), 'utf8'));
   }
   if (fs.existsSync(out + '/walk.json')) row.metadata = JSON.parse(fs.readFileSync(out + '/walk.json', 'utf8'));
   records.push(row); save(name, row); assert.equal(row.error, null); assert.equal(row.signal, null);
@@ -81,6 +92,31 @@ leg('work structured rows on all harnesses', () => {
     fs.writeFileSync(stream, JSON.stringify({ type: 'tool_result', content: 'OUTCOME: O99 FAIL — stale tool text' })+'\n'+JSON.stringify(event)+'\n');
     const r = run('stream-' + harness, '', common, fixture, { STUB_STREAM_FILE: stream, OPENAI_CODEX_API_KEY: 'fixture-key' }); assert.equal(r.status, 0, r.stderr); assert.equal(r.metadata.outcomes.length, 3);
   }
+});
+// Restore the original verifier after the cross-harness fixture above.
+roster.seats.verifier=structuredClone(originalVerifier); fs.writeFileSync(rosterFile,JSON.stringify(roster));
+const canonicalReview=path.join(fleet,'seats/verdicts/fixture-work.md');
+function unreviewed(name:string,prepare:()=>void,pattern:RegExp) {
+  approval(); fs.rmSync(path.join(agent,'cwd.txt'),{force:true}); prepare();
+  try { const r=run(name,done); refused(r,5,pattern,true); assert.match(r.stderr,/REFUSED:.*fixture-work/s); assert.match(r.stderr,/review first: bun seats\/verify.ts fixture-work/); assert.equal(r.scratchAdds,0); assert(!fs.existsSync(path.join(agent,'cwd.txt'))); const rows=fs.readFileSync(fleet+'/seats/inbox.jsonl','utf8').trim().split('\n').map(s=>JSON.parse(s)); assert(rows.at(-1).detail.includes('REFUSED:')); }
+  finally { approval(); }
+}
+leg('ordering missing review refused before scratch or spawn',()=>unreviewed('ordering-missing',()=>fs.unlinkSync(canonicalReview),/review first:/));
+leg('ordering BOUNCE refused before scratch or spawn',()=>unreviewed('ordering-bounce',()=>writeReviewFixture(fleet,reviewSample,'fixture-work',{tip:pin,verdict:'BOUNCE'}),/review verdict is BOUNCE/));
+leg('ordering DISCOVER refused before scratch or spawn',()=>unreviewed('ordering-discover',()=>writeReviewFixture(fleet,reviewSample,'fixture-work',{tip:pin,verdict:'DISCOVER'}),/review verdict is DISCOVER/));
+leg('ordering stale approval refused with both tips',()=>unreviewed('ordering-stale',()=>writeReviewFixture(fleet,reviewSample,'fixture-work',{tip:'0'.repeat(40)}),new RegExp('reviewed tip '+ '0'.repeat(40)+' is not the branch tip '+pin+'; re-review at '+pin)));
+leg('ordering partial and refused records are not approval',()=>unreviewed('ordering-partial',()=>{fs.renameSync(canonicalReview,canonicalReview.replace(/\.md$/,'.partial.md'));fs.writeFileSync(canonicalReview.replace(/\.md$/,'.refused.json'),JSON.stringify({stdout:fs.readFileSync(reviewSample,'utf8')}));},/review first:/));
+leg('ordering reviewer directory alias refused',()=>{
+  approval();const alias=agent+'-reviewer-alias';fs.symlinkSync(reviewerDir,alias);roster.seats.verifier.account.dir=alias;fs.writeFileSync(rosterFile,JSON.stringify(roster));fs.rmSync(reviewerDir+'/cwd.txt',{force:true});
+  try {const r=run('ordering-same-reviewer',done);refused(r,5,/SAME account directory/,true);assert(r.stderr.includes('REVIEWER-RECORD-SENTINEL'));assert(r.stderr.includes('verifier'));assert.equal(r.scratchAdds,0);assert(!fs.existsSync(reviewerDir+'/cwd.txt'));}
+  finally {roster.seats.verifier=structuredClone(originalVerifier);fs.writeFileSync(rosterFile,JSON.stringify(roster));}
+});
+leg('ordering reviewer-role verifier refused',()=>{
+  roster.seats['reviewer-role']={role:'reviewer',account:{dir:agent}};fs.writeFileSync(rosterFile,JSON.stringify(roster));
+  const r=run('ordering-role',done,[...common,'--verifier','reviewer-role']);refused(r,5,/role "reviewer", not "verifier"/,true);assert.equal(r.scratchAdds,0);
+});
+leg('ordering exact APPROVE distinct verifier spawns without review context',()=>{
+  approval(); const r=run('ordering-approved',done);assert.equal(r.status,0);assert.equal(r.invoked,1);assert.equal(r.metadata.tip,pin);assert(!r.prompt.includes('REVIEWER-RECORD-SENTINEL'));assert(!r.prompt.includes('review first:'));assert(!r.prompt.includes('review verdict is'));assert(r.scratchAdds>0);
 });
 save('results', { legs, records: records.map(({name,status,invoked}) => ({name,status,invoked})), pin, sourceSha256: createHash('sha256').update(fs.readFileSync(path.join(fleet, 'seats/walk.ts'))).digest('hex') });
 if (legs.some(x => x.error)) process.exitCode = 1;

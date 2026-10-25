@@ -174,7 +174,9 @@ EOF
 run_work_fixture(){
   local proj="$FIX/proj-work" ns="walk-work"
   build_proj "$proj" "$ns"
-  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/walk/work.ts" "$proj" "$HOME_FIX/.pi-seats-$ns/verifier" "$HERE/fixtures/contracts/work-walk.md" "$HERE/fixtures/verification/five-features" "$HERE/fixtures/walk/work-snapshot.cjs"
+  local sample="$FIX/actual-review-sample.md"
+  WHEELHOUSE_REVIEW_RECORD_ONLY=1 WHEELHOUSE_REVIEW_RECORD_SEED_ONLY=1 WHEELHOUSE_REVIEW_RECORD_SEED="$sample" bash "$HERE/verify.selftest.sh" "$VERIFY" || return $?
+  WHEELHOUSE_REVIEW_RECORD_SAMPLE="$sample" HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/walk/work.ts" "$proj" "$HOME_FIX/.pi-seats-$ns/verifier" "$HERE/fixtures/contracts/work-walk.md" "$HERE/fixtures/verification/five-features" "$HERE/fixtures/walk/work-snapshot.cjs"
 }
 # Focused removal controls use the exact same setup/driver/assertions as default.
 if [ "${WHEELHOUSE_WALK_WORK_ONLY:-0}" = 1 ]; then run_work_fixture; exit $?; fi

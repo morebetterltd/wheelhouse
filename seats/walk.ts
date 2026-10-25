@@ -21,7 +21,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
 import { resolveRoleBrief } from "./briefs";
-import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, requireDistinctAccount, resolveRepoRoot, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
+import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, readReviewRecord, requireDifferentAccountDirs, requireDistinctAccount, resolveRepoRoot, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
@@ -54,7 +54,9 @@ interface SeatEntry {
 
 type WalkVerdict = "WALKED-DONE" | "WALKED-NOT-DONE" | "COULD-NOT-WALK";
 
+let workRefusalBead: string | undefined;
 function refuse(msg: string): never {
+  if (workRefusalBead) appendVerifierGateInbox(workRefusalBead, "distress", `verifier work refused — ${workRefusalBead}`, `REFUSED: ${msg}`, "verifier-work-preflight", "seats/walk.ts");
   process.stderr.write(`REFUSED: ${msg}\n`);
   process.exit(5);
 }
@@ -668,10 +670,15 @@ function workMain(args: string[]): void {
   const branch = values.get("--branch")!;
   const author = validateSegment("seat name", values.get("--author")!);
   const verifierArg = values.has("--verifier") ? validateSegment("seat name", values.get("--verifier")!) : undefined;
+  workRefusalBead = bead;
   setVerifierGateBead(bead, "seats/walk.ts");
   const checked = checkBeadContract(ROOT, bead);
   if (checked.errors.length) refuse(contractRemedy(bead, checked.errors));
   const contract = parseContract(checked.text!);
+  const review = readReviewRecord(ROOT, bead);
+  const reviewNext = `review first: bun seats/verify.ts ${bead} ${branch} ${author}`;
+  if (!review) refuse(`${bead}: ${reviewNext}`);
+  if (review.verdict !== "APPROVE") refuse(`${bead}: review verdict is ${review.verdict}; ${reviewNext}`);
   const repoArg = values.get("--repo");
   const repoRoot = resolveRepoRoot(repoArg);
   const product = repoArg ? fs.realpathSync(path.resolve(ROOT, expandTilde(repoArg))) : repoRoot;
@@ -680,9 +687,11 @@ function workMain(args: string[]): void {
   let tip: string;
   try { tip = execFileSync("git", ["rev-parse", "--verify", `${branch}^{commit}`], { cwd: repoRoot, encoding: "utf8" }).trim(); }
   catch { die(`cannot resolve branch ${JSON.stringify(branch)} to a commit`); }
+  if (review.tip !== tip!) refuse(`${bead}: reviewed tip ${review.tip} is not the branch tip ${tip!}; re-review at ${tip!}; ${reviewNext}`);
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
   if (!entry.account?.dir) refuse(`verifier seat "${verifierSeat}" has no account.dir`);
   requireDistinctAccount(author, verifierSeat, entry.account.dir, refuse, "verifier");
+  requireDifferentAccountDirs(review.reviewerSeat, review.reviewerDir, verifierSeat, entry.account.dir, refuse, "verifier", "gating reviewer");
   let harness: HarnessName;
   try { harness = harnessNameForSeat(verifierSeat, entry); } catch (e: any) { refuse(e.message); }
   const verifierDir = requireCredential(entry, verifierSeat, harness);
