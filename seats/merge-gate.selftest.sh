@@ -8,8 +8,8 @@ SOURCE="$(cd "$(dirname "$GATE")" && pwd -P)"
 FIX=""
 cleanup() { [ -z "$FIX" ] || selftest_remove_fixture_dir "$FIX"; return 0; }
 selftest_install_cleanup_traps cleanup
-FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-merge-gate.$$.XXXXXX")"
-selftest_isolate_git "$FIX"
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-merge-gate.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 SAMPLE="$FIX/actual-review.md"
 WHEELHOUSE_REVIEW_RECORD_ONLY=1 WHEELHOUSE_REVIEW_RECORD_SEED_ONLY=1 WHEELHOUSE_REVIEW_RECORD_SEED="$SAMPLE" \
