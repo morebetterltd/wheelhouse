@@ -65,19 +65,33 @@ try {
   const command = fileResult.stderr.slice(fileResult.stderr.lastIndexOf("Recheck: ") + 9).trim();
   const recheck = await native("bash", ["-c", command], { STAMP: "must-not-expand" }); assert.equal(recheck.code, 2, `${tag}: quoted recheck did not address original file: ${recheck.stderr}`); oracle(recheck, 2, ["--file", legacyFile]);
   records.push({ kind: "quoted-file-recheck", command, native: recheck }); save();
+  // Restore only this test graph's old-format input after the simulated repair.
+  const restoreLegacy = await native("bd", ["update", legacy, "--body-file", path.join(root, "pre-gate-single-skill.md"), "--json"]); assert.equal(restoreLegacy.code, 0, restoreLegacy.stderr);
   // Remove only the actionable repair; statuses must remain genuine refusals.
   const repairGuard = '  if (!errors.some(error => error.startsWith("contract: Skills:"))) return errors;';
   fs.writeFileSync(module, changed(original, repairGuard, "  if (true) return errors;"));
-  for (const mode of ["check", "dispatch", "review"]) await grade("repair-removed", mode, fresh, "repair-removed");
+  for (const [name, id] of [["legacy", legacy], ["new", fresh]]) for (const mode of ["check", "dispatch", "review"]) await grade("repair-removed-" + name, mode, id, "repair-removed");
+  const fileWithoutRepair = await native("bun", [module, "check", "--file", legacyFile]); assert.equal(fileWithoutRepair.code, 2);
+  let fileRejection = ""; try { oracle(fileWithoutRepair, 2, ["--file", legacyFile]); } catch (e: any) { fileRejection = e.message; }
+  assert(fileRejection.includes(tag), "CONTROL_SETUP file repair removal did not reach oracle"); records.push({ kind: "file-repair-removed", native: fileWithoutRepair, rejection: fileRejection, source: fs.readFileSync(module, "utf8") }); save();
   // Disable only the actual mandatory gate. The same new input now passes CLI0.
   fs.writeFileSync(module, changed(original, "const REQUIRE_SKILLS = true;", "const REQUIRE_SKILLS = false;"));
   const unsafe = await native("bun", [module, "check", fresh]); assert.equal(unsafe.code, 0, "CONTROL_SETUP gate-off must actually accept new unstamped input");
   let rejection = ""; try { oracle(unsafe, 2, [fresh]); } catch (e: any) { rejection = e.message; }
   assert(rejection.includes(tag), "CONTROL_SETUP gate-off did not reach refusal oracle"); records.push({ kind: "gate-off", native: unsafe, rejection, source: fs.readFileSync(module, "utf8") }); save();
+  // Remove quoting from the actual emitted repair command, not from its input.
+  const quoteLine = original.split("\n").find(line => line.startsWith("  const quote = (arg: string) =>")); assert(quoteLine, "CONTROL_SETUP quote line");
+  fs.writeFileSync(module, changed(original, quoteLine, "  const quote = (arg: string) => arg;"));
+  const unquoted = await native("bun", [module, "check", "--file", legacyFile]); assert.equal(unquoted.code, 2);
+  const badCommand = unquoted.stderr.slice(unquoted.stderr.lastIndexOf("Recheck: ") + 9).trim();
+  const wrongFile = await native("bash", ["-c", badCommand], { STAMP: "must-not-expand" });
+  assert.equal(wrongFile.code, 3, "CONTROL_SETUP unquoted command must run the CLI with wrong argv"); assert(wrongFile.stderr.includes("usage: contract.ts"));
+  let quoteRejection = ""; try { assert.equal(wrongFile.code, 2, `${tag}: repair command must address original file`); } catch (e: any) { quoteRejection = e.message; }
+  assert(quoteRejection.includes(tag)); records.push({ kind: "quote-removed", command: badCommand, refusal: unquoted, native: wrongFile, rejection: quoteRejection, source: fs.readFileSync(module, "utf8") }); save();
   fs.writeFileSync(module, original);
   const doc = fs.readFileSync(path.join(repo, "runbooks/UPGRADE.md"), "utf8"), required = ["### Two-skill contract gate", "do not bulk-append", "reset <producer-seat>", "steer <producer-seat>", "new unstamped", "bun seats/contract.ts check <bead-id>"];
   for (const text of required) assert(doc.includes(text), `${tag}: documented upgrade instruction missing: ${text}`);
   let removed = 0; for (const text of required) { assert(!doc.replaceAll(text, "").includes(text)); let e: any; try { assert(doc.replaceAll(text, "").includes(text), `${tag}: removed documented path`); } catch (x) { e = x; } assert(e.message.includes(tag)); removed++; }
   records.push({ kind: "docs", doc, required, removed }); save();
-  console.log("upgrade skill checks: legacy/new check+dispatch+review exact refusals; simulated repaired check0; quoted recheck2; 3 repair removals + gate-off native0 + 6 document removals");
+  console.log("upgrade skill checks: legacy/new check+dispatch+review exact refusals; simulated repaired check0; quoted recheck2; 7 repair removals + gate-off native0 + wrong-quoted-command native3 + 6 document removals");
 } finally { save(); }
