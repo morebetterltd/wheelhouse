@@ -36,7 +36,6 @@ cases.push({ phase: "reviewer-orphan", signal: "SIGTERM" });
 // An interrupted sweep is itself terminal, even if its groups retired before
 // close. Also cover the commander's simultaneous dispatcher+runner TERM path.
 cases.push(...(["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase: "sweep-interrupted", signal })));
-cases.push({ phase: "sweep-both", signal: "SIGTERM" });
 cases.push(...(["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase: "sweep-stubborn", signal })));
 cases.push({ phase: "sweep-stubborn-long-grace", signal: "SIGTERM" });
 cases.push({ phase: "sweep-stubborn-runner-killed", signal: "SIGTERM" });
@@ -175,7 +174,7 @@ esac
       if (!ended) child.kill(signal);
     } else {
       child.kill(signal);
-      if (phase === "sweep-both") {
+      if (phase === "sweep") {
         try { process.kill(runnerPid, signal); } catch (e: any) { if (e.code !== "ESRCH") throw e; }
       }
     }
