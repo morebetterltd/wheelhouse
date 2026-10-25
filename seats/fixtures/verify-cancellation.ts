@@ -35,7 +35,7 @@ const cases = ["sweep", "reviewer"].flatMap(phase => (["SIGTERM", "SIGINT", "SIG
 cases.push({ phase: "reviewer-orphan", signal: "SIGTERM" });
 // An interrupted sweep is itself terminal, even if its groups retired before
 // close. Also cover the commander's simultaneous dispatcher+runner TERM path.
-cases.push({ phase: "sweep-interrupted", signal: "SIGTERM" });
+cases.push(...(["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase: "sweep-interrupted", signal })));
 cases.push({ phase: "sweep-both", signal: "SIGTERM" });
 cases.push(...(["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase: "sweep-stubborn", signal })));
 cases.push({ phase: "sweep-stubborn-long-grace", signal: "SIGTERM" });
