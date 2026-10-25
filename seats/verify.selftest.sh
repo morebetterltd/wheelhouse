@@ -702,12 +702,21 @@ EOF
     pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
   else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
 }
+manual_scope_cases() {
+  bun "$HERE/fixtures/verify-manual-scope.ts" "$VERIFY" "$FIX/manual-scope" "${WHEELHOUSE_VERIFY_MANUAL_SCOPE_CASE:-all}" || fail 'manual scope prompt/metadata fixtures'
+}
 if [ -n "${WHEELHOUSE_VERIFY_SELFTEST_CASE:-}" ]; then
-  [ "$WHEELHOUSE_VERIFY_SELFTEST_CASE" = bead-progress-past-total ] || { echo "unknown verify selftest case: $WHEELHOUSE_VERIFY_SELFTEST_CASE" >&2; exit 2; }
-  progress_past_total
+  case "$WHEELHOUSE_VERIFY_SELFTEST_CASE" in
+    bead-progress-past-total) progress_past_total ;;
+    manual-scope) manual_scope_cases ;;
+    *) echo "unknown verify selftest case: $WHEELHOUSE_VERIFY_SELFTEST_CASE" >&2; exit 2 ;;
+  esac
   [ "$FAILED" = 0 ]
   exit $?
 fi
+
+phase "manual scope: pinned product diff beside the gate's contract outcomes"
+manual_scope_cases
 
 phase "contract gate: no-outcomes review is refused before harness spawn"
 # The gate-removed negative must reach a normally answering harness, not fail

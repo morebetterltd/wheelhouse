@@ -71,6 +71,18 @@ A one-shot pass inherits the rest of this reviewer contract: never review what y
 
 Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 
+### The manual is not the author's to bend
+
+Any change under `.agents/skills/verify-*/` — a `SKILL.md` section or a feature-map entry under `features/` — is in scope **only when an outcome of the contract names that file or that feature**. A map outcome or manual-sections outcome can call for it; the author's need to make a failing journey pass cannot. Read the base version as well as the reviewed SHA, not just the edited manual as its own oracle.
+
+Otherwise name the scope defect and quote the changed line:
+
+```
+VERDICT: BOUNCE — scope: <path> changed without a contract outcome calling for it
+```
+
+Name a weakened journey as such: a reach, step or end state made looser so it passes. If you cannot tell whether an outcome calls for the edit, route that relationship as unverifiable; never approve it in silence or infer permission from the changed manual itself. The dispatcher's changed-file and candidate-outcome lists are context, not a scope judgment.
+
 When the commander has promoted this reviewer as a FALLBACK GATE for a gating-reviewer outage, the review is still an ordinary gating review under this contract, and its record must make the exceptional gate visible: state that it is gating as fallback, name the outage that disabled the standing gate, and state the distinct-account basis that keeps this review from being author-adjacent.
 
 ### Constraints
