@@ -1,0 +1,38 @@
+{
+  "provenance": {
+    "kind": "docs-derived, not a recording of a live Slack workspace",
+    "sources": [
+      "https://docs.slack.dev/reference/methods/chat.postMessage/",
+      "https://docs.slack.dev/reference/methods/conversations.history/",
+      "https://docs.slack.dev/messaging/formatting-message-text/#escaping-text"
+    ],
+    "notes": "Fictional message and documentation example IDs. Slack documents ok/channel/ts, timestamp-inclusive history lookup, mutable message representations, and the three entity equivalents &amp; &lt; &gt;. This models an entity-escaped echo; it does not establish that Slack automatically transformed the reported incident. Backticks, Unicode arrows and newlines are retained, not invented as extra escape rules."
+  },
+  "channel": "C123ABC456",
+  "ts": "1503435956.000247",
+  "submitted": "Release report: `a1b2c3` <sha-placeholder> & review -> validation → shipping.\nThe release notes retain `inline code`, literal <markers>, ampersands & arrows -> without flattening the line breaks.\nStatus: ready for review, not an automatic instruction to publish.\n",
+  "post": {
+    "ok": true,
+    "channel": "C123ABC456",
+    "ts": "1503435956.000247",
+    "message": {
+      "type": "message",
+      "subtype": "bot_message",
+      "ts": "1503435956.000247",
+      "text": "Release report: `a1b2c3` &lt;sha-placeholder&gt; &amp; review -&gt; validation → shipping.\nThe release notes retain `inline code`, literal &lt;markers&gt;, ampersands &amp; arrows -&gt; without flattening the line breaks.\nStatus: ready for review, not an automatic instruction to publish.\n"
+    }
+  },
+  "history": {
+    "ok": true,
+    "latest": "1503435956.000247",
+    "messages": [
+      {
+        "type": "message",
+        "user": "U123ABC456",
+        "ts": "1503435956.000247",
+        "text": "Release report: `a1b2c3` &lt;sha-placeholder&gt; &amp; review -&gt; validation → shipping.\nThe release notes retain `inline code`, literal &lt;markers&gt;, ampersands &amp; arrows -&gt; without flattening the line breaks.\nStatus: ready for review, not an automatic instruction to publish.\n"
+      }
+    ],
+    "has_more": false
+  }
+}
