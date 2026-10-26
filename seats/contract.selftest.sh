@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
@@ -15,11 +16,25 @@ export GIT_CEILING_DIRECTORIES="$FIX"
 FAILED=0
 pass(){ echo "PASS $*"; }
 fail(){ echo "FAIL $*"; FAILED=$((FAILED+1)); }
+mkdir -p "$FIX/fixture-command"
+if bun "$HERE/fixtures/fixture-command-regression.ts" "$FIX/fixture-command"; then
+  pass 'fixture command return/throw compatibility and meaningful removals'
+else fail 'fixture command compatibility regression'; fi
 leg(){
   local name="$1" expected="$2" error="$3" out rc=0
   out="$(bun "$CONTRACT" check --file "$HERE/fixtures/contracts/$name.md" 2>&1)" || rc=$?
   if [ "$rc" = "$expected" ] && { [ -z "$error" ] || grep -Fq "$error" <<<"$out"; }; then pass "$name (exit $rc)"; else fail "$name expected exit $expected + '$error', got $rc: $out"; fi
 }
+outcomes_skill_leg(){
+  local rc=0
+  bun "$HERE/fixtures/outcomes-skill.ts" "$HERE/.." "$CONTRACT" "$FIX/outcomes" || rc=$?
+  [ "$rc" = 0 ] && pass 'outcomes skill examples and consumer/check mismatch' || fail "outcomes skill examples and consumer/check mismatch (exit $rc)"
+}
+if [ "${WHEELHOUSE_OUTCOMES_SKILL_ONLY:-0}" = 1 ]; then
+  outcomes_skill_leg
+  [ "$FAILED" = 0 ] && exit 0
+  exit 1
+fi
 # Intent-only linter never reads the graph. All fixtures are owned by this run.
 mkdir -p "$FIX/intents"
 intent_leg(){
@@ -78,6 +93,14 @@ if [ "$RC" = 1 ] && grep -Fq "$INVALID_ID: O1: surface: missing" <<<"$OUT" && ! 
 RC=0; OUT="$(env -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE WHEELHOUSE_CONTRACT_ROOT="$FIX/graph" bun "$CONTRACT" check "$VALID_ID" 2>&1)" || RC=$?
 [ "$RC" = 0 ] && pass 'read real bd show JSON from overridden root' || fail "bd JSON check rc=$RC: $OUT"
 
+if bun "$HERE/fixtures/producer-stamps.ts" "$CONTRACT" "$FIX/producer-stamps" "$FIX/graph" "$HERE/.."; then
+  pass 'producer stamps: default shared gate, real graph labels, pseudo-header boundary, versions and removals'
+else fail 'producer stamp consumer cases failed'; fi
+
+if bun "$HERE/fixtures/upgrade-skill-stamps.ts" "$CONTRACT" "$FIX/upgrade-skills" "$FIX/graph" "$HERE/.."; then
+  pass 'two-skill upgrade: legacy/new dispatch and review refuse with exact producer repair; new work stays gated'
+else fail 'two-skill upgrade consumer cases failed'; fi
+
 mkdir -p "$FIX/bin"
 printf '#!/bin/sh\necho fixture-bd-unavailable >&2\nexit 7\n' > "$FIX/bin/bd"; chmod +x "$FIX/bin/bd"
 RC=0; OUT="$(env -u WHEELHOUSE_CONTRACT_FIXTURE WHEELHOUSE_SKIP_BD=1 bun "$CONTRACT" check unreadable-bead 2>&1)" || RC=$?
@@ -108,8 +131,12 @@ POSTED_ID="$(WHEELHOUSE_INTAKE_ROOT="$FIX/graph" bun "$HERE/intake.ts" post --ki
 case "$POSTED_ID" in sig-????) ;; *) echo 'STOP: intake post did not return an id'; exit 2;; esac
 sed "s/$POSTED_ID/sig-abcd/g" "$FIX/graph/seats/intake.jsonl" > "$FIX/posted.jsonl"
 cp -f "$FIX/posted.jsonl" "$FIX/graph/seats/intake.jsonl"
-CONTRACT="$CONTRACT" HERE="$HERE" FIX="$FIX" node - <<'JS'
-const fs=require('fs'),path=require('path'),cp=require('child_process'),assert=require('assert');
+CONTRACT="$CONTRACT" HERE="$HERE" FIX="$FIX" bun - <<'JS'
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert';
+import * as nativeCP from 'node:child_process';
+const cp={...nativeCP,...await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
 const {CONTRACT,HERE,FIX}=process.env,root=path.join(FIX,'graph'),ledger=path.join(root,'seats/intake.jsonl');
 const valid=fs.readFileSync(path.join(HERE,'fixtures/contracts/valid.md'),'utf8');
 const env={...process.env,WHEELHOUSE_CONTRACT_ROOT:root};delete env.WHEELHOUSE_SKIP_BD;delete env.WHEELHOUSE_CONTRACT_FIXTURE;delete env.WHEELHOUSE_INTAKE_FIXTURE;
@@ -171,5 +198,6 @@ console.log(`Signal/trace checks: ${passed} PASS / ${failed} FAIL`);process.exit
 JS
 SIGNAL_RC=$?
 [ "$SIGNAL_RC" = 0 ] || FAILED=$((FAILED+1))
+outcomes_skill_leg
 if [ "$FAILED" = 0 ]; then echo 'contract.selftest: PASS'; exit 0; fi
 echo "contract.selftest: FAIL ($FAILED failures)"; exit 1

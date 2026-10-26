@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 const [base, seats] = process.argv.slice(2);
 assert(fs.statSync(path.join(base, ".wheelhouse-selftest-fixture")).isFile());
 const fixture = import.meta.dir, preload = path.join(fixture, "cleanup-host-preload.ts"), probe = path.join(fixture, "cleanup-host-probe.ts");
@@ -11,7 +11,7 @@ const marker = ".wheelhouse-cleanup-scratch.json", bead = "host-task", sha = (s:
 const id = (machine: string) => sha(process.platform === "darwin" ? `darwin:${machine === "b" ? "20000000-0000-0000-0000-000000000002" : "10000000-0000-0000-0000-000000000001"}` : `linux:${(machine === "b" ? "2" : "1").repeat(32)}`);
 assert.notEqual(id("a"), id("b"));
 // Pin both files before any controls. Never mutate a queued worktree.
-const originals = Object.fromEntries(["cleanup-identity.ts", "selftest-sweep-lock.ts"].map(n => [n, fs.readFileSync(path.join(seats, n), "utf8")]));
+const originals = Object.fromEntries(["cleanup-identity.ts", "selftest-sweep-lock.ts", "native-command.ts", "completed-command.ts"].map(n => [n, fs.readFileSync(path.join(seats, n), "utf8")]));
 console.log("pinned cleanup sources " + JSON.stringify(Object.fromEntries(Object.entries(originals).map(([n, s]) => [n, sha(s)]))));
 type World = ReturnType<typeof world>;
 function world(name: string, runtime = seats) {

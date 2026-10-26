@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync, execFileSync } from "node:child_process";
+import { spawnSync, execFileSync } from "./fixture-command.cjs";
 import { createHash } from "node:crypto";
 const [template, home] = process.argv.slice(2), base = path.join(path.dirname(template), "shadow-cases");
 assert(fs.statSync(path.join(path.dirname(template), ".wheelhouse-selftest-fixture")).isFile());
@@ -37,7 +37,7 @@ function run(w: World, expected: number, selected?: string, error?: string) {
   delete env.BEADS_ACTOR; delete env.WHEELHOUSE_BEADS_ACTOR_COMMANDER;
   Object.assign(env, w.env);
   const args = [path.join(w.root, "seats/verify.ts"), bead, "fleet/bead-1", "worker-1", ...(w.explicit ? ["mirror"] : []), ...w.args];
-  const r = spawnSync("bun", args, { cwd: w.root, env, encoding: "utf8", timeout: 120000 });
+  const r = spawnSync("bun", args, { cwd: w.root, env, encoding: "utf8" });
   fs.writeFileSync(path.join(w.root, "invocation.json"), JSON.stringify({ args, status: r.status, signal: r.signal, stdout: r.stdout, stderr: r.stderr }, null, 2));
   assert(!r.error, String(r.error)); assert.equal(r.signal, null); assert.equal(r.status, expected, r.stdout + r.stderr);
   if (error) assert((r.stdout + r.stderr).includes(error), r.stdout + r.stderr);

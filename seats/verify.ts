@@ -79,12 +79,14 @@
  */
 
 import * as crypto from "node:crypto";
-import { checkBeadContract, contractRemedy, parseContract, repoDeclarations } from "./contract";
+import { checkBeadContract, contractRemedy, parseContract, repoDeclarations, type Contract } from "./contract";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { resolveRoleBrief } from "./briefs";
+import { spawn } from "node:child_process";
+import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
+import { resolveRoleBrief, scratchPromptLines } from "./briefs";
+import { parseQuarantine, type QuarantineEntry } from "./quarantine";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { heavyTestEntry } from "./heavy-test-entry";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
@@ -429,7 +431,7 @@ function gateInboxId(beadId: string, eventClass: "settle" | "distress", detail: 
     .digest("hex");
 }
 
-export function appendVerifierGateInbox(beadId: string, eventClass: "settle" | "distress", title: string, detail: string, sourceType = "verifier-gate", sourceLog = "seats/verify.ts"): void {
+export function appendVerifierGateInbox(beadId: string, eventClass: "settle" | "distress", title: string, detail: string, sourceType = "verifier-gate", sourceLog = "seats/verify.ts", detailLimit = 1200): void {
   fs.mkdirSync(SEATS_DIR, { recursive: true });
   const row = {
     id: gateInboxId(beadId, eventClass, detail),
@@ -438,7 +440,7 @@ export function appendVerifierGateInbox(beadId: string, eventClass: "settle" | "
     class: eventClass,
     state: eventClass === "distress" ? "failed" : "terminal",
     title,
-    detail: detail.replace(/\s+$/g, "").slice(0, 1200),
+    detail: detail.replace(/\s+$/g, "").slice(0, detailLimit),
     source: { log: sourceLog, offset: 0, type: sourceType },
   };
   fs.appendFileSync(path.join(SEATS_DIR, "inbox.jsonl"), JSON.stringify(row) + "\n");
@@ -759,7 +761,7 @@ function repoArgFromClaim(claim: string): string | undefined {
   return declared;
 }
 
-function resolveRepoRoot(repoArg: string | undefined, claim?: string): string {
+export function resolveRepoRoot(repoArg: string | undefined, claim?: string): string {
   const effectiveRepoArg = repoArg ?? (claim ? repoArgFromClaim(claim) : undefined) ?? defaultRepoArgFromTemplateSource();
   if (!effectiveRepoArg) return ROOT;
   const expanded = expandTilde(effectiveRepoArg);
@@ -958,13 +960,13 @@ function accountLabelSuffix(entry: SeatEntry | undefined): string {
  * is the fallback for a seat that once ran here but left the roster. A seat
  * found in neither is a STOP — distinctness cannot be established against
  * an account nobody can name. */
-function accountDirFor(name: string): string {
+function accountDirFor(name: string, reject: (message: string) => never = die): string {
   const entry = readRoster()[name];
   if (entry) {
     if (entry.external) {
-      die(`seat "${name}" is external — it has no Pi account dir, so account-distinctness cannot be established against it`);
+      reject(`seat "${name}" is external — it has no Pi account dir, so account-distinctness cannot be established against it`);
     }
-    if (!entry.account?.dir) die(`seat "${name}" has no account.dir in seats/seats.json`);
+    if (!entry.account?.dir) reject(`seat "${name}" has no account.dir in seats/seats.json`);
     return entry.account.dir;
   }
   if (fs.existsSync(STATE_FILE)) {
@@ -972,7 +974,29 @@ function accountDirFor(name: string): string {
     const rec = st.seats?.[name];
     if (rec?.accountDir) return rec.accountDir;
   }
-  die(`no seat named "${name}" in seats/seats.json or seats/state.json — cannot establish whose account authored this`);
+  reject(`no seat named "${name}" in seats/seats.json or seats/state.json — cannot establish whose account authored this`);
+}
+
+/** Shared author-account gate; default reviewer behavior and canary anchor stay intact. */
+export function requireDistinctAccount(authorSeat: string, reviewerSeat: string, accountDir: string,
+  reject: (message: string) => never = die, role = "reviewer"): string {
+  return requireDifferentAccountDirs(authorSeat, accountDirFor(authorSeat, reject), reviewerSeat, accountDir, reject, role);
+}
+
+/** Compare a recorded account, not a possibly changed live roster entry. */
+export function requireDifferentAccountDirs(authorSeat: string, authorAccountDir: string, reviewerSeat: string, accountDir: string,
+  reject: (message: string) => never = die, role = "reviewer", authorRole = "author"): string {
+  const authorDir = canonicalDir(authorAccountDir);
+  const reviewerDir = canonicalDir(accountDir);
+  if (authorDir === reviewerDir) { // distinctness-gate
+    reject(
+      `${role} seat "${reviewerSeat}" and ${authorRole} seat "${authorSeat}" resolve to the SAME account directory:\n` +
+        `        ${reviewerDir}\n` +
+        `      Same directory means same auth.json means same account, and a verdict\n` +
+        `      from the author's own account is not a verdict. Nothing was spawned.`
+    );
+  }
+  return reviewerDir;
 }
 
 const PROVIDER_ENV_VARS: Record<string, string> = {
@@ -1024,6 +1048,37 @@ function claudeOauthIsIdentity(configDir: string): boolean {
     return false;
   }
 }
+export interface ReviewRecord {
+  bead: string; branch: string; tip: string; verdict: "APPROVE" | "BOUNCE" | "DISCOVER";
+  push: string; reviewerSeat: string; reviewerDir: string; at: string;
+}
+
+/** Only the completed dispatcher header is a verdict. Output/sweep prose is not. */
+export function readReviewRecord(root: string, beadId: string): ReviewRecord | null {
+  if (!beadId || beadId === "." || beadId === ".." || /[\\/\s'"`]/.test(beadId)) return null;
+  const file = path.join(root, "seats", "verdicts", `${beadId}.md`);
+  let text: string;
+  try { if (!fs.lstatSync(file).isFile()) return null; text = fs.readFileSync(file, "utf8"); } catch { return null; }
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines[0] !== `# Verdict — bead ${beadId}`) return null;
+  const fields = new Map<string, string>();
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue;
+    const m = /^- ([a-z-]+): (.*)$/.exec(line);
+    if (!m) break;
+    const key = m[1] === "verifier-seat" ? "reviewer-seat" : m[1];
+    if (fields.has(key)) return null;
+    fields.set(key, m[2]);
+  }
+  const tip = fields.get("tip"), shown = fields.get("verdict"), seatLine = fields.get("reviewer-seat");
+  const verdict = shown?.split(/\s+/)[0];
+  const seat = seatLine && /^(\S+) \((.+)\)$/.exec(seatLine);
+  if (!tip || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(tip) || !["APPROVE", "BOUNCE", "DISCOVER"].includes(verdict ?? "") || !seat) return null;
+  if (fields.get("bead") !== beadId || !fields.get("branch") || !fields.get("push") || !fields.get("at") || !Number.isFinite(Date.parse(fields.get("at")!))) return null;
+  return { bead: beadId, branch: fields.get("branch")!, tip, verdict: verdict as ReviewRecord["verdict"], push: fields.get("push")!,
+    reviewerSeat: seat[1], reviewerDir: seat[2], at: fields.get("at")! };
+}
+
 function authRouteIdentity(name: string, entry: SeatEntry, authFile: string, harness: HarnessName, accountDir: string): boolean {
   const route = entry.account?.authRoute;
   if (route === "env") {
@@ -1243,6 +1298,57 @@ function tierGit(root: string, ...args: string[]): Buffer {
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete env[key];
   return execFileSync("git", ["--no-replace-objects", "-C", root, ...args], { env, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 });
 }
+interface ManualReviewContext {
+  base: string;
+  baseRef: string;
+  files: string[];
+  outcomes: { id: string; surface: string }[];
+}
+function manualReviewContext(root: string, tip: string, contract: Contract): ManualReviewContext {
+  const resolve = (ref: string): string | null => {
+    try { return tierGit(root, "rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`).toString().trim() || null; }
+    catch { return null; }
+  };
+  // Dispatch's available integration/install-base ordering, using the contract
+  // already read by the gate rather than another bd read or rendered claim.
+  const candidates: string[] = [], integration = contract.integration.match(/^[^\s`'"]+/)?.[0];
+  if (integration) {
+    if (!integration.includes("/") || !resolve(integration)) candidates.push(`origin/${integration}`);
+    candidates.push(integration);
+  }
+  if (process.env.WHEELHOUSE_WORKTREE_BASE) candidates.push(process.env.WHEELHOUSE_WORKTREE_BASE);
+  let recorded = "";
+  try { recorded = fs.readFileSync(path.join(ROOT, "wheelhouse/.template-source"), "utf8").match(/^merge-target=(\S+)/m)?.[1] ?? ""; } catch {}
+  if (recorded) { if (!recorded.includes("/")) candidates.push(`origin/${recorded}`); candidates.push(recorded); }
+  try { candidates.push(tierGit(root, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD").toString().trim()); } catch {}
+  candidates.push("origin/main", "origin/master", "main", "master");
+  const baseRef = candidates.find(ref => ref && resolve(ref));
+  if (!baseRef) throw new Error("cannot establish a comparison base for manual scope");
+  const base = tierGit(root, "merge-base", resolve(baseRef)!, tip).toString().trim();
+  // A trailing-slash wildcard alone does not select descendants. Explicit glob
+  // + NUL records includes deleted paths and both sides of an in-tree rename.
+  const files = tierGit(root, "diff", "--name-only", "--no-renames", "-z", base, tip, "--", ":(glob).agents/skills/verify-*/**")
+    .toString().split("\0").filter(Boolean).sort();
+  const featureSurface = /(?:^|[\/\s`"'(])features\/[^\s`"')]+/;
+  const skillSurface = /(?:^|[\/\s`"'(])verify-[^/\s`"'()]+\/SKILL\.md(?=$|[\s`"'),;])/;
+  const outcomes = contract.outcomes.filter(o => featureSurface.test(o.surface) || skillSurface.test(o.surface))
+    .map(({ id, surface }) => ({ id, surface }));
+  return { base, baseRef, files, outcomes };
+}
+function manualScopeLists(context: ManualReviewContext): string[] {
+  if (!context.files.length) return [];
+  return [
+    `Manual files changed by this branch: ${JSON.stringify(context.files)}.`,
+    `Contract outcomes that call for manual or map changes: ${context.outcomes.length ? JSON.stringify(context.outcomes) : "none"}.`,
+  ];
+}
+function manualScopePrompt(context: ManualReviewContext): string[] {
+  if (!context.files.length) return [];
+  return ["", ...manualScopeLists(context),
+    `Manual comparison base: ${context.base} (${JSON.stringify(context.baseRef)}).`,
+    `A changed file no outcome calls for is a scope defect; see REVIEWER.md "The manual is not the author's to bend". These lists are context, not permission: judge the file/feature relationship against the contract and inspect the base-to-tip changed lines.`,
+  ];
+}
 function tierInventory(root: string, tip: string): string[] {
   return tierGit(root, "ls-tree", "-r", "-z", "--name-only", tip, "--", "seats").toString().split("\0")
     .filter(name => /^seats\/[^/]+\.selftest\.sh$/.test(name)).map(name => path.basename(name));
@@ -1264,7 +1370,7 @@ export function chooseSweepTier(root: string, tip: string, claim: string, instal
   const manifest = parseCoreManifest(tierGit(root, "show", `${tip}:seats/selftest-core.list`), knownSuites), core = new Set(manifest.suites);
   const names = knownSuites
     .map(name => name.replace(/\.selftest\.sh$/, "")).sort((a, b) => b.length - a.length || a.localeCompare(b));
-  const harness = new Set(["selftest-sweep.sh", "selftest-lib.sh", "selftest-sweep-lock.ts", "selftest-herald.sh", "python-invocations.ts", "selftest-core.list", "adapter.ts", "seat-worktree.ts", "verify.ts"].map(name => `seats/${name}`));
+  const harness = new Set(["selftest-sweep.sh", "selftest-lib.sh", "selftest-sweep-lock.ts", "selftest-herald.sh", "python-invocations.ts", "selftest-core.list", "selftest-quarantine.list", "quarantine.ts", "adapter.ts", "seat-worktree.ts", "verify.ts", "heavy-test.sh", "heavy-test-entry.ts"].map(name => `seats/${name}`));
   // Nightly's runner and brake are test-harness code, not ordinary daemon UI.
   harness.add("seats/nightly-sweep.ts");
   harness.add("seats/nightly-state.ts");
@@ -1284,8 +1390,21 @@ export function chooseSweepTier(root: string, tip: string, claim: string, instal
   if (claimRequiresSweepCitation(claim)) return { tier: "full", reason: "Done line", manifest };
   return { tier: "core", reason: "default", manifest };
 }
-interface SuiteTiming { suite: string; seconds: number }
-interface SweepTimings { tier: SweepTier; manifest?: string; tierLine: string; footer: string; totalSeconds: number; suites: SuiteTiming[]; slowest: SuiteTiming[] }
+interface SuiteTiming { suite: string; seconds: number; quarantined?: boolean }
+interface QuarantineResult extends QuarantineEntry { result: "PASS" | "FAIL" }
+interface SweepTimings { tier: SweepTier; manifest?: string; tierLine: string; footer: string; totalSeconds: number; suites: SuiteTiming[]; slowest: SuiteTiming[]; quarantine: QuarantineResult[] }
+function quarantineAt(root: string, tip: string): QuarantineEntry[] {
+  if (!tierGit(root, "ls-tree", "--name-only", tip, "--", "seats/selftest-quarantine.list").length) return [];
+  return parseQuarantine(tierGit(root, "show", `${tip}:seats/selftest-quarantine.list`).toString(), tierInventory(root, tip));
+}
+function assertSweepQuarantine(timings: SweepTimings, entries: QuarantineEntry[]): void {
+  const selected = entries.filter(e=>timings.suites.some(s=>s.suite===e.suite)).sort((a,b)=>a.suite.localeCompare(b.suite));
+  const actual = [...timings.quarantine].sort((a,b)=>a.suite.localeCompare(b.suite));
+  if (actual.length !== selected.length || selected.some((e,i)=>e.suite!==actual[i].suite || e.owner!==actual[i].owner || e.deadline!==actual[i].deadline)) throw new Error("dispatcher quarantine policy/summary mismatch");
+}
+function quarantineLines(sweep: SweepResult): string[] {
+  return ["- quarantined failures:", ...(sweep.timings?.quarantine.filter(q=>q.result==="FAIL").map(q=>`  - ${q.suite} owner=${q.owner} until=${q.deadline}`) ?? [])];
+}
 interface SweepResult { required: boolean; rc: number | null; logPath: string | null; elapsedMs: number; tip: string; choice?: SweepChoice; requiredChoice?: SweepChoice; timings?: SweepTimings; error?: string; batch?: { tip: string; main: string; sha256: string } }
 function assertSweepChoice(timings: SweepTimings, choice: SweepChoice): void {
   if (timings.tier !== choice.tier) throw new Error(`dispatcher tier mismatch: chose ${choice.tier} (${choice.reason}), log records ${timings.tier}`);
@@ -1313,30 +1432,47 @@ export function readSweepTimings(text: string): SweepTimings {
   if (!first) invalid("inventory/summary mismatch");
   const prefix = first![1], suites: SuiteTiming[] = [], seen = new Set<string>();
   let pending: string | undefined, failures = 0;
+  const quarantined = new Set<string>();
   for (const line of body.split("\n")) {
     if (line.startsWith(`selftest-sweep: START ${prefix}`)) {
       const name = line.slice(`selftest-sweep: START ${prefix}`.length);
       if (pending || !/^[^/\n]+\.selftest\.sh$/.test(name) || seen.has(name)) invalid("duplicate or unordered outer suite records");
       pending = name;
-    } else if (["PASS", "FAIL"].some(kind => line.startsWith(`selftest-sweep: ${kind} ${prefix}`))) {
+    } else if (["PASS", "FAIL", "QUARANTINED-FAIL"].some(kind => line.startsWith(`selftest-sweep: ${kind} ${prefix}`))) {
       const pass = `selftest-sweep: PASS ${prefix}${pending} elapsed=`;
       const fail = `selftest-sweep: FAIL ${prefix}${pending} `;
+      const quarantineFail = `selftest-sweep: QUARANTINED-FAIL ${prefix}${pending} `;
       let seconds: string | undefined;
-      if (pending && line.startsWith(pass)) seconds = /^(0|[1-9][0-9]*)s$/.exec(line.slice(pass.length))?.[1];
+      if (pending && line.startsWith(quarantineFail)) {
+        const result = /^rc=([1-9][0-9]*) elapsed=(0|[1-9][0-9]*)s$/.exec(line.slice(quarantineFail.length));
+        seconds = result?.[2]; if (result) quarantined.add(pending);
+      }
+      else if (pending && line.startsWith(pass)) seconds = /^(0|[1-9][0-9]*)s$/.exec(line.slice(pass.length))?.[1];
       else if (pending && line.startsWith(fail)) {
         seconds = /^(?:rc=[0-9]+|timed out after [1-9][0-9]*s \(TERM then KILL after [1-9][0-9]*s grace; rc=[0-9]+\)) elapsed=(0|[1-9][0-9]*)s$/.exec(line.slice(fail.length))?.[1];
         failures++;
       }
       if (seconds === undefined) invalid("missing, malformed or failed outer suite records");
-      suites.push({ suite: pending!, seconds: whole(seconds!) }); seen.add(pending!); pending = undefined;
+      suites.push({ suite: pending!, seconds: whole(seconds!), ...(quarantined.has(pending!) ? {quarantined:true} : {}) }); seen.add(pending!); pending = undefined;
     }
   }
   if (pending || suites.length !== count) invalid("missing or filtered outer suite records");
   if (failures !== (footer![3] ? whole(footer![3]) : 0)) invalid("failed outer suite records disagree with footer");
   const sum = suites.reduce((n, s) => n + s.seconds, 0);
   if (!Number.isSafeInteger(sum) || totalSeconds < sum) invalid("total seconds below per-suite sum");
+  const tail = body.trimEnd().split("\n"); const summaries: string[] = [];
+  while (tail.at(-1)?.startsWith("selftest-sweep: quarantine: ")) summaries.unshift(tail.pop()!);
+  const quarantine: QuarantineResult[] = [];
+  if (summaries.includes("selftest-sweep: quarantine: none")) {
+    if (summaries.length !== 1) invalid("mixed empty quarantine summary");
+  } else for (const row of summaries) {
+    const q = /^selftest-sweep: quarantine: ([A-Za-z0-9][A-Za-z0-9._-]*\.selftest\.sh) owner=([A-Za-z0-9][A-Za-z0-9._-]*) until=(\d{4}-\d{2}-\d{2}) result=(PASS|FAIL)$/.exec(row);
+    if (!q || quarantine.some(e=>e.suite===q[1]) || !seen.has(q[1]) || (q[4]==="FAIL") !== quarantined.has(q[1])) invalid("invalid quarantine summary/result");
+    quarantine.push({suite:q![1],owner:q![2],deadline:q![3],result:q![4] as "PASS"|"FAIL"});
+  }
+  if ([...quarantined].some(name=>!quarantine.some(q=>q.suite===name))) invalid("quarantined failure missing summary");
   const slowest = [...suites].sort((a, b) => b.seconds - a.seconds || a.suite.localeCompare(b.suite)).slice(0, 5);
-  return { tier: tier![4] ? "core" : "full", manifest: tier![4], tierLine: tier![0], footer: footer![0], totalSeconds, suites, slowest };
+  return { tier: tier![4] ? "core" : "full", manifest: tier![4], tierLine: tier![0], footer: footer![0], totalSeconds, suites, slowest, quarantine };
 }
 
 function sweepTimingLines(sweep: SweepResult): string[] {
@@ -1347,6 +1483,7 @@ function sweepTimingLines(sweep: SweepResult): string[] {
     `- totalSeconds: ${sweep.timings.totalSeconds}`,
     `- slowest suites (whole seconds, descending):`,
     ...sweep.timings.slowest.map(s => `  - ${s.suite}: ${s.seconds}s`),
+    ...quarantineLines(sweep),
   ];
 }
 
@@ -1401,7 +1538,7 @@ export function readBatchSweep(repoRoot: string, reviewedTip: string, logArg: st
   catch (e: any) { return refuse(e.message); }
   if (expected!.length === 0 || timings.suites.length !== expected!.length || timings.suites.some(s => !expected!.includes(s.suite))) refuse("full-suite inventory/summary mismatch");
   const choice: SweepChoice = { tier: header![3] as SweepTier, reason: header![4], manifest: batchManifest };
-  try { assertSweepChoice(timings, choice); } catch (e: any) { refuse(e.message); }
+  try { assertSweepChoice(timings, choice); assertSweepQuarantine(timings, quarantineAt(repoRoot, batchTip)); } catch (e: any) { refuse(e.message); }
   if (requiredChoice.tier === "full" && choice.tier !== "full") refuse(`full tier required by ${requiredChoice.reason}; a core batch cannot cover this candidate`);
   return { required: true, rc: 0, logPath: logPath!, elapsedMs, tip: reviewedTip, choice, requiredChoice, timings, batch: { tip: batchTip, main: main!, sha256: sha256! } };
 }
@@ -1471,7 +1608,19 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
     const graphDir = path.join(graphRoot, ".beads");
     const init = spawnSync(realBd, ["init", "--non-interactive", "--skip-agents", "-p", "verify-sweep"], { cwd: graphRoot, encoding: "utf8", env: { ...env, PWD: graphRoot, BEADS_DIR: graphDir } });
     if (init.status !== 0) throw new Error(`scratch bd init failed: ${init.stderr || init.stdout}`);
-    fs.symlinkSync(graphDir, path.join(scratchCwd, ".beads"), "dir");
+    const sweepBeads = path.join(scratchCwd, ".beads");
+    let existingBeads: fs.Stats | undefined;
+    try { existingBeads = fs.lstatSync(sweepBeads); }
+    catch (e: any) { if (e.code !== "ENOENT") throw e; }
+    if (!existingBeads) fs.symlinkSync(graphDir, sweepBeads, "dir");
+    else {
+      // Umbrella trees may track .beads/config.yaml, hooks, etc. Keep those
+      // bytes in place: bd's native redirect is local to this workspace, unlike
+      // an inherited BEADS_DIR that would hijack suites' own fixture graphs.
+      // Never follow a reviewed symlink or overwrite an existing redirect.
+      if (!existingBeads.isDirectory()) throw new Error("reviewed .beads is not a directory; cannot expose the isolated sweep graph safely");
+      fs.writeFileSync(path.join(sweepBeads, "redirect"), graphDir + "\n", { flag: "wx", mode: 0o600 });
+    }
     const located = spawnSync(realBd, ["where", "--json"], { cwd: scratchCwd, encoding: "utf8", env });
     if (located.status !== 0 || fs.realpathSync(JSON.parse(located.stdout).path) !== fs.realpathSync(graphDir)) {
       throw new Error("sweep bd did not resolve its owned scratch graph");
@@ -1522,7 +1671,7 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
   } catch (e: any) { rc = 1; error = e.message; }
   let timings: SweepTimings | undefined;
   if (!error && (rc === 0 || rc === 1)) {
-    try { timings = readSweepTimings(fs.readFileSync(logPath, "utf8")); assertSweepChoice(timings, choice); }
+    try { timings = readSweepTimings(fs.readFileSync(logPath, "utf8")); assertSweepChoice(timings, choice); assertSweepQuarantine(timings, quarantineAt(repoRoot, tip)); }
     catch (e: any) { error = e.message; rc = 1; }
   }
   const elapsedMs = Date.now() - started;
@@ -1542,6 +1691,7 @@ function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[
     `- tier: ${sweep.choice?.tier ?? "unknown"}; reason: ${sweep.choice?.reason ?? "missing"}`,
     ...(sweep.requiredChoice ? [`- candidate required tier: ${sweep.requiredChoice.tier}; reason: ${sweep.requiredChoice.reason}`] : []),
     `- rc: ${sweep.rc}`,
+    `a quarantined failure does not block APPROVE; read it and BOUNCE if it looks caused by this change`,
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
     ...sweepTimingLines(sweep),
@@ -1678,11 +1828,12 @@ async function main(): Promise<void> {
   if (promotionArg) validateSegment("promotion comment id", promotionArg);
   const contract = checkBeadContract(ROOT, beadId);
   refuseUncontractedReview(beadId, contract.errors); // contract-gate: before reviewer identity or harness spawn
+  const parsedWorkContract = parseContract(contract.text ?? "");
   const claim = [
     beadClaim(beadId),
     ``,
     `Parsed work contract (validated before reviewer spawn):`,
-    JSON.stringify(parseContract(contract.text ?? ""), null, 2),
+    JSON.stringify(parsedWorkContract, null, 2),
   ].join("\n");
   const repoRoot = resolveRepoRoot(repoArg, claim);
   if (path.resolve(repoRoot) !== path.resolve(earlyRepoRoot)) sweepStaleScratchWorktrees(repoRoot);
@@ -1706,16 +1857,7 @@ async function main(): Promise<void> {
   if (!entry.account?.dir) die(`reviewer seat "${reviewerSeat}" has no account.dir in seats/seats.json`);
 
   // --- account distinctness, before anything is spawned ---------------------
-  const authorDir = canonicalDir(accountDirFor(authorSeat));
-  const reviewerDir = canonicalDir(entry.account.dir);
-  if (authorDir === reviewerDir) { // distinctness-gate
-    die(
-      `reviewer seat "${reviewerSeat}" and author seat "${authorSeat}" resolve to the SAME account directory:\n` +
-        `        ${reviewerDir}\n` +
-        `      Same directory means same auth.json means same account, and a verdict\n` +
-        `      from the author's own account is not a verdict. Nothing was spawned.`
-    );
-  }
+  const reviewerDir = requireDistinctAccount(authorSeat, reviewerSeat, entry.account.dir);
 
   if (!fs.existsSync(reviewerDir)) {
     die(
@@ -1752,6 +1894,7 @@ async function main(): Promise<void> {
   }
 
   const promotion = promotionArg ? readFallbackPromotion(beadId, reviewerSeat, tip, promotionArg) : undefined;
+  const manualScope = manualReviewContext(repoRoot, tip, parsedWorkContract);
 
   // --- evidence floor checks, against the SHA the verdict is about ----------
   const evidence = checkEvidence(repoRoot, tip, evidencePaths);
@@ -1803,10 +1946,12 @@ async function main(): Promise<void> {
     `Branch under review: ${branch}`,
     `Branch repository: ${repoRoot}`,
     `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT)`,
+    ...scratchPromptLines(ROOT, beadId),
     `Tip SHA at dispatch: ${tip}`,
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
     claim,
+    ...manualScopePrompt(manualScope),
     ...(promotion ? [
       `Referenced per-outage promotion: bead ${beadId}, comment ${promotion.commentId}, recorded actor ${promotion.author}, reviewer ${reviewerSeat}, tip ${tip}.`,
       `This is a FALLBACK GATE, not a SHADOW verdict. The full REVIEWER.md contract and all ordinary evidence/account/sweep gates still apply.`,
@@ -2011,7 +2156,9 @@ async function main(): Promise<void> {
         if (sweep.rc !== 0 || sweep.error) refuse(`INCOMPLETE review: APPROVE with failed full sweep rc=${sweep.rc}; log=${sweep.logPath}${sweep.error ? `; ${sweep.error}` : ""}`, false);
         try {
           if (!sweep.choice) throw new Error("missing dispatcher tier choice");
-          assertSweepChoice(readSweepTimings(fs.readFileSync(sweep.logPath!, "utf8")), sweep.choice);
+          const retainedTimings = readSweepTimings(fs.readFileSync(sweep.logPath!, "utf8"));
+          assertSweepChoice(retainedTimings, sweep.choice);
+          assertSweepQuarantine(retainedTimings, quarantineAt(repoRoot, sweep.batch?.tip ?? tip));
         } catch (error: any) { refuse(`INCOMPLETE review: ${error.message}`, false); }
       }
       if (sweep.logPath && requireSweepCitation) {
@@ -2029,6 +2176,8 @@ async function main(): Promise<void> {
         `- branch: ${branch}`,
         `- branch-repo: ${repoRoot}`,
         `- tip: ${tip}`,
+        ...manualScopeLists(manualScope).map(line => `- ${line}`),
+        ...(manualScope.files.length ? [`- manual-diff-base: ${manualScope.base} (${JSON.stringify(manualScope.baseRef)})`] : []),
         `- author-seat: ${authorSeat}`,
         `- verifier-seat: ${reviewerSeat} (${reviewerDir})`,
         ...(promotion ? [

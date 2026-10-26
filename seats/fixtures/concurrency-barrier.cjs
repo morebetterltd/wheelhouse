@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
 const crypto = require('node:crypto');
+const {waitForCondition} = require('./wait-for-condition.cjs');
 const [project, barrier] = process.argv.slice(2).map(p => fs.realpathSync(p));
 let fixture = project;
 while (!fs.existsSync(path.join(fixture, '.wheelhouse-selftest-fixture'))) {
@@ -82,28 +83,12 @@ function check() {
     finish(ok, ok ? 'both held turns observed' : 'missing turn start', logs);
   } catch (error) { finish(false, String(error), logs); }
 }
-function armNative(target) {
-  if (finished) return;
-  const watcher = fs.watch(target, check);
-  disposers.push(() => watcher.close());
-  check();
-}
-function armReconciliation(target) {
-  if (finished) return;
-  // This is a scheduling interval, NOT a deadline or a failure threshold.
-  // An idle/live peer may wait indefinitely; only check()'s file/native state
-  // can finish it. Native file notifications are advisory and can be lost.
-  fs.watchFile(target, { interval: 20 }, check);
-  disposers.push(() => fs.unwatchFile(target, check));
-  check();
-}
 try {
-  for (const seat of seats) {
-    armNative(seat.log);
-    armReconciliation(seat.log);
-    armNative(seat.accountDir);
-    armReconciliation(path.join(seat.accountDir, `stub-launch.${seat.pid}.json`));
-  }
+  const observed = waitForCondition({site:'concurrency-barrier.observation',interval:20,
+    paths:seats.flatMap(seat=>[seat.log,seat.accountDir]),
+    predicate:()=>{check();return finished;}});
+  disposers.push(observed.cancel);
+  observed.promise.catch(error=>finish(false,String(error),[]));
   for (const seat of seats) {
     if (finished) break;
     const fd = fs.openSync(seat.fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);

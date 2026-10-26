@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { hasPool, loadPool, seatEntryFor, staffedSeatName, type Pool } from "./pool";
 import { staffingPath, type StaffingFile } from "./roster";
 import { fleetSnapshot, freeWorkers, freeReviewers, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
@@ -14,6 +14,7 @@ const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
 const LOG_FILE = path.join(ROOT, "seats", "logs", "staffing.log");
 const LOCK_FILE = path.join(RUN_DIR, "staffing.lock");
+const STAFFING_STOP_OBSERVE_LIMIT_MS = Number(process.env.WHEELHOUSE_STAFFING_STOP_MS ?? 30000);
 type Role = "workers" | "reviewers";
 type DecisionKind = "add-worker" | "add-reviewer" | "drop-seat" | "nothing";
 export interface Decision { kind: DecisionKind; role?: Role; seat?: string; entry?: string; reason: string; decider: string }
@@ -115,6 +116,8 @@ function invalidSeatDecision(d: Decision): Decision | null {
 function applyAdd(root: string, pool: Pool, staffing: StaffingFile, d: Decision): Decision {
   const invalid = invalidSeatDecision(d); if (invalid) return invalid;
   if (!d.role || !d.seat || !d.entry) return d;
+  const existing = readJson(statePath(root))?.seats?.[d.seat];
+  if (existing?.pid) pidAlive(existing.pid, existing.fifo, existing.startedAt);
   registerSeat(root, staffing, d.role, d.seat, d.entry);
   if (d.role === "reviewers") return d;
   const r = runAdapter(["spawn", d.seat]);
@@ -154,13 +157,17 @@ function applyDrop(root: string, staffing: StaffingFile, d: Decision, snap: Snap
   if (!d.seat) return d;
   const live = [...snap.workers.live, ...snap.reviewers.live].find((s) => s.name === d.seat);
   if (live?.busy) return { ...d, kind: "nothing", reason: `drop refused: ${d.seat} is busy` };
+  // Snapshot reporting must not abort for uncertainty, but lifecycle must
+  // still recheck this exact record before freeing even a reviewer entry.
+  const before = readJson(statePath(root))?.seats?.[d.seat];
+  if (before?.pid) pidAlive(before.pid, before.fifo, before.startedAt);
   if (d.role === "reviewers") { unregisterSeat(root, staffing, d.seat); return d; }
   try { stateRunFile(root, d.seat); } catch (e: any) { return { ...d, kind: "nothing", reason: `drop refused: ${e.message}` }; }
   const r = runAdapter(["stop", d.seat]);
-  const deadline = Date.now() + Number(process.env.WHEELHOUSE_STAFFING_STOP_MS ?? 30000);
-  while (Date.now() < deadline) { const rec = readJson(statePath(root))?.seats?.[d.seat]; if (!rec?.pid || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) break; sleep(50); }
+  const deadline = performance.now() + STAFFING_STOP_OBSERVE_LIMIT_MS;
+  while (performance.now() < deadline) { const rec = readJson(statePath(root))?.seats?.[d.seat]; if (!rec?.pid || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) break; sleep(50); }
   const rec = readJson(statePath(root))?.seats?.[d.seat];
-  if (rec?.pid && pidAlive(rec.pid, rec.fifo, rec.startedAt)) return { ...d, kind: "nothing", reason: `drop deferred: ${d.seat} still exiting` };
+  if (rec?.pid && pidAlive(rec.pid, rec.fifo, rec.startedAt)) return { ...d, kind: "nothing", reason: `drop deferred: ${d.seat} still exiting; last observation=${JSON.stringify({pid:rec.pid,startedAt:rec.startedAt,stoppedAt:rec.stoppedAt??null})}; registration retained` };
   try { removeSeatWorktree(root, d.seat); removeState(root, d.seat); } catch (e: any) { return { ...d, kind: "nothing", reason: `drop refused: ${e.message}` }; }
   unregisterSeat(root, staffing, d.seat);
   return r.status === 0 ? d : { ...d, reason: `dropped after stop report: ${r.text || r.status}` };

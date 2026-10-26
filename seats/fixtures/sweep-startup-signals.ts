@@ -1,9 +1,10 @@
 // Pause the real runner at startup publication boundaries; no scheduling sleep
-// decides a verdict. Deadlines only fail containment. All runners/locks are private.
+// decides a verdict. The containing sweep owns containment. All runners/locks are private.
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import { createHash } from "node:crypto";
 
 const [here, root] = process.argv.slice(2);
@@ -42,9 +43,8 @@ function same(a: Identity | null, b: Identity): boolean {
   return !!a && a.pid === b.pid && a.group === b.group && a.born === b.born;
 }
 async function until(test: () => boolean, label: string): Promise<void> {
-  const limit = Date.now() + 30_000;
+  console.error(`FIXTURE_WAIT startup signals: ${label}`);
   while (!test()) {
-    if (Date.now() >= limit) throw new Error(`startup fixture containment deadline: ${label}`);
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
@@ -91,7 +91,7 @@ function instrument(removed: boolean): string {
   ps -p "$START_WATCH_PID" -o pid=,pgid=,lstart= >> "$START_IDENTITIES"
   startup_fixture_point watchdog-forked
   WATCHDOG_PID=$START_WATCH_PID`);
-  replace('  local root="$1" dir="$2" message=""\n', '  local root="$1" dir="$2" message=""\n  printf "read\\n" >> "$START_READS"\n');
+  replace('  trap \'\' INT TERM HUP\n  local root="$1" dir="$2" message=""\n', '  trap \'\' INT TERM HUP\n  local root="$1" dir="$2" message=""\n  printf "read\\n" >> "$START_READS"\n');
   replace('  if [ "$mode" = stop ]; then printf \'stop\\n\' >&9; fi', '  if [ "$mode" = stop ]; then printf "stop\\n" >> "$START_STOPS"; printf \'stop\\n\' >&9; fi');
   replace('interrupt_sweep(){\n  local rc="$1"\n', 'interrupt_sweep(){\n  local rc="$1"\n  printf "%s\\n" "$rc" >> "$START_SIGNALS"\n');
   return s;

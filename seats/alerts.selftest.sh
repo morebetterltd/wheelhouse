@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 set -uo pipefail
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
@@ -62,6 +63,19 @@ case "${GH_UNTRIAGED:-0}" in
 esac
 SH
 chmod +x "$BIN/gh"
+# Defense in depth only: generic alerts/clock/canary children have no Docker
+# opt-in and must not execute even this stub. Pressure cases opt in locally.
+# This is a recorded fixture, never a daemon or prune delegation.
+export WHEELHOUSE_ALERTS_DOCKER_CAPTURE="$HERE/fixtures/docker-system-df.jsonl"
+cat > "$BIN/docker" <<'JS'
+#!/usr/bin/env bun
+const fs=require('fs'),args=process.argv.slice(2);
+if(JSON.stringify(args)!==JSON.stringify(['system','df','--format','{{json .}}'])){console.error('forbidden fixture docker call');process.exit(91);}
+const capture=fs.readFileSync(process.env.WHEELHOUSE_ALERTS_DOCKER_CAPTURE,'utf8');
+if(process.env.WHEELHOUSE_DOCKER_PRESSURE_EVIDENCE)fs.writeFileSync(process.env.WHEELHOUSE_DOCKER_PRESSURE_EVIDENCE+'/docker-default-'+process.pid+'.json',JSON.stringify({pid:process.pid,ppid:process.ppid,args,capture}));
+process.stdout.write(capture);
+JS
+chmod +x "$BIN/docker"
 run_alert(){ OUT="$(cd "$ROOT" && env HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" "$@" 2>&1)"; RC=$?;
   if [ "$RC" = 0 ] && [ -f "$ROOT/seats/inbox.jsonl" ]; then
     node --input-type=module - "$ROOT" <<'JS' || fail 'every herald alert row must name its condition and retain concrete detail'
@@ -132,12 +146,36 @@ drift_set_cases(){
     [ "$FAILED" = 0 ] && pass 'changed drift set starts a fresh hold and re-raises exactly once; returning old set gets a new hold'
   fi
 }
+phase 'Docker fixture isolation and bounded optional observation'
+if bun "$HERE/fixtures/alerts-docker-isolation.ts" "$ROOT/seats/alerts.ts" "$FIX/docker-isolation"; then
+  pass 'alerts fixtures never resolve host Docker; expired/oversize observations stay unknown'
+else fail 'Docker isolation fixture failed'; fi
+
+phase 'Docker cache pressure — recorded JSONL, synthetic variations, no real daemon'
+if bun "$HERE/fixtures/docker-cache-pressure.ts" "$ROOT/seats/alerts.ts" "$FIX/docker-cases"; then
+  pass 'Docker cache-pressure and unavailable-Docker consumer cases pass'
+else fail 'Docker cache-pressure fixture failed'; fi
+
+phase 'numeric alert settings'
+if bun "$HERE/fixtures/alert-values.ts" "$HERE" "$FIX/alert-values" "$ROOT/seats/alerts.ts"; then
+  pass 'missing/blank numeric defaults, explicit values and finite validation; actual reader removals rejected'
+else
+  fail 'numeric alert setting consumer cases failed'
+fi
+
 phase 'drift file-set design'
 case "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" in all|same|changed) ;; *) echo 'invalid drift test case' >&2; exit 2;; esac
 drift_set_cases
 if [ "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" != all ]; then
   [ "$FAILED" = 0 ] && { echo 'drift-set selftest: PASS'; exit 0; }
   echo "drift-set selftest: FAIL ($FAILED failure(s))" >&2; exit 1
+fi
+
+phase 'drift continuity across unknown observations'
+if bun "$HERE/fixtures/drift-continuity.ts" "$HERE" "$FIX/drift-continuity" "$ROOT/seats/alerts.ts"; then
+  pass 'unchanged active/pending drift survives failures; real changes and clears re-arm; removals rejected'
+else
+  fail 'drift continuity consumer sequences failed'
 fi
 
 phase 'empty drift set'
@@ -159,6 +197,42 @@ clear_runtime; WHEELHOUSE_ALERT_INTERVAL_MS= run_alert bun seats/alerts.ts check
 [ $RC -eq 0 ] && [ "$empty_interval" = 60000 ] && pass 'empty WHEELHOUSE_ALERT_INTERVAL_MS records default interval' || fail "empty interval rc=$RC interval=$empty_interval out=$OUT"
 clear_runtime; WHEELHOUSE_ALERT_INTERVAL_MS=0 run_alert bun seats/alerts.ts check --json; zero_interval="$(node -e 'console.log(require(process.argv[1]).intervalMs)' "$ROOT/seats/run/fleet-snapshot.json")"
 [ $RC -eq 0 ] && [ "$zero_interval" = 0 ] && pass 'explicit zero WHEELHOUSE_ALERT_INTERVAL_MS is honoured in snapshot' || fail "zero interval rc=$RC interval=$zero_interval out=$OUT"
+
+phase 'quarantine count transitions'
+clear_runtime
+for name in quarantine-a quarantine-b quarantine-c; do printf 'exit 0\n' > "$ROOT/seats/$name.selftest.sh"; done
+printf 'quarantine-a.selftest.sh owner-a 2099-12-31\nquarantine-b.selftest.sh owner-b 2099-12-31\n' > "$ROOT/seats/selftest-quarantine.list"
+run_alert bun seats/alerts.ts check --json
+if [ "$RC" = 0 ] && node - "$ROOT" <<'JS'
+const fs=require('fs'),a=require('assert/strict'),r=process.argv[2],s=JSON.parse(fs.readFileSync(r+'/seats/run/fleet-snapshot.json','utf8')),rows=fs.readFileSync(r+'/seats/inbox.jsonl','utf8').trim().split('\n').map(JSON.parse);a.deepEqual(s.quarantined,{count:2,names:['quarantine-a.selftest.sh','quarantine-b.selftest.sh']});a.equal(rows.length,1);a.equal(rows[0].source.name,'quarantine');a(rows[0].detail.includes('count=2'));
+JS
+then pass 'real snapshot names/count and one herald row at first nonzero quarantine'; else fail "quarantine snapshot transition: $OUT"; fi
+run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 1 ] && pass 'unchanged quarantine poll is quiet' || fail 'duplicate quarantine row'
+printf 'quarantine-a.selftest.sh owner-a 2099-12-31\n' > "$ROOT/seats/selftest-quarantine.list"
+run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 2 ] && pass 'quarantine shrink emits one row' || fail 'quarantine shrink row missing'
+printf '# cleared\n' > "$ROOT/seats/selftest-quarantine.list"
+run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 3 ] && pass 'quarantine clear emits one row' || fail 'quarantine clear row missing'
+cp -f "$ROOT/seats/alerts.ts" "$FIX/quarantine-alerts-source.ts"
+bun - "$ROOT/seats/alerts.ts" <<'JS'
+import fs from 'node:fs';const f=process.argv[2],s=fs.readFileSync(f,'utf8'),a='if(quarantined.count!==(prior?.quarantined?.count??0))';if(s.split(a).length!==2)throw Error('quarantine count guard changed');fs.writeFileSync(f,s.replace(a,'if(false)'));
+JS
+[ "$?" = 0 ] || exit 2
+clear_runtime
+printf 'quarantine-a.selftest.sh owner-a 2099-12-31\n' > "$ROOT/seats/selftest-quarantine.list"
+run_alert bun seats/alerts.ts check --json
+[ "$RC" = 0 ] && [ "$(inbox_count)" = 0 ] && pass 'canary: removing count notification loses the required inbox row' || fail 'quarantine count canary insensitive'
+cp -f "$FIX/quarantine-alerts-source.ts" "$ROOT/seats/alerts.ts"
+rm -f "$ROOT/seats/selftest-quarantine.list" "$ROOT"/seats/quarantine-*.selftest.sh
+clear_runtime
+phase 'claimed commander refusal surface'
+if bun "$HERE/fixtures/commander-alert.ts" "$HERE" "$FIX/commander-alert"; then
+  pass 'not-commander %12 alert/need/remedy, ok clear, and source controls'
+else
+  fail 'claimed commander refusal alert failed'
+fi
 
 phase 'transition table, thresholds, clears'
 clear_runtime; BD_READY=1 run_alert bun seats/alerts.ts check --json
@@ -184,10 +258,11 @@ for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done
 printf '{"status":"ok"}\n' > "$ROOT/seats/run/herald.target.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared commander-pane-invalid' "$ROOT/seats/logs/alerts.log" && [ "$(need_closed_count)" = 1 ] && pass 'commander-pane-invalid clear closes its need' || fail "pane close failed: $(cat "$ROOT/seats/needs.jsonl" 2>/dev/null)"
 
-clear_runtime; printf '{"seats":{"worker-a":{"pid":%s,"log":"%s","lastCapacityEvent":{"at":"2026-01-01T00:00:00Z","detail":"synthetic"}}}}\n' $$ "$ROOT/seats/logs/worker-a.jsonl" > "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
+ME_STARTED="$(bun -e 'const { spawnSync } = await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE);const r=spawnSync("ps",["-p",process.argv[1],"-o","lstart="],{encoding:"utf8"});console.error("CAPTURE alerts fixture ps "+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));if(r.status!==0||r.error||r.signal)process.exit(2);console.log(new Date(Date.parse(r.stdout.trim())).toISOString());' "$$")" || exit 2
+clear_runtime; printf '{"seats":{"worker-a":{"pid":%s,"startedAt":"%s","log":"%s","lastCapacityEvent":{"at":"2026-01-01T00:00:00Z","detail":"synthetic"}}}}\n' $$ "$ME_STARTED" "$ROOT/seats/logs/worker-a.jsonl" > "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && active capacity-events && pass 'capacity-events fires when state carries lastCapacityEvent' || fail "capacity failed rc=$RC out=$OUT"
 for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done; [ "$(inbox_count)" = 1 ] && pass 'capacity-events stays quiet over 3 active runs' || fail "capacity not quiet"
-node -e 'const fs=require("fs"), f=process.argv[1]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.seats["worker-b"]={pid:process.pid,log:"x",lastCapacityEvent:{at:"2026-01-01T00:00:00Z",detail:"synthetic"}}; fs.writeFileSync(f,JSON.stringify(j));' "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
+node -e 'const fs=require("fs"), f=process.argv[1]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.seats["worker-b"]={pid:null,log:"x",lastCapacityEvent:{at:"2026-01-01T00:00:00Z",detail:"synthetic"}}; fs.writeFileSync(f,JSON.stringify(j));' "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
 [ "$(inbox_count)" = 2 ] && pass 'capacity-events fires again when the set changes' || fail "capacity set change did not fire"
 printf '{"seats":{}}\n' > "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared capacity-events' "$ROOT/seats/logs/alerts.log" && pass 'capacity-events clears' || fail "capacity clear failed"
@@ -236,11 +311,12 @@ JS
   else fail "drift $mode classification/detail failed rc=$RC out=$OUT"; fi
  done
 cat > "$FIX/drift-spawn-error.mjs" <<'JS'
-import * as cp from 'node:child_process';import {mock} from 'bun:test';
+import fs from 'node:fs';import * as cp from 'node:child_process';import {mock} from 'bun:test';
 const original={...cp};
 const spawnSync=(cmd,args,options)=>{
   if(cmd==='bash'&&args?.[0]?.endsWith('/template-drift.sh')){
     if(options?.timeout!==undefined)throw new Error('drift spawn still has a fixed timeout');
+    if(typeof options?.stdio?.[2]==='number')fs.writeSync(options.stdio[2],'fixture partial stderr');
     return {status:null,signal:null,error:Object.assign(new Error('fixture spawn error ETIMEDOUT'),{code:'ETIMEDOUT'}),stdout:'',stderr:'fixture partial stderr'};
   }
   return original.spawnSync(cmd,args,options);
@@ -288,6 +364,13 @@ JS
   [ $RC -eq 0 ] && [ -s "$ROOT/seats/run/fleet-snapshot.json" ] && [ ! -e "$ROOT/seats/run/alerts.lock" ] && pass "alerts writes a fresh snapshot after an old incomplete lock (${content:-empty})" || fail "incomplete alerts lock blocked snapshot rc=$RC out=$OUT"
 done
 
+phase 'crash-left lock consumer outcomes'
+if bun "$HERE/fixtures/alerts-lock.ts" "$HERE" "$FIX/alerts-lock-cases"; then
+  pass 'O1 stale-lock snapshot publication and O2 real-owner refusal; meaningful removals rejected'
+else
+  fail 'alerts lock consumer outcomes failed'
+fi
+
 phase 'failure and stale lock handling'
 old_at="$(node -e 'console.log(require(process.argv[1]).at)' "$ROOT/seats/run/fleet-snapshot.json")"
 cat > "$BIN/bd" <<'SH'
@@ -334,20 +417,14 @@ if (export PATH="$CLOCK_PATH"; hash -r; ! command -v timeout >/dev/null && ! com
 else
   fail 'herald clock PATH still exposes timeout/gtimeout or lacks helper dependencies'; exit 2
 fi
-rm -f "$ROOT/seats/run/fleet-snapshot.json"; HERALD_OUT="$FIX/herald.out"; start=$(date +%s); (cd "$ROOT" && HOME="$HOME_FIX" PATH="$CLOCK_PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 WHEELHOUSE_HERALD_TMUX_PANE="" with_timeout 3 bun seats/herald.ts --daemon >"$HERALD_OUT" 2>&1) || true; elapsed=$(( $(date +%s) - start ))
-[ -s "$ROOT/seats/run/fleet-snapshot.json" ] && [ "$elapsed" -le 4 ] && pass 'herald launches alerts child and snapshot appears without blocking the scan loop' || fail "herald did not launch alerts child rc? elapsed=$elapsed out=$(cat "$HERALD_OUT" 2>/dev/null)"
-SLOW="$FIX/slow-herald"; cp -R "$ROOT" "$SLOW"; cat > "$SLOW/seats/alerts.ts" <<'TS'
-await new Promise((resolve) => setTimeout(resolve, 2000));
-TS
-SLOW_OUT="$FIX/slow-herald.out"; (cd "$SLOW" && HOME="$HOME_FIX" PATH="$CLOCK_PATH" WHEELHOUSE_ALERTS_ROOT="$SLOW" with_timeout 1 bun seats/herald.ts --once >"$SLOW_OUT" 2>&1); SRC=$?
-[ "$SRC" = 0 ] && pass 'scan loop does not wait for a slow alerts child' || fail "slow alerts child blocked scan rc=$SRC out=$(cat "$SLOW_OUT" 2>/dev/null)"
-BROKEN="$FIX/no-alert-clock"; cp -R "$ROOT" "$BROKEN"; bun - "$BROKEN/seats/herald.ts" <<'JS'
-const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8'),needle='const clocked = runStaffingClock(state) || runAlertsClock(state);';
-if(s.split(needle).length!==2) throw new Error('alerts clock canary source changed');
-fs.writeFileSync(p,s.replace(needle,'fs.writeFileSync(path.join(ROOT, "seats/run/clock-canary-started"), "started\\n"); const clocked = runStaffingClock(state);'));
-JS
-rm -f "$BROKEN/seats/run/fleet-snapshot.json"; BROKEN_OUT="$FIX/no-alert-clock.out"; (cd "$BROKEN" && HOME="$HOME_FIX" PATH="$CLOCK_PATH" WHEELHOUSE_ALERTS_ROOT="$BROKEN" WHEELHOUSE_ALERT_INTERVAL_MS=200 WHEELHOUSE_HERALD_INTERVAL_MS=100 with_timeout 1 bun seats/herald.ts --daemon >"$BROKEN_OUT" 2>&1) || true
-[ -s "$BROKEN/seats/run/clock-canary-started" ] && [ ! -s "$BROKEN/seats/run/fleet-snapshot.json" ] && pass 'canary: removing runAlertsClock makes the herald snapshot leg fail after an actual scan' || fail "canary without runAlertsClock did not scan or still produced a snapshot: $(cat "$BROKEN_OUT" 2>/dev/null)"
+# Native --once close while the child remains explicitly held is the verdict,
+# not elapsed startup time. Controls execute a real child-completion FIFO read
+# and remove the actual alerts clock, each failing at its own observed event.
+if bun "$HERE/fixtures/alerts-clock.ts" "$FIX" "$ROOT" "$BIN" "$HOME_FIX" "$CLOCK_PATH"; then
+  pass 'alerts snapshot and non-blocking scan observed; real blocking/missing-clock removals rejected'
+else
+  fail 'alerts clock scan protocol failed (see native event evidence above)'
+fi
 
 phase 'canary'
 CAN="$FIX/canary"; cp -R "$ROOT" "$CAN"; bun - "$CAN/seats/alerts.ts" <<'JS'

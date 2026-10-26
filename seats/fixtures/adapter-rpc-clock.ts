@@ -21,12 +21,16 @@ Date.now = () => {
   return nativeNow();
 };
 
+let observations = 0;
 const write = process.stderr.write.bind(process.stderr);
 process.stderr.write = ((chunk: any, ...args: any[]) => {
   if (String(chunk).startsWith("WAIT:") && fs.existsSync(path.join(dir, "observe"))) {
-    fs.writeFileSync(path.join(dir, "progress"), JSON.stringify({
-      message: String(chunk), virtualAdvanceMs: fs.existsSync(path.join(dir, "advance")) ? 60001 : 0,
+    const progress = path.join(dir, "progress"), next = progress + ".next";
+    fs.writeFileSync(next, JSON.stringify({
+      message: String(chunk), observations: ++observations,
+      virtualAdvanceMs: fs.existsSync(path.join(dir, "advance")) ? 60001 : 0,
     }) + "\n");
+    fs.renameSync(next, progress); // the controller never reads a partial record
   }
   return write(chunk, ...args);
 }) as typeof process.stderr.write;

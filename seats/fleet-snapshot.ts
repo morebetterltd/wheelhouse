@@ -1,26 +1,27 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { completedExecFileSync as execFileSync } from "./native-command";
+import { completedCommand } from "./completed-command";
 import { effectiveRoster, type StaffingFile } from "./roster";
-import { agentSettledEvent, lastActivityAt, lastEvent, pidAlive } from "./seat-activity";
+import { agentSettledEvent, lastActivityAt, lastEvent, pidAlive, seatIdentity } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
-const BD_TIMEOUT_MS = Number(process.env.WHEELHOUSE_FLEET_SNAPSHOT_BD_TIMEOUT_MS || "30000");
 
 export interface ReadyItem { id: string; title: string; chained: boolean; groupKey: string | null }
 export interface BacklogItem { id: string; title: string; authorSeat: string | null; authorAccountDir: string | null }
-export interface LiveWorker { name: string; entry: string | null; accountDir: string | null; busy: boolean; lastBead?: string; lastActivityAt: string | null }
-export interface LiveReviewer { name: string; entry: string | null; accountDir: string | null; busy: boolean }
-export interface Snapshot { at: string; ready: ReadyItem[]; readyCount: number; chainedCount: number; overlapCount: number; reviewBacklog: BacklogItem[]; workers: { live: LiveWorker[]; idle: number; busy: number }; reviewers: { live: LiveReviewer[]; idle: number; busy: number }; changes: { isaHead: string | null; isaChanged: boolean; newEpics: number } }
+export interface UnverifiedSeat { pid: number | null; role: string; status: "UNVERIFIED"; reason: string }
+export interface LiveWorker { identity?: "UNVERIFIED"; name: string; entry: string | null; accountDir: string | null; busy: boolean; lastBead?: string; lastActivityAt: string | null; taskStatus?: string | null; taskNeedsReview?: boolean }
+export interface LiveReviewer { identity?: "UNVERIFIED"; name: string; entry: string | null; accountDir: string | null; busy: boolean }
+export interface Snapshot { unverified?: Record<string, UnverifiedSeat>; at: string; ready: ReadyItem[]; readyCount: number; chainedCount: number; overlapCount: number; reviewBacklog: BacklogItem[]; workers: { live: LiveWorker[]; idle: number; busy: number }; reviewers: { live: LiveReviewer[]; idle: number; busy: number }; changes: { isaHead: string | null; isaChanged: boolean; newEpics: number } }
 
 function stop(msg: string): never { throw new Error(`STOP: ${msg}`); }
 function readJson(file: string): any { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } }
 function runBd(root: string, args: string[]): any[] {
-  const r = spawnSync("bd", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: BD_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
-  if (r.status !== 0) stop(`bd ${args.join(" ")} failed (${r.status ?? r.error?.message}): ${(r.stderr || r.stdout || "").trim()}`);
-  try { return JSON.parse(r.stdout || "[]"); } catch (e: any) { stop(`bd ${args.join(" ")} did not return JSON: ${e.message}`); }
+  const r = completedCommand("bd", args, { cwd: root });
+  if (r.error || r.signal || r.status !== 0) stop(`bd ${args.join(" ")} failed (${r.status ?? r.error?.message}): ${(r.stderr || r.stdout || "").trim()}`);
+  try { return JSON.parse(r.stdout); } catch (e: any) { stop(`bd ${args.join(" ")} did not return JSON: ${e.message}`); }
 }
 function idOf(x: any): string { return String(x?.id ?? x?.key ?? x?.name ?? ""); }
 function titleOf(x: any): string { return String(x?.title ?? x?.summary ?? x?.description ?? ""); }
@@ -83,6 +84,11 @@ export function fleetSnapshot(root: string = ROOT, opts: { since?: { isaHead?: s
   const roster = effectiveRoster(root) as Record<string, any>;
   const state = readState(root);
   const staffing = readStaffing(root);
+  // Reporting is total per seat: uncertainty is data, not a fleet-wide STOP.
+  // These entries remain occupied/busy so callers cannot allocate them as idle.
+  const identities = new Map(Object.entries<any>(state).map(([name, rec]) => [name, seatIdentity(rec.pid, rec.fifo, rec.startedAt)]));
+  const unverified: Record<string, UnverifiedSeat> = {};
+  for (const [name, identity] of identities) if (identity.kind === "unverified") unverified[name] = { pid: state[name].pid, role: roster[name]?.role ?? state[name].role ?? "unknown", status: "UNVERIFIED", reason: identity.reason };
   const authorDirs = new Map<string, string | null>();
   for (const [name, entry] of Object.entries(roster)) authorDirs.set(name, canonicalDir((entry as any).account?.dir));
 
@@ -94,22 +100,27 @@ export function fleetSnapshot(root: string = ROOT, opts: { since?: { isaHead?: s
   for (const [name, rec] of Object.entries<any>(state)) {
     const entry = roster[name];
     if (!entry || entry.external || entry.role !== "worker") continue;
-    if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) continue;
+    if (unverified[name]) {
+      workerLive.push({ name, entry: entryForSeat(staffing, name), accountDir: authorDirs.get(name) ?? null, busy: true, identity: "UNVERIFIED", lastBead: rec.lastBead, lastActivityAt: null });
+      continue;
+    }
+    if (identities.get(name)?.kind !== "owned") continue;
     const st = rec.lastBead ? statuses.get(rec.lastBead) : undefined;
     const inReviewOrRework = !!st && (st.status === "open" || st.status === "in_progress" || st.labels.includes("needs-review"));
     const settled = agentSettledEvent(lastEvent(rec.log));
     const busy = !settled || inReviewOrRework;
-    workerLive.push({ name, entry: entryForSeat(staffing, name), accountDir: authorDirs.get(name) ?? null, busy, lastBead: rec.lastBead, lastActivityAt: lastActivityAt(rec.log)?.toISOString() ?? null });
+    workerLive.push({ name, entry: entryForSeat(staffing, name), accountDir: authorDirs.get(name) ?? null, busy, lastBead: rec.lastBead, lastActivityAt: lastActivityAt(rec.log)?.toISOString() ?? null, taskStatus: st?.status ?? null, taskNeedsReview: st?.labels.includes("needs-review") ?? false });
   }
   const reviewersLive: LiveReviewer[] = [];
   for (const [name, entry] of Object.entries<any>(roster)) {
     if (entry.external || entry.role !== "reviewer") continue;
-    reviewersLive.push({ name, entry: entryForSeat(staffing, name), accountDir: authorDirs.get(name) ?? null, busy: verifyMarkerLive(root, name) });
+    reviewersLive.push({ name, entry: entryForSeat(staffing, name), accountDir: authorDirs.get(name) ?? null, busy: !!unverified[name] || verifyMarkerLive(root, name), ...(unverified[name] ? { identity: "UNVERIFIED" as const } : {}) });
   }
   const head = isaHead(root);
   const newEpics = all.filter((x) => String(x?.issue_type ?? x?.type ?? "").toLowerCase() === "epic" && (!opts.since?.at || Date.parse(String(x?.created_at ?? x?.created ?? 0)) > Date.parse(opts.since.at))).length;
   return {
     at,
+    unverified,
     ready,
     readyCount: ready.length,
     chainedCount: ready.filter((r) => r.chained).length,
@@ -121,9 +132,10 @@ export function fleetSnapshot(root: string = ROOT, opts: { since?: { isaHead?: s
   };
 }
 
-export function readyWorkNobodyOnIt(snap: Snapshot): boolean { return snap.readyCount > 0 && snap.workers.busy === 0; }
-export function freeWorkers(snap: Snapshot): LiveWorker[] { return snap.workers.live.filter((w) => !w.busy); }
-export function freeReviewers(snap: Snapshot): LiveReviewer[] { return snap.reviewers.live.filter((r) => !r.busy); }
+export function hasUnverifiedWorkers(snap: Snapshot): boolean { return Object.values(snap.unverified ?? {}).some(s => s.role !== "reviewer"); }
+export function readyWorkNobodyOnIt(snap: Snapshot): boolean { return !hasUnverifiedWorkers(snap) && snap.readyCount > 0 && snap.workers.busy === 0; }
+export function freeWorkers(snap: Snapshot): LiveWorker[] { return snap.workers.live.filter((w) => !w.busy && w.identity !== "UNVERIFIED"); }
+export function freeReviewers(snap: Snapshot): LiveReviewer[] { return snap.reviewers.live.filter((r) => !r.busy && r.identity !== "UNVERIFIED"); }
 
 if (import.meta.main) {
   try {

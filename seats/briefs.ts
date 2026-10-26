@@ -11,6 +11,47 @@ function templateBriefPath(root: string, role: string): string {
   return path.join(root, "contracts", `${role.toUpperCase()}.md`);
 }
 
+// The dispatcher supplies the install, never a product, parent or worktree.
+export function scratchPromptLines(root: string, beadId: string): string[] {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(beadId)) throw new Error(`invalid scratch bead id: ${beadId}`);
+  const installRoot = path.resolve(root);
+  return [
+    `Install root (WHEELHOUSE_ROOT): ${installRoot}`,
+    `Scratch root for bead ${beadId}: ${path.join(installRoot, ".wheelhouse-runs", beadId)}${path.sep}`,
+    `Put all ad-hoc builds, review output, simulator artifacts and other bead scratch under that exact scratch root. Use the supplied install root (WHEELHOUSE_ROOT); do not infer it from the install's parent, a selected product repository or your worktree.`,
+  ];
+}
+
+export function workerDispatchPrompt(root: string, beadId: string, text: string): string {
+  return [`Bead ${beadId}`, "", ...scratchPromptLines(root, beadId), "", text].join("\n");
+}
+
+export type ContractSkillName = "intent" | "outcomes";
+export function readContractSkill(root: string, name: ContractSkillName): { file: string; version: string; body: string } {
+  const file = path.join(root, ".agents", "skills", name, "SKILL.md");
+  let text: string;
+  try { text = fs.readFileSync(file, "utf8"); }
+  catch (e: any) { throw new Error(`STOP: required producer skill ${file}: ${e.message}`); }
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/);
+  const versions = match?.[1].match(/^version:[ \t]*(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s]+)[ \t]*$/gm) ?? [];
+  const names = match?.[1].match(/^name:[ \t]*(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s]+)[ \t]*$/gm) ?? [];
+  const scalar = (line: string) => line.slice(line.indexOf(":") + 1).trim().replace(/^(["'])(.*)\1$/, "$2");
+  const version = versions.length === 1 ? scalar(versions[0]) : "";
+  if (!match || names.length !== 1 || scalar(names[0]) !== name || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(version) || !match[2].trim()) {
+    throw new Error(`STOP: invalid producer skill name/version/body at ${file}`);
+  }
+  return { file, version, body: match[2] };
+}
+
+export function assembleBrief(root: string, role: string): string {
+  const brief = fs.readFileSync(resolveRoleBrief(root, role), "utf8");
+  if (role !== "producer") return brief;
+  return brief + (["intent", "outcomes"] as const).map(name => {
+    const skill = readContractSkill(root, name);
+    return `\n\n# Skill: ${name} (version ${skill.version})\n\n${skill.body}`;
+  }).join("");
+}
+
 export function resolveRoleBrief(root: string, role: string): string {
   const installed = installedBriefPath(root, role);
   if (fs.existsSync(installed)) return installed;

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const [root, scratch] = process.argv.slice(2);
 assert(fs.existsSync(path.join(scratch, ".wheelhouse-selftest-fixture")), "owned fixture must exist");
@@ -30,11 +30,30 @@ console.log(`PASS upgrade baseline: ${baseline} exists, is an ancestor, has all 
 const noAllocation = path.join(scratch, "must-not-allocate");
 assert(!fs.existsSync(noAllocation));
 const env = { ...process.env, TMPDIR: noAllocation, WHEELHOUSE_UPGRADE_SELFTEST_BASELINE: absent,
-  WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY: "0", WHEELHOUSE_UPGRADE_CACHE_ONLY: "0" };
+  WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY: "0", WHEELHOUSE_UPGRADE_CACHE_ONLY: "0", WHEELHOUSE_UPGRADE_SKILLS_ONLY: "0" };
+const admissionTmp = path.join(scratch, "baseline-admission-tmp"); fs.mkdirSync(admissionTmp);
+const admissionReceipt = path.join(scratch, "baseline-admission-tmp.receipt");
+let lastMissingResult: any;
+function observeMissing(code = source, isolateAdmission = true) {
+  // Admission itself now observes native commands through private files. Give
+  // ONLY that real admission a valid owned scratch root, then restore the bad
+  // TMPDIR before the baseline guard and fixture allocation. No bypass token.
+  const anchor = '. "$SELFTEST_LIB"';
+  assert.equal(code.split(anchor).length, 2);
+  fs.rmSync(admissionReceipt, { force: true });
+  const observed = `printf '%s\\n' "$TMPDIR" > ${JSON.stringify(admissionReceipt)}; ${anchor}`;
+  code = code.replace(anchor, () => isolateAdmission
+    ? `saved_baseline_tmp=$TMPDIR; export TMPDIR=${JSON.stringify(admissionTmp)}; ${observed}; export TMPDIR="$saved_baseline_tmp"`
+    : observed);
+  lastMissingResult = spawnSync("bash", ["-c", code, suite], { cwd: root, env, encoding: "utf8" });
+  assert.ifError(lastMissingResult.error); assert.equal(lastMissingResult.signal ?? null, null);
+  assert(fs.existsSync(admissionReceipt), "real admission boundary must be reached");
+  assert.equal(fs.readFileSync(admissionReceipt, "utf8"), admissionTmp + "\n",
+    "BASELINE_ADMISSION_ORACLE: supply native admission capture scratch before restoring invalid allocator TMPDIR");
+  return lastMissingResult;
+}
 function checkMissing(code?: string) {
-  // $0 preserves the real suite location for dirname/ROOT in the mutated copy.
-  const args = code === undefined ? [suite] : ["-c", code, suite];
-  const result = spawnSync("bash", args, { cwd: root, env, encoding: "utf8" });
+  const result = observeMissing(code);
   assert.ifError(result.error);
   assert.equal(result.status, 2, result.stdout + result.stderr);
   assert(result.stderr.includes(`STOP: upgrade selftest baseline "${absent}" is missing from template history`), result.stderr);
@@ -43,6 +62,11 @@ function checkMissing(code?: string) {
   assert(!result.stderr.includes("mktemp"), "fixture allocation ran before refusal");
   assert(!fs.existsSync(noAllocation), "refusal must leave allocation root absent");
 }
+const early = observeMissing(source);
+assert.ifError(early.error); assert.equal(early.status, 2, early.stdout + early.stderr);
+assert.equal(early.stdout, "");
+assert(early.stderr.includes(`STOP: upgrade selftest baseline "${absent}" is missing from template history`), early.stderr);
+assert(!fs.existsSync(noAllocation), "earlier refusal must not allocate anything");
 checkMissing();
 console.log(`PASS missing baseline: exit=2 names ${absent}, gives remedy, no fixture setup`);
 
@@ -50,9 +74,10 @@ let caught = false;
 try { checkDefault(source.replace(`:-${baseline}}`, `:-${absent}}`)); } catch { caught = true; }
 assert(caught, "default-availability regression passed with a missing default");
 console.log("PASS negative control: missing default fails the availability/old-shape leg");
-const guard = 'if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then';
+const guard = 'if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && [ "${WHEELHOUSE_UPGRADE_SKILLS_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then';
 assert.equal(source.split(guard).length, 2, "preflight mutation anchor must match exactly once");
 caught = false;
 try { checkMissing(source.replace(guard, guard.replace("&& ! git", "&& false && ! git"))); } catch { caught = true; }
 assert(caught, "missing-baseline regression passed with preflight removed");
+assert(lastMissingResult.stderr.includes("STOP: mktemp failed for fixture template") && lastMissingResult.stderr.includes(noAllocation), "removed baseline guard must actually reach the allocator, not fail admission setup");
 console.log("PASS negative control: removing preflight fails the early-refusal leg");

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const [root, scratch] = process.argv.slice(2);
 assert(fs.existsSync(path.join(scratch, ".wheelhouse-selftest-fixture")), "owned fixture must exist");
@@ -34,9 +34,25 @@ console.log(`PASS audit baseline: ${baseline} exists, is an ancestor, has old co
 const noAllocation = path.join(scratch, "must-not-allocate");
 assert(!fs.existsSync(noAllocation));
 const missingSource = source.replace(`BASELINE=${baseline}`, `BASELINE=${absent}`);
+const admissionTmp = path.join(scratch, "audit-admission-tmp"); fs.mkdirSync(admissionTmp);
+const admissionReceipt = path.join(scratch, "audit-admission-tmp.receipt");
+let lastMissingResult: any;
+function observeMissing(code: string, isolateAdmission = true) {
+  const anchor = '. "$HERE/selftest-lib.sh"'; assert.equal(code.split(anchor).length, 2);
+  fs.rmSync(admissionReceipt, { force: true });
+  const observed = `printf '%s\\n' "$TMPDIR" > ${JSON.stringify(admissionReceipt)}; ${anchor}`;
+  code = code.replace(anchor, () => isolateAdmission
+    ? `saved_baseline_tmp=$TMPDIR; export TMPDIR=${JSON.stringify(admissionTmp)}; ${observed}; export TMPDIR="$saved_baseline_tmp"`
+    : observed);
+  lastMissingResult = spawnSync("bash", ["-c", code, suite], { cwd: root, env: { ...process.env, TMPDIR: noAllocation }, encoding: "utf8" });
+  assert.ifError(lastMissingResult.error); assert.equal(lastMissingResult.signal ?? null, null);
+  assert(fs.existsSync(admissionReceipt), "real admission boundary must be reached");
+  assert.equal(fs.readFileSync(admissionReceipt, "utf8"), admissionTmp + "\n",
+    "BASELINE_ADMISSION_ORACLE: supply native admission capture scratch before restoring invalid allocator TMPDIR");
+  return lastMissingResult;
+}
 function checkMissing(code: string) {
-  // Preserve $0 so HERE/ROOT still describe the actual suite, not this copy.
-  const result = spawnSync("bash", ["-c", code, suite], { cwd: root, env: { ...process.env, TMPDIR: noAllocation }, encoding: "utf8" });
+  const result = observeMissing(code);
   assert.ifError(result.error);
   assert.equal(result.status, 2, result.stdout + result.stderr);
   assert(result.stderr.includes(`STOP: upgrade contract audit baseline "${absent}" is missing from template history`), result.stderr);
@@ -45,6 +61,10 @@ function checkMissing(code: string) {
   assert(!result.stderr.includes("mktemp"), "allocation must not precede refusal");
   assert(!fs.existsSync(noAllocation), "refusal must leave allocation root absent");
 }
+const early = observeMissing(missingSource);
+assert.ifError(early.error); assert.equal(early.status, 2, early.stdout + early.stderr); assert.equal(early.stdout, "");
+assert(early.stderr.includes(`STOP: upgrade contract audit baseline "${absent}" is missing from template history`), early.stderr);
+assert(!fs.existsSync(noAllocation), "earlier refusal must leave allocation root absent");
 checkMissing(missingSource);
 console.log("PASS missing audit baseline: exit=2 names the absent commit and remedy before fixture allocation");
 for (const [name, code] of [["missing default", missingSource], ["new-contract default", source.replace(`BASELINE=${baseline}`, `BASELINE=${git(["rev-parse", "HEAD"]).trim()}`)]]) {
@@ -56,4 +76,5 @@ const guard = 'if ! git -C "$ROOT" cat-file -e "${BASELINE}^{commit}" >/dev/null
 assert.equal(missingSource.split(guard).length, 2, "one early-refusal mutation anchor");
 let caught = false; try { checkMissing(missingSource.replace(guard, "if false; then")); } catch { caught = true; }
 assert(caught, "removed preflight control passed");
+assert(lastMissingResult.stderr.includes("STOP: mktemp failed for fixture template") && lastMissingResult.stderr.includes(noAllocation), "removed baseline guard must reach actual fixture allocation, not fail admission setup");
 console.log("PASS negative control: removing preflight fails the early-refusal leg");

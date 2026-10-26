@@ -4,7 +4,7 @@
 // selectors, and literal/transparent named argv, options and stdin in JS/TS.
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { programmaticPrograms } from "./bun-inline-programmatic";
 
 export type InlineProgram = { offset: number; code: string; mode: string };

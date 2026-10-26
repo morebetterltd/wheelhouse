@@ -30,6 +30,14 @@ A goal branch is an integration line, not an unreviewed staging pile. At the goa
 
 A child closes when its reviewed tip is on the goal branch; `wheelhouse/GRAPH.md` owns that close semantics. The epic closes when the last group PR merges to the default line, citing that default-line SHA. Remove the branch from `seats/integration-refs.txt` at that close.
 
+### Review, then verify, then merge
+
+Review first: the reviewer must APPROVE the exact tip. Then dispatch the per-work verifier to prove the person-on-surface and person-reading outcomes at that same tip, on a verifier-role seat distinct from the author and from the reviewer directory in the APPROVE record that gates this walk. It is not the seat whose APPROVE gates this walk, and never a reviewer-role seat; an earlier review at another tip does not gate the walk. `walk.ts --work` refuses missing, non-APPROVE or stale review records and account/role collisions before creating a scratch worktree or spawning the verifier. This order is enforced by the dispatcher, not left to the commander's discipline. Machine outcomes need no walk: their literal command evidence was attached by the worker and judged by the reviewer.
+
+Last before merging, run `bun seats/merge-gate.ts BEAD-ID BRANCH [--repo PATH] [--walk WALK-JSON]`. It reads the contract, the completed APPROVE at the branch tip and the newest matching per-work walk (or `--walk`); it refuses a failed outcome, an unverified consumer outcome or no APPROVE at that tip. Machine outcomes are skipped by name, but a recorded FAIL or UNREACHED is never ignored, even for a machine outcome. All-machine work passes on APPROVE alone, explicitly saying no walk is required. Every named gate run writes `seats/verdicts/BEAD-ID.merge-gate.json`; a refusal replaces an older PASS. Preflight receipts may have a null tip when no commit was resolved.
+
+Then merge and push under their existing authority gates. The installed pre-push hook refuses to publish a bead-naming merge to the default or a listed integration ref unless its receipt says PASS at that merge's second parent, the exact work tip. `WHEELHOUSE_INTEGRATOR_PUSH=1` licenses fleet publication, not a missing receipt. Approval, walk and receipt are pinned to the same identifier; moving the branch requires re-review and a new gate decision. The receipt is local decision data, not permission to push or a substitute for the tip comparison below.
+
 ### Confirm what you actually integrated
 
 The worker reports a head. Your job is to establish that the head you integrated is that one, by comparing refs rather than by reading output.
@@ -73,7 +81,7 @@ A verdict authorises what it states and nothing adjacent to it. Before anything 
 
 ### What you may close, and what routes back
 
-- After a merge, run the merged-tip selftests before push when they apply: `adapter.selftest.sh`, `pool.selftest.sh`, `fleet-snapshot.selftest.sh`, `staffing.selftest.sh`, `staffing-live.selftest.sh`, `alerts.selftest.sh`, `concurrency.selftest.sh`, `herald.selftest.sh`, `needs.selftest.sh`, `desk.selftest.sh`, `principal-sentinel.selftest.sh`, `courier.selftest.sh`, `supervisor.selftest.sh`, `floor.selftest.sh`, `legibility.selftest.sh`, `fleet-gate.selftest.sh`, `recover.selftest.sh`, `cockpit.selftest.sh`, `isolation.selftest.sh`, `intent-check.selftest.sh`, `push-authority-lint.selftest.sh`, `selftest-lib.selftest.sh`, and `verify.selftest.sh`. A merge whose shared files touch one of these tools runs that tool's selftest at the merged tip before anything is pushed.
+- After a merge, run the merged-tip selftests before push when they apply: `adapter.selftest.sh`, `pool.selftest.sh`, `fleet-snapshot.selftest.sh`, `staffing.selftest.sh`, `staffing-live.selftest.sh`, `alerts.selftest.sh`, `concurrency.selftest.sh`, `herald.selftest.sh`, `needs.selftest.sh`, `desk.selftest.sh`, `principal-sentinel.selftest.sh`, `courier.selftest.sh`, `supervisor.selftest.sh`, `floor.selftest.sh`, `legibility.selftest.sh`, `fleet-gate.selftest.sh`, `recover.selftest.sh`, `cockpit.selftest.sh`, `isolation.selftest.sh`, `intent-check.selftest.sh`, `push-authority-lint.selftest.sh`, `selftest-lib.selftest.sh`, `prune-safety.selftest.sh`, and `verify.selftest.sh`. A merge whose shared files touch one of these tools runs that tool's selftest at the merged tip before anything is pushed.
 - Close on evidence you hold and can show. Say what you checked.
 - When closing a bead after review and merge, closing it is enough. Cleanup of its `.wheelhouse-runs/<bead>*` scratch, per-bead build folder and any leftover per-bead worktree happens automatically — on the seat's next dispatch, when the adapter runs `bun seats/prune.ts cleanup --bead <old bead>` after pushing the old branch, and nightly for the whole fleet — and every removal or keep is logged with its reason in `seats/logs/cleanup.log`. Do not prune by hand before reporting the close. The reviewed `bun seats/prune.ts scan` / `prune --from-file <reviewed-scan> --yes` path is only for rows cleanup kept that a person has judged; open or in-progress bead scratch stays `needs-review` and is never acted on, and `xctest-devices` is safe only when its simulator set is idle and no `xcodebuild` process is running.
 - Anything asserting another party's assent, words or intent regarding something they have not seen is not yours to close, however reasonable the inference and however consistent with every previous instance. Evidence of a pattern is not evidence of an instance. Route it to that party and close on their answer, in their words.
@@ -120,6 +128,8 @@ Default project value, to keep the drift-walk integer in a project half the upgr
 ```yaml
 walk_cadence_merges: 5
 ```
+
+Claim walks on a project with a verification manual use `manual:<feature-slug>` surfaces and `--repo <product-repo>`. The dispatcher supplies the pinned manual and feature entry; a mismatched entry fails that feature's walk rather than authorizing a different route. This is claim-walk plumbing, not W11's future per-outcome verdict rows.
 
 Override `walk_cadence_merges` here if this install needs a tighter or looser drift-walk rhythm. Name the actual install, upgrade, and product surfaces in `wheelhouse/crew/VERIFIER.md`'s project half so both claim-closing walks and every-N drift walks dispatch against the same list.
 

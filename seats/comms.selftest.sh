@@ -6,6 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-comms-selftest.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
+. "$HERE/fixtures/readiness.sh"
 PASS=0; FAIL=0; SERVER_PID=""
 cleanup(){ [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
 selftest_install_cleanup_traps cleanup
@@ -27,6 +28,12 @@ cat > "$ROOT/seats/channels.json" <<'JSON'
   }
 }
 JSON
+# Literal docs-derived Slack payloads: no live workspace or recorded-incident claim.
+if bun "$HERE/fixtures/slack-readback.ts" "$HERE" "$FIX/slack-readback" "$ROOT/seats/transports/slack.ts"; then
+  pass 'Slack channel/ts and entity-equivalent content verify; missing/changed messages and removals reject'
+else
+  fail 'Slack docs-derived read-back cases failed'
+fi
 cat > "$FIX/server.ts" <<'TS'
 import * as fs from "node:fs";
 const dir=process.env.STUB_DIR!; let msg=0;
@@ -34,7 +41,7 @@ function append(row:any){ fs.appendFileSync(`${dir}/requests.jsonl`, JSON.string
 function rows(name:string){ try{return fs.readFileSync(`${dir}/${name}`,"utf8").split(/\n/).filter(Boolean).map(JSON.parse);}catch{return [];} }
 function remember(kind:string, row:any){ fs.appendFileSync(`${dir}/${kind}.jsonl`, JSON.stringify(row)+"\n"); }
 function hidden(){ return fs.existsSync(`${dir}/fail-readback`); }
-Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
+const server=Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
  const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : undefined;
  const loggedUrl=u.pathname.replace(/^\/bot[^/]+\//, "/bot[redacted]/")+u.search;
  append({method:req.method, url:loggedUrl, body});
@@ -45,10 +52,13 @@ Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch
  if(u.pathname.match(/\/messages\/[^/]+$/) && req.method==="GET"){ const id=u.pathname.split("/").pop(); const row=rows("teams.jsonl").find((m:any)=>m.id===id); return row?Response.json(hidden()?{...row,body:{content:"dropped"}}:row):Response.json({error:{message:"missing"}},{status:404}); }
  return Response.json({error:"no route", path:u.pathname},{status:404});
 }});
+fs.writeFileSync(`${dir}/server.ready`,String(server.port)+"\n");
 TS
 P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
-sleep 0.2
-base_env(){ env -u BEADS_ACTOR WHEELHOUSE_COMMS_ROOT="$ROOT" WHEELHOUSE_TELEGRAM_TOKEN=tg-token WHEELHOUSE_TELEGRAM_CHAT_ID=111 WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_SLACK_TOKEN="$(printf 'xox%s-%s' b fixture)" WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TEAMS_TOKEN=teams-token WHEELHOUSE_TEAMS_API_BASE="http://127.0.0.1:$P" "$@"; }
+fixture_wait "transport stub bound its private listener" "$SERVER_PID" test -s "$FIX/server.ready" || exit 1
+# This fixture tests relay/read, not alert/staffing policy. Zero means always due,
+# not disabled; keep these unrelated clocks explicitly not due for this fixture.
+base_env(){ env -u BEADS_ACTOR WHEELHOUSE_ALERT_INTERVAL_MS=9007199254740991 WHEELHOUSE_STAFFING_INTERVAL_MS=9007199254740991 WHEELHOUSE_COMMS_ROOT="$ROOT" WHEELHOUSE_TELEGRAM_TOKEN=tg-token WHEELHOUSE_TELEGRAM_CHAT_ID=111 WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_SLACK_TOKEN="$(printf 'xox%s-%s' b fixture)" WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TEAMS_TOKEN=teams-token WHEELHOUSE_TEAMS_API_BASE="http://127.0.0.1:$P" "$@"; }
 count_req(){ [ -f "$FIX/requests.jsonl" ] && wc -l < "$FIX/requests.jsonl" | tr -d ' ' || printf '0'; }
 count_rows(){ if [ -f "$ROOT/seats/comms.jsonl" ]; then awk -v t="\"type\":\"$1\"" 'index($0,t){n++} END{print n+0}' "$ROOT/seats/comms.jsonl"; else printf '0'; fi; }
 reset_logs(){ rm -f "$FIX/requests.jsonl" "$FIX/slack.jsonl" "$FIX/telegram.jsonl" "$FIX/teams.jsonl" "$FIX/fail-readback" "$FIX/fail-read-once" "$ROOT/seats/comms.jsonl" "$ROOT/seats/inbox.jsonl" "$ROOT/seats/herald.state.json" "$ROOT/seats/run/comms."*.cursor "$ROOT/seats/logs/courier.out.log" 2>/dev/null || true; }
@@ -124,7 +134,7 @@ printf '%s\n' '{"ts":"1790000003.000000","channel":"C08EXAMPLE","user":"U4","tex
 : > "$FIX/requests.jsonl"
 base_env bun "$ROOT/seats/comms.ts" read partners > "$FIX/read2.out" 2>&1; rc2=$?
 INBOUND_MATCHES="$(node -e 'const fs=require("fs"); const rows=fs.existsSync(process.argv[1])?fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse):[]; console.log(rows.filter(r=>r.class==="inbound"&&r.state==="terminal"&&r.seat==="channel:partners"&&String(r.detail).startsWith("UNTRUSTED inbound text")&&r.detail.includes("new inbound info")).length)' "$ROOT/seats/inbox.jsonl")"
-if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q 'read partners: 0 new' "$FIX/read1.out" && grep -q 'read partners: 1 new' "$FIX/read2.out" && [ "$INBOUND_MATCHES" -eq 1 ] && [ "$(count_rows sent)" -eq 0 ] && [ "$(count_rows request)" -eq 0 ] && [ ! -e "$ROOT/seats/needs.jsonl" ] && [ "$(grep -c 'conversations.history' "$FIX/requests.jsonl")" -eq 1 ]; then pass 'inbound Slack read is terminal UNTRUSTED information only with no comms/needs side effect'; else fail "inbound read leg rc=$rc/$rc2 out1=$(cat "$FIX/read1.out") out2=$(cat "$FIX/read2.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null) inbox=$(cat "$ROOT/seats/inbox.jsonl" 2>/dev/null) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
+if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q 'read partners: 0 new' "$FIX/read1.out" && grep -q 'read partners: 1 new' "$FIX/read2.out" && [ "$INBOUND_MATCHES" -eq 1 ] && [ "$(count_rows sent)" -eq 0 ] && [ "$(count_rows request)" -eq 0 ] && [ ! -e "$ROOT/seats/needs.jsonl" ] && [ "$(grep -c 'conversations.history' "$FIX/requests.jsonl")" -eq 1 ]; then pass 'inbound Slack read is terminal UNTRUSTED information only with no comms/needs side effect'; else fail "inbound read leg rc=$rc/$rc2 matches=$INBOUND_MATCHES sent=$(count_rows sent) requests=$(count_rows request) needs_exists=$([ -e "$ROOT/seats/needs.jsonl" ] && echo yes || echo no) out1=$(cat "$FIX/read1.out") out2=$(cat "$FIX/read2.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null) inbox=$(cat "$ROOT/seats/inbox.jsonl" 2>/dev/null) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
 
 reset_logs
 base_env BEADS_ACTOR=commander bun "$ROOT/seats/comms.ts" send partners "fleet echo" >/dev/null 2>&1

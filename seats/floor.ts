@@ -35,9 +35,20 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { completedExecFileSync as execFileSync } from "./native-command";
 import { effectiveRoster } from "./roster";
 import { seatTurnDisplay } from "./seat-turn-display";
+import { seatIdentity, type SeatIdentity } from "./seat-activity";
+
+// listSeats reads fresh records each frame. Reuse one native proof per record
+// within that frame (spotlight/status/rail), never across frames.
+const identityCache = new WeakMap<object, SeatIdentity>();
+function recordIdentity(rec: any): SeatIdentity {
+  if (!rec) return { kind: "gone", reason: "no record" };
+  let identity = identityCache.get(rec);
+  if (!identity) { identity = seatIdentity(rec.pid, rec.fifo, rec.startedAt); identityCache.set(rec, identity); }
+  return identity;
+}
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -403,8 +414,10 @@ function readyCount(): number | null {
   if (Date.now() - readyCache.at < READY_TTL_MS) return readyCache.count;
   let count: number | null = null;
   try {
-    const out = execFileSync("bd", ["ready"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
-    count = out.split("\n").filter((l) => /\S/.test(l) && !/no issues|nothing/i.test(l)).length;
+    const out = execFileSync("bd", ["ready", "--json", "--limit", "0"], { encoding: "utf8" });
+    const rows = JSON.parse(out);
+    if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw new Error("bd ready did not return an issue array");
+    count = rows.length;
   } catch {
     count = null; // bd missing or unhappy — the rail just skips this signal
   }
@@ -458,7 +471,10 @@ function assess(seat: Seat): Assessment {
     }
     return detail;
   })();
-  const alive = pidAlive(rec?.pid);
+  const identity = recordIdentity(rec);
+  const alive = identity.kind === "owned";
+  if (identity.kind === "unverified") return { cue: "amber", line: `UNVERIFIED — ${identity.reason}; do not restart or reclaim` };
+  if (identity.kind === "foreign") return { cue: "red", line: `PROCESS GONE — pid ${rec.pid} foreign (${identity.reason})` };
 
   if (AUTH_RE.test(errBlob)) {
     return { cue: "red", line: `AUTH DEAD — OAuth: PI_CODING_AGENT_DIR=${rec?.accountDir ?? "<dir>"} pi, then /login in the REPL; api_key: auth.json or provider env var` };

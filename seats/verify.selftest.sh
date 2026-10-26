@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
@@ -24,14 +25,15 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 # checks these tests notice. Each sabotage is guarded with cmp: if the sed
 # no longer bites, the canary says so instead of proving nothing.
 #
-# The last phase is ONE real-pi smoke leg (SKIP-able): a fixture project
-# whose REVIEWER.md brief is a scripted-reply instruction, so one trivial
-# model turn proves the spawn/parse/record plumbing against the real binary.
-# It borrows your login the way adapter.selftest.sh does; no pi, no login,
-# or WHEELHOUSE_SKIP_REAL_PI=1 each print a SKIP line and the hermetic
-# phases still decide the exit code.
+# The last phase uses the real Pi binary with a private loopback model,
+# dummy credentials and isolated resources. It tests spawn/parse/record plus
+# a genuine verdict-free turn (exit5), not live OAuth/provider availability or
+# a real model's instruction following. It never borrows a login or pays for
+# model calls. No pi or WHEELHOUSE_SKIP_REAL_PI=1 prints a SKIP line.
 #
 # Usage: verify.selftest.sh [path-to-verify.ts]
+# Focused load case: WHEELHOUSE_VERIFY_SELFTEST_CASE=bead-progress-past-total
+# (same setup, CLI and assertions as the full suite; no other phases run).
 #
 # Exit 0 = verify.ts works here. Non-zero = read the FAIL lines: a failure
 # in phases 1-8 or the real leg means verify.ts broke; a canary failure
@@ -114,7 +116,7 @@ RUN_PATH="$BIN:$PATH" # Keep fixture mocks before inherited host-budget shims.
 # STUB_REPLY_FILE, exits STUB_EXIT (default 0). No sessions, no protocol —
 # the one-shot path is argv in, stdout out, and that is what gets asserted.
 cat > "$BIN/pi" <<'STUB'
-#!/usr/bin/env node
+#!/usr/bin/env bun
 const fs = require("fs"), path = require("path");
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
@@ -128,7 +130,7 @@ if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) require(process.env.WHEELHOUSE_TES
 // export reaching this one-shot process.
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, WHEELHOUSE_REAL_BD: process.env.WHEELHOUSE_REAL_BD ?? null, GIT_DIR: process.env.GIT_DIR ?? null, GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null }));
 if (process.env.STUB_GIT_INIT_REPO) {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const repo = process.env.STUB_GIT_INIT_REPO;
   const cleanEnv = { ...process.env };
   delete cleanEnv.GIT_DIR; delete cleanEnv.GIT_WORK_TREE; delete cleanEnv.GIT_INDEX_FILE;
@@ -144,7 +146,7 @@ if (process.env.STUB_GIT_INIT_REPO) {
   fs.writeFileSync(path.join(agentDir, "git-init-check.json"), JSON.stringify({ before, after, initStatus: init.status, initStderr: init.stderr ?? "", gitDir: process.env.GIT_DIR ?? null, gitWorkTree: process.env.GIT_WORK_TREE ?? null }, null, 2));
 }
 if (process.env.STUB_CLOBBER_CORE_WORKTREE_REPO) {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const cleanEnv = { ...process.env };
   delete cleanEnv.GIT_DIR; delete cleanEnv.GIT_WORK_TREE; delete cleanEnv.GIT_INDEX_FILE;
   cp.spawnSync("git", ["-C", process.env.STUB_CLOBBER_CORE_WORKTREE_REPO, "config", "--local", "core.worktree", process.cwd()], { env: cleanEnv });
@@ -167,7 +169,7 @@ if (watchdogDir) {
   }
 }
 if (process.env.STUB_RUN_BENCH === "1") {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const outDir = path.join(process.cwd(), "bench-out");
   fs.mkdirSync(outDir, { recursive: true });
   const bench = path.join(process.env.WHEELHOUSE_ROOT || "", "wheelhouse", "crew", "bench.sh");
@@ -198,7 +200,7 @@ if (process.env.STUB_SOURCE_CHECK === "1") {
   }
 }
 if (process.env.STUB_CANONICAL_WRITE_REPO) {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const repo = process.env.STUB_CANONICAL_WRITE_REPO;
   let status = "not-run";
   try {
@@ -210,7 +212,7 @@ if (process.env.STUB_CANONICAL_WRITE_REPO) {
   fs.writeFileSync(path.join(agentDir, "canonical-write-attempt.txt"), `repo=${repo}\nstatus=${status}\ncwd=${process.cwd()}\nGIT_WORK_TREE=${process.env.GIT_WORK_TREE ?? ""}\n`);
 }
 if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const started = Date.now();
   const grep = cp.spawnSync("grep", ["-R", "--", "wheelhouse-selftest-never-match", "seats"], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const elapsedMs = Date.now() - started;
@@ -225,7 +227,7 @@ if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
   }, null, 2));
 }
 if (process.env.STUB_BD_READONLY_CHECK === "1") {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const readonlyInstall = path.join(path.dirname(process.cwd()), "readonly-install");
   fs.mkdirSync(path.join(readonlyInstall, ".beads"), { recursive: true });
   const cases = [
@@ -247,10 +249,10 @@ if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
   let logText = "", ok = false;
   try { logText = fs.readFileSync(log, "utf8"); ok = rc === "0" && logText.includes("fixture sweep PASS") && logText.includes("scratch bd create ok"); } catch (e) { logText = `read failed: ${e.message}`; }
   fs.writeFileSync(path.join(agentDir, "sweep-prompt-check.json"), JSON.stringify({ rc, log, ok, logText }, null, 2));
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const readonly = cp.spawnSync("bd", ["create", "reviewer must not write"], { encoding: "utf8" });
   if (!log) {
-    const attempted = cp.spawnSync("bash", ["seats/selftest-sweep.sh"], { timeout: 150, encoding: "utf8" });
+    const attempted = require("node:child_process").spawnSync("bash", ["seats/selftest-sweep.sh"], { timeout: 150, encoding: "utf8" });
     process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : "BOUNCE"}\nPUSH: NOT CONSIDERED\n`}})+"\n");
     process.exit(0);
   }
@@ -261,7 +263,7 @@ if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
   process.exit(0);
 }
 if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const scratchGraph = path.join(process.cwd(), "bd-scratch");
   const siblingInstall = path.join(path.dirname(process.cwd()), "sibling-install");
   const arbitraryCwd = path.join(path.dirname(process.cwd()), "arbitrary-cwd");
@@ -294,7 +296,7 @@ if (process.env.STUB_MUTATE_BATCH_LOG) {
   fs.writeFileSync(file, after);
 }
 if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const repo = process.env.STUB_MOVE_BRANCH_REPO;
   const branch = process.env.STUB_MOVE_BRANCH;
   const gitEnv = { ...process.env };
@@ -347,7 +349,7 @@ if (process.env.STUB_SILENT === "1") {
   }
 } else if (process.env.STUB_HANG_CHILD_AFTER_RESULT === "1") {
   if (!process.env.STUB_SUPPRESS_DEFAULT_PUSH && text && !/^PUSH:/m.test(text)) text += "PUSH:    NOT CONSIDERED\n";
-  const cp = require("child_process");
+  const cp={...require("node:child_process"),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
   const child = cp.spawn(process.execPath, ["-e", "setInterval(()=>{}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] });
   fs.writeFileSync(path.join(agentDir, "hanging-child-pid.txt"), String(child.pid));
   if (streamRequested) {
@@ -544,7 +546,7 @@ EOF
   build_sweep_fixture "$proj"
   ( cd "$proj" &&
     git init -q -b main &&
-    git add seats/README.md seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add seats/README.md seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/native-command.ts seats/completed-command.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
@@ -610,7 +612,7 @@ EOF
   build_sweep_fixture "$umb"
   ( cd "$umb" &&
     git init -q -b main &&
-    git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/native-command.ts seats/completed-command.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella-base ) || { echo "selftest: could not build umbrella git repo" >&2; exit 2; }
   mkdir -p "$product/seats"
   selftest_copy_seat_runtime "$product" "$VERIFY_DIR"
@@ -618,7 +620,7 @@ EOF
   ( cd "$product" &&
     git init -q -b main &&
     mkdir -p evidence && printf 'product branch evidence\n' > evidence/bench.log &&
-    git add evidence/bench.log seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
+    git add evidence/bench.log seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/native-command.ts seats/completed-command.ts seats/python-invocations.ts seats/fixture.selftest.sh &&
     git -c user.email=selftest@local -c user.name=selftest commit -q -m base &&
     git branch fleet/bead-1 ) || { echo "selftest: could not build umbrella product git repo" >&2; exit 2; }
 }
@@ -686,6 +688,43 @@ VDIR="$PROJ/seats/verdicts"
 VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 VINVOKED="$HOME_FIX/.pi-seats-alpha/reviewer/invoked"
 VCWD="$HOME_FIX/.pi-seats-alpha/reviewer/cwd.txt"
+
+review_record_suite() {
+  local record_proj="$FIX/review-record-project" seed="${WHEELHOUSE_REVIEW_RECORD_SEED:-$FIX/actual-review.md}"
+  build_proj "$record_proj" review-records "$VERIFY"
+  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/review-records.ts" "$record_proj" "$HOME_FIX" "$RUN_PATH" "$record_proj/seats/verify.ts" "$seed" "${WHEELHOUSE_REVIEW_RECORD_SEED_ONLY:-0}"
+}
+if [ "${WHEELHOUSE_REVIEW_RECORD_ONLY:-0}" = 1 ]; then review_record_suite; exit $?; fi
+
+# Shared by the full suite and focused load repetitions: the same actual CLI,
+# fixture Pi, acknowledged clock generations and verdict/proof assertions.
+progress_past_total() {
+  cat > "$REPLY" <<'EOF'
+Finished after quoting the previous review without being reaped mid-run.
+VERDICT: APPROVE
+PUSH: NOT CONSIDERED
+EOF
+  WATCHDOG_DIR="$(mktemp -d "$FIX/progress-clock.XXXXXX")"
+  OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" progress bead-progress-past-total fleet/bead-1 worker-1 reviewer --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
+  if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && [ -s "$WATCHDOG_DIR/progress-proof" ]; then
+    pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
+  else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
+}
+manual_scope_cases() {
+  bun "$HERE/fixtures/verify-manual-scope.ts" "$VERIFY" "$FIX/manual-scope" "${WHEELHOUSE_VERIFY_MANUAL_SCOPE_CASE:-all}" || fail 'manual scope prompt/metadata fixtures'
+}
+if [ -n "${WHEELHOUSE_VERIFY_SELFTEST_CASE:-}" ]; then
+  case "$WHEELHOUSE_VERIFY_SELFTEST_CASE" in
+    bead-progress-past-total) progress_past_total ;;
+    manual-scope) manual_scope_cases ;;
+    *) echo "unknown verify selftest case: $WHEELHOUSE_VERIFY_SELFTEST_CASE" >&2; exit 2 ;;
+  esac
+  [ "$FAILED" = 0 ]
+  exit $?
+fi
+
+phase "manual scope: pinned product diff beside the gate's contract outcomes"
+manual_scope_cases
 
 phase "contract gate: no-outcomes review is refused before harness spawn"
 # The gate-removed negative must reach a normally answering harness, not fail
@@ -809,6 +848,9 @@ phase "0a1. required core/full tier selection and receipt gates"
 if bun "$HERE/fixtures/verify-tiers.ts" "$VERIFY_DIR" "$FIX" "$PROJ" "$HOME_FIX" "$RUN_PATH"; then
   pass "tier selection, CLI receipts, core/full batch coverage and sensitive removal controls"
 else fail "core/full review tier regression"; fi
+if bun "$HERE/fixtures/verify-quarantine.ts" "$VERIFY_DIR" "$FIX" "$PROJ" "$HOME_FIX" "$RUN_PATH"; then
+  pass "quarantined failure approval, receipt, policy binding and sensitive controls"
+else fail "quarantine review regression"; fi
 
 # Nightly-only brake and CLI receipt/batch controls; separate from quarantine.
 phase "0an. nightly red brake on digest-only reviews"
@@ -826,8 +868,8 @@ git -C "$SWEEP_PROJ" rm -q seats/fixture.selftest.sh || exit 2
 SWEEP_BIN="$FIX/sweep-bin"; mkdir -p "$SWEEP_BIN"
 export STUB_SWEEP_BASE_BD="$BIN/bd" STUB_SWEEP_PWD_MARKER="$FIX/sweep-pwd.json"
 cat > "$SWEEP_BIN/bd" <<'JS'
-#!/usr/bin/env node
-const fs=require('fs'),cp=require('child_process');
+#!/usr/bin/env bun
+const fs=require('fs'),cp={...require('node:child_process'),...require(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
 if(process.argv[2]==='where') {
   console.log(JSON.stringify({path:fs.realpathSync(require('path').join(process.cwd(),'.beads'))})); process.exit(0);
 }
@@ -838,7 +880,7 @@ if(process.argv[2]==='init') {
   if(pwd!==cwd || !primary) { console.error('scratch bd init requires an isolated primary repo and consistent PWD'); process.exit(73); }
   fs.writeFileSync(process.env.STUB_SWEEP_PWD_MARKER,JSON.stringify({cwd,pwd,primary}));
 }
-const r=cp.spawnSync(process.env.STUB_SWEEP_BASE_BD,process.argv.slice(2),{stdio:'inherit',env:process.env});
+const r=require('node:child_process').spawnSync(process.env.STUB_SWEEP_BASE_BD,process.argv.slice(2),{stdio:'inherit',env:process.env});
 if(r.status===0 && process.argv[2]==='init' && process.env.STUB_SWEEP_MUTATE_SETUP==='1') {
   cp.execFileSync('git',['-c','user.name=selftest','-c','user.email=selftest@local','commit','--allow-empty','-qm','bad sweep setup'],{cwd:require('path').dirname(process.cwd())});
 }
@@ -868,7 +910,7 @@ SH
 chmod +x "$SWEEP_PROJ/seats/selftest-sweep.sh"
 # Detached evidence runs only committed files: include both runner companions.
 printf 'slowed.selftest.sh\n' > "$SWEEP_PROJ/seats/selftest-core.list"
-git -C "$SWEEP_PROJ" add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/python-invocations.ts seats/slowed.selftest.sh
+git -C "$SWEEP_PROJ" add seats/selftest-core.list seats/selftest-sweep.sh seats/selftest-sweep-lock.ts seats/native-command.ts seats/completed-command.ts seats/python-invocations.ts seats/slowed.selftest.sh
 git -C "$SWEEP_PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m sweep-fixture
 git -C "$SWEEP_PROJ" branch -f fleet/bead-1 HEAD
 SWEEP_TIP="$(git -C "$SWEEP_PROJ" rev-parse fleet/bead-1)"
@@ -1306,12 +1348,12 @@ if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && grep -q 'VERDICT: APPROVE' "$VDIR
   pass "post-result background child cannot keep verify open after final VERDICT/PUSH lines"
 else fail "post-result background child kept verify open or verdict was not recorded (exit $RC child=$HANG_CHILD_PID): $OUT"; fi
 if [ -n "$HANG_CHILD_PID" ]; then
-  for _ in $(seq 1 3000); do kill -0 "$HANG_CHILD_PID" 2>/dev/null || break; sleep 0.1; done
+  printf 'FIXTURE_WAIT verify: background child native absence, pid=%s\n' "$HANG_CHILD_PID" >&2
+  while kill -0 "$HANG_CHILD_PID" 2>/dev/null; do sleep 0.1; done
 fi
 if [ -z "$HANG_CHILD_PID" ] || ! kill -0 "$HANG_CHILD_PID" 2>/dev/null; then
   pass "post-result background child process group is reaped"
 else
-  kill "$HANG_CHILD_PID" 2>/dev/null || true
   fail "post-result background child survived reviewer cleanup (pid=$HANG_CHILD_PID)"
 fi
 cat > "$REPLY" <<'EOF'
@@ -1323,11 +1365,7 @@ OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIM
 if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && ! says "exited 143" && grep -q 'VERDICT: APPROVE' "$VDIR/bead-pi-quoted-verdict.md" 2>/dev/null; then
   pass "pi quoted mid-run verdict is not reaped before agent_end"
 else fail "pi quoted mid-run verdict was killed or failed (exit $RC): $OUT"; fi
-WATCHDOG_DIR="$(mktemp -d "$FIX/progress-clock.XXXXXX")"
-OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" STUB_LONG_TOOL_PROGRESS=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" progress bead-progress-past-total fleet/bead-1 worker-1 reviewer --timeout-ms 300 --no-event-timeout-ms 150 2>&1)"; RC=$?
-if [ $RC -eq 0 ] && says "VERDICT: APPROVE" && [ -s "$WATCHDOG_DIR/progress-proof" ]; then
-  pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
-else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
+progress_past_total
 WATCHDOG_DIR="$(mktemp -d "$FIX/silent-readiness.XXXXXX")"
 OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_SILENT=1 bun "$READINESS_DRIVER" "$RUN_PROJ/seats/verify.ts" "$WATCHDOG_DIR" silent bead-silent fleet/bead-1 worker-1 reviewer 2>&1)"; RC=$?
 if [ $RC -eq 1 ] && [ -f "$WATCHDOG_DIR/expired-first" ] && says "reviewer emitted no stdout/stderr within" && says "first-output deadline" && says "--first-output-timeout-ms"; then
@@ -1667,8 +1705,8 @@ mkfifo "$LOCK_RELEASE"
 exec 7<> "$LOCK_RELEASE"
 perl -MFcntl=:flock -e 'open(my $fh, ">>", $ARGV[0]) or die $!; flock($fh, LOCK_EX) or die $!; open(my $ready, ">", $ARGV[1]) or die $!; print $ready "held\n"; close($ready); open(my $release, "<", $ARGV[2]) or die $!; scalar(<$release>);' "$LOCK" "$LOCK_READY" "$LOCK_RELEASE" 7>&- &
 LOCK_PID=$!
-LOCK_DEADLINE=$((SECONDS+300))
-while [ ! -s "$LOCK_READY" ] && kill -0 "$LOCK_PID" 2>/dev/null && [ "$SECONDS" -lt "$LOCK_DEADLINE" ]; do sleep 0.05; done
+printf 'FIXTURE_WAIT verify: held-flock acknowledgement, pid=%s file=%s\n' "$LOCK_PID" "$LOCK_READY" >&2
+while [ ! -s "$LOCK_READY" ] && kill -0 "$LOCK_PID" 2>/dev/null; do sleep 0.05; done
 [ -s "$LOCK_READY" ] || fail "host-budget fixture never published its held-flock acknowledgement"
 RC=0; OUT="$(env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY_FILE="$REPLY" WHEELHOUSE_BUILD_LOCK="$LOCK" bun "$RUN_PROJ/seats/verify.ts" bead-1 fleet/bead-1 worker-1 2>&1)" || RC=$?
 printf 'release\n' >&7
@@ -2305,8 +2343,9 @@ SHA_BRANCH="0123456789abcdef0123456789abcdef01234567"
 git -C "$PROJ" branch "$SHA_BRANCH" HEAD >/dev/null 2>&1
 HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/scratch-owner.ts" live "$PROJ/seats/verify.ts" "$PROJ" verify "$FIX/live-owner.json" > "$FIX/live-owner.out" 2>&1 &
 LIVE_OWNER_PID=$!
-LIVE_READY_DEADLINE=$((SECONDS+300))
-while [ ! -s "$FIX/live-owner.json" ] && kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ "$SECONDS" -lt "$LIVE_READY_DEADLINE" ]; do sleep 0.05; done
+printf 'FIXTURE_WAIT verify: live-owner record, pid=%s\n' "$LIVE_OWNER_PID" >&2
+while [ ! -s "$FIX/live-owner.json" ] && kill -0 "$LIVE_OWNER_PID" 2>/dev/null; do sleep 0.05; done
+[ -s "$FIX/live-owner.json" ] || { fail 'live owner exited before publishing its record'; exit 1; }
 LIVE_DIR="$(node -pe 'require(process.argv[1]).dir' "$FIX/live-owner.json")"
 if git -C "$PROJ" worktree list | grep -F >/dev/null "$ORPHAN_DIR" \
    && git -C "$PROJ" worktree list | grep -F >/dev/null "$REVIEW_ORPHAN_DIR" \
@@ -2342,14 +2381,16 @@ CONCURRENT_PID_A=$!
 (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$CONCURRENT_LOCK_B" STUB_STALL=1 bun "$PROJ/seats/verify.ts" bead-b fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$CONCURRENT_OUT_B" 2>&1) &
 CONCURRENT_PID_B=$!
 CONCURRENT_DIRS=""
-CONCURRENT_READY_DEADLINE=$((SECONDS+300))
-while [ "$SECONDS" -lt "$CONCURRENT_READY_DEADLINE" ]; do
+printf 'FIXTURE_WAIT verify: both concurrent registered worktrees, entries=%s/%s\n' "$CONCURRENT_PID_A" "$CONCURRENT_PID_B" >&2
+while kill -0 "$CONCURRENT_PID_A" 2>/dev/null && kill -0 "$CONCURRENT_PID_B" 2>/dev/null; do
   # The token-bearing owner is the real review, not its forwarding entry PID.
   # Legacy direct entries remain their own PID if no active lock is present.
   CONCURRENT_OWNER_A="$CONCURRENT_PID_A"; CONCURRENT_OWNER_B="$CONCURRENT_PID_B"
   [ ! -f "$CONCURRENT_LOCK_A/pid" ] || IFS= read -r CONCURRENT_OWNER_A < "$CONCURRENT_LOCK_A/pid"
   [ ! -f "$CONCURRENT_LOCK_B/pid" ] || IFS= read -r CONCURRENT_OWNER_B < "$CONCURRENT_LOCK_B/pid"
-  CONCURRENT_DIRS="$(git -C "$PROJ" worktree list --porcelain 2>/dev/null | awk -v a="wheelhouse-verify-${CONCURRENT_OWNER_A}-" -v b="wheelhouse-verify-${CONCURRENT_OWNER_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
+  CONCURRENT_ENUM_RC=0; CONCURRENT_ENUM="$(git -C "$PROJ" worktree list --porcelain 2> "$FIX/concurrent-worktrees.stderr")" || CONCURRENT_ENUM_RC=$?
+  if [ "$CONCURRENT_ENUM_RC" != 0 ]; then fail "concurrent worktree observer failed rc=$CONCURRENT_ENUM_RC: $(cat "$FIX/concurrent-worktrees.stderr")"; break; fi
+  CONCURRENT_DIRS="$(printf '%s\n' "$CONCURRENT_ENUM" | awk -v a="wheelhouse-verify-${CONCURRENT_OWNER_A}-" -v b="wheelhouse-verify-${CONCURRENT_OWNER_B}-" '/^worktree /{p=substr($0,10); if (index(p,a) || index(p,b)) print p}' | sort)"
   [ "$(printf '%s\n' "$CONCURRENT_DIRS" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2 ] && break
   sleep 0.05
  done
@@ -2377,13 +2418,18 @@ wait "$CONCURRENT_PID_B" 2>/dev/null || true
 
 kill -KILL "$LIVE_OWNER_PID" 2>/dev/null
 wait "$LIVE_OWNER_PID" 2>/dev/null || true
-i=0; while kill -0 "$LIVE_OWNER_PID" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+# wait above joined the exact child; no extra scheduling allowance is evidence.
 run   # a second sweep pass, now that the "live" owner has actually exited
 if ! git -C "$PROJ" worktree list | grep -F >/dev/null "$LIVE_DIR" && [ ! -d "$LIVE_DIR" ]; then
   pass "once its owner pid actually exits, a later sweep reclaims that worktree too"
 else fail "the formerly-live worktree was not reclaimed after its owner pid died: $(git -C "$PROJ" worktree list)"; fi
 
 phase "10b. killed one-shot — reaper leaves no scratch worktree or SHA branch"
+OWN_OBSERVER="$HERE/fixtures/verify-own-worktree.ts"
+OWN_CONTROL="$FIX/own-worktree-control"; mkdir -p "$OWN_CONTROL"
+if bun "$HERE/fixtures/verify-own-worktree-controls.ts" "$OWN_CONTROL"; then
+  pass "own-worktree observer ignores a native foreign Git128 and rejects its own failures/removals"
+else fail "own-worktree observer regression controls failed"; exit 1; fi
 KILL_PROJ="$FIX/proj-kill"
 build_proj "$KILL_PROJ" kill "$VERIFY"
 RUN_PROJ="$KILL_PROJ"; VDIR="$KILL_PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-kill/reviewer/argv.json"
@@ -2394,22 +2440,28 @@ KILL_CORE_WORKTREE_BEFORE="$(core_worktree_snapshot "$KILL_PROJ")"
 KILLED_GATE_LOCK="$FIX/killed-gate.lock"
 (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$KILLED_GATE_LOCK" STUB_STALL=1 bun "$RUN_PROJ/seats/verify.ts" bead-kill fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$OUT_FILE" 2>&1) &
 KILLED_DISPATCHER_PID=$!
-KILLED_DIR=""
+KILLED_DIR=""; KILLED_ADMIN=""
 PI_PID_FILE="$HOME_FIX/.pi-seats-kill/reviewer/pi-pid.txt"
-KILLED_READY_DEADLINE=$((SECONDS+300))
-while [ "$SECONDS" -lt "$KILLED_READY_DEADLINE" ]; do
-  KILLED_DIR="$(git -C "$KILL_PROJ" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
-  # Child launch proves makeScratchCwd finished its ownership record, not just
-  # Git registration. Killing before that record must fail closed, not adopt it.
-  [ -n "$KILLED_DIR" ] && [ -s "$PI_PID_FILE" ] && break
+KILLED_CWD_FILE="$HOME_FIX/.pi-seats-kill/reviewer/cwd.txt"
+printf 'FIXTURE_WAIT verify: registered killed-gate worktree and model entry, pid=%s\n' "$KILLED_DISPATCHER_PID" >&2
+while kill -0 "$KILLED_DISPATCHER_PID" 2>/dev/null; do
+  # The model's own cwd receipt proves launch followed makeScratchCwd's owner
+  # publication. Never enumerate another review's mutable Git admin files.
+  if [ -s "$PI_PID_FILE" ] && [ -s "$KILLED_CWD_FILE" ]; then
+    IFS= read -r KILLED_DIR < "$KILLED_CWD_FILE"
+    KILLED_REAL_PID="$KILLED_DISPATCHER_PID"
+    [ ! -f "$KILLED_GATE_LOCK/pid" ] || IFS= read -r KILLED_REAL_PID < "$KILLED_GATE_LOCK/pid"
+    if ! KILLED_ADMIN="$(bun "$OWN_OBSERVER" registered "$KILL_PROJ" "$KILLED_DIR" "$KILLED_REAL_PID" 2> "$FIX/killed-worktrees.stderr")"; then
+      fail "killed-gate own-worktree observer failed: $(cat "$FIX/killed-worktrees.stderr")"; exit 1
+    fi
+    break
+  fi
   sleep 0.05
 done
-if [ -n "$KILLED_DIR" ]; then pass "killed one-shot fixture reached a registered scratch worktree"
-else fail "killed one-shot fixture never registered a scratch worktree: $(cat "$OUT_FILE" 2>/dev/null)"; fi
+if [ -n "$KILLED_DIR" ] && [ -n "$KILLED_ADMIN" ] && [ -s "$PI_PID_FILE" ]; then pass "killed one-shot fixture reached its own registered scratch worktree and model entry"
+else fail "killed one-shot fixture exited before complete scratch/model setup: $(cat "$OUT_FILE" 2>/dev/null)"; exit 1; fi
 # Kill the real dispatcher owning this fresh private endpoint, not merely its
 # proxy (whose death intentionally leaves a live admitted run protected).
-KILLED_REAL_PID="$KILLED_DISPATCHER_PID"
-[ ! -f "$KILLED_GATE_LOCK/pid" ] || IFS= read -r KILLED_REAL_PID < "$KILLED_GATE_LOCK/pid"
 case "$KILLED_DIR" in
   */wheelhouse-verify-"$KILLED_REAL_PID"-*)
     kill -9 "$KILLED_REAL_PID" 2>/dev/null || true ;;
@@ -2421,12 +2473,10 @@ wait "$KILLED_DISPATCHER_PID" 2>/dev/null || true
 
 if [ -s "$PI_PID_FILE" ]; then kill "$(cat "$PI_PID_FILE")" 2>/dev/null || true; fi
 run   # sweep the killed run's scratch worktree and stale SHA branch
-if [ -n "$KILLED_DIR" ] && ! git -C "$KILL_PROJ" worktree list | grep -F >/dev/null "$KILLED_DIR" && [ ! -d "$KILLED_DIR" ]; then
-  pass "killed one-shot scratch worktree was reclaimed by the reaper pass"
-else fail "killed one-shot scratch survived: dir=$KILLED_DIR list=$(git -C "$KILL_PROJ" worktree list)"; fi
-if ! git -C "$KILL_PROJ" show-ref --verify --quiet "refs/heads/$KILL_SHA_BRANCH"; then
-  pass "killed one-shot reaper pass removed the stale SHA-named branch"
-else fail "killed one-shot stale SHA branch survived"; fi
+if bun "$OWN_OBSERVER" reaped "$KILL_PROJ" "$KILLED_DIR" "$KILLED_ADMIN" "$KILL_SHA_BRANCH" 2> "$FIX/killed-reaped.stderr"; then
+  pass "killed one-shot own scratch directory and registration were reclaimed by the reaper pass"
+  pass "killed one-shot reaper pass removed the stale SHA-named branch (native Git status1)"
+else fail "killed one-shot own-resource cleanup failed: $(cat "$FIX/killed-reaped.stderr")"; fi
 if [ "$(core_worktree_snapshot "$KILL_PROJ")" = "$KILL_CORE_WORKTREE_BEFORE" ]; then
   pass "killed verify run leaves product repo core.worktree byte-identical"
 else fail "killed verify changed core.worktree: before=$KILL_CORE_WORKTREE_BEFORE after=$(core_worktree_snapshot "$KILL_PROJ")"; fi
@@ -2441,14 +2491,17 @@ signal_cleanup_case() {
   (env -u WHEELHOUSE_VERIFY_TIMEOUT_MS -u WHEELHOUSE_VERIFY_FIRST_OUTPUT_TIMEOUT_MS -u WHEELHOUSE_VERIFY_NO_EVENT_TIMEOUT_MS -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_STALL=1 STUB_CLOBBER_CORE_WORKTREE_REPO="$sig_proj" bun "$sig_proj/seats/verify.ts" "bead-$ns" fleet/bead-1 worker-1 reviewer --timeout-ms 1800000 >"$out_file" 2>&1) &
   local dispatcher_pid=$!
   dir=""
-  local ready_deadline=$((SECONDS+300))
-  while [ "$SECONDS" -lt "$ready_deadline" ]; do
-    dir="$(git -C "$sig_proj" worktree list --porcelain 2>/dev/null | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p' || true)"
+  printf 'FIXTURE_WAIT verify: %s scratch registration and clobber receipt, pid=%s\n' "$label" "$dispatcher_pid" >&2
+  local enum enum_rc
+  while kill -0 "$dispatcher_pid" 2>/dev/null; do
+    enum_rc=0; enum="$(git -C "$sig_proj" worktree list --porcelain 2> "$FIX/$ns-worktrees.stderr")" || enum_rc=$?
+    if [ "$enum_rc" != 0 ]; then fail "$label worktree observer failed rc=$enum_rc: $(cat "$FIX/$ns-worktrees.stderr")"; break; fi
+    dir="$(printf '%s\n' "$enum" | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p')"
     [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/reviewer/core-worktree-clobber.txt" ] && break
     sleep 0.05
   done
-  if [ -n "$dir" ]; then pass "$label fixture reached a registered scratch worktree"
-  else fail "$label fixture never registered a scratch worktree: $(cat "$out_file" 2>/dev/null)"; fi
+  if [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/reviewer/core-worktree-clobber.txt" ]; then pass "$label fixture reached a registered scratch worktree and clobber receipt"
+  else fail "$label fixture exited before complete scratch/clobber setup: $(cat "$out_file" 2>/dev/null)"; return 1; fi
   kill -"$sig" "$dispatcher_pid" 2>/dev/null || true
   wait "$dispatcher_pid" 2>/dev/null; wait_rc=$?
   pid_file="$HOME_FIX/.pi-seats-$ns/reviewer/pi-pid.txt"
@@ -2465,17 +2518,11 @@ signal_cleanup_case TERM 143 sigterm SIGTERM
 signal_cleanup_case INT 130 sigint SIGINT
 RUN_PROJ="$PROJ"; VDIR="$PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 
-phase "11. real pi — one smoke leg through the actual binary (SKIP-able)"
-REAL_AUTH="$HOME/.pi/agent/auth.json"
-real_auth_is_identity() {
-  [ -f "$REAL_AUTH" ] && [ -n "$(tr -d '{}[:space:]' < "$REAL_AUTH" 2>/dev/null)" ]
-}
+phase "11. real pi — local model spawn/parse/record and stripped-verdict control (SKIP-able)"
 if [ "${WHEELHOUSE_SKIP_REAL_PI:-}" = "1" ]; then
   skip "real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1"
 elif [ -z "$REAL_PI" ]; then
   skip "real-pi leg: no pi on PATH (npm install -g @earendil-works/pi-coding-agent)"
-elif ! real_auth_is_identity; then
-  skip "real-pi leg: $REAL_AUTH missing or empty — run pi, then /login inside the REPL once as yourself"
 else
   RPROJ="$FIX/realproj"
   RHOME="$FIX/realhome"
@@ -2483,64 +2530,21 @@ else
   HOME_SAVE="$HOME_FIX"; HOME_FIX="$RHOME"
   build_proj "$RPROJ" real "$VERIFY"
   HOME_FIX="$HOME_SAVE"
-  # The smoke brief scripts the reply, so one trivial model turn exercises
-  # spawn -> parse -> record against the real binary without a real review.
   cat > "$RPROJ/contracts/REVIEWER.md" <<'EOF'
-SMOKE TEST. Ignore the task in the prompt. Reply with exactly these two
-lines and nothing else, using no tools:
-VERDICT: APPROVE
-PUSH:    NOT CONSIDERED
+SMOKE TEST. This is a local-model CLI protocol fixture, not a live review.
+The controlled model emits the verdict text or its verdict-stripped control.
 EOF
-  # Borrow the real login into the reviewer seat only; it dies with the fixture.
-  RSEAT="$RHOME/.pi-seats-real/reviewer"
-  cp "$REAL_AUTH" "$RSEAT/auth.json" && chmod 600 "$RSEAT/auth.json"
-  [ -f "$HOME/.pi/agent/settings.json" ] && cp "$HOME/.pi/agent/settings.json" "$RSEAT/settings.json"
-  # No --provider/--model pin by default: whatever your login can actually
-  # run. When the working login is NOT pi's default provider, pin both
-  # (always together — see the roster gotcha in README.md):
-  #   WHEELHOUSE_REAL_PI_PROVIDER=... WHEELHOUSE_REAL_PI_MODEL=...
-  env HOME="$RHOME" bun -e '
-    import fs from "node:fs";
-    const f = process.argv[1];
-    const j = JSON.parse(fs.readFileSync(f, "utf8"));
-    const p = process.env.WHEELHOUSE_REAL_PI_PROVIDER, m = process.env.WHEELHOUSE_REAL_PI_MODEL;
-    if (p && m) { j.seats.reviewer.provider = p; j.seats.reviewer.model = m; }
-    else { delete j.seats.reviewer.provider; delete j.seats.reviewer.model; }
-    fs.writeFileSync(f, JSON.stringify(j, null, 2));
-  ' "$RPROJ/seats/seats.json"
-  REAL_PATH="$(dirname "$REAL_PI"):$(dirname "$(command -v bun)"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
-  OUT="$(env HOME="$RHOME" PATH="$REAL_PATH" WHEELHOUSE_VERIFY_TIMEOUT_MS=180000 \
-    bun "$RPROJ/seats/verify.ts" smoke-1 fleet/bead-1 worker-1 2>&1)"; RC=$?
-  if [ $RC -eq 0 ] && says "VERDICT: APPROVE"; then
-    pass "real: one-shot spawn/parse/record round-trips through the real pi"
-  else fail "real: smoke leg exited ${RC}: $OUT"; fi
-  if grep -q "verdict: APPROVE" "$RPROJ/seats/verdicts/smoke-1.md" 2>/dev/null; then
-    pass "real: verdict file recorded"
-  else fail "real: no verdict file from the real leg"; fi
-  # The hermetic no-leak phase proves the rule with a sentinel; the real leg
-  # must hold the same line for the REAL credential, before the fixture (and
-  # the copied auth.json) is deleted: no string value from auth.json may
-  # appear in the verdict record.
-  AUTH_LEAK=0
-  while IFS= read -r tok; do
-    [ -n "$tok" ] || continue
-    if grep -rqF -- "$tok" "$RPROJ/seats/verdicts/" 2>/dev/null; then
-      AUTH_LEAK=1
-    fi
-  done < <("$NODE_BIN" -e '
-    const fs = require("fs");
-    const out = [];
-    const walk = (v) => {
-      if (typeof v === "string") { if (v.length >= 16 && !v.includes("\n")) out.push(v); }
-      else if (v && typeof v === "object") for (const k of Object.keys(v)) walk(v[k]);
-    };
-    walk(JSON.parse(fs.readFileSync(process.argv[1], "utf8")));
-    for (const t of out) process.stdout.write(t + "\n");
-  ' "$RSEAT/auth.json")
-  if [ "$AUTH_LEAK" -eq 0 ]; then
-    pass "real: no auth material in the verdict record before fixture deletion"
-  else fail "real: a value from the borrowed auth.json appears in seats/verdicts/"; fi
+  # Native Pi, never the hermetic pi stub; a separate safe bd fixture keeps
+  # the real dispatcher sweep/receipt gate active without a production graph.
+  if bun "$HERE/fixtures/verify-real-smoke.ts" "$RPROJ" "$RHOME" "$REAL_PI" "$BIN/bd"; then
+    pass 'real: local-model Pi spawn/parse/record and exit5 stripped-verdict control'
+  else
+    fail 'real: local-model Pi smoke failed (native evidence above)'
+  fi
 fi
+
+phase 'completed review records are readable; incomplete runs are not approval'
+if review_record_suite; then pass 'review record ordering reader assertions completed'; else fail 'review record reader regression'; fi
 
 printf '\n'
 if [ $FAILED -eq 0 ]; then

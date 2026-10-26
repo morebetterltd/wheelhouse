@@ -11,7 +11,7 @@ const lock = path.join(host, "wheelhouse-selftest-sweep.lock"), pause = path.joi
 const installs = ["A", "B"].map(name => {
   const dir = path.join(root, name), seats = path.join(dir, "seats"); fs.mkdirSync(seats, { recursive: true });
   fs.mkdirSync(path.join(dir, "tmp"));
-  for (const file of ["heavy-test.sh", "heavy-test-entry.ts", "selftest-sweep.sh", "selftest-sweep-lock.ts", "python-invocations.ts"]) {
+  for (const file of ["heavy-test.sh", "heavy-test-entry.ts", "selftest-sweep.sh", "selftest-sweep-lock.ts", "native-command.ts", "completed-command.ts", "python-invocations.ts"]) {
     const original = fs.readFileSync(path.join(source, file), "utf8");
     // Only relocate the canonical endpoint, not TMPDIR, as in the default-lock
     // sweep regression. Otherwise this inner fixture would queue on its parent.
@@ -53,9 +53,9 @@ const runs: Run[] = [];
 const listeners = new Set<() => void>();
 const notify = () => { for (const f of [...listeners]) f(); };
 async function until(p: Run, test: () => boolean, label: string) {
+  console.error(`FIXTURE_WAIT heavy-test: ${label}, child=${p.child.pid}`);
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => finish(Error("INCOMPLETE waiting for " + label)), 20000);
-    const finish = (error?: Error) => { clearTimeout(timer); listeners.delete(check); error ? reject(error) : resolve(); };
+    const finish = (error?: Error) => { listeners.delete(check); error ? reject(error) : resolve(); };
     const check = () => { if (test()) finish(); else if (p.closed) finish(Error(`${label}: early exit ${p.code}/${p.signal}\n${p.out}\n${p.err}`)); };
     listeners.add(check); check();
   });

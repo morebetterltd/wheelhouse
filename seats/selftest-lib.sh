@@ -414,12 +414,16 @@ $(find "$root" -path '*/seats/state.json' -type f 2>/dev/null)
 EOF
 }
 
+# TERM grace is an escalation policy; census spacing is not evidence of exit.
+SELFTEST_CLEANUP_TERM_GRACE_S=0.2
+SELFTEST_CLEANUP_OBSERVE_INTERVAL_S=0.1
+SELFTEST_CLEANUP_RETIRE_LIMIT_S=120
 selftest_cleanup_fixture_processes() {
   root="${1:-}"
   shift || true
   [ -n "$root" ] || return 0
   [ -e "$root" ] || [ -L "$root" ] || return 0
-  local canonical_root
+  local canonical_root fixture_pids="" fixture_pid
   canonical_root="$(cd "$root" 2>/dev/null && pwd -P)" || { selftest_fixture_refused "$root" 'cannot canonicalize allocation'; return 2; }
   root="$canonical_root"
   selftest_require_fixture_owner "$root" || return 2
@@ -432,30 +436,28 @@ selftest_cleanup_fixture_processes() {
   done
 
   pids="$(selftest_fixture_processes "$root" | awk '{print $1}' | tr '\n' ' ')"
+  fixture_pids="$pids"
   [ -n "$pids" ] && kill $pids >/dev/null 2>&1 || true
-  sleep 0.2
+  sleep "$SELFTEST_CLEANUP_TERM_GRACE_S"
   pids="$(selftest_fixture_processes "$root" | awk '{print $1}' | tr '\n' ' ')"
+  fixture_pids="$fixture_pids $pids"
   [ -n "$pids" ] && kill -9 $pids >/dev/null 2>&1 || true
-  sleep 0.1
+  # Retain the TERM cohort too: a promptly terminated direct child disappears
+  # from the KILL census but still needs its parent's wait. Nonchildren return
+  # 127 immediately; their disappearance remains checked below.
+  for fixture_pid in $fixture_pids; do wait "$fixture_pid" 2>/dev/null || true; done
 
-  leaks="$(selftest_fixture_processes "$root" || true)"
-  if [ -n "$leaks" ]; then
-    sleep 0.2
-    stable=""
-    while IFS= read -r line; do
-      pid="${line%% *}"
-      [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && stable="${stable}${stable:+
-}$line"
-    done <<EOF
-$leaks
-EOF
-    if [ -n "$stable" ]; then
-      echo "selftest cleanup leak under $root:" >&2
-      printf '%s\n' "$stable" >&2
+  local retire_until=$((SECONDS + SELFTEST_CLEANUP_RETIRE_LIMIT_S))
+  while :; do
+    leaks="$(selftest_fixture_processes "$root")" || { echo "STOP: fixture retirement observation unavailable under $root" >&2; return 2; }
+    [ -n "$leaks" ] || return 0
+    if [ "$SECONDS" -ge "$retire_until" ]; then
+      echo "selftest cleanup retirement policy expired under $root; last native observation:" >&2
+      printf '%s\n' "$leaks" >&2
       return 1
     fi
-  fi
-  return 0
+    sleep "$SELFTEST_CLEANUP_OBSERVE_INTERVAL_S"
+  done
 }
 
 # Admission happens on source, before fixture allocation or suite work. A

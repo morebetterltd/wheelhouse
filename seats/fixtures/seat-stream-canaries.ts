@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 // Each new test case must reject removal of its corresponding fix. Copies are
 // beneath the enclosing selftest allocation; never mutate the source checkout.
 type Mutation = [test: string, file: string, before: string, after: string];
@@ -27,9 +27,9 @@ const mutations: Mutation[] = [
   ["rotation", "seat-stream-health.ts", 'return { active, sawLifecycle, last, key, received, tools };', 'if (!sawLifecycle && !prior) active = true; return { active, sawLifecycle, last, key, received, tools };'],
   ["rotation", "seat-stream-health.ts", '} else if (!/compaction_/.test(type)) {', '} else {'],
   ["alert", "adapter.ts", 'Boolean(stream?.stalled)', 'false'],
-  ["dedupe", "alerts.ts", 'next.active&&(!was?.active||was.signature!==next.signature)', 'next.active'],
+  ["dedupe", "alerts.ts", 'const shouldFire = next.active&&(!was?.active||was.signature!==next.signature)', 'const shouldFire = next.active'],
   ["need", "alerts.ts", 'stream && age>=seatStallNeedMs(ROOT)', 'false && stream && age>=seatStallNeedMs(ROOT)'],
-  ["recovery", "alerts.ts", 'if(!next.active&&was?.active)', 'if(false&&!next.active&&was?.active)'],
+  ["recovery", "alerts.ts", 'if(!next.active&&was?.active){', 'if(false&&!next.active&&was?.active){'],
   ["exclusions", "seat-stream-health.ts", 'rec.stoppedAt || ', ''],
 ];
 export async function mutationChecks(root: string, fixture: string) {

@@ -49,13 +49,21 @@ let sessionFile, sessionId;
 const si = args.indexOf("--session");
 if (si !== -1) { sessionFile = args[si + 1]; sessionId = path.basename(sessionFile, ".jsonl"); fs.appendFileSync(sessionFile, JSON.stringify({type:"resumed"})+"\n"); }
 else { sessionId = crypto.randomUUID(); sessionFile = path.join(sessDir, sessionId + ".jsonl"); fs.writeFileSync(sessionFile, JSON.stringify({type:"session-start"})+"\n"); }
-let streaming = false;
+let streaming = false, turnPoll, turnCap;
+const held = path.join(agentDir, "turn.held"), release = path.join(agentDir, "turn.release"), capped = path.join(agentDir, "turn.capped");
 const out = (o) => process.stdout.write(JSON.stringify(o)+"\n");
-function finish(cmd){ fs.appendFileSync(sessionFile, JSON.stringify({type:"prompt", message:cmd.message})+"\n"); out({type:"agent_end", messages:[]}); streaming = false; }
+function finish(cmd){ clearInterval(turnPoll); clearTimeout(turnCap); fs.rmSync(held, {force:true}); fs.appendFileSync(sessionFile, JSON.stringify({type:"prompt", message:cmd.message})+"\n"); streaming = false; out({type:"agent_end", messages:[]}); }
+function hold(cmd){
+  fs.rmSync(release, {force:true}); fs.rmSync(capped, {force:true}); fs.writeFileSync(held, "mid-turn\n");
+  turnPoll = setInterval(() => { if (fs.existsSync(release)) finish(cmd); }, 25);
+  // Only explicit release completes the turn. The admitted sweep contains a
+  // broken test; a slower host must not expire this actor while it is measured.
+  // Keep capped as a tripwire for controls which restore the old fixture timer.
+}
 function handle(cmd){
   const id = cmd.id;
   if (cmd.type === "get_state") out({id, type:"response", command:"get_state", success:true, data:{isStreaming:streaming, sessionFile, sessionId}});
-  else if (cmd.type === "prompt") { streaming = true; out({id, type:"response", command:"prompt", success:true}); out({type:"agent_start"}); /SLOW/.test(cmd.message) ? setTimeout(()=>finish(cmd), 1500) : finish(cmd); }
+  else if (cmd.type === "prompt") { streaming = true; const slow = /SLOW/.test(cmd.message); if (slow) hold(cmd); out({id, type:"response", command:"prompt", success:true}); out({type:"agent_start"}); if (!slow) finish(cmd); }
   else out({id, type:"response", command:cmd.type, success:false, error:"stub unknown"});
 }
 let buf=""; process.stdin.on("data", c => { buf += c.toString("utf8"); let i; while ((i=buf.indexOf("\n")) !== -1) { const line=buf.slice(0,i); buf=buf.slice(i+1); if (line.trim()) handle(JSON.parse(line)); }});
@@ -91,10 +99,10 @@ EOF
 }
 
 RUN_PROJ=""
-run(){ RC=0; OUT="$(with_timeout 30 env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run(){ RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
 says(){ case "$OUT" in *"$1"*) return 0;; *) return 1;; esac; }
 state_get(){ env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$RUN_PROJ/seats/state.json','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(v)"; }
-wait_for(){ local file="$1" text="$2" i=0; while [ $i -lt 50 ]; do [ -f "$file" ] && grep -q "$text" "$file" && return 0; sleep 0.1; i=$((i+1)); done; return 1; }
+wait_for(){ bun "$HERE/fixtures/file-event.ts" "$1" "$2" "${3:-}"; }
 
 phase "1. all-idle stop-all stops every running rostered seat"
 PROJ="$FIX/proj"; build_proj "$PROJ" alpha; RUN_PROJ="$PROJ"
@@ -115,11 +123,16 @@ run spawn worker-b; [ $RC -eq 0 ] || fail "busy setup spawn b failed: $OUT"
 run dispatch worker-a bead-x "SLOW keep this turn open"; [ $RC -eq 0 ] || fail "busy setup dispatch failed: $OUT"
 wait_for "$PROJ2/seats/logs/worker-a.jsonl" 'agent_start' || fail "busy turn did not start"
 PID_BUSY="$(state_get worker-a pid)"; SESS_BUSY="$(state_get worker-a sessionFile)"; SESS_IDLE="$(state_get worker-b sessionFile)"
+BUSY_AGENT="$HOME_FIX/.pi-seats-beta/worker-a"
+[ -f "$BUSY_AGENT/turn.held" ] && [ ! -e "$BUSY_AGENT/turn.capped" ] || fail "busy fixture was not holding a live turn"
 run stop-all
 if [ $RC -eq 0 ] && says "worker-a: BUSY mid-turn; NOT stopped" && says "worker-b stopped"; then pass "stop-all reports busy seat and still stops idle peer"; else fail "busy stop-all outcome wrong (rc=$RC): $OUT"; fi
 if [ "$(state_get worker-a pid)" = "$PID_BUSY" ] && kill -0 "$PID_BUSY" 2>/dev/null; then pass "busy seat was not killed"; else fail "busy seat was touched or killed"; fi
 if [ "$(state_get worker-a sessionFile)" = "$SESS_BUSY" ] && [ "$(state_get worker-b sessionFile)" = "$SESS_IDLE" ]; then pass "busy and stopped sessions remain resumable in state.json"; else fail "session records changed unexpectedly"; fi
-wait_for "$PROJ2/seats/logs/worker-a.jsonl" 'agent_end' || fail "busy turn did not finish after being spared"
+if [ -f "$BUSY_AGENT/turn.held" ] && [ ! -e "$BUSY_AGENT/turn.capped" ] && selftest_capture_lacks "$PROJ2/seats/logs/worker-a.jsonl" -q -- 'agent_end'; then pass "busy turn stays open until explicit test release"
+else fail "busy turn ended or hit its safety cap before test release"; fi
+printf 'release\n' > "$BUSY_AGENT/turn.release"
+wait_for "$PROJ2/seats/logs/worker-a.jsonl" 'agent_end' "$PID_BUSY" || fail "busy turn did not finish after explicit test release"
 run stop-all >/dev/null
 
 phase "2b. codex-harness seats use the shared stop path and do not abort later stops"
@@ -137,10 +150,15 @@ CAN="$FIX/can"; build_proj "$CAN" can; sed 's|if (st.data?.isStreaming) {|if (fa
 if cmp -s "$ADAPTER" "$CAN/seats/adapter.ts"; then
   fail "canary: could not cut stop-all's isStreaming check"
 else
-  RUN_PROJ="$CAN"; run spawn worker-a; run spawn worker-b; run dispatch worker-a bead-x "SLOW canary"; wait_for "$CAN/seats/logs/worker-a.jsonl" 'agent_start'
-  BEFORE=$FAILED; run stop-all >/dev/null 2>&1
-  PID="$(state_get worker-a pid)"
-  if [ -z "$PID" ]; then FAILED=$BEFORE; pass "canary: stop-all without the busy check kills the busy seat and is caught"; else FAILED=$((BEFORE+1)); fail "canary: busy-check-cut adapter did not expose a detectable failure"; fi
+  RUN_PROJ="$CAN"; run spawn worker-a; run spawn worker-b; run dispatch worker-a bead-x "SLOW canary"
+  CAN_AGENT="$HOME_FIX/.pi-seats-can/worker-a"; CAN_PID="$(state_get worker-a pid)"
+  if [ "$RC" != 0 ] || ! wait_for "$CAN/seats/logs/worker-a.jsonl" 'agent_start' || [ ! -f "$CAN_AGENT/turn.held" ] || [ -e "$CAN_AGENT/turn.capped" ] || [ -z "$CAN_PID" ] || ! kill -0 "$CAN_PID" 2>/dev/null; then
+    fail "canary setup did not establish a held mid-turn seat"
+  else
+    BEFORE=$FAILED; run stop-all >/dev/null 2>&1
+    PID="$(state_get worker-a pid)"
+    if [ -z "$PID" ] && [ -f "$CAN_AGENT/turn.held" ] && [ ! -e "$CAN_AGENT/turn.capped" ]; then FAILED=$BEFORE; pass "canary: stop-all without the busy check kills the busy seat and is caught"; else FAILED=$((BEFORE+1)); fail "canary: busy-check-cut adapter did not expose a detectable failure"; fi
+  fi
 fi
 
 printf '\n'

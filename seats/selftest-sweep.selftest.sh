@@ -23,6 +23,27 @@ CHECKED=0
 FIX=""
 pass(){ CHECKED=$((CHECKED + 1)); printf 'ok - %s\n' "$*"; }
 fail(){ CHECKED=$((CHECKED + 1)); printf 'not ok - %s\n' "$*"; FAILED=$((FAILED + 1)); }
+# Native event or participant exit, not a fixed number of scheduling polls.
+wait_sweep_event(){
+  local pid="$1"; shift
+  local file pattern rc
+  local -a observations=("$@")
+  printf 'FIXTURE_WAIT sweep checkpoint: pid=%s observations=%s\n' "$pid" "$*" >&2
+  while :; do
+    set -- "${observations[@]}"
+    while [ "$#" -gt 0 ]; do
+      file="$1"; pattern="$2"; shift 2
+      if [ -f "$file" ]; then
+        [ "$pattern" != '@exists' ] || return 0
+        grep -Eq -- "$pattern" "$file"; rc=$?
+        [ "$rc" != 0 ] || return 0
+        [ "$rc" = 1 ] || return "$rc"
+      fi
+    done
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.05
+  done
+}
 cleanup(){
   [ -n "$FIX" ] && selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
@@ -63,18 +84,14 @@ default_tmpdir_leg(){
   git -C "$FIX/default-project" add seats || exit 2
   env -u WHEELHOUSE_SELFTEST_SWEEP_LOCK TMPDIR="$tmp_a" SWEEP_RELEASE="$release" SWEEP_ID=TA SWEEP_EVENTS="$events" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$runner" > "$FIX/TA.out" 2> "$FIX/TA.err" &
   pid_a=$!
-  for _ in $(seq 1 100); do grep -q '^TA start$' "$events" 2>/dev/null && break; sleep 0.05; done
+  wait_sweep_event "$pid_a" "$events" '^TA start$' || true
   if ! grep -q '^TA start$' "$events" 2>/dev/null; then
     : > "$release"; wait "$pid_a" || true
     fail "default TMPDIR fixture first sweep never started"; return
   fi
   env -u WHEELHOUSE_SELFTEST_SWEEP_LOCK TMPDIR="$tmp_b" SWEEP_RELEASE="$release" SWEEP_ID=TB SWEEP_EVENTS="$events" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$runner" > "$FIX/TB.out" 2> "$FIX/TB.err" &
   pid_b=$!
-  for _ in $(seq 1 100); do
-    grep -q 'waiting for host-wide lock' "$FIX/TB.err" && break
-    grep -q '^TB start$' "$events" 2>/dev/null && break
-    sleep 0.05
-  done
+  wait_sweep_event "$pid_b" "$FIX/TB.err" 'waiting for host-wide lock' "$events" '^TB start$' || true
   if grep -qF "waiting for host-wide lock $host/wheelhouse-selftest-sweep.lock" "$FIX/TB.err" && selftest_capture_lacks "$events" -q -- '^TB start$'; then
     pass "different TMPDIRs share the default lock: second sweep waits on first"
   else
@@ -192,6 +209,9 @@ fi
 if bun "$HERE/fixtures/sweep-core.ts" "$HERE" "$FIX" "$SWEEP"; then
   pass 'core manifest/CLI admission and matching removal controls'
 else fail 'core manifest/CLI regression'; fi
+if bun "$HERE/fixtures/quarantine-sweep.ts" "$HERE" "$FIX" "$SWEEP"; then
+  pass 'quarantine execution, expiry, validation and sensitive removals'
+else fail 'quarantine sweep regression'; fi
 default_tmpdir_leg
 if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
   [ "$FAILED" -eq 0 ] || { echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1; }
@@ -216,20 +236,21 @@ ownership_tests(){
   # Bun exits1 for missing/malformed programs too. Only the helper's reserved
   # held result may retry; missing and broken helpers must fail once, before START.
   for case in missing broken; do
-    local helper="$FIX/$case-helper.ts" calls="$FIX/$case-helper.calls"
+    local helper="$FIX/$case-helper.ts" calls="$FIX/$case-helper.calls" call_count=0
     if [ "$case" = broken ]; then
       printf 'import fs from "node:fs";fs.appendFileSync(process.env.HELPER_CALLS!,"called\\n");process.exit(1);\n' > "$helper"
     fi
     path="$FIX/$case-helper.lock"
-    HELPER_CALLS="$calls" WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$helper" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/$case-helper.out" 2> "$FIX/$case-helper.err" &
-    pid=$!
-    for _ in $(seq 1 40); do kill -0 "$pid" 2>/dev/null || break; sleep 0.05; done
-    kill -TERM "$pid" 2>/dev/null || true
-    wait "$pid"; rc=$?
-    if [ "$rc" = 2 ] && [ ! -e "$path" ] && ! grep -q 'waiting for host-wide lock' "$FIX/$case-helper.err" && ! grep -q 'selftest-sweep: START ' "$FIX/$case-helper.out" && { [ "$case" = missing ] || [ "$(wc -l < "$calls" | tr -d ' ')" = 1 ]; }; then
+    # Deliberately broken helpers must refuse, never hang the whole suite.
+    # This named outer negative-leg policy cannot count as a passing refusal.
+    local HELPER_REFUSAL_OUTER_SECONDS=120
+    printf 'FIXTURE_WAIT helper refusal: case=%s helper=%s\n' "$case" "$helper" >&2
+    with_timeout "$HELPER_REFUSAL_OUTER_SECONDS" env HELPER_CALLS="$calls" WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$helper" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/$case-helper.out" 2> "$FIX/$case-helper.err"; rc=$?
+    if [ -f "$calls" ]; then call_count="$(wc -l < "$calls" | tr -d ' ')"; fi
+    if [ "$rc" = 2 ] && [ ! -e "$path" ] && ! grep -q 'waiting for host-wide lock' "$FIX/$case-helper.err" && ! grep -q 'selftest-sweep: START ' "$FIX/$case-helper.out" && { [ "$case" = missing ] || [ "$call_count" = 1 ]; }; then
       pass "$case helper fails2 without retry, lock mutation or suite START"
     else
-      fail "$case helper was mistaken for lock-held (rc=$rc)"
+      fail "$case helper was mistaken for lock-held (rc=$rc calls=$call_count)"
     fi
   done
   for case in plain extra nested bad-marker mismatch bad-time other-host link legacy-bad legacy-duplicate; do
@@ -284,7 +305,7 @@ EOF
   local pid_wait rc_wait
   env TEST_LOCK="$path" TEST_SWEEP="$SWEEP" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash -c 'printf "pid=%s\n" "$$" > "$TEST_LOCK"; exec bash "$TEST_SWEEP"' > "$FIX/not-acquired.out" 2> "$FIX/not-acquired.err" &
   pid_wait=$!
-  for _ in $(seq 1 100); do grep -q 'waiting for host-wide lock' "$FIX/not-acquired.err" && break; sleep 0.05; done
+  wait_sweep_event "$pid_wait" "$FIX/not-acquired.err" 'waiting for host-wide lock' || fail 'never-acquired child exited before its queued checkpoint'
   before="$(lock_snapshot "$path")"
   kill -TERM "$pid_wait" 2>/dev/null || true
   wait "$pid_wait"; rc_wait=$?
@@ -301,7 +322,7 @@ source_policy_leg
 RELEASE_A="$FIX/release-A"
 SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=A SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/A.out" 2> "$FIX/A.err" &
 PID_A=$!
-for _ in $(seq 1 100); do grep -q '^A start$' "$EVENTS" 2>/dev/null && break; sleep 0.05; done
+wait_sweep_event "$PID_A" "$EVENTS" '^A start$' || fail 'first sweep exited before actual suite entry'
 if bun -e '
 import fs from "node:fs";import p from "node:path";import os from "node:os";import assert from "node:assert/strict";
 const [dir,pid]=process.argv.slice(1);assert(fs.lstatSync(dir).isDirectory());
@@ -354,13 +375,18 @@ SWEEP_RELEASE="$RELEASE_RACE" SWEEP_ID=D SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFT
 PID_D=$!
 SWEEP_RELEASE="$RELEASE_RACE" SWEEP_ID=E SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$RACE" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/race-E.out" 2> "$FIX/race-E.err" &
 PID_E=$!
-for _ in $(seq 1 100); do grep -Eq '^[DE] start$' "$EVENTS" 2>/dev/null && break; sleep 0.05; done
-sleep 0.2
-REMOVE_COUNT="$(grep -h -c 'removing stale lock' "$FIX/race-D.err" "$FIX/race-E.err" 2>/dev/null | awk '{s += $1} END {print s + 0}')"
+printf 'FIXTURE_WAIT stale takeover: actual contender queue/entry checkpoints\n' >&2
+while :; do
+  if { [ -f "$FIX/race-D.err" ] && grep -q 'waiting for host-wide lock' "$FIX/race-D.err"; } || { [ -f "$FIX/race-E.err" ] && grep -q 'waiting for host-wide lock' "$FIX/race-E.err"; }; then break; fi
+  if [ -f "$EVENTS" ] && grep -q '^D start$' "$EVENTS" && grep -q '^E start$' "$EVENTS"; then break; fi
+  kill -0 "$PID_D" 2>/dev/null && kill -0 "$PID_E" 2>/dev/null || break
+  sleep 0.05
+ done
 : > "$RELEASE_RACE"
 wait "$PID_D"; RC_D=$?
 wait "$PID_E"; RC_E=$?
-if [ "$RC_D" -eq 0 ] && [ "$RC_E" -eq 0 ] && [ "$REMOVE_COUNT" -eq 1 ]; then
+REMOVE_COUNT="$(awk '/removing stale lock/{n++} END {print n+0}' "$FIX/race-D.err" "$FIX/race-E.err")"; REMOVE_COUNT_RC=$?
+if [ "$RC_D" -eq 0 ] && [ "$RC_E" -eq 0 ] && [ "$REMOVE_COUNT_RC" = 0 ] && [ "$REMOVE_COUNT" -eq 1 ]; then
   pass "exactly one waiter wins stale-lock takeover"
 else
   fail "stale-lock takeover was not single-winner (rcD=$RC_D rcE=$RC_E remove_count=$REMOVE_COUNT D.err=$(cat "$FIX/race-D.err" 2>/dev/null) E.err=$(cat "$FIX/race-E.err" 2>/dev/null))"
@@ -394,11 +420,7 @@ EPERM="$FIX/eperm.lock"
 make_lock "$EPERM" 1
 SWEEP_ID=H SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$EPERM" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/eperm.out" 2> "$FIX/eperm.err" &
 PID_G=$!
-for _ in $(seq 1 100); do
-  grep -q 'waiting for host-wide lock' "$FIX/eperm.err" && break
-  kill -0 "$PID_G" 2>/dev/null || break
-  sleep 0.05
- done
+wait_sweep_event "$PID_G" "$FIX/eperm.err" 'waiting for host-wide lock' || fail 'live-holder child exited before its queued checkpoint'
 if [ -d "$EPERM" ] && grep -q 'waiting for host-wide lock' "$FIX/eperm.err" && ! grep -q 'removing stale lock' "$FIX/eperm.err"; then
   pass "EPERM holder pid is treated as live instead of stale"
 else
@@ -428,13 +450,20 @@ TERM_SUITES="$FIX/term-suites"
 TERM_LOCK="$FIX/term.lock"
 TERM_EVENTS="$FIX/term-events.log"
 TERM_STARTED="$FIX/term-started"
+TERM_RELEASE="$FIX/term-release"
 mkdir -p "$TERM_SUITES"
 cat > "$TERM_SUITES/one.selftest.sh" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf 'one start\n' >> "$TERM_EVENTS"
-: > "$TERM_STARTED"
-( trap 'exit 0' TERM; sleep 1; printf 'child survived\n' >> "$TERM_EVENTS" ) &
+# A census can legitimately take longer than one second before delivering TERM.
+# Hold the child's work until cleanup returns; require its actual TERM receipt,
+# not a race between an arbitrary sleep and native ownership observation.
+( trap 'printf "child TERM\n" >> "$TERM_EVENTS"; exit 0' TERM
+  : > "$TERM_STARTED"
+  while [ ! -f "$TERM_RELEASE" ]; do sleep 0.05; done
+  printf 'child survived\n' >> "$TERM_EVENTS"
+) &
 while :; do sleep 0.05; done
 EOF
 cat > "$TERM_SUITES/two.selftest.sh" <<'EOF'
@@ -443,15 +472,16 @@ set -eu
 printf 'two start\n' >> "$TERM_EVENTS"
 EOF
 chmod +x "$TERM_SUITES"/*.selftest.sh
-TERM_EVENTS="$TERM_EVENTS" TERM_STARTED="$TERM_STARTED" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$TERM_SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$TERM_LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/term.out" 2> "$FIX/term.err" &
+TERM_EVENTS="$TERM_EVENTS" TERM_STARTED="$TERM_STARTED" TERM_RELEASE="$TERM_RELEASE" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$TERM_SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$TERM_LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/term.out" 2> "$FIX/term.err" &
 PID_TERM=$!
-for _ in $(seq 1 100); do [ -f "$TERM_STARTED" ] && break; sleep 0.05; done
+wait_sweep_event "$PID_TERM" "$TERM_STARTED" '@exists' || fail 'TERM fixture exited before its child installed the signal handler'
 kill -TERM "$PID_TERM" 2>/dev/null || true
 wait "$PID_TERM"; RC_TERM=$?
-sleep 1.2
+: > "$TERM_RELEASE"
+# The runner's own joined exit, not an extra grace sleep, is the observation.
 TERM_ORDER="$(tr '\n' '|' < "$TERM_EVENTS" 2>/dev/null || true)"
-if [ "$RC_TERM" -eq 143 ] && [ "$TERM_ORDER" = 'one start|' ] && [ ! -e "$TERM_LOCK" ]; then
-  pass "TERM stops the running fixture suite process group, skips later suites, and releases the lock"
+if [ "$RC_TERM" -eq 143 ] && [ "$TERM_ORDER" = 'one start|child TERM|' ] && [ ! -e "$TERM_LOCK" ]; then
+  pass "TERM reaches the ready child, stops the suite group, skips later suites, and releases the lock"
 else
   fail "TERM did not stop cleanly (rc=$RC_TERM order=$TERM_ORDER lock=$(ls -ld "$TERM_LOCK" 2>/dev/null || true) out=$(cat "$FIX/term.out" 2>/dev/null) err=$(cat "$FIX/term.err" 2>/dev/null))"
 fi

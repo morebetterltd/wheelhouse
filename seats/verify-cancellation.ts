@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 
 // Direct detached children and suite groups published by our fixed launcher
 // before setsid are the ownership proof. Never infer ownership from ps,
@@ -19,6 +20,8 @@ export const reviewScratchCleanups = new Set<() => void>();
 export let reviewCancelling = false;
 export let reviewChildrenStopped = false;
 let reviewSignalsInstalled = false;
+const REVIEW_CANCEL_TERM_GRACE_MS = 1500; // escalation policy, never proof of exit
+const REVIEW_CANCEL_CLOSE_LIMIT_MS = Number(process.env.WHEELHOUSE_REVIEW_CANCEL_CLOSE_MS || 120000);
 
 function groupAlive(pgid: number): boolean {
   if (!Number.isInteger(pgid) || pgid <= 1) throw new Error("invalid owned review pgid");
@@ -82,6 +85,7 @@ async function cancelReview(signal: "SIGTERM" | "SIGINT" | "SIGHUP"): Promise<vo
   reviewCancelling = true;
   const status = signal === "SIGTERM" ? 143 : signal === "SIGINT" ? 130 : 129;
   try {
+    if (!Number.isFinite(REVIEW_CANCEL_CLOSE_LIMIT_MS) || REVIEW_CANCEL_CLOSE_LIMIT_MS <= 0) throw new Error("invalid review cancellation close policy bound");
     const children = [...reviewChildren];
     const locks = children.map(captureReviewLock).filter((x): x is ReviewLock => x !== null);
     for (const child of children) child.onCancel?.();
@@ -96,15 +100,15 @@ async function cancelReview(signal: "SIGTERM" | "SIGINT" | "SIGHUP"): Promise<vo
       const until = performance.now() + ms;
       while (!settled() && performance.now() < until) await new Promise(resolve => setTimeout(resolve, 100));
     };
-    await wait(1500);
+    await wait(REVIEW_CANCEL_TERM_GRACE_MS);
     // Kill runner groups FIRST. A launcher not yet published is still in its
     // runner group; any launcher which left it has already published its pgid.
     for (const child of children) if (groupAlive(child.pid)) signalGroup(child.pid, "SIGKILL");
     refresh();
     const directGroups = new Set(children.map(c => c.pid));
     for (const pgid of groups) if (!directGroups.has(pgid) && groupAlive(pgid)) signalGroup(pgid, "SIGKILL");
-    await wait(2000);
-    if (!settled()) throw new Error("owned review process groups did not exit/close after KILL");
+    await wait(REVIEW_CANCEL_CLOSE_LIMIT_MS);
+    if (!settled()) throw new Error(`owned review process groups did not exit/close after KILL; last observations=${JSON.stringify({ children: children.map(c => ({ pid: c.pid, closed: c.closed })), groups: [...groups].map(pgid => ({ pgid, alive: groupAlive(pgid) })) })}`);
     // TERM normally runs the runner's EXIT trap. If KILL was necessary, replay
     // only its captured owner/token/inode through the existing lock helper.
     // The helper refuses changed ownership and never removes a replacement.
@@ -137,13 +141,16 @@ export function trackReviewChild(child: ReturnType<typeof spawn>, extra: Partial
   if (!child.pid) return { ...extra, pid: 0, closed: true }; // preserve spawn-error handling
   const owned: ReviewChild = { ...extra, pid: child.pid, closed: false };
   reviewChildren.add(owned);
-  child.once("close", () => {
+  child.once("close", (code, signal) => {
     owned.closed = true;
-    // Unexpected runner death must not let the caller remove the registry's
-    // scratch while published suite groups remain alive. Start coordinated
-    // teardown before its close callback can resume main/launch a reviewer.
+    // A runner's handled TERM/INT/HUP is a shell exit code, not necessarily
+    // child.signal. Latch cancellation BEFORE the caller's close callback:
+    // even a perfectly retired interrupted sweep must never start a model.
+    const interrupted = signal !== null || code === 129 || code === 130 || code === 143;
+    const reason = signal === "SIGINT" || code === 130 ? "SIGINT" : signal === "SIGHUP" || code === 129 ? "SIGHUP" : "SIGTERM";
+    // Unexpected runner death must also retain/retire published suite groups.
     try {
-      if (owned.sweep && (groupAlive(owned.pid) || suiteGroups(owned).some(groupAlive))) { void cancelReview("SIGTERM"); return; }
+      if (owned.sweep && (interrupted || groupAlive(owned.pid) || suiteGroups(owned).some(groupAlive))) { void cancelReview(reason); return; }
     } catch { void cancelReview("SIGTERM"); return; }
     // Retire only a completed child whose group and published groups are gone.
     if (!groupAlive(owned.pid)) reviewChildren.delete(owned);

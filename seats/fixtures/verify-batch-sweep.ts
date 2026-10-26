@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "./fixture-command.cjs";
 import { pathToFileURL } from "node:url";
 const [here, root, seedFile, seedTip] = process.argv.slice(2);
 assert(fs.statSync(root).isDirectory()); assert(fs.statSync(seedFile).isFile());

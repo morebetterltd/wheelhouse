@@ -21,7 +21,6 @@ numbers="$( ( PASS=0; FAIL=0; fail fixture-failure; pass fixture-success ) 2>&1 
 legacy_numbers="$( ( PASS=0; FAIL=0; pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }; fail fixture-failure; pass fixture-success ) 2>&1 )"
 [ "$legacy_numbers" != "$expected_numbers" ] || { echo 'TAP numbering control failed to detect old rule' >&2; exit 1; }
 echo '# TAP numbering: failure1/success2; old success-only numbering rejected'
-port(){ bun -e 'import net from "node:net"; const s=net.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats/transports" "$ROOT/seats/run"
 selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$FIX/server.ts" <<'TS'
@@ -31,7 +30,7 @@ function append(row:any){ const line=JSON.stringify(row)+"\n"; fs.appendFileSync
 function rows(name:string){ try{return fs.readFileSync(`${dir}/${name}`,"utf8").split(/\n/).filter(Boolean).map(JSON.parse);}catch{return [];} }
 function remember(kind:string, row:any){ fs.appendFileSync(`${dir}/${kind}.jsonl`, JSON.stringify(row)+"\n"); }
 function hidden(){ return fs.existsSync(`${dir}/fail-readback`); }
-Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
+const server = Bun.serve({hostname:"127.0.0.1", port:0, async fetch(req){
  const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : undefined;
  const auth=req.headers.get("authorization")||"";
  const loggedUrl=u.pathname.replace(/^\/bot[^/]+\//, "/bot[redacted]/")+u.search;
@@ -54,9 +53,12 @@ Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch
  if(u.pathname.endsWith("/messages") && req.method==="GET"){ return Response.json({value:rows("teams.jsonl")}); }
  return Response.json({error:"no route", path:u.pathname},{status:404});
 }});
+const ready = `${dir}/server.ready.json`;
+fs.writeFileSync(ready + '.new', JSON.stringify({pid:process.pid,root:fs.realpathSync(dir),port:server.port})+'\n');
+fs.renameSync(ready + '.new', ready);
 TS
-P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
-sleep 0.2
+STUB_DIR="$FIX" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
+P="$(bun "$HERE/fixtures/transport-fixture-observation.ts" ready "$FIX" "$SERVER_PID" "$FIX/server.ready.json")" || { fail 'fake endpoint exited before publishing its bound port'; exit 1; }
 cat > "$FIX/check.ts" <<'TS'
 import * as fs from "node:fs";
 import { transportFor } from "./proj/seats/transports/index";

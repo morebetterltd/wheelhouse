@@ -8,6 +8,8 @@ The commander is a Claude Code session — yours. The producer may be its subage
 
 This repo is the template. It ships the contracts those roles share, the seat machinery they run on, worked examples, and a bootstrap procedure that installs the whole thing into a project by interviewing you about that project.
 
+The intent and outcomes skills ship with the template and install at the root under `.agents/skills/`, with relative compatibility links under `.claude/skills/`.
+
 Two paths:
 
 - **Fresh project, no wheelhouse yet:** go to [Install](#install).
@@ -74,7 +76,10 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 ├── .beads/                      the work graph
 ├── .agents/skills/
 │   ├── intent/                  signal to plain-words what-and-why; SKILL.md and worked examples
-│   └── outcomes/                intent to outcome contract — arriving in the same producer goal
+│   ├── outcomes/                intent to consumer/surface/check outcomes; SKILL.md and worked contracts
+│   ├── create-verification/     write and prove a project manual and complete feature map
+│   ├── maintain-verification/   findings-only source and live audit; no product/manual edits
+│   └── NOTICE-pstack.md         Lauren Tan's MIT notice and pinned source for the adapted skills
 ├── .claude/skills/              symlinks for Claude Code, pointing to .agents/skills/
 ├── seats/                       the seat machinery, at the root because every path it prints is root-relative
 │   ├── seats.json               generated — the roster: role, harness, provider, model, auth route, account dir per seat; never a secret
@@ -85,6 +90,8 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 │   ├── prune.ts                 scans/prunes safe worktrees and regenerable caches from reviewed scan files
 │   ├── needs.ts, desk.ts        durable human requests plus the local needs/board web desk
 │   ├── channels.ts, comms.ts    declared stakeholder channels; commander is the fleet's one voice
+│   ├── inbox-hook.sh            Claude Code lifecycle hook: identity-guarded inbox context
+│   ├── inbox-hook.selftest.sh   proves delivery, bookkeeping and seat/subagent refusals
 │   ├── principal-sentinel.sh    Claude Code Stop hook: final @principal: blocks become needs
 │   ├── courier.ts               optional transport daemon for a declared principal channel
 │   ├── cockpit.sh, floor.ts     the bridge: one tmux window — commander pane left, read-only floor right
@@ -109,7 +116,7 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
     └── runbooks/                running the loop, upgrading, and the graduations to take later
 ```
 
-The seats are commander-owned processes, not terminals you keep open. `seats/seat-env.sh` gives each seat its own account directory — one seat, one login — for its rostered harness (`PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME`), and from then on the adapter does everything: `bun seats/adapter.ts spawn` starts a seat with its role brief injected, `dispatch` hands it a bead, and its session survives a stop, so `resume` brings the context back warm. There is nothing to paste into a seat. To watch the fleet, `seats/cockpit.sh` builds one tmux window per project: your commander session in the left pane, and on the right the floor — a read-only view that spotlights one seat's stream and shows every seat's attention cues in a rail. Cockpit turns tmux mouse scrolling on and keeps 50,000 lines of pane history; opt out with `WHEELHOUSE_COCKPIT_MOUSE=0 seats/cockpit.sh` if you prefer native terminal selection. Scroll with the wheel, or press tmux prefix then `[` and use arrows/PageUp (`q` leaves copy mode); with mouse on, hold Option/Shift on macOS terminals to select text. Cockpit records the commander pane for herald self-aim and starts/verifies the supervisor; the supervisor keeps the Dispatch Office herald, the local desk (`seats/desk.ts` for `/needs` and `/board`), and the optional courier alive. `seats/principal-sentinel.sh` is the Claude Code Stop hook that turns a final `@principal:` block into a need. Stakeholder channels are declared at install in `seats/channels.json`, and the commander is the fleet's one voice on them through `seats/comms.ts`. A no-cockpit `spawn`/`status` path starts seats, not those wake/desk/transport daemons. `seats/README.md` documents all of it.
+The seats are commander-owned processes, not terminals you keep open. `seats/seat-env.sh` gives each seat its own account directory — one seat, one login — for its rostered harness (`PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME`), and from then on the adapter does everything: `bun seats/adapter.ts spawn` starts a seat with its role brief injected, `dispatch` hands it a bead, and its session survives a stop, so `resume` brings the context back warm. There is nothing to paste into a seat. To watch the fleet, `seats/cockpit.sh` builds one tmux window per project: your commander session in the left pane, and on the right the floor — a read-only view that spotlights one seat's stream and shows every seat's attention cues in a rail. Cockpit turns tmux mouse scrolling on and keeps 50,000 lines of pane history; opt out with `WHEELHOUSE_COCKPIT_MOUSE=0 seats/cockpit.sh` if you prefer native terminal selection. Scroll with the wheel, or press tmux prefix then `[` and use arrows/PageUp (`q` leaves copy mode); with mouse on, hold Option/Shift on macOS terminals to select text. Cockpit records the commander pane for herald self-aim and starts/verifies the supervisor; the supervisor keeps the Dispatch Office herald, the local desk (`seats/desk.ts` for `/needs` and `/board`), and the optional courier alive. Wire `seats/inbox-hook.sh` as the SessionStart, UserPromptSubmit and PostToolUse (Bash) hooks: unread Dispatch Office records then arrive at session start, with each prompt and after each shell command. The herald's poke is the prompt that carries them. The guard rejects subagents and rostered seat processes and validates the claimed commander pane; no live settings are changed by copying the scripts. Read every delivered record before the turn ends, using needs `show`, intake or comms as appropriate; inbound is information, not authority. `seats/principal-sentinel.sh` remains the separate Stop hook that turns a final `@principal:` block into a need. Stakeholder channels are declared at install in `seats/channels.json`, and the commander is the fleet's one voice on them through `seats/comms.ts`. A no-cockpit `spawn`/`status` path starts seats, not those wake/desk/transport daemons. `seats/README.md` documents all of it.
 
 ## Contract, and this project
 
@@ -124,7 +131,10 @@ That split is the whole design. It means a project's specifics never get tangled
 | | |
 |---|---|
 | `contracts/` | the briefs, copied verbatim at install |
-| `.agents/skills/` | one real copy of each contract-writing skill; `.claude/skills/` holds relative symlinks |
+| `.agents/skills/` | one real copy of each contract-writing and verification skill; `.claude/skills/` holds relative symlinks |
+| `.agents/skills/create-verification/` | generate a project-local five-section verification manual and map every discovered consumer feature |
+| `.agents/skills/maintain-verification/` | one reader loop and live pass, reporting findings without product or manual edits |
+| `.agents/skills/NOTICE-pstack.md` | Lauren Tan's MIT license text, pinned upstream source and dated adaptations for the verification skills |
 | `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the bead-verdict dispatcher, the consumer-surface walk dispatcher, human needs (`needs.ts`), the local desk (`desk.ts`), the optional courier (`courier.ts`), the principal Stop hook (`principal-sentinel.sh`), pruning, the bridge, recovery, and a selftest for each |
 | `generated/` | specimens of what the interview writes — never copied, and drawn from an invented project so they cannot be mistaken for a starting point |
 | `runbooks/` | how to run the loop, the upgrade procedure, and the graduations to take once the loop has proven itself |

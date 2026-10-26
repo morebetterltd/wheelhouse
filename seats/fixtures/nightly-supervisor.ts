@@ -15,7 +15,7 @@ function world(label: string, code = source, config = "sweep=on\nsweep-hour=07\n
   fs.writeFileSync(path.join(root, "wheelhouse/.template-source"), "cleanup=off\ndigest=off\n" + config);
   fs.writeFileSync(path.join(root, "seats/supervisor.sh"), code);
   fs.copyFileSync(path.join(here, "nightly-state.ts"), path.join(root, "seats/nightly-state.ts"));
-  fs.writeFileSync(path.join(root, "seats/daemons.sh"), 'daemon_alive(){ return 0; }\nprincipal_channel_declared(){ return 1; }\nrecover_dead_seats(){ :; }\n');
+  fs.writeFileSync(path.join(root, "seats/daemons.sh"), 'daemon_alive(){ return 0; }\ndaemon_starting(){ return 1; }\nprincipal_channel_declared(){ return 1; }\nrecover_dead_seats(){ :; }\n');
   fs.writeFileSync(path.join(root, "seats/nightly-sweep.ts"), 'import fs from "node:fs";fs.appendFileSync(import.meta.dir+"/run/nightly-calls.jsonl",JSON.stringify({pattern:process.env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN??null,tier:process.env.WHEELHOUSE_SELFTEST_SWEEP_TIER??null})+"\\n");\n');
   return root;
 }

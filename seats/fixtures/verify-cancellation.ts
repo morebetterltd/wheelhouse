@@ -5,24 +5,46 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 const root = path.resolve(process.argv[2]), runtime = path.join(root, "runtime/seats");
+function retainChildDiagnostics(saved: string | undefined, name: string, stdout: string, stderr: string, child: any): string | undefined {
+  const base = path.resolve(process.env.WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT || process.env.WHEELHOUSE_VERIFY_CANCEL_EVIDENCE || path.join(path.dirname(import.meta.dir), "verdicts/verify-cancellation-failures"));
+  fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+  const physical = fs.realpathSync(base), scratch = fs.realpathSync(root);
+  assert(physical !== scratch && !physical.startsWith(scratch + path.sep), "failed-child retention must be outside removable cancellation scratch");
+  const temporary = process.env.TMPDIR ? fs.realpathSync(process.env.TMPDIR) : undefined;
+  assert(!temporary || (physical !== temporary && !physical.startsWith(temporary + path.sep)), "failed-child retention must be outside removable per-suite TMPDIR");
+  saved ??= fs.mkdtempSync(path.join(physical, name + "-"));
+  const put = (file: string, data: string) => {
+    const next = path.join(saved!, file + "." + crypto.randomUUID() + ".new");
+    fs.writeFileSync(next, data, { flag: "wx", mode: 0o600 }); fs.renameSync(next, path.join(saved!, file));
+  };
+  put("stdout", stdout); put("stderr", stderr);
+  put("exit.json", JSON.stringify({ name, pid: child.pid, code: child.exitCode, signal: child.signalCode, stdoutEOF: child.stdout.readableEnded, stderrEOF: child.stderr.readableEnded, stdoutBytes: Buffer.byteLength(stdout), stderrBytes: Buffer.byteLength(stderr) }, null, 2) + "\n");
+  return saved;
+}
 const groupAlive = (pgid: number) => { assert(Number.isInteger(pgid) && pgid > 1); try { process.kill(-pgid, 0); return true; } catch (e: any) { if (e.code === "ESRCH") return false; if (e.code === "EPERM") return true; throw e; } };
 const pidAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (e: any) { if (e.code === "ESRCH") return false; throw e; } };
 function signalGroup(pgid: number, signal: NodeJS.Signals) { assert(Number.isInteger(pgid) && pgid > 1); try { process.kill(-pgid, signal); } catch (e: any) { if (e.code !== "ESRCH") throw e; } }
 async function until(test: () => boolean, ended: () => boolean, label: string) {
-  const limit = performance.now() + 60000; // incomplete-test guard, not a pass threshold
-  while (!test()) { if (ended()) throw Error("child exited before " + label); if (performance.now() > limit) throw Error("INCOMPLETE fixture join: " + label); await Bun.sleep(50); }
+  console.error(`FIXTURE_WAIT verify cancellation: ${label}`);
+  while (!test()) { if (ended()) throw Error("child exited before " + label); await Bun.sleep(50); }
 }
 function command(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) { const r = spawnSync(bin, args, { cwd, env, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout; }
 const cases = ["sweep", "reviewer"].flatMap(phase => (["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase, signal })));
 cases.push({ phase: "reviewer-orphan", signal: "SIGTERM" });
+// An interrupted sweep is itself terminal, even if its groups retired before
+// close. Also cover the commander's simultaneous dispatcher+runner TERM path.
+cases.push(...(["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase: "sweep-interrupted", signal })));
 cases.push(...(["SIGTERM", "SIGINT", "SIGHUP"] as const).map(signal => ({ phase: "sweep-stubborn", signal })));
 cases.push({ phase: "sweep-stubborn-long-grace", signal: "SIGTERM" });
 cases.push({ phase: "sweep-stubborn-runner-killed", signal: "SIGTERM" });
 cases.push({ phase: "sweep-stubborn-runner-killed-aliased-parent", signal: "SIGTERM" });
 cases.push({ phase: "sweep-stubborn-runner-killed-aliased-parent-replacement", signal: "SIGTERM" });
-const selected = process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_ALIASES_ONLY === "1" ? cases.filter(c => c.phase.includes("-aliased-parent")) : cases;
+const selected = process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_CASE
+  ? cases.filter(c => c.phase + "-" + c.signal === process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_CASE)
+  : process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_ALIASES_ONLY === "1" ? cases.filter(c => c.phase.includes("-aliased-parent")) : cases;
 assert(selected.length > 0);
 const results: any[] = [];
 for (const { phase, signal } of selected) {
@@ -63,7 +85,12 @@ for (const { phase, signal } of selected) {
   assert.equal(anchors.length, 1, "one dispatcher sweep declaration");
   const anchor = anchors[0];
   const observed = text.replace(anchor, '  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => fs.writeFileSync(process.env.CANCEL_CASE! + "/handler-returned", sig));\n  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "before-sweep\\n");\n' + anchor + '\n  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "after-sweep\\n");');
-  fs.writeFileSync(verify, observed.replace('  const res = await runOneShot(', '  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "before-reviewer\\n");\n  const res = await runOneShot('));
+  let instrumented = observed.replace('  const res = await runOneShot(', '  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "before-reviewer\\n");\n  const res = await runOneShot(');
+  if (process.env.WHEELHOUSE_TEST_VERIFY_CANCEL_EARLY_EXIT === name) {
+    const line = instrumented.indexOf("\n") + 1;
+    instrumented = instrumented.slice(0, line) + 'fs.writeSync(1, "planted cancellation stdout — retained\\n"); fs.writeSync(2, "planted cancellation stderr — retained\\n"); process.exit(37);\n' + instrumented.slice(line);
+  }
+  fs.writeFileSync(verify, instrumented);
   fs.writeFileSync(path.join(project, "contracts/REVIEWER.md"), "Inert cancellation reviewer.\n");
   const author = path.join(dir, "author"), reviewer = path.join(dir, "reviewer"); fs.mkdirSync(author); fs.mkdirSync(reviewer); fs.writeFileSync(path.join(reviewer, "auth.json"), '{"fixture":true}\n');
   fs.writeFileSync(path.join(project, "seats/seats.json"), JSON.stringify({ seats: { author: { role: "worker", account: { dir: author } }, reviewer: { role: "reviewer", harness: "pi", provider: "openai", model: "fixture", account: { dir: reviewer } } } }));
@@ -120,7 +147,7 @@ esac
   const closed = new Promise<any>((resolve, reject) => { child.once("error", reject); child.once("close", (code, sig) => resolve({ code, signal: sig })); });
   const groups = new Set<number>([child.pid!]); // this controller started that new group
   fs.appendFileSync(ledger, String(child.pid!) + "\n");
-  let canary: ReturnType<typeof spawn> | undefined, canaryClosed: Promise<unknown> | undefined, failure: any, measurement: any = {};
+  let canary: ReturnType<typeof spawn> | undefined, canaryClosed: Promise<unknown> | undefined, failure: any, failureMessage: string | undefined, retainedDiagnostics: string | undefined, retentionError: string | undefined, measurement: any = {};
   try {
     const role = phase.startsWith("sweep") ? "suite" : "reviewer";
     await until(() => fs.existsSync(path.join(dir, role + ".pid")), () => ended, "idle target");
@@ -141,7 +168,17 @@ esac
     const runnerKilled = phase.startsWith("sweep-stubborn-runner-killed");
     if (runnerKilled) signalGroup(runnerGroup, "SIGKILL");
     // Signal ONLY the direct dispatcher we started, not its entire group.
-    child.kill(signal);
+    if (phase === "sweep-interrupted") {
+      process.kill(runnerPid, signal);
+      await until(() => ended || fs.existsSync(path.join(dir, "pi-entered")), () => false, "interrupted sweep exit / forbidden reviewer start");
+      // Fix-removed containment only, AFTER retaining the forbidden launch.
+      if (!ended) child.kill(signal);
+    } else {
+      child.kill(signal);
+      if (phase === "sweep") {
+        try { process.kill(runnerPid, signal); } catch (e: any) { if (e.code !== "ESRCH") throw e; }
+      }
+    }
     await until(() => ended, () => false, "cancelled dispatcher exit"); const result = await closed;
     const survivors = [rolePid, sleepPid, runnerPid].filter((x): x is number => !!x).filter(pidAlive);
     const listing = command("git", ["worktree", "list", "--porcelain"], project, env), scratchGone = scratch.every(p => !fs.existsSync(p) && !listing.includes("worktree " + p + "\n"));
@@ -158,15 +195,20 @@ esac
     }
     const absent = !fs.existsSync(physicalLock); let admitted = false;
     if (absent) { const token = crypto.randomUUID().replace(/-/g, ""), r = spawnSync("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "acquire", physicalLock, String(process.pid), token, ""], { cwd: project, env, encoding: "utf8" }); admitted = r.status === 0; if (admitted) command("bun", [path.join(project, "seats/selftest-sweep-lock.ts"), "release", physicalLock, String(process.pid), token, r.stdout.trim()], project, env); }
-    measurement = { ...result, phase, runnerKilled, requestedSignal: signal, recordedGroup: roleGroup, publishedGroups, runnerPid, runnerGroup, survivors, ownedGroupsGone: !groupAlive(roleGroup) && !groupAlive(runnerGroup), reportedClean: err.includes("owned groups stopped, locks released, scratch removed"), lockRequested: targetLock, physicalLock, releasedPaths, replacementUntouched, lockRefusal: err.includes("SELFTEST_LOCK_REFUSAL"), runnerGrace: phase === "sweep-stubborn-long-grace" ? 120 : 5, scratchGone, lockAbsent: absent, lockAdmitted: admitted, foreignAlive: groupAlive(canaryGroup), foreignSignals: fs.existsSync(path.join(dir, "foreign.signals")) ? fs.readFileSync(path.join(dir, "foreign.signals"), "utf8") : "", handlerReturned: fs.existsSync(path.join(dir, "handler-returned")), stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded, reviewerStarted: fs.existsSync(path.join(dir, "reviewer.pid")) };
-    assert.equal(result.code, signal === "SIGTERM" ? 143 : signal === "SIGINT" ? 130 : 129); assert.equal(result.signal, null); assert(measurement.stdoutEOF && measurement.stderrEOF); assert.deepEqual(survivors, []); assert(measurement.ownedGroupsGone, "all owned groups must be empty before clean stop"); if (phase.startsWith("sweep-stubborn")) assert(publishedGroups.includes(roleGroup), "real runner must publish suite group ownership before payload"); assert(!measurement.lockRefusal, err); assert(scratchGone && (replacement ? replacementUntouched && !absent : absent && admitted)); assert(measurement.foreignAlive && !measurement.foreignSignals); assert.equal(measurement.reviewerStarted, !phase.startsWith("sweep")); if (signal !== "SIGHUP") assert(measurement.handlerReturned, "production handler must return while asynchronous teardown joins children"); assert(err.includes("owned groups stopped, locks released, scratch removed"), err);
+    measurement = { ...result, phase, runnerKilled, requestedSignal: signal, recordedGroup: roleGroup, publishedGroups, runnerPid, runnerGroup, survivors, ownedGroupsGone: !groupAlive(roleGroup) && !groupAlive(runnerGroup), reportedClean: err.includes("owned groups stopped, locks released, scratch removed"), lockRequested: targetLock, physicalLock, releasedPaths, replacementUntouched, lockRefusal: err.includes("SELFTEST_LOCK_REFUSAL"), runnerGrace: phase === "sweep-stubborn-long-grace" ? 120 : 5, scratchGone, lockAbsent: absent, lockAdmitted: admitted, foreignAlive: groupAlive(canaryGroup), foreignSignals: fs.existsSync(path.join(dir, "foreign.signals")) ? fs.readFileSync(path.join(dir, "foreign.signals"), "utf8") : "", handlerReturned: fs.existsSync(path.join(dir, "handler-returned")), stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded, reviewerStarted: fs.existsSync(path.join(dir, "pi-entered")) || fs.existsSync(path.join(dir, "reviewer.pid")) };
+    assert.equal(result.code, signal === "SIGTERM" ? 143 : signal === "SIGINT" ? 130 : 129); assert.equal(result.signal, null); assert(measurement.stdoutEOF && measurement.stderrEOF); assert.deepEqual(survivors, []); assert(measurement.ownedGroupsGone, "all owned groups must be empty before clean stop"); if (phase.startsWith("sweep-stubborn")) assert(publishedGroups.includes(roleGroup), "real runner must publish suite group ownership before payload"); assert(!measurement.lockRefusal, err); assert(scratchGone && (replacement ? replacementUntouched && !absent : absent && admitted)); assert(measurement.foreignAlive && !measurement.foreignSignals); assert.equal(measurement.reviewerStarted, !phase.startsWith("sweep")); if (signal !== "SIGHUP" && phase !== "sweep-interrupted") assert(measurement.handlerReturned, "production handler must return while asynchronous teardown joins children"); assert(err.includes("owned groups stopped, locks released, scratch removed"), err);
     console.log("PASS " + name + " " + JSON.stringify(measurement));
-  } catch (e: any) { failure = e.stack ?? String(e); console.error("FAIL " + name + ": " + e.message); }
+  } catch (e: any) { failure = e.stack ?? String(e); failureMessage = e.message; }
   finally {
+    if (failureMessage === "child exited before idle target") {
+      try { retainedDiagnostics = retainChildDiagnostics(undefined, name, out, err, child); }
+      catch (error) { retentionError = String(error); }
+    }
+    if (failure) console.error("FAIL " + name + ": " + failureMessage + (failureMessage === "child exited before idle target" ? "; retained child diagnostics: " + JSON.stringify(retainedDiagnostics ?? `UNAVAILABLE: ${retentionError ?? "writer returned no path"}`) : ""));
     fs.writeFileSync(path.join(dir, "out"), out); fs.writeFileSync(path.join(dir, "err"), err);
     const sweepDir = path.join(project, "seats/verdicts/sweeps");
     const stage = { steps: fs.existsSync(path.join(dir, "steps")) ? fs.readFileSync(path.join(dir, "steps"), "utf8") : "", bdCalls: fs.existsSync(path.join(dir, "bd-calls")) ? fs.readFileSync(path.join(dir, "bd-calls"), "utf8") : "", piEntered: fs.existsSync(path.join(dir, "pi-entered")), runnerStarted: fs.existsSync(path.join(dir, "runner.pid")), suiteReady: fs.existsSync(path.join(dir, "suite.pid")), reviewerReady: fs.existsSync(path.join(dir, "reviewer.pid")), sweepLogs: fs.existsSync(sweepDir) ? fs.readdirSync(sweepDir).map(file => ({ file, tail: fs.readFileSync(path.join(sweepDir, file), "utf8").slice(-16000) })) : [] };
-    fs.writeFileSync(path.join(dir, "before-cleanup.json"), JSON.stringify({ name, failure: failure ?? null, measurement, stage, groups: [...groups] }, null, 2) + "\n");
+    fs.writeFileSync(path.join(dir, "before-cleanup.json"), JSON.stringify({ name, failure: failure ?? null, measurement, dispatcher: { code: child.exitCode, signal: child.signalCode, stdout: out, stderr: err }, stage, groups: [...groups] }, null, 2) + "\n");
     const early = process.env.WHEELHOUSE_VERIFY_CANCEL_EVIDENCE;
     if (early) { fs.mkdirSync(early, { recursive: true }); fs.copyFileSync(path.join(dir, "before-cleanup.json"), path.join(early, name + ".before-cleanup.json")); }
     // Fix-removed cleanup: ONLY recorded groups from processes this fixture
@@ -176,7 +218,11 @@ esac
     await closed; await canaryClosed;
     await until(() => [...groups].every(g => !groupAlive(g)), () => false, "recorded fixture groups reaped");
     fs.unlinkSync(ledger);
-    fs.writeFileSync(path.join(dir, "out"), out); fs.writeFileSync(path.join(dir, "err"), err); const record = { name, failure: failure ?? null, measurement }; fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(record, null, 2) + "\n"); results.push(record);
+    if (retainedDiagnostics) {
+      try { retainedDiagnostics = retainChildDiagnostics(retainedDiagnostics, name, out, err, child); }
+      catch (error) { retentionError = String(error); console.error(`FAIL ${name}: retained child diagnostics update failed: ${retentionError}`); }
+    }
+    fs.writeFileSync(path.join(dir, "out"), out); fs.writeFileSync(path.join(dir, "err"), err); const record = { name, failure: failure ?? null, measurement, retainedDiagnostics, retentionError, dispatcher: { code: child.exitCode, signal: child.signalCode, stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded } }; fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(record, null, 2) + "\n"); results.push(record);
   }
 }
 fs.writeFileSync(path.join(root, "completed.json"), JSON.stringify(results, null, 2) + "\n");

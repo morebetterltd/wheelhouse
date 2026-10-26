@@ -49,10 +49,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import * as crypto from "node:crypto";
 import { PLACEHOLDER_MARKER, phantomOnlyStatus, porcelainStatus } from "./seat-worktree";
 import { acquireCleanupLock, prepareCleanupRuntime, cleanupPathIdentity, cleanupPathUnchanged, scratchOwnership, type CleanupPathIdentity } from "./cleanup-identity";
+import { assertSeatIdentities, seatIdentity } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const FLEET_CONTAINER = ".wheelhouse-worktrees";
@@ -100,7 +101,7 @@ const CATEGORIES: Record<string, string> = {
 
 function run(cmd: string, args: string[], cwd?: string, input?: string): { ok: boolean; out: string; err: string; code: number | null } {
   const r = spawnSync(cmd, args, { cwd, encoding: "utf8", stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], input, maxBuffer: 256 * 1024 * 1024 });
-  return { ok: r.status === 0, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim(), code: r.status };
+  return { ok: !r.error && !r.signal && r.status === 0, out: (r.stdout ?? "").trim(), err: String(r.stderr || r.error?.message || r.signal || "").trim(), code: r.status ?? null };
 }
 function isDir(p: string): boolean { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
 function subdirs(p: string): string[] { try { return fs.readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(p, d.name)); } catch { return []; } }
@@ -228,8 +229,12 @@ function beadStatuses(root: string): Map<string, string> {
   if (!isDir(path.join(root, ".beads"))) return m;
   for (const st of ["open", "in_progress", "blocked", "deferred", "closed"]) {
     const r = run("bd", ["list", `--status=${st}`, "--json", "--limit", "5000"], root);
-    if (!r.ok || !r.out) continue;
-    try { for (const b of JSON.parse(r.out)) if (b?.id) m.set(String(b.id), String(b.status ?? st)); } catch {}
+    if (!r.ok || !r.out) { console.error(`UNVERIFIED bead statuses ${st}: ${r.err || `native exit ${r.code}, empty JSON`}; no closed-bead authority supplied`); continue; }
+    try {
+      const rows = JSON.parse(r.out);
+      if (!Array.isArray(rows) || rows.some(b => !b || typeof b !== "object" || !b.id)) throw new Error("expected an issue array");
+      for (const b of rows) m.set(String(b.id), String(b.status ?? st));
+    } catch (e: any) { console.error(`UNVERIFIED bead statuses ${st}: ${e.message}; no closed-bead authority supplied`); }
   }
   return m;
 }
@@ -272,9 +277,10 @@ function liveCwds(fresh = false): Set<string> | null {
   let set: Set<string> | null = null;
   for (const lsof of candidates) {
     const r = spawnSync(lsof, ["-d", "cwd", "-Fpn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
-    if (r.error || typeof r.stdout !== "string" || r.stdout.length === 0) continue;
-    set = new Set<string>();
-    for (const line of r.stdout.split("\n")) if (line.startsWith("n")) set.add(line.slice(1));
+    if (r.error || r.signal || r.status !== 0 || typeof r.stdout !== "string" || r.stdout.length === 0) continue;
+    const paths = r.stdout.split("\n").filter(line => line.startsWith("n")).map(line => line.slice(1));
+    if (!paths.length || paths.some(p => !path.isAbsolute(p))) continue;
+    set = new Set(paths);
     break;
   }
   liveCwdCache = { at: Date.now(), set };
@@ -291,7 +297,7 @@ function liveCwdHolders(): LiveCwdHolder[] | null {
   const candidates = process.env.WHEELHOUSE_LSOF ? [process.env.WHEELHOUSE_LSOF] : ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"];
   for (const lsof of candidates) {
     const r = spawnSync(lsof, ["-d", "cwd", "-Fpcn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
-    if (r.error || typeof r.stdout !== "string" || r.stdout.length === 0) continue;
+    if (r.error || r.signal || r.status !== 0 || typeof r.stdout !== "string" || r.stdout.length === 0) continue;
     const holders: LiveCwdHolder[] = [];
     let current: Partial<LiveCwdHolder> = {};
     const flush = () => { if (current.pid && current.cwd) holders.push({ pid: current.pid, command: current.command ?? "?", cwd: path.resolve(current.cwd) }); };
@@ -302,6 +308,7 @@ function liveCwdHolders(): LiveCwdHolder[] | null {
       else if (line.startsWith("n")) current.cwd = line.slice(1);
     }
     flush();
+    if (!holders.length || holders.some(h => !Number.isSafeInteger(h.pid) || h.pid <= 0 || !path.isAbsolute(h.cwd))) continue;
     return holders;
   }
   return null;
@@ -330,8 +337,11 @@ function pushInProgress(root: string, p: string, live: Set<string> | null): stri
       } catch {}
     }
   } catch {}
-  const ps = spawnSync("ps", ["axo", "pid=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout || "";
-  for (const line of ps.split("\n")) {
+  const observation = spawnSync("ps", ["axo", "pid=,command="], { encoding: "utf8" });
+  if (observation.error || observation.signal || observation.status !== 0 || !observation.stdout.trim()) return `cannot verify pushes in flight: native ps status=${observation.status ?? "unknown"} signal=${observation.signal ?? "none"}; ${observation.error?.message ?? observation.stderr}`.trim();
+  const processLines = observation.stdout.split("\n");
+  if (!processLines.some(line => Number(/^\s*(\d+)\s+/.exec(line)?.[1]) === process.pid)) return "cannot verify pushes in flight: native process table lacks the observing process";
+  for (const line of processLines) {
     const m = line.match(/^\s*(\d+)\s+(.*)$/);
     if (!m || !/\bgit(-remote-\w+)?\b.*\bpush\b/.test(m[2])) continue;
     const cwd = processCwd(Number(m[1]));
@@ -493,6 +503,21 @@ function scanBeadRuns(root: string, beads: Map<string, string>, seats: Map<strin
   return rows;
 }
 
+// An ambiguous "container" brief sent scratch above the install. Observe only
+// names matching this graph; never traverse/size/chmod/remove foreign scratch.
+const MISPLACED_SCRATCH = "misplaced scratch outside install";
+function scanMisplacedBeadRuns(root: string, beads: Map<string, string>): Row[] {
+  const parent = path.dirname(root);
+  if (parent === root || beads.size === 0) return [];
+  const rows: Row[] = [];
+  for (const d of subdirs(path.join(parent, RUNS_DIRNAME))) {
+    const name = path.basename(d), b = beadPrefix(name, beads);
+    if (b && (name === b[0] || name.startsWith(`${b[0]}-`) || name.startsWith(`${b[0]}_`))) rows.push(row("needs-review", false, root, d, "", "none",
+      `${MISPLACED_SCRATCH}: matches bead ${b[0]} in this install; reporting only, never deleted`, 0));
+  }
+  return rows;
+}
+
 function scanPrivateTmp(root: string, beads: Map<string, string>): Row[] {
   // Record the physical parent, not TMPDIR's alias spelling. Reviewed rows
   // must stay canonical; do not relax their symlink/identity checks instead.
@@ -605,6 +630,7 @@ function scan(roots: string[], includeOptional: boolean): Row[] {
     const activeBench = benchInProgress(root);
     rows.push(...scanOrphans(root, registeredPaths, seats, live));
     rows.push(...scanBeadRuns(root, beads, seats, live));
+    rows.push(...scanMisplacedBeadRuns(root, beads));
     rows.push(...scanPrivateTmp(root, beads));
     rows.push(...scanSimulators(root, beads));
     rows.push(...scanXCTestDevices(root));
@@ -697,40 +723,69 @@ function parseScan(file: string): Row[] {
   // Eagerly validate ALL rows before any prune action, even excluded/unsafe rows.
   return values!.map((r, i) => validateScanRow(r, i + 2));
 }
-function readJsonlResponse(log: string, id: string, start: number, deadlineMs: number): any | null {
-  while (Date.now() < deadlineMs) {
-    try {
-      const fd = fs.openSync(log, "r");
-      try {
-        const size = fs.fstatSync(fd).size;
-        if (size > start) {
-          const buf = Buffer.alloc(size - start);
-          fs.readSync(fd, buf, 0, buf.length, start);
-          for (const line of buf.toString("utf8").split("\n")) {
-            if (!line.trim()) continue;
-            try { const j = JSON.parse(line); if (j?.id === id && j?.type === "response") return j; } catch {}
-          }
+const PRUNE_STATE_OBSERVE_LIMIT_MS = Number(process.env.WHEELHOUSE_PRUNE_STATE_OBSERVE_MS || 120000);
+function readJsonlResponse(rec: any, fd: number, id: string, start: number, until: number): any {
+  const initial = fs.fstatSync(fd, { bigint: true }), identity = `${initial.dev}:${initial.ino}`;
+  let offset = start, pending = Buffer.alloc(0);
+  const last = () => `pid=${rec.pid} source=${identity} observedOffset=${offset} partialBytes=${pending.length}`;
+  for (;;) {
+    const st = fs.statSync(String(rec.log), { bigint: true });
+    if (`${st.dev}:${st.ino}` !== identity || st.size < BigInt(offset)) throw new Error(`state response source changed; ${last()}`);
+    const n = Number(st.size - BigInt(offset));
+    if (n > 0) {
+      const bytes = Buffer.alloc(Math.min(n, 64 * 1024)), read = fs.readSync(fd, bytes, 0, bytes.length, offset);
+      offset += read; pending = Buffer.concat([pending, bytes.subarray(0, read)]);
+      for (;;) {
+        const lf = pending.indexOf(10); if (lf < 0) break;
+        const line = pending.subarray(0, lf).toString("utf8"); pending = pending.subarray(lf + 1);
+        let response: any; try { response = JSON.parse(line); } catch { continue; }
+        if (response?.id === id && response?.type === "response") {
+          const proof = seatIdentity(rec.pid, rec.fifo, rec.startedAt);
+          if (proof.kind !== "owned") throw new Error(`state response identity ${proof.kind}: ${proof.reason}; ${last()}`);
+          return response;
         }
-      } finally { fs.closeSync(fd); }
-    } catch {}
+      }
+      if (read > 0) {
+        if (performance.now() >= until) throw new Error(`state observation policy expired, not an idle result; ${last()}`);
+        continue;
+      }
+    }
+    if (!pidAlive(Number(rec.pid))) throw new Error(`seat exited before state response; ${last()}`);
+    if (performance.now() >= until) throw new Error(`state observation policy expired, not an idle result; ${last()}`);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
-  return null;
 }
-function getState(rec: any): any | null {
-  if (!rec?.fifo || !rec?.log || !fs.existsSync(String(rec.fifo)) || !fs.existsSync(String(rec.log))) return null;
-  const id = crypto.randomUUID();
-  const start = fs.existsSync(String(rec.log)) ? fs.statSync(String(rec.log)).size : 0;
-  try { fs.appendFileSync(String(rec.fifo), JSON.stringify({ id, type: "get_state" }) + "\n"); } catch { return null; }
-  return readJsonlResponse(String(rec.log), id, start, Date.now() + 2000);
+function getState(rec: any): any {
+  if (!rec?.fifo || !rec?.log) throw new Error("state transport is not recorded");
+  if (!Number.isFinite(PRUNE_STATE_OBSERVE_LIMIT_MS) || PRUNE_STATE_OBSERVE_LIMIT_MS <= 0) throw new Error("invalid prune state-observation policy bound");
+  const id = crypto.randomUUID(), fd = fs.openSync(String(rec.log), fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    const st = fs.fstatSync(fd); if (!st.isFile()) throw new Error("state response source is not a regular file");
+    const writer = fs.openSync(String(rec.fifo), fs.constants.O_WRONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+    try {
+      if (!fs.fstatSync(writer).isFIFO()) throw new Error("state request target is not a FIFO");
+      const request = Buffer.from(JSON.stringify({ id, type: "get_state" }) + "\n");
+      if (fs.writeSync(writer, request) !== request.length) throw new Error("state request was not written completely");
+    } finally { fs.closeSync(writer); }
+    return readJsonlResponse(rec, fd, id, st.size, performance.now() + PRUNE_STATE_OBSERVE_LIMIT_MS);
+  } finally { fs.closeSync(fd); }
 }
 function midTurnSeatReason(): string | null {
+  assertSeatIdentities(ROOT);
   let state: any;
-  try { state = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "state.json"), "utf8")); } catch { return null; }
+  try { state = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "state.json"), "utf8")); }
+  catch (e: any) { return e.code === "ENOENT" ? null : `seat state UNVERIFIED: ${e.message}; prune not authorized`; }
   for (const [name, rec] of Object.entries<any>(state.seats ?? {})) {
     if (!pidAlive(Number(rec?.pid ?? 0))) continue;
-    const st = getState(rec);
-    if (st?.success && st?.data?.isStreaming) return `seat "${name}" is mid-turn per get_state; settle seats before prune --yes`;
+    // Cwd-only records are generic anchors, not declarations of an RPC seat.
+    // They remain protected by the independent live-cwd/seat-anchor guards;
+    // do not invent an idle result or require a protocol they never claimed.
+    const rpcSeat = rec.fifo !== undefined || rec.log !== undefined || rec.role === "worker" || rec.role === "reviewer" || rec.accountDir || rec.sessionFile || rec.sessionId;
+    if (!rpcSeat) continue;
+    let st: any;
+    try { st = getState(rec); } catch (e: any) { return `seat "${name}" state UNVERIFIED: ${e.message}; prune not authorized`; }
+    if (!st?.success || typeof st?.data?.isStreaming !== "boolean") return `seat "${name}" state UNVERIFIED: no successful streaming observation; prune not authorized`;
+    if (st.data.isStreaming) return `seat "${name}" is mid-turn per get_state; settle seats before prune --yes`;
   }
   return null;
 }
@@ -974,6 +1029,7 @@ function cleanup(o: CleanupOptions): number {
   prepareCleanupRuntime(root);
   fs.mkdirSync(path.dirname(o.log), { recursive: true });
   const emit = (line: string) => { const l = `${nowIso()} ${line}`; console.log(l); fs.appendFileSync(o.log, l + "\n"); };
+  assertSeatIdentities(root); // no scan/removal may treat unknown identity as vacancy
   const policy = cleanupPolicy(root);
   if (policy === "off") { emit("cleanup skipped cleanup=off in wheelhouse/.template-source"); return 0; }
   if (policy === "report") o = { ...o, dryRun: true };
@@ -995,7 +1051,7 @@ function cleanup(o: CleanupOptions): number {
     rowsLoop: for (const r of rows) {
       if (NEVER.has(r.category)) {
         // kept lines only for what cleanup could otherwise have touched: worktrees and bead scratch
-        if (inContainer(r.path)) { emit(`${dry}kept ${r.category} ${r.path} reason=${r.category === "seat-anchor" ? `seat-anchor: ${r.reason}` : r.reason}`); kept++; }
+        if (inContainer(r.path) || r.reason.startsWith(MISPLACED_SCRATCH)) { emit(`${dry}kept ${r.category} ${r.path} reason=${r.category === "seat-anchor" ? `seat-anchor: ${r.reason}` : r.reason}`); kept++; }
         continue;
       }
       if (!underAllowed(root, r.path)) { emit(`${dry}kept ${r.category} ${r.path} reason=outside ${FLEET_CONTAINER}/ and ${RUNS_DIRNAME}/; never touched by cleanup`); kept++; continue; }
@@ -1012,6 +1068,8 @@ function cleanup(o: CleanupOptions): number {
       const expectedBead = r.category === "run-scratch" ? /^scratch belongs to closed bead (.+)$/.exec(r.reason)?.[1] : undefined;
       const nestedScratch = seatScratchLocation(root, r.path);
       const ownershipRoot = nestedScratch?.seatRoot ?? root;
+      assertSeatIdentities(root);
+      if (ownershipRoot !== root) assertSeatIdentities(ownershipRoot);
       let ownership: ReturnType<typeof scratchOwnership> | null = null;
       if (r.action === "rm") {
         try {

@@ -4,12 +4,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 import { instrument, until } from "./verify-readiness";
 
 export function afterResult(done: boolean): void {
   const dir = process.env.WHEELHOUSE_NO_VERDICT_CASE!;
-  if (!fs.existsSync(path.join(dir, "observed.json"))) fs.writeFileSync(path.join(dir, "observed.json"), JSON.stringify({ done }));
+  const file = path.join(dir, "observed.json");
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file + ".new", JSON.stringify({ done }));
+    fs.renameSync(file + ".new", file);
+  }
 }
 
 export function afterRetry(stdout: string, done: boolean, reaping: boolean): void {
@@ -105,6 +110,7 @@ async function test(): Promise<void> {
     // turn without a judgment, not refusal of malformed work.
     const description = `Trace: verify-no-verdict regression fixture
 Signal: isa-gap: K1
+Skills: intent@1.0.0 outcomes@1.0.0
 
 Intent:
 Keep a completed local check distinguishable from a final judgment, so unfinished evidence cannot be mistaken for approval.

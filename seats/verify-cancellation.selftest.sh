@@ -19,5 +19,11 @@ selftest_copy_seat_runtime "$FIX/runtime" "${WHEELHOUSE_VERIFY_CANCELLATION_RUNT
 if [ -n "${WHEELHOUSE_VERIFY_CANCELLATION_SOURCE:-}" ]; then
   cp -f "$WHEELHOUSE_VERIFY_CANCELLATION_SOURCE" "$FIX/runtime/seats/verify.ts"
 fi
-bun "$HERE/fixtures/verify-cancellation.ts" "$FIX"
+# Unlike FIX and the per-suite TMPDIR, this root survives fixture teardown.
+export WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT="${WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT:-${WHEELHOUSE_VERIFY_CANCEL_EVIDENCE:-$HERE/verdicts/verify-cancellation-failures}}"
+normal=0
+bun "$HERE/fixtures/verify-cancellation.ts" "$FIX" || normal=$?
 [[ -f "$FIX/completed.json" ]] || { echo 'STOP: cancellation fixture did not complete' >&2; exit 2; }
+retention=0
+bun "$HERE/fixtures/verify-cancellation-retention.ts" "$FIX/retention-canary" "$HERE/fixtures/verify-cancellation.ts" "$FIX/runtime/seats" || retention=$?
+[ "$normal" = 0 ] && [ "$retention" = 0 ]

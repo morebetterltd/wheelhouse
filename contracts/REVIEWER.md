@@ -71,6 +71,18 @@ A one-shot pass inherits the rest of this reviewer contract: never review what y
 
 Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 
+### The manual is not the author's to bend
+
+Any change under `.agents/skills/verify-*/` — a `SKILL.md` section or a feature-map entry under `features/` — is in scope **only when an outcome of the contract names that file or that feature**. A map outcome or manual-sections outcome can call for it; the author's need to make a failing journey pass cannot. Read the base version as well as the reviewed SHA, not just the edited manual as its own oracle.
+
+Otherwise name the scope defect and quote the changed line:
+
+```
+VERDICT: BOUNCE — scope: <path> changed without a contract outcome calling for it
+```
+
+Name a weakened journey as such: a reach, step or end state made looser so it passes. If you cannot tell whether an outcome calls for the edit, route that relationship as unverifiable; never approve it in silence or infer permission from the changed manual itself. The dispatcher's changed-file and candidate-outcome lists are context, not a scope judgment.
+
 When the commander has promoted this reviewer as a FALLBACK GATE for a gating-reviewer outage, the review is still an ordinary gating review under this contract, and its record must make the exceptional gate visible: state that it is gating as fallback, name the outage that disabled the standing gate, and state the distinct-account basis that keeps this review from being author-adjacent.
 
 ### Constraints
@@ -81,7 +93,7 @@ When the commander has promoted this reviewer as a FALLBACK GATE for a gating-re
 - The worker's report is a CLAIM, not evidence. Re-run what is cheap, and say explicitly what you could not re-run.
 - Check the claims as well as the code. A correct change described by a false sentence still ships that sentence, and the next reader believes it.
 - For a host app, daemon, service, supervisor, launch agent, or machine-local port listener change, verify that the worker's run could not have displaced production: before review, record whether the production port/socket and LaunchAgent/systemd unit/service/plist/login item/supervisor entry exist and are running; after any reviewer-run proof, record the same facts again and compare them. An APPROVE needs the before/after production state unchanged, or an explicit statement that no production service exists on the review machine. If checking that state requires access you do not have, route it as structurally unverifiable rather than approving in silence.
-- Every ad-hoc build, derived-data directory, review-output directory, walk-simulator artifact, or other scratch artifact you create for a bead lives under `<container>/.wheelhouse-runs/<bead-id>/...`, not a bare `/tmp` path. Any simulator you create for a bead is named `<bead-id>-*` so the closed-bead scratch pruner can identify it later.
+- Every ad-hoc build, derived-data directory, review-output directory, walk-simulator artifact, or other scratch artifact you create for a bead lives under `$WHEELHOUSE_ROOT/.wheelhouse-runs/<bead-id>/...`, using the absolute install root and exact per-bead scratch path printed by the dispatcher; do not infer that root from the install's parent, a selected product repository or the scratch worktree. Do not use a bare `/tmp` path. Any simulator you create for a bead is named `<bead-id>-*` so the closed-bead scratch pruner can identify it later.
 - When this install has a host build budget (`seats/host-budget.json` exists and seat launch/probe/one-shot PATHs include `seats/bin`), every build and test you run goes through the shim, regardless of whether the seat harness is `pi`, `claude-code`, or `codex`; never call the raw tool by absolute path, by a PATH that skips `seats/bin`, or by any other escape hatch. Build caches are shared under the host lock by default. Per-worktree cache isolation is allowed only with a written reason on the bead, because isolation multiplies disk and compile load.
 
 ### Commander sentinel
@@ -128,7 +140,7 @@ For any diff that touches `seats/cockpit.sh`, reviewer bench evidence includes b
 
 For any diff that touches `seats/adapter.ts` status rendering, liveness checks, orphan detection, or process/FIFO ownership, reviewer bench evidence includes `bash seats/legibility.selftest.sh`. The legibility suite exercises the multi-seat failure-state fixture through `adapter.ts status` and `floor.ts --once`, so adapter-only evidence is incomplete for that path.
 
-A review never records APPROVE without a dispatcher-owned sweep of **the tier the change requires**, at the exact reviewed tip, with the receipt naming the tier and reason. Core is the tracked `seats/selftest-core.list`; full includes every root `seats/*.selftest.sh`. Changes against main's merge base require full when they touch `seats/{selftest-sweep.sh,selftest-lib.sh,selftest-sweep-lock.ts,selftest-herald.sh,python-invocations.ts,selftest-core.list,adapter.ts,seat-worktree.ts,verify.ts}`, a full-tier suite, or a fixture not named for a core suite. Explicit “full sweep passes” / `selftest-sweep.sh` claim wording also forces full. The first matching touched path, or “Done line”, is the reason; otherwise core/default. A log/choice tier mismatch is INCOMPLETE, never APPROVE. Run the required tier through `bash seats/selftest-sweep.sh --tier core|full` (default full), never a hand-rolled loop. Both tiers take the same host-wide lock. See `seats/README.md`, “Required review tier”; targeted bench checks remain additional obligations.
+A review never records APPROVE without a dispatcher-owned sweep of **the tier the change requires**, at the exact reviewed tip, with the receipt naming the tier and reason. Core is the tracked `seats/selftest-core.list`; full includes every root `seats/*.selftest.sh`. Changes against main's merge base require full when they touch `seats/{selftest-sweep.sh,selftest-lib.sh,selftest-sweep-lock.ts,selftest-herald.sh,python-invocations.ts,selftest-core.list,adapter.ts,seat-worktree.ts,verify.ts,heavy-test.sh,heavy-test-entry.ts}`, a full-tier suite, or a fixture not named for a core suite. Explicit “full sweep passes” / `selftest-sweep.sh` claim wording also forces full. The first matching touched path, or “Done line”, is the reason; otherwise core/default. A log/choice tier mismatch is INCOMPLETE, never APPROVE. A quarantined failure does not block APPROVE; read it and BOUNCE if it looks caused by this change. Run the required tier through `bash seats/selftest-sweep.sh --tier core|full` (default full), never a hand-rolled loop. Both tiers take the same host-wide lock. See `seats/README.md`, “Required review tier”; targeted bench checks remain additional obligations.
 
 ### When the bench outlives the review turn
 

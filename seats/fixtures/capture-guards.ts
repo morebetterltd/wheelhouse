@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const [seats, fix] = process.argv.slice(2);
 assert(fs.statSync(seats).isDirectory());
@@ -11,7 +11,8 @@ const inventory = new Map([
   ["adapter.selftest.sh", 5], ["walk.selftest.sh", 3],
   ["verify.selftest.sh", 3], ["reset.selftest.sh", 2],
   ["herald.selftest.sh", 1], ["desk.selftest.sh", 6],
-  ["isolation.selftest.sh", 5], ["prune.selftest.sh", 5],
+  ["isolation.selftest.sh", 5], ["prune.selftest.sh", 1],
+  ["prune-safety.selftest.sh", 4],
   ["concurrency.selftest.sh", 2], ["drivers/codex/selftest.sh", 1],
   ["channel-credentials.selftest.sh", 1], ["selftest-sweep.selftest.sh", 3],
 ]);

@@ -25,7 +25,7 @@ PROJ="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"
 mkdir -p "$PROJ/seats/run" "$PROJ/seats/logs" "$PROJ/wheelhouse" "$PROJ/contracts" "$BIN" "$HOME_FIX"
 cp "$GATE" "$PROJ/seats/fleet-gate.sh"
 chmod +x "$PROJ/seats/fleet-gate.sh"
-for f in alerts.ts nightly-state.ts fleet-snapshot.ts roster.ts pool.ts seat-activity.ts seat-stream-health.ts seat-worktree.ts credential-shapes.ts harness.ts needs.ts template-drift.sh lock.ts; do cp "$HERE/$f" "$PROJ/seats/$f"; done
+for f in nightly-state.ts quarantine.ts alerts.ts seat-settled.ts fleet-snapshot.ts native-command.ts completed-command.ts roster.ts pool.ts seat-activity.ts seat-stream-health.ts seat-worktree.ts credential-shapes.ts harness.ts needs.ts template-drift.sh lock.ts; do cp "$HERE/$f" "$PROJ/seats/$f"; done
 chmod +x "$PROJ/seats/template-drift.sh"
 cat > "$PROJ/seats/template-drift.sh" <<'SH'
 #!/usr/bin/env bash
@@ -55,10 +55,24 @@ exit 1
 SH
 chmod +x "$BIN/bd" "$BIN/gh"
 ( cd "$PROJ" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest && git add seats wheelhouse contracts && git commit -q -m base )
-(sleep 1000) & P1=$!; (sleep 1000) & P2=$!
-cat > "$PROJ/seats/state.json" <<JSON
-{"seats":{"worker-a":{"pid":$P1,"log":"$PROJ/seats/logs/worker-a.jsonl"},"worker-b":{"pid":$P2,"log":"$PROJ/seats/logs/worker-b.jsonl"}}}
-JSON
+SIGNALS="$HERE/fixtures/adapter-selftest-signals.ts"
+(cd "$FIX" && exec bun "$SIGNALS" hold "$FIX/p1.release" "$FIX/p1.ready") & P1=$!
+(cd "$FIX" && exec bun "$SIGNALS" hold "$FIX/p2.release" "$FIX/p2.ready") & P2=$!
+bun "$SIGNALS" exists "$FIX/p1.ready" '' 0 "$P1" || exit 2
+bun "$SIGNALS" exists "$FIX/p2.ready" '' 0 "$P2" || exit 2
+export LIFECYCLE_COMMAND_HELPER="$HERE/completed-command.ts"
+bun - "$PROJ" "$P1" "$P2" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const {completedCommand}=await import(process.env.LIFECYCLE_COMMAND_HELPER);
+const [root,...pids]=process.argv.slice(2),seats={};
+for(const [i,pid]of pids.entries()){
+ const r=completedCommand('ps',['-p',pid,'-o','lstart=']);
+ console.error('CAPTURE fleet-gate fixture ps '+JSON.stringify({pid,status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));
+ assert.equal(r.status,0);assert.equal(r.signal,null);assert.equal(r.error,undefined);
+ seats['worker-'+String.fromCharCode(97+i)]={pid:Number(pid),startedAt:new Date(Date.parse(r.stdout.trim())).toISOString(),log:root+'/seats/logs/worker-'+String.fromCharCode(97+i)+'.jsonl'};
+}
+fs.writeFileSync(root+'/seats/state.json',JSON.stringify({seats}));
+JS
 printf '%s\n' '{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}' > "$PROJ/seats/logs/worker-a.jsonl"
 printf '%s\n' '{"type":"agent_end","timestamp":"2026-01-01T00:00:00Z"}' > "$PROJ/seats/logs/worker-b.jsonl"
 
@@ -105,6 +119,26 @@ else
   fail "fresh snapshot output wrong rc=$RC out=$OUT"
 fi
 
+node - "$PROJ/seats/run/fleet-snapshot.json" <<'JS'
+const fs=require('fs'),f=process.argv[2],j=JSON.parse(fs.readFileSync(f,'utf8'));j.quarantined={count:2,names:['a.selftest.sh','b.selftest.sh']};fs.writeFileSync(f,JSON.stringify(j));
+JS
+run_gate
+[ "$RC" = 0 ] && has 'quarantine: 2' && pass 'snapshot quarantine count prints on Node path' || fail "quarantine count missing: $OUT"
+run_bun_gate(){ OUT="$(cd "$PROJ"; command(){ if [ "$*" = '-v node' ]; then return 1; fi; builtin command "$@"; }; export -f command; bash seats/fleet-gate.sh 2>&1)"; RC=$?; }
+run_bun_gate
+[ "$RC" = 0 ] && has 'quarantine: 2' && pass 'snapshot quarantine count prints on Bun fallback' || fail "Bun quarantine count missing: $OUT"
+cp -f "$PROJ/seats/fleet-gate.sh" "$FIX/quarantine-gate-source.sh"
+node - "$PROJ/seats/fleet-gate.sh" <<'JS'
+const fs=require('fs'),f=process.argv[2],s=fs.readFileSync(f,'utf8'),q=' · quarantine: ${j.quarantined.count}';if(s.split(q).length!==3)throw Error('both gate display sites required');fs.writeFileSync(f,s.split(q).join(''));
+JS
+[ "$?" = 0 ] || exit 2
+run_gate
+[ "$RC" = 0 ] && ! has 'quarantine: 2' && pass 'canary: removing display loses Node quarantine count' || fail 'Node quarantine canary insensitive'
+run_bun_gate
+[ "$RC" = 0 ] && ! has 'quarantine: 2' && pass 'canary: removing display loses Bun quarantine count' || fail 'Bun quarantine canary insensitive'
+cp -f "$FIX/quarantine-gate-source.sh" "$PROJ/seats/fleet-gate.sh"
+cp -f "$FIX/real-fleet-snapshot.json" "$PROJ/seats/run/fleet-snapshot.json"; mutate_snapshot fresh
+
 PRODUCT="$PROJ/product-checkout"
 mkdir -p "$PRODUCT/seats"
 cp "$PROJ/seats/fleet-gate.sh" "$PRODUCT/seats/fleet-gate.sh"
@@ -138,34 +172,40 @@ else
   fail "stale snapshot output wrong rc=$RC out=$OUT"
 fi
 
-cat > "$BIN/bd" <<'SH'
+export FLEET_GATE_TOOL_CALLS="$FIX/forbidden-tool-calls"
+: > "$FLEET_GATE_TOOL_CALLS"
+for tool in bd bun gh; do
+  cat > "$BIN/$tool" <<'SH'
 #!/usr/bin/env bash
-sleep 2
-echo 'old fleet-gate should not call bd' >&2
+printf '%s\n' "${0##*/} $*" >> "$FLEET_GATE_TOOL_CALLS"
+echo 'snapshot reader must not delegate to live tools' >&2
 exit 9
 SH
-cat > "$BIN/bun" <<'SH'
-#!/usr/bin/env bash
-sleep 2
-echo 'old fleet-gate should not call bun adapter/status' >&2
-exit 9
-SH
-cat > "$BIN/gh" <<'SH'
-#!/usr/bin/env bash
-sleep 2
-echo 'old fleet-gate should not call gh' >&2
-exit 9
-SH
+ done
 chmod +x "$BIN/bd" "$BIN/bun" "$BIN/gh"
 cp "$FIX/real-fleet-snapshot.json" "$PROJ/seats/run/fleet-snapshot.json"; mutate_snapshot fresh
-TIME_OUT="$(cd "$PROJ" && perl -MTime::HiRes=time -e '$t=time; system(qw(bash seats/fleet-gate.sh)); printf "ELAPSED=%.3f\n", time-$t' 2>&1)"; TIME_RC=$?
-ELAPSED="$(printf '%s\n' "$TIME_OUT" | sed -n 's/^ELAPSED=//p' | tail -1)"
-if [ $TIME_RC -eq 0 ] && printf '%s\n' "$TIME_OUT" | grep >/dev/null '🚢 FLEET: 2 seats live' && ! printf '%s\n' "$TIME_OUT" | grep >/dev/null '2/2 seats live' && ELAPSED="$ELAPSED" perl -e 'exit(($ENV{ELAPSED}//9) < 1 ? 0 : 1)'; then
-  pass 'reader finishes under 1s, uses no slow tools, and does not ask for absent rostered count'
+TIME_RC=0
+bun - "$HERE/completed-command.ts" "$PROJ" "$BIN" "$FIX/reader.stdout" <<'JS' || TIME_RC=$?
+import fs from 'node:fs';
+const [moduleFile,root,bin,capture]=process.argv.slice(2),{completedCommand}=await import(moduleFile);
+const native=completedCommand('bash',['seats/fleet-gate.sh'],{cwd:root,env:{...process.env,PATH:bin+':'+process.env.PATH}});
+fs.writeFileSync(capture,native.stdout);fs.writeFileSync(capture+'.stderr',native.stderr);
+console.log('CAPTURE snapshot reader '+JSON.stringify(native));
+process.exit(native.error||native.signal||native.status===null?1:native.status);
+JS
+TIME_OUT="$(cat "$FIX/reader.stdout")"
+printf 'CAPTURE snapshot reader harness=%s forbidden-tools=%s\n' "$TIME_RC" "$(cat "$FLEET_GATE_TOOL_CALLS")"
+if [ $TIME_RC -eq 0 ] && printf '%s\n' "$TIME_OUT" | grep >/dev/null '🚢 FLEET: 2 seats live' && ! printf '%s\n' "$TIME_OUT" | grep >/dev/null '2/2 seats live' && [ ! -s "$FLEET_GATE_TOOL_CALLS" ]; then
+  pass 'reader completes without live tool calls or invented rostered count; no throughput verdict'
 else
-  fail "subsecond/no-slow-tools/no-rostered leg failed rc=$TIME_RC elapsed=${ELAPSED:-?} out=$TIME_OUT"
+  fail "snapshot/no-live-tools/no-rostered leg failed rc=$TIME_RC calls=$(cat "$FLEET_GATE_TOOL_CALLS") out=$TIME_OUT"
 fi
 
+printf 'explicit owner release\n' > "$FIX/p1.release"
+printf 'explicit owner release\n' > "$FIX/p2.release"
+wait "$P1"; P1_RC=$?; wait "$P2"; P2_RC=$?
+printf 'CAPTURE fleet-gate holder exits=%s/%s after owner release\n' "$P1_RC" "$P2_RC"
+[ "$P1_RC" = 0 ] && [ "$P2_RC" = 0 ] || fail 'fixture holder died before explicit release'
 printf '\n'
 if [ $FAILED -eq 0 ]; then
   echo 'fleet-gate.sh works on this machine.'

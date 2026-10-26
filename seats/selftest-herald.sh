@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Herald-specific lifetime binding; deliberately separate from selftest-lib.
+# TERM escalation grace only; the final wait joins the original child.
+SELFTEST_HERALD_TERM_GRACE_TICKS=30
+SELFTEST_HERALD_OBSERVE_INTERVAL_S=0.1
 # Call in the owning selftest shell after allocating its marked fixture.
 selftest_bind_herald_owner() {
   local root="${1:-}" started
@@ -23,7 +26,7 @@ selftest_stop_herald_child() {
   [ -n "$pid" ] || return 0
   selftest_herald_child_is_ours "$pid" || return 0
   kill -TERM "$pid" 2>/dev/null || true
-  for _ in $(seq 1 30); do selftest_herald_child_is_ours "$pid" || break; sleep 0.1; done
+  for _ in $(seq 1 "$SELFTEST_HERALD_TERM_GRACE_TICKS"); do selftest_herald_child_is_ours "$pid" || break; sleep "$SELFTEST_HERALD_OBSERVE_INTERVAL_S"; done
   selftest_herald_child_is_ours "$pid" && kill -KILL "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }

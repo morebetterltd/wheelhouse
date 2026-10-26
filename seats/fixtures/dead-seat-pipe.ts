@@ -1,7 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as assert from 'node:assert/strict';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
+import conditionWait from './wait-for-condition.cjs';
+const { waitForCondition } = conditionWait;
 
 // Private process-boundary fixture: the peer exits AFTER the nonblocking
 // reader probe succeeds, BEFORE liveness examines the pathname. No elapsed
@@ -33,12 +36,7 @@ function closed(child: ChildProcess): Promise<{ code: number | null; signal: str
   return new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({ code, signal })); });
 }
 function published(file: string): { promise: Promise<void>; cancel(): void } {
-  let watcher: fs.FSWatcher;
-  const promise = new Promise<void>((resolve) => {
-    const check = () => { if (fs.existsSync(file)) { watcher.close(); resolve(); } };
-    watcher = fs.watch(path.dirname(file), check); check();
-  });
-  return { promise, cancel: () => watcher.close() };
+  return waitForCondition({ site: 'dead-seat-pipe.published', paths: [path.dirname(file)], predicate: () => fs.existsSync(file) });
 }
 const failures: string[] = [];
 for (const command of ['stop', 'dispatch']) {

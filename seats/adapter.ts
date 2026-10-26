@@ -40,8 +40,8 @@
  *   resume   <seat>                    respawn attached to the recorded session
  *   reset    <seat>                    stop, discard the session, respawn cold
  *
- * A worker seat's process cwd is its OWN persistent worktree,
- * `.wheelhouse-worktrees/<seat-name>`, by construction and not by prompt
+ * A worker seat's process cwd is its OWN persistent worktree (normally
+ * `.wheelhouse-worktrees/<seat-name>`, or an adopted legacy path), by construction and not by prompt
  * discipline: spawn with a bead id, or dispatch, prepares that worktree on
  * `fleet/<bead-id>` (seats/seat-worktree.ts: create it under the seats+2
  * cap, push the previous bead's branch first, refuse real uncommitted
@@ -55,21 +55,23 @@
  * moment its bead closes.
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import * as crypto from "node:crypto";
 import { checkBeadContract, contractRemedy } from "./contract";
+import { completedCommand } from "./completed-command";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
-import { resolveRoleBrief } from "./briefs";
+import { completedExecFileSync as execFileSync } from "./native-command";
+import { resolveRoleBrief, workerDispatchPrompt, assembleBrief } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
 import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
-import { agentSettledEvent, barePidAlive, eventTimeIso, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath } from "./seat-activity";
+import { agentSettledEvent, barePidAlive, eventTimeIso, inspectProcessStart, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath, seatIdentity, SeatIdentityUnverified } from "./seat-activity";
 import { seatTurnDisplay } from "./seat-turn-display";
 import { QUOTA_RE } from "./quota";
 import { acquirePidLock, releasePidLock } from "./lock";
@@ -119,7 +121,7 @@ function seatCwdFor(name: string, entry: SeatEntry): string {
 }
 
 /** Prepare the seat's worktree on the bead's branch (create, push-gate,
- * switch) and return the cwd to launch or dispatch into. Refusals are loud
+ * switch) and return the cwd/branch binding to launch or dispatch into. Refusals are loud
  * STOPs that leave the seat exactly as it was; plain-words notes land in
  * the seat's event log so "push failed" is readable where the seat's
  * history is. */
@@ -146,20 +148,23 @@ function seatPushSetting(): SeatPushSetting { return setting("seat_push", ["on",
 function seatWorktreesSetting(): SeatWorktreesSetting { return setting("seat_worktrees", ["per-seat", "per-task"] as const, "per-seat"); }
 function cleanupSetting(): CleanupSetting { return setting("cleanup", ["on", "off", "report"] as const, "on"); }
 
-function prepareSeatCwd(name: string, entry: SeatEntry, beadId: string, base: string | null): string {
-  if (!seatUsesWorktree(entry)) return ROOT;
+type PreparedSeatCwd = { cwd: string; branch: string | null };
+
+function prepareSeatCwd(name: string, entry: SeatEntry, beadId: string, base: string | null): PreparedSeatCwd {
+  if (!seatUsesWorktree(entry)) return { cwd: ROOT, branch: null };
   const state = readState();
   const rec = state.seats[name];
   if (seatWorktreesSetting() === "per-task") {
     console.log(`seat ${name}: seat_worktrees=per-task; adapter will not create, move, or switch worktrees`);
-    return rec?.cwd ?? ROOT;
+    return { cwd: rec?.cwd ?? ROOT, branch: null };
   }
   const note = (line: string) => {
     console.log(line);
     if (rec?.log) appendSeatLog(rec.log, { type: "wheelhouse_note", seat: name, bead: beadId, message: line, at: new Date().toISOString() });
   };
   try {
-    return ensureSeatWorktree({ root: ROOT, seat: name, beadId, base, roster: parseRosterFile(), state, note, seatPush: seatPushSetting() }).target;
+    const prepared = ensureSeatWorktree({ root: ROOT, seat: name, beadId, base, roster: parseRosterFile(), state, note, seatPush: seatPushSetting() });
+    return { cwd: prepared.target, branch: prepared.branch };
   } catch (e: any) {
     if (e instanceof SeatWorktreeError) die(e.message);
     throw e;
@@ -346,6 +351,7 @@ interface SeatRecord {
   lastCapacityCleared?: { at: string; logOffset: number };
   lastStalledEvent?: { at: string; detail: string };
   lastLaunchFailure?: { at: string; detail: string };
+  resumeContinuation?: { at: string; pid: number; startedAt: string; logIdentity: string; offset: number };
 }
 
 interface State {
@@ -613,19 +619,23 @@ function sleep(ms: number): Promise<void> {
 
 /** Read complete log lines from a byte offset; for old offset=0 callers, tail only. */
 function logLinesFrom(log: string, offset: number, maxBytes = LOG_TAIL_BYTES): { lines: string[]; offset: number; truncated: boolean } {
-  if (!fs.existsSync(log)) return { lines: [], offset, truncated: false };
-  const size = fs.statSync(log).size;
+  let fd: number;
+  try { fd = fs.openSync(log, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); }
+  catch (e: any) {
+    if (e.code === "ENOENT") return { lines: [], offset, truncated: false };
+    throw e;
+  }
+  try { return logLinesFromDescriptor(fd, offset, maxBytes); }
+  finally { fs.closeSync(fd); }
+}
+
+function logLinesFromDescriptor(fd: number, offset: number, maxBytes = LOG_TAIL_BYTES): { lines: string[]; offset: number; truncated: boolean } {
+  const size = fs.fstatSync(fd).size;
   if (size <= offset) return { lines: [], offset, truncated: false };
   const start = offset === 0 && size > maxBytes ? size - maxBytes : offset;
   const truncated = start > offset;
-  const fd = fs.openSync(log, "r");
-  let chunk: Buffer;
-  try {
-    chunk = Buffer.alloc(size - start);
-    fs.readSync(fd, chunk, 0, chunk.length, start);
-  } finally {
-    fs.closeSync(fd);
-  }
+  const chunk = Buffer.alloc(size - start);
+  fs.readSync(fd, chunk, 0, chunk.length, start);
   let text = chunk.toString("utf8");
   let base = start;
   if (truncated) {
@@ -651,12 +661,40 @@ function promptCommand(message: string, streamingBehavior: "followUp" | "steer")
 
 async function rpc(rec: RpcSeat, command: Record<string, unknown>): Promise<any> {
   const id = crypto.randomUUID();
-  let offset = fs.existsSync(rec.log) ? fs.statSync(rec.log).size : 0;
+  let responseSource: string | undefined;
+  const lost = (reason: string) => new Error(`${rpcSeat(rec)} response source lost: ${JSON.stringify(rec.log)} — ${reason}`);
+  const openResponseSource = (): number | null => {
+    let fd: number;
+    try { fd = fs.openSync(rec.log, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); }
+    catch (e: any) {
+      // A fresh launch may not have created its first log yet. Once observed,
+      // or for an established seat, absence is a lost channel, not latency.
+      if (e.code === "ENOENT" && rec.startedAt === undefined && responseSource === undefined) return null;
+      throw lost(e.code === "ENOENT" ? "path missing" : `cannot open response file (${e.code ?? e.message})`);
+    }
+    try {
+      const st = fs.fstatSync(fd, { bigint: true });
+      if (!st.isFile()) throw lost("response path is not a regular file");
+      const identity = `${st.dev}:${st.ino}`;
+      if (responseSource !== undefined && responseSource !== identity) throw lost(`inode changed (${responseSource} -> ${identity})`);
+      responseSource = identity;
+      return fd;
+    } catch (e) { fs.closeSync(fd); throw e; }
+  };
+  const initial = openResponseSource();
+  let offset = 0;
+  if (initial !== null) {
+    try { offset = fs.fstatSync(initial).size; }
+    finally { fs.closeSync(initial); }
+  }
   await fifoWrite(rec, { ...command, id });
   const phase = `while waiting for ${command.type} response`;
   const progress = rpcProgress(rec, () => `${phase}; pipe open`);
   for (;;) {
-    const r = logLinesFrom(rec.log, offset);
+    const fd = openResponseSource();
+    let r: ReturnType<typeof logLinesFromDescriptor>;
+    try { r = fd === null ? { lines: [], offset, truncated: false } : logLinesFromDescriptor(fd, offset); }
+    finally { if (fd !== null) fs.closeSync(fd); }
     offset = r.offset;
     for (const line of r.lines) {
       let obj: any;
@@ -855,6 +893,32 @@ function roleBriefPath(role: string): string {
   }
 }
 
+function roleBriefContent(role: string, sessionFile: string | null = null, prior?: SeatRecord) {
+  const file = roleBriefPath(role);
+  let text: string;
+  try { text = assembleBrief(ROOT, role); } catch (e: any) { die(e.message); }
+  // Workers keep their existing byte hash/path semantics. Producer continuity
+  // includes the exact skill bodies and versions supplied to the harness.
+  const hash = crypto.createHash("sha256").update(role === "producer" ? text : fs.readFileSync(file)).digest("hex");
+  if (role === "producer" && sessionFile && prior?.roleBriefHash !== hash) {
+    die(`seat producer brief changed; reset instead of resume (recorded ${prior?.roleBriefHash ?? "unknown"}, current ${hash})`);
+  }
+  return { file, text, hash };
+}
+
+function producerBriefFile(name: string, role: string, brief: ReturnType<typeof roleBriefContent>): string {
+  if (role !== "producer") return brief.file;
+  // The native shims take a file; publish the same assembled bytes atomically,
+  // not a second harness-specific skill loader. A content key avoids clobbering
+  // a running shim's input when another launch is prepared.
+  fs.mkdirSync(RUN_DIR, { recursive: true });
+  const file = path.join(RUN_DIR, `${name}.producer-brief.${brief.hash}.md`);
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try { fs.writeFileSync(tmp, brief.text, { flag: "wx", mode: 0o600 }); fs.renameSync(tmp, file); }
+  finally { try { fs.unlinkSync(tmp); } catch {} }
+  return file;
+}
+
 function accountLabel(entry: SeatEntry | undefined, rec?: SeatRecord): string | undefined {
   const label = entry?.account?.label ?? rec?.accountLabel;
   return typeof label === "string" && label.length > 0 ? label : undefined;
@@ -913,6 +977,22 @@ function requirePiModelPin(name: string, entry: SeatEntry): void {
   }
 }
 
+function spawnedBirth(child: ReturnType<typeof spawn>): { startedAt: string; birthUnverified?: string } {
+  const observation = child.pid ? inspectProcessStart(child.pid) : { ms: null, reason: "spawn returned no child pid" };
+  const reason = child.exitCode != null || child.signalCode != null
+    ? "original child exited during birth observation"
+    : observation.reason;
+  if (observation.ms === null || reason) {
+    // Refuse the timestamp capture, not an independently observed FIFO proof.
+    // Retain the live record; never restamp, classify it dead/foreign, or signal
+    // a numeric occupant merely because the birth observer was unavailable.
+    const detail = reason || "native child birth unavailable";
+    console.error(`UNVERIFIED native birth for spawned pid ${child.pid}: ${detail}; no timestamp fallback recorded`);
+    return { startedAt: "", birthUnverified: detail };
+  }
+  return { startedAt: new Date(observation.ms).toISOString() };
+}
+
 async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | null, cwd: string, retriedFresh = false): Promise<void> {
   requirePiModelPin(name, entry);
   requireCwdDir(cwd);
@@ -932,7 +1012,8 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   const authFile = path.join(accountDir, "auth.json");
   requireLaunchCredential(name, entry, accountDir, authFile, labelSuffix);
 
-  const brief = roleBriefPath(entry.role);
+  const loadedBrief = roleBriefContent(entry.role, sessionFile, existing);
+  const brief = loadedBrief.file, roleBriefHash = loadedBrief.hash;
   fs.mkdirSync(RUN_DIR, { recursive: true });
   fs.mkdirSync(LOG_DIR, { recursive: true });
   const fifo = path.join(RUN_DIR, `${name}.stdin`);
@@ -945,7 +1026,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     execFileSync("mkfifo", [fifo]);
   }
 
-  const args = ["--mode", "rpc", "--append-system-prompt", brief];
+  const args = ["--mode", "rpc", "--append-system-prompt", entry.role === "producer" ? loadedBrief.text : brief];
   if (entry.provider) args.push("--provider", entry.provider);
   if (entry.model) args.push("--model", entry.model);
   args.push(...skillArgs(name, entry));
@@ -967,6 +1048,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   });
   child.unref();
   const pid = child.pid!;
+  const birth = spawnedBirth(child);
 
   // Ask the seat who it is. This doubles as the readiness gate: pi answers
   // get_state only once its session exists, and the answer carries the
@@ -1003,11 +1085,12 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
 
   const record: SeatRecord = {
     pid,
-    startedAt: new Date().toISOString(),
+    ...birth,
     accountDir,
     ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
     roleBrief: brief,
+    roleBriefHash,
     cwd: requestedCwd,
     fifo,
     log,
@@ -1082,11 +1165,12 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — claude-code launch must pin the exact model`);
   if (!entry.allowedTools) die(`seat "${name}"${labelSuffix} has no allowedTools list in seats/seats.json — claude-code acceptEdits mode must name the tools it may use`);
 
-  const brief = roleBriefPath(entry.role);
-  const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+  const loadedBrief = roleBriefContent(entry.role, sessionFile, existing);
+  const roleBriefHash = loadedBrief.hash;
   if (sessionFile && existing?.roleBriefHash && existing.roleBriefHash !== roleBriefHash) {
     die(`seat "${name}" brief changed; reset instead of resume (recorded ${existing.roleBriefHash.slice(0, 12)}, current ${roleBriefHash.slice(0, 12)})`);
   }
+  const brief = producerBriefFile(name, entry.role, loadedBrief);
 
   fs.mkdirSync(RUN_DIR, { recursive: true });
   fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -1121,6 +1205,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   const child = spawn("bash", ["-c", shellCmd], { cwd, env: claudeChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" });
   child.unref();
   const pid = child.pid!;
+  const birth = spawnedBirth(child);
 
   const probe = { fifo, log, pid };
   let st: any;
@@ -1141,7 +1226,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   const liveCwd = processCwd(pid);
   const record: SeatRecord = {
     pid,
-    startedAt: new Date().toISOString(),
+    ...birth,
     accountDir,
     ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
     role: entry.role,
@@ -1204,8 +1289,9 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   if (!isCodexDefaultAuth(entry) && !fs.existsSync(accountDir)) die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`);
   requireCodexCredential(name, entry, accountDir, labelSuffix);
   if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — codex launch must pin the exact model`);
-  const brief = roleBriefPath(entry.role); const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+  const loadedBrief = roleBriefContent(entry.role, sessionFile, existing), roleBriefHash = loadedBrief.hash;
   if (sessionFile && existing?.roleBriefHash && existing.roleBriefHash !== roleBriefHash) die(`seat "${name}" brief changed; reset instead of resume (recorded ${existing.roleBriefHash.slice(0, 12)}, current ${roleBriefHash.slice(0, 12)})`);
+  const brief = producerBriefFile(name, entry.role, loadedBrief);
   fs.mkdirSync(RUN_DIR, { recursive: true }); fs.mkdirSync(LOG_DIR, { recursive: true });
   const fifo = path.join(RUN_DIR, `${name}.stdin`), log = path.join(LOG_DIR, `${name}.jsonl`), rawLog = path.join(LOG_DIR, `${name}.raw.jsonl`), errLog = path.join(LOG_DIR, `${name}.stderr.log`);
   if (fs.existsSync(fifo)) { if (!fs.statSync(fifo).isFIFO()) die(`${fifo} exists and is not a FIFO — refusing to guess what it is`); } else execFileSync("mkfifo", [fifo]);
@@ -1215,11 +1301,11 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
   const shellCmd = `exec ${q(process.execPath)} ${args.map(q).join(" ")} 0<> ${q(fifo)} 2>> ${q(errLog)}`;
   const child = spawn("bash", ["-c", shellCmd], { cwd, env: codexChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" }); child.unref();
-  const pid = child.pid!, probe = { fifo, log, pid }; let st: any;
+  const pid = child.pid!, birth = spawnedBirth(child), probe = { fifo, log, pid }; let st: any;
   try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
-  const record: SeatRecord = { pid, startedAt: new Date().toISOString(), accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
+  const record: SeatRecord = { pid, ...birth, accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
   await recordLaunchedSeat(name, record); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`); console.log(`  events -> ${log}`);
 }
 function codexProbe(name: string, entry: SeatEntry): void {
@@ -1263,7 +1349,7 @@ function driverForSeat(name: string, entry: SeatEntry, operation: string): SeatD
 // enforcement belongs to dispatch, not to this preparation-only command.
 async function cmdSpawn(name: string, beadId?: string, base: string | null = null): Promise<void> {
   const entry = requireSeat(name);
-  const cwd = beadId ? prepareSeatCwd(name, entry, beadId, base) : ROOT;
+  const cwd = beadId ? prepareSeatCwd(name, entry, beadId, base).cwd : ROOT;
   await driverForSeat(name, entry, "adapter spawn").launch(name, entry, null, cwd);
   if (beadId) await writeState((state) => {
     if (state.seats[name]) state.seats[name].lastBead = beadId;
@@ -1359,9 +1445,9 @@ async function cmdResume(name: string): Promise<void> {
     await driverForSeat(name, entry, "adapter resume").launch(name, entry, null, fallbackCwd);
     return;
   }
-  const wasMidTool = logHasUnfinishedToolCall(rec.log);
+  const interrupted = !rec.lastCapacityEvent && logHasInterruptedTurn(rec.log);
   await driverForSeat(name, entry, "adapter resume").launch(name, entry, rec.sessionFile, resumeCwd);
-  if (wasMidTool) await markSeatStalledAfterResume(name, rec.lastBead);
+  if (interrupted) await continueResumedTurn(name);
 }
 
 /**
@@ -1386,6 +1472,7 @@ async function cmdReset(name: string): Promise<void> {
   const rec = stateBefore.seats[name];
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
   const entry = requireSeat(name);
+  if (entry.role === "producer") roleBriefContent(entry.role); // fail before stop/session discard
   if (pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     const st = await rpc(rec, { type: "get_state" });
     if (!st.success) {
@@ -1441,6 +1528,9 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   let entryCache: SeatEntry | undefined;
   const entry = (): SeatEntry => (entryCache ??= requireSeat(name));
   const rosterEntry = (() => { try { return readNamedRosterEntry(name); } catch { return undefined; } })();
+  if (rosterEntry?.role === "producer" && rec.roleBriefHash !== roleBriefContent("producer").hash) {
+    die(`seat "${name}" brief changed; reset instead of resume before dispatch; no producer prompt sent`);
+  }
   const previousBead = rec.lastBead;
   const crossBead = Boolean(previousBead) && previousBead !== beadId;
   const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
@@ -1477,6 +1567,16 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
   }
 
+  // A live session can still hold the pre-upgrade canonical-path brief. Do
+  // not send an authoritative legacy path beneath stale system instructions,
+  // or infer freshness for an older Pi record that has no loaded-brief hash.
+  if (rosterEntry && seatUsesWorktree(entry()) && seatWorktreesSetting() === "per-seat") {
+    const currentHash = roleBriefContent(entry().role).hash;
+    if (rec.roleBriefHash !== currentHash) {
+      die(`seat "${name}" brief changed; reset instead of resume before dispatch (loaded brief hash ${rec.roleBriefHash ?? "unknown"}, current ${currentHash}). Seat anchor ${seatCwdFor(name, entry())}; recorded worktree ${rec.cwd ?? ROOT}. No prompt sent; this dispatch has not discarded the session.`);
+    }
+  }
+
   // Prepare scratch before launching or prompting the worker. A legacy run
   // without a creation record remains unowned: dispatch never adopts it.
   const scratch = prepareTaskScratch(ROOT, beadId);
@@ -1486,7 +1586,14 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   // cwd change (fresh session, relaunch), never as "same place as before".
   const recordedCwd = rec.cwd ?? ROOT;
   const recordedCwdExists = fs.existsSync(recordedCwd) && fs.statSync(recordedCwd).isDirectory();
-  const targetCwd = rosterEntry ? prepareSeatCwd(name, entry(), beadId, base) : (rec.cwd ?? ROOT);
+  // state.json can outlive a launcher or be stale after legacy adoption. The
+  // live process, not its recorded cwd, decides whether relaunch is required.
+  const actualCwd = alive && !forcedStop ? processCwd(rec.pid!) : null;
+  if (alive && !forcedStop && rosterEntry && seatUsesWorktree(entry()) && !actualCwd) {
+    die(`cannot determine native cwd for seat ${name} pid ${rec.pid}; refusing dispatch before preparing its worktree`);
+  }
+  const prepared = rosterEntry ? prepareSeatCwd(name, entry(), beadId, base) : { cwd: rec.cwd ?? ROOT, branch: null };
+  const targetCwd = prepared.cwd;
   rec = readState().seats[name];
   if (!pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     if (forcedStop && recordedCwdExists) {
@@ -1499,7 +1606,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
       await driverForSeat(name, entry(), "adapter dispatch").launch(name, entry(), null, targetCwd);
     }
     rec = requireRunning(name);
-  } else if (!recordedCwdExists || !samePath(rec.cwd, targetCwd)) {
+  } else if (!recordedCwdExists || !samePath(actualCwd ?? rec.cwd, targetCwd)) {
     // Construction, not prompt discipline: a seat whose cwd is not the
     // target gets stopped and relaunched attached to its own session,
     // rooted in its worktree, before the prompt goes anywhere near it.
@@ -1518,9 +1625,21 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     }
     rec = requireRunning(name);
   }
+  let dispatchContext = "";
+  if (prepared.branch) {
+    const branch = completedCommand("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: targetCwd });
+    if (branch.error || branch.signal || branch.status !== 0 || branch.stderr || branch.stdout.trim() !== prepared.branch) {
+      die(`cannot dispatch ${beadId}: worktree ${targetCwd} must be on ${prepared.branch}, observed ${branch.stdout.trim() || "no branch"}${branch.stderr ? ` (${branch.stderr.trim()})` : ""}`);
+    }
+    const liveCwd = processCwd(rec.pid!);
+    if (!liveCwd || !samePath(liveCwd, targetCwd)) {
+      die(`cannot dispatch ${beadId}: seat ${name} native cwd ${liveCwd ?? "unknown"} differs from prepared worktree ${targetCwd}`);
+    }
+    dispatchContext = `Dispatch context (adapter-authoritative):\nWorktree: ${targetCwd}\nBranch: ${prepared.branch}\nUse this worktree, not an inferred seat-name path.\n\n`;
+  }
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
-  const promptText = `Bead ${beadId}\n\n${text}`;
+  const promptText = workerDispatchPrompt(ROOT, beadId, `${dispatchContext}${text}`);
   await writeState((state) => {
     state.seats[name].lastBead = beadId;
     state.seats[name].lastDispatchAt = new Date().toISOString();
@@ -1528,6 +1647,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     delete state.seats[name].lastCapacityEvent; // a dispatch attempt to a new bead is the current seat fact
     delete state.seats[name].lastCapacityCleared;
     delete state.seats[name].lastStalledEvent; // a new dispatch supersedes a prior resumed-cutoff stall
+    delete state.seats[name].resumeContinuation;
   });
   let resp: any;
   try {
@@ -1593,18 +1713,27 @@ async function cmdSteer(name: string, text: string): Promise<void> {
 interface ProcessRow { pid: number; ppid: number; startMs: number | null; command: string }
 type OpenPathSnapshot = Map<number, string[]>;
 
-function processRows(): Map<number, ProcessRow> {
-  const rows = new Map<number, ProcessRow>();
+type ProcessRowsSnapshot = { rows: Map<number, ProcessRow>; error?: undefined } | { rows: null; error: string };
+
+function processRows(): ProcessRowsSnapshot {
   try {
-    const out = spawnSync("ps", ["axo", "pid=,ppid=,lstart=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout || "";
-    for (const line of out.split(/\n/)) {
+    const result = completedCommand("ps", ["axo", "pid=,ppid=,lstart=,command="]);
+    if (result.error || result.signal || result.status !== 0 || result.stderr.trim()) {
+      return { rows: null, error: `ps exit=${result.status ?? "none"} signal=${result.signal ?? "none"}${result.error ? ` error=${result.error.message}` : ""}${result.stderr ? ` stderr=${JSON.stringify(result.stderr)}` : ""}` };
+    }
+    if (!result.stdout.trim()) return { rows: null, error: "ps returned an empty census" };
+    const rows = new Map<number, ProcessRow>();
+    for (const [index, line] of result.stdout.split(/\n/).entries()) {
+      if (!line.trim()) continue;
       const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$/);
-      if (!m) continue;
+      if (!m) return { rows: null, error: `ps returned a malformed census record at line ${index + 1}` };
       const start = Date.parse(m[3]);
       rows.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), startMs: Number.isFinite(start) ? start : null, command: m[4] || "" });
     }
-  } catch { /* ps should exist; absence only removes an extra status hint */ }
-  return rows;
+    return { rows };
+  } catch (error) {
+    return { rows: null, error: `ps capture failed: ${String(error)}` };
+  }
 }
 
 function isDescendantOf(pid: number, ancestor: number | null | undefined, rows: Map<number, ProcessRow>): boolean {
@@ -1735,22 +1864,40 @@ function orphanMatchesFor(name: string, rec: SeatRecord, rows: Map<number, Proce
 
 function seatIdleByLog(rec: SeatRecord): boolean { return agentSettledEvent(lastEvent(rec.log)); }
 
-function logHasUnfinishedToolCall(log: string): boolean {
+function logHasInterruptedTurn(log: string): boolean {
   try {
-    const r = logLinesFrom(log, 0);
-    let lastToolStart = -1;
-    let lastToolEndOrSettle = -1;
-    for (let i = 0; i < r.lines.length; i++) {
+    let active = false;
+    for (const line of logLinesFrom(log, 0).lines) {
       try {
-        const obj = JSON.parse(r.lines[i]);
-        if (obj?.type === "tool_execution_start") lastToolStart = i;
-        if (obj?.type === "tool_execution_end" || agentSettledEvent(obj?.type)) lastToolEndOrSettle = i;
-      } catch { /* skip */ }
+        const ev = JSON.parse(line);
+        if (ev.type === "agent_start" || ev.type === "turn_start") active = true;
+        else if (ev.type === "agent_end") active = ev.willRetry === true;
+        else if (ev.type === "agent_settled") active = ev.state === "stalled";
+        else if (/^(message_start|message_update|message_end|tool_execution_start|tool_execution_update|tool_execution_end|stream_activity)$/.test(ev.type)) active = true;
+      } catch { /* partial/malformed rows are not observed lifecycle boundaries */ }
     }
-    return lastToolStart >= 0 && lastToolStart > lastToolEndOrSettle;
-  } catch {
-    return false;
+    return active;
+  } catch { return false; }
+}
+
+function resumeHasProgress(name: string, rec: SeatRecord): boolean {
+  const pending = rec.resumeContinuation;
+  if (!pending || pending.pid !== rec.pid || pending.startedAt !== rec.startedAt) return false;
+  const st = ownedSeatLog(name, rec.log);
+  if (!st || `${st.dev}:${st.ino}` !== pending.logIdentity || st.size < pending.offset) return false;
+  for (const line of logLinesFrom(rec.log, pending.offset).lines) {
+    try {
+      const ev = JSON.parse(line);
+      // Readiness/queue acknowledgements, user echoes, agent/turn starts and
+      // replayed thinking/toolcall starts do not prove that work continued.
+      if (ev.type === "stream_activity" && ev.sourceType === "message_update") return true;
+      if (/^tool_execution_(start|update|end)$/.test(ev.type)) return true;
+      if (ev.type === "message_update" && /^(text_delta|thinking_delta|toolcall_delta|toolcall_end)$/.test(ev.assistantMessageEvent?.type ?? "")) return true;
+      if (ev.type === "message_end" && ev.message?.role === "assistant") return true;
+      if (ev.type === "agent_end" || ev.type === "turn_end" || (ev.type === "agent_settled" && ev.state !== "stalled")) return true;
+    } catch { /* incomplete rows are not progress */ }
   }
+  return false;
 }
 
 function appendSeatLog(log: string, obj: any): void {
@@ -1758,17 +1905,21 @@ function appendSeatLog(log: string, obj: any): void {
   fs.appendFileSync(log, `${JSON.stringify(obj)}\n`);
 }
 
-async function markSeatStalledAfterResume(name: string, bead: string | undefined): Promise<void> {
-  const at = new Date().toISOString();
-  const detail = `resume detected prior turn was cut off during a tool call${bead ? ` for bead ${bead}` : ""}; commander must redispatch or reset`;
-  const rec = await writeState((state) => {
-    const rec = state.seats[name];
-    if (rec) rec.lastStalledEvent = { at, detail };
-    return rec;
+async function continueResumedTurn(name: string): Promise<void> {
+  const rec = readState().seats[name], st = rec && ownedSeatLog(name, rec.log);
+  if (!rec?.pid || !st) die(`seat ${name}: cannot verify resumed log; continuation not sent`);
+  const pending = { at: new Date().toISOString(), pid: rec.pid, startedAt: rec.startedAt, logIdentity: `${st.dev}:${st.ino}`, offset: st.size };
+  await writeState((state) => {
+    const current = state.seats[name];
+    if (!current || !sameSeatProcess(current, rec)) throw new Error(`seat ${name}: resumed process changed before continuation`);
+    current.resumeContinuation = pending;
   });
-  if (!rec) return;
-  appendSeatLog(rec.log, { type: "agent_settled", state: "stalled", message: detail, bead: bead ?? null, at });
-  console.log(`seat ${name}: STALLED — ${detail}`);
+  // This is transport metadata, not a fabricated model/settlement event.
+  appendSeatLog(rec.log, { type: "resume_continuation", state: "requested", at: pending.at });
+  // Raw Pi steer only queues on an idle session. Reuse the idle-aware path:
+  // prompt when idle, steer when active, preserving session/cwd/assignment.
+  await cmdSteer(name, "[adapter resume] Your previous turn was interrupted. Continue the existing task in this recorded session. First inspect actual tool results and any still-running processes; do not blindly repeat, restart or cancel work. If the task already finished, report that rather than doing it again.");
+  console.log(`seat ${name}: resume continuation requested; own stream progress not yet confirmed`);
 }
 
 function logLastStalledEvent(log: string): boolean {
@@ -1777,6 +1928,7 @@ function logLastStalledEvent(log: string): boolean {
     for (let i = r.lines.length - 1; i >= 0; i--) {
       try {
         const obj = JSON.parse(r.lines[i]);
+        if (obj?.type === "resume_continuation") return false; // its process-bound pending state owns the verdict
         if (obj?.type === "agent_settled" && obj?.state === "stalled") return true;
         if (obj?.type === "agent_end" || obj?.type === "turn_end" || obj?.type === "tool_execution_end") return false;
       } catch { /* skip */ }
@@ -1897,50 +2049,72 @@ async function cmdStatus(): Promise<void> {
     return;
   }
   const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
-  const rows = processRows();
+  const census = processRows();
+  if (census.rows === null) console.error(`UNVERIFIED orphan census: ${census.error}; no absence of extra processes inferred; recorded seat rows still reported`);
+  const rows = census.rows;
   const observations = readStreamObservations(ROOT);
   let sawSettled = false;
   for (const name of names) {
     const ownedLog = ownedSeatLog(name, state.seats[name]?.log);
     // Invalid log records are not read either: lastEvent opens its argument,
     // so allowing a FIFO here could hang status before the rotation guard.
-    const rec = ownedLog ? await syncCapacityFromLog(name, roster) : state.seats[name];
+    let rec = ownedLog ? await syncCapacityFromLog(name, roster) : state.seats[name];
     if (!rec) continue;
     const bareAlive = barePidAlive(rec.pid);
-    const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
+    let identity = seatIdentity(rec.pid, rec.fifo, rec.startedAt);
+    let alive = identity.kind === "owned";
     // A seat nobody stopped whose pid is gone — or whose pid was reused by a
     // foreign process — DIED. Rendering either as the same calm STOPPED a
     // graceful stop earns would be a failure conflated into a normal state.
-    const died = !alive && rec.pid != null && !rec.stoppedAt;
+    const died = (identity.kind === "gone" || identity.kind === "foreign") && rec.pid != null && !rec.stoppedAt;
     const parkedQuota = Boolean(rec.lastCapacityEvent);
-    const stream = ownedLog && alive ? seatStreamHealth(ROOT, name, rec, observations[name]) : null;
-    const stalled = Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log)) || Boolean(stream?.stalled);
+    let stream: ReturnType<typeof seatStreamHealth> = null;
+    try { stream = ownedLog && alive ? seatStreamHealth(ROOT, name, rec, observations[name]) : null; }
+    catch (e) {
+      if (!(e instanceof SeatIdentityUnverified)) throw e;
+      identity = { kind: "unverified", reason: e.message }; alive = false;
+    }
+    if (ownedLog && alive && rec.resumeContinuation && resumeHasProgress(name, rec)) {
+      const observed = rec;
+      const continued = await writeState((current) => {
+        const live = current.seats[name];
+        if (!live || !sameSeatProcess(live, observed) || JSON.stringify(live.resumeContinuation) !== JSON.stringify(observed.resumeContinuation)) return null;
+        delete live.resumeContinuation;
+        return live;
+      });
+      if (continued) rec = continued;
+    }
+    const stalled = Boolean(rec.resumeContinuation) || Boolean(rec.lastStalledEvent) || Boolean(ownedLog && logLastStalledEvent(rec.log)) || Boolean(stream?.stalled);
     const last = ownedLog ? lastEvent(rec.log) : "-";
     // Status reports observed process/log facts, not a guessed get_state
     // deadline. A live, slow responder is not evidence of a wedged seat.
     const turnDisplay = ownedLog ? seatTurnDisplay(rec.log) : "RUNNING";
-    const word = parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? turnDisplay : died ? "DIED" : "STOPPED";
-    const pid = alive ? `pid ${rec.pid}` : died ? (bareAlive ? `pid ${rec.pid} foreign` : `pid ${rec.pid} gone`) : "stopped";
+    const word = identity.kind === "unverified" ? "UNVERIFIED" : parkedQuota ? "PARKED" : alive && stalled ? "STALLED" : alive ? turnDisplay : died ? "DIED" : "STOPPED";
+    const pid = identity.kind === "unverified" ? `pid ${rec.pid} unverified` : alive ? `pid ${rec.pid}` : died ? (bareAlive ? `pid ${rec.pid} foreign` : `pid ${rec.pid} gone`) : "stopped";
     const bead = rec.lastBead ? `  bead ${rec.lastBead}` : "";
     const label = accountLabel(roster[name], rec);
     const labelText = label ? `  account ${label}` : "";
     const role = `${rec.role}${roster[name]?.shadow === true ? " (shadow)" : ""}`;
     if (agentSettledEvent(last)) sawSettled = true;
     console.log(`${name.padEnd(16)} ${role.padEnd(17)} ${word.padEnd(7)}  ${pid.padEnd(11)} last-event ${last}${bead}${labelText}`);
-    rotateLogIfSafe(name, rec.log, last);
+    if (identity.kind !== "unverified") rotateLogIfSafe(name, rec.log, last);
+    if (identity.kind === "unverified") {
+      console.log(`${" ".repeat(16)} UNVERIFIED: ${identity.reason}; left untouched — do not restart or reclaim until identity is verified`);
+    }
     if (died) {
-      console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? "is alive but is not this seat (no FIFO/start-time proof)" : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
+      console.log(`${" ".repeat(16)} DIED: pid ${rec.pid} ${bareAlive ? `is alive but is not this seat (${identity.reason})` : "is gone"} and nobody stopped it — check ${rec.log.replace(/\.jsonl$/, ".stderr.log")}`);
     }
     if (rec.lastCapacityEvent) {
       console.log(`${" ".repeat(16)} CAPACITY: QUOTA at ${rec.lastCapacityEvent.at} — ${rec.lastCapacityEvent.detail}`);
       console.log(`${" ".repeat(16)} RE-PROBE: bun seats/adapter.ts probe ${name}`);
     }
-    if (stalled && rec.lastStalledEvent) {
+    if (alive && rec.resumeContinuation) console.log(`${" ".repeat(16)} STALLED: resumed interrupted turn awaiting own stream progress; readiness/acknowledgements/replayed starts are not progress (no automatic restart)`);
+    if (identity.kind !== "unverified" && stalled && rec.lastStalledEvent) {
       console.log(`${" ".repeat(16)} STALLED: ${rec.lastStalledEvent.detail}`);
     }
     if (stream?.stalled) console.log(`${" ".repeat(16)} STALLED: no own stream event for ${Math.floor(stream.quietForMs / 1000)}s; last ${stream.lastEvent} at ${stream.lastEventAt}; commander inspect/redispatch (no automatic restart)`);
     else if (stream?.phase === "tool") console.log(`${" ".repeat(16)} TOOL WAIT: ${stream.pendingTools.join(", ")}; last stream event ${stream.lastEventAt}; not a model-stream stall`);
-    for (const orphan of orphanMatchesFor(name, rec, rows, roster[name])) {
+    for (const orphan of identity.kind === "unverified" || rows === null ? [] : orphanMatchesFor(name, rec, rows, roster[name])) {
       if (orphan.fixtureBead) {
         console.log(`${" ".repeat(16)} fixture leak (${orphan.fixtureBead}): pid ${orphan.pid} matches rostered seat ${name} but is running under a .wheelhouse-runs fixture root; reason: ${orphan.reason}; remedy: kill the fixture process and inspect fixture cleanup`);
       } else {

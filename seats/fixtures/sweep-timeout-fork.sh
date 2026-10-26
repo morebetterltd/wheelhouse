@@ -2,7 +2,7 @@
 # Coordinate an idle parent at the final census: without quiescence it forks a
 # separate job-control PGID AFTER ps completed, BEFORE the captured groups die.
 run_fork_window_case(){
-  local name="$1" control="$2" dir="$FIX/$1" project="$FIX/$1/project" rc reuse_rc gone=0 rescue_rc stopped=0 i
+  local name="$1" control="$2" suppress_kill="${3:-0}" dir="$FIX/$1" project="$FIX/$1/project" rc reuse_rc gone=0 rescue_rc stopped=0 i
   selftest_require_fixture_owner "$FIX" || return 2
   mkdir -p "$dir"
   : > "$dir/identities"
@@ -25,17 +25,24 @@ run_fork_window_case(){
 SH
   # Instrument only a pinned private runner, after its native process census.
   # The control removes only the quiescence call, retaining all identity checks.
-  awk -v hook="$dir/probe" -v control="$control" '
+  awk -v hook="$dir/probe" -v control="$control" -v suppress_kill="$suppress_kill" '
+    $0 == "      kill -\"$signal\" -- \"-$g\" 2>/dev/null || true" && suppress_kill == 1 {
+      print "      if [ \"$signal\" != KILL ]; then"
+      print
+      print "      fi"
+      omitted++; next
+    }
     $0 == "  if ! quiesce_suite_tree \"$root\" \"$dir\"; then" && control == 1 {
       print "  if ! :; then"; removed++; next
     }
     { print }
-    /^  ps -axo .* > "\$dir\/processes" \|\| return 2$/ {
+    /^  LC_ALL=C ps -ww -axo .* > "\$dir\/processes" \|\| return 2$/ {
       while ((getline line < hook) > 0) print line
       close(hook); injected++
     }
-    END { if (injected != 1 || removed != control) exit 2 }
+    END { if (injected != 1 || removed != control || omitted != suppress_kill) exit 2 }
   ' "$SWEEP" > "$project/seats/selftest-sweep.sh" || return 2
+  observe_fixture_watchdog "$project/seats/selftest-sweep.sh" "$project/seats/selftest-sweep.sh" || return 2
   git -C "$project" init -q -b main || return 2
   [ "$(git -C "$project" rev-parse --show-toplevel)" = "$project" ] || return 2
   git -C "$project" add seats || return 2
@@ -65,7 +72,7 @@ SH
     case "$(<"$dir/at-kill")" in *T*|*t*) stopped=1 ;; esac
   fi
   printf 'FORK_WINDOW name=%s control=%s stopped_at_kill=%s late_child=%s survivor_check=%s runner=%s reuse=%s rescue=%s\n' "$name" "$control" "$stopped" "$([ -e "$dir/child-ready" ] && echo yes || echo no)" "$gone" "$rc" "$reuse_rc" "$([ -e "$dir/rescued" ] && echo yes || echo no)"
-  if [ "$rc" != 1 ] || [ "$reuse_rc" != 0 ] || [ "$rescue_rc" != 0 ] || [ -e "$dir/rescued" ] || [ ! -e "$dir/after" ] || [ -e "$dir/lock" ] || [ -e "$dir/lock.queue" ]; then
+  if [ "$rc" != 1 ] || [ "$reuse_rc" != 0 ] || [ "$rescue_rc" != 0 ] || [ ! -s "$dir/containment-finished" ] || [ -e "$dir/rescued" ] || [ ! -e "$dir/after" ] || [ -e "$dir/lock" ] || [ -e "$dir/lock.queue" ]; then
     fail "$name: timeout/reuse/independent containment outcome (rc=$rc reuse=$reuse_rc)"
   elif [ "$control" = 0 ] && [ "$stopped" = 1 ] && [ ! -e "$dir/child-ready" ] && [ "$gone" = 0 ]; then
     pass 'fork window: parent is stopped at final KILL census; no late group can be born; lock reusable'
@@ -89,3 +96,23 @@ SH
 }
 run_fork_window_case fork-frozen 0 || fail 'fixed fork-window setup failed'
 run_fork_window_case fork-unfrozen 1 || fail 'control fork-window setup failed'
+
+# Quiescence alone is not containment. Keep it, but omit group KILL in a
+# pinned private runner; the frozen parent must outlive its deadline and the
+# completed watchdog pass, then cause a real rejection and owned rescue.
+run_frozen_kill_control(){
+  local before="$FAILED" rejected=0 dir="$FIX/fork-kill-omitted"
+  run_fork_window_case fork-kill-omitted 0 1 > "$FIX/frozen-kill-control.out" 2> "$FIX/frozen-kill-control.err"
+  if [ "$FAILED" = "$((before+1))" ] && [ -s "$dir/containment-finished" ] && [ -s "$dir/rescue-checked" ] && [ -s "$dir/rescued" ] && grep -E 'state=[Tt]' "$dir/rescue-targets" >/dev/null && grep -F 'FORK_WINDOW name=fork-kill-omitted control=0 stopped_at_kill=1' "$FIX/frozen-kill-control.out" >/dev/null && grep -F 'FAIL fork-kill-omitted: timeout/reuse/independent containment outcome' "$FIX/frozen-kill-control.out" >/dev/null && check_gone "$dir" 1; then rejected=1; fi
+  FAILED="$before"
+  if [ "$rejected" = 1 ]; then
+    printf 'EXPECTED_REJECTION FAIL fork-kill-omitted: frozen cohort survived deadline and completed watchdog pass\n'
+    while IFS= read -r line; do printf 'FROZEN_RESCUE %s\n' "$line"; done < "$dir/rescue-targets"
+    pass 'frozen-kill control: omitted KILL rejected; unchanged 15s post-containment observer rescued matching frozen target'
+  else
+    while IFS= read -r line; do printf '%s\n' "$line"; done < "$FIX/frozen-kill-control.out"
+    while IFS= read -r line; do printf '%s\n' "$line" >&2; done < "$FIX/frozen-kill-control.err"
+    fail 'frozen-kill control: missing rejection or frozen-target rescue proof'
+  fi
+}
+run_frozen_kill_control || fail 'frozen-kill control setup failed'
