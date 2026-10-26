@@ -97,6 +97,10 @@ if bun "$HERE/fixtures/producer-stamps.ts" "$CONTRACT" "$FIX/producer-stamps" "$
   pass 'producer stamps: default shared gate, real graph labels, pseudo-header boundary, versions and removals'
 else fail 'producer stamp consumer cases failed'; fi
 
+if bun "$HERE/fixtures/upgrade-skill-stamps.ts" "$CONTRACT" "$FIX/upgrade-skills" "$FIX/graph" "$HERE/.."; then
+  pass 'two-skill upgrade: legacy/new dispatch and review refuse with exact producer repair; new work stays gated'
+else fail 'two-skill upgrade consumer cases failed'; fi
+
 mkdir -p "$FIX/bin"
 printf '#!/bin/sh\necho fixture-bd-unavailable >&2\nexit 7\n' > "$FIX/bin/bd"; chmod +x "$FIX/bin/bd"
 RC=0; OUT="$(env -u WHEELHOUSE_CONTRACT_FIXTURE WHEELHOUSE_SKIP_BD=1 bun "$CONTRACT" check unreadable-bead 2>&1)" || RC=$?
