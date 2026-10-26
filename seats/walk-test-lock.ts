@@ -26,7 +26,7 @@ export function testLockPath(env: NodeJS.ProcessEnv = process.env) {
   const file = path.resolve(env.WHEELHOUSE_SELFTEST_SWEEP_LOCK || "/tmp/wheelhouse-selftest-sweep.lock");
   return path.join(fs.realpathSync(path.dirname(file)), path.basename(file));
 }
-export function testLockHolder(lock: string): TestLockHolder | null {
+export function testLockHolder(lock: string, observationAttempt = 0): TestLockHolder | null {
   try {
     const st = fs.lstatSync(lock, { bigint: true });
     let pid: number, started: string, token = "legacy";
@@ -41,7 +41,12 @@ export function testLockHolder(lock: string): TestLockHolder | null {
       if (!pidValid(pid)) throw new Error(`invalid legacy test-lock pid: ${lock}`);
     } else throw new Error(`test lock is not a regular record/directory: ${lock}`);
     const again = fs.lstatSync(lock, { bigint: true });
-    if (again.dev !== st.dev || again.ino !== st.ino) throw new Error(`test lock changed during observation: ${lock}`);
+    if (again.dev !== st.dev || again.ino !== st.ino) {
+      // A normal release/handoff is not a malformed lock. Retry only an
+      // actually changed identity; never turn unreadable metadata into free.
+      if (observationAttempt < 2) return testLockHolder(lock, observationAttempt + 1);
+      throw new Error(`test lock repeatedly changed during observation: ${lock}`);
+    }
     return alive(pid) ? { lock, pid, started, epoch: `${st.dev}:${st.ino}:${pid}:${started}:${token}` } : null;
   } catch (e: any) { if (e.code === "ENOENT") return null; throw e; }
 }
@@ -66,7 +71,13 @@ export function initialTestLock(lock: string): TestLockHolder | null {
   const holder = testLockHolder(lock);
   // An already-admitted caller is not another run. This does not substitute
   // for the helper's separate token/FIFO/inherited-admission validation.
-  return holder && !ancestor(holder.pid, process.pid, parents()) ? holder : null;
+  if (!holder) return null;
+  const table = parents();
+  if (!table.has(holder.pid)) {
+    if (!alive(holder.pid)) return null;
+    throw new Error("test-lock ancestry omitted live holder");
+  }
+  return !ancestor(holder.pid, process.pid, table) ? holder : null;
 }
 export async function waitForInitialTestLock(initial: TestLockHolder | null): Promise<void> {
   if (!initial) return;
@@ -84,7 +95,9 @@ export function queuedTestLock(lock: string, verifierPid: number): string | unde
   try { entries = fs.readdirSync(queue); } catch (e: any) { if (e.code === "ENOENT") return; throw e; }
   for (const name of entries) {
     if (!/^[0-9]{20}\.[0-9a-f]{32}$/.test(name)) continue;
-    const ticket = JSON.parse(bounded(path.join(queue, name)));
+    let ticket: any;
+    try { ticket = JSON.parse(bounded(path.join(queue, name))); }
+    catch (e: any) { if (e.code === "ENOENT") continue; throw e; }
     if (ticket.kind !== "wheelhouse-selftest-sweep-waiter" || ticket.version !== 1 || !pidValid(ticket.pid) || !name.endsWith("." + ticket.token)) throw new Error(`invalid test-lock waiter: ${queue}/${name}`);
     if (ticket.pid !== holder.pid && alive(ticket.pid) && ancestor(verifierPid, ticket.pid, table)) {
       if (testLockHolder(lock)?.epoch !== holder.epoch) return;
