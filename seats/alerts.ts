@@ -271,6 +271,7 @@ export async function buildSnapshot(root=ROOT):Promise<SnapshotFile>{
     if(stream?.stalled && was?.active && was.signature!==active[name].sig){ if(was.needId) needClose(was.needId); was=undefined; }
     const next=name==="template-drift" ? heldAlertRow(active[name].on,was,active[name].sig,TEMPLATE_DRIFT_ALERT_HOLD_MS) : alertRow(active[name].on,was,active[name].sig);
     next.detail=was?.detail;
+    if(name.startsWith("nightly-sweep-") && active[name].on) next.detail=bodyFor(name,active[name].detail);
     const shouldFire = next.active&&(!was?.active||was.signature!==next.signature);
     if(shouldFire){ next.detail=bodyFor(name,active[name].detail); appendLog(`alert fired ${name}: ${next.detail}`); appendInboxAlert(name,next.detail,stream); }
     if(!next.active&&was?.active){ appendLog(`alert cleared ${name}`); if(was.needId) needClose(was.needId); next.needId=null; }
