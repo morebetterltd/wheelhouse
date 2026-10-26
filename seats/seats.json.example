@@ -11,7 +11,7 @@
       "provider": "anthropic",
       "model": "claude-sonnet-5",
       "account": { "dir": "~/.pi-seats-myproject/producer", "authRoute": "oauth" },
-      "allowedTools": "Read,Grep,Glob,Bash(bd:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*)",
+      "allowedTools": "Read,Grep,Glob,Bash(bd:*),Bash(bun seats/intake.ts:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*)",
       "disallowedTools": "Edit,Write,NotebookEdit"
     },
     "worker-1": {

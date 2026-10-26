@@ -3,8 +3,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { completedCommand } from "./completed-command";
 import { fold, INTAKE_KINDS, type IntakeEvent, type IntakeRow } from "./intake";
+import { readContractSkill } from "./briefs";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_CONTRACT_ROOT || path.join(import.meta.dir, ".."));
+const REQUIRE_SKILLS = true;
 const CHECKS = { "person-on-surface": "walk", "person-reading": "read", machine: "run" } as const;
 export interface Outcome {
   id: string;
@@ -33,7 +35,7 @@ export function parseContract(text: string): Contract {
   let sawIntent = false, sawOutcomes = false;
   let outcome: Outcome | undefined;
   let fields = new Set<string>();
-  let sawSignal = false;
+  let sawSignal = false, sawSkills = false;
   const pair = (value: string): [string, string] => {
     const m = value.match(/^(\S+)[ \t]+(?:—|-)[ \t]*(.*)$/);
     return m ? [m[1], m[2].trim()] : [value.trim().split(/\s/)[0] ?? "", ""];
@@ -51,6 +53,10 @@ export function parseContract(text: string): Contract {
       if (key === "signal") {
         if (sawSignal) parsed.errors.push("contract: Signal: duplicate line");
         sawSignal = true;
+      }
+      if (key === "skills") {
+        if (sawSkills) parsed.errors.push("contract: Skills: duplicate line");
+        sawSkills = true;
       }
       parsed[key] = meta[2].trim();
       continue;
@@ -95,8 +101,19 @@ export function parseContract(text: string): Contract {
   return parsed;
 }
 
+function stampedSkills(value: string): Map<string, string> | null {
+  const tokens = value.trim().split(/\s+/), versions = new Map<string, string>();
+  if (tokens.length !== 2) return null;
+  for (const token of tokens) {
+    const m = token.match(/^(intent|outcomes)@([^\s@]+)$/);
+    if (!m || versions.has(m[1])) return null;
+    versions.set(m[1], m[2]);
+  }
+  return versions.has("intent") && versions.has("outcomes") ? versions : null;
+}
+
 /** Shape/Signal syntax here; gate-level validation resolves posted intake ids. */
-export function validateContract(parsed: Contract, options: { requireSkills?: boolean; requireSignal?: boolean } = {}): string[] {
+export function validateContract(parsed: Contract, options: { requireSkills?: boolean; requireSignal?: boolean; labels?: readonly string[] } = {}): string[] {
   const errors = [...parsed.errors];
   if (!parsed.intent) errors.push("contract: Intent: must contain at least one non-blank line before Outcomes:");
   if (!parsed.outcomes.length) errors.push("contract: Outcomes: must contain at least one outcome");
@@ -116,7 +133,12 @@ export function validateContract(parsed: Contract, options: { requireSkills?: bo
     else if (expected && o.checkKind !== expected) errors.push(`${o.id}: check: ${o.group} requires ${expected}, got ${o.checkKind}`);
     if (!o.checkHow) errors.push(`${o.id}: check: how missing after dash`);
   });
-  if (options.requireSkills && !parsed.skills) errors.push("contract: Skills: missing");
+  if (options.requireSkills) {
+    if (!parsed.skills) errors.push("contract: Skills: missing");
+    else if (parsed.skills === "install-procedure carve-out") {
+      if (!options.labels?.some(label => label === "wheelhouse-bootstrap" || label === "wheelhouse-smoke")) errors.push("contract: Skills: install-procedure carve-out requires wheelhouse-bootstrap or wheelhouse-smoke label");
+    } else if (!stampedSkills(parsed.skills)) errors.push("contract: Skills: expected intent@<version> outcomes@<version> (both non-empty, once each)");
+  }
   if (options.requireSignal) {
     if (!parsed.signal) errors.push("contract: Signal: missing");
     else if (!/^(?:sig-[a-z0-9]+|isa-gap: [A-Z]+[0-9-]+|install-procedure)$/.test(parsed.signal)) errors.push(`contract: Signal: invalid ${JSON.stringify(parsed.signal)}; expected sig-<id>, isa-gap: <claim>, or install-procedure`);
@@ -139,11 +161,13 @@ export function lintIntent(text: string): string | null {
   return null;
 }
 
-export type BeadText = { text: string; error: null } | { text: null; error: string };
+export type BeadText = { text: string; error: null; labels: string[] } | { text: null; error: string };
 function fixtureText(file: string): BeadText {
   try {
     const text = fs.readFileSync(file, "utf8");
-    return text.trim() ? { text, error: null } : { text: null, error: `empty contract fixture: ${file}` };
+    const header = process.env.WHEELHOUSE_SKIP_BD === "1" ? text.split(/\r?\n/, 1)[0].match(/^labels:[ \t]*(.*)$/)?.[1] : undefined;
+    const labels = header?.split(/[,\s]+/).filter(Boolean) ?? [];
+    return text.trim() ? { text, error: null, labels } : { text: null, error: `empty contract fixture: ${file}` };
   } catch (e: any) { return { text: null, error: `cannot read contract fixture ${file}: ${e.message}` }; }
 }
 function bd(root: string, args: string[]) {
@@ -154,13 +178,14 @@ export function readBeadText(root: string, beadId: string): BeadText {
   if (process.env.WHEELHOUSE_SKIP_BD === "1") return fixture ? fixtureText(fixture) : { text: null, error: "WHEELHOUSE_SKIP_BD=1 requires WHEELHOUSE_CONTRACT_FIXTURE" };
   const r = bd(root, ["show", beadId, "--json"]);
   if (r.status !== 0 || r.error) return fixture ? fixtureText(fixture) : { text: null, error: `bd show ${beadId} failed: ${(r.stderr || r.error?.message || r.stdout || `exit ${r.status}`).trim()}` };
-  let text: string;
+  let text: string, labels: string[] = [];
   try {
     const j = JSON.parse(r.stdout);
     const b = Array.isArray(j) ? j[0] : j;
+    if (Array.isArray(b?.labels) && b.labels.every((label: unknown) => typeof label === "string")) labels = b.labels;
     text = [b?.title, b?.description, b?.notes, b?.design, b?.body].filter(s => typeof s === "string").join("\n");
   } catch { text = r.stdout; }
-  return text.trim() ? { text, error: null } : { text: null, error: `bd show ${beadId} returned empty bead text` };
+  return text.trim() ? { text, error: null, labels } : { text: null, error: `bd show ${beadId} returned empty bead text` };
 }
 
 function intakeRows(root: string, strict: boolean): Map<string, IntakeRow> | null {
@@ -195,9 +220,20 @@ function intakeRows(root: string, strict: boolean): Map<string, IntakeRow> | nul
     return fold(events);
   } catch (e: any) { throw new Error(`intake ledger link invalid at ${file}: ${e.message}`); }
 }
-function contractErrors(root: string, text: string, requireSignal: boolean): string[] {
+function contractErrors(root: string, text: string, requireSignal: boolean, labels: readonly string[] = [], requireSkills = REQUIRE_SKILLS): string[] {
   const parsed = parseContract(text);
-  const errors = validateContract(parsed, { requireSignal });
+  const errors = validateContract(parsed, { requireSignal, requireSkills, labels });
+  const versions = stampedSkills(parsed.skills);
+  if (requireSkills && versions) for (const name of ["intent", "outcomes"] as const) {
+    const file = path.join(root, ".agents", "skills", name, "SKILL.md");
+    // Older contracts remain usable; absent installed skills are not a new
+    // worker gate. Producer assembly independently requires both readable files.
+    if (!fs.existsSync(file)) continue;
+    try {
+      const installed = readContractSkill(root, name).version, written = versions.get(name)!;
+      if (written !== installed) console.error(`WARN: contract written with ${name}@${written}, installed ${name}@${installed}`);
+    } catch { console.error(`WARN: installed skill version unavailable at ${file}`); }
+  }
   if (requireSignal && /^sig-[a-z0-9]+$/.test(parsed.signal)) {
     try {
       const rows = intakeRows(root, false);
@@ -206,10 +242,10 @@ function contractErrors(root: string, text: string, requireSignal: boolean): str
   }
   return errors;
 }
-export function checkBeadContract(root: string, beadId: string, options: { requireSignal?: boolean } = {}): { text: string | null; errors: string[]; unreadable: boolean } {
+export function checkBeadContract(root: string, beadId: string, options: { requireSignal?: boolean; requireSkills?: boolean } = {}): { text: string | null; errors: string[]; unreadable: boolean } {
   const read = readBeadText(root, beadId);
   return read.error !== null ? { text: null, errors: [`${beadId}: contract: unreadable: ${read.error}`], unreadable: true }
-    : { text: read.text, errors: contractErrors(root, read.text, options.requireSignal ?? true).map(e => `${beadId}: ${e}`), unreadable: false };
+    : { text: read.text, errors: contractErrors(root, read.text, options.requireSignal ?? true, read.labels, options.requireSkills ?? REQUIRE_SKILLS).map(e => `${beadId}: ${e}`), unreadable: false };
 }
 
 /** Shared read-only Repo: grammar: paths/lists, NAME (path/), TEMPLATE., UMBRELLA. */
@@ -303,7 +339,7 @@ export function traceContract(root: string, target: string): string {
   return lines.join("\n");
 }
 export function contractRemedy(beadId: string, errors: string[]): string {
-  return `${beadId} is not a contract: ${errors.join("; ")} — fix: write Signal:, Intent: and Outcomes: per wheelhouse/GRAPH.md (Every bead is a contract) and dispatch again`;
+  return `${beadId} is not a contract: ${errors.join("; ")} — fix: write Signal:, Skills:, Intent: and Outcomes: per wheelhouse/GRAPH.md (Every bead is a contract) and dispatch again`;
 }
 
 function cli(): number {
@@ -319,7 +355,7 @@ function cli(): number {
     if (args[0] === "--file" && args.length === 2) {
       const read = fixtureText(args[1]);
       if (read.error !== null) { console.error(`${args[1]}: contract: unreadable: ${read.error}`); return 3; }
-      const errors = contractErrors(ROOT, read.text, true);
+      const errors = contractErrors(ROOT, read.text, true, read.labels);
       for (const e of errors) console.error(`${args[1]}: ${e}`);
       return errors.length ? 2 : 0;
     }
