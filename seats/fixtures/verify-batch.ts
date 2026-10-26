@@ -60,8 +60,9 @@ async function test(){
   {name:'all-bounced-failed-sweep',reply:positive('BOUNCE','BOUNCE').replace('CANDIDATE: '+ids.a+' APPROVE','CANDIDATE: '+ids.a+' BOUNCE'),want:2},
   {name:'fenced-noise',reply:'```text\nCANDIDATE: outside-fixture BOUNCE\n```\n'+positive(),want:0},
  ];
- const selected=process.env.WHEELHOUSE_TEST_VERIFY_BATCH_CASE;
- for(const originalSeed of seeds)for(const spec of specs){const seed={...originalSeed};if(selected&&!selected.split(',').includes(spec.name))continue;if(seed.layout==='umbrella'&&!['approve','set-extra','manual-scope'].includes(spec.name)&&!selected)continue;
+ const selected=process.env.WHEELHOUSE_TEST_VERIFY_BATCH_CASE,selectedLayout=process.env.WHEELHOUSE_TEST_VERIFY_BATCH_LAYOUT;
+ assert(!selectedLayout||['single','umbrella'].includes(selectedLayout),'known fixture layout required');
+ for(const originalSeed of seeds)for(const spec of specs){const seed={...originalSeed};if(selectedLayout&&seed.layout!==selectedLayout)continue;if(selected&&!selected.split(',').includes(spec.name))continue;if(seed.layout==='umbrella'&&!['approve','set-extra','manual-scope'].includes(spec.name)&&!selected)continue;
   const name=seed.layout+'-'+spec.name,dir=path.join(allocation,name),install=path.join(dir,'install'),repo=seed.layout==='single'?install:path.join(install,'app'),bin=path.join(dir,'bin');fs.mkdirSync(dir);fs.cpSync(seed.seed,install,{recursive:true});fs.mkdirSync(bin);fs.writeFileSync(path.join(dir,'spawns.jsonl'),'');fs.writeFileSync(path.join(dir,'sweeps.jsonl'),'');fs.writeFileSync(path.join(dir,'reply.txt'),spec.reply);const quote=(s:string)=>"'"+s.replaceAll("'","'\\''")+"'";fs.writeFileSync(path.join(bin,'pi'),'#!/usr/bin/env bash\nexec bun '+quote(import.meta.path)+' --reviewer "$@"\n',{mode:0o755});
   const env={...process.env,...spec.env,PATH:bin+path.delimiter+process.env.PATH,VERIFY_BATCH_CASE:dir,VERIFY_BATCH_FRAMES:framesFile,STUB_REPLY_FILE:path.join(dir,'reply.txt'),GIT_TERMINAL_PROMPT:'0'};
   let manualFacts:any;

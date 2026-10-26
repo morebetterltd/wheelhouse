@@ -2274,8 +2274,6 @@ async function main(): Promise<void> {
         `- branch: ${subject.branch}`,
         `- branch-repo: ${repoRoot}`,
         `- tip: ${subject.tip}`,
-        ...manualScopeLists(manualScope).map(line => `- ${line}`),
-        ...(manualScope.files.length ? [`- manual-diff-base: ${manualScope.base} (${JSON.stringify(manualScope.baseRef)})`] : []),
         `- author-seat: ${subject.author}`,
         `- verifier-seat: ${reviewerSeat} (${reviewerDir})`,
         ...subject.headers,
@@ -2288,6 +2286,10 @@ async function main(): Promise<void> {
         `- at: ${new Date().toISOString()}`,
         `- verdict: ${subject.shown}`,
         `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
+        // Human-readable manual notes terminate the strict lowercase-key reader.
+        // Keep every required verdict field above them, for single AND batch records.
+        ...manualScopeLists(manualScope).map(line => `- ${line}`),
+        ...(manualScope.files.length ? [`- manual-diff-base: ${manualScope.base} (${JSON.stringify(manualScope.baseRef)})`] : []),
         ...benchGapNotes.map((note) => `- ${note}`),
         ...refusedOutputs.map((file) => `- refused-output (not a verdict): ${path.relative(ROOT, file)}`),
         ``,
