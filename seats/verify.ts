@@ -79,7 +79,7 @@
  */
 
 import * as crypto from "node:crypto";
-import { checkBeadContract, contractRemedy, parseContract, repoDeclarations } from "./contract";
+import { checkBeadContract, contractRemedy, parseContract, repoDeclarations, type Contract } from "./contract";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1294,6 +1294,57 @@ function tierGit(root: string, ...args: string[]): Buffer {
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete env[key];
   return execFileSync("git", ["--no-replace-objects", "-C", root, ...args], { env, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 });
 }
+interface ManualReviewContext {
+  base: string;
+  baseRef: string;
+  files: string[];
+  outcomes: { id: string; surface: string }[];
+}
+function manualReviewContext(root: string, tip: string, contract: Contract): ManualReviewContext {
+  const resolve = (ref: string): string | null => {
+    try { return tierGit(root, "rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`).toString().trim() || null; }
+    catch { return null; }
+  };
+  // Dispatch's available integration/install-base ordering, using the contract
+  // already read by the gate rather than another bd read or rendered claim.
+  const candidates: string[] = [], integration = contract.integration.match(/^[^\s`'"]+/)?.[0];
+  if (integration) {
+    if (!integration.includes("/") || !resolve(integration)) candidates.push(`origin/${integration}`);
+    candidates.push(integration);
+  }
+  if (process.env.WHEELHOUSE_WORKTREE_BASE) candidates.push(process.env.WHEELHOUSE_WORKTREE_BASE);
+  let recorded = "";
+  try { recorded = fs.readFileSync(path.join(ROOT, "wheelhouse/.template-source"), "utf8").match(/^merge-target=(\S+)/m)?.[1] ?? ""; } catch {}
+  if (recorded) { if (!recorded.includes("/")) candidates.push(`origin/${recorded}`); candidates.push(recorded); }
+  try { candidates.push(tierGit(root, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD").toString().trim()); } catch {}
+  candidates.push("origin/main", "origin/master", "main", "master");
+  const baseRef = candidates.find(ref => ref && resolve(ref));
+  if (!baseRef) throw new Error("cannot establish a comparison base for manual scope");
+  const base = tierGit(root, "merge-base", resolve(baseRef)!, tip).toString().trim();
+  // A trailing-slash wildcard alone does not select descendants. Explicit glob
+  // + NUL records includes deleted paths and both sides of an in-tree rename.
+  const files = tierGit(root, "diff", "--name-only", "--no-renames", "-z", base, tip, "--", ":(glob).agents/skills/verify-*/**")
+    .toString().split("\0").filter(Boolean).sort();
+  const featureSurface = /(?:^|[\/\s`"'(])features\/[^\s`"')]+/;
+  const skillSurface = /(?:^|[\/\s`"'(])verify-[^/\s`"'()]+\/SKILL\.md(?=$|[\s`"'),;])/;
+  const outcomes = contract.outcomes.filter(o => featureSurface.test(o.surface) || skillSurface.test(o.surface))
+    .map(({ id, surface }) => ({ id, surface }));
+  return { base, baseRef, files, outcomes };
+}
+function manualScopeLists(context: ManualReviewContext): string[] {
+  if (!context.files.length) return [];
+  return [
+    `Manual files changed by this branch: ${JSON.stringify(context.files)}.`,
+    `Contract outcomes that call for manual or map changes: ${context.outcomes.length ? JSON.stringify(context.outcomes) : "none"}.`,
+  ];
+}
+function manualScopePrompt(context: ManualReviewContext): string[] {
+  if (!context.files.length) return [];
+  return ["", ...manualScopeLists(context),
+    `Manual comparison base: ${context.base} (${JSON.stringify(context.baseRef)}).`,
+    `A changed file no outcome calls for is a scope defect; see REVIEWER.md "The manual is not the author's to bend". These lists are context, not permission: judge the file/feature relationship against the contract and inspect the base-to-tip changed lines.`,
+  ];
+}
 function tierInventory(root: string, tip: string): string[] {
   return tierGit(root, "ls-tree", "-r", "-z", "--name-only", tip, "--", "seats").toString().split("\0")
     .filter(name => /^seats\/[^/]+\.selftest\.sh$/.test(name)).map(name => path.basename(name));
@@ -1750,11 +1801,12 @@ async function main(): Promise<void> {
   if (promotionArg) validateSegment("promotion comment id", promotionArg);
   const contract = checkBeadContract(ROOT, beadId);
   refuseUncontractedReview(beadId, contract.errors); // contract-gate: before reviewer identity or harness spawn
+  const parsedWorkContract = parseContract(contract.text ?? "");
   const claim = [
     beadClaim(beadId),
     ``,
     `Parsed work contract (validated before reviewer spawn):`,
-    JSON.stringify(parseContract(contract.text ?? ""), null, 2),
+    JSON.stringify(parsedWorkContract, null, 2),
   ].join("\n");
   const repoRoot = resolveRepoRoot(repoArg, claim);
   if (path.resolve(repoRoot) !== path.resolve(earlyRepoRoot)) sweepStaleScratchWorktrees(repoRoot);
@@ -1815,6 +1867,7 @@ async function main(): Promise<void> {
   }
 
   const promotion = promotionArg ? readFallbackPromotion(beadId, reviewerSeat, tip, promotionArg) : undefined;
+  const manualScope = manualReviewContext(repoRoot, tip, parsedWorkContract);
 
   // --- evidence floor checks, against the SHA the verdict is about ----------
   const evidence = checkEvidence(repoRoot, tip, evidencePaths);
@@ -1871,6 +1924,7 @@ async function main(): Promise<void> {
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
     claim,
+    ...manualScopePrompt(manualScope),
     ...(promotion ? [
       `Referenced per-outage promotion: bead ${beadId}, comment ${promotion.commentId}, recorded actor ${promotion.author}, reviewer ${reviewerSeat}, tip ${tip}.`,
       `This is a FALLBACK GATE, not a SHADOW verdict. The full REVIEWER.md contract and all ordinary evidence/account/sweep gates still apply.`,
@@ -2095,6 +2149,8 @@ async function main(): Promise<void> {
         `- branch: ${branch}`,
         `- branch-repo: ${repoRoot}`,
         `- tip: ${tip}`,
+        ...manualScopeLists(manualScope).map(line => `- ${line}`),
+        ...(manualScope.files.length ? [`- manual-diff-base: ${manualScope.base} (${JSON.stringify(manualScope.baseRef)})`] : []),
         `- author-seat: ${authorSeat}`,
         `- verifier-seat: ${reviewerSeat} (${reviewerDir})`,
         ...(promotion ? [
