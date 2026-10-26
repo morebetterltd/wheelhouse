@@ -7,6 +7,7 @@
 prune_fixture_start(){
 set -uo pipefail
 
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$HERE/fixtures/fixture-command.cjs"
 PRUNE="${1:-$HERE/prune.ts}"
 SCRUB="$HERE/evidence-scrub.sh"
 [ -f "$PRUNE" ] || { echo "selftest: not found: $PRUNE" >&2; exit 2; }
@@ -150,7 +151,7 @@ TMP_SCRATCH+=()
 cleanup_live(){ kill "$LIVE_PID" "$OPEN_LIVE_PID" "$CLOSED_LIVE_PID" >/dev/null 2>&1 || true; }
 cleanup_prune(){ cleanup_live; cleanup; }
 selftest_install_cleanup_traps cleanup_prune
-LIVE_STARTED="$(bun -e 'import {spawnSync} from "node:child_process"; const r=spawnSync("ps",["-p",process.argv[1],"-o","lstart="],{encoding:"utf8"}); console.error("CAPTURE prune fixture ps "+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr})); if(r.status!==0||r.signal||r.error)process.exit(2); console.log(new Date(Date.parse(r.stdout.trim())).toISOString());' "$LIVE_PID")" || exit 2
+LIVE_STARTED="$(bun -e 'const { spawnSync } = await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE); const r=spawnSync("ps",["-p",process.argv[1],"-o","lstart="],{encoding:"utf8"}); console.error("CAPTURE prune fixture ps "+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr})); if(r.status!==0||r.signal||r.error)process.exit(2); console.log(new Date(Date.parse(r.stdout.trim())).toISOString());' "$LIVE_PID")" || exit 2
 printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"},"worker-live":{"pid":%s,"startedAt":"%s","cwd":"%s"},"worker-history":{"pid":999998,"cwd":"%s","sessionFile":"%s"}}}\n' "$WTS/$OPEN_ID" "$LIVE_PID" "$LIVE_STARTED" "$WTS/$OPEN_ID" "$WTS/$OPEN_ID" "$SESSION_HISTORY" > "$ROOT/seats/state.json"
 printf '{"seats":{"worker-rostered":{}}}\n' > "$ROOT/seats/seats.json"
 mkdir -p "$WTS/worker-rostered"

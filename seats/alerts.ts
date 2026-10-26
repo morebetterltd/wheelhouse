@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFile } from "node:child_process";
 import { completedSpawnSync as spawnSync, nativeJsonArray } from "./native-command";
 import { readQuarantine } from "./quarantine";
 import { fleetSnapshot, readyWorkNobodyOnIt, hasUnverifiedWorkers, type Snapshot } from "./fleet-snapshot";
@@ -19,17 +20,17 @@ const ALERT_LOG = path.join(LOGS, "alerts.log");
 const DEFAULT_INTERVAL_MS = 60_000;
 export const TEMPLATE_DRIFT_ALERT_HOLD_MS = Number(process.env.WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS ?? 10 * 60_000);
 
-type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|`seat-stalled:${string}`|`seat-unverified:${string}`;
+type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"docker-cache-pressure"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|`seat-stalled:${string}`|`seat-unverified:${string}`;
 type AlertState = { active:boolean; since:string|null; lastFiredAt:string|null; needId?:string|null; signature?:string; detail?:string };
-type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; github:any; drift:any; quarantined:{count:number;names:string[]}; seatStreams:Record<string,StreamHealth>; alerts:Record<string,AlertState>; settledSeats:Record<string,SettledSeat> };
+type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; docker:any; github:any; drift:any; quarantined:{count:number;names:string[]}; seatStreams:Record<string,StreamHealth>; alerts:Record<string,AlertState>; settledSeats:Record<string,SettledSeat> };
 
 function now(){ return new Date().toISOString(); }
 function readJson(file:string):any{ try { return JSON.parse(fs.readFileSync(file,"utf8")); } catch { return null; } }
 function writeAtomic(file:string, data:string){ fs.mkdirSync(path.dirname(file),{recursive:true}); const tmp=`${file}.tmp.${process.pid}`; fs.writeFileSync(tmp,data); fs.renameSync(tmp,file); }
 function appendLog(s:string){ fs.mkdirSync(LOGS,{recursive:true}); fs.appendFileSync(ALERT_LOG, `${now()} ${s}\n`); }
 export function templateValue(key:string, root=ROOT):string{ try { const m=fs.readFileSync(path.join(root,"wheelhouse",".template-source"),"utf8").match(new RegExp(`^${key}=(.*)$`,"m")); return m?.[1]?.trim() ?? ""; } catch { return ""; } }
-function minutesValue(key:string, def:number):number{ const n=Number(templateValue(key)); return Number.isFinite(n) ? n : def; }
-function gbValue(key:string, def:number):number{ const n=Number(templateValue(key)); return Number.isFinite(n) ? n : def; }
+function minutesValue(key:string, def:number):number{ const raw=templateValue(key); if(raw==="") return def; const n=Number(raw); return Number.isFinite(n) ? n : def; }
+function gbValue(key:string, def:number):number{ const raw=templateValue(key); if(raw==="") return def; const n=Number(raw); return Number.isFinite(n) ? n : def; }
 function acquireLock():number|null{ return acquirePidLock(LOCK); }
 function releaseLock(fd:number|null){ releasePidLock(LOCK, fd); }
 function intervalMs(){ const raw=process.env.WHEELHOUSE_ALERT_INTERVAL_MS; if(raw===undefined||raw.trim()==="") return DEFAULT_INTERVAL_MS; const n=Number(raw); return Number.isFinite(n)&&n>=0?Math.floor(n):DEFAULT_INTERVAL_MS; }
@@ -60,6 +61,56 @@ function diskInfo(){
     else { const lines=r.stdout.trim().split(/\n/), cols=lines.at(-1)?.split(/\s+/), n=Number(cols?.[3])*1024; if(lines.length>=2&&Number.isFinite(n)&&n>=0) freeBytes=n; else unavailable="native df returned no parseable filesystem record"; }
   }
   return {freeBytes,thresholdBytes,...(unavailable?{unavailable}:{})};
+}
+// Every sourced selftest exports a fixture nonce, including suites that invoke
+// alerts indirectly. Never resolve host PATH there without an explicit fixture.
+function fixtureDocker(executable:string):string|null {
+  try {
+    if(!path.isAbsolute(executable)) return null;
+    const root=fs.realpathSync(ROOT), actual=fs.realpathSync(executable);
+    if(actual!==executable||!actual.startsWith(root+path.sep)||!fs.statSync(actual).isFile()) return null;
+    return actual;
+  } catch { return null; }
+}
+function dockerCommand(executable:string):Promise<any> {
+  return new Promise(resolve=>{
+    let output:any, native:any;
+    const finish=()=>{ if(output&&native) resolve({...native,...output,error:typeof output.error?.code==="string"?output.error:undefined}); };
+    // This optional host probe has its own budget, not a deadline on drift,
+    // graph reads or the shared native-command observer. Kill only this client.
+    const child=execFile(executable,["system","df","--format","{{json .}}"],{
+      cwd:ROOT,encoding:"utf8",timeout:5000,killSignal:"SIGKILL",maxBuffer:65536,
+    },(error,stdout,stderr)=>{ output={error,stdout,stderr}; finish(); });
+    child.stdin?.end();
+    child.once("close",(status,signal)=>{ native={status,signal}; finish(); });
+  });
+}
+async function dockerCacheInfo(){
+  const raw=templateValue("alert-docker-build-cache-gib");
+  const value=raw===""?10:Number(raw), gib=Number.isFinite(value)&&value>=0&&value*1024**3<=Number.MAX_SAFE_INTEGER?value:10;
+  const thresholdBytes=Math.floor(gib*1024**3);
+  const unavailable=(reason:string,r?:any)=>({status:"unavailable",cacheBytes:null,cacheSize:null,thresholdBytes,reason,...(r?{exitCode:r.status,signal:r.signal,errorCode:r.error?.code??null,error:r.error?.message??null,stdout:r.stdout??"",stderr:r.stderr??""}:{})});
+  if(thresholdBytes===0) return {status:"disabled",cacheBytes:null,cacheSize:null,thresholdBytes};
+  const selftest=process.env.WHEELHOUSE_SELFTEST_FIXTURE_NONCE!==undefined;
+  const fixture=process.env.WHEELHOUSE_ALERTS_FIXTURE_DOCKER;
+  if(selftest&&!fixture) return {status:"disabled",cacheBytes:null,cacheSize:null,thresholdBytes,reason:"Docker probe off in selftests without an explicit fixture"};
+  const dockerBin=selftest?fixtureDocker(fixture!):Bun.which("docker");
+  if(!dockerBin) return unavailable("docker not on PATH or fixture executable unavailable");
+  let r; try { r=await dockerCommand(dockerBin); }
+  catch { return unavailable("docker observation unavailable"); }
+  if(r.error||r.signal||r.status!==0) return unavailable("docker observation did not complete successfully",r);
+  let rows:any[]; try { rows=r.stdout.trim().split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line)); }
+  catch { return unavailable("invalid Docker JSONL",r); }
+  if(!rows.length||rows.some(row=>!row||typeof row!=="object"||typeof row.Type!=="string")) return unavailable("invalid Docker rows",r);
+  const cache=rows.filter(row=>row.Type==="Build Cache");
+  if(cache.length!==1||typeof cache[0].Size!=="string") return unavailable("Docker Build Cache row unavailable",r);
+  // Docker's human-readable Size uses decimal SI units, not GiB. Reclaimable's
+  // percentage is object reclaimability, never VM disk fullness.
+  const size=cache[0].Size, match=size.match(/^([0-9]+(?:\.[0-9]+)?)\s*(B|kB|KB|MB|GB|TB|PB)$/);
+  const units:Record<string,number>={B:1,kB:1000,KB:1000,MB:1000**2,GB:1000**3,TB:1000**4,PB:1000**5};
+  const bytes=match?Number(match[1])*units[match[2]]:NaN;
+  if(!Number.isFinite(bytes)||bytes<0||bytes>Number.MAX_SAFE_INTEGER) return unavailable("invalid Docker cache size",r);
+  return {status:"ok",cacheBytes:Math.floor(bytes),cacheSize:size,thresholdBytes};
 }
 export function repoFromRemote(s:string){ return s.replace(/.*github\.com[:/]/,"").replace(/\.git$/,""); }
 function githubIssueRepos(){ const raw=templateValue("github-issue-repos"); if(raw) return raw.split(/[,;]/).map(s=>s.trim()).filter(Boolean); try{ const r=spawnSync("git",["remote","get-url","origin"],{cwd:ROOT,encoding:"utf8"}); if(r.error||r.signal||r.status!==0) return []; const url=r.stdout.trim(); return url?[repoFromRemote(url)]:[]; }catch{return []} }
@@ -142,7 +193,7 @@ function needOpen(name:AlertName, title:string, body:string, stream?:StreamHealt
 function needClose(id:string){ spawnSync("bun",["seats/needs.ts","close",id,"--reason","cleared"],{cwd:ROOT,encoding:"utf8",env:{...process.env,BEADS_ACTOR:"alerts"}}); }
 function title(name:string){ return `alert — ${name.replace(/-/g," ")}`; }
 function bodyFor(name:AlertName, detail:string){ return `Alert ${name}: ${detail}. ${remedyFor(name)}`; }
-function remedyFor(name:AlertName){ if(name.startsWith("seat-stalled:")) return "Cost: delivery is waiting, even though the process is alive. Next: inspect the seat's own stream and redispatch after diagnosis; never interrupt a legitimate tool wait. No automatic abort or restart was performed."; if(name==="template-drift-check-failed") return "Cost: $0 directly; template drift is unknown. Next: inspect the retained drift failure in seats/run/fleet-snapshot.json and repair/retry the check."; if(name==="commander-pane-invalid") return "The commander pane target is invalid. Cost: $0 while noticed, but alerts and wakes may not reach the commander. Next: run seats/cockpit.sh to re-aim the commander pane and restart the herald."; if(name==="inbox-lag") return "The fleet inbox has undrained rows for longer than the alert threshold. Cost: $0 directly, but workers may wait for attention. Next: run bun seats/herald.ts --drain in the commander pane."; if(name==="idle-fleet-ready-work") return "Ready work exists while nobody is on it. Cost: $0 directly, but delivery is stalled. Next: spawn or resume seats and dispatch work; this clears itself once a worker is busy."; return "A fleet alert became active. Cost: $0. Next: inspect seats/run/fleet-snapshot.json; no action needed when the condition clears itself."; }
+function remedyFor(name:AlertName){ if(name==="docker-cache-pressure") return "Cost: cache pressure can prevent Docker builds and benches. Next: inspect the cache and run docker builder prune -f to remove regenerable build cache when appropriate. No automatic prune was performed."; if(name.startsWith("seat-stalled:")) return "Cost: delivery is waiting, even though the process is alive. Next: inspect the seat's own stream and redispatch after diagnosis; never interrupt a legitimate tool wait. No automatic abort or restart was performed."; if(name==="template-drift-check-failed") return "Cost: $0 directly; template drift is unknown. Next: inspect the retained drift failure in seats/run/fleet-snapshot.json and repair/retry the check."; if(name==="commander-pane-invalid") return "The commander pane target is invalid. Cost: $0 while noticed, but alerts and wakes may not reach the commander. Next: run seats/cockpit.sh to re-aim the commander pane and restart the herald, or run seats/cockpit.sh --claim-commander inside the pane your commander uses."; if(name==="inbox-lag") return "The fleet inbox has undrained rows for longer than the alert threshold. Cost: $0 directly, but workers may wait for attention. Next: inspect the commander's SessionStart, UserPromptSubmit and PostToolUse Bash inbox hooks (seats/inbox-hook.sh), their pane identity guard and delivery-failed log; restore hook delivery, then read the delivered records."; if(name==="idle-fleet-ready-work") return "Ready work exists while nobody is on it. Cost: $0 directly, but delivery is stalled. Next: spawn or resume seats and dispatch work; this clears itself once a worker is busy."; return "A fleet alert became active. Cost: $0. Next: inspect seats/run/fleet-snapshot.json; no action needed when the condition clears itself."; }
 function maybeHuman(name:AlertName, st:AlertState, stream?:StreamHealth){ const age=Date.now()-Date.parse(st.since||now()); const humanAfter=minutesValue("alert-human-after-minutes",15)*60_000; if(stream && age>=seatStallNeedMs(ROOT)){ if(!st.needId) st.needId=needOpen(name,"A model stream needs attention",`An assigned worker's model stream remains silent. Its last own event was at ${stream.lastEventAt}. Cost: delivery is waiting while its process remains alive. Next: ask the commander to inspect the stream and recover or redispatch the work after diagnosis. No automatic restart was performed.`,stream); } else if(name==="commander-pane-invalid" || ((name==="inbox-lag"||name==="idle-fleet-ready-work") && age>=humanAfter)){ if(!st.needId) st.needId=needOpen(name,title(name),st.detail??bodyFor(name,"condition remains active")); } }
 
 // Independent namespace/state from the unfinished-model-stream watchdog.
@@ -168,7 +219,7 @@ function settledTaskAlerts(observations:Record<string,SettledSeat>, prior:Record
   }
 }
 
-export function buildSnapshot(root=ROOT):SnapshotFile{
+export async function buildSnapshot(root=ROOT):Promise<SnapshotFile>{
   const entries=readQuarantine(root); const quarantined={count:entries.length,names:entries.map(e=>e.suite)};
   const prior=readJson(SNAP) as SnapshotFile|null; const priorAlerts=prior?.alerts??{}; const snap=fleetSnapshot(root);
   const unverified=snap.unverified??={};
@@ -177,7 +228,7 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
     unverified[seat]={pid:rec.pid??null,role:worker?"worker":reviewer?"reviewer":rec.role??unverified[seat]?.role??"unknown",status:"UNVERIFIED",reason};
     for(const entry of [worker,reviewer]) if(entry){entry.busy=true;entry.identity="UNVERIFIED";}
   };
-  const settledSeats=observeSettledSeats(root,snap.workers.live,prior?.settledSeats,Date.now(),unknown); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const github=githubInfo(); const drift=driftInfo();
+  const settledSeats=observeSettledSeats(root,snap.workers.live,prior?.settledSeats,Date.now(),unknown); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const docker=await dockerCacheInfo(); const github=githubInfo(); const drift=driftInfo();
   const seatStreams=observeSeatStreams(root,prior?.seatStreams??{},Date.now(),unknown);
   for(const seat of Object.keys(unverified)){delete seatStreams[seat];delete settledSeats[seat];}
   snap.workers.busy=snap.workers.live.filter(w=>w.busy).length;snap.workers.idle=snap.workers.live.length-snap.workers.busy;
@@ -189,7 +240,8 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
     "untriaged-github-issues":{on:Array.isArray(github.untriaged)&&github.untriaged.length>0,sig:Array.isArray(github.untriaged)?github.untriaged.join("\n"):"",detail:`untriaged issues=${(github.untriaged??[]).join(", ")}`},
     "capacity-events":{on:capacity.seats.length>0,sig:capacity.seats.join("\n"),detail:`capacity seats=${capacity.seats.join(", ")}`},
     "low-disk":{on:disk.freeBytes!==null&&disk.freeBytes<disk.thresholdBytes,sig:"",detail:`free bytes=${disk.freeBytes}; threshold bytes=${disk.thresholdBytes}`},
-    "commander-pane-invalid":{on:herald.target?.status?herald.target.status!=="ok":false,sig:String(herald.target?.status??""),detail:`commander target status=${herald.target?.status??"unknown"}`},
+    "docker-cache-pressure":{on:docker.status==="ok"&&docker.cacheBytes!==null&&docker.cacheBytes>=docker.thresholdBytes,sig:"",detail:`cache pressure: build cache=${docker.cacheSize}; threshold bytes=${docker.thresholdBytes}`},
+    "commander-pane-invalid":{on:herald.target?.status?herald.target.status!=="ok":false,sig:String(herald.target?.status??""),detail:`commander target status=${herald.target?.status??"unknown"}; pane=${herald.target?.target??"unknown"}`},
     "template-drift":{on:drift.status==="drift",sig:driftFileSetSignature(drift),detail:`modified=${JSON.stringify(drift.modified)}; localOnly=${JSON.stringify(drift.localOnly)}; missing=${JSON.stringify(drift.missing)}; aheadBy=${drift.aheadBy??"unknown"}`},
     "template-drift-check-failed":{on:drift.status==="check-failed",sig:drift.reason??"",detail:drift.reason??"drift check failed without a reason"},
   };
@@ -204,7 +256,7 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
     if(name.startsWith("seat-stalled:")&&unverified[name.slice("seat-stalled:".length)]){if(priorAlerts[name])alerts[name]=priorAlerts[name];continue;}
     // Unknown observations cannot clear a last-known condition or reset its
     // pending hold. A confirmed clean drift result still follows the clear path.
-    if((name==="untriaged-github-issues"&&github.untriaged===null&&!github.disabled)||(name==="low-disk"&&disk.freeBytes===null)||(name==="template-drift"&&drift.status==="check-failed")){ alerts[name]=priorAlerts[name]??alertRow(false,undefined,""); continue; }
+    if((name==="untriaged-github-issues"&&github.untriaged===null&&!github.disabled)||(name==="low-disk"&&disk.freeBytes===null)||(name==="template-drift"&&drift.status==="check-failed")||(name==="docker-cache-pressure"&&docker.status==="unavailable")){ alerts[name]=priorAlerts[name]??alertRow(false,undefined,""); continue; }
     const stored=priorAlerts[name], stream=name.startsWith("seat-stalled:")?seatStreams[name.slice("seat-stalled:".length)]:undefined;
     let was=name==="template-drift"&&stored ? {...stored,signature:priorDriftSignature(stored.signature)} : stored;
     if(stream?.stalled && was?.active && was.signature!==active[name].sig){ if(was.needId) needClose(was.needId); was=undefined; }
@@ -218,7 +270,7 @@ export function buildSnapshot(root=ROOT):SnapshotFile{
   }
   if(quarantined.count!==(prior?.quarantined?.count??0)) appendInboxAlert("quarantine",`Alert quarantine: count=${quarantined.count}; suites=${quarantined.names.join(", ")||"none"}. Cost: these suites keep running but their failures do not block review. Next: inspect each owner task and deadline in seats/selftest-quarantine.list.`);
   settledTaskAlerts(settledSeats,priorAlerts,alerts,unverified);
-  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,github,drift,quarantined,seatStreams,alerts,settledSeats};
+  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,docker,github,drift,quarantined,seatStreams,alerts,settledSeats};
 }
-export function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }
-if(import.meta.main){ const [cmd,...rest]=process.argv.slice(2); if(cmd==="check") check(rest.includes("--json")); else { console.error("usage: alerts.ts check [--json]"); process.exit(2); } }
+export async function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=await buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }
+if(import.meta.main){ const [cmd,...rest]=process.argv.slice(2); if(cmd==="check") await check(rest.includes("--json")); else { console.error("usage: alerts.ts check [--json]"); process.exit(2); } }

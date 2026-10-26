@@ -26,6 +26,14 @@ A goal branch is an integration line, not an unreviewed staging pile. At the goa
 
 A child closes when its reviewed tip is on the goal branch; `wheelhouse/GRAPH.md` owns that close semantics. The epic closes when the last group PR merges to the default line, citing that default-line SHA. Remove the branch from `seats/integration-refs.txt` at that close.
 
+### Review, then verify, then merge
+
+Review first: the reviewer must APPROVE the exact tip. Then dispatch the per-work verifier to prove the person-on-surface and person-reading outcomes at that same tip, on a verifier-role seat distinct from the author and from the reviewer directory in the APPROVE record that gates this walk. It is not the seat whose APPROVE gates this walk, and never a reviewer-role seat; an earlier review at another tip does not gate the walk. `walk.ts --work` refuses missing, non-APPROVE or stale review records and account/role collisions before creating a scratch worktree or spawning the verifier. This order is enforced by the dispatcher, not left to the commander's discipline. Machine outcomes need no walk: their literal command evidence was attached by the worker and judged by the reviewer.
+
+Last before merging, run `bun seats/merge-gate.ts BEAD-ID BRANCH [--repo PATH] [--walk WALK-JSON]`. It reads the contract, the completed APPROVE at the branch tip and the newest matching per-work walk (or `--walk`); it refuses a failed outcome, an unverified consumer outcome or no APPROVE at that tip. Machine outcomes are skipped by name, but a recorded FAIL or UNREACHED is never ignored, even for a machine outcome. All-machine work passes on APPROVE alone, explicitly saying no walk is required. Every named gate run writes `seats/verdicts/BEAD-ID.merge-gate.json`; a refusal replaces an older PASS. Preflight receipts may have a null tip when no commit was resolved.
+
+Then merge and push under their existing authority gates. The installed pre-push hook refuses to publish a bead-naming merge to the default or a listed integration ref unless its receipt says PASS at that merge's second parent, the exact work tip. `WHEELHOUSE_INTEGRATOR_PUSH=1` licenses fleet publication, not a missing receipt. Approval, walk and receipt are pinned to the same identifier; moving the branch requires re-review and a new gate decision. The receipt is local decision data, not permission to push or a substitute for the tip comparison below.
+
 ### Confirm what you actually integrated
 
 The worker reports a head. Your job is to establish that the head you integrated is that one, by comparing refs rather than by reading output.

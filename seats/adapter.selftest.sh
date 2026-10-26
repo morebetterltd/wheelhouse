@@ -92,6 +92,9 @@ selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
+# Nested lifetime cases need only the existing stub/builders below. Keep the
+# regression cheap and avoid recursively running this suite's unrelated legs.
+if [ -z "${WHEELHOUSE_ADAPTER_LIFETIME_CHILD:-}" ] && [ "${WHEELHOUSE_ADAPTER_LIFETIME_ONLY:-0}" != 1 ]; then
 phase "0. shared status/floor turn display (display only, not alert policy)"
 selftest_copy_seat_runtime "$FIX/turn-display-runtime" "$ADAPTER_DIR" || exit 2
 if bun "$HERE/fixtures/seat-turn-display.ts" "$FIX/turn-display-runtime/seats" "$FIX/turn-display"; then
@@ -111,11 +114,13 @@ if bun "$HERE/fixtures/log-rotation-owner.ts" "$FIX/log-rotation-runtime" "$FIX"
 else
   fail "status log-rotation ownership regression"
 fi
+fi
 # Dispatch must pass the real contract gate too (fleet/producer enables it).
 export WHEELHOUSE_CONTRACT_FIXTURE="$FIX/dispatch-contract.md"
 cat > "$WHEELHOUSE_CONTRACT_FIXTURE" <<'CONTRACT'
 Trace: adapter protocol selftest
 Signal: install-procedure
+Skills: intent@1.0.0 outcomes@1.0.0
 Intent:
 Keep fixture dispatches exercising the adapter protocol and worktree lifecycle.
 Outcomes:
@@ -163,6 +168,7 @@ start_holder() { # name, cwd, process title, optional stdin FIFO, ignore TERM
   wait_exists "$ready" "$HOLDER_PID" && kill -0 "$HOLDER_PID" 2>/dev/null || { fail "holder $1 exited before its live-process precondition"; return 1; }
 }
 
+if [ -z "${WHEELHOUSE_ADAPTER_LIFETIME_CHILD:-}" ] && [ "${WHEELHOUSE_ADAPTER_LIFETIME_ONLY:-0}" != 1 ]; then
 phase "0. fixture cleanup catches cwd-only descendants"
 CWD_ONLY_DIR="$FIX/cwd-only-holder"
 mkdir -p "$CWD_ONLY_DIR"
@@ -177,6 +183,7 @@ else
   kill "$CWD_ONLY_PID" >/dev/null 2>&1 || true
 fi
 
+fi
 # The stub pi: a long-lived RPC process. It records argv, honours
 # PI_CODING_AGENT_DIR, answers get_state/prompt/steer, appends to a session
 # file, resumes one via --session, and dies cleanly on SIGTERM. A prompt
@@ -490,6 +497,30 @@ run() { RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELH
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 RUN_PROJ="$PROJ"
 
+if [ -n "${WHEELHOUSE_ADAPTER_LIFETIME_CHILD:-}" ]; then
+  [ "$WHEELHOUSE_ADAPTER_LIFETIME_CHILD" != deadline ] || trap '' TERM
+  HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$HERE/fixtures/adapter-lifetime.ts" child \
+    "$FIX" "$PROJ" "$WHEELHOUSE_ADAPTER_LIFETIME_READY" "$WHEELHOUSE_ADAPTER_LIFETIME_CHILD" "$$"
+  exit $?
+fi
+phase "0. adapter lifetime — normal/deadline survivor checks and two-layer removal controls"
+LIFETIME_EVIDENCE="${WHEELHOUSE_ADAPTER_LIFETIME_EVIDENCE:-}"
+LIFETIME_EVIDENCE_OWNED=0
+if [ -z "$LIFETIME_EVIDENCE" ]; then
+  LIFETIME_EVIDENCE="$(selftest_make_fixture_dir "${WHEELHOUSE_SELFTEST_ARTIFACT_ROOT:-$TMPDIR}/wheelhouse-adapter-lifetime.XXXXXX")" || exit 2
+  selftest_isolate_git "$LIFETIME_EVIDENCE" || exit 2
+  LIFETIME_EVIDENCE_OWNED=1
+fi
+LIFETIME_MODE=review
+[ "${WHEELHOUSE_ADAPTER_LIFETIME_REVIEW_CHILD:-0}" != 1 ] || LIFETIME_MODE=run
+if bun "$HERE/fixtures/adapter-lifetime.ts" "$LIFETIME_MODE" "$HERE" "$ADAPTER" "$FIX/lifetime-cases" "$LIFETIME_EVIDENCE"; then
+  pass 'adapter lifetime: no argv/cwd survivors after normal/deadline; both defences removed reports detached stub; production detach retained'
+  [ "$LIFETIME_EVIDENCE_OWNED" != 1 ] || selftest_remove_fixture_dir "$LIFETIME_EVIDENCE" || exit 2
+else
+  fail "adapter lifetime regression; native evidence retained at $LIFETIME_EVIDENCE"
+fi
+if [ "${WHEELHOUSE_ADAPTER_LIFETIME_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
+
 phase "contract gate: no-surface dispatch is refused before any side effect"
 REFUSE_PROJ="$FIX/contract-refusal"
 build_proj "$REFUSE_PROJ" contract-refusal
@@ -521,6 +552,13 @@ fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/signal-worktrees.after"
 fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/signal-status.after"
 LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
 if cmp -s "$FIX/contract-state.before" "$REFUSE_PROJ/seats/state.json" && cmp -s "$FIX/contract-worktrees.before" "$FIX/signal-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/signal-status.after" && [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ]; then pass 'Signal refusal: state, worktree and launch count unchanged'; else fail 'Signal refusal: side effect occurred'; fi
+sed '/^Skills:/d' "$FIX/dispatch-contract.md" > "$FIX/no-skills-contract.md"
+WHEELHOUSE_DISPATCH_FORCE=1 WHEELHOUSE_CONTRACT_FIXTURE="$FIX/no-skills-contract.md" run dispatch worker-1 missing-skills 'must never reach a seat'
+[ "$RC" = 1 ] && says 'missing-skills: contract: Skills: missing' && pass 'Skills refusal: unstamped dispatch names the stamp; force cannot bypass' || fail "Skills refusal rc=$RC: $OUT"
+fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/skills-worktrees.after"
+fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/skills-status.after"
+LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
+if cmp -s "$FIX/contract-state.before" "$REFUSE_PROJ/seats/state.json" && cmp -s "$FIX/contract-worktrees.before" "$FIX/skills-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/skills-status.after" && [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ]; then pass 'Skills refusal: state, worktree and launch count unchanged'; else fail 'Skills refusal: side effect occurred'; fi
 if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 RUN_PROJ="$PROJ"
 phase "0a0. state lock waits visibly for live holders; safely reclaims abandoned writers"
@@ -1053,7 +1091,7 @@ CODEX_TMP="$FIX/codex-driver"; mkdir -p "$CODEX_TMP/bin" "$CODEX_TMP/home" "$COD
 cat > "$CODEX_TMP/bin/codex" <<'CODEXSTUB'
 #!/usr/bin/env node
 const fs=require('fs'),path=require('path'); const home=process.env.CODEX_HOME||process.env.HOME; fs.mkdirSync(home,{recursive:true}); fs.appendFileSync(path.join(home,'codex-calls.jsonl'),JSON.stringify({argv:process.argv.slice(2)})+'\n'); if(process.argv[2]==='login'&&process.argv[3]==='status') process.exit(0); if(process.argv[2]==='exec'){console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'OK'}}));process.exit(0);} fs.writeFileSync(path.join(home,'codex-env.json'),JSON.stringify({OPENAI_API_KEY:process.env.OPENAI_API_KEY||null,ANTHROPIC_API_KEY:process.env.ANTHROPIC_API_KEY||null,ANTHROPIC_AUTH_TOKEN:process.env.ANTHROPIC_AUTH_TOKEN||null})); let thread='thread-'+process.pid, threadPath=path.join(home,'sessions','odd','rollout--'+thread+'.jsonl'), buf=''; function ensure(){fs.mkdirSync(path.dirname(threadPath),{recursive:true});fs.appendFileSync(threadPath,'{}\n');} function send(o){console.log(JSON.stringify(o));} function text(input){return (input||[]).map(x=>x.text||'').join('\n')}
-process.stdin.on('data',d=>{buf+=d;let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue;const r=JSON.parse(l),m=r.method,p=r.params||{};if(m==='initialize')send({jsonrpc:'2.0',id:r.id,result:{codexHome:home,userAgent:'stub'}});else if(m==='thread/start'){ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model,sandbox:p.sandbox,approvalPolicy:p.approvalPolicy}})}else if(m==='thread/resume'){thread=p.threadId;threadPath=path.join(home,'sessions','odd','rollout--'+thread+'.jsonl');ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model}})}else if(m==='turn/start'||m==='turn/steer'){const turn='turn-'+Date.now(), msg=text(p.input);send({jsonrpc:'2.0',id:r.id,result:{turn:{id:turn,status:'inProgress'}}});send({jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'active'}}});send({jsonrpc:'2.0',method:'turn/started',params:{threadId:thread,turn:{id:turn,status:'inProgress'}}});if(/tools/i.test(msg)){send({jsonrpc:'2.0',method:'item/started',params:{threadId:thread,item:{id:'tool-1',type:'commandExecution',command:'printf OK'}}});send({jsonrpc:'2.0',method:'item/completed',params:{threadId:thread,item:{id:'tool-1',type:'commandExecution',command:'printf OK',status:'completed',exitCode:0,output:'OK'}}});}send({jsonrpc:'2.0',method:'item/completed',params:{threadId:thread,item:{id:'msg-1',type:'agentMessage',text:/resume/i.test(msg)?'RESUME_OK':'OK'}}});send({jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'idle'}}});send({jsonrpc:'2.0',method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed'}}});}}});process.on('SIGTERM',()=>process.exit(0));
+process.stdin.on('data',d=>{buf+=d;let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue;const r=JSON.parse(l),m=r.method,p=r.params||{};fs.appendFileSync(path.join(home,'codex-rpc.jsonl'),JSON.stringify(r)+'\n');if(m==='initialize')send({jsonrpc:'2.0',id:r.id,result:{codexHome:home,userAgent:'stub'}});else if(m==='thread/start'){ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model,sandbox:p.sandbox,approvalPolicy:p.approvalPolicy}})}else if(m==='thread/resume'){thread=p.threadId;threadPath=path.join(home,'sessions','odd','rollout--'+thread+'.jsonl');ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model}})}else if(m==='turn/start'||m==='turn/steer'){const turn='turn-'+Date.now(), msg=text(p.input);send({jsonrpc:'2.0',id:r.id,result:{turn:{id:turn,status:'inProgress'}}});send({jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'active'}}});send({jsonrpc:'2.0',method:'turn/started',params:{threadId:thread,turn:{id:turn,status:'inProgress'}}});if(/tools/i.test(msg)){send({jsonrpc:'2.0',method:'item/started',params:{threadId:thread,item:{id:'tool-1',type:'commandExecution',command:'printf OK'}}});send({jsonrpc:'2.0',method:'item/completed',params:{threadId:thread,item:{id:'tool-1',type:'commandExecution',command:'printf OK',status:'completed',exitCode:0,output:'OK'}}});}send({jsonrpc:'2.0',method:'item/completed',params:{threadId:thread,item:{id:'msg-1',type:'agentMessage',text:/resume/i.test(msg)?'RESUME_OK':'OK'}}});send({jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'idle'}}});send({jsonrpc:'2.0',method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed'}}});}}});process.on('SIGTERM',()=>process.exit(0));
 CODEXSTUB
 chmod +x "$CODEX_TMP/bin/codex"
 printf 'worker brief\n' > "$CODEX_TMP/proj/contracts/WORKER.md"; printf 'x\n' > "$CODEX_TMP/proj/contracts/COMMANDER.md"; printf 'x\n' > "$CODEX_TMP/proj/contracts/REVIEWER.md"
@@ -1090,6 +1128,11 @@ PATH="$CODEX_TMP/bin:$PATH" run resume worker-1
 if [ $RC -eq 1 ] && says "brief changed; reset instead of resume"; then pass "codex resume refuses when the role brief hash changed"; else fail "codex resume did not refuse changed brief (rc=$RC): $OUT"; fi
 PATH="$CODEX_TMP/bin:$PATH" run stop worker-1 >/dev/null 2>&1 || true
 RUN_PROJ="$OLD_RUN_PROJ"; STATE="$OLD_STATE"; LOG="$OLD_LOG"; ARGV="$OLD_ARGV"
+
+phase "producer skills — all native harness inputs, continuity and no-stamp refusal"
+if bun "$HERE/fixtures/producer-adapter.ts" "$ADAPTER" "$FIX/producer-skills" "$BIN" "$CODEX_TMP/bin" "$HERE/.."; then
+  pass "producer skills reach Pi/Claude/Codex; stale/missing briefs and unstamped work refuse; removals reject"
+else fail "producer skill adapter consumer cases failed"; fi
 
 phase "0. seat-name validation — a name is one path segment or it is refused"
 check_bad_name() {   # $1 = label, $2 = offending name

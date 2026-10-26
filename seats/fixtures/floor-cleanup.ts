@@ -19,16 +19,19 @@ const q = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 // paths past Darwin's AF_UNIX limit; relative -S names the SAME private file.
 // Native argv/status/stdout/stderr are retained. No tmux response is emulated.
 const wrapper = String.raw`#!/usr/bin/env node
-const fs=require('node:fs'),cp=require('node:child_process'),dir=process.env.FLOOR_CLEANUP_OBSERVER,args=process.argv.slice(2),native=[...args];
+const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path'),dir=process.env.FLOOR_CLEANUP_OBSERVER,args=process.argv.slice(2),native=[...args];
+// Pane callbacks run below PROJ, not the observer's initial cwd. Relative -S
+// must still address the same owned namespace, never the caller's directory.
+const nativeCwd=process.env.TMUX_TMPDIR;if(!nativeCwd)throw Error('private tmux root required');
 if(native[0]==='-L')native.splice(0,2,'-S',process.env.FLOOR_CLEANUP_ADDRESS==='legacy'?'./'+native[1]+'.sock':'./tmux-'+process.getuid()+'/'+native[1]);
 const fds=['stdout','stderr'].map(x=>fs.openSync(dir+'/commands/'+process.pid+'.'+x,'wx'));
-const r=cp.spawnSync(process.env.FLOOR_CLEANUP_REAL_TMUX,native,{stdio:['ignore',...fds]});fds.forEach(fd=>fs.closeSync(fd));
-const data={args,nativeArgs:native,code:r.status,signal:r.signal,error:r.error?String(r.error):null,stdout:fs.readFileSync(dir+'/commands/'+process.pid+'.stdout','utf8'),stderr:fs.readFileSync(dir+'/commands/'+process.pid+'.stderr','utf8')};
+const r=cp.spawnSync(process.env.FLOOR_CLEANUP_REAL_TMUX,native,{cwd:nativeCwd,stdio:['ignore',...fds]});fds.forEach(fd=>fs.closeSync(fd));
+const data={args,nativeArgs:native,callerCwd:process.cwd(),nativeCwd,code:r.status,signal:r.signal,error:r.error?String(r.error):null,stdout:fs.readFileSync(dir+'/commands/'+process.pid+'.stdout','utf8'),stderr:fs.readFileSync(dir+'/commands/'+process.pid+'.stderr','utf8')};
 fs.writeFileSync(dir+'/commands/'+process.pid+'.json',JSON.stringify(data));process.stdout.write(data.stdout);process.stderr.write(data.stderr);
 function finish(){process.exit(r.error||r.signal||r.status===null?2:r.status);}
 if(args[0]==='-L'&&args[2]==='new-session'&&r.status===0&&!fs.existsSync(dir+'/created.json')){
- const file=native[1],s=fs.lstatSync(file);if(!s.isSocket()||s.uid!==process.getuid())process.exit(2);
- const pidResult=cp.spawnSync(process.env.FLOOR_CLEANUP_REAL_TMUX,['-S',file,'display-message','-p','#{pid}'],{encoding:'utf8'});
+ const file=path.resolve(nativeCwd,native[1]),s=fs.lstatSync(file);if(!s.isSocket()||s.uid!==process.getuid())process.exit(2);
+ const pidResult=cp.spawnSync(process.env.FLOOR_CLEANUP_REAL_TMUX,['-S',native[1],'display-message','-p','#{pid}'],{cwd:nativeCwd,encoding:'utf8'});
  if(pidResult.status!==0||pidResult.signal||pidResult.error||!/^[1-9][0-9]*\n$/.test(pidResult.stdout))process.exit(2);
  fs.writeFileSync(dir+'/created.json',JSON.stringify({sock:args[1],file:require('node:path').resolve(file),pid:Number(pidResult.stdout.trim()),state:{exists:true,socket:true,symlink:false,dev:s.dev,ino:s.ino,uid:s.uid},pidResult}));
 }

@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { execFileSync } from "./fixture-command.cjs";
 import { randomUUID } from "node:crypto";
 import { instrument, until } from "./verify-readiness";
 

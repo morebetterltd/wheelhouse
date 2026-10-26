@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const [root, scratch] = process.argv.slice(2);
 assert(fs.existsSync(path.join(scratch, ".wheelhouse-selftest-fixture")), "owned fixture must exist");
@@ -35,11 +35,21 @@ const noAllocation = path.join(scratch, "must-not-allocate");
 assert(!fs.existsSync(noAllocation));
 const missingSource = source.replace(`BASELINE=${baseline}`, `BASELINE=${absent}`);
 const admissionTmp = path.join(scratch, "audit-admission-tmp"); fs.mkdirSync(admissionTmp);
+const admissionReceipt = path.join(scratch, "audit-admission-tmp.receipt");
 let lastMissingResult: any;
 function observeMissing(code: string, isolateAdmission = true) {
   const anchor = '. "$HERE/selftest-lib.sh"'; assert.equal(code.split(anchor).length, 2);
-  if (isolateAdmission) code = code.replace(anchor, () => `saved_baseline_tmp=$TMPDIR; export TMPDIR=${JSON.stringify(admissionTmp)}; ${anchor}; export TMPDIR="$saved_baseline_tmp"`);
-  return lastMissingResult = spawnSync("bash", ["-c", code, suite], { cwd: root, env: { ...process.env, TMPDIR: noAllocation }, encoding: "utf8" });
+  fs.rmSync(admissionReceipt, { force: true });
+  const observed = `printf '%s\\n' "$TMPDIR" > ${JSON.stringify(admissionReceipt)}; ${anchor}`;
+  code = code.replace(anchor, () => isolateAdmission
+    ? `saved_baseline_tmp=$TMPDIR; export TMPDIR=${JSON.stringify(admissionTmp)}; ${observed}; export TMPDIR="$saved_baseline_tmp"`
+    : observed);
+  lastMissingResult = spawnSync("bash", ["-c", code, suite], { cwd: root, env: { ...process.env, TMPDIR: noAllocation }, encoding: "utf8" });
+  assert.ifError(lastMissingResult.error); assert.equal(lastMissingResult.signal ?? null, null);
+  assert(fs.existsSync(admissionReceipt), "real admission boundary must be reached");
+  assert.equal(fs.readFileSync(admissionReceipt, "utf8"), admissionTmp + "\n",
+    "BASELINE_ADMISSION_ORACLE: supply native admission capture scratch before restoring invalid allocator TMPDIR");
+  return lastMissingResult;
 }
 function checkMissing(code: string) {
   const result = observeMissing(code);
@@ -51,9 +61,9 @@ function checkMissing(code: string) {
   assert(!result.stderr.includes("mktemp"), "allocation must not precede refusal");
   assert(!fs.existsSync(noAllocation), "refusal must leave allocation root absent");
 }
-const early = observeMissing(missingSource, false);
+const early = observeMissing(missingSource);
 assert.ifError(early.error); assert.equal(early.status, 2, early.stdout + early.stderr); assert.equal(early.stdout, "");
-assert(early.stderr.includes(`STOP: upgrade contract audit baseline "${absent}"`) || (early.stderr.includes("STOP:") && early.stderr.includes(noAllocation)), "earlier refusal must name the missing baseline or bad TMPDIR");
+assert(early.stderr.includes(`STOP: upgrade contract audit baseline "${absent}" is missing from template history`), early.stderr);
 assert(!fs.existsSync(noAllocation), "earlier refusal must leave allocation root absent");
 checkMissing(missingSource);
 console.log("PASS missing audit baseline: exit=2 names the absent commit and remedy before fixture allocation");

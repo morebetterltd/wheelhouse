@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const root = process.argv[2];
 assert.equal(process.env.HOME, path.join(path.dirname(root), "home"), "account folders must stay in fixture HOME");

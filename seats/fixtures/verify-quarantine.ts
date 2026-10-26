@@ -1,4 +1,4 @@
-import fs from "node:fs";import path from "node:path";import assert from "node:assert/strict";import {execFileSync,spawnSync}from"node:child_process";import{pathToFileURL}from"node:url";
+import fs from "node:fs";import path from "node:path";import assert from "node:assert/strict";import {execFileSync,spawnSync}from"./fixture-command.cjs";import{pathToFileURL}from"node:url";
 const[here,root,base,home,runPath]=process.argv.slice(2);assert(fs.statSync(path.join(root,".wheelhouse-selftest-fixture")).isFile());
 const source=fs.readFileSync(path.join(here,"verify.ts"),"utf8"),runner=fs.readFileSync(path.join(here,"selftest-sweep.sh"),"utf8"),dir=path.join(root,"review-quarantine");fs.mkdirSync(dir);
 const env={...process.env,HOME:home,PATH:runPath,GIT_AUTHOR_DATE:"2000-01-01T00:00:00Z",GIT_COMMITTER_DATE:"2000-01-01T00:00:00Z"};

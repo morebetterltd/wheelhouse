@@ -3,13 +3,13 @@
 "use strict";
 const fs = require("node:fs");
 const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
+const { spawnSync } = require("./fixture-command.cjs");
 const columns = "pid=,ppid=,pgid=,stat=,lstart=,comm=";
 
 function readProcess(pid, run = spawnSync) {
   assert(Number.isSafeInteger(pid) && pid > 1, "child PID must be a real subject");
   const r = run("ps", ["-ww", "-p", String(pid), "-o", columns], {
-    encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" }, timeout: 5000, maxBuffer: 65536,
+    encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
   });
   const native = { status: r.status, signal: r.signal ?? null, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   if (r.error || native.signal || native.stderr) throw new Error(`incomplete child identity observation: ${JSON.stringify({ pid, ...native, error: r.error?.message })}`);

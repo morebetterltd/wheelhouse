@@ -49,6 +49,7 @@ run_herald_with_tmux() {
   WHEELHOUSE_HERALD_POKE_STABILITY_MS="${WHEELHOUSE_HERALD_POKE_STABILITY_MS:-20}" \
   WHEELHOUSE_HERALD_POKE_COOLDOWN_MS="${WHEELHOUSE_HERALD_POKE_COOLDOWN_MS:-500}" \
   WHEELHOUSE_HERALD_POKE_ESCALATE_MS="${WHEELHOUSE_HERALD_POKE_ESCALATE_MS:-500}" \
+  FAKE_TMUX_PANE_STAMPS="$(printf 'wh-demo:bridge.0\t%s' "$PROJ")" \
   WHEELHOUSE_HERALD_TMUX_SESSION=wh-demo WHEELHOUSE_HERALD_TMUX_PANE=wh-demo:bridge.0 PATH="$FIX/bin:$PATH" bun "$ROOT/seats/herald.ts" --once
 }
 run_herald_resolving_tmux() {
@@ -82,6 +83,16 @@ cat > "$FIX/bin/tmux" <<'EOF'
 set -u
 if [ "${1:-}" = "-L" ]; then shift 2; fi
 cmd="${1:-}"; shift || true
+[ -z "${FAKE_TMUX_CALLS_LOG:-}" ] || printf '%s\n' "$cmd" >> "$FAKE_TMUX_CALLS_LOG"
+pane_path(){
+  if [ -n "${FAKE_TMUX_MISSING_PANES:-}" ] && printf '%s\n' "$FAKE_TMUX_MISSING_PANES" | grep -xF >/dev/null "$target"; then return 1; fi
+  if [ -n "${FAKE_TMUX_PANE_PATHS:-}" ]; then
+    found="$(printf '%s\n' "$FAKE_TMUX_PANE_PATHS" | awk -v t="$target" -F '\t' '$1==t && !found++ {print substr($0, index($0,$2))}')"
+    [ -z "$found" ] || { printf '%s\n' "$found"; return; }
+  fi
+  printf '%s\n' "${FAKE_TMUX_PANE_PATH:-${WHEELHOUSE_HERALD_ROOT:-$PWD}}"
+}
+pane_mark(){ printf '%s\n' "${FAKE_TMUX_PANE_STAMPS:-}" | awk -v t="$target" -F '\t' '$1==t && !found++ {print substr($0, index($0,$2))}'; }
 case "$cmd" in
   display-message)
     fmt="${*: -1}"
@@ -90,13 +101,12 @@ case "$cmd" in
     for a in "$@"; do [ "$prev" = "-t" ] && target="$a"; prev="$a"; done
     case "$fmt" in
       '#{pane_current_command}') printf '%s\n' "${FAKE_TMUX_COMMAND:-claude}" ;;
-      '#{pane_current_path}')
-        if [ -n "${FAKE_TMUX_MISSING_PANES:-}" ] && printf '%s\n' "$FAKE_TMUX_MISSING_PANES" | grep -xF >/dev/null "$target"; then exit 1; fi
-        if [ -n "${FAKE_TMUX_PANE_PATHS:-}" ]; then
-          found="$(printf '%s\n' "$FAKE_TMUX_PANE_PATHS" | awk -v t="$target" -F '\t' '$1==t && !found++ {print substr($0, index($0,$2))}')"
-          [ -n "$found" ] && { printf '%s\n' "$found"; exit 0; }
-        fi
-        printf '%s\n' "${FAKE_TMUX_PANE_PATH:-${WHEELHOUSE_HERALD_ROOT:-$PWD}}" ;;
+      '#{pane_current_path}') pane_path ;;
+      '#{pane_current_path}	#{@wheelhouse_commander}')
+        p="$(pane_path)" || exit $?; printf '%s\t%s\n' "$p" "$(pane_mark)" ;;
+      '#{@wheelhouse_commander}') pane_mark ;;
+      '#{pane_id}') printf '%s\n' "$target" ;;
+      '#{session_name}') printf '%s\n' "${FAKE_TMUX_SESSION:-wh-demo}" ;;
       *) printf '%s\n' "${FAKE_TMUX_COMMAND:-claude}" ;;
     esac ;;
   capture-pane)
@@ -140,7 +150,16 @@ case "$cmd" in
 esac
 EOF
 chmod +x "$FIX/bin/bd"
+# Non-poke collection/daemon legs resolve targets too. Keep EVERY tmux
+# request on this fake, even when the worker inherited a live TMUX value.
+export PATH="$FIX/bin:$PATH" FAKE_TMUX_CALLS_LOG="$FIX/all-fake-tmux-calls.log"
 SEND_LOG="$FIX/send-keys.log"
+if bun "$SCRIPT_DIR/fixtures/commander-target.ts" "$SCRIPT_DIR" "$FIX/commander-target" "$FIX/bin/tmux"; then
+  pass 'claimed commander identity across all sources, fallback, headless surfaces and actual guard removals'
+else
+  fail 'commander identity consumer cases failed'
+fi
+if bun "$SCRIPT_DIR/fixtures/commander-docs.ts" "$ROOT"; then pass 'commander mark/claim/refusal/upgrade documentation and removals'; else fail 'commander documentation failed'; fi
 
 printf '%s\n' '{"type":"agent_end","messages":["rename retry settle"],"timestamp":"2026-09-10T00:00:00Z"}' > "$PROJ/seats/logs/rename-retry.jsonl"
 seed_log_cursor rename-retry.jsonl 0
@@ -441,24 +460,24 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run
 printf '{"paneId":"%%99","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic commander file target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_PATHS="$(printf '%%99\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%99\t%s' "$PROJ")" FAKE_TMUX_PANE_PATHS="$(printf '%%99\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -qx -- '-t %99 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "cockpit-file"' "$PROJ/seats/run/herald.target.json"; then pass "env unset with commander-pane.json resolves target and sends poke"
 else fail "commander-pane.json target did not poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic scan target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-PANES="$(printf '%%10\twh-other\tbridge\t0\t%s\n%%11\twh-Project\tbridge\t0\t%s\n%%12\twh-Project\tbridge\t1\t%s' "$PROJ" "$PROJ" "$PROJ")"
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%11\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
-if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "scan"' "$PROJ/seats/run/herald.target.json"; then pass "scan resolves case-different bridge pane 0 and sends poke"
+PANES="$(printf '%%10\twh-other\t%s\t%s\n%%11\twh-Project\t%s\t%s\n%%12\twh-Project\t\t%s' "$PROJ" "$PROJ" "$PROJ" "$PROJ" "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%11\t%s' "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%11\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "scan"' "$PROJ/seats/run/herald.target.json"; then pass "scan resolves a marked pane in the case-different preferred session and sends poke"
 else fail "scan target did not poke (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 mkdir -p "$PROJ/wheelhouse"; printf 'namespace=fixture-ns\n' > "$PROJ/wheelhouse/.template-source"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic namespace scan target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-PANES="$(printf '%%20\twh-project\tbridge\t0\t%s\n%%21\twh-fixture-ns\tbridge\t0\t%s' "$PROJ" "$PROJ")"
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%20\t%s\n%%21\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+PANES="$(printf '%%20\twh-project\t%s\t%s\n%%21\twh-Fixture-NS\t%s\t%s' "$PROJ" "$PROJ" "$PROJ" "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%20\t%s\n%%21\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_PANE_PATHS="$(printf '%%20\t%s\n%%21\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -qx -- '-t %21 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"target": "%21"' "$PROJ/seats/run/herald.target.json"; then pass "scan prefers .template-source namespace over directory basename"
 else fail "namespace scan did not prefer namespace session (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 rm -f "$PROJ/wheelhouse/.template-source"
@@ -467,7 +486,7 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run
 printf '{"paneId":"%%88","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic wrong root target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s' "$FIX/outside")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%88\t%s' "$PROJ")" FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s' "$FIX/outside")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
 LAST_POKED="$(node -e 'const fs=require("fs"); const f=process.argv[1]; const s=fs.existsSync(f)?JSON.parse(fs.readFileSync(f,"utf8")):{}; console.log(s.lastPokedInboxSize===undefined?"unset":s.lastPokedInboxSize)' "$PROJ/seats/herald.state.json")"
 if [ $RC -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 0 ] && grep -q 'poke refused .*reason=wrong-root .*target=%88 .*resolvedBy=cockpit-file' "$POKE_LOG" && grep -q '"status": "wrong-root"' "$PROJ/seats/run/herald.target.json" && [ "$LAST_POKED" = unset ]; then pass "wrong-root target is refused without send or lastPokedInboxSize"
 else fail "wrong-root target was not refused safely (rc=$RC out=$OUT sends=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) state=$(cat "$PROJ/seats/herald.state.json" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
@@ -476,17 +495,19 @@ rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run
 printf '{"paneId":"%%88","session":"wh-demo","root":"%s","writtenAt":"2026-01-01T00:00:00Z"}\n' "$PROJ" > "$PROJ/seats/run/commander-pane.json"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic stale commander file target"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-PANES="$(printf '%%11\twh-project\tbridge\t0\t%s' "$PROJ")"
-RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s\n%%11\t%s' "$FIX/outside" "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
+PANES="$(printf '%%11\twh-project\t%s\t%s' "$PROJ" "$PROJ")"
+RC=0; OUT="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$(printf '%%88\t%s\n%%11\t%s' "$PROJ" "$PROJ")" FAKE_TMUX_PANE_PATHS="$(printf '%%88\t%s\n%%11\t%s' "$FIX/outside" "$PROJ")" FAKE_TMUX_PANES="$PANES" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC=$?
 if [ $RC -eq 0 ] && grep -qx -- '-t %11 check the fleet inbox Enter' "$SEND_LOG" && grep -q '"resolvedBy": "scan"' "$PROJ/seats/run/herald.target.json"; then pass "stale commander-pane.json falls through to pane scan"
 else fail "stale commander-pane.json did not fall through to scan (rc=$RC out=$OUT send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none) target=$(cat "$PROJ/seats/run/herald.target.json" 2>/dev/null || echo none))"; fi
 
 rm -f "$PROJ/seats/inbox.jsonl" "$PROJ/seats/herald.state.json" "$PROJ/seats/run/herald.target.json" "$PROJ/seats/run/commander-pane.json" "$SEND_LOG" "$POKE_LOG"
 printf '%s\n' '{"type":"agent_end","messages":["synthetic target appears later"]}' > "$PROJ/seats/logs/worker-1.jsonl"
 seed_log_cursor worker-1.jsonl 0
-RC1=0; OUT1="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_MISSING_PANES='%77' FAKE_TMUX_PANES="$(printf '%%77\twh-demo\tbridge\t0\t%s' "$PROJ")" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC1=$?
-RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_MISSING_PANES='%77' FAKE_TMUX_PANES="$(printf '%%77\twh-demo\tbridge\t0\t%s' "$PROJ")" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC2=$?
-RC3=0; OUT3="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANES="$(printf '%%77\twh-demo\tbridge\t0\t%s' "$PROJ")" FAKE_TMUX_PANE_PATHS="$(printf '%%77\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC3=$?
+MISSING_SCAN="$(printf '%%77\twh-demo\t%s\t%s' "$PROJ" "$PROJ")"
+MISSING_STAMP="$(printf '%%77\t%s' "$PROJ")"
+RC1=0; OUT1="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$MISSING_STAMP" FAKE_TMUX_MISSING_PANES='%77' FAKE_TMUX_PANES="$MISSING_SCAN" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC1=$?
+RC2=0; OUT2="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$MISSING_STAMP" FAKE_TMUX_MISSING_PANES='%77' FAKE_TMUX_PANES="$MISSING_SCAN" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC2=$?
+RC3=0; OUT3="$(WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=0 FAKE_TMUX_COMMAND=bun FAKE_TMUX_PANE_STAMPS="$MISSING_STAMP" FAKE_TMUX_PANES="$MISSING_SCAN" FAKE_TMUX_PANE_PATHS="$(printf '%%77\t%s' "$PROJ")" FAKE_TMUX_CAPTURE_FILE="$ROOT/seats/fixtures/herald-panes/idle.txt" FAKE_TMUX_SEND_LOG="$SEND_LOG" run_herald_resolving_tmux 2>&1)" || RC3=$?
 if [ $RC1 -eq 0 ] && [ $RC2 -eq 0 ] && [ $RC3 -eq 0 ] && [ "$(line_count "$SEND_LOG")" = 1 ] && [ "$(grep -c 'poke refused .*reason=missing' "$POKE_LOG" 2>/dev/null || echo 0)" = 1 ] && ! grep -q 'poke escalated' "$POKE_LOG"; then pass "missing target is refused once and pending poke sends as soon as pane appears"
 else fail "missing target retry failed (rc=$RC1/$RC2/$RC3 out=$OUT1/$OUT2/$OUT3 send=$(cat "$SEND_LOG" 2>/dev/null || echo none) log=$(cat "$POKE_LOG" 2>/dev/null || echo none))"; fi
 
@@ -791,8 +812,8 @@ CURRENT_DAEMON_PID="$(cat "$PROJ/seats/run/herald.pid" 2>/dev/null || true)"
 [ -n "$CURRENT_DAEMON_PID" ] && DAEMON_PID="$CURRENT_DAEMON_PID"
 kill -9 "$DAEMON_PID" 2>/dev/null || true
 # Wait for the actual stopped process, not an arbitrary scheduling delay.
-for _ in $(seq 1 50); do kill -0 "$DAEMON_PID" 2>/dev/null || break; sleep 0.05; done
-if kill -0 "$DAEMON_PID" 2>/dev/null; then fail "herald stop deadline: PID $DAEMON_PID still exists before cockpit restart"; exit 1; fi
+printf 'FIXTURE_WAIT herald: native stopped-daemon absence, pid=%s\n' "$DAEMON_PID" >&2
+while kill -0 "$DAEMON_PID" 2>/dev/null; do sleep 0.05; done
 if ! restart_fixture_is_exclusive; then fail "competing supervisor appeared before cockpit restart"; exit 1; fi
 WHEELHOUSE_DESK_PORT="$HERALD_SELFTEST_DESK_PORT" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=500 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=500 PATH="$FIX/bin:$PATH" "$PROJ/seats/cockpit.sh" --herald demo > "$FIX/cockpit2.out" 2>&1
 RC=$?
@@ -826,28 +847,52 @@ SH
 chmod +x "$INTERVAL_BIN/bun"
 REAL_BUN="$(command -v bun)"
 INTERVAL_LOG="$FIX/interval-launches.log"; : > "$INTERVAL_LOG"
+# Keep the policy clock fixed, and join actual children before counting. No
+# wall-clock gap or 200ms scheduling allowance decides these interval checks.
+selftest_copy_seat_runtime "$INTERVAL_ROOT" "$ROOT/seats" || exit 2
+INTERVAL_NATIVE="$FIX/interval-native.jsonl"; : > "$INTERVAL_NATIVE"
+bun - "$INTERVAL_ROOT/seats/herald.ts" "$INTERVAL_NATIVE" <<'JS'
+import fs from 'node:fs'; import assert from 'node:assert/strict';
+const [file,ledger]=process.argv.slice(2); let source=fs.readFileSync(file,'utf8');
+const anchor='  child.unref();'; assert.equal(source.split(anchor).length,2,'native child join anchor');
+source=source.replace(anchor,`  child.ref();
+  child.once('error', error => { fs.appendFileSync(${JSON.stringify(ledger)},JSON.stringify({name,argv,pid:child.pid,error:error.message})+'\\n'); process.exitCode=1; });
+  child.once('close', (status,signal) => { fs.appendFileSync(${JSON.stringify(ledger)},JSON.stringify({name,argv,pid:child.pid,status,signal:signal??null})+'\\n'); if(status!==0 || signal)process.exitCode=1; });`);
+const header=source.startsWith('#!')?source.indexOf('\n')+1:0;
+const clock=`const FixtureDate=globalThis.Date; globalThis.Date=class extends FixtureDate { constructor(...args){ if(args.length)super(...args);else super('2026-01-01T00:00:00Z'); } static now(){return 1767225600000;} };\n`;
+fs.writeFileSync(file,source.slice(0,header)+clock+source.slice(header));
+JS
+INTERVAL_TICK=0
+run_interval_tick(){
+  INTERVAL_TICK=$((INTERVAL_TICK+1))
+  local rc=0
+  "$REAL_BUN" "$INTERVAL_ROOT/seats/herald.ts" --once > "$FIX/interval-$INTERVAL_TICK.out" 2> "$FIX/interval-$INTERVAL_TICK.err" || rc=$?
+  printf '%s\n' "$rc" > "$FIX/interval-$INTERVAL_TICK.rc"
+  [ "$rc" = 0 ] || fail "interval native tick $INTERVAL_TICK failed rc=$rc stderr=$(cat "$FIX/interval-$INTERVAL_TICK.err")"
+}
 unset WHEELHOUSE_ALERT_INTERVAL_MS WHEELHOUSE_STAFFING_INTERVAL_MS
-WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
-sleep 0.2
-WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
-sleep 0.2
+WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" run_interval_tick
+WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" run_interval_tick
 DEFAULT_ALERTS="$(grep -c ' alerts$' "$INTERVAL_LOG" || true)"; DEFAULT_STAFFING="$(grep -c ' staffing$' "$INTERVAL_LOG" || true)"
 [ "$DEFAULT_ALERTS" = 1 ] && [ "$DEFAULT_STAFFING" = 1 ] && pass "unset herald alert/staffing intervals use defaults instead of relaunching immediately" || fail "default interval counts alerts=$DEFAULT_ALERTS staffing=$DEFAULT_STAFFING log=$(cat "$INTERVAL_LOG")"
-WHEELHOUSE_ALERT_INTERVAL_MS= WHEELHOUSE_STAFFING_INTERVAL_MS= WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
-sleep 0.2
+WHEELHOUSE_ALERT_INTERVAL_MS= WHEELHOUSE_STAFFING_INTERVAL_MS= WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" run_interval_tick
 EMPTY_ALERTS="$(grep -c ' alerts$' "$INTERVAL_LOG" || true)"; EMPTY_STAFFING="$(grep -c ' staffing$' "$INTERVAL_LOG" || true)"
 [ "$EMPTY_ALERTS" = 1 ] && [ "$EMPTY_STAFFING" = 1 ] && pass "empty herald alert/staffing intervals use defaults instead of relaunching immediately" || fail "empty interval counts alerts=$EMPTY_ALERTS staffing=$EMPTY_STAFFING log=$(cat "$INTERVAL_LOG")"
 rm -f "$INTERVAL_ROOT/seats/pool.json"
-WHEELHOUSE_ALERT_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
-sleep 0.2
-WHEELHOUSE_ALERT_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
-sleep 0.2
+WHEELHOUSE_ALERT_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" run_interval_tick
+WHEELHOUSE_ALERT_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" run_interval_tick
 printf '{"roles":{"worker":{"min":1,"max":1,"entries":["local"]}},"entries":{"local":{"provider":"codex","app":"openai-codex","auth":"oauth","model":"gpt-5.5"}},"check_interval_seconds":60}
 ' > "$INTERVAL_ROOT/seats/pool.json"
-WHEELHOUSE_STAFFING_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
-sleep 0.2
-WHEELHOUSE_STAFFING_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" "$REAL_BUN" "$ROOT/seats/herald.ts" --once >/dev/null 2>&1
-sleep 0.2
+WHEELHOUSE_STAFFING_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" run_interval_tick
+WHEELHOUSE_STAFFING_INTERVAL_MS=0 WHEELHOUSE_HERALD_ROOT="$INTERVAL_ROOT" WHEELHOUSE_HERALD_INTERVAL_MS=50 PATH="$INTERVAL_BIN:$FIX/bin:$PATH" INTERVAL_LOG="$INTERVAL_LOG" run_interval_tick
+bun - "$FIX" "$INTERVAL_NATIVE" <<'JS'
+import fs from 'node:fs'; import path from 'node:path'; import assert from 'node:assert/strict';
+const [root,file]=process.argv.slice(2),children=fs.readFileSync(file,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse),ticks=[];
+for(let i=1;i<=7;i++){const native={tick:i,status:Number(fs.readFileSync(path.join(root,`interval-${i}.rc`),'utf8')),stdout:fs.readFileSync(path.join(root,`interval-${i}.out`),'utf8'),stderr:fs.readFileSync(path.join(root,`interval-${i}.err`),'utf8')};ticks.push(native);assert.equal(native.status,0,native.stderr);}
+assert.equal(children.length,6,'all six actual clock jobs must be observed'); for(const child of children){assert.equal(child.status,0);assert.equal(child.signal,null);assert(!child.error);}
+console.log('CAPTURE herald interval native completion '+JSON.stringify({clock:'2026-01-01T00:00:00Z',ticks,children}));
+JS
+[ "$?" = 0 ] || fail "interval native completion/EOF observation failed"
 ZERO_ALERTS="$(grep -c ' alerts$' "$INTERVAL_LOG" || true)"; ZERO_STAFFING="$(grep -c ' staffing$' "$INTERVAL_LOG" || true)"
 [ "$ZERO_ALERTS" -ge 3 ] && [ "$ZERO_STAFFING" -ge 3 ] && pass "explicit zero herald alert/staffing intervals are honoured" || fail "zero interval counts alerts=$ZERO_ALERTS staffing=$ZERO_STAFFING log=$(cat "$INTERVAL_LOG")"
 
@@ -856,26 +901,35 @@ mkdir -p "$ROOT_GONE/seats/logs" "$ROOT_GONE/seats/run"
 printf '%s\n' '{"logs":{},"seen":[],"alerts":{"lastCheckAt":"2999-01-01T00:00:00Z"},"staffing":{"lastCheckAt":"2999-01-01T00:00:00Z"}}' > "$ROOT_GONE/seats/herald.state.json"
 WHEELHOUSE_HERALD_ROOT="$ROOT_GONE" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_HERALD_POKE_STABILITY_MS=20 WHEELHOUSE_HERALD_POKE_COOLDOWN_MS=20 WHEELHOUSE_HERALD_POKE_ESCALATE_MS=20 bun "$ROOT/seats/herald.ts" > "$FIX/root-gone.out" 2> "$FIX/root-gone.err" &
 ROOT_GONE_PID=$!
-# PID publication follows fixture-owner validation and lock acquisition. Do not
-# delete the root while the child is still starting; a safety cap is a failure.
+# PID publication follows fixture-owner validation and lock acquisition. The
+# native record/exit decides; keep both ps channels and their status separately.
 wait_root_gone_event(){
-  with_timeout 120 bash -c '
-    mode="$1"; pid="$2"; file="$3"
-    while kill -0 "$pid" 2>/dev/null; do
-      state="$(ps -p "$pid" -o stat= 2>/dev/null)" || state=""
+  bash -c '
+    mode="$1"; pid="$2"; file="$3"; capture="$4"
+    printf "FIXTURE_WAIT root-gone: mode=%s pid=%s file=%s\n" "$mode" "$pid" "$file" >&2
+    while :; do
+      rc=0; ps -p "$pid" -o stat= > "$capture.stdout" 2> "$capture.stderr" || rc=$?
+      printf "%s\n" "$rc" > "$capture.rc"
+      state="$(<"$capture.stdout")"
+      [ ! -s "$capture.stderr" ] || { cat "$capture.stderr" >&2; exit 2; }
+      case "$rc" in
+        0) [ -n "$state" ] || exit 2;;
+        1) [ -z "$state" ] || exit 2; [ "$mode" = exit ]; exit $?;;
+        *) exit 2;;
+      esac
       case "$state" in *Z*) [ "$mode" = exit ]; exit $?;; esac
-      if [ "$mode" = ready ] && [ -n "$state" ] && [ -s "$file" ] && IFS= read -r advertised < "$file" && [ "$advertised" = "$pid" ]; then exit 0; fi
+      if [ "$mode" = ready ] && [ -s "$file" ] && IFS= read -r advertised < "$file" && [ "$advertised" = "$pid" ]; then exit 0; fi
       sleep 0.05
     done
-    [ "$mode" = exit ]
-  ' root-gone-event "$1" "$ROOT_GONE_PID" "$ROOT_GONE/seats/run/herald.pid"
+  ' root-gone-event "$1" "$ROOT_GONE_PID" "$ROOT_GONE/seats/run/herald.pid" "$FIX/root-gone-$1-native-ps"
 }
 if ! wait_root_gone_event ready; then
-  fail "root-gone herald did not publish its live PID before the startup safety cap (err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
+  fail "root-gone herald exited or its native observation failed before PID publication (err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
   selftest_stop_herald_child "$ROOT_GONE_PID"
 else
   DELETE_RC=0
-  with_timeout 120 bash -c 'while [ -e "$1" ]; do rm -rf "$1" 2>/dev/null; [ ! -e "$1" ] || sleep 0.05; done' remove-fixture-root "$ROOT_GONE" || DELETE_RC=$?
+  printf 'FIXTURE_WAIT herald: owned fixture root removal, path=%s\n' "$ROOT_GONE" >&2
+  bash -c 'while [ -e "$1" ]; do rm -rf "$1"; [ ! -e "$1" ] || sleep 0.05; done' remove-fixture-root "$ROOT_GONE" || DELETE_RC=$?
   if [ "$DELETE_RC" != 0 ] || [ -e "$ROOT_GONE" ]; then
     fail "fixture root-gone directory could not be removed before disappearance assertion"
     selftest_stop_herald_child "$ROOT_GONE_PID"
@@ -888,6 +942,16 @@ else
     fail "herald did not exit after project root disappeared (pid=$ROOT_GONE_PID out=$(cat "$FIX/root-gone.out" 2>/dev/null) err=$(cat "$FIX/root-gone.err" 2>/dev/null))"
     selftest_stop_herald_child "$ROOT_GONE_PID"
   fi
+fi
+
+if bun "$SCRIPT_DIR/fixtures/herald-heartbeat.ts" "$FIX" "$SCRIPT_DIR"; then
+  pass "completed-scan heartbeat, tmux hold, write budget and real removal controls"
+else
+  fail "heartbeat consumer/controls failed"
+fi
+
+if [ -n "${WHEELHOUSE_QJGW_EVIDENCE:-}" ] && [ -f "$FAKE_TMUX_CALLS_LOG" ]; then
+  cp -f "$FAKE_TMUX_CALLS_LOG" "$WHEELHOUSE_QJGW_EVIDENCE/all-fake-tmux-calls.log"
 fi
 
 if [ $FAIL -eq 0 ]; then

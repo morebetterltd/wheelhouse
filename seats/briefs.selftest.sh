@@ -26,4 +26,8 @@ for layout in template installed; do
   [ "$SELECTED" = all ] || [ "$SELECTED" = "$layout" ] || continue
   bun "$FIX/check.ts" "$IMPL" "$FIX/$layout" "$layout" "$FIX/installed/seats/seats.json"
 done
+if [ "$SELECTED" = all ]; then
+  bun "$HERE/fixtures/producer-briefs.ts" "$IMPL" "$FIX/skills" "$HERE/.."
+  bun "$HERE/fixtures/producer-docs.ts" "$HERE/.." "$FIX/producer-docs"
+fi
 echo "briefs.selftest: PASS ($SELECTED)"

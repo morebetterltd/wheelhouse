@@ -136,6 +136,10 @@ for (const name of cases.filter(x => selected === 'all' || x === selected)) {
       assert.equal(branch, 'fleet/' + task, 'prepared worktree must be on the task branch');
       assert(listing.includes('worktree ' + named + '\n') && listing.includes('branch refs/heads/fleet/' + task + '\n'));
       assert(prompt.message.includes('Branch: fleet/' + task), 'brief must name the prepared branch');
+      const scratchLine = `Scratch root for bead ${task}: ${path.join(project,'.wheelhouse-runs',task)}${path.sep}`;
+      assert(prompt.message.split('\n').includes(scratchLine),'actual dispatch must carry the exact install scratch root');
+      assert.equal(readState().seats[seat].lastPrompt,prompt.message,'recorded prompt must equal the actual seat message');
+      console.log('SCRATCH_DISPATCH '+JSON.stringify({case:name,scratchLine,stateMatches:true,actualCwd:prompt.actualCwd}));
     }
     console.log('PASS dispatch-worktree ' + name);
   } catch (error) { failures++; console.error('CASE_ASSERTION ' + name); console.error(error); }

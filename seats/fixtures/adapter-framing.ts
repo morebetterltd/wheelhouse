@@ -5,7 +5,7 @@ import path from 'node:path';
 import net from 'node:net';
 import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync } from "./fixture-command.cjs";
 const sha=(b:Uint8Array)=>crypto.createHash('sha256').update(b).digest('hex');
 function trace(event:object){fs.appendFileSync(path.join(process.env.WHEELHOUSE_FRAMING_TRACE!,'events.jsonl'),JSON.stringify({role:process.env.WHEELHOUSE_FRAMING_ROLE,pid:process.pid,...event})+'\n');}
 export function traceWrite(rec:any,obj:any,line:Buffer,offset:number,write:()=>number):number{

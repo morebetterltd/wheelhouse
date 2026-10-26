@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import os from "node:os";
+import { spawnSync } from "./fixture-command.cjs";
 import { acquirePidLock, releasePidLock } from "../lock";
 import conditionWait from './wait-for-condition.cjs';
 const { waitForCondition } = conditionWait;
@@ -18,16 +18,23 @@ const lockFile = path.join(root, "seats/state.lock");
 assert(["ab", "ba"].includes(order));
 const names = order === "ba" ? ["worker-b", "worker-a"] : ["worker-a", "worker-b"];
 console.log(`stop commit order: ${names.join(" then ")}`);
-// Deliberate commit latency holds the second peer past the old incidental 5s
-// RPC-test override. This is a regression input, not an elapsed-time verdict.
-const firstCommitDelayMs = Number(process.env.WHEELHOUSE_ADAPTER_STATE_FIRST_COMMIT_DELAY_MS ?? 6000);
+// Ordering is driven by release/exit/commit events, not an artificial sleep.
+const firstCommitDelayMs = Number(process.env.WHEELHOUSE_ADAPTER_STATE_FIRST_COMMIT_DELAY_MS ?? 0);
 assert(Number.isSafeInteger(firstCommitDelayMs) && firstCommitDelayMs >= 0 && firstCommitDelayMs <= 10000);
 console.log("ADAPTER_STATE_AMBIENT " + JSON.stringify({ order, nice: os.getPriority(0), cores: os.cpus().length, load: os.loadavg(), firstCommitDelayMs }));
 const peers: ReturnType<typeof Bun.spawn>[] = [];
 const stops: ReturnType<typeof Bun.spawn>[] = [];
 const records: Record<string, any> = {};
 const token = randomUUID();
-const write = (name: string) => fs.writeFileSync(path.join(dir, name), "release\n");
+const write = (name: string) => {
+  const index = names.findIndex(seat => name === `${seat}.release`), peer = peers[index];
+  if (peer && peer.exitCode === null) {
+    try { peer.send({ type: "release", token, name: names[index] }); }
+    catch (error: any) { console.error("ADAPTER_STATE_RELEASE_IPC " + JSON.stringify({ name, error: error.message })); }
+  }
+  // Durable event also covers cleanup, closed IPC and already-published input.
+  fs.writeFileSync(path.join(dir, name), "release\n");
+};
 const read = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));
 function saveEvidence(suffix = "") {
   const evidence = process.env.WHEELHOUSE_ADAPTER_STATE_EVIDENCE;
@@ -90,12 +97,14 @@ function native(command: string, args: string[]): string {
 function spawn(args: string[], cwd: string, label: string) {
   const env = { ...process.env,
     WHEELHOUSE_STATE_WRITE_DELAY_MS: label === `stop-${names[0]}` ? String(firstCommitDelayMs) : "0" };
-  // The second peer intentionally waits for the first stop's commit. Exercise
-  // the unchanged product default, not an incidental RPC-test shutdown grace.
-  delete env.WHEELHOUSE_RPC_TIMEOUT_MS;
+  if (label.startsWith("stop-") && process.env.WHEELHOUSE_ADAPTER_STATE_ORDER_CONTROL !== "1") {
+    // Positive order legs hold a peer across the first commit; fixture grace covers that scheduling window, not the product's 20s policy.
+    env.WHEELHOUSE_RPC_TIMEOUT_MS = "60000";
+  } else delete env.WHEELHOUSE_RPC_TIMEOUT_MS;
   const child = Bun.spawn(["bun", ...args], {
     cwd, env,
     stdin: "ignore", stdout: Bun.file(path.join(dir, `${label}.out`)), stderr: Bun.file(path.join(dir, `${label}.err`)),
+    ...(label.startsWith("stop-") ? {} : { ipc() {} }),
   });
   fs.writeFileSync(path.join(dir, `${label}.spawn.json`), JSON.stringify({ pid: child.pid, args, cwd,
     rpcTimeoutOverride: env.WHEELHOUSE_RPC_TIMEOUT_MS ?? null, stateWriteDelayMs: Number(env.WHEELHOUSE_STATE_WRITE_DELAY_MS) }));

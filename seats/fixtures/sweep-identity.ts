@@ -4,7 +4,8 @@ import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 const [root, helper, runner] = process.argv.slice(2);
 // Exact current-main helper captured at 76bd232 (blob 3805817f...).
 const oldHelper = path.join(import.meta.dir, "sweep-lock-v1.ts");

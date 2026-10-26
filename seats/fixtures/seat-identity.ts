@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const root = process.argv[2], seats = path.join(root, "seats"), bin = path.join(root, "bin");
 for (const p of [bin, path.join(seats, "run"), path.join(seats, "logs"), path.join(root, "wheelhouse")]) fs.mkdirSync(p, { recursive: true });
@@ -31,8 +32,11 @@ function check(name: string, fn: () => void) {
   try { fn(); console.log("PASS identity: " + name); } catch (e: any) { failures++; console.error("FAIL identity: " + name + ": " + e.message); }
 }
 try {
-  const deadline = Date.now() + 120000;
-  while (!fs.existsSync(ready) && holder.exitCode === null && Date.now() < deadline) await Bun.sleep(25);
+  console.error(`FIXTURE_WAIT seat identity: holder readiness, pid=${holder.pid}, file=${ready}`);
+  while (!fs.existsSync(ready)) {
+    assert.equal(holder.exitCode, null, "holder exited before readiness"); assert.equal(holder.signalCode, null, "holder signalled before readiness");
+    await Bun.sleep(25);
+  }
   assert.equal(Number(fs.readFileSync(ready, "utf8")), holder.pid, "holder readiness names the exact live child");
   const birth = command(ps, ["-p", String(holder.pid), "-o", "lstart="]);
   console.log("CAPTURE identity holder " + JSON.stringify({ pid: holder.pid, status: birth.status, signal: birth.signal, stdout: birth.stdout, stderr: birth.stderr }));

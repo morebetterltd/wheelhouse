@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 const [here, root] = process.argv.slice(2);
 assert(fs.statSync(here).isDirectory() && fs.statSync(root).isDirectory());
 const helper = "seat-settled.ts", alerts = "alerts.ts";

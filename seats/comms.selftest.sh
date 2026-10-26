@@ -28,6 +28,12 @@ cat > "$ROOT/seats/channels.json" <<'JSON'
   }
 }
 JSON
+# Literal docs-derived Slack payloads: no live workspace or recorded-incident claim.
+if bun "$HERE/fixtures/slack-readback.ts" "$HERE" "$FIX/slack-readback" "$ROOT/seats/transports/slack.ts"; then
+  pass 'Slack channel/ts and entity-equivalent content verify; missing/changed messages and removals reject'
+else
+  fail 'Slack docs-derived read-back cases failed'
+fi
 cat > "$FIX/server.ts" <<'TS'
 import * as fs from "node:fs";
 const dir=process.env.STUB_DIR!; let msg=0;

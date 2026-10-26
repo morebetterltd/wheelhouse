@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 
 const [moduleFile, root] = process.argv.slice(2);
 assert.ok(moduleFile && fs.statSync(moduleFile).isFile(), "lock module must exist");

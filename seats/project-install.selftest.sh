@@ -29,6 +29,7 @@ mkdir -p "$INSTALL/wheelhouse/evidence" "$INSTALL/seats/fixtures"
 printf 'Install-owned evidence lives here.\n' > "$INSTALL/wheelhouse/evidence/README.txt"
 selftest_copy_seat_runtime "$INSTALL" "$HERE" || exit 2
 cp -f "$HERE/evidence-scrub.selftest.sh" "$INSTALL/seats/" || exit 2
+cp -f "$HERE/fixtures/fixture-command.cjs" "$INSTALL/seats/fixtures/" || exit 2
 cp -R "$HERE/fixtures/walk" "$HERE/fixtures/verify-real" "$INSTALL/seats/fixtures/" || exit 2
 git -C "$INSTALL" init -q -b main
 git -C "$INSTALL" commit --allow-empty -qm 'project install fixture'

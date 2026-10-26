@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./fixture-command.cjs";
 const [base, seats] = process.argv.slice(2);
 assert(fs.statSync(path.join(base, ".wheelhouse-selftest-fixture")).isFile());
 const fixture = import.meta.dir, preload = path.join(fixture, "cleanup-host-preload.ts"), probe = path.join(fixture, "cleanup-host-probe.ts");

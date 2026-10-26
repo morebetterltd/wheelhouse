@@ -81,7 +81,7 @@ TEMPLATE=$(template_root)
 if [ "${WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY:-0}" = 1 ]; then printf '%s\n' "$TEMPLATE"; exit 0; fi
 # Source/cache-only probes use tiny repositories and do not consume BASELINE.
 # Refuse a missing baseline before allocating fixtures or running any cases.
-if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then
+if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && [ "${WHEELHOUSE_UPGRADE_SKILLS_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then
   printf 'STOP: upgrade selftest baseline "%s" is missing from template history; fetch complete public history or set WHEELHOUSE_UPGRADE_SELFTEST_BASELINE to an available old-install commit\n' "$BASELINE" >&2
   exit 2
 fi
@@ -332,6 +332,17 @@ producer_migration_tests() (
   done
 )
 
+skills_tests() {
+  mkdir -p "$TMP/skills fixture"
+  bun "$TEMPLATE/seats/fixtures/upgrade-skills.ts" "$TEMPLATE" "$TMP/skills fixture" || fail "printed skills recipes or owner signal command failed"
+  pass "skills recipes: fresh upgrade, repeat, preserved product manuals, refusal, install, scoped readback and owner command (bash/zsh)"
+}
+if [ "${WHEELHOUSE_UPGRADE_SKILLS_ONLY:-0}" = 1 ]; then
+  skills_tests
+  echo "upgrade-runbook.selftest: PASS (skills only; no adapter leg)"
+  exit 0
+fi
+
 if [ "${WHEELHOUSE_UPGRADE_PRODUCER_ONLY:-0}" = 1 ]; then
   producer_migration_tests
   echo "upgrade-runbook.selftest: PASS (producer migration only: ${WHEELHOUSE_UPGRADE_PRODUCER_CASE:-all}; no adapter leg)"
@@ -339,6 +350,7 @@ if [ "${WHEELHOUSE_UPGRADE_PRODUCER_ONLY:-0}" = 1 ]; then
 fi
 # Installed history fixtures may resolve a source predating this migration.
 if [ "$TEMPLATE" = "$ROOT" ]; then
+  skills_tests
   bun "$ROOT/seats/fixtures/upgrade-baseline.ts" "$ROOT" "$TMP"
   pass "default baseline is public old-install shape; missing baseline refuses before fixture setup (negative controls detected)"
   cache_recovery_tests
@@ -742,7 +754,12 @@ printf '%s\n' "$SEAT_ENV_OUT" | grep >/dev/null 'CLAUDE_CONFIG_DIR' || fail "sea
 hrun probe worker-a; [ "$HRC" -eq 0 ] && [ "$HOUT" = OK ] || fail "claude-code binding probe failed: $HOUT"
 hrun reset worker-a; [ "$HRC" -eq 0 ] || fail "claude-code reset failed: $HOUT"
 hrun dispatch worker-a smoke-a 'Smoke check after harness switch: reply OK and stop.'; [ "$HRC" -eq 0 ] || fail "claude-code smoke dispatch failed: $HOUT"
-for i in $(seq 1 50); do grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl" && break; sleep 0.1; done
+printf 'FIXTURE_WAIT upgrade runbook: actual worker-a smoke response\n' >&2
+while ! grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl"; do
+  HARNESS_SMOKE_PID="$(hstate worker-a pid)"
+  [ -n "$HARNESS_SMOKE_PID" ] && kill -0 "$HARNESS_SMOKE_PID" 2>/dev/null || break
+  sleep 0.1
+done
 grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl" || fail "claude-code smoke dispatch did not complete OK"
 [ "$(hstate worker-b pid)" = "$B_PID_BEFORE" ] && [ "$(hstate worker-b sessionFile)" = "$B_SESS_BEFORE" ] || fail "switching worker-a touched worker-b state/session"
 # Switch back to pi, again without touching worker-b.

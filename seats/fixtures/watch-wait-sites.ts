@@ -15,6 +15,7 @@ const sites = [
   ['adapter-rpc.fileSignal','fixtures/adapter-rpc.ts','signal'],
   ['adapter-state.barrier','fixtures/adapter-state.ts','signal'],
   ['adapter-state-peer.release','fixtures/adapter-state-peer.ts','release'],
+  ['adapter-state-order-hold.release','fixtures/adapter-state-order-hold.ts','release'],
   ['runtime-copy-source.ready','fixtures/runtime-copy-source.ts','signal'],
   ['adapter.stub.held','adapter.selftest.sh','release'],
   ['concurrency.stub.release','concurrency.selftest.sh','release'],

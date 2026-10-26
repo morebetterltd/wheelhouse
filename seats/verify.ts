@@ -79,13 +79,13 @@
  */
 
 import * as crypto from "node:crypto";
-import { checkBeadContract, contractRemedy, parseContract, repoDeclarations } from "./contract";
+import { checkBeadContract, contractRemedy, parseContract, repoDeclarations, type Contract } from "./contract";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
-import { resolveRoleBrief } from "./briefs";
+import { resolveRoleBrief, scratchPromptLines } from "./briefs";
 import { parseQuarantine, type QuarantineEntry } from "./quarantine";
 import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { heavyTestEntry } from "./heavy-test-entry";
@@ -976,11 +976,17 @@ function accountDirFor(name: string, reject: (message: string) => never = die): 
 /** Shared author-account gate; default reviewer behavior and canary anchor stay intact. */
 export function requireDistinctAccount(authorSeat: string, reviewerSeat: string, accountDir: string,
   reject: (message: string) => never = die, role = "reviewer"): string {
-  const authorDir = canonicalDir(accountDirFor(authorSeat, reject));
+  return requireDifferentAccountDirs(authorSeat, accountDirFor(authorSeat, reject), reviewerSeat, accountDir, reject, role);
+}
+
+/** Compare a recorded account, not a possibly changed live roster entry. */
+export function requireDifferentAccountDirs(authorSeat: string, authorAccountDir: string, reviewerSeat: string, accountDir: string,
+  reject: (message: string) => never = die, role = "reviewer", authorRole = "author"): string {
+  const authorDir = canonicalDir(authorAccountDir);
   const reviewerDir = canonicalDir(accountDir);
   if (authorDir === reviewerDir) { // distinctness-gate
     reject(
-      `${role} seat "${reviewerSeat}" and author seat "${authorSeat}" resolve to the SAME account directory:\n` +
+      `${role} seat "${reviewerSeat}" and ${authorRole} seat "${authorSeat}" resolve to the SAME account directory:\n` +
         `        ${reviewerDir}\n` +
         `      Same directory means same auth.json means same account, and a verdict\n` +
         `      from the author's own account is not a verdict. Nothing was spawned.`
@@ -1038,6 +1044,37 @@ function claudeOauthIsIdentity(configDir: string): boolean {
     return false;
   }
 }
+export interface ReviewRecord {
+  bead: string; branch: string; tip: string; verdict: "APPROVE" | "BOUNCE" | "DISCOVER";
+  push: string; reviewerSeat: string; reviewerDir: string; at: string;
+}
+
+/** Only the completed dispatcher header is a verdict. Output/sweep prose is not. */
+export function readReviewRecord(root: string, beadId: string): ReviewRecord | null {
+  if (!beadId || beadId === "." || beadId === ".." || /[\\/\s'"`]/.test(beadId)) return null;
+  const file = path.join(root, "seats", "verdicts", `${beadId}.md`);
+  let text: string;
+  try { if (!fs.lstatSync(file).isFile()) return null; text = fs.readFileSync(file, "utf8"); } catch { return null; }
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines[0] !== `# Verdict — bead ${beadId}`) return null;
+  const fields = new Map<string, string>();
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue;
+    const m = /^- ([a-z-]+): (.*)$/.exec(line);
+    if (!m) break;
+    const key = m[1] === "verifier-seat" ? "reviewer-seat" : m[1];
+    if (fields.has(key)) return null;
+    fields.set(key, m[2]);
+  }
+  const tip = fields.get("tip"), shown = fields.get("verdict"), seatLine = fields.get("reviewer-seat");
+  const verdict = shown?.split(/\s+/)[0];
+  const seat = seatLine && /^(\S+) \((.+)\)$/.exec(seatLine);
+  if (!tip || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(tip) || !["APPROVE", "BOUNCE", "DISCOVER"].includes(verdict ?? "") || !seat) return null;
+  if (fields.get("bead") !== beadId || !fields.get("branch") || !fields.get("push") || !fields.get("at") || !Number.isFinite(Date.parse(fields.get("at")!))) return null;
+  return { bead: beadId, branch: fields.get("branch")!, tip, verdict: verdict as ReviewRecord["verdict"], push: fields.get("push")!,
+    reviewerSeat: seat[1], reviewerDir: seat[2], at: fields.get("at")! };
+}
+
 function authRouteIdentity(name: string, entry: SeatEntry, authFile: string, harness: HarnessName, accountDir: string): boolean {
   const route = entry.account?.authRoute;
   if (route === "env") {
@@ -1256,6 +1293,57 @@ function tierGit(root: string, ...args: string[]): Buffer {
   const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete env[key];
   return execFileSync("git", ["--no-replace-objects", "-C", root, ...args], { env, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 });
+}
+interface ManualReviewContext {
+  base: string;
+  baseRef: string;
+  files: string[];
+  outcomes: { id: string; surface: string }[];
+}
+function manualReviewContext(root: string, tip: string, contract: Contract): ManualReviewContext {
+  const resolve = (ref: string): string | null => {
+    try { return tierGit(root, "rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`).toString().trim() || null; }
+    catch { return null; }
+  };
+  // Dispatch's available integration/install-base ordering, using the contract
+  // already read by the gate rather than another bd read or rendered claim.
+  const candidates: string[] = [], integration = contract.integration.match(/^[^\s`'"]+/)?.[0];
+  if (integration) {
+    if (!integration.includes("/") || !resolve(integration)) candidates.push(`origin/${integration}`);
+    candidates.push(integration);
+  }
+  if (process.env.WHEELHOUSE_WORKTREE_BASE) candidates.push(process.env.WHEELHOUSE_WORKTREE_BASE);
+  let recorded = "";
+  try { recorded = fs.readFileSync(path.join(ROOT, "wheelhouse/.template-source"), "utf8").match(/^merge-target=(\S+)/m)?.[1] ?? ""; } catch {}
+  if (recorded) { if (!recorded.includes("/")) candidates.push(`origin/${recorded}`); candidates.push(recorded); }
+  try { candidates.push(tierGit(root, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD").toString().trim()); } catch {}
+  candidates.push("origin/main", "origin/master", "main", "master");
+  const baseRef = candidates.find(ref => ref && resolve(ref));
+  if (!baseRef) throw new Error("cannot establish a comparison base for manual scope");
+  const base = tierGit(root, "merge-base", resolve(baseRef)!, tip).toString().trim();
+  // A trailing-slash wildcard alone does not select descendants. Explicit glob
+  // + NUL records includes deleted paths and both sides of an in-tree rename.
+  const files = tierGit(root, "diff", "--name-only", "--no-renames", "-z", base, tip, "--", ":(glob).agents/skills/verify-*/**")
+    .toString().split("\0").filter(Boolean).sort();
+  const featureSurface = /(?:^|[\/\s`"'(])features\/[^\s`"')]+/;
+  const skillSurface = /(?:^|[\/\s`"'(])verify-[^/\s`"'()]+\/SKILL\.md(?=$|[\s`"'),;])/;
+  const outcomes = contract.outcomes.filter(o => featureSurface.test(o.surface) || skillSurface.test(o.surface))
+    .map(({ id, surface }) => ({ id, surface }));
+  return { base, baseRef, files, outcomes };
+}
+function manualScopeLists(context: ManualReviewContext): string[] {
+  if (!context.files.length) return [];
+  return [
+    `Manual files changed by this branch: ${JSON.stringify(context.files)}.`,
+    `Contract outcomes that call for manual or map changes: ${context.outcomes.length ? JSON.stringify(context.outcomes) : "none"}.`,
+  ];
+}
+function manualScopePrompt(context: ManualReviewContext): string[] {
+  if (!context.files.length) return [];
+  return ["", ...manualScopeLists(context),
+    `Manual comparison base: ${context.base} (${JSON.stringify(context.baseRef)}).`,
+    `A changed file no outcome calls for is a scope defect; see REVIEWER.md "The manual is not the author's to bend". These lists are context, not permission: judge the file/feature relationship against the contract and inspect the base-to-tip changed lines.`,
+  ];
 }
 function tierInventory(root: string, tip: string): string[] {
   return tierGit(root, "ls-tree", "-r", "-z", "--name-only", tip, "--", "seats").toString().split("\0")
@@ -1713,11 +1801,12 @@ async function main(): Promise<void> {
   if (promotionArg) validateSegment("promotion comment id", promotionArg);
   const contract = checkBeadContract(ROOT, beadId);
   refuseUncontractedReview(beadId, contract.errors); // contract-gate: before reviewer identity or harness spawn
+  const parsedWorkContract = parseContract(contract.text ?? "");
   const claim = [
     beadClaim(beadId),
     ``,
     `Parsed work contract (validated before reviewer spawn):`,
-    JSON.stringify(parseContract(contract.text ?? ""), null, 2),
+    JSON.stringify(parsedWorkContract, null, 2),
   ].join("\n");
   const repoRoot = resolveRepoRoot(repoArg, claim);
   if (path.resolve(repoRoot) !== path.resolve(earlyRepoRoot)) sweepStaleScratchWorktrees(repoRoot);
@@ -1778,6 +1867,7 @@ async function main(): Promise<void> {
   }
 
   const promotion = promotionArg ? readFallbackPromotion(beadId, reviewerSeat, tip, promotionArg) : undefined;
+  const manualScope = manualReviewContext(repoRoot, tip, parsedWorkContract);
 
   // --- evidence floor checks, against the SHA the verdict is about ----------
   const evidence = checkEvidence(repoRoot, tip, evidencePaths);
@@ -1829,10 +1919,12 @@ async function main(): Promise<void> {
     `Branch under review: ${branch}`,
     `Branch repository: ${repoRoot}`,
     `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT)`,
+    ...scratchPromptLines(ROOT, beadId),
     `Tip SHA at dispatch: ${tip}`,
     `Author seat: ${authorSeat} (account-distinctness from you was asserted before this spawn)`,
     ``,
     claim,
+    ...manualScopePrompt(manualScope),
     ...(promotion ? [
       `Referenced per-outage promotion: bead ${beadId}, comment ${promotion.commentId}, recorded actor ${promotion.author}, reviewer ${reviewerSeat}, tip ${tip}.`,
       `This is a FALLBACK GATE, not a SHADOW verdict. The full REVIEWER.md contract and all ordinary evidence/account/sweep gates still apply.`,
@@ -2057,6 +2149,8 @@ async function main(): Promise<void> {
         `- branch: ${branch}`,
         `- branch-repo: ${repoRoot}`,
         `- tip: ${tip}`,
+        ...manualScopeLists(manualScope).map(line => `- ${line}`),
+        ...(manualScope.files.length ? [`- manual-diff-base: ${manualScope.base} (${JSON.stringify(manualScope.baseRef)})`] : []),
         `- author-seat: ${authorSeat}`,
         `- verifier-seat: ${reviewerSeat} (${reviewerDir})`,
         ...(promotion ? [

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 set -uo pipefail
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
@@ -62,6 +63,19 @@ case "${GH_UNTRIAGED:-0}" in
 esac
 SH
 chmod +x "$BIN/gh"
+# Defense in depth only: generic alerts/clock/canary children have no Docker
+# opt-in and must not execute even this stub. Pressure cases opt in locally.
+# This is a recorded fixture, never a daemon or prune delegation.
+export WHEELHOUSE_ALERTS_DOCKER_CAPTURE="$HERE/fixtures/docker-system-df.jsonl"
+cat > "$BIN/docker" <<'JS'
+#!/usr/bin/env bun
+const fs=require('fs'),args=process.argv.slice(2);
+if(JSON.stringify(args)!==JSON.stringify(['system','df','--format','{{json .}}'])){console.error('forbidden fixture docker call');process.exit(91);}
+const capture=fs.readFileSync(process.env.WHEELHOUSE_ALERTS_DOCKER_CAPTURE,'utf8');
+if(process.env.WHEELHOUSE_DOCKER_PRESSURE_EVIDENCE)fs.writeFileSync(process.env.WHEELHOUSE_DOCKER_PRESSURE_EVIDENCE+'/docker-default-'+process.pid+'.json',JSON.stringify({pid:process.pid,ppid:process.ppid,args,capture}));
+process.stdout.write(capture);
+JS
+chmod +x "$BIN/docker"
 run_alert(){ OUT="$(cd "$ROOT" && env HOME="$HOME_FIX" PATH="$BIN:$PATH" WHEELHOUSE_ALERTS_ROOT="$ROOT" "$@" 2>&1)"; RC=$?;
   if [ "$RC" = 0 ] && [ -f "$ROOT/seats/inbox.jsonl" ]; then
     node --input-type=module - "$ROOT" <<'JS' || fail 'every herald alert row must name its condition and retain concrete detail'
@@ -132,6 +146,23 @@ drift_set_cases(){
     [ "$FAILED" = 0 ] && pass 'changed drift set starts a fresh hold and re-raises exactly once; returning old set gets a new hold'
   fi
 }
+phase 'Docker fixture isolation and bounded optional observation'
+if bun "$HERE/fixtures/alerts-docker-isolation.ts" "$ROOT/seats/alerts.ts" "$FIX/docker-isolation"; then
+  pass 'alerts fixtures never resolve host Docker; expired/oversize observations stay unknown'
+else fail 'Docker isolation fixture failed'; fi
+
+phase 'Docker cache pressure — recorded JSONL, synthetic variations, no real daemon'
+if bun "$HERE/fixtures/docker-cache-pressure.ts" "$ROOT/seats/alerts.ts" "$FIX/docker-cases"; then
+  pass 'Docker cache-pressure and unavailable-Docker consumer cases pass'
+else fail 'Docker cache-pressure fixture failed'; fi
+
+phase 'numeric alert settings'
+if bun "$HERE/fixtures/alert-values.ts" "$HERE" "$FIX/alert-values" "$ROOT/seats/alerts.ts"; then
+  pass 'missing/blank numeric defaults, explicit values and finite validation; actual reader removals rejected'
+else
+  fail 'numeric alert setting consumer cases failed'
+fi
+
 phase 'drift file-set design'
 case "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" in all|same|changed) ;; *) echo 'invalid drift test case' >&2; exit 2;; esac
 drift_set_cases
@@ -196,6 +227,13 @@ run_alert bun seats/alerts.ts check --json
 cp -f "$FIX/quarantine-alerts-source.ts" "$ROOT/seats/alerts.ts"
 rm -f "$ROOT/seats/selftest-quarantine.list" "$ROOT"/seats/quarantine-*.selftest.sh
 clear_runtime
+phase 'claimed commander refusal surface'
+if bun "$HERE/fixtures/commander-alert.ts" "$HERE" "$FIX/commander-alert"; then
+  pass 'not-commander %12 alert/need/remedy, ok clear, and source controls'
+else
+  fail 'claimed commander refusal alert failed'
+fi
+
 phase 'transition table, thresholds, clears'
 clear_runtime; BD_READY=1 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && active idle-fleet-ready-work && active cold-seats-ready-work && [ "$(inbox_count)" = 2 ] && pass 'ready work fires idle-fleet and cold-seats once' || fail "ready/cold failed rc=$RC out=$OUT inbox=$(inbox_count)"
@@ -220,7 +258,7 @@ for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done
 printf '{"status":"ok"}\n' > "$ROOT/seats/run/herald.target.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && grep -q 'alert cleared commander-pane-invalid' "$ROOT/seats/logs/alerts.log" && [ "$(need_closed_count)" = 1 ] && pass 'commander-pane-invalid clear closes its need' || fail "pane close failed: $(cat "$ROOT/seats/needs.jsonl" 2>/dev/null)"
 
-ME_STARTED="$(bun -e 'import {spawnSync} from "node:child_process";const r=spawnSync("ps",["-p",process.argv[1],"-o","lstart="],{encoding:"utf8"});console.error("CAPTURE alerts fixture ps "+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));if(r.status!==0||r.error||r.signal)process.exit(2);console.log(new Date(Date.parse(r.stdout.trim())).toISOString());' "$$")" || exit 2
+ME_STARTED="$(bun -e 'const { spawnSync } = await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE);const r=spawnSync("ps",["-p",process.argv[1],"-o","lstart="],{encoding:"utf8"});console.error("CAPTURE alerts fixture ps "+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));if(r.status!==0||r.error||r.signal)process.exit(2);console.log(new Date(Date.parse(r.stdout.trim())).toISOString());' "$$")" || exit 2
 clear_runtime; printf '{"seats":{"worker-a":{"pid":%s,"startedAt":"%s","log":"%s","lastCapacityEvent":{"at":"2026-01-01T00:00:00Z","detail":"synthetic"}}}}\n' $$ "$ME_STARTED" "$ROOT/seats/logs/worker-a.jsonl" > "$ROOT/seats/state.json"; run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && active capacity-events && pass 'capacity-events fires when state carries lastCapacityEvent' || fail "capacity failed rc=$RC out=$OUT"
 for i in 1 2 3; do run_alert bun seats/alerts.ts check --json; done; [ "$(inbox_count)" = 1 ] && pass 'capacity-events stays quiet over 3 active runs' || fail "capacity not quiet"

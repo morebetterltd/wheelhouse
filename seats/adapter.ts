@@ -64,7 +64,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { completedExecFileSync as execFileSync } from "./native-command";
-import { resolveRoleBrief } from "./briefs";
+import { resolveRoleBrief, workerDispatchPrompt, assembleBrief } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
 import { effectiveRoster } from "./roster";
@@ -893,6 +893,32 @@ function roleBriefPath(role: string): string {
   }
 }
 
+function roleBriefContent(role: string, sessionFile: string | null = null, prior?: SeatRecord) {
+  const file = roleBriefPath(role);
+  let text: string;
+  try { text = assembleBrief(ROOT, role); } catch (e: any) { die(e.message); }
+  // Workers keep their existing byte hash/path semantics. Producer continuity
+  // includes the exact skill bodies and versions supplied to the harness.
+  const hash = crypto.createHash("sha256").update(role === "producer" ? text : fs.readFileSync(file)).digest("hex");
+  if (role === "producer" && sessionFile && prior?.roleBriefHash !== hash) {
+    die(`seat producer brief changed; reset instead of resume (recorded ${prior?.roleBriefHash ?? "unknown"}, current ${hash})`);
+  }
+  return { file, text, hash };
+}
+
+function producerBriefFile(name: string, role: string, brief: ReturnType<typeof roleBriefContent>): string {
+  if (role !== "producer") return brief.file;
+  // The native shims take a file; publish the same assembled bytes atomically,
+  // not a second harness-specific skill loader. A content key avoids clobbering
+  // a running shim's input when another launch is prepared.
+  fs.mkdirSync(RUN_DIR, { recursive: true });
+  const file = path.join(RUN_DIR, `${name}.producer-brief.${brief.hash}.md`);
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try { fs.writeFileSync(tmp, brief.text, { flag: "wx", mode: 0o600 }); fs.renameSync(tmp, file); }
+  finally { try { fs.unlinkSync(tmp); } catch {} }
+  return file;
+}
+
 function accountLabel(entry: SeatEntry | undefined, rec?: SeatRecord): string | undefined {
   const label = entry?.account?.label ?? rec?.accountLabel;
   return typeof label === "string" && label.length > 0 ? label : undefined;
@@ -986,8 +1012,8 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   const authFile = path.join(accountDir, "auth.json");
   requireLaunchCredential(name, entry, accountDir, authFile, labelSuffix);
 
-  const brief = roleBriefPath(entry.role);
-  const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+  const loadedBrief = roleBriefContent(entry.role, sessionFile, existing);
+  const brief = loadedBrief.file, roleBriefHash = loadedBrief.hash;
   fs.mkdirSync(RUN_DIR, { recursive: true });
   fs.mkdirSync(LOG_DIR, { recursive: true });
   const fifo = path.join(RUN_DIR, `${name}.stdin`);
@@ -1000,7 +1026,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     execFileSync("mkfifo", [fifo]);
   }
 
-  const args = ["--mode", "rpc", "--append-system-prompt", brief];
+  const args = ["--mode", "rpc", "--append-system-prompt", entry.role === "producer" ? loadedBrief.text : brief];
   if (entry.provider) args.push("--provider", entry.provider);
   if (entry.model) args.push("--model", entry.model);
   args.push(...skillArgs(name, entry));
@@ -1139,11 +1165,12 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — claude-code launch must pin the exact model`);
   if (!entry.allowedTools) die(`seat "${name}"${labelSuffix} has no allowedTools list in seats/seats.json — claude-code acceptEdits mode must name the tools it may use`);
 
-  const brief = roleBriefPath(entry.role);
-  const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+  const loadedBrief = roleBriefContent(entry.role, sessionFile, existing);
+  const roleBriefHash = loadedBrief.hash;
   if (sessionFile && existing?.roleBriefHash && existing.roleBriefHash !== roleBriefHash) {
     die(`seat "${name}" brief changed; reset instead of resume (recorded ${existing.roleBriefHash.slice(0, 12)}, current ${roleBriefHash.slice(0, 12)})`);
   }
+  const brief = producerBriefFile(name, entry.role, loadedBrief);
 
   fs.mkdirSync(RUN_DIR, { recursive: true });
   fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -1262,8 +1289,9 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   if (!isCodexDefaultAuth(entry) && !fs.existsSync(accountDir)) die(`seat directory does not exist for seat "${name}"${labelSuffix}: ${accountDir}\n      provision it first: seats/seat-env.sh <namespace> ${name} "${ROOT}"`);
   requireCodexCredential(name, entry, accountDir, labelSuffix);
   if (!entry.model) die(`seat "${name}"${labelSuffix} has no model pin in seats/seats.json — codex launch must pin the exact model`);
-  const brief = roleBriefPath(entry.role); const roleBriefHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+  const loadedBrief = roleBriefContent(entry.role, sessionFile, existing), roleBriefHash = loadedBrief.hash;
   if (sessionFile && existing?.roleBriefHash && existing.roleBriefHash !== roleBriefHash) die(`seat "${name}" brief changed; reset instead of resume (recorded ${existing.roleBriefHash.slice(0, 12)}, current ${roleBriefHash.slice(0, 12)})`);
+  const brief = producerBriefFile(name, entry.role, loadedBrief);
   fs.mkdirSync(RUN_DIR, { recursive: true }); fs.mkdirSync(LOG_DIR, { recursive: true });
   const fifo = path.join(RUN_DIR, `${name}.stdin`), log = path.join(LOG_DIR, `${name}.jsonl`), rawLog = path.join(LOG_DIR, `${name}.raw.jsonl`), errLog = path.join(LOG_DIR, `${name}.stderr.log`);
   if (fs.existsSync(fifo)) { if (!fs.statSync(fifo).isFIFO()) die(`${fifo} exists and is not a FIFO — refusing to guess what it is`); } else execFileSync("mkfifo", [fifo]);
@@ -1444,6 +1472,7 @@ async function cmdReset(name: string): Promise<void> {
   const rec = stateBefore.seats[name];
   if (!rec) die(`no record of seat "${name}" — spawn it first`);
   const entry = requireSeat(name);
+  if (entry.role === "producer") roleBriefContent(entry.role); // fail before stop/session discard
   if (pidAlive(rec.pid, rec.fifo, rec.startedAt)) {
     const st = await rpc(rec, { type: "get_state" });
     if (!st.success) {
@@ -1499,6 +1528,9 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   let entryCache: SeatEntry | undefined;
   const entry = (): SeatEntry => (entryCache ??= requireSeat(name));
   const rosterEntry = (() => { try { return readNamedRosterEntry(name); } catch { return undefined; } })();
+  if (rosterEntry?.role === "producer" && rec.roleBriefHash !== roleBriefContent("producer").hash) {
+    die(`seat "${name}" brief changed; reset instead of resume before dispatch; no producer prompt sent`);
+  }
   const previousBead = rec.lastBead;
   const crossBead = Boolean(previousBead) && previousBead !== beadId;
   const alive = pidAlive(rec.pid, rec.fifo, rec.startedAt);
@@ -1539,8 +1571,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   // not send an authoritative legacy path beneath stale system instructions,
   // or infer freshness for an older Pi record that has no loaded-brief hash.
   if (rosterEntry && seatUsesWorktree(entry()) && seatWorktreesSetting() === "per-seat") {
-    const brief = roleBriefPath(entry().role);
-    const currentHash = crypto.createHash("sha256").update(fs.readFileSync(brief)).digest("hex");
+    const currentHash = roleBriefContent(entry().role).hash;
     if (rec.roleBriefHash !== currentHash) {
       die(`seat "${name}" brief changed; reset instead of resume before dispatch (loaded brief hash ${rec.roleBriefHash ?? "unknown"}, current ${currentHash}). Seat anchor ${seatCwdFor(name, entry())}; recorded worktree ${rec.cwd ?? ROOT}. No prompt sent; this dispatch has not discarded the session.`);
     }
@@ -1608,7 +1639,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   }
   // followUp: a new bead queues behind the current turn instead of erroring
   // if the seat is mid-stream. Mid-turn redirection is what steer is for.
-  const promptText = `Bead ${beadId}\n\n${dispatchContext}${text}`;
+  const promptText = workerDispatchPrompt(ROOT, beadId, `${dispatchContext}${text}`);
   await writeState((state) => {
     state.seats[name].lastBead = beadId;
     state.seats[name].lastDispatchAt = new Date().toISOString();
