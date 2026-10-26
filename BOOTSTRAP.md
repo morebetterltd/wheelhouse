@@ -124,6 +124,8 @@ mkdir -p wheelhouse
   echo "seat_push=on"
   echo "seat_worktrees=per-seat"
   echo "cleanup=on"
+  echo "sweep=on"
+  echo "sweep-hour=03"
   echo "isa_signals=on"
 } > wheelhouse/.template-source
 cat wheelhouse/.template-source
@@ -359,6 +361,18 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
    sed -i.bak "s|^github-report-routes=.*|github-report-routes=<comma-separated routes or empty>|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
    grep -E '^github-report(-routes)?=' wheelhouse/.template-source
    ```
+
+12. **Nightly full-tier hour.** Default first: “My default is one full test run at **03:00 local time** each day. Core protects ordinary reviews; the nightly covers the rest, and a red nightly forces every review to full until a later nightly is green. What hour is this install available, outside any pause window?” Ask for an hour `00`–`23`, showing `03` as the default, and offer `sweep=off` only as an explicit opt-out. Record the answer rather than assuming this machine's pause policy. A `seats/run/paused` marker (or `WHEELHOUSE_SUPERVISOR_PAUSE_FILE` override) skips a due nightly; the installer does not modify an existing pause mechanism.
+
+   Write and read back the chosen settings:
+
+   ```bash
+   sed -i.bak "s|^sweep=.*|<sweep=on or sweep=off>|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+   sed -i.bak "s|^sweep-hour=.*|sweep-hour=<chosen local hour, default 03>|" wheelhouse/.template-source && rm -f wheelhouse/.template-source.bak
+   grep -E '^sweep(-hour)?=' wheelhouse/.template-source
+   ```
+
+   `WHEELHOUSE_SUPERVISOR_SWEEP_HOUR` can override the recorded hour. Point to `seats/README.md`, “Nightly full tier”, for logs, missed attempts, the red-review brake and safe manual retries.
 
 ### Record what the interview decided — the machine copies, before anything derives from them
 
