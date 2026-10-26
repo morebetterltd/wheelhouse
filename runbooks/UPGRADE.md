@@ -654,6 +654,16 @@ rm -f wheelhouse/.template-source.bak
 
 ## 7. Sweep what the contracts do not cover
 
+Existing seat worktrees get the factory skill links under both `.agents/skills`
+and `.claude/skills` on their next dispatch (or bead-bound spawn); nothing needs
+linking by hand. After preparation run `bun seats/adapter.ts skills-check <seat>`
+for each standing seat whose worktree exists; stop on a refusal naming the seat
+and skill. Project-owned directories and committed links are preserved. The
+adapter adds exact per-entry Git excludes **without trailing slashes**: Git
+regards a symlink as a file entry, so a trailing-slash directory rule leaves it
+visible. Never exclude the entire skills directory; new manual/map files must
+remain visible.
+
 An upgrade re-copies the contracts and the runbooks and reaches nothing else. If the change altered a convention — a path form, a command name, a label — then your generated files and your existing beads still speak the old one:
 
 - If this install has an uncommitted, git-excluded root `AGENTS.md` carrying the wheelhouse note, move it to `wheelhouse/AGENTS.md` and drop any `AGENTS.md` or `/AGENTS.md` line from `.git/info/exclude`; then `git check-ignore AGENTS.md` must exit 1. If root `AGENTS.md` is committed, leave it product-owned and put only the wheelhouse note in `wheelhouse/AGENTS.md`. Also remove any blanket `.agents/` or `/.agents/` line from `.git/info/exclude`; a wheelhouse install no longer claims that namespace, and only named machine-generated paths belong in the machine-local exclude file.

@@ -259,17 +259,109 @@ export function porcelainStatus(wt: string): { ok: boolean; out: string; err: st
   return { ok: !r.error && !r.signal && r.status === 0, out: r.stdout ?? "", err: String(r.stderr || r.error?.message || r.signal || "").trim() };
 }
 
-export function ensureSeatLocalExcludes(wt: string): void {
+export function ensureSeatLocalExcludes(wt: string, skillEntries: string[] = []): void {
   const exclude = git(wt, ["rev-parse", "--git-path", "info/exclude"], wt);
-  if (!exclude.ok || !exclude.out) return;
+  if (!exclude.ok || !exclude.out) {
+    if (skillEntries.length) refuse(`cannot locate skill excludes in ${wt}: ${exclude.err}`);
+    return;
+  }
   const file = path.isAbsolute(exclude.out) ? exclude.out : path.join(wt, exclude.out);
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-    const lines = ["/.wheelhouse-runs/", "/.wheelhouse-worktrees/"];
+    // A trailing slash matches a real directory, NOT a symlink. Exact entry
+    // rules hide factory links without hiding the whole skills directory.
+    const lines = ["/.wheelhouse-runs/", "/.wheelhouse-worktrees/", ...skillEntries.map(entry => `/${entry.replace(/([\\*?\[\] ])/g, "\\$1")}`)];
     const missing = lines.filter((line) => !current.split("\n").includes(line));
     if (missing.length) fs.appendFileSync(file, `${current.endsWith("\n") || current.length === 0 ? "" : "\n"}${missing.join("\n")}\n`);
-  } catch {}
+  } catch (e: any) {
+    if (skillEntries.length) refuse(`cannot write skill excludes in ${wt}: ${e.message}`);
+  }
+}
+
+const SKILL_LOCATIONS = [".agents/skills", ".claude/skills"];
+const REQUIRED_FACTORY_SKILLS = ["intent", "outcomes", "create-verification", "maintain-verification"];
+
+/** Only directories carrying SKILL.md are factory skills; notices are not. */
+export function factorySkills(root: string): { name: string; source: string }[] {
+  const dir = path.resolve(root, ".agents/skills");
+  if (!fs.existsSync(dir)) return []; // Older installs and library fixtures.
+  return fs.readdirSync(dir).sort().flatMap(name => {
+    const source = path.join(dir, name);
+    try {
+      if (fs.statSync(source).isDirectory() && fs.statSync(path.join(source, "SKILL.md")).isFile()) {
+        validateSegment("factory skill name", name);
+        return [{ name, source }];
+      }
+    } catch (e: any) { if (e.code !== "ENOENT" && e.code !== "ENOTDIR") throw e; }
+    return [];
+  });
+}
+
+/** Link, do not copy: upgrades at the install root reach existing seats on the
+ * next preparation. Product-owned directories and committed links win. */
+export function linkFactorySkills(root: string, wt: string, note: (line: string) => void = () => {}): void {
+  const skills = factorySkills(root);
+  if (!skills.length) return;
+  // Do not follow a planted parent into another tree while repairing links.
+  for (const parent of [".agents", ".agents/skills", ".claude", ".claude/skills"]) {
+    try {
+      const stat = fs.lstatSync(path.join(wt, parent));
+      if (!stat.isDirectory() || stat.isSymbolicLink()) refuse(`cannot link factory skills through non-directory or symlink parent ${parent} in ${wt}`);
+    } catch (e: any) { if (e.code !== "ENOENT") throw e; }
+  }
+  const entries: string[] = [];
+  for (const loc of SKILL_LOCATIONS) {
+    fs.mkdirSync(path.join(wt, loc), { recursive: true });
+    for (const { name, source } of skills) {
+      const relative = `${loc}/${name}`, target = path.join(wt, relative);
+      let stat: fs.Stats | undefined;
+      try { stat = fs.lstatSync(target); } catch (e: any) { if (e.code !== "ENOENT") throw e; }
+      if (stat?.isDirectory()) { note(`seat skills: keeping project directory ${relative}`); continue; }
+      if (stat && !stat.isSymbolicLink()) refuse(`cannot replace non-symlink skill entry ${relative} in ${wt}`);
+      if (stat) {
+        const tracked = git(wt, ["ls-files", "--error-unmatch", "--", `:(literal)${relative}`]);
+        if (tracked.ok) { note(`seat skills: keeping committed project link ${relative}`); continue; }
+        if (tracked.code !== 1) refuse(`cannot check ownership of skill ${relative}: ${tracked.err}`);
+        if (fs.readlinkSync(target) === source) { entries.push(relative); continue; }
+        fs.unlinkSync(target); // Only the untracked symlink itself, never its target.
+      }
+      fs.symlinkSync(source, target);
+      entries.push(relative);
+    }
+  }
+  ensureSeatLocalExcludes(wt, entries);
+}
+
+/** Read-only discovery check. It never prepares/repairs links or changes state.
+ * Check both Git paths even when the harness reads only one: a tracked manual
+ * can be dirty through its canonical path while its Claude link is unchanged. */
+export function checkSeatSkills(root: string, wt: string, harness: string): string[] {
+  const inventory = factorySkills(root);
+  for (const name of REQUIRED_FACTORY_SKILLS) if (!inventory.some(skill => skill.name === name)) refuse(`${name}: missing factory SKILL.md at the install root`);
+  const names = new Set(inventory.map(skill => skill.name));
+  const manuals = new Set<string>();
+  for (const loc of SKILL_LOCATIONS) {
+    const dir = path.join(wt, loc);
+    if (!fs.existsSync(dir)) continue;
+    for (const name of fs.readdirSync(dir).sort()) {
+      if (!name.startsWith("verify-")) continue;
+      try { if (fs.statSync(path.join(dir, name)).isDirectory()) manuals.add(name); }
+      catch (e: any) { if (e.code !== "ENOENT") throw e; }
+    }
+  }
+  if (!manuals.size) refuse(`verify-*: missing project manual in ${wt}`);
+  for (const name of manuals) names.add(name);
+  const loc = harness === "claude-code" ? ".claude/skills" : ".agents/skills";
+  for (const name of [...names].sort()) {
+    const entry = path.join(wt, loc, name, "SKILL.md");
+    try { if (!fs.statSync(entry).isFile()) refuse(`${name}: missing ${loc}/${name}/SKILL.md`); }
+    catch (e: any) { if (e.code === "ENOENT" || e.code === "ENOTDIR") refuse(`${name}: missing ${loc}/${name}/SKILL.md`); throw e; }
+    const status = git(wt, ["status", "--porcelain", "-z", "--untracked-files=all", "--", ...SKILL_LOCATIONS.map(dir => `:(literal)${dir}/${name}`)]);
+    if (!status.ok || status.err) refuse(`${name}: git status failed: ${status.err}`);
+    if (status.out) refuse(`${name}: dirty skill entry in ${wt}`);
+  }
+  return [...names].sort();
 }
 
 export function worktreeStatus(_root: string, wt: string): { clean: boolean; phantomOnly: boolean; real: string[] } {
@@ -494,6 +586,10 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   const note = o.note ?? (() => {});
   const remote = o.remote ?? process.env.WHEELHOUSE_PUSH_REMOTE ?? "origin";
   const seatPush = o.seatPush ?? "on";
+  const finish = (result: EnsureResult): EnsureResult => {
+    linkFactorySkills(root, result.target, note);
+    return result;
+  };
 
   // 1. one live seat per worktree. Stopped/dead seats may retain stale cwd
   // records from crashes or older adapters; those records must not pin a
@@ -584,13 +680,13 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     const add = exists ? git(repo, ["worktree", "add", target, branch]) : git(repo, ["worktree", "add", "-b", branch, target, base]);
     if (!add.ok) refuse(`git worktree add failed for ${target}: ${add.err || add.out}`);
     note(`seat ${o.seat}: created worktree ${target} on ${branch}${exists ? " (existing branch, commits kept)" : ` from ${base}`}`);
-    return { target, branch, base, created: true, switched: false, pushed: null, previousBranch: null };
+    return finish({ target, branch, base, created: true, switched: false, pushed: null, previousBranch: null });
   }
 
   // Worktree exists and is registered. Already on the bead's branch?
   const current = git(repo, ["symbolic-ref", "--short", "-q", "HEAD"], target);
   const currentBranch = current.ok && current.out ? current.out : null;
-  if (currentBranch === branch) return { target, branch, base, created: false, switched: false, pushed: null, previousBranch: currentBranch };
+  if (currentBranch === branch) return finish({ target, branch, base, created: false, switched: false, pushed: null, previousBranch: currentBranch });
 
   // 4. push gate: the previous branch must be on the remote before the seat moves on
   const headSha = git(repo, ["rev-parse", "HEAD"], target).out;
@@ -653,7 +749,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   const head = git(repo, ["rev-parse", "HEAD"], target).out;
   if (!exists && head !== baseTip) refuse(`worktree ${target} HEAD ${head.slice(0, 12)} is not the base tip ${baseTip.slice(0, 12)} after switching to ${branch}`);
   note(`seat ${o.seat}: switched ${target} from ${currentBranch ?? "detached"} to ${branch}${exists ? " (existing branch, commits kept)" : ` from ${base}`}`);
-  return { target, branch, base, created: false, switched: true, pushed, previousBranch: currentBranch };
+  return finish({ target, branch, base, created: false, switched: true, pushed, previousBranch: currentBranch });
 }
 
 /** First product repository recorded by the install, when this root is an

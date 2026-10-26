@@ -114,6 +114,13 @@ if bun "$HERE/fixtures/log-rotation-owner.ts" "$FIX/log-rotation-runtime" "$FIX"
 else
   fail "status log-rotation ownership regression"
 fi
+phase "0. factory skills in prepared seat and one-shot worktrees"
+selftest_copy_seat_runtime "$FIX/skills-runtime" "$ADAPTER_DIR" || exit 2
+if bun "$HERE/fixtures/adapter-skills.ts" "$FIX/skills-runtime" "$FIX/skills-check"; then
+  pass "skills-check lists five for Claude Code, Codex and Pi; missing/dirty skills refuse without repair"
+else
+  fail "factory skills-check or scratch-worktree regression"
+fi
 fi
 # Dispatch must pass the real contract gate too (fleet/producer enables it).
 export WHEELHOUSE_CONTRACT_FIXTURE="$FIX/dispatch-contract.md"

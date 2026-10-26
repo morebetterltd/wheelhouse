@@ -194,8 +194,14 @@ else
   fail "Integration remote-only goal ref did not resolve before merge-target/origin-HEAD: $(cat "$OUT" 2>/dev/null)"
 fi
 
+if bun "$HERE/fixtures/seat-worktree-skills.ts" "$HERE" "$FIX/factory-skills"; then
+  pass "factory skills link both harness locations; exact excludes, repairs, idempotence and project skills survive"
+else
+  fail "factory skill worktree regression"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
-  echo "seat-worktree.selftest: PASS (6 checks)"
+  echo "seat-worktree.selftest: PASS (7 checks)"
 else
   echo "seat-worktree.selftest: FAIL ($FAILED failure(s))"
   exit 1
