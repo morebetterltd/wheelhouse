@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import fs from "node:fs";
 import path from "node:path";
+import { parseContract, validateContract } from "./contract";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_MANUAL_ROOT || path.join(import.meta.dir, ".."));
 const COMPATIBILITY_SKILLS_DIRECTORY = ".claude/skills";
@@ -177,6 +178,66 @@ export function checkEvidence(manual: VerificationManual, slug: string, retentio
   if (!fs.readdirSync(dir, { withFileTypes: true }).some(entry => entry.isFile())) fail(dir, 1, "no regular evidence file");
   return dir;
 }
+const LINT_USAGE = "usage: manual.ts lint-contract --file <contract> [--repo <path>] [--project <name>]; heuristic: literal product locator/reach and optional '; proof: <literal>' matching, not semantic change detection";
+const normalized = (text: string) => text.replace(/`/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+function containsLiteral(text: string, literal: string): boolean {
+  const haystack = normalized(text), needle = normalized(literal), token = /[a-z0-9_/#?&=.%:+-]/;
+  if (!needle) return false;
+  for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
+    if ((!at || !token.test(haystack[at - 1])) && (at + needle.length === haystack.length || !token.test(haystack[at + needle.length]))) return true;
+  }
+  return false;
+}
+function productReference(surface: string, manual: VerificationManual): { reach: string; slug: string; stem: string; proof?: string } | null {
+  const [raw, proof] = surface.replace(/`/g, "").split(/;\s*proof:\s*/i);
+  const value = raw.trim();
+  if (proof !== undefined && !proof.trim()) throw new Error("surface: proof suffix needs a literal end state");
+  let reach = "", stem = "", slug = "";
+  const endpoint = /^(?:(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+)?(https?:\/\/\S+|\/\S*)$/i.exec(value);
+  const token = /^(?:screen|command):\s*(\S.*)$/i.exec(value);
+  if (endpoint) {
+    const locator = /^https?:/i.test(endpoint[2]) ? new URL(endpoint[2]).pathname + new URL(endpoint[2]).search + new URL(endpoint[2]).hash : endpoint[2];
+    reach = (endpoint[1] ? endpoint[1].toUpperCase() + " " : "") + locator;
+    const pathname = locator.split(/[?#]/)[0]; stem = pathname.split("/").filter(Boolean)[0] ?? "home";
+    slug = pathname === "/" ? "home" : pathname.replace(/^\/+|\/+$/g, "").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  } else if (token) { reach = token[1].trim(); slug = reach.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); stem = slug; }
+  else if (manual.features.some(feature => feature.slug === value)) { reach = value; slug = value; stem = value; }
+  else return null;
+  return { reach, slug, stem, ...(proof !== undefined ? { proof: proof.trim() } : {}) };
+}
+export interface MapContractLint { expected: number; found: number; needed: string[]; provided: string[]; error: string | null }
+/** Deterministic drafting lint only: use the validated map, never work-type labels
+ * or a map outcome itself as evidence that a map change is needed. */
+export function lintContract(text: string, manual: VerificationManual): MapContractLint {
+  const parsed = parseContract(text), shape = validateContract(parsed);
+  if (shape.length) throw new Error(shape[0]);
+  const needed = new Map<string, string>(), provided: { slug: string; id: string; project?: string; validConsumer: boolean }[] = [];
+  for (const outcome of parsed.outcomes) {
+    const surface = outcome.surface.replace(/`/g, "").replace(/^\.\//, "");
+    const map = /^(?:\.agents\/skills\/verify-([^/]+)\/)?features\/([^/\s]+)\.md$/.exec(surface);
+    if (map) { provided.push({ slug: map[2], id: outcome.id, project: map[1], validConsumer: outcome.group === "machine" && outcome.checkKind === "run" }); continue; }
+    // Relative factory/source files are not product locators. Consumer group
+    // alone must never suppress a named product route, screen or command.
+    const reference = productReference(surface, manual); if (!reference) continue;
+    const covering = manual.features.find(feature => containsLiteral(feature.howToGetToIt, reference.reach));
+    const feature = covering ?? manual.features.find(feature => feature.slug === reference.stem);
+    const covered = covering !== undefined;
+    const proofChanged = reference.proof !== undefined && (!feature || !containsLiteral(feature.whatProvesItWorks, reference.proof));
+    const requiresMap = !covered || proofChanged;
+    if (requiresMap) needed.set(feature?.slug ?? reference.slug, `${outcome.id}: ${outcome.surface}`);
+  }
+  let error: string | null = null; const seen = new Set<string>();
+  for (const map of provided) {
+    if (map.project !== undefined && map.project !== manual.project) { error = `${map.id}: map outcome names another manual ${map.project}`; break; }
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(map.slug)) { error = `${map.id}: map outcome needs a flat feature slug`; break; }
+    if (!map.validConsumer) { error = `${map.id}: map outcome requires machine consumer and run check`; break; }
+    if (seen.has(map.slug)) { error = `${map.id}: duplicate map outcome ${map.slug}`; break; }
+    seen.add(map.slug);
+    if (!needed.has(map.slug)) { error = `${map.id}: map outcome ${map.slug} is not needed by any other outcome's product surface`; break; }
+  }
+  if (!error) for (const [slug, surface] of needed) if (!seen.has(slug)) { error = `${surface}: missing map outcome for ${slug}`; break; }
+  return { expected: needed.size, found: provided.length, needed: [...needed.keys()], provided: provided.map(map => map.slug), error };
+}
 function main(args: string[]): number {
   const [command, ...rest] = args; let repo = ROOT, project: string | undefined, dir: string | undefined, file: string | undefined, json = false;
   const positional: string[] = [], seen = new Set<string>();
@@ -189,8 +250,14 @@ function main(args: string[]): number {
       if (arg === "--repo") repo = path.resolve(value); else if (arg === "--project") project = value; else if (arg === "--dir") dir = value; else file = value;
     } else if (arg.startsWith("-")) throw new Error(`unknown option ${arg}`); else positional.push(arg);
   }
-  if (command === "lint-contract") { if (positional.length || json || dir) throw new Error("usage: lint-contract --file <contract>"); console.error("not yet"); return 2; }
-  if (!["check", "features", "evidence"].includes(command) || file || (json && command !== "features") || (dir && command !== "evidence") || positional.length !== (command === "evidence" ? 1 : 0) || (command === "evidence" && !dir)) throw new Error("usage: manual.ts check|features [--repo <path>] [--project <name>] [--json]; evidence <feature> --dir <path>; lint-contract --file <contract>");
+  if (command === "lint-contract") {
+    if (!file || positional.length || json || dir) throw new Error(LINT_USAGE);
+    const result = lintContract(textFile(path.resolve(file)), readManual(repo, project));
+    console.log(`map outcomes: expected ${result.expected}, found ${result.found}`);
+    if (result.error) { console.error(`${file}: ${result.error}`); return 2; }
+    return 0;
+  }
+  if (!["check", "features", "evidence"].includes(command) || file || (json && command !== "features") || (dir && command !== "evidence") || positional.length !== (command === "evidence" ? 1 : 0) || (command === "evidence" && !dir)) throw new Error(`usage: manual.ts check|features [--repo <path>] [--project <name>] [--json]; evidence <feature> --dir <path>; ${LINT_USAGE}`);
   const manual = readManual(repo, project);
   if (command === "check") console.log(`manual ok: ${manual.features.length} features`);
   else if (command === "features") console.log(json ? JSON.stringify(manual.features) : manual.features.map(feature => `${feature.slug}\t${feature.title}\n${feature.howToGetToIt}\n${feature.whatProvesItWorks}`).join("\n\n"));

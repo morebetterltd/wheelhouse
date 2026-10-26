@@ -29,6 +29,9 @@ outcomes_skill_leg(){
   local rc=0
   bun "$HERE/fixtures/outcomes-skill.ts" "$HERE/.." "$CONTRACT" "$FIX/outcomes" || rc=$?
   [ "$rc" = 0 ] && pass 'outcomes skill examples and consumer/check mismatch' || fail "outcomes skill examples and consumer/check mismatch (exit $rc)"
+  rc=0
+  bun "$HERE/fixtures/map-contracts.ts" "$HERE/manual.ts" "$CONTRACT" "$FIX/map-contracts" "$HERE/.." || rc=$?
+  [ "$rc" = 0 ] && pass 'map outcomes examples 1/1, 1/1, 0/0, 0/0 and meaningful removals' || fail "map outcomes examples (exit $rc)"
 }
 if [ "${WHEELHOUSE_OUTCOMES_SKILL_ONLY:-0}" = 1 ]; then
   outcomes_skill_leg
@@ -138,7 +141,10 @@ import assert from 'node:assert';
 import * as nativeCP from 'node:child_process';
 const cp={...nativeCP,...await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
 const {CONTRACT,HERE,FIX}=process.env,root=path.join(FIX,'graph'),ledger=path.join(root,'seats/intake.jsonl');
-const valid=fs.readFileSync(path.join(HERE,'fixtures/contracts/valid.md'),'utf8');
+const {readContractSkill}=await import(path.join(HERE,'briefs.ts'));
+const installedStamp=['intent','outcomes'].map(name=>`${name}@${readContractSkill(path.join(HERE,'..'),name).version}`).join(' ');
+// This Signal/trace input is synthetic; committed historical stamps stay put.
+const valid=fs.readFileSync(path.join(HERE,'fixtures/contracts/valid.md'),'utf8').replace(/^Skills:.*$/m,`Skills: ${installedStamp}`);
 const env={...process.env,WHEELHOUSE_CONTRACT_ROOT:root};delete env.WHEELHOUSE_SKIP_BD;delete env.WHEELHOUSE_CONTRACT_FIXTURE;delete env.WHEELHOUSE_INTAKE_FIXTURE;
 let failed=0,passed=0;
 function test(name,fn){try{fn();passed++;console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+': '+e.message);}}
